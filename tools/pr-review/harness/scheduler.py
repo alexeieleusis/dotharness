@@ -13,6 +13,8 @@ def parse_duration(s: str) -> int:
 
 
 def build_cron_expression(interval_seconds: int) -> str:
+    if interval_seconds < 60:
+        raise ValueError("Minimum interval is 60 seconds for cron scheduler")  # noqa: TRY003
     minutes = interval_seconds // 60
     if minutes >= 60:
         hours = minutes // 60
