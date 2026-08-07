@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 XDG_DATA = Path.home() / ".local/share/dotharness"
@@ -12,7 +13,14 @@ _COMMAND_FILES = {
 }
 
 
+def _validate_repo_slug(slug: str) -> str:
+    if not re.match(r"^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$", slug):
+        raise ValueError(f"Invalid repo slug: {slug!r}")  # noqa: TRY003
+    return slug
+
+
 def _state_path(repo_slug: str, filename: str) -> Path:
+    _validate_repo_slug(repo_slug)
     p = XDG_DATA / "state" / repo_slug / filename
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
