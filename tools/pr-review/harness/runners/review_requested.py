@@ -145,9 +145,10 @@ def _process_pr(
     original_sha = git_detach_and_record(wdir, env)
     try:
         git_fetch_and_checkout(pr["headRefName"], wdir, env)
-        _run_file_reviews(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env)
-        _run_summary_review(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env)
-        remove_reviewer(pr_number, config.repo.name, current_user, env)
+        files_ok = _run_file_reviews(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env)
+        summary_ok = _run_summary_review(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env)
+        if files_ok and summary_ok:
+            remove_reviewer(pr_number, config.repo.name, current_user, env)
     except Exception:
         logger.exception("PR #%d: error", pr_number)
     finally:
@@ -162,7 +163,7 @@ def _run_file_reviews(
     backend: Backend,
     wdir: str,
     env: dict,
-) -> list[str]:
+) -> bool:
     pr_number = pr["number"]
     file_instructions = (knowledge_dir / "review-file.md").read_text(encoding="utf-8")
     vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr["headRefName"])
@@ -171,6 +172,7 @@ def _run_file_reviews(
     commit_sha = get_pr_head_sha(pr_number, config.repo.name, env)
     files = get_changed_files(base_branch, wdir, env, expected_sha=commit_sha)
 
+    all_ok = True
     for file in files:
         diff = get_file_diff(file, base_branch, wdir, env)
         abs_path = os.path.join(wdir, file)
@@ -189,7 +191,8 @@ def _run_file_reviews(
             backend.run(prompt, cwd=wdir)
         except subprocess.TimeoutExpired:
             logger.exception("PR #%d file %s: backend timed out", pr_number, file)
-    return files
+            all_ok = False
+    return all_ok
 
 
 def _build_file_prompt(
@@ -221,7 +224,7 @@ def _run_summary_review(
     backend: Backend,
     wdir: str,
     env: dict,
-) -> None:
+) -> bool:
     pr_number = pr["number"]
     summary_instructions = (knowledge_dir / "review-summary.md").read_text(encoding="utf-8")
     vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr["headRefName"])
@@ -243,3 +246,6 @@ def _run_summary_review(
         backend.run(summary_prompt, cwd=wdir)
     except subprocess.TimeoutExpired:
         logger.exception("PR #%d: summary backend timed out", pr_number)
+        return False
+    else:
+        return True
