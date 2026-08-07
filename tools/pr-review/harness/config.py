@@ -108,15 +108,18 @@ def load_config(path: Path) -> HarnessConfig:
     if not r.get("working_dir"):
         raise ConfigError("repo.working_dir is required")  # noqa: TRY003
 
-    subdirs = [
-        SubDir(
-            path=s["path"],
-            pre_commands=[_parse_pre_command(pc) for pc in s.get("pre_commands", [])],
-            coverage=s.get("coverage", False),
-            timeout=s.get("timeout", 300),
+    subdirs = []
+    for s in r.get("subdir", []):
+        if "path" not in s:
+            raise ConfigError("repo.subdir[].path is required")  # noqa: TRY003
+        subdirs.append(
+            SubDir(
+                path=s["path"],
+                pre_commands=[_parse_pre_command(pc) for pc in s.get("pre_commands", [])],
+                coverage=s.get("coverage", False),
+                timeout=s.get("timeout", 300),
+            )
         )
-        for s in r.get("subdir", [])
-    ]
 
     working_dir = Path(r["working_dir"]).expanduser()
     raw_odir = r.get("opencode_dir")

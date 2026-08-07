@@ -112,6 +112,21 @@ working_dir = "/tmp"
         load_config(p)
 
 
+def test_subdir_missing_path_raises(tmp_path):
+    p = tmp_path / ".harness.toml"
+    p.write_text("""
+[harness]
+[repo]
+name = "a/b"
+working_dir = "/tmp"
+
+[[repo.subdir]]
+pre_commands = ["npm ci"]
+""")
+    with pytest.raises(ConfigError, match=r"repo\.subdir.*path"):
+        load_config(p)
+
+
 def test_subdirs_parsed(tmp_path):
     p = tmp_path / ".harness.toml"
     p.write_text("""

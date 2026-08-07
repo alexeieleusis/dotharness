@@ -55,7 +55,7 @@ review or pre-commit step.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `path` | string | **required** | Path of the sub-project, relative to `repo.working_dir` (e.g. `"."` for the repo root, or `"services/api"`). Missing `path` raises a `KeyError` while parsing (there is no friendly `ConfigError` for this one). |
+| `path` | string | **required** | Path of the sub-project, relative to `repo.working_dir` (e.g. `"."` for the repo root, or `"services/api"`). Loading fails with `ConfigError: repo.subdir[].path is required` if missing. |
 | `pre_commands` | list | `[]` | Commands to run before operating on this subdir. Each entry is either a plain string (shorthand for `{ cmd = "...", critical = false }`) or a table `{ cmd = "...", critical = true/false }`. See below for the two forms. |
 | `coverage` | boolean | `false` | Whether this subdir participates in coverage collection. |
 | `timeout` | integer | `300` | Timeout (seconds) for running this subdir's pre-commands. |
