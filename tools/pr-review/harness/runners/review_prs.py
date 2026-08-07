@@ -98,21 +98,19 @@ def _process_pr(pr: dict, config: HarnessConfig, env: dict, current_user: str, w
         pr["number"], config.repo.name, env, marker=GENERAL_COMMENT_MARKER, body=GENERAL_COMMENT_BODY
     )
     was_requested = current_user in get_requested_reviewers(pr["number"], config.repo.name, env)
-    any_posted = False
     results: list[bool] = []
     changed_files = _get_changed_files_for_pr(pr, config, wdir, env)
     for subdir in config.repo.subdirs:
         if not _subdir_has_changes(subdir.path, changed_files):
             logger.info("PR #%d: skipping subdir %s, no changes", pr["number"], subdir.path)
             continue
-        ok = _process_subdir(pr["number"], subdir, config, env)
-        results.append(ok)
-        if ok:
-            any_posted = True
-    if any_posted and was_requested:
+        results.append(_process_subdir(pr["number"], subdir, config, env))
+    if results and was_requested:
         # Submitting a review via the GitHub API clears the submitter from the PR's
         # requested-reviewers list, which would hide this PR from review_requested's
         # "user-review-requested:@me" search for the rest of this run_all cycle.
+        # We re-add whenever at least one subdir was processed, since we cannot
+        # observe from here whether the subprocess actually posted any comments.
         add_reviewer(pr["number"], config.repo.name, current_user, env)
     return all(results) if results else True
 
