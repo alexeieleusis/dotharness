@@ -26,7 +26,7 @@ from harness.runners.common import (
 )
 
 logger = logging.getLogger(__name__)
-OSC_REVIEW_MARKERS = ("osc-review", "Review Summary")
+OSC_REVIEW_MARKERS = ("[bot]osc-review", "[bot]Review Summary")
 
 
 def run(config: HarnessConfig) -> None:
