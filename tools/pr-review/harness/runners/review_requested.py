@@ -68,20 +68,21 @@ def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
 
 
 def _get_prs(repo: str, env: dict) -> list[dict]:
-    # gh search prs does not support headRefName in --json; fetch numbers/urls first,
-    # then hydrate each with headRefName via gh pr view.
+    # Use gh pr list with search predicates to get all fields in a single call,
+    # avoiding the N+1 pattern of gh search prs + individual gh pr view calls.
     result = run_cmd(
         [
             "gh",
-            "search",
-            "prs",
-            "user-review-requested:@me",
+            "pr",
+            "list",
             "--repo",
             repo,
             "--state",
             "open",
+            "--search",
+            "reviewer:@me",
             "--json",
-            "number,url",
+            "number,url,headRefName",
             "--limit",
             "500",
         ],
@@ -92,19 +93,7 @@ def _get_prs(repo: str, env: dict) -> list[dict]:
     )
     if result.returncode != 0:
         return []
-    stubs = sorted(json.loads(result.stdout), key=lambda p: p["number"])
-    prs = []
-    for stub in stubs:
-        detail = run_cmd(
-            ["gh", "pr", "view", str(stub["number"]), "--repo", repo, "--json", "number,url,headRefName"],
-            cwd="/",
-            env=env,
-            timeout=TIMEOUT_GH,
-            check=False,
-        )
-        if detail.returncode == 0:
-            prs.append(json.loads(detail.stdout))
-    return prs
+    return sorted(json.loads(result.stdout), key=lambda p: p["number"])
 
 
 def _has_user_approved(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
