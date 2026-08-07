@@ -296,7 +296,7 @@ def list_open_prs_matching_authors(repo: str, authors_config: str | list, cwd: s
         check=False,
     )
     if result.returncode != 0:
-        logger.error("Failed to list PRs: %s", result.stderr.decode())
+        logger.error("Failed to list PRs: %s", result.stderr.decode("utf-8", errors="replace"))
         return []
     prs = json.loads(result.stdout)
     eligible = [p for p in prs if not is_draft_pr(p) and author_matches(p["author"]["login"], authors_config)]
