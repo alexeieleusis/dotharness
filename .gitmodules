@@ -1,0 +1,3 @@
+[submodule "vendor/vibe-types"]
+	path = vendor/vibe-types
+	url = https://github.com/jpablo/vibe-types.git
