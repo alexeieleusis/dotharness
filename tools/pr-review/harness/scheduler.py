@@ -87,9 +87,34 @@ def find_harness_cron_entries(crontab_text: str) -> list[dict]:
     return entries
 
 
+def _remove_cron_entry(text: str, command: str, slug: str) -> str:
+    """Remove the cron line and marker for a given command+slug from crontab text."""
+    marker_prefix = f"# harness: {command} {slug} "
+    lines = text.splitlines(keepends=True)
+    filtered = []
+    skip_next = False
+    for line in reversed(lines):
+        if line.strip().startswith(marker_prefix):
+            skip_next = True
+            continue
+        if skip_next:
+            skip_next = False
+            continue
+        filtered.append(line)
+    return "".join(reversed(filtered))
+
+
 def install_cron(entry: ScheduleEntry) -> None:
     result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)  # noqa: S607
     current = result.stdout if result.returncode == 0 else ""
+
+    # Duplicate detection: if command+slug already exists, replace instead of appending
+    existing = find_harness_cron_entries(current)
+    for e in existing:
+        if e["command"] == entry.command and e["slug"] == entry.repo_slug:
+            current = _remove_cron_entry(current, entry.command, entry.repo_slug)
+            break
+
     new_crontab = current.rstrip("\n") + "\n" + entry.to_cron_line() + "\n"
     subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=True)  # noqa: S607
 
