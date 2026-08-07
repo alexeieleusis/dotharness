@@ -244,11 +244,8 @@ def remove_reviewer(pr_number: int, repo: str, login: str, env: dict) -> None:
 
 
 def is_review_summary_comment(body: str) -> bool:
-    stripped = body.strip()
-    if not stripped:
-        return False
-    first_line = stripped.splitlines()[0]
-    return first_line.startswith("#") and "review summary" in first_line.lower()
+    lower = body.lower()
+    return "review summary" in lower or "osc-review" in lower
 
 
 def has_review_summary_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
