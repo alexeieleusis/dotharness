@@ -20,7 +20,7 @@ harness run [--config PATH] [--verbose] self-review
 6. For each PR not already in the reviewed set:
    - If a prior comment on the PR already starts with an `osc-review` or `Review Summary` marker (i.e. it's already been reviewed, possibly by a previous run whose state write didn't happen), the PR is marked reviewed in state and skipped — no new review is generated.
    - Otherwise it fetches and checks out the PR's head branch (using the shared rebase/reset behavior — see [Shared behavior](index.md#shared-behavior)), then computes the diff against the PR's base branch.
-   - For each changed file, it builds a review prompt (file diff, or the whole file if it's new or the diff touches ≥75% of it) plus PR metadata, the PR description, and any matching vibe-heal static-analysis context, and runs the backend against it. The backend is responsible for producing/posting the actual inline PR review comments — this command supplies the prompt and repo checkout, not the GitHub API calls.
+   - For each changed file, it builds a review prompt (file diff, or the whole file if it's new or the diff touches ≥75% of it) plus PR metadata, the PR description, and any matching vibe-heal static-analysis context, and runs the backend against it. The backend is responsible for producing/posting the actual inline PR review comments — this command supplies the prompt and repo checkout, not the GitHub API calls. The backend runs with unrestricted shell access (see [Security](#security)).
    - After all files, it builds one more prompt from `review-summary.md` (listing every file reviewed) and runs the backend once more to produce the overall PR summary/comment.
    - The working tree is always restored to the recorded detached `HEAD` afterward (even on failure), before the next PR is processed.
    - The PR is only added to the reviewed set in state — and only then persisted to disk — if every backend invocation for that PR (all files plus the summary) exited 0 without timing out. If any invocation fails or times out, the PR is left unmarked so the *entire* file list is retried from scratch on the next run.
@@ -61,5 +61,33 @@ This deletes `self_review.json` for the repo after an interactive confirmation (
 - A PR is marked reviewed only if *every* file's review and the final summary all succeeded in the same run; a single timed-out or failing file means the whole PR — including files that succeeded — gets re-sent to the backend next time. There's no per-file progress tracking within a PR.
 - The "already reviewed" check is comment-based, not state-based: it looks for any PR comment whose body starts with `osc-review` or `Review Summary` (after stripping leading `#`/spaces). This means a manually posted comment with one of those exact prefixes will cause `self-review` to consider the PR already reviewed and skip it.
 - Subject to the shared `gh` account and working-directory-mutation caveats in
-  [Shared behavior](index.md#shared-behavior) — worth pinning `gh_token_cmd` to a specific
-  account if you juggle multiple `gh` logins.
+   [Shared behavior](index.md#shared-behavior) — worth pinning `gh_token_cmd` to a specific
+   account if you juggle multiple `gh` logins.
+
+## Security
+
+The backend process runs with elevated privileges that create an undocumented command execution surface. Both `opencode` and `claude` are invoked with `--dangerously-skip-permissions`, which grants the AI model unrestricted shell access within the subprocess. In practice this means the backend can:
+
+- Execute **any** shell command, not just the `gh api` calls needed to post review comments
+- Read and write the full working directory tree, including `.git/` metadata and any files checked out during PR processing
+- Access `GITHUB_TOKEN` from the subprocess environment, which is inherited from the parent process
+
+A confused or adversarial model response could exfiltrate source code, modify repository files, or abuse the GitHub token to make unauthorized API calls.
+
+### Existing mitigations
+
+The following mitigations are already in place in `backend.py`:
+
+- **`--pure` (opencode only):** Disables external plugins, preventing a skill or plugin from creating branches, worktrees, or otherwise mutating git state independently.
+- **`--disable-slash-commands` (claude only):** Disables slash commands that could trigger built-in actions beyond the prompt scope.
+- **New process session (`start_new_session=True`):** Each backend runs in its own process group, allowing the tool to kill the entire tree on timeout.
+- **Working tree restoration:** After each PR is processed, the working tree is reset to a recorded detached `HEAD`, limiting the persistence of any file mutations.
+
+### Mitigations to evaluate
+
+The following have not been implemented but reduce the attack surface further:
+
+- **`--disable-slash-commands` for opencode:** Currently applied only to claude; the equivalent flag for opencode would further restrict built-in actions.
+- **Environment sanitization:** Stripping `GITHUB_TOKEN` and other sensitive env vars from the backend subprocess, passing only the tokens the AI actually needs for its specific task. This would require restructuring how the backend receives its GitHub credentials (e.g., writing the token to a temporary file the backend reads, rather than inheriting it from the environment).
+- **Sandboxed execution:** Running the backend in a restricted container, namespace, or `firejail` profile to isolate filesystem and network access.
+- **Read-only checkout:** Checking out PR branches with a read-only filesystem mount, though this would prevent the backend from writing files needed for its prompt files.
