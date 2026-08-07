@@ -22,8 +22,20 @@ CACHE_DIR = Path.home() / ".harness" / "cache"
 # ---------------------------------------------------------------------------
 
 
-def run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=capture, text=True, check=check)  # noqa: S603
+def run(
+    cmd: list[str],
+    *,
+    check: bool = True,
+    capture: bool = True,
+    stdin_input: str | None = None,
+) -> subprocess.CompletedProcess:
+    return subprocess.run(  # noqa: S603
+        cmd,
+        input=stdin_input,
+        capture_output=capture,
+        text=True,
+        check=check,
+    )
 
 
 def gh_json(args: list[str]) -> Any:
@@ -211,9 +223,10 @@ def cmd_reply(pr_number: int, commit_hash: str, input_path: str | None) -> None:
                 "-X",
                 "POST",
                 "-f",
-                f"body={build_body(c['id'])}",
+                "body=@-",
             ],
             check=False,
+            stdin_input=build_body(c["id"]),
         )
         if result.returncode == 0:
             # Verify the API actually returned a reply object (has an "id" field)
@@ -245,9 +258,10 @@ def cmd_reply(pr_number: int, commit_hash: str, input_path: str | None) -> None:
                 "-X",
                 "POST",
                 "-f",
-                f"body={body}",
+                "body=@-",
             ],
             check=False,
+            stdin_input=body,
         )
         if result.returncode == 0:
             try:
