@@ -186,6 +186,35 @@ def _focused_review_approved(comment: dict, repo: str, our_login: str | None, en
     return reply_has_reaction_from(last_reply["id"], repo, our_login, env)
 
 
+def _is_comment_already_replied(comment: dict, our_login: str) -> bool:
+    """Return True if `our_login` has already replied to this comment."""
+    if comment["type"] == "inline":
+        replies = comment.get("replies")
+        if replies and replies[-1].get("author") == our_login:
+            return True
+    return comment["type"] == "issue" and comment.get("author") == our_login
+
+
+def _process_gated_comments(
+    gated: list[dict],
+    comments: list[dict],
+    pr_number: int,
+    repo: str,
+    our_login: str | None,
+    env: dict,
+) -> list[dict]:
+    """Filter gated comments by approval status, log pending count, and append approved to comments."""
+    approved = [c for c in gated if _focused_review_approved(c, repo, our_login, env)]
+    pending = len(gated) - len(approved)
+    if pending:
+        logger.info(
+            "PR #%d: %d focused-review comment(s) awaiting a \U0001f44d reaction before addressing",
+            pr_number,
+            pending,
+        )
+    return comments + approved
+
+
 def _filter_comments(
     comments: list[dict],
     pr_number: int,
@@ -211,12 +240,7 @@ def _filter_comments(
 
     if our_login:
         before = len(comments)
-        comments = [
-            c
-            for c in comments
-            if not (c["type"] == "inline" and c.get("replies") and c["replies"][-1].get("author") == our_login)
-            and not (c["type"] == "issue" and c.get("author") == our_login)
-        ]
+        comments = [c for c in comments if not _is_comment_already_replied(c, our_login)]
         if len(comments) < before:
             logger.info(
                 "PR #%d: skipped %d already-replied comment(s)",
@@ -225,15 +249,7 @@ def _filter_comments(
             )
 
     if gated:
-        approved = [c for c in gated if _focused_review_approved(c, repo, our_login, env)]
-        pending = len(gated) - len(approved)
-        if pending:
-            logger.info(
-                "PR #%d: %d focused-review comment(s) awaiting a \U0001f44d reaction before addressing",
-                pr_number,
-                pending,
-            )
-        comments = comments + approved
+        comments = _process_gated_comments(gated, comments, pr_number, repo, our_login, env)
 
     if plugin_prefix:
         before = len(comments)
