@@ -487,12 +487,12 @@ def _get_unresolved_comment_ids(pr_number: int, repo: str, env: dict) -> set[int
     return ids
 
 
-def _has_pending_feedback(pr_number: int, repo: str, env: dict) -> bool:
+def _check_gql_unresolved_threads(pr_number: int, repo: str, env: dict) -> tuple[int, int, bool]:
+    """Query review threads via GraphQL and return (total_threads, unresolved, success)."""
     owner, repo_name = repo.split("/")
     cursor: str | None = None
     total_threads = 0
     total_unresolved = 0
-    gql_ok = True
 
     while True:
         cmd = [
@@ -513,8 +513,7 @@ def _has_pending_feedback(pr_number: int, repo: str, env: dict) -> bool:
         gql_result = run_cmd(cmd, cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
         if gql_result.returncode != 0:
             logger.debug("PR #%d: GraphQL review threads query failed (rc=%d)", pr_number, gql_result.returncode)
-            gql_ok = False
-            break
+            return total_threads, total_unresolved, False
         data = json.loads(gql_result.stdout)
         threads_page = data.get("data", {}).get("repository", {}).get("pullRequest", {}).get("reviewThreads", {})
         nodes = threads_page.get("nodes", [])
@@ -525,11 +524,11 @@ def _has_pending_feedback(pr_number: int, repo: str, env: dict) -> bool:
             break
         cursor = page_info.get("endCursor")
 
-    if gql_ok:
-        logger.debug("PR #%d: %d review thread(s), %d unresolved", pr_number, total_threads, total_unresolved)
-        if total_unresolved:
-            return True
+    return total_threads, total_unresolved, True
 
+
+def _check_human_issue_comments(pr_number: int, repo: str, env: dict) -> bool:
+    """Return True if the PR has any non-bot issue comments."""
     comments_result = run_cmd(
         ["gh", "api", f"repos/{repo}/issues/{pr_number}/comments", "--paginate"],
         cwd="/",
@@ -537,14 +536,22 @@ def _has_pending_feedback(pr_number: int, repo: str, env: dict) -> bool:
         timeout=TIMEOUT_GH,
         check=False,
     )
-    if comments_result.returncode == 0:
-        comments = json.loads(comments_result.stdout)
-        bot_logins = {"github-actions[bot]", "dependabot[bot]"}
-        human_comments = [c for c in comments if c.get("user", {}).get("login") not in bot_logins]
-        logger.debug("PR #%d: %d issue comment(s), %d from humans", pr_number, len(comments), len(human_comments))
-        if human_comments:
-            return True
-    else:
+    if comments_result.returncode != 0:
         logger.debug("PR #%d: issue comments query failed (rc=%d)", pr_number, comments_result.returncode)
+        return False
+    comments = json.loads(comments_result.stdout)
+    bot_logins = {"github-actions[bot]", "dependabot[bot]"}
+    human_comments = [c for c in comments if c.get("user", {}).get("login") not in bot_logins]
+    logger.debug("PR #%d: %d issue comment(s), %d from humans", pr_number, len(comments), len(human_comments))
+    return len(human_comments) > 0
 
-    return False
+
+def _has_pending_feedback(pr_number: int, repo: str, env: dict) -> bool:
+    total_threads, total_unresolved, gql_ok = _check_gql_unresolved_threads(pr_number, repo, env)
+
+    if gql_ok:
+        logger.debug("PR #%d: %d review thread(s), %d unresolved", pr_number, total_threads, total_unresolved)
+        if total_unresolved:
+            return True
+
+    return _check_human_issue_comments(pr_number, repo, env)
