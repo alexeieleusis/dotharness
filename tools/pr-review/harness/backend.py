@@ -70,7 +70,7 @@ class Backend:
         the whole point is to catch processes that no longer share the killed group."""
         try:
             result = subprocess.run(  # noqa: S603
-                ["pgrep", "-af", self.backend_name],  # noqa: S607
+                ["pgrep", "-a", "-x", self.backend_name],  # noqa: S607
                 capture_output=True,
                 text=True,
                 timeout=10,
