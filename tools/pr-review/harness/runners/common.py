@@ -114,6 +114,8 @@ def get_head_sha(wdir: str, env: dict) -> str:
 
 def git_restore(original_sha: str, branch: str, cwd: str, env: dict) -> None:
     try:
+        if branch:
+            _preserve_unpushed_commits(branch, cwd, env)
         run_cmd(
             ["git", "checkout", "--recurse-submodules", "-f", original_sha],
             cwd=cwd,
@@ -125,6 +127,48 @@ def git_restore(original_sha: str, branch: str, cwd: str, env: dict) -> None:
             run_cmd(["git", "branch", "-D", branch], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
     except Exception:
         logger.exception("git restore failed")
+
+
+def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:
+    """Before `git_restore` force-checks-out elsewhere and deletes the local `branch`,
+    save any commit(s) on it that origin/`branch` doesn't have under a recovery ref.
+
+    Normally every commit on `branch` has already been pushed by the time we get here.
+    But a backend run can rewrite history mid-run (see address_comments's fast-forward
+    check) or a push can simply fail, leaving local-only commits. Deleting the branch in
+    that state would silently destroy that work with no trace it ever existed."""
+    head_result = run_cmd(["git", "rev-parse", branch], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
+    if head_result.returncode != 0:
+        return
+    branch_sha = head_result.stdout.decode("utf-8", errors="replace").strip()
+    is_pushed = run_cmd(
+        ["git", "merge-base", "--is-ancestor", branch_sha, f"origin/{branch}"],
+        cwd=cwd,
+        env=env,
+        timeout=TIMEOUT_GIT,
+        check=False,
+    )
+    if is_pushed.returncode == 0:
+        return
+    recovery_ref = f"refs/harness-recovery/{branch}-{branch_sha[:12]}"
+    save_result = run_cmd(
+        ["git", "update-ref", recovery_ref, branch_sha], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False
+    )
+    if save_result.returncode == 0:
+        logger.warning(
+            "git_restore: %s (%s) is not on origin/%s; preserved it at %s before deleting the local branch",
+            branch,
+            branch_sha,
+            branch,
+            recovery_ref,
+        )
+    else:
+        logger.error(
+            "git_restore: %s has unpushed commit(s) at %s that could NOT be preserved under a recovery ref "
+            "— they will be lost when the local branch is deleted",
+            branch,
+            branch_sha,
+        )
 
 
 def build_subprocess_env(path_prepend: list[str], env_vars: dict[str, str], gh_token: str) -> dict[str, str]:

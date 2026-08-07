@@ -160,9 +160,17 @@ def _process_single_pr(
         logger.info("PR #%d: found %d comment(s) to address", number, len(comments))
         head_sha = get_head_sha(wdir, env)
         for comment in comments:
-            head_sha = _address_single_comment(
+            head_sha, rewritten = _address_single_comment(
                 comment, number, instructions_template, backend, wdir, repo, env, head_sha, opencode_dir
             )
+            if rewritten:
+                logger.warning(
+                    "PR #%d: skipping remaining comments this run — comment %s's backend run rewrote "
+                    "branch history, so pushing it could silently discard or corrupt already-pushed commits",
+                    number,
+                    comment.get("id", "?"),
+                )
+                break
             if not _push_branch(number, branch, wdir, env):
                 logger.warning(
                     "PR #%d: skipping remaining comments this run after comment %s's push failed",
@@ -303,10 +311,13 @@ def _address_single_comment(
     env: dict,
     pre_sha: str,
     opencode_dir: str | None = None,
-) -> str:
+) -> tuple[str, bool]:
     """Run the backend for `comment`, then return the resulting HEAD sha (or `pre_sha`
     unchanged if HEAD didn't move / couldn't be read) so the caller can pass it as the
-    next comment's `pre_sha` without re-deriving it."""
+    next comment's `pre_sha` without re-deriving it, plus whether the backend rewrote
+    branch history (moved HEAD to a commit that isn't a descendant of `pre_sha`) — the
+    caller must not push in that case, since it could silently discard or corrupt
+    already-pushed commits."""
     cid = comment.get("id", "?")
     ctype = comment.get("type", "?")
     author = comment.get("author", "?")
@@ -319,6 +330,7 @@ def _address_single_comment(
     )
     comment_instructions = _build_comment_instructions(instructions_template, comment, pr_number, repo)
     post_sha = pre_sha
+    rewritten = False
     try:
         backend.run(comment_instructions, cwd=wdir, opencode_dir=opencode_dir)
         logger.info("PR #%d: comment %s — backend finished", pr_number, cid)
@@ -327,6 +339,7 @@ def _address_single_comment(
     finally:
         post_sha = get_head_sha(wdir, env) or pre_sha
         if pre_sha and post_sha != pre_sha and not _is_ancestor(pre_sha, post_sha, wdir, env):
+            rewritten = True
             logger.error(
                 "PR #%d comment %s: HEAD %s..%s is not a fast-forward — branch history was "
                 "rewritten during this comment's backend run; earlier commit(s) may have just been discarded",
@@ -335,7 +348,7 @@ def _address_single_comment(
                 pre_sha,
                 post_sha,
             )
-    return post_sha
+    return post_sha, rewritten
 
 
 def _push_branch(number: int, branch: str, wdir: str, env: dict) -> bool:

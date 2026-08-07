@@ -163,6 +163,50 @@ def test_stops_processing_comments_after_push_failure(tmp_xdg, tmp_path):
     mock_restore.assert_called()
 
 
+def test_stops_processing_comments_after_history_rewrite(tmp_xdg, tmp_path):
+    cfg = _cfg(tmp_path)
+    (tmp_path / "k" / "pr-review").mkdir(parents=True)
+    (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
+    comment_2 = {**_FAKE_COMMENT, "id": 43}
+    rev_parse_calls = {"count": 0}
+
+    def run_cmd_side_effect(cmd, **kwargs):
+        if "rev-parse" in cmd:
+            rev_parse_calls["count"] += 1
+            # first rev-parse is the pre-loop head_sha; the one inside the (only)
+            # comment's backend run reports a HEAD that moved
+            sha = "sha-before" if rev_parse_calls["count"] == 1 else "sha-after"
+            return MagicMock(returncode=0, stdout=f"{sha}\n".encode(), stderr=b"")
+        if "merge-base" in cmd:
+            return MagicMock(returncode=1, stdout=b"", stderr=b"")  # not an ancestor: history was rewritten
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    mock_run = MagicMock(side_effect=run_cmd_side_effect)
+    with (
+        patch("harness.runners.address_comments.get_gh_token", return_value="tok"),
+        patch(
+            "harness.runners.address_comments._list_prs_to_check",
+            return_value=[{"number": 2, "headRefName": "my-branch"}],
+        ),
+        patch("harness.runners.address_comments._has_pending_feedback", return_value=True),
+        patch("harness.runners.address_comments.fetch_pr_comments", return_value=[_FAKE_COMMENT, comment_2]),
+        patch("harness.runners.address_comments.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.address_comments.git_fetch_and_checkout"),
+        patch("harness.runners.address_comments.git_restore") as mock_restore,
+        patch("harness.runners.address_comments.run_cmd", mock_run),
+        patch("harness.runners.common.run_cmd", mock_run),
+        patch("harness.runners.address_comments.Backend") as mock_be,
+    ):
+        mock_be.return_value.run.return_value = MagicMock(returncode=0)
+        address_comments._run_locked(cfg)
+    # the first comment's backend ran; the fast-forward check must have caught the
+    # rewrite and skipped both the push and the second comment entirely
+    assert mock_be.return_value.run.call_count == 1
+    push_calls = [c for c in mock_run.call_args_list if c.args and "push" in c.args[0]]
+    assert push_calls == []
+    mock_restore.assert_called()
+
+
 def test_list_prs_to_check_merges_author_and_assignee_deduped():
     author_payload = [{"number": 1, "headRefName": "a", "isDraft": False}]
     assignee_payload = [
@@ -223,11 +267,12 @@ def test_address_single_comment_history_rewrite_detection(
         patch("harness.runners.common.run_cmd", run_cmd_mock),
         caplog.at_level("ERROR"),
     ):
-        post_sha = _address_single_comment(
+        post_sha, rewritten = _address_single_comment(
             _FAKE_COMMENT, 1, "instructions", mock_backend, "/repo", "acme/frontend", {}, "sha-before"
         )
     assert any("not a fast-forward" in r.message for r in caplog.records) == expect_error
     assert post_sha == post_sha_stdout.decode().strip()
+    assert rewritten == expect_error
 
 
 _MARKED_COMMENT = {

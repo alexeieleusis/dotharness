@@ -55,6 +55,8 @@ If no code change is needed (the comment is informational, already fixed, or you
 
 ## Step 3 — Commit
 
+**Never amend, rebase, or reset existing commits — including ones from earlier comments addressed in this same run, and even if they touch the same file.** Always create a brand new commit on top of the current HEAD. The runner pushes each commit to origin right after it's made; rewriting history that may already be on origin will corrupt the branch and can destroy prior work.
+
 Stage only the files you changed (never `git add -A`). Build `<COMMENT_LINK>` from the comment type:
 - **inline**: `https://github.com/<REPO>/pull/<NUMBER>#discussion_r<COMMENT_ID>`
 - **issue**: `<COMMENT_URL>` directly
@@ -117,6 +119,7 @@ _https://github.com/<REPO>/commit/<HASH>_"
 
 ## Notes
 
+- Never amend, rebase, or reset existing commits — always commit fresh on top of HEAD.
 - Never use `git add -A` or `git add .` — stage only the files you changed.
 - Never push; the runner handles that after you finish.
 - Never request or re-request a review, or use the `/address-pr-comments` skill/command or `pr-comments.py reply` — see the note above.

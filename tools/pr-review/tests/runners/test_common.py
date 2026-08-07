@@ -9,6 +9,7 @@ from harness.runners.common import (
     get_gh_token,
     git_detach_and_record,
     git_fetch_and_checkout,
+    git_restore,
     run_cmd,
 )
 
@@ -67,3 +68,66 @@ def test_get_gh_token_strips_whitespace():
         mock_run.return_value = MagicMock(stdout="  tok123\n  ")
         tok = get_gh_token("echo tok123")
     assert tok == "tok123"
+
+
+def _git_restore_side_effect(is_ancestor_returncode):
+    def side_effect(cmd, **kwargs):
+        if "rev-parse" in cmd:
+            return MagicMock(returncode=0, stdout=b"deadbeef1234\n", stderr=b"")
+        if "merge-base" in cmd:
+            return MagicMock(returncode=is_ancestor_returncode, stdout=b"", stderr=b"")
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    return side_effect
+
+
+def test_git_restore_preserves_commits_not_on_origin(tmp_path, caplog):
+    mock_run = MagicMock(side_effect=_git_restore_side_effect(is_ancestor_returncode=1))
+    with patch("harness.runners.common.run_cmd", mock_run), caplog.at_level("WARNING"):
+        git_restore("orig-sha", "my-branch", str(tmp_path), {})
+    update_ref_calls = [c for c in mock_run.call_args_list if c.args and "update-ref" in c.args[0]]
+    assert len(update_ref_calls) == 1
+    assert update_ref_calls[0].args[0] == [
+        "git",
+        "update-ref",
+        "refs/harness-recovery/my-branch-deadbeef1234",
+        "deadbeef1234",
+    ]
+    # the local branch must still get force-checked-out-away-from and deleted afterward
+    checkout_calls = [c for c in mock_run.call_args_list if c.args and "checkout" in c.args[0]]
+    branch_delete_calls = [c for c in mock_run.call_args_list if c.args and c.args[0][:3] == ["git", "branch", "-D"]]
+    assert checkout_calls and branch_delete_calls
+    assert any("preserved it at" in r.message for r in caplog.records)
+
+
+def test_git_restore_skips_recovery_ref_when_branch_fully_pushed(tmp_path, caplog):
+    mock_run = MagicMock(side_effect=_git_restore_side_effect(is_ancestor_returncode=0))
+    with patch("harness.runners.common.run_cmd", mock_run), caplog.at_level("WARNING"):
+        git_restore("orig-sha", "my-branch", str(tmp_path), {})
+    update_ref_calls = [c for c in mock_run.call_args_list if c.args and "update-ref" in c.args[0]]
+    assert update_ref_calls == []
+    assert not any("preserved it at" in r.message for r in caplog.records)
+
+
+def test_git_restore_skips_preserve_check_when_branch_empty(tmp_path):
+    mock_run = MagicMock(return_value=MagicMock(returncode=0, stdout=b"", stderr=b""))
+    with patch("harness.runners.common.run_cmd", mock_run):
+        git_restore("orig-sha", "", str(tmp_path), {})
+    # no branch name means nothing to preserve or delete: only the checkout happens
+    assert mock_run.call_count == 1
+    assert mock_run.call_args_list[0].args[0][:2] == ["git", "checkout"]
+
+
+def test_git_restore_logs_error_when_recovery_ref_cannot_be_saved(tmp_path, caplog):
+    def side_effect(cmd, **kwargs):
+        if "rev-parse" in cmd:
+            return MagicMock(returncode=0, stdout=b"deadbeef1234\n", stderr=b"")
+        if "merge-base" in cmd:
+            return MagicMock(returncode=1, stdout=b"", stderr=b"")
+        if "update-ref" in cmd:
+            return MagicMock(returncode=1, stdout=b"", stderr=b"failed")
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    with patch("harness.runners.common.run_cmd", side_effect=side_effect), caplog.at_level("ERROR"):
+        git_restore("orig-sha", "my-branch", str(tmp_path), {})
+    assert any("could NOT be preserved" in r.message for r in caplog.records)
