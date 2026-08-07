@@ -136,7 +136,10 @@ def _post_comment_if_needed(pr_number: int, repo: str, env: dict, *, marker: str
         check=False,
     )
     if result.returncode == 0:
-        comments = json.loads(result.stdout)
+        try:
+            comments = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            comments = []
         if any(marker in c.get("body", "") for c in comments):
             return
     run_cmd(
