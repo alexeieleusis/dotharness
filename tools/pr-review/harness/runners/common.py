@@ -160,6 +160,8 @@ def pr_from_url(url: str, repo: str, env: dict, fields: str) -> dict:
         timeout=TIMEOUT_GH,
         check=False,
     )
+    if result.returncode != 0:
+        return {}
     return json.loads(result.stdout)
 
 
