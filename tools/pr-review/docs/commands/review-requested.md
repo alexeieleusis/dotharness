@@ -46,7 +46,7 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
 6. For each candidate PR, in order:
    - Skips it if the current user already left an `APPROVED` review on it, or
      if the current user already posted a comment whose body starts with
-      `[bot]osc-review` or `[bot]Review Summary` (after stripping leading `#`/whitespace)
+      `[bot]osc-review` or `Review Summary` (after stripping leading `#`/whitespace)
      — this is the mechanism that prevents re-reviewing the same PR revision.
    - Otherwise: fetches and checks out the PR's head branch (using the shared
      rebase/reset behavior — see [Shared behavior](index.md#shared-behavior)),
@@ -68,7 +68,7 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
      knowledge + PR/repo metadata + list of reviewed files + description +
      vibe-heal context) and invokes the backend once more; per
      `review-summary.md` this posts a single `gh pr comment` starting with
-      `# [bot]Review Summary`. A timeout here is likewise caught and logged.
+      `# Review Summary`. A timeout here is likewise caught and logged.
    - Removes the current user as a requested reviewer on the PR
      (`gh pr edit --remove-reviewer <login>`), which is what clears it from
      future `user-review-requested:@me` searches.
@@ -104,7 +104,7 @@ This runner does not use the `state.py` module — there is no persisted
 duplicate work using two live signals read from GitHub on every run:
 1. It skips a PR if the current user already has an `APPROVED` review on it.
 2. It skips a PR if the current user already posted a comment starting with
-    `[bot]osc-review` or `[bot]Review Summary`.
+    `[bot]osc-review` or `Review Summary`.
 3. After reviewing, it removes itself as a requested reviewer, which is what
    drops the PR out of the `user-review-requested:@me` search used to build
    the batch list next run.

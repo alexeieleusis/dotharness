@@ -188,7 +188,7 @@ def test_add_reviewer_invokes_gh_pr_edit():
 @pytest.mark.parametrize(
     ("body", "expected"),
     [
-        ("# [bot]Review Summary\nNo blocking issues found.", True),
+        ("# Review Summary\nNo blocking issues found.", True),
         ("# review summary\nlowercase heading still counts", True),
         ("## REVIEW SUMMARY", True),
         ("Review summary without a leading hash", True),
@@ -205,9 +205,9 @@ def test_is_review_summary_comment(body, expected):
 
 def test_has_review_summary_comment_matches_only_current_user():
     comments = [
-        {"user": {"login": "someone-else"}, "body": "# [bot]Review Summary\nother account's comment"},
+        {"user": {"login": "someone-else"}, "body": "# Review Summary\nother account's comment"},
         {"user": {"login": "alice"}, "body": "unrelated comment"},
-        {"user": {"login": "alice"}, "body": "# [bot]Review Summary\nNo blocking issues found."},
+        {"user": {"login": "alice"}, "body": "# Review Summary\nNo blocking issues found."},
     ]
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
@@ -215,7 +215,7 @@ def test_has_review_summary_comment_matches_only_current_user():
 
 
 def test_has_review_summary_comment_false_when_only_other_user_posted():
-    comments = [{"user": {"login": "someone-else"}, "body": "# [bot]Review Summary\nnot alice's comment"}]
+    comments = [{"user": {"login": "someone-else"}, "body": "# Review Summary\nnot alice's comment"}]
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
         assert has_review_summary_comment(1, "acme/repo", "alice", {}) is False

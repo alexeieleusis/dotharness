@@ -18,7 +18,7 @@ harness run [--config PATH] [--verbose] self-review
 4. Loads the shared prompt templates `review-file.md` and `review-summary.md` from `harness.knowledge_dir/pr-review/`, plus the optional `harness.review_knowledge_file` (appended to every prompt as an "Additional Review Guide" section).
 5. Constructs the `Backend` (opencode or claude, per `harness.backend`) and records the repo's current `HEAD` as a detached commit, so the working tree can always be restored.
 6. For each PR not already in the reviewed set:
-   - If a prior comment on the PR already starts with a `[bot]osc-review` or `[bot]Review Summary` marker (i.e. it's already been reviewed, possibly by a previous run whose state write didn't happen), the PR is marked reviewed in state and skipped — no new review is generated.
+   - If a prior comment on the PR already starts with a `[bot]osc-review` or `Review Summary` marker (i.e. it's already been reviewed, possibly by a previous run whose state write didn't happen), the PR is marked reviewed in state and skipped — no new review is generated.
    - Otherwise it fetches and checks out the PR's head branch (using the shared rebase/reset behavior — see [Shared behavior](index.md#shared-behavior)), then computes the diff against the PR's base branch.
    - For each changed file, it builds a review prompt (file diff, or the whole file if it's new or the diff touches ≥75% of it) plus PR metadata, the PR description, and any matching vibe-heal static-analysis context, and runs the backend against it. The backend is responsible for producing/posting the actual inline PR review comments — this command supplies the prompt and repo checkout, not the GitHub API calls. The backend runs with unrestricted shell access (see [Security](#security)).
    - After all files, it builds one more prompt from `review-summary.md` (listing every file reviewed) and runs the backend once more to produce the overall PR summary/comment.
@@ -48,7 +48,7 @@ Only these `.harness.toml` fields affect `self-review`; see [`../configuration.m
 
 State is stored at `~/.local/share/dotharness/state/<repo_slug>/self_review.json` and tracks:
 - `version` — schema version (currently `1`)
-- `reviewed_prs` — list of PR numbers already reviewed (or already carrying a `[bot]osc-review`/`[bot]Review Summary` comment)
+- `reviewed_prs` — list of PR numbers already reviewed (or already carrying a `[bot]osc-review`/`Review Summary` comment)
 
 PRs in `reviewed_prs` are skipped on subsequent runs, so re-running `self-review` is safe and only does work for PRs opened (or newly qualifying) since the last successful pass. To force everything to be re-reviewed, clear the state:
 ```
@@ -60,7 +60,7 @@ This deletes `self_review.json` for the repo after an interactive confirmation (
 
 - A PR is marked reviewed only if *every* file's review and the final summary all succeeded in the same run; a single timed-out or failing file means the whole PR — including files that succeeded — gets re-sent to the backend next time. There's no per-file progress tracking within a PR.
 - **Cost implication:** When a file fails mid-PR, the `_review_files` loop continues processing all remaining files, then the summary also runs. On the next invocation the *entire* file list is retried from scratch. For a PR with N files where file K fails, the cost is approximately (2K — 1) backend invocations (K files + summary on first pass, then N files + summary on retry, minus the K already-processed files on first pass). With expensive backends this can approach 2x the normal cost for large PRs. Consider setting `harness.backend_timeout_seconds` conservatively to avoid mid-run timeouts, and monitor `~/.local/share/dotharness/logs/self-review/` for timeout patterns.
-- The "already reviewed" check is comment-based, not state-based: it looks for any PR comment whose body starts with `[bot]osc-review` or `[bot]Review Summary` (after stripping leading `#`/spaces). The `[bot]` prefix was chosen to reduce collision risk with organic comments. If a comment with one of these exact prefixes is posted manually (or by another tool), `self-review` will treat the PR as already reviewed and skip it. To recover from this, clear the state with `harness state reset self-review`.
+- The "already reviewed" check is comment-based, not state-based: it looks for any PR comment whose body starts with `[bot]osc-review` or `Review Summary` (after stripping leading `#`/spaces). The `[bot]` prefix on `osc-review` was chosen to reduce collision risk with organic comments. If a comment with one of these exact prefixes is posted manually (or by another tool), `self-review` will treat the PR as already reviewed and skip it. To recover from this, clear the state with `harness state reset self-review`.
 - Subject to the shared `gh` account and working-directory-mutation caveats in
    [Shared behavior](index.md#shared-behavior) — worth pinning `gh_token_cmd` to a specific
    account if you juggle multiple `gh` logins.
