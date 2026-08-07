@@ -201,7 +201,11 @@ def cmd_reply(pr_number: int, commit_hash: str, input_path: str | None) -> None:
     per_comment_replies: dict[str, str] = json.loads(rfile.read_text()) if rfile.exists() else {}
 
     # Resolve full commit hash and build URL
-    full_hash = run(["git", "rev-parse", commit_hash]).stdout.strip()
+    try:
+        full_hash = run(["git", "rev-parse", commit_hash]).stdout.strip()
+    except subprocess.CalledProcessError:
+        print(f"Error: Commit `{commit_hash}` not found — run `git fetch` first.", file=sys.stderr)
+        sys.exit(1)
     repo = gh_json(["repo", "view", "--json", "nameWithOwner"])["nameWithOwner"]
     commit_url = f"https://github.com/{repo}/commit/{full_hash}"
 
