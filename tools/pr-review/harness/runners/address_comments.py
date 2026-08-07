@@ -439,6 +439,49 @@ def _list_prs(repo: str, env: dict, filter_flag: str) -> list[dict]:
     return json.loads(result.stdout)
 
 
+def _fetch_unresolved_threads_page(
+    pr_number: int, owner: str, repo_name: str, cursor: str | None, env: dict
+) -> dict | None:
+    """Fetch one page of review threads (with comment databaseIds) via GraphQL.
+    Returns None if the request fails or the response can't be parsed."""
+    cmd = [
+        "gh",
+        "api",
+        "graphql",
+        "-f",
+        f"query={GRAPHQL_QUERY_THREAD_IDS}",
+        "-F",
+        f"owner={owner}",
+        "-F",
+        f"repo={repo_name}",
+        "-F",
+        f"number={pr_number}",
+    ]
+    if cursor:
+        cmd += ["-f", f"cursor={cursor}"]
+    result = run_cmd(cmd, cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
+    if result.returncode != 0:
+        logger.warning("PR #%d: could not fetch unresolved thread IDs (rc=%d)", pr_number, result.returncode)
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except ValueError:
+        logger.warning("PR #%d: could not parse GraphQL response for thread IDs", pr_number)
+        return None
+    return data.get("data", {}).get("repository", {}).get("pullRequest", {}).get("reviewThreads", {})
+
+
+def _collect_unresolved_ids(thread_nodes: list[dict], ids: set[int]) -> None:
+    """Add databaseIds of comments belonging to unresolved threads into `ids`."""
+    for t in thread_nodes:
+        if t["isResolved"]:
+            continue
+        for c in t.get("comments", {}).get("nodes", []):
+            db_id = c.get("databaseId")
+            if db_id:
+                ids.add(db_id)
+
+
 def _get_unresolved_comment_ids(pr_number: int, repo: str, env: dict) -> set[int] | None:
     """Return REST API databaseIds of inline comments in unresolved threads.
     Returns None if the GraphQL query fails (caller should skip filtering)."""
@@ -447,37 +490,10 @@ def _get_unresolved_comment_ids(pr_number: int, repo: str, env: dict) -> set[int
     cursor: str | None = None
 
     while True:
-        cmd = [
-            "gh",
-            "api",
-            "graphql",
-            "-f",
-            f"query={GRAPHQL_QUERY_THREAD_IDS}",
-            "-F",
-            f"owner={owner}",
-            "-F",
-            f"repo={repo_name}",
-            "-F",
-            f"number={pr_number}",
-        ]
-        if cursor:
-            cmd += ["-f", f"cursor={cursor}"]
-        result = run_cmd(cmd, cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
-        if result.returncode != 0:
-            logger.warning("PR #%d: could not fetch unresolved thread IDs (rc=%d)", pr_number, result.returncode)
+        threads_page = _fetch_unresolved_threads_page(pr_number, owner, repo_name, cursor, env)
+        if threads_page is None:
             return None
-        try:
-            data = json.loads(result.stdout)
-        except ValueError:
-            logger.warning("PR #%d: could not parse GraphQL response for thread IDs", pr_number)
-            return None
-        threads_page = data.get("data", {}).get("repository", {}).get("pullRequest", {}).get("reviewThreads", {})
-        for t in threads_page.get("nodes", []):
-            if not t["isResolved"]:
-                for c in t.get("comments", {}).get("nodes", []):
-                    db_id = c.get("databaseId")
-                    if db_id:
-                        ids.add(db_id)
+        _collect_unresolved_ids(threads_page.get("nodes", []), ids)
         page_info = threads_page.get("pageInfo", {})
         if not page_info.get("hasNextPage"):
             break
