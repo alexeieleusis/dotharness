@@ -138,7 +138,7 @@ def cmd_run(ctx, config_path, verbose):
     "pr_url",
     default=None,
     help=(
-        "Run vibe_heal against a single PR URL instead of discovering PRs via the "
+        "Review a single PR URL instead of discovering PRs via the "
         "last_pr watermark. Bypasses state entirely: the watermark is not read or updated, "
         "so this PR can be re-run any number of times without affecting future review-prs runs."
     ),
