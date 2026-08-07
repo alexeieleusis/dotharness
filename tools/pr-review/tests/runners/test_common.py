@@ -1,4 +1,5 @@
 import os
+import signal
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -30,11 +31,12 @@ def test_run_cmd_timeout_kills_process_group(tmp_path):
     mock_proc.pid = os.getpid()
     with (
         patch("subprocess.Popen", return_value=mock_proc),
+        patch("os.getpgid", return_value=1234),
         patch("os.killpg") as mock_kill,
         pytest.raises(subprocess.TimeoutExpired),
     ):
         run_cmd(["sleep", "999"], cwd=str(tmp_path), env={}, timeout=1)
-    mock_kill.assert_called_once()
+    mock_kill.assert_called_once_with(1234, signal.SIGKILL)
 
 
 def test_git_detach_records_sha(tmp_path):
