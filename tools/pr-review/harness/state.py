@@ -1,3 +1,4 @@
+import fcntl
 import json
 import re
 from pathlib import Path
@@ -32,6 +33,22 @@ def _atomic_write(path: Path, data: dict) -> None:
     tmp.rename(path)
 
 
+class _state_lock:
+    """Acquire an exclusive flock on a state file's parent directory entry."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def __enter__(self):
+        self._fd = open(self.path, "a")
+        fcntl.flock(self._fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        fcntl.flock(self._fd, fcntl.LOCK_UN)
+        self._fd.close()
+
+
 def read_vibe_heal_state(repo_slug: str) -> dict:
     p = _state_path(repo_slug, VIBE_HEAL_FILE)
     if not p.exists():
@@ -44,13 +61,14 @@ def read_vibe_heal_state(repo_slug: str) -> dict:
 def write_vibe_heal_state(repo_slug: str, last_pr: int | None = None, *, last_main_sha: str | None = None) -> None:
     if last_pr is None and last_main_sha is None:
         raise ValueError("write_vibe_heal_state called with no fields to update")  # noqa: TRY003
-    current = read_vibe_heal_state(repo_slug)
-    if last_pr is not None:
-        current["last_pr"] = last_pr
-    if last_main_sha is not None:
-        current["last_main_sha"] = last_main_sha
     p = _state_path(repo_slug, VIBE_HEAL_FILE)
-    _atomic_write(p, current)
+    with _state_lock(p):
+        current = read_vibe_heal_state(repo_slug)
+        if last_pr is not None:
+            current["last_pr"] = last_pr
+        if last_main_sha is not None:
+            current["last_main_sha"] = last_main_sha
+        _atomic_write(p, current)
 
 
 def read_self_review_state(repo_slug: str) -> dict:
@@ -62,7 +80,8 @@ def read_self_review_state(repo_slug: str) -> dict:
 
 def write_self_review_state(repo_slug: str, reviewed_prs: list[int]) -> None:
     p = _state_path(repo_slug, SELF_REVIEW_FILE)
-    _atomic_write(p, {"version": 1, "reviewed_prs": reviewed_prs})
+    with _state_lock(p):
+        _atomic_write(p, {"version": 1, "reviewed_prs": reviewed_prs})
 
 
 def delete_state(repo_slug: str, command: str) -> None:
