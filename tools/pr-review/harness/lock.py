@@ -16,6 +16,8 @@ def acquire_lock(repo_slug: str):
     lock_dir = XDG_RUNTIME / "locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock_file = lock_dir / f"{repo_slug}.lock"
+    if not str(lock_file.resolve()).startswith(str(lock_dir.resolve())):
+        raise ValueError(f"Invalid repo_slug: {repo_slug!r}")  # noqa: TRY003
     fd = None
     try:
         fd = lock_file.open("w")
