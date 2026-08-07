@@ -83,7 +83,8 @@ def test_init_aborts_if_exists(tmp_path, monkeypatch):
 
 def test_validate_exits_0_on_valid(minimal_toml):
     runner = CliRunner()
-    result = runner.invoke(cli, ["validate", "--config", str(minimal_toml)])
+    with patch("shutil.which", return_value="/usr/bin/stub"):
+        result = runner.invoke(cli, ["validate", "--config", str(minimal_toml)])
     assert result.exit_code == 0
 
 
