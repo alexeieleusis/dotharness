@@ -1,4 +1,5 @@
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,7 +43,7 @@ class ScheduleEntry:
     def to_cron_line(self) -> str:
         log_dir = Path.home() / ".local/share/dotharness/logs" / self.command
         cron_expr = build_cron_expression(self.interval_seconds)
-        cmd = f"{self.harness_bin} run --config {self.config_path} {self.command} >> {log_dir}/$(date +\\%F).log 2>&1"
+        cmd = f"{shlex.quote(self.harness_bin)} run --config {shlex.quote(self.config_path)} {shlex.quote(self.command)} >> {shlex.quote(str(log_dir))}/$(date +\\%F).log 2>&1"
         # marker includes interval_seconds and config_path so `schedule list` can parse them
         marker = f"# harness: {self.command} {self.repo_slug} {self.interval_seconds} {self.config_path}"
         return f"{cron_expr} {cmd}\n{marker}"
