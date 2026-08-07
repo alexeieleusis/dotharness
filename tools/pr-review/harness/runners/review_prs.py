@@ -1,5 +1,6 @@
 import json
 import logging
+import shlex
 import subprocess
 
 from harness import state
@@ -167,8 +168,8 @@ def _run_pre_commands(subdir, config: HarnessConfig, env: dict) -> bool:
         cmd_str = pre_command.cmd
         logger.info("Running pre-command: %s", cmd_str)
         try:
-            has_shell_ops = any(op in cmd_str for op in (">", "|", "&&", ";", "<"))
-            cmd = cmd_str if has_shell_ops else cmd_str.split()
+            has_shell_ops = any(op in cmd_str for op in (">", "|", "&&", ";", "<", "`", "$("))
+            cmd = cmd_str if has_shell_ops else shlex.split(cmd_str)
             run_cmd(cmd, cwd=str(config.repo.working_dir), env=env, timeout=subdir.timeout, shell=has_shell_ops)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
             logger.warning("Pre-command failed '%s': %s", cmd_str, e)
