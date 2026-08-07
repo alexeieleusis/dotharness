@@ -10,3 +10,6 @@ htmlcov/
 site/
 .tox/
 .worktrees/
+.env.vibeheal
+sonar-project.properties
+.scannerwork
