@@ -255,6 +255,8 @@ def has_review_summary_comment(pr_number: int, repo: str, current_user: str, env
             [
                 "gh",
                 "api",
+                "--method",
+                "GET",
                 f"repos/{repo}/issues/{pr_number}/comments",
                 "-F",
                 "per_page=100",
@@ -288,6 +290,8 @@ def has_inline_review_comments(pr_number: int, repo: str, current_user: str, env
             [
                 "gh",
                 "api",
+                "--method",
+                "GET",
                 f"repos/{repo}/pulls/{pr_number}/comments",
                 "-F",
                 "per_page=100",

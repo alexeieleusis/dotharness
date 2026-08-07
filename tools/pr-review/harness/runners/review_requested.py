@@ -103,6 +103,8 @@ def _has_user_approved(pr_number: int, repo: str, current_user: str, env: dict) 
             [
                 "gh",
                 "api",
+                "--method",
+                "GET",
                 f"repos/{repo}/pulls/{pr_number}/reviews",
                 "-F",
                 "per_page=100",
