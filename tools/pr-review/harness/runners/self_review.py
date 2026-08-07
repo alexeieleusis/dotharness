@@ -42,11 +42,14 @@ def _get_extra_knowledge(config) -> str | None:
 
 
 def _build_backend(config, env: dict) -> Backend:
+    token = env.get("GITHUB_TOKEN", "")
+    if not token:
+        raise RuntimeError("GITHUB_TOKEN is not set in the subprocess environment")  # noqa: TRY003
     return Backend(
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
-        {**config.harness.env, "GITHUB_TOKEN": env.get("GITHUB_TOKEN", "")},
+        {**config.harness.env, "GITHUB_TOKEN": token},
     )
 
 
