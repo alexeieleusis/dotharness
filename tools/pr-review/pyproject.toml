@@ -1,0 +1,105 @@
+[project]
+name = "dotharness-pr-review"
+version = "0.1.0"
+description = "Generic PR automation with configurable AI backends"
+authors = [{ name = "Alexei Diaz", email = "alexei.eleusis@gmail.com" }]
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["python", "github", "pr-review", "ai"]
+requires-python = ">=3.11"
+dependencies = ["click>=8.1"]
+
+[project.urls]
+Homepage = "https://alexeieleusis.github.io/dotharness/"
+Repository = "https://github.com/alexeieleusis/dotharness"
+Documentation = "https://alexeieleusis.github.io/dotharness/"
+
+[project.scripts]
+harness = "harness.cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["harness"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.14",
+    "pre-commit>=4.5.1",
+    "tox-uv>=1.33.4",
+    "deptry>=0.25.1",
+    "ty>=0.0.24",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.15.7",
+    "zensical>=0.0.26",
+    "mkdocstrings-python>=1.0.3",
+]
+
+[tool.ty.environment]
+python = "./.venv"
+python-version = "3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+fix = true
+
+[tool.ruff.lint]
+select = [
+    # flake8-2020
+    "YTT",
+    # flake8-bandit
+    "S",
+    # flake8-bugbear
+    "B",
+    # flake8-builtins
+    "A",
+    # flake8-comprehensions
+    "C4",
+    # flake8-debugger
+    "T10",
+    # flake8-simplify
+    "SIM",
+    # isort
+    "I",
+    # mccabe
+    "C90",
+    # pycodestyle
+    "E", "W",
+    # pyflakes
+    "F",
+    # pygrep-hooks
+    "PGH",
+    # pyupgrade
+    "UP",
+    # ruff
+    "RUF",
+    # tryceratops
+    "TRY",
+]
+ignore = [
+    # LineTooLong
+    "E501",
+    # DoNotAssignLambda
+    "E731",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+[tool.ruff.format]
+preview = true
+
+[tool.coverage.report]
+skip_empty = true
+
+[tool.coverage.run]
+branch = true
+source = ["harness"]

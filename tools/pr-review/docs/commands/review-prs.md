@@ -1,0 +1,120 @@
+# review-prs
+
+Runs automated static-analysis review (via the external `vibe_heal` tool) against open, non-draft pull
+requests in a repo, posting results as PR comments. It is a batch/sweep command — meant to run on a schedule
+(e.g. via `harness schedule install review-prs`) so that every open PR gets vibe_heal/SonarQube-style feedback
+without anyone triggering it by hand. Unlike `review-requested` or `self-review`, this command does not invoke
+harness's own AI backend (opencode/claude) directly — it shells out to `vibe_heal`, which does its own analysis
+and posts its own comments.
+
+## Usage
+```
+harness run [--config PATH] [--verbose] review-prs [--pr PR_URL]
+```
+- `--config PATH` — path to the `.harness.toml` config file. Defaults to `./.harness.toml` (resolved relative
+  to the current directory) if omitted.
+- `--verbose` — enables DEBUG-level logging and mirrors log output to stdout (normally only written to the
+  per-day log file under `~/.local/share/dotharness/logs/review-prs/`).
+- `--pr PR_URL` — optional. When given, runs the vibe_heal pipeline against only that one PR (the PR number is
+  parsed as the last path segment of the URL) instead of discovering PRs via the `last_pr` watermark. This
+  mode reads and writes no state at all: it doesn't consult `last_pr` to decide eligibility, and it doesn't
+  advance `last_pr` afterward — so the same PR can be re-run any number of times (e.g. to pick up a config
+  change or re-run after a transient failure) without affecting which PRs future watermark-based runs pick up.
+  It also skips the draft and `vibe_heal.authors` filtering that the batch case applies — a single PR fetched
+  this way is processed regardless of draft status or author.
+
+## What it does
+
+1. Acquires a per-repo lock (`repo_slug`), shared with the other four commands. If another
+   run — `review-prs` or any of the other four — is already holding the lock for the same
+   repo, the new invocation exits immediately with an error instead of waiting.
+2. If `vibe_heal.enabled` is `false` in config, logs and exits — the whole command is a no-op.
+3. Builds a subprocess environment: resolves a GitHub token via `harness.gh_token_cmd`, applies
+   `harness.path_prepend` / `harness.env`, and looks up the current `gh` user's login.
+4. Builds the list of PRs to process:
+   - If `--pr` was given, resolves just that PR via `gh pr view` (`number`, `headRefName`, `baseRefName`).
+   - Otherwise, reads `last_pr` from state, lists open PRs via `gh pr list --repo <repo.name> --state open
+     --limit 500`, and filters to **eligible** PRs: PR number greater than `last_pr`, **not a draft**, and
+     author matching `vibe_heal.authors` (`"*"` or an explicit login list). Eligible PRs are sorted ascending
+     by number.
+5. If there are no PRs to process, the command exits.
+6. Detaches HEAD and records the current SHA, then processes each PR in order:
+   - Fetches and checks out the PR's head branch (see rebase/reset behavior in
+     [Commands → Shared behavior](index.md#shared-behavior)).
+   - Posts a one-time general marker comment on the PR (`[vibe-heal-bot]` marker) explaining that automated
+     analysis comments follow, if not already posted.
+   - Determines whether the current user is currently a requested reviewer on the PR.
+   - Computes the PR's changed files — unless every configured `repo.subdir` is the repo root (`.`/`""`), in
+     which case this is skipped and every subdir is treated as changed.
+   - For each `repo.subdir`: skips it if it's not the root and none of the changed files fall under its path;
+     otherwise runs its `pre_commands`, then `vibe_heal review --pr <N>` (with `--coverage` if the subdir has
+     `coverage = true`), then `vibe_heal review --post --pr <N>` — this second step is what actually posts the
+     analysis findings as PR comments. A failing (non-critical) pre-command is logged and skipped; a failing
+     `critical` pre-command, or a failing `vibe_heal` invocation, stops processing for that subdir only — it
+     does not raise, so it does not affect the rest of the PR's processing below.
+   - If any subdir posted a review and the user was a requested reviewer before checkout, re-requests them as
+     a reviewer — submitting a review via the GitHub API clears the submitter from the PR's requested-reviewer
+     list, which would otherwise hide the PR from `review-requested`'s search for the rest of a `run all` cycle.
+   - Unless running with `--pr`, advances `last_pr` in state to this PR's number. This happens regardless of
+     whether any subdir's `vibe_heal` invocation succeeded — only an *unhandled* exception while processing the
+     PR (an unexpected error, or a `FatalGitError` from an unrecoverable checkout) prevents the state write for
+     that PR.
+   - A `FatalGitError` aborts processing of all remaining PRs in this run. Any other exception is logged and
+     processing moves on to the next PR.
+   - After each PR (success, failure, or exception), the working directory is restored to the SHA recorded in
+     step 6.
+
+## Configuration
+
+Only the fields below affect this command. See [`../configuration.md`](../configuration.md) for the full schema.
+
+| Field | Effect |
+|---|---|
+| `harness.gh_token_cmd` | Command used to obtain the GitHub token passed to `gh`/git subprocesses. |
+| `harness.path_prepend` | Directories prepended to `PATH` for all subprocesses this runner spawns. |
+| `harness.env` | Extra environment variables merged into the subprocess environment. |
+| `repo.name` | GitHub repo (`org/repo`) queried via `gh pr list`/`gh pr view` and used for posting comments. |
+| `repo.working_dir` | Local git working copy that gets checked out/fetched for each PR. |
+| `repo.subdir[].path` | Directory (relative to `working_dir`) each `vibe_heal` invocation runs in; also used to filter which subdirs run for a given PR's changed files. |
+| `repo.subdir[].pre_commands` | Commands run before `vibe_heal` in that subdir; a failing `critical` command aborts that subdir. |
+| `repo.subdir[].coverage` | Adds `--coverage` to the per-PR `vibe_heal review` invocation. |
+| `repo.subdir[].timeout` | Timeout (seconds) for each pre-command in that subdir. |
+| `vibe_heal.enabled` | Master switch — command is a no-op unless `true`. |
+| `vibe_heal.python` | Python interpreter used to invoke `vibe_heal` (`<python> -m vibe_heal ...`). |
+| `vibe_heal.authors` | `"*"` (any author) or a list of GitHub logins; PRs from non-matching authors are filtered out of eligibility in the batch (non-`--pr`) case. |
+| `vibe_heal.vibe_heal_timeout` | Timeout for the `vibe_heal review --pr` invocation. |
+| `vibe_heal.vibe_heal_post_timeout` | Timeout for the `vibe_heal review --post --pr` invocation. |
+
+Fields this runner does **not** read: `harness.backend`, `harness.backend_timeout_seconds`,
+`harness.knowledge_dir`, `harness.review_knowledge_file`, `repo.opencode_dir` — those only matter to runners
+that invoke harness's own AI backend directly.
+
+## State and idempotency
+
+State is stored at `~/.local/share/dotharness/state/<repo_slug>/vibe_heal.json` (`repo_slug` is `repo.name`
+with `/` replaced by `-`). It tracks a single field:
+- `last_pr` — the highest PR number processed by a batch (non-`--pr`) run; only PRs with a greater number are
+  eligible on the next batch run.
+
+Run `harness state reset review-prs` (add `--yes` to skip the confirmation prompt) to delete this file, which
+resets `last_pr` to 0 — the next batch run will re-consider every open PR from scratch.
+
+`--pr` runs never read or write this file — see the `--pr` description under [Usage](#usage).
+
+## Notes
+
+- **Draft PRs are always skipped** in the batch case, unconditionally — there is no config flag to include
+  them. A PR passed explicitly via `--pr` is processed even if it's a draft.
+- `last_pr` is a single monotonic watermark, not a per-PR "already reviewed" set. Eligible PRs are processed in
+  ascending order, and `last_pr` advances after each one is processed (success or subdir failure alike) unless
+  an unhandled exception interrupts that PR — see step 6 above.
+- Checking out a PR's branch uses the shared rebase/reset behavior described in
+  [Commands → Shared behavior](index.md#shared-behavior).
+- The `[vibe-heal-bot]` general notice comment is idempotent: existing PR comments are checked for the marker
+  text before posting, so re-running never duplicates it.
+- The actual review content is produced and posted by the external `vibe_heal` CLI (`vibe_heal review --pr`
+  then `vibe_heal review --post --pr`), not by harness itself — this command only orchestrates checkouts,
+  invocation, and bookkeeping around it.
+- `gh pr list` is capped at 500 open PRs per run.
+- Errors while restoring the working directory to its pre-PR SHA are logged but not raised, so a failed
+  restore won't crash the run.
