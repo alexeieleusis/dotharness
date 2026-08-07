@@ -356,6 +356,17 @@ def test_run_base_analysis_does_not_persist_sha_when_subdir_fails(tmp_xdg, tmp_p
     mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
 
 
+def test_run_locked_skips_when_subdirs_empty(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path)
+    with (
+        patch("harness.runners.review_prs.get_gh_token") as mock_token,
+        patch("harness.runners.review_prs.list_open_prs_matching_authors") as mock_list,
+    ):
+        review_prs._run_locked(cfg)
+    mock_token.assert_not_called()
+    mock_list.assert_not_called()
+
+
 def test_run_locked_skips_pr_processing_when_base_analysis_fails(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     with (

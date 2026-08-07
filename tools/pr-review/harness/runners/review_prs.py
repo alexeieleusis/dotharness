@@ -51,6 +51,10 @@ def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
         logger.info("vibe_heal disabled, skipping")
         return
 
+    if not config.repo.subdirs:
+        logger.error("vibe_heal enabled but repo.subdirs is empty; add a [[repo.subdir]] entry to .harness.toml")
+        return
+
     gh_token = get_gh_token(config.harness.gh_token_cmd)
     env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
 
