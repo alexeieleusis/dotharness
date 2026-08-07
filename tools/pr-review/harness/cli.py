@@ -109,7 +109,7 @@ def cmd_validate(directory, config_path):
         errors.append(f"harness.backend: binary '{backend_bin}' not found on PATH")
     if not shutil.which("gh"):
         errors.append("gh: binary not found on PATH")
-    if cfg.vibe_heal.enabled and cfg.vibe_heal.python and not Path(cfg.vibe_heal.python).exists():
+    if cfg.vibe_heal.enabled and cfg.vibe_heal.python and not Path(cfg.vibe_heal.python).expanduser().exists():
         errors.append(f"vibe_heal.python: path does not exist: {cfg.vibe_heal.python}")
 
     if errors:
