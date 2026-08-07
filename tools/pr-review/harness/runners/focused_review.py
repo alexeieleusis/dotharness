@@ -74,7 +74,7 @@ def _run_locked(config: HarnessConfig) -> None:
             _process_matches(matches, config, instructions_template, backend, number, wdir, env)
         except FatalGitError:
             logger.exception("PR #%d: fatal git error", number)
-            break
+            continue
         except Exception:
             logger.exception("PR #%d: error", number)
         finally:
