@@ -249,34 +249,66 @@ def is_review_summary_comment(body: str) -> bool:
 
 
 def has_review_summary_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
-    result = run_cmd(
-        ["gh", "api", f"repos/{repo}/issues/{pr_number}/comments", "--paginate"],
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return False
-    comments = json.loads(result.stdout)
-    return any(
-        c.get("user", {}).get("login") == current_user and is_review_summary_comment(c.get("body", ""))
-        for c in comments
-    )
+    page = 1
+    while True:
+        result = run_cmd(
+            [
+                "gh",
+                "api",
+                f"repos/{repo}/issues/{pr_number}/comments",
+                "-F",
+                "per_page=100",
+                "-F",
+                f"page={page}",
+            ],
+            cwd="/",
+            env=env,
+            timeout=TIMEOUT_GH,
+            check=False,
+        )
+        if result.returncode != 0:
+            return False
+        comments = json.loads(result.stdout)
+        if not comments:
+            return False
+        if any(
+            c.get("user", {}).get("login") == current_user and is_review_summary_comment(c.get("body", ""))
+            for c in comments
+        ):
+            return True
+        if len(comments) < 100:
+            return False
+        page += 1
 
 
 def has_inline_review_comments(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
-    result = run_cmd(
-        ["gh", "api", f"repos/{repo}/pulls/{pr_number}/comments", "--paginate"],
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return False
-    comments = json.loads(result.stdout)
-    return any(c.get("user", {}).get("login") == current_user for c in comments)
+    page = 1
+    while True:
+        result = run_cmd(
+            [
+                "gh",
+                "api",
+                f"repos/{repo}/pulls/{pr_number}/comments",
+                "-F",
+                "per_page=100",
+                "-F",
+                f"page={page}",
+            ],
+            cwd="/",
+            env=env,
+            timeout=TIMEOUT_GH,
+            check=False,
+        )
+        if result.returncode != 0:
+            return False
+        comments = json.loads(result.stdout)
+        if not comments:
+            return False
+        if any(c.get("user", {}).get("login") == current_user for c in comments):
+            return True
+        if len(comments) < 100:
+            return False
+        page += 1
 
 
 def author_matches(login: str, authors_config: str | list) -> bool:

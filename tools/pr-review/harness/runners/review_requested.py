@@ -107,23 +107,39 @@ def _get_prs(repo: str, env: dict) -> list[dict]:
     return prs
 
 
-def _get_reviews(pr_number: int, repo: str, env: dict) -> list[dict]:
-    result = run_cmd(
-        ["gh", "api", f"repos/{repo}/pulls/{pr_number}/reviews", "--paginate"],
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return []
-    return json.loads(result.stdout)
+def _has_user_approved(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+    page = 1
+    while True:
+        result = run_cmd(
+            [
+                "gh",
+                "api",
+                f"repos/{repo}/pulls/{pr_number}/reviews",
+                "-F",
+                "per_page=100",
+                "-F",
+                f"page={page}",
+            ],
+            cwd="/",
+            env=env,
+            timeout=TIMEOUT_GH,
+            check=False,
+        )
+        if result.returncode != 0:
+            return False
+        reviews = json.loads(result.stdout)
+        if not reviews:
+            return False
+        if any(r["state"] == "APPROVED" and r["user"]["login"] == current_user for r in reviews):
+            return True
+        if len(reviews) < 100:
+            return False
+        page += 1
 
 
 def _should_skip_pr(pr: dict, repo: str, current_user: str, env: dict) -> bool:
     pr_number = pr["number"]
-    reviews = _get_reviews(pr_number, repo, env)
-    if any(r["state"] == "APPROVED" and r["user"]["login"] == current_user for r in reviews):
+    if _has_user_approved(pr_number, repo, current_user, env):
         logger.info("PR #%d already approved by self, skipping", pr_number)
         return True
     if has_review_summary_comment(pr_number, repo, current_user, env):
