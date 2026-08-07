@@ -53,7 +53,7 @@ def test_skips_already_approved_pr(tmp_xdg, tmp_path):
             "harness.runners.review_requested._get_prs", return_value=[{"number": 1, "url": "u", "headRefName": "b"}]
         ),
         patch("harness.runners.review_requested._get_reviews", return_value=reviews),
-        patch("harness.runners.review_requested._has_osc_review_comment", return_value=False),
+        patch("harness.runners.review_requested.has_review_summary_comment", return_value=False),
         patch("harness.runners.review_requested.git_detach_and_record", return_value="sha"),
         patch("harness.runners.review_requested.Backend") as mock_be,
     ):
@@ -71,7 +71,7 @@ def test_skips_pr_with_existing_osc_review(tmp_xdg, tmp_path):
             "harness.runners.review_requested._get_prs", return_value=[{"number": 1, "url": "u", "headRefName": "b"}]
         ),
         patch("harness.runners.review_requested._get_reviews", return_value=[]),
-        patch("harness.runners.review_requested._has_osc_review_comment", return_value=True),
+        patch("harness.runners.review_requested.has_review_summary_comment", return_value=True),
         patch("harness.runners.review_requested.git_detach_and_record", return_value="sha"),
         patch("harness.runners.review_requested.Backend") as mock_be,
     ):
@@ -89,7 +89,7 @@ def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
             "harness.runners.review_requested._get_prs", return_value=[{"number": 1, "url": "u", "headRefName": "feat"}]
         ),
         patch("harness.runners.review_requested._get_reviews", return_value=[]),
-        patch("harness.runners.review_requested._has_osc_review_comment", return_value=False),
+        patch("harness.runners.review_requested.has_review_summary_comment", return_value=False),
         patch("harness.runners.review_requested.git_detach_and_record", return_value="sha"),
         patch("harness.runners.review_requested.git_fetch_and_checkout"),
         patch("harness.runners.review_requested.git_restore"),
@@ -120,7 +120,7 @@ def test_vibe_heal_context_included_in_prompts(tmp_xdg, tmp_path):
             "harness.runners.review_requested._get_prs", return_value=[{"number": 1, "url": "u", "headRefName": "feat"}]
         ),
         patch("harness.runners.review_requested._get_reviews", return_value=[]),
-        patch("harness.runners.review_requested._has_osc_review_comment", return_value=False),
+        patch("harness.runners.review_requested.has_review_summary_comment", return_value=False),
         patch("harness.runners.review_requested.git_detach_and_record", return_value="sha"),
         patch("harness.runners.review_requested.git_fetch_and_checkout"),
         patch("harness.runners.review_requested.git_restore"),
@@ -179,7 +179,7 @@ def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
             "harness.runners.review_requested._get_prs", return_value=[{"number": 1, "url": "u", "headRefName": "feat"}]
         ),
         patch("harness.runners.review_requested._get_reviews", return_value=[]),
-        patch("harness.runners.review_requested._has_osc_review_comment", return_value=False),
+        patch("harness.runners.review_requested.has_review_summary_comment", return_value=False),
         patch("harness.runners.review_requested.git_detach_and_record", return_value="sha"),
         patch("harness.runners.review_requested.git_fetch_and_checkout"),
         patch("harness.runners.review_requested.git_restore"),

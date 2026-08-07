@@ -13,6 +13,7 @@ from harness.runners.common import (
     build_file_review_section,
     build_subprocess_env,
     get_changed_files,
+    get_current_user,
     get_file_diff,
     get_gh_token,
     get_pr_base_branch,
@@ -22,11 +23,11 @@ from harness.runners.common import (
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
+    has_review_summary_comment,
     run_cmd,
 )
 
 logger = logging.getLogger(__name__)
-OSC_REVIEW_MARKERS = ("[bot]osc-review", "[bot]Review Summary")
 
 
 def run(config: HarnessConfig) -> None:
@@ -49,10 +50,10 @@ def _build_backend(config, env: dict) -> Backend:
     )
 
 
-def _should_skip_pr(number: int, repo: str, reviewed: set, env: dict) -> bool:
+def _should_skip_pr(number: int, repo: str, current_user: str, reviewed: set, env: dict) -> bool:
     if number in reviewed:
         return True
-    return bool(_has_osc_review_comment(number, repo, env))
+    return has_review_summary_comment(number, repo, current_user, env)
 
 
 def _gather_pr_context(pr: dict, number: int, config, wdir: str, env: dict) -> dict:
@@ -237,6 +238,7 @@ def _process_single_pr(
 def _run_locked(config: HarnessConfig) -> None:
     gh_token = get_gh_token(config.harness.gh_token_cmd)
     env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
+    current_user = get_current_user(env)
 
     reviewed = set(state.read_self_review_state(config.repo_slug)["reviewed_prs"])
     prs = _list_my_prs(config.repo.name, env)
@@ -251,7 +253,7 @@ def _run_locked(config: HarnessConfig) -> None:
 
     for pr in prs:
         number = pr["number"]
-        if _should_skip_pr(number, config.repo.name, reviewed, env):
+        if _should_skip_pr(number, config.repo.name, current_user, reviewed, env):
             if number not in reviewed:
                 reviewed.add(number)
                 state.write_self_review_state(config.repo_slug, list(reviewed))
@@ -296,20 +298,3 @@ def _list_my_prs(repo: str, env: dict) -> list[dict]:
     if result.returncode != 0:
         return []
     return sorted(json.loads(result.stdout), key=lambda p: p["number"])
-
-
-def _has_osc_review_comment(pr_number: int, repo: str, env: dict) -> bool:
-    result = run_cmd(
-        ["gh", "api", f"repos/{repo}/issues/{pr_number}/comments", "--paginate"],
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return False
-    for c in json.loads(result.stdout):
-        body = c.get("body", "").lstrip("# ").strip()
-        if any(body.startswith(m) for m in OSC_REVIEW_MARKERS):
-            return True
-    return False

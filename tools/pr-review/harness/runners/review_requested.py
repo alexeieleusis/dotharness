@@ -22,13 +22,13 @@ from harness.runners.common import (
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
+    has_review_summary_comment,
     pr_from_url,
     remove_reviewer,
     run_cmd,
 )
 
 logger = logging.getLogger(__name__)
-OSC_REVIEW_MARKERS = ("[bot]osc-review", "[bot]Review Summary")
 
 
 def run(config: HarnessConfig, pr_url: str | None = None) -> None:
@@ -119,33 +119,13 @@ def _get_reviews(pr_number: int, repo: str, env: dict) -> list[dict]:
     return json.loads(result.stdout)
 
 
-def _has_osc_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
-    result = run_cmd(
-        ["gh", "api", f"repos/{repo}/issues/{pr_number}/comments", "--paginate"],
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return False
-    comments = json.loads(result.stdout)
-    for c in comments:
-        if c.get("user", {}).get("login") != current_user:
-            continue
-        body = c.get("body", "").lstrip("# ").strip()
-        if any(body.startswith(m) for m in OSC_REVIEW_MARKERS):
-            return True
-    return False
-
-
 def _should_skip_pr(pr: dict, repo: str, current_user: str, env: dict) -> bool:
     pr_number = pr["number"]
     reviews = _get_reviews(pr_number, repo, env)
     if any(r["state"] == "APPROVED" and r["user"]["login"] == current_user for r in reviews):
         logger.info("PR #%d already approved by self, skipping", pr_number)
         return True
-    if _has_osc_review_comment(pr_number, repo, current_user, env):
+    if has_review_summary_comment(pr_number, repo, current_user, env):
         logger.info("PR #%d already has osc-review comment, skipping", pr_number)
         return True
     return False

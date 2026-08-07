@@ -197,6 +197,31 @@ def remove_reviewer(pr_number: int, repo: str, login: str, env: dict) -> None:
     )
 
 
+def is_review_summary_comment(body: str) -> bool:
+    stripped = body.strip()
+    if not stripped:
+        return False
+    first_line = stripped.splitlines()[0]
+    return first_line.startswith("#") and "review summary" in first_line.lower()
+
+
+def has_review_summary_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+    result = run_cmd(
+        ["gh", "api", f"repos/{repo}/issues/{pr_number}/comments", "--paginate"],
+        cwd="/",
+        env=env,
+        timeout=TIMEOUT_GH,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    comments = json.loads(result.stdout)
+    return any(
+        c.get("user", {}).get("login") == current_user and is_review_summary_comment(c.get("body", ""))
+        for c in comments
+    )
+
+
 def author_matches(login: str, authors_config: str | list) -> bool:
     if authors_config == "*":
         return True

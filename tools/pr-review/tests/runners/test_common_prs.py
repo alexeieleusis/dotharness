@@ -8,6 +8,8 @@ from harness.runners.common import (
     author_matches,
     get_current_user,
     get_requested_reviewers,
+    has_review_summary_comment,
+    is_review_summary_comment,
     list_open_prs_for_current_user,
     list_open_prs_matching_authors,
     pr_from_url,
@@ -181,3 +183,43 @@ def test_add_reviewer_invokes_gh_pr_edit():
         add_reviewer(1, "acme/repo", "alice", {})
     cmd = mock_run.call_args.args[0]
     assert cmd == ["gh", "pr", "edit", "1", "--repo", "acme/repo", "--add-reviewer", "alice"]
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("# [bot]Review Summary\nNo blocking issues found.", True),
+        ("# review summary\nlowercase heading still counts", True),
+        ("## REVIEW SUMMARY", True),
+        ("Review summary without a leading hash", False),
+        ("# Just a heading about something else", False),
+        ("", False),
+        ("   \n\n  ", False),
+    ],
+)
+def test_is_review_summary_comment(body, expected):
+    assert is_review_summary_comment(body) is expected
+
+
+def test_has_review_summary_comment_matches_only_current_user():
+    comments = [
+        {"user": {"login": "someone-else"}, "body": "# [bot]Review Summary\nother account's comment"},
+        {"user": {"login": "alice"}, "body": "unrelated comment"},
+        {"user": {"login": "alice"}, "body": "# [bot]Review Summary\nNo blocking issues found."},
+    ]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_review_summary_comment(1, "acme/repo", "alice", {}) is True
+
+
+def test_has_review_summary_comment_false_when_only_other_user_posted():
+    comments = [{"user": {"login": "someone-else"}, "body": "# [bot]Review Summary\nnot alice's comment"}]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_review_summary_comment(1, "acme/repo", "alice", {}) is False
+
+
+def test_has_review_summary_comment_returns_false_on_gh_failure():
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
+        assert has_review_summary_comment(1, "acme/repo", "alice", {}) is False

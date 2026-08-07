@@ -29,6 +29,7 @@ def test_skips_already_reviewed_pr(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 5, "url": "u", "headRefName": "b"}]),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.self_review.Backend") as mock_be,
@@ -43,8 +44,9 @@ def test_backup_check_marks_reviewed_without_running(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 3, "url": "u", "headRefName": "b"}]),
-        patch("harness.runners.self_review._has_osc_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_review_summary_comment", return_value=True),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.self_review.Backend") as mock_be,
     ):
@@ -59,8 +61,9 @@ def test_updates_state_on_success(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 7, "url": "u", "headRefName": "b"}]),
-        patch("harness.runners.self_review._has_osc_review_comment", return_value=False),
+        patch("harness.runners.self_review.has_review_summary_comment", return_value=False),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.self_review.git_fetch_and_checkout"),
         patch("harness.runners.self_review.git_restore"),
@@ -84,8 +87,9 @@ def test_does_not_update_state_on_failure(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 9, "url": "u", "headRefName": "b"}]),
-        patch("harness.runners.self_review._has_osc_review_comment", return_value=False),
+        patch("harness.runners.self_review.has_review_summary_comment", return_value=False),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.self_review.git_fetch_and_checkout"),
         patch("harness.runners.self_review.git_restore"),
@@ -109,10 +113,11 @@ def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch(
             "harness.runners.self_review._list_my_prs", return_value=[{"number": 11, "url": "u", "headRefName": "feat"}]
         ),
-        patch("harness.runners.self_review._has_osc_review_comment", return_value=False),
+        patch("harness.runners.self_review.has_review_summary_comment", return_value=False),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.self_review.git_fetch_and_checkout"),
         patch("harness.runners.self_review.git_restore"),
@@ -138,10 +143,11 @@ def test_does_not_update_state_when_file_call_fails(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch(
             "harness.runners.self_review._list_my_prs", return_value=[{"number": 13, "url": "u", "headRefName": "feat"}]
         ),
-        patch("harness.runners.self_review._has_osc_review_comment", return_value=False),
+        patch("harness.runners.self_review.has_review_summary_comment", return_value=False),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.self_review.git_fetch_and_checkout"),
         patch("harness.runners.self_review.git_restore"),
@@ -165,8 +171,9 @@ def test_vibe_heal_context_included_in_prompts(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 7, "url": "u", "headRefName": "b"}]),
-        patch("harness.runners.self_review._has_osc_review_comment", return_value=False),
+        patch("harness.runners.self_review.has_review_summary_comment", return_value=False),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.self_review.git_fetch_and_checkout"),
         patch("harness.runners.self_review.git_restore"),
@@ -194,8 +201,9 @@ def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 7, "url": "u", "headRefName": "b"}]),
-        patch("harness.runners.self_review._has_osc_review_comment", return_value=False),
+        patch("harness.runners.self_review.has_review_summary_comment", return_value=False),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.self_review.git_fetch_and_checkout"),
         patch("harness.runners.self_review.git_restore"),
