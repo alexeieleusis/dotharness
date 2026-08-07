@@ -308,7 +308,9 @@ def test_restores_working_dir_even_on_backend_failure(tmp_xdg, tmp_path):
     mock_restore.assert_called_once()
 
 
-def test_fatal_git_error_breaks_remaining_prs(tmp_xdg, tmp_path):
+def test_fatal_git_error_continues_to_remaining_prs(tmp_xdg, tmp_path):
+    # A fatal git error on one PR must not abort the remaining PRs, since
+    # the finally block restores the repo state before moving on.
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
@@ -323,10 +325,11 @@ def test_fatal_git_error_breaks_remaining_prs(tmp_xdg, tmp_path):
             "harness.runners.focused_review.git_fetch_and_checkout",
             side_effect=focused_review.FatalGitError("boom"),
         ) as mock_checkout,
-        patch("harness.runners.focused_review.git_restore"),
+        patch("harness.runners.focused_review.git_restore") as mock_restore,
         patch("harness.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
         patch("harness.runners.focused_review.Backend") as mock_be,
     ):
         focused_review._run_locked(cfg)
-    mock_checkout.assert_called_once()
-    assert mock_be.return_value.run.call_count <= 1
+    assert mock_checkout.call_count == 2
+    assert mock_restore.call_count == 2
+    mock_be.return_value.run.assert_not_called()
