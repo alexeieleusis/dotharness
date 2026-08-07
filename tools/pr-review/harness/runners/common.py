@@ -268,6 +268,20 @@ def has_review_summary_comment(pr_number: int, repo: str, current_user: str, env
     )
 
 
+def has_inline_review_comments(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+    result = run_cmd(
+        ["gh", "api", f"repos/{repo}/pulls/{pr_number}/comments", "--paginate"],
+        cwd="/",
+        env=env,
+        timeout=TIMEOUT_GH,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    comments = json.loads(result.stdout)
+    return any(c.get("user", {}).get("login") == current_user for c in comments)
+
+
 def author_matches(login: str, authors_config: str | list) -> bool:
     if authors_config == "*":
         return True

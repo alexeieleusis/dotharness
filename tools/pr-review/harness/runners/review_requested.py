@@ -22,6 +22,7 @@ from harness.runners.common import (
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
+    has_inline_review_comments,
     has_review_summary_comment,
     pr_from_url,
     remove_reviewer,
@@ -126,7 +127,10 @@ def _should_skip_pr(pr: dict, repo: str, current_user: str, env: dict) -> bool:
         logger.info("PR #%d already approved by self, skipping", pr_number)
         return True
     if has_review_summary_comment(pr_number, repo, current_user, env):
-        logger.info("PR #%d already has osc-review comment, skipping", pr_number)
+        logger.info("PR #%d already has review summary comment, skipping", pr_number)
+        return True
+    if has_inline_review_comments(pr_number, repo, current_user, env):
+        logger.info("PR #%d has partial inline review comments, skipping", pr_number)
         return True
     return False
 
