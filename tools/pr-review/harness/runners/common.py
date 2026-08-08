@@ -84,7 +84,7 @@ def git_detach_and_record(cwd: str, env: dict) -> str:
         run_cmd(["git", "checkout", "--recurse-submodules", "--detach", "HEAD"], cwd=cwd, env=env, timeout=TIMEOUT_GIT)
         result = run_cmd(["git", "rev-parse", "HEAD"], cwd=cwd, env=env, timeout=TIMEOUT_GIT)
         return result.stdout.decode("utf-8").strip()
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         raise FatalGitError(f"git detach failed: {e}") from e  # noqa: TRY003
 
 
@@ -97,7 +97,7 @@ def git_fetch_and_checkout(branch: str, cwd: str, env: dict) -> None:
             env=env,
             timeout=TIMEOUT_GIT,
         )
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         if e.stdout:
             logger.exception("git checkout stdout: %s", e.stdout.decode("utf-8", errors="replace"))
         if e.stderr:
