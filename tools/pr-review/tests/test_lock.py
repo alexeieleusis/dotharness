@@ -1,5 +1,7 @@
 from multiprocessing import Process
 
+import pytest
+
 from harness import lock
 from harness.lock import acquire_lock
 
@@ -35,3 +37,11 @@ def test_lock_released_after_context(tmp_xdg):
 def test_different_slugs_dont_conflict(tmp_xdg):
     with acquire_lock("acme-frontend"), acquire_lock("acme-backend"):
         pass  # no exception
+
+
+def test_lock_released_on_exception(tmp_xdg):
+    with pytest.raises(ValueError), acquire_lock("acme-frontend"):
+        raise ValueError("boom")
+    # Lock must be released — re-acquisition must succeed
+    with acquire_lock("acme-frontend"):
+        pass
