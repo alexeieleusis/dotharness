@@ -124,6 +124,7 @@ def _run_locked(config: HarnessConfig) -> None:
             config.repo.name,
             env,
             config.address_comments.require_reaction_for_focused_review,
+            config.address_comments.trusted_commenters,
             opencode_dir,
             plugin_prefix,
         )
@@ -141,6 +142,7 @@ def _process_single_pr(
     repo: str,
     env: dict,
     require_reaction_for_focused_review: bool,
+    trusted_commenters: str | list[str],
     opencode_dir: str | None = None,
     plugin_prefix: str | None = None,
 ) -> None:
@@ -152,7 +154,14 @@ def _process_single_pr(
             logger.info("PR #%d: no actionable comments found", number)
             return
         comments = _filter_comments(
-            comments, number, repo, our_login, env, require_reaction_for_focused_review, plugin_prefix
+            comments,
+            number,
+            repo,
+            our_login,
+            env,
+            require_reaction_for_focused_review,
+            trusted_commenters,
+            plugin_prefix,
         )
         if not comments:
             logger.info("PR #%d: no unresolved comments remain after filtering", number)
@@ -246,8 +255,21 @@ def _filter_comments(
     our_login: str | None,
     env: dict,
     require_reaction_for_focused_review: bool = False,
+    trusted_commenters: str | list[str] = "*",
     plugin_prefix: str | None = None,
 ) -> list[dict]:
+    if trusted_commenters != "*":
+        trusted_set = set(trusted_commenters) if isinstance(trusted_commenters, list) else {trusted_commenters}
+        before = len(comments)
+        comments = [c for c in comments if c.get("author", "") in trusted_set]
+        if len(comments) < before:
+            logger.info(
+                "PR #%d: filtered to %d comment(s) from trusted authors (was %d)",
+                pr_number,
+                len(comments),
+                before,
+            )
+
     unresolved_ids = _get_unresolved_comment_ids(pr_number, repo, env)
     if unresolved_ids is not None:
         before = len(comments)
