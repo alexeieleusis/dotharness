@@ -121,3 +121,18 @@ def test_all_details_content_returns_empty(tmp_path):
     with patch("pathlib.Path.home", return_value=home):
         result = get_vibe_heal_context([SubDir(path=".")], str(tmp_path), "main")
     assert result == ""
+
+
+def test_branch_with_path_traversal_segments_returns_empty(tmp_path):
+    (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=fe\n", encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+    secret_dir = home / "secret"
+    secret_dir.mkdir()
+    (secret_dir / "secret.txt").write_text("classified", encoding="utf-8")
+    review_base = home / ".vibe-heal" / "reviews" / "fe"
+    review_base.mkdir(parents=True)
+    with patch("pathlib.Path.home", return_value=home):
+        result = get_vibe_heal_context([SubDir(path=".")], str(tmp_path), "../../../secret/secret.txt")
+    assert result == ""
+    assert "classified" not in result

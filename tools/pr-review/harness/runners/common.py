@@ -564,6 +564,11 @@ def get_vibe_heal_context(subdirs: list[SubDir], working_dir: str, branch: str) 
             continue
         seen_keys.add(project_key)
         review_path = Path.home() / ".vibe-heal" / "reviews" / project_key / branch / "review.md"
+        try:
+            reviews_base = (Path.home() / ".vibe-heal" / "reviews" / project_key).resolve()
+            review_path.resolve().relative_to(reviews_base)
+        except ValueError:
+            continue
         if not review_path.exists():
             continue
         try:
