@@ -74,23 +74,41 @@ def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
     wdir = str(config.repo.working_dir)
     original_sha = git_detach_and_record(wdir, env)
 
+    batch_failed = False
     for pr in eligible:
+        success = True
         try:
             success = _process_pr(pr, config, env, current_user, wdir)
-            if pr_url is None:
-                if success:
-                    state.write_vibe_heal_state(config.repo_slug, last_pr=pr["number"])
-                else:
-                    _post_comment_if_needed(
-                        pr["number"], config.repo.name, env, marker=FAILURE_COMMENT_MARKER, body=FAILURE_COMMENT_BODY
-                    )
         except FatalGitError:
             logger.exception("PR #%d: fatal git error", pr["number"])
+            batch_failed = True
             break
         except Exception:
             logger.exception("PR #%d: error", pr["number"])
+            batch_failed = True
         finally:
             git_restore(original_sha, pr["headRefName"], wdir, env)
+
+        if pr_url is None:
+            _handle_pr_result(pr, success, batch_failed, config, env)
+            if not success:
+                batch_failed = True
+
+
+def _handle_pr_result(
+    pr: dict,
+    success: bool,
+    batch_failed: bool,
+    config: HarnessConfig,
+    env: dict,
+) -> None:
+    """Update state or post failure comment after processing a PR."""
+    if success and not batch_failed:
+        state.write_vibe_heal_state(config.repo_slug, last_pr=pr["number"])
+    elif not success:
+        _post_comment_if_needed(
+            pr["number"], config.repo.name, env, marker=FAILURE_COMMENT_MARKER, body=FAILURE_COMMENT_BODY
+        )
 
 
 def _process_pr(pr: dict, config: HarnessConfig, env: dict, current_user: str, wdir: str) -> bool:
