@@ -50,6 +50,23 @@ def test_claude_command_shape(tmp_xdg):
     assert "--dangerously-skip-permissions" in cmd
 
 
+def test_nonzero_returncode_returns_completed_process(tmp_xdg, caplog):
+    b = _make_backend(tmp_xdg)
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"out data", b"err data")
+    mock_proc.returncode = 1
+    with (
+        patch("subprocess.Popen", return_value=mock_proc),
+        caplog.at_level("ERROR"),
+    ):
+        result = b.run("Do this.", cwd="/tmp")  # noqa: S108
+    assert isinstance(result, subprocess.CompletedProcess)
+    assert result.returncode == 1
+    assert result.stdout == b"out data"
+    assert result.stderr == b"err data"
+    assert "Backend exited 1" in caplog.text
+
+
 def test_temp_file_cleaned_on_success(tmp_xdg):
     b = _make_backend(tmp_xdg)
     long = "x" * (INLINE_THRESHOLD_BYTES + 1)
