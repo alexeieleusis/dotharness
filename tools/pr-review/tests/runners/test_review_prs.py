@@ -637,6 +637,31 @@ def test_generic_exception_continues_pr_processing_loop(tmp_xdg, tmp_path):
     assert len(fail_comment_calls) >= 1
 
 
+def test_run_locked_calls_git_restore_when_process_pr_raises(tmp_xdg, tmp_path):
+    state.write_vibe_heal_state("acme-frontend", 0)
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    prs = [{"number": 5, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False}]
+
+    with (
+        patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_prs.get_current_user", return_value="alice"),
+        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("harness.runners.review_prs._run_base_analysis", return_value=True),
+        patch("harness.runners.review_prs._process_pr", side_effect=RuntimeError("boom")),
+        patch("harness.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")),
+        patch("harness.runners.review_prs.git_detach_and_record", return_value="original-sha"),
+        patch("harness.runners.review_prs.git_restore") as mock_restore,
+        patch("harness.runners.review_prs.git_fetch_and_checkout"),
+    ):
+        review_prs._run_locked(cfg)
+    mock_restore.assert_called_once()
+    call_args = mock_restore.call_args
+    assert call_args[0][0] == "original-sha"
+    assert call_args[0][1] == "feat"
+    assert call_args[0][2] == str(tmp_path)
+
+
 def test_post_comment_if_needed_skips_when_marker_exists():
     comments = [{"body": "Some comment", "id": 1}, {"body": "[vibe-heal-bot] already posted", "id": 2}]
     stdout = json.dumps(comments).encode()
