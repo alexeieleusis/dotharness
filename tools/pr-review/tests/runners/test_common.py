@@ -74,6 +74,34 @@ def test_get_gh_token_strips_whitespace():
     assert tok == "tok123"
 
 
+def test_get_gh_token_nonzero_exit_returns_stdout():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="partial-token", stderr="auth error")
+        tok = get_gh_token("fail_cmd")
+    assert tok == "partial-token"
+
+
+def test_get_gh_token_nonzero_exit_empty_stdout():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="auth failed")
+        tok = get_gh_token("fail_cmd")
+    assert tok == ""
+
+
+def test_get_gh_token_timeout_raises():
+    with patch("subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.TimeoutExpired("gh_token_cmd", 10)
+        with pytest.raises(subprocess.TimeoutExpired):
+            get_gh_token("gh_token_cmd")
+
+
+def test_get_gh_token_stderr_only_returns_empty():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="token not configured")
+        tok = get_gh_token("echo")
+    assert tok == ""
+
+
 def _git_restore_side_effect(is_ancestor_returncode):
     def side_effect(cmd, **kwargs):
         if "rev-parse" in cmd:
