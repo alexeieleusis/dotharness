@@ -132,9 +132,14 @@ def _review_files(
     commit_sha: str,
     pr_description: str | None,
     vibe_heal_context: str | None,
-) -> bool:
+    partial_files: set[str],
+    repo_slug: str,
+) -> tuple[bool, set[str]]:
     any_failure = False
     for file in files:
+        if file in partial_files:
+            logger.info("PR #%d: file %s already reviewed in a prior run — skipping", number, file)
+            continue
         diff = get_file_diff(file, base_branch, wdir, env)
         abs_path = os.path.join(wdir, file)
         prompt = _build_file_review_prompt(
@@ -152,7 +157,10 @@ def _review_files(
         )
         if _review_file(prompt, backend, wdir, number, file):
             any_failure = True
-    return any_failure
+        else:
+            partial_files.add(file)
+            state.set_partial_reviewed_files(repo_slug, number, list(partial_files))
+    return any_failure, partial_files
 
 
 def _run_summary(
@@ -199,10 +207,11 @@ def _process_single_pr(
     extra_knowledge: str | None,
     reviewed: set,
     original_sha: str,
+    partial_files: set[str],
 ) -> None:
     try:
         ctx = _gather_pr_context(pr, number, config, wdir, env)
-        file_failure = _review_files(
+        file_failure, partial_files = _review_files(
             ctx["files"],
             ctx["base_branch"],
             wdir,
@@ -216,6 +225,8 @@ def _process_single_pr(
             ctx["commit_sha"],
             ctx["pr_description"],
             ctx["vibe_heal_context"],
+            partial_files,
+            config.repo_slug,
         )
         summary_failure = _run_summary(
             summary_instructions,
@@ -231,7 +242,11 @@ def _process_single_pr(
         )
         if not file_failure and not summary_failure:
             reviewed.add(number)
-            state.write_self_review_state(config.repo_slug, list(reviewed))
+            sr_state = state.read_self_review_state(config.repo_slug)
+            sr_state["partial_reviews"].pop(str(number), None)
+            state.write_self_review_state(config.repo_slug, list(reviewed), sr_state["partial_reviews"])
+        elif not file_failure:
+            state.set_partial_reviewed_files(config.repo_slug, number, list(partial_files))
     except Exception:
         logger.exception("PR #%d: error", number)
     finally:
@@ -261,6 +276,7 @@ def _run_locked(config: HarnessConfig) -> None:
                 reviewed.add(number)
                 state.write_self_review_state(config.repo_slug, list(reviewed))
             continue
+        partial_files = set(state.get_partial_reviewed_files(config.repo_slug, number))
         _process_single_pr(
             pr,
             number,
@@ -273,6 +289,7 @@ def _run_locked(config: HarnessConfig) -> None:
             extra_knowledge,
             reviewed,
             original_sha,
+            partial_files,
         )
 
 
