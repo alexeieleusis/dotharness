@@ -209,15 +209,28 @@ def cmd_reply(pr_number: int, commit_hash: str, input_path: str | None) -> None:
     repo = gh_json(["repo", "view", "--json", "nameWithOwner"])["nameWithOwner"]
     commit_url = f"https://github.com/{repo}/commit/{full_hash}"
 
+    # Current user login — used for idempotency checks
+    current_user = gh_json(["api", "user"])["login"]
+
     def build_body(comment_id: str | int) -> str:
         key = str(comment_id)
         if key in per_comment_replies:
             return f"{per_comment_replies[key]}\n\n_{commit_url}_"
         return f"Addressed in {commit_url}"
 
+    def already_replied(comment: dict) -> bool:
+        """Return True if the current user already posted an 'Addressed in' reply."""
+        for r in comment.get("replies", []):
+            if r.get("author") == current_user and r.get("body", "").startswith("Addressed in"):
+                return True
+        return False
+
     errors = []
 
     for c in data["inline_comments"]:
+        if already_replied(c):
+            print(f"Skipping inline comment {c['id']} — already replied.")
+            continue
         print(f"Replying to inline comment {c['id']} ({c['path']}:{c['line']}) …", end=" ")
         result = run(
             [
