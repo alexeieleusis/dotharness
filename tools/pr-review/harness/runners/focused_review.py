@@ -130,17 +130,22 @@ def _resolve_knowledge_file(vibe_types_repo: Path, commit: str, rel_path: str, e
 
     Tries, in order: the pinned commit directly; fetching that commit then retrying;
     falling back to the path on origin/main. Returns None if all three fail.
+
+    The shared vibe-types checkout is locked by path hash so concurrent focused-review
+    runs across different repos don't race on the same git working copy.
     """
     repo = str(vibe_types_repo)
-    attempts = [(None, commit), (commit, commit), ("main", "origin/main")]
-    for fetch_ref, show_ref in attempts:
-        if fetch_ref:
-            run_cmd(["git", "fetch", "origin", fetch_ref], cwd=repo, env=env, timeout=TIMEOUT_GIT, check=False)
-        result = run_cmd(
-            ["git", "show", f"{show_ref}:{rel_path}"], cwd=repo, env=env, timeout=_TIMEOUT_GIT_SHOW, check=False
-        )
-        if result.returncode == 0:
-            return result.stdout.decode("utf-8", errors="replace")
+    lock_key = f"vibe-types-{hash(str(vibe_types_repo.resolve())) & 0xFFFFFFFF:08x}"
+    with acquire_lock(lock_key):
+        attempts = [(None, commit), (commit, commit), ("main", "origin/main")]
+        for fetch_ref, show_ref in attempts:
+            if fetch_ref:
+                run_cmd(["git", "fetch", "origin", fetch_ref], cwd=repo, env=env, timeout=TIMEOUT_GIT, check=False)
+            result = run_cmd(
+                ["git", "show", f"{show_ref}:{rel_path}"], cwd=repo, env=env, timeout=_TIMEOUT_GIT_SHOW, check=False
+            )
+            if result.returncode == 0:
+                return result.stdout.decode("utf-8", errors="replace")
     return None
 
 
