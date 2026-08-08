@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from harness.runners.common import (
+    FatalGitError,
     build_subprocess_env,
     get_gh_token,
     git_detach_and_record,
@@ -53,6 +54,22 @@ def test_git_fetch_and_checkout_calls(tmp_path):
     calls = [str(c) for c in mock_run.call_args_list]
     assert any("fetch" in c for c in calls)
     assert any("checkout" in c and "feature-branch" in c for c in calls)
+
+
+def test_git_detach_raises_fatal_error_on_called_process_error(tmp_path):
+    with (
+        patch("harness.runners.common.run_cmd", side_effect=subprocess.CalledProcessError(1, ["git", "checkout"])),
+        pytest.raises(FatalGitError),
+    ):
+        git_detach_and_record(str(tmp_path), {})
+
+
+def test_git_fetch_and_checkout_raises_fatal_error_on_called_process_error(tmp_path):
+    with (
+        patch("harness.runners.common.run_cmd", side_effect=subprocess.CalledProcessError(1, ["git", "fetch"])),
+        pytest.raises(FatalGitError),
+    ):
+        git_fetch_and_checkout("feature-branch", str(tmp_path), {})
 
 
 def test_build_env_prepends_path():
