@@ -189,6 +189,41 @@ def test_run_pre_commands_aborts_after_critical_failure(tmp_path):
     assert mock_run.call_count == 1
 
 
+def test_run_pre_commands_continues_after_non_critical_timeout(tmp_path):
+    from harness.config import HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
+
+    cfg = HarnessConfig(
+        harness=HarnessSection(),
+        repo=RepoConfig(name="acme/frontend", working_dir=tmp_path),
+        vibe_heal=VibehealConfig(),
+    )
+    subdir = SubDir(path=".", pre_commands=[PreCommand(cmd="pnpm ci"), PreCommand(cmd="echo hi")])
+    with patch("harness.runners.review_prs.run_cmd") as mock_run:
+        mock_run.side_effect = [subprocess.TimeoutExpired("pnpm ci", 30), MagicMock(returncode=0)]
+        result = review_prs._run_pre_commands(subdir, cfg, {})
+    assert result is True
+    assert mock_run.call_count == 2
+
+
+def test_run_pre_commands_aborts_after_critical_timeout(tmp_path):
+    from harness.config import HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
+
+    cfg = HarnessConfig(
+        harness=HarnessSection(),
+        repo=RepoConfig(name="acme/frontend", working_dir=tmp_path),
+        vibe_heal=VibehealConfig(),
+    )
+    subdir = SubDir(
+        path=".",
+        pre_commands=[PreCommand(cmd="poetry install", critical=True), PreCommand(cmd="echo hi")],
+    )
+    with patch("harness.runners.review_prs.run_cmd") as mock_run:
+        mock_run.side_effect = subprocess.TimeoutExpired("poetry install", 30)
+        result = review_prs._run_pre_commands(subdir, cfg, {})
+    assert result is False
+    assert mock_run.call_count == 1
+
+
 def test_run_locked_re_requests_review_once_per_pr_across_subdirs(tmp_xdg, tmp_path):
     state.write_vibe_heal_state("acme-frontend", 0)
 
@@ -415,3 +450,57 @@ def test_run_locked_returns_early_when_vibe_heal_disabled(tmp_path):
     with patch("harness.runners.review_prs.run_cmd") as mock_run:
         review_prs._run_locked(cfg)
     mock_run.assert_not_called()
+
+
+def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path):
+    from harness.runners.common import FatalGitError
+
+    state.write_vibe_heal_state("acme-frontend", 0)
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    prs = [
+        {"number": 3, "headRefName": "pr3", "author": {"login": "alice"}, "isDraft": False},
+        {"number": 4, "headRefName": "pr4", "author": {"login": "alice"}, "isDraft": False},
+    ]
+    with (
+        patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_prs.get_current_user", return_value="alice"),
+        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("harness.runners.review_prs._run_base_analysis", return_value=True),
+        patch("harness.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")),
+        patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.review_prs.git_restore") as mock_restore,
+        patch("harness.runners.review_prs.git_fetch_and_checkout") as mock_fetch,
+    ):
+        mock_fetch.side_effect = [None, FatalGitError("corrupted ref")]
+        review_prs._run_locked(cfg)
+    # Only PR 3 was processed; FatalGitError on PR 4 broke the loop.
+    assert mock_fetch.call_count == 1
+    assert state.read_vibe_heal_state("acme-frontend")["last_pr"] == 3
+    assert mock_restore.call_count == 2
+
+
+def test_generic_exception_continues_pr_processing_loop(tmp_xdg, tmp_path):
+    state.write_vibe_heal_state("acme-frontend", 0)
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    prs = [
+        {"number": 2, "headRefName": "pr2", "author": {"login": "alice"}, "isDraft": False},
+        {"number": 4, "headRefName": "pr4", "author": {"login": "alice"}, "isDraft": False},
+    ]
+    with (
+        patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_prs.get_current_user", return_value="alice"),
+        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("harness.runners.review_prs._run_base_analysis", return_value=True),
+        patch("harness.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")),
+        patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.review_prs.git_restore") as mock_restore,
+        patch("harness.runners.review_prs.git_fetch_and_checkout") as mock_fetch,
+    ):
+        mock_fetch.side_effect = [None, RuntimeError("unexpected failure")]
+        review_prs._run_locked(cfg)
+    # Both PRs were processed; generic Exception on PR 2 did not break the loop.
+    assert mock_fetch.call_count == 2
+    assert state.read_vibe_heal_state("acme-frontend")["last_pr"] == 4
+    assert mock_restore.call_count == 2
