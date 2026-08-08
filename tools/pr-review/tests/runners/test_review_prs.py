@@ -1,4 +1,3 @@
-import json
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -515,7 +514,7 @@ def test_run_locked_skips_pr_processing_when_base_analysis_fails(tmp_xdg, tmp_pa
     mock_list.assert_not_called()
 
 
-def test_run_locked_does_not_advance_state_and_posts_fail_marker_on_subdir_failure(tmp_xdg, tmp_path):
+def test_run_locked_does_not_advance_state_on_subdir_failure(tmp_xdg, tmp_path):
     state.write_vibe_heal_state("acme-frontend", 0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False}]
@@ -531,18 +530,16 @@ def test_run_locked_does_not_advance_state_and_posts_fail_marker_on_subdir_failu
         patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs._run_base_analysis", return_value=True),
-        patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd) as mock_run,
+        patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd),
         patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
         patch("harness.runners.review_prs.git_restore"),
         patch("harness.runners.review_prs.git_fetch_and_checkout"),
     ):
         review_prs._run_locked(cfg)
     assert state.read_vibe_heal_state("acme-frontend")["last_pr"] == 0
-    fail_comment_calls = [c for c in mock_run.call_args_list if "vibe-heal-bot-fail" in str(c)]
-    assert len(fail_comment_calls) >= 1
 
 
-def test_run_locked_does_not_advance_state_and_posts_fail_marker_on_generic_exception(tmp_xdg, tmp_path):
+def test_run_locked_does_not_advance_state_on_generic_exception(tmp_xdg, tmp_path):
     state.write_vibe_heal_state("acme-frontend", 0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False}]
@@ -554,17 +551,13 @@ def test_run_locked_does_not_advance_state_and_posts_fail_marker_on_generic_exce
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs._run_base_analysis", return_value=True),
         patch("harness.runners.review_prs._process_pr", side_effect=ValueError("boom")),
-        patch(
-            "harness.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]", stderr=b"")
-        ) as mock_run,
+        patch("harness.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]", stderr=b"")),
         patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
         patch("harness.runners.review_prs.git_restore"),
         patch("harness.runners.review_prs.git_fetch_and_checkout"),
     ):
         review_prs._run_locked(cfg)
     assert state.read_vibe_heal_state("acme-frontend")["last_pr"] == 0
-    fail_comment_calls = [c for c in mock_run.call_args_list if "vibe-heal-bot-fail" in str(c)]
-    assert len(fail_comment_calls) >= 1
 
 
 def test_run_locked_returns_early_when_vibe_heal_disabled(tmp_path):
@@ -649,7 +642,7 @@ def test_generic_exception_continues_pr_processing_loop(tmp_xdg, tmp_path):
         patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs._run_base_analysis", return_value=True),
-        patch("harness.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")) as mock_run,
+        patch("harness.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")),
         patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
         patch("harness.runners.review_prs.git_restore") as mock_restore,
         patch("harness.runners.review_prs.git_fetch_and_checkout") as mock_fetch,
@@ -661,8 +654,6 @@ def test_generic_exception_continues_pr_processing_loop(tmp_xdg, tmp_path):
     assert mock_restore.call_count == 2
     # batch_failed=True from PR 2 prevents state advancement for remaining PRs.
     assert state.read_vibe_heal_state("acme-frontend")["last_pr"] == 0
-    fail_comment_calls = [c for c in mock_run.call_args_list if "vibe-heal-bot-fail" in str(c)]
-    assert len(fail_comment_calls) >= 1
 
 
 def test_run_locked_calls_git_restore_when_process_pr_raises(tmp_xdg, tmp_path):
@@ -688,21 +679,3 @@ def test_run_locked_calls_git_restore_when_process_pr_raises(tmp_xdg, tmp_path):
     assert call_args[0][0] == "original-sha"
     assert call_args[0][1] == "feat"
     assert call_args[0][2] == str(tmp_path)
-
-
-def test_post_comment_if_needed_skips_when_marker_exists():
-    comments = [{"body": "Some comment", "id": 1}, {"body": "[vibe-heal-bot] already posted", "id": 2}]
-    stdout = json.dumps(comments).encode()
-
-    call_count = 0
-
-    def fake_run_cmd(cmd, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        return MagicMock(returncode=0, stdout=stdout)
-
-    with patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd):
-        review_prs._post_comment_if_needed(
-            1, "acme/frontend", {"GH_TOKEN": "tok"}, marker="[vibe-heal-bot]", body="new comment"
-        )
-    assert call_count == 1
