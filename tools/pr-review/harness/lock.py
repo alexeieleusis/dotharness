@@ -18,16 +18,16 @@ def acquire_lock(repo_slug: str):
     lock_file = lock_dir / f"{repo_slug}.lock"
     if not str(lock_file.resolve()).startswith(str(lock_dir.resolve())):
         raise ValueError(f"Invalid repo_slug: {repo_slug!r}")  # noqa: TRY003
-    fd = None
+    fd = lock_file.open("w")
     try:
-        fd = lock_file.open("w")
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as ex:
+        fd.close()
+        raise SystemExit(f"Another instance is already running for {repo_slug}") from ex  # noqa: TRY003
+    try:
         try:
             yield
         finally:
             fcntl.flock(fd, fcntl.LOCK_UN)
-    except BlockingIOError as ex:
-        raise SystemExit(f"Another instance is already running for {repo_slug}") from ex  # noqa: TRY003
     finally:
-        if fd is not None:
-            fd.close()
+        fd.close()
