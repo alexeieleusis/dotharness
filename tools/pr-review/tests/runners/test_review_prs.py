@@ -402,3 +402,16 @@ def test_run_locked_does_not_advance_state_and_posts_fail_marker_on_subdir_failu
     assert state.read_vibe_heal_state("acme-frontend")["last_pr"] == 0
     fail_comment_calls = [c for c in mock_run.call_args_list if "vibe-heal-bot-fail" in str(c)]
     assert len(fail_comment_calls) >= 1
+
+
+def test_run_locked_returns_early_when_vibe_heal_disabled(tmp_path):
+    from harness.config import HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
+
+    cfg = HarnessConfig(
+        harness=HarnessSection(),
+        repo=RepoConfig(name="acme/frontend", working_dir=tmp_path),
+        vibe_heal=VibehealConfig(enabled=False),
+    )
+    with patch("harness.runners.review_prs.run_cmd") as mock_run:
+        review_prs._run_locked(cfg)
+    mock_run.assert_not_called()
