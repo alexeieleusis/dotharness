@@ -36,10 +36,11 @@ if any of them failed.
 - **Logging.** Logs always go to `~/.local/share/dotharness/logs/<command>/<date>.log`.
   `--verbose` additionally enables DEBUG-level logging and mirrors it to stdout.
 - **Working directory mutation.** Commands that talk to an AI backend or `vibe_heal`
-  check out PR branches directly inside `repo.working_dir`: each checkout rebases local
-  commits onto `origin/<branch>`, falling back to a hard reset to `origin/<branch>` if
-  that rebase conflicts (discarding local-only commits), and the original commit is
-  restored afterward. Don't point `working_dir` at a checkout you have uncommitted work in.
+  check out PR branches directly inside `repo.working_dir`: each checkout runs
+  `git checkout -B <branch> origin/<branch>`, which unconditionally repoints the local
+  branch to its remote tracking branch, discarding any local-only commits. The original
+  detached HEAD commit is restored afterward. Don't point `working_dir` at a checkout you
+  have uncommitted work in.
 - **`gh` account state.** Several commands rely on `gh`'s currently active authenticated
   account (for `--author @me`, `--assignee @me`, `user-review-requested:@me`, and posting as "you"). If you
   juggle multiple `gh` accounts, the active one is global machine state, not scoped to
