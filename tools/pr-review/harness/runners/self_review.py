@@ -108,7 +108,7 @@ def _review_file(
     file: str,
 ) -> bool:
     try:
-        result = backend.run(prompt, cwd=wdir)
+        result = backend.run(prompt, cwd=wdir, context=f"PR #{number} file {file}")
         if result.returncode != 0:
             logger.error("PR #%d file %s: backend exited %d", number, file, result.returncode)
             return True
@@ -185,7 +185,7 @@ def _run_summary(
         + (f"\n\n## Static Analysis\n{vibe_heal_context}" if vibe_heal_context else "")
     )
     try:
-        result = backend.run(summary_prompt, cwd=wdir)
+        result = backend.run(summary_prompt, cwd=wdir, context=f"PR #{number} summary")
         if result.returncode != 0:
             logger.error("PR #%d: summary backend exited %d", number, result.returncode)
             return True
@@ -276,6 +276,7 @@ def _run_locked(config: HarnessConfig) -> None:
                 reviewed.add(number)
                 state.write_self_review_state(config.repo_slug, list(reviewed))
             continue
+        logger.info("PR #%d: starting", number)
         partial_files = set(state.get_partial_reviewed_files(config.repo_slug, number))
         _process_single_pr(
             pr,

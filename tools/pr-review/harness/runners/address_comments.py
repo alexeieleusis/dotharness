@@ -354,7 +354,7 @@ def _address_single_comment(
     post_sha = pre_sha
     rewritten = False
     try:
-        backend.run(comment_instructions, cwd=wdir, opencode_dir=opencode_dir)
+        backend.run(comment_instructions, cwd=wdir, opencode_dir=opencode_dir, context=f"PR #{pr_number} comment {cid}")
         logger.info("PR #%d: comment %s — backend finished", pr_number, cid)
     except Exception:
         logger.exception("PR #%d comment %s: error", pr_number, cid)

@@ -160,6 +160,7 @@ def _process_pr(
     current_user: str,
 ) -> None:
     pr_number = pr["number"]
+    logger.info("PR #%d: starting", pr_number)
     original_sha = git_detach_and_record(wdir, env)
     try:
         git_fetch_and_checkout(pr["headRefName"], wdir, env)
@@ -206,7 +207,7 @@ def _run_file_reviews(
             vibe_heal_context,
         )
         try:
-            result = backend.run(prompt, cwd=wdir)
+            result = backend.run(prompt, cwd=wdir, context=f"PR #{pr_number} file {file}")
             if result.returncode != 0:
                 logger.error("PR #%d file %s: backend exited %d", pr_number, file, result.returncode)
                 all_ok = False
@@ -264,7 +265,7 @@ def _run_summary_review(
         + (f"\n\n## Static Analysis\n{vibe_heal_context}" if vibe_heal_context else "")
     )
     try:
-        result = backend.run(summary_prompt, cwd=wdir)
+        result = backend.run(summary_prompt, cwd=wdir, context=f"PR #{pr_number} summary")
         if result.returncode != 0:
             logger.error("PR #%d: summary backend exited %d", pr_number, result.returncode)
             return False

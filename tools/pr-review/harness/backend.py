@@ -24,12 +24,15 @@ class Backend:
         self.env_vars = env_vars
         self.max_retries = max_retries
 
-    def run(self, instructions: str, cwd: str, opencode_dir: str | None = None) -> subprocess.CompletedProcess:
+    def run(
+        self, instructions: str, cwd: str, opencode_dir: str | None = None, context: str | None = None
+    ) -> subprocess.CompletedProcess:
+        prefix = f"{context}: " if context else ""
         total_attempts = self.max_retries + 1
         for attempt in range(1, total_attempts + 1):
             cmd, tmp_path = self._build_command(instructions, opencode_dir)
             env = self._build_env()
-            logger.info("Running backend: %s (cwd=%s)", " ".join(cmd[:4]), cwd)
+            logger.info("%sRunning backend: %s (cwd=%s)", prefix, " ".join(cmd[:4]), cwd)
             proc = None
             try:
                 proc = subprocess.Popen(  # noqa: S603
@@ -43,7 +46,8 @@ class Backend:
                 stdout, stderr = proc.communicate(timeout=self.timeout)
                 if proc.returncode != 0:
                     logger.error(
-                        "Backend exited %d\nstdout: %s\nstderr: %s",
+                        "%sBackend exited %d\nstdout: %s\nstderr: %s",
+                        prefix,
                         proc.returncode,
                         stdout.decode("utf-8", errors="replace")[:2000],
                         stderr.decode("utf-8", errors="replace")[:2000],
@@ -54,9 +58,9 @@ class Backend:
                     with contextlib.suppress(ProcessLookupError):
                         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                     proc.communicate()
-                    self._warn_if_backend_survived()
+                    self._warn_if_backend_survived(prefix)
                 if attempt < total_attempts:
-                    logger.warning("Backend timed out, retrying (attempt %d/%d)", attempt + 1, total_attempts)
+                    logger.warning("%sBackend timed out, retrying (attempt %d/%d)", prefix, attempt + 1, total_attempts)
                     continue
                 raise
             finally:
@@ -64,7 +68,7 @@ class Backend:
                     tmp_path.unlink()
         raise RuntimeError("run loop exhausted without returning")  # noqa: TRY003
 
-    def _warn_if_backend_survived(self) -> None:
+    def _warn_if_backend_survived(self, prefix: str) -> None:
         """killpg only reaches processes still in the killed group; a backend that
         double-forks into its own session (common for daemonizing subprocess managers)
         escapes it entirely and can keep running against the shared working directory
@@ -78,13 +82,14 @@ class Backend:
                 timeout=10,
             )
         except Exception:
-            logger.warning("Could not check for surviving %s processes after timeout-kill", self.backend_name)
+            logger.warning("%sCould not check for surviving %s processes after timeout-kill", prefix, self.backend_name)
             return
         survivors = result.stdout.strip()
         if survivors:
             logger.warning(
-                "Backend timeout-kill: %s process(es) still alive afterward (pgid kill may have missed "
+                "%sBackend timeout-kill: %s process(es) still alive afterward (pgid kill may have missed "
                 "a daemonized child):\n%s",
+                prefix,
                 self.backend_name,
                 survivors,
             )

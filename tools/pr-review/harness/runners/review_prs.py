@@ -75,6 +75,7 @@ def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
 
     batch_failed = False
     for pr in eligible:
+        logger.info("PR #%d: starting", pr["number"])
         success = True
         try:
             success = _process_pr(pr, config, env, current_user, wdir)

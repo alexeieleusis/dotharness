@@ -69,6 +69,7 @@ def _run_locked(config: HarnessConfig) -> None:
             matches = _matching_comments(comments)
             if not matches:
                 continue
+            logger.info("PR #%d: starting", number)
             checkout_attempted = True
             git_fetch_and_checkout(branch, wdir, env)
             _process_matches(matches, config, instructions_template, backend, number, wdir, env)
@@ -108,7 +109,7 @@ def _process_matches(
             continue
         prompt = _build_prompt(instructions_template, comment, knowledge_text, number, config.repo.name)
         try:
-            backend.run(prompt, cwd=wdir)
+            backend.run(prompt, cwd=wdir, context=f"PR #{number} comment {comment.get('id', '?')}")
         except Exception:
             logger.exception("PR #%d comment %s: backend error", number, comment.get("id", "?"))
 

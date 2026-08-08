@@ -459,7 +459,9 @@ def test_address_single_comment_passes_opencode_dir_to_backend():
             "sha-before",
             opencode_dir="/repo/plugins/foo",
         )
-    mock_backend.run.assert_called_once_with(ANY, cwd="/repo", opencode_dir="/repo/plugins/foo")
+    mock_backend.run.assert_called_once_with(
+        ANY, cwd="/repo", opencode_dir="/repo/plugins/foo", context="PR #1 comment 42"
+    )
 
 
 def _graphql_page(nodes, cursor=None, has_next=False):
