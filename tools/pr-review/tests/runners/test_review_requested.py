@@ -1,4 +1,6 @@
+import contextlib
 import json
+from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
 
 from harness.runners import review_requested
@@ -41,6 +43,47 @@ def _strict_run_cmd(mapping: dict[str, MagicMock]):
     return side_effect
 
 
+@contextlib.contextmanager
+def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
+    """Patch every dependency `_run_locked` needs to drive a full PR review pass.
+
+    Yields a namespace of the mocks so each test can tweak a return value or
+    side effect for the piece it cares about, instead of repeating all ~15
+    patch targets `_run_locked` touches on every call.
+    """
+    prs = prs if prs is not None else [{"number": 1, "url": "u", "headRefName": "feat"}]
+    changed_files = changed_files if changed_files is not None else ["src/foo.py"]
+    with (
+        patch("harness.runners.review_requested.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_requested.get_current_user", return_value="bot"),
+        patch("harness.runners.review_requested._get_prs", return_value=prs) as get_prs,
+        patch("harness.runners.review_requested._should_skip_pr", return_value=skip_pr) as should_skip_pr,
+        patch("harness.runners.review_requested.git_detach_and_record", return_value="sha") as detach,
+        patch("harness.runners.review_requested.git_fetch_and_checkout") as fetch_checkout,
+        patch("harness.runners.review_requested.git_restore") as restore,
+        patch("harness.runners.review_requested.run_cmd", return_value=MagicMock(returncode=0, stdout=b"")) as run_cmd,
+        patch("harness.runners.review_requested.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.review_requested.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.review_requested.get_changed_files", return_value=changed_files),
+        patch("harness.runners.review_requested.get_file_diff", return_value="@@diff"),
+        patch("harness.runners.review_requested.os") as os_mock,
+        patch("harness.runners.review_requested.Backend") as backend,
+    ):
+        os_mock.path.exists.return_value = True
+        os_mock.path.join.side_effect = lambda *parts: "/".join(parts)
+        backend.return_value.run.return_value = MagicMock(returncode=0)
+        yield SimpleNamespace(
+            get_prs=get_prs,
+            should_skip_pr=should_skip_pr,
+            detach=detach,
+            fetch_checkout=fetch_checkout,
+            restore=restore,
+            run_cmd=run_cmd,
+            os=os_mock,
+            backend=backend,
+        )
+
+
 def test_skips_already_approved_pr(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
@@ -80,64 +123,22 @@ def test_skips_pr_with_existing_osc_review(tmp_xdg, tmp_path):
 def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
-    with (
-        patch("harness.runners.review_requested.get_gh_token", return_value="tok"),
-        patch("harness.runners.review_requested.get_current_user", return_value="bot"),
-        patch(
-            "harness.runners.review_requested._get_prs", return_value=[{"number": 1, "url": "u", "headRefName": "feat"}]
-        ),
-        patch("harness.runners.review_requested._has_user_approved", return_value=False),
-        patch("harness.runners.review_requested.has_review_summary_comment", return_value=False),
-        patch("harness.runners.review_requested.git_detach_and_record", return_value="sha"),
-        patch("harness.runners.review_requested.git_fetch_and_checkout"),
-        patch("harness.runners.review_requested.git_restore"),
-        patch("harness.runners.review_requested.run_cmd") as mock_run,
-        patch("harness.runners.review_requested.get_pr_base_branch", return_value="main"),
-        patch("harness.runners.review_requested.get_pr_head_sha", return_value="abc123"),
-        patch("harness.runners.review_requested.get_changed_files", return_value=["src/a.py", "src/b.py"]),
-        patch("harness.runners.review_requested.get_file_diff", return_value="@@diff"),
-        patch("harness.runners.review_requested.os") as mock_os,
-        patch("harness.runners.review_requested.Backend") as mock_be,
-    ):
-        mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"")
-        mock_os.path.exists.return_value = True
-        mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
+    with _full_run_mocks(changed_files=["src/a.py", "src/b.py"]) as mocks:
         review_requested._run_locked(cfg, pr_url=None)
     # 2 files + 1 summary = 3 backend calls
-    assert mock_be.return_value.run.call_count == 3
+    assert mocks.backend.return_value.run.call_count == 3
 
 
 def test_vibe_heal_context_included_in_prompts(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("harness.runners.review_requested.get_gh_token", return_value="tok"),
-        patch("harness.runners.review_requested.get_current_user", return_value="bot"),
-        patch(
-            "harness.runners.review_requested._get_prs", return_value=[{"number": 1, "url": "u", "headRefName": "feat"}]
-        ),
-        patch("harness.runners.review_requested._has_user_approved", return_value=False),
-        patch("harness.runners.review_requested.has_review_summary_comment", return_value=False),
-        patch("harness.runners.review_requested.git_detach_and_record", return_value="sha"),
-        patch("harness.runners.review_requested.git_fetch_and_checkout"),
-        patch("harness.runners.review_requested.git_restore"),
-        patch("harness.runners.review_requested.run_cmd") as mock_run,
-        patch("harness.runners.review_requested.get_pr_base_branch", return_value="main"),
-        patch("harness.runners.review_requested.get_pr_head_sha", return_value="abc123"),
-        patch("harness.runners.review_requested.get_changed_files", return_value=["src/foo.py"]),
-        patch("harness.runners.review_requested.get_file_diff", return_value="@@diff"),
-        patch("harness.runners.review_requested.os") as mock_os,
+        _full_run_mocks() as mocks,
         patch("harness.runners.review_requested.get_vibe_heal_context", return_value="sonar findings"),
-        patch("harness.runners.review_requested.Backend") as mock_be,
     ):
-        mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"")
-        mock_os.path.exists.return_value = True
-        mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
         review_requested._run_locked(cfg, pr_url=None)
     # backend.run(prompt, cwd=wdir) — prompt is first positional arg
-    prompts = [c.args[0] for c in mock_be.return_value.run.call_args_list]
+    prompts = [c.args[0] for c in mocks.backend.return_value.run.call_args_list]
     assert all("## Static Analysis" in p for p in prompts)
     assert all("sonar findings" in p for p in prompts)
 
@@ -196,106 +197,37 @@ def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("harness.runners.review_requested.get_gh_token", return_value="tok"),
-        patch("harness.runners.review_requested.get_current_user", return_value="bot"),
-        patch(
-            "harness.runners.review_requested._get_prs", return_value=[{"number": 1, "url": "u", "headRefName": "feat"}]
-        ),
-        patch("harness.runners.review_requested._has_user_approved", return_value=False),
-        patch("harness.runners.review_requested.has_review_summary_comment", return_value=False),
-        patch("harness.runners.review_requested.git_detach_and_record", return_value="sha"),
-        patch("harness.runners.review_requested.git_fetch_and_checkout"),
-        patch("harness.runners.review_requested.git_restore"),
-        patch("harness.runners.review_requested.run_cmd") as mock_run,
-        patch("harness.runners.review_requested.get_pr_base_branch", return_value="main"),
-        patch("harness.runners.review_requested.get_pr_head_sha", return_value="abc123"),
-        patch("harness.runners.review_requested.get_changed_files", return_value=["src/foo.py"]),
-        patch("harness.runners.review_requested.get_file_diff", return_value="@@diff"),
-        patch("harness.runners.review_requested.os") as mock_os,
+        _full_run_mocks() as mocks,
         patch("harness.runners.review_requested.get_vibe_heal_context", return_value=""),
-        patch("harness.runners.review_requested.Backend") as mock_be,
     ):
-        mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"")
-        mock_os.path.exists.return_value = True
-        mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
         review_requested._run_locked(cfg, pr_url=None)
-    prompts = [c.args[0] for c in mock_be.return_value.run.call_args_list]
+    prompts = [c.args[0] for c in mocks.backend.return_value.run.call_args_list]
     assert all("## Static Analysis" not in p for p in prompts)
 
 
 def test_continues_to_next_pr_on_backend_exception(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
-    restore_calls = []
-    detach_calls = []
-
-    def spy_restore(*args, **kwargs):
-        restore_calls.append((args, kwargs))
-
-    def spy_detach(*args, **kwargs):
-        detach_calls.append((args, kwargs))
-        return "sha"
-
-    with (
-        patch("harness.runners.review_requested.get_gh_token", return_value="tok"),
-        patch("harness.runners.review_requested.get_current_user", return_value="bot"),
-        patch(
-            "harness.runners.review_requested._get_prs",
-            return_value=[
-                {"number": 1, "url": "u1", "headRefName": "feat1"},
-                {"number": 2, "url": "u2", "headRefName": "feat2"},
-            ],
-        ),
-        patch("harness.runners.review_requested._should_skip_pr", return_value=False),
-        patch("harness.runners.review_requested.git_detach_and_record", side_effect=spy_detach),
-        patch("harness.runners.review_requested.git_fetch_and_checkout"),
-        patch("harness.runners.review_requested.git_restore", side_effect=spy_restore),
-        patch("harness.runners.review_requested.run_cmd") as mock_run,
-        patch("harness.runners.review_requested.get_pr_base_branch", return_value="main"),
-        patch("harness.runners.review_requested.get_pr_head_sha", return_value="abc123"),
-        patch("harness.runners.review_requested.get_changed_files", return_value=["src/foo.py"]),
-        patch("harness.runners.review_requested.get_file_diff", return_value="@@diff"),
-        patch("harness.runners.review_requested.os") as mock_os,
-        patch("harness.runners.review_requested.Backend") as mock_be,
-    ):
-        mock_be.return_value.run.side_effect = [RuntimeError("backend crash"), MagicMock(returncode=0)]
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"")
-        mock_os.path.exists.return_value = True
-        mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
+    prs = [
+        {"number": 1, "url": "u1", "headRefName": "feat1"},
+        {"number": 2, "url": "u2", "headRefName": "feat2"},
+    ]
+    with _full_run_mocks(prs=prs) as mocks:
+        mocks.backend.return_value.run.side_effect = [RuntimeError("backend crash"), MagicMock(returncode=0)]
         review_requested._run_locked(cfg, pr_url=None)
 
+    restore_calls = mocks.restore.call_args_list
     assert len(restore_calls) == 2
     assert restore_calls[0][0][0] == "sha"
     assert restore_calls[0][0][1] == "feat1"
     assert restore_calls[1][0][1] == "feat2"
-    assert len(detach_calls) == 2
+    assert mocks.detach.call_count == 2
 
 
 def test_restores_head_on_backend_failure(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
-    with (
-        patch("harness.runners.review_requested.get_gh_token", return_value="tok"),
-        patch("harness.runners.review_requested.get_current_user", return_value="bot"),
-        patch(
-            "harness.runners.review_requested._get_prs", return_value=[{"number": 1, "url": "u", "headRefName": "feat"}]
-        ),
-        patch("harness.runners.review_requested._should_skip_pr", return_value=False),
-        patch("harness.runners.review_requested.git_detach_and_record", return_value="sha"),
-        patch("harness.runners.review_requested.git_fetch_and_checkout"),
-        patch("harness.runners.review_requested.git_restore") as mock_restore,
-        patch("harness.runners.review_requested.run_cmd") as mock_run,
-        patch("harness.runners.review_requested.get_pr_base_branch", return_value="main"),
-        patch("harness.runners.review_requested.get_pr_head_sha", return_value="abc123"),
-        patch("harness.runners.review_requested.get_changed_files", return_value=["src/foo.py"]),
-        patch("harness.runners.review_requested.get_file_diff", return_value="@@diff"),
-        patch("harness.runners.review_requested.os") as mock_os,
-        patch("harness.runners.review_requested.Backend") as mock_be,
-    ):
-        mock_be.return_value.run.side_effect = RuntimeError("backend crash")
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"")
-        mock_os.path.exists.return_value = True
-        mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
+    with _full_run_mocks() as mocks:
+        mocks.backend.return_value.run.side_effect = RuntimeError("backend crash")
         review_requested._run_locked(cfg, pr_url=None)
-    mock_restore.assert_called_once_with("sha", "feat", str(cfg.repo.working_dir), ANY)
+    mocks.restore.assert_called_once_with("sha", "feat", str(cfg.repo.working_dir), ANY)
