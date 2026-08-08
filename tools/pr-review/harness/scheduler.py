@@ -154,6 +154,8 @@ def uninstall_cron(command: str, repo_slug: str) -> None:
 
 
 def install_launchd(entry: ScheduleEntry) -> None:
+    # Uninstall existing entry first so install is idempotent
+    uninstall_launchd(entry.command, entry.repo_slug)
     plist_dir = Path.home() / "Library/LaunchAgents"
     plist_dir.mkdir(parents=True, exist_ok=True)
     plist_path = plist_dir / f"{entry.launchd_label}.plist"
