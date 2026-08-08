@@ -85,7 +85,10 @@ class HarnessConfig:
 
 def load_config(path: Path) -> HarnessConfig:
     with open(path, "rb") as f:
-        data = tomllib.load(f)
+        try:
+            data = tomllib.load(f)
+        except tomllib.TOMLDecodeError as e:
+            raise ConfigError(f"Invalid TOML in config file: {e}") from None  # noqa: TRY003
 
     h = data.get("harness", {})
     backend = h.get("backend", "opencode")

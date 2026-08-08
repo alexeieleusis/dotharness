@@ -248,3 +248,15 @@ require_reaction_for_focused_review = true
 """)
     cfg = load_config(p)
     assert cfg.address_comments.require_reaction_for_focused_review is True
+
+
+def test_malformed_toml_raises_config_error(tmp_path):
+    p = tmp_path / ".harness.toml"
+    p.write_text("""
+[harness]
+backend = "opencode"
+[repo
+name = "a/b"
+""")
+    with pytest.raises(ConfigError, match="Invalid TOML"):
+        load_config(p)
