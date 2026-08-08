@@ -3,6 +3,7 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from xml.sax import saxutils
 
 
 def parse_duration(s: str) -> int:
@@ -64,23 +65,24 @@ class ScheduleEntry:
 
     def to_launchd_plist(self) -> str:
         log_dir = Path.home() / ".local/share/dotharness/logs" / self.command
-        log_file = log_dir / "launchd.log"
+        log_file = str(log_dir / "launchd.log")
+        esc = saxutils.escape
         return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>Label</key><string>{self.launchd_label}</string>
+    <key>Label</key><string>{esc(self.launchd_label)}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{self.harness_bin}</string>
+        <string>{esc(self.harness_bin)}</string>
         <string>run</string>
-        <string>{self.command}</string>
+        <string>{esc(self.command)}</string>
         <string>--config</string>
-        <string>{self.config_path}</string>
+        <string>{esc(self.config_path)}</string>
     </array>
     <key>StartInterval</key><integer>{self.interval_seconds}</integer>
-    <key>StandardOutPath</key><string>{log_file}</string>
-    <key>StandardErrorPath</key><string>{log_file}</string>
+    <key>StandardOutPath</key><string>{esc(log_file)}</string>
+    <key>StandardErrorPath</key><string>{esc(log_file)}</string>
     <key>RunAtLoad</key><false/>
 </dict>
 </plist>"""
