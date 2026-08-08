@@ -317,6 +317,6 @@ def _list_my_prs(repo: str, env: dict) -> list[dict]:
         return []
     try:
         return sorted(json.loads(result.stdout), key=lambda p: p["number"])
-    except (json.JSONDecodeError, ValueError):
+    except ValueError:
         logger.exception("_list_my_prs: malformed JSON from gh CLI")
         return []
