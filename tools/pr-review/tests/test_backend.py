@@ -4,23 +4,25 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from harness.backend import INLINE_THRESHOLD_BYTES, Backend
+from harness.backend import Backend
 
 
 def _make_backend(tmp_xdg, backend="opencode"):
     return Backend(backend=backend, timeout=10, path_prepend=[], env_vars={})
 
 
-def test_short_instructions_inline(tmp_xdg):
+def test_short_instructions_write_temp_file(tmp_xdg):
     b = _make_backend(tmp_xdg)
     cmd, tmp = b._build_command("Do this.")
-    assert tmp is None
-    assert "Do this." in cmd
+    assert tmp is not None
+    assert tmp.exists()
+    assert "Do this." not in cmd
+    assert str(tmp) in " ".join(cmd)
 
 
 def test_long_instructions_write_temp_file(tmp_xdg):
     b = _make_backend(tmp_xdg)
-    long = "x" * (INLINE_THRESHOLD_BYTES + 1)
+    long = "x" * 5000
     cmd, tmp = b._build_command(long)
     assert tmp is not None
     assert tmp.exists()
@@ -29,8 +31,7 @@ def test_long_instructions_write_temp_file(tmp_xdg):
 
 def test_temp_file_in_xdg_tmp(tmp_xdg):
     b = _make_backend(tmp_xdg)
-    long = "x" * (INLINE_THRESHOLD_BYTES + 1)
-    _, tmp = b._build_command(long)
+    _, tmp = b._build_command("Do this.")
     assert str(tmp_xdg) in str(tmp)
 
 
@@ -76,18 +77,18 @@ def test_nonzero_returncode_returns_completed_process(tmp_xdg, caplog):
 
 def test_temp_file_cleaned_on_success(tmp_xdg):
     b = _make_backend(tmp_xdg)
-    long = "x" * (INLINE_THRESHOLD_BYTES + 1)
+    prompt = "Do this."
     mock_proc = MagicMock()
     mock_proc.communicate.return_value = (b"", b"")
     mock_proc.returncode = 0
     with patch("subprocess.Popen", return_value=mock_proc):
-        b.run(long, cwd="/tmp")  # noqa: S108
+        b.run(prompt, cwd="/tmp")  # noqa: S108
     assert not list((tmp_xdg / "tmp").glob("harness_*.md"))
 
 
 def test_temp_file_cleaned_on_timeout(tmp_xdg):
     b = _make_backend(tmp_xdg)
-    long = "x" * (INLINE_THRESHOLD_BYTES + 1)
+    prompt = "Do this."
     mock_proc = MagicMock()
     mock_proc.communicate.side_effect = [
         subprocess.TimeoutExpired([], 10),  # attempt 1: timed communicate raises
@@ -101,7 +102,7 @@ def test_temp_file_cleaned_on_timeout(tmp_xdg):
         patch("os.killpg"),
         pytest.raises(subprocess.TimeoutExpired),
     ):
-        b.run(long, cwd="/tmp")  # noqa: S108
+        b.run(prompt, cwd="/tmp")  # noqa: S108
     assert not list((tmp_xdg / "tmp").glob("harness_*.md"))
 
 
@@ -114,7 +115,7 @@ def test_temp_file_cleaned_on_timeout(tmp_xdg):
 )
 def test_timeout_kill_warns_iff_backend_survives(tmp_xdg, caplog, survivor_stdout, expect_warning):
     b = _make_backend(tmp_xdg)
-    long = "x" * (INLINE_THRESHOLD_BYTES + 1)
+    prompt = "Do this."
     mock_proc = MagicMock()
     # Default max_retries=1 means two attempts; both time out here so the final
     # TimeoutExpired still propagates, but the survival check runs on each attempt.
@@ -133,7 +134,7 @@ def test_timeout_kill_warns_iff_backend_survives(tmp_xdg, caplog, survivor_stdou
         pytest.raises(subprocess.TimeoutExpired),
         caplog.at_level("WARNING"),
     ):
-        b.run(long, cwd="/tmp")  # noqa: S108
+        b.run(prompt, cwd="/tmp")  # noqa: S108
     assert ("still alive afterward" in caplog.text) == expect_warning
 
 
@@ -159,7 +160,7 @@ def test_retries_once_on_timeout_then_succeeds(tmp_xdg):
 
 def test_temp_file_cleaned_across_retry_loop(tmp_xdg):
     b = _make_backend(tmp_xdg)
-    long = "x" * (INLINE_THRESHOLD_BYTES + 1)
+    prompt = "Do this."
     mock_proc = MagicMock()
     mock_proc.communicate.side_effect = [
         subprocess.TimeoutExpired([], 10),  # attempt 1: times out, tmp file created
@@ -173,7 +174,7 @@ def test_temp_file_cleaned_across_retry_loop(tmp_xdg):
         patch("os.killpg"),
         patch("subprocess.run", return_value=MagicMock(stdout="")),
     ):
-        result = b.run(long, cwd="/tmp")  # noqa: S108
+        result = b.run(prompt, cwd="/tmp")  # noqa: S108
     assert result.stdout == b"ok"
     assert not list((tmp_xdg / "tmp").glob("harness_*.md"))
 
