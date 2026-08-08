@@ -50,10 +50,16 @@ def test_cron_entry_contains_marker():
     assert "harness run --config /path/.harness.toml review-prs" in cron_line
 
 
-def test_cron_escapes_percent():
+def test_cron_log_filename_escapes_percent():
     entry = ScheduleEntry("review-prs", "slug", "cron", 7200, "/c/.harness.toml", "/bin/harness")
     cron_line = entry.to_cron_line()
     assert r"\%" in cron_line
+
+
+def test_cron_escapes_percent_in_user_input():
+    entry = ScheduleEntry("test%cmd", "slug", "cron", 7200, "/c/.harness.toml", "/bin/harness")
+    cron_line = entry.to_cron_line()
+    assert r"'test\%cmd'" in cron_line
 
 
 def test_launchd_plist_name():
