@@ -59,6 +59,8 @@ def test_backup_check_marks_reviewed_without_running(tmp_xdg, tmp_path):
 def test_updates_state_on_success(tmp_xdg, tmp_path):
     state.write_self_review_state("acme-frontend", [])
     _setup_knowledge(tmp_path)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
@@ -72,12 +74,9 @@ def test_updates_state_on_success(tmp_xdg, tmp_path):
         patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
         patch("harness.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
-        patch("harness.runners.self_review.os") as mock_os,
         patch("harness.runners.self_review.Backend") as mock_be,
     ):
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        mock_os.path.exists.return_value = True
-        mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
         self_review._run_locked(cfg)
     assert 7 in state.read_self_review_state("acme-frontend")["reviewed_prs"]
 
@@ -85,6 +84,8 @@ def test_updates_state_on_success(tmp_xdg, tmp_path):
 def test_does_not_update_state_on_failure(tmp_xdg, tmp_path):
     state.write_self_review_state("acme-frontend", [])
     _setup_knowledge(tmp_path)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
@@ -98,12 +99,9 @@ def test_does_not_update_state_on_failure(tmp_xdg, tmp_path):
         patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
         patch("harness.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
-        patch("harness.runners.self_review.os") as mock_os,
         patch("harness.runners.self_review.Backend") as mock_be,
     ):
         mock_be.return_value.run.return_value = MagicMock(returncode=1)
-        mock_os.path.exists.return_value = True
-        mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
         self_review._run_locked(cfg)
     assert 9 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
 
@@ -111,6 +109,9 @@ def test_does_not_update_state_on_failure(tmp_xdg, tmp_path):
 def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
     state.write_self_review_state("acme-frontend", [])
     _setup_knowledge(tmp_path)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "a.py").write_text("a = 1\n")
+    (tmp_path / "src" / "b.py").write_text("b = 2\n")
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
@@ -126,12 +127,9 @@ def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
         patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
         patch("harness.runners.self_review.get_changed_files", return_value=["src/a.py", "src/b.py"]),
         patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
-        patch("harness.runners.self_review.os") as mock_os,
         patch("harness.runners.self_review.Backend") as mock_be,
     ):
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        mock_os.path.exists.return_value = True
-        mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
         self_review.run(cfg)
     # 2 files + 1 summary = 3 backend calls
     assert mock_be.return_value.run.call_count == 3
@@ -141,6 +139,8 @@ def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
 def test_does_not_update_state_when_file_call_fails(tmp_xdg, tmp_path):
     state.write_self_review_state("acme-frontend", [])
     _setup_knowledge(tmp_path)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "a.py").write_text("a = 1\n")
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
@@ -156,12 +156,9 @@ def test_does_not_update_state_when_file_call_fails(tmp_xdg, tmp_path):
         patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
         patch("harness.runners.self_review.get_changed_files", return_value=["src/a.py"]),
         patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
-        patch("harness.runners.self_review.os") as mock_os,
         patch("harness.runners.self_review.Backend") as mock_be,
     ):
         mock_be.return_value.run.return_value = MagicMock(returncode=1)
-        mock_os.path.exists.return_value = True
-        mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
         self_review.run(cfg)
     assert 13 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
 
@@ -169,6 +166,8 @@ def test_does_not_update_state_when_file_call_fails(tmp_xdg, tmp_path):
 def test_vibe_heal_context_included_in_prompts(tmp_xdg, tmp_path):
     state.write_self_review_state("acme-frontend", [])
     _setup_knowledge(tmp_path)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
@@ -182,13 +181,10 @@ def test_vibe_heal_context_included_in_prompts(tmp_xdg, tmp_path):
         patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
         patch("harness.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
-        patch("harness.runners.self_review.os") as mock_os,
         patch("harness.runners.self_review.get_vibe_heal_context", return_value="sonar findings"),
         patch("harness.runners.self_review.Backend") as mock_be,
     ):
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        mock_os.path.exists.return_value = True
-        mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
         self_review._run_locked(cfg)
     # backend.run(prompt, cwd=wdir) — prompt is first positional arg
     prompts = [c.args[0] for c in mock_be.return_value.run.call_args_list]
@@ -199,6 +195,8 @@ def test_vibe_heal_context_included_in_prompts(tmp_xdg, tmp_path):
 def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
     state.write_self_review_state("acme-frontend", [])
     _setup_knowledge(tmp_path)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
@@ -212,13 +210,10 @@ def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
         patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
         patch("harness.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
-        patch("harness.runners.self_review.os") as mock_os,
         patch("harness.runners.self_review.get_vibe_heal_context", return_value=""),
         patch("harness.runners.self_review.Backend") as mock_be,
     ):
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        mock_os.path.exists.return_value = True
-        mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
         self_review._run_locked(cfg)
     prompts = [c.args[0] for c in mock_be.return_value.run.call_args_list]
     assert all("## Static Analysis" not in p for p in prompts)
@@ -251,6 +246,8 @@ def test_timeout_expired_does_not_mark_reviewed(tmp_xdg, tmp_path):
     """When backend.run raises TimeoutExpired, the PR is not marked reviewed and no crash propagates."""
     state.write_self_review_state("acme-frontend", [])
     _setup_knowledge(tmp_path)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
@@ -266,11 +263,8 @@ def test_timeout_expired_does_not_mark_reviewed(tmp_xdg, tmp_path):
         patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
         patch("harness.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
-        patch("harness.runners.self_review.os") as mock_os,
         patch("harness.runners.self_review.Backend") as mock_be,
     ):
         mock_be.return_value.run.side_effect = subprocess.TimeoutExpired("cmd", 10)
-        mock_os.path.exists.return_value = True
-        mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
         self_review._run_locked(cfg)
     assert 21 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
