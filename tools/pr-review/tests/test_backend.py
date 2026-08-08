@@ -34,6 +34,13 @@ def test_temp_file_in_xdg_tmp(tmp_xdg):
     assert str(tmp_xdg) in str(tmp)
 
 
+def test_opencode_dir_flag(tmp_xdg):
+    b = _make_backend(tmp_xdg, "opencode")
+    cmd, _ = b._build_command("Do this.", opencode_dir="/some/path")
+    assert "--dir" in cmd
+    assert "/some/path" in cmd
+
+
 def test_opencode_command_shape(tmp_xdg):
     b = _make_backend(tmp_xdg, "opencode")
     cmd, _ = b._build_command("Do this.")
