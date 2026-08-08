@@ -92,7 +92,11 @@ def _process_matches(
     env: dict,
 ) -> None:
     for comment, commit, rel_path in matches:
-        knowledge_text = _resolve_knowledge_file(config.focused_review.vibe_types_repo, commit, rel_path, env)
+        try:
+            knowledge_text = _resolve_knowledge_file(config.focused_review.vibe_types_repo, commit, rel_path, env)
+        except Exception:
+            logger.exception("PR #%d comment %s: knowledge-file resolve error", number, comment.get("id", "?"))
+            continue
         if knowledge_text is None:
             logger.warning(
                 "PR #%d comment %s: could not resolve knowledge file %s@%s",
