@@ -89,7 +89,12 @@ def test_temp_file_cleaned_on_timeout(tmp_xdg):
     b = _make_backend(tmp_xdg)
     long = "x" * (INLINE_THRESHOLD_BYTES + 1)
     mock_proc = MagicMock()
-    mock_proc.communicate.side_effect = subprocess.TimeoutExpired([], 10)
+    mock_proc.communicate.side_effect = [
+        subprocess.TimeoutExpired([], 10),  # attempt 1: timed communicate raises
+        (b"", b""),  # attempt 1: post-kill flush returns normally
+        subprocess.TimeoutExpired([], 10),  # attempt 2: timed communicate raises
+        (b"", b""),  # attempt 2: post-kill flush returns normally
+    ]
     mock_proc.pid = os.getpid()
     with (
         patch("subprocess.Popen", return_value=mock_proc),
@@ -176,7 +181,10 @@ def test_temp_file_cleaned_across_retry_loop(tmp_xdg):
 def test_no_retry_when_max_retries_zero(tmp_xdg):
     b = Backend(backend="opencode", timeout=10, path_prepend=[], env_vars={}, max_retries=0)
     mock_proc = MagicMock()
-    mock_proc.communicate.side_effect = subprocess.TimeoutExpired([], 10)
+    mock_proc.communicate.side_effect = [
+        subprocess.TimeoutExpired([], 10),  # timed communicate raises
+        (b"", b""),  # post-kill flush returns normally
+    ]
     mock_proc.pid = os.getpid()
     with (
         patch("subprocess.Popen", return_value=mock_proc),
