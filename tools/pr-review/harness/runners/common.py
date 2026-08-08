@@ -564,27 +564,30 @@ def get_vibe_heal_context(subdirs: list[SubDir], working_dir: str, branch: str) 
             continue
         seen_keys.add(project_key)
         review_path = Path.home() / ".vibe-heal" / "reviews" / project_key / branch / "review.md"
-        try:
-            reviews_base = (Path.home() / ".vibe-heal" / "reviews" / project_key).resolve()
-            review_path.resolve().relative_to(reviews_base)
-        except ValueError:
-            continue
-        if not review_path.exists():
-            continue
-        try:
-            text = review_path.read_text(encoding="utf-8")
-            cleaned = text
-            while True:
-                new_cleaned = re.sub(r"<details>.*?</details>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
-                if new_cleaned == cleaned:
-                    break
-                cleaned = new_cleaned
-            cleaned = re.sub(r"</?details>", "", cleaned, flags=re.IGNORECASE).strip()
-            if cleaned:
-                parts.append(cleaned)
-        except Exception:  # noqa: S112
-            continue
+        cleaned = _read_vibe_heal_review(review_path, project_key)
+        if cleaned:
+            parts.append(cleaned)
     return "\n\n".join(parts)
+
+
+def _read_vibe_heal_review(review_path: Path, project_key: str) -> str | None:
+    reviews_base = (Path.home() / ".vibe-heal" / "reviews" / project_key).resolve()
+    try:
+        review_path.resolve().relative_to(reviews_base)
+    except ValueError:
+        return None
+    if not review_path.exists():
+        return None
+    try:
+        cleaned = review_path.read_text(encoding="utf-8")
+    except Exception:
+        return None
+    while True:
+        new_cleaned = re.sub(r"<details>.*?</details>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+        if new_cleaned == cleaned:
+            break
+        cleaned = new_cleaned
+    return re.sub(r"</?details>", "", cleaned, flags=re.IGNORECASE).strip()
 
 
 def _read_sonar_project_key(props_path: Path) -> str | None:
