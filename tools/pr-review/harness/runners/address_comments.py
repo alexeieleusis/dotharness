@@ -1,5 +1,6 @@
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from harness.backend import Backend
@@ -101,6 +102,21 @@ def _run_locked(config: HarnessConfig) -> None:
     original_sha = git_detach_and_record(wdir, env)
     our_login = get_current_user(env)
 
+    ctx = _ProcessPrContext(
+        script_path=script_path,
+        instructions_template=instructions_template,
+        backend=backend,
+        our_login=our_login,
+        wdir=wdir,
+        original_sha=original_sha,
+        repo=config.repo.name,
+        env=env,
+        require_reaction_for_focused_review=config.address_comments.require_reaction_for_focused_review,
+        trusted_commenters=config.address_comments.trusted_commenters,
+        opencode_dir=opencode_dir,
+        plugin_prefix=plugin_prefix,
+    )
+
     logger.info("Found %d open PR(s) to check", len(prs))
     for pr in prs:
         number = pr["number"]
@@ -112,65 +128,61 @@ def _run_locked(config: HarnessConfig) -> None:
         if not _has_pending_feedback(number, config.repo.name, env):
             logger.info("PR #%d: no pending feedback, skipping", number)
             continue
-        _process_single_pr(
-            number,
-            branch,
-            script_path,
-            instructions_template,
-            backend,
-            our_login,
-            wdir,
-            original_sha,
-            config.repo.name,
-            env,
-            config.address_comments.require_reaction_for_focused_review,
-            config.address_comments.trusted_commenters,
-            opencode_dir,
-            plugin_prefix,
-        )
+        _process_single_pr(number, branch, ctx)
 
 
-def _process_single_pr(
-    number: int,
-    branch: str,
-    script_path: Path,
-    instructions_template: str,
-    backend: Backend,
-    our_login: str | None,
-    wdir: str,
-    original_sha: str,
-    repo: str,
-    env: dict,
-    require_reaction_for_focused_review: bool,
-    trusted_commenters: str | list[str],
-    opencode_dir: str | None = None,
-    plugin_prefix: str | None = None,
-) -> None:
+@dataclass
+class _ProcessPrContext:
+    """Fields that stay constant across every PR processed in a single `_run_locked` pass."""
+
+    script_path: Path
+    instructions_template: str
+    backend: Backend
+    our_login: str | None
+    wdir: str
+    original_sha: str
+    repo: str
+    env: dict
+    require_reaction_for_focused_review: bool
+    trusted_commenters: str | list[str]
+    opencode_dir: str | None = None
+    plugin_prefix: str | None = None
+
+
+def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -> None:
     logger.info("PR #%d (branch=%s): has pending feedback, processing", number, branch)
     try:
-        git_fetch_and_checkout(branch, wdir, env)
-        comments = fetch_pr_comments(number, script_path, wdir, env)
+        git_fetch_and_checkout(branch, ctx.wdir, ctx.env)
+        comments = fetch_pr_comments(number, ctx.script_path, ctx.wdir, ctx.env)
         if not comments:
             logger.info("PR #%d: no actionable comments found", number)
             return
         comments = _filter_comments(
             comments,
             number,
-            repo,
-            our_login,
-            env,
-            require_reaction_for_focused_review,
-            trusted_commenters,
-            plugin_prefix,
+            ctx.repo,
+            ctx.our_login,
+            ctx.env,
+            ctx.require_reaction_for_focused_review,
+            ctx.trusted_commenters,
+            ctx.plugin_prefix,
         )
         if not comments:
             logger.info("PR #%d: no unresolved comments remain after filtering", number)
             return
         logger.info("PR #%d: found %d comment(s) to address", number, len(comments))
-        head_sha = get_head_sha(wdir, env)
+        head_sha = get_head_sha(ctx.wdir, ctx.env)
         for comment in comments:
             head_sha, rewritten = _address_single_comment(
-                comment, number, instructions_template, backend, wdir, repo, env, head_sha, opencode_dir
+                comment,
+                number,
+                ctx.instructions_template,
+                ctx.backend,
+                ctx.wdir,
+                ctx.repo,
+                ctx.env,
+                head_sha,
+                ctx.opencode_dir,
             )
             if rewritten:
                 logger.warning(
@@ -180,7 +192,7 @@ def _process_single_pr(
                     comment.get("id", "?"),
                 )
                 break
-            if not _push_branch(number, branch, wdir, env):
+            if not _push_branch(number, branch, ctx.wdir, ctx.env):
                 logger.warning(
                     "PR #%d: skipping remaining comments this run after comment %s's push failed",
                     number,
@@ -190,7 +202,7 @@ def _process_single_pr(
     except Exception:
         logger.exception("PR #%d: error", number)
     finally:
-        git_restore(original_sha, branch, wdir, env)
+        git_restore(ctx.original_sha, branch, ctx.wdir, ctx.env)
 
 
 def _split_gated_focused_review_comments(comments: list[dict], enabled: bool) -> tuple[list[dict], list[dict]]:
