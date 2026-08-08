@@ -7,7 +7,6 @@ import tempfile
 from pathlib import Path
 
 XDG_DATA = Path.home() / ".local/share/dotharness"
-INLINE_THRESHOLD_BYTES = 4096
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +63,7 @@ class Backend:
                     continue
                 raise
             finally:
-                if tmp_path is not None and tmp_path.exists():
-                    tmp_path.unlink()
+                tmp_path.unlink(missing_ok=True)
         raise RuntimeError("run loop exhausted without returning")  # noqa: TRY003
 
     def _warn_if_backend_survived(self, prefix: str) -> None:
@@ -105,10 +103,7 @@ class Backend:
             return cmd
         return ["claude", "--dangerously-skip-permissions", "--disable-slash-commands", "-p", text]
 
-    def _build_command(self, instructions: str, opencode_dir: str | None = None) -> tuple[list[str], Path | None]:
-        if len(instructions.encode("utf-8")) <= INLINE_THRESHOLD_BYTES:
-            return self._cmd_for(instructions, opencode_dir), None
-
+    def _build_command(self, instructions: str, opencode_dir: str | None = None) -> tuple[list[str], Path]:
         tmp_dir = XDG_DATA / "tmp"
         tmp_dir.mkdir(parents=True, exist_ok=True)
         fd, path_str = tempfile.mkstemp(suffix=".md", dir=tmp_dir, prefix="harness_")
