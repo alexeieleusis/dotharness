@@ -1,4 +1,3 @@
-import json
 import logging
 import shlex
 import subprocess
@@ -146,18 +145,15 @@ def _get_changed_files_for_pr(pr: dict, config: HarnessConfig, wdir: str, env: d
 
 def _post_comment_if_needed(pr_number: int, repo: str, env: dict, *, marker: str, body: str) -> None:
     result = run_cmd(
-        ["gh", "api", f"repos/{repo}/issues/{pr_number}/comments?per_page=100"],
+        "gh api --paginate repos/" + repo + "/issues/" + str(pr_number) + "/comments --jq '.body // empty'",
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
         check=False,
     )
     if result.returncode == 0:
-        try:
-            comments = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            comments = []
-        if any(marker in c.get("body", "") for c in comments):
+        all_bodies = result.stdout.decode("utf-8", errors="replace")
+        if marker in all_bodies:
             return
     run_cmd(
         ["gh", "pr", "comment", str(pr_number), "--repo", repo, "--body", body],
