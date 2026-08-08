@@ -119,8 +119,7 @@ def _review_file(
 
 
 def _review_files(
-    files: list[str],
-    base_branch: str,
+    ctx: dict,
     wdir: str,
     env: dict,
     backend: Backend,
@@ -129,12 +128,14 @@ def _review_files(
     pr: dict,
     number: int,
     config,
-    commit_sha: str,
-    pr_description: str | None,
-    vibe_heal_context: str | None,
     partial_files: set[str],
     repo_slug: str,
 ) -> tuple[bool, set[str]]:
+    files = ctx["files"]
+    base_branch = ctx["base_branch"]
+    commit_sha = ctx["commit_sha"]
+    pr_description = ctx["pr_description"]
+    vibe_heal_context = ctx["vibe_heal_context"]
     any_failure = False
     for file in files:
         if file in partial_files:
@@ -212,8 +213,7 @@ def _process_single_pr(
     try:
         ctx = _gather_pr_context(pr, number, config, wdir, env)
         file_failure, partial_files = _review_files(
-            ctx["files"],
-            ctx["base_branch"],
+            ctx,
             wdir,
             env,
             backend,
@@ -222,9 +222,6 @@ def _process_single_pr(
             pr,
             number,
             config,
-            ctx["commit_sha"],
-            ctx["pr_description"],
-            ctx["vibe_heal_context"],
             partial_files,
             config.repo_slug,
         )
