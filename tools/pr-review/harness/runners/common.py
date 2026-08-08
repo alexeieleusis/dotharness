@@ -573,7 +573,13 @@ def get_vibe_heal_context(subdirs: list[SubDir], working_dir: str, branch: str) 
             continue
         try:
             text = review_path.read_text(encoding="utf-8")
-            cleaned = re.sub(r"<details>.*?</details>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+            cleaned = text
+            while True:
+                new_cleaned = re.sub(r"<details>.*?</details>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+                if new_cleaned == cleaned:
+                    break
+                cleaned = new_cleaned
+            cleaned = re.sub(r"</?details>", "", cleaned, flags=re.IGNORECASE).strip()
             if cleaned:
                 parts.append(cleaned)
         except Exception:  # noqa: S112

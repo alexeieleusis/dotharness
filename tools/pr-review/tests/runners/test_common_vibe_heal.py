@@ -123,6 +123,22 @@ def test_all_details_content_returns_empty(tmp_path):
     assert result == ""
 
 
+def test_nested_details_tags_stripped_completely(tmp_path):
+    (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=fe\n", encoding="utf-8")
+    home = tmp_path / "home"
+    review_dir = home / ".vibe-heal" / "reviews" / "fe" / "main"
+    review_dir.mkdir(parents=True)
+    (review_dir / "review.md").write_text(
+        "<details>\nouter <details>\ninner\n</details>\n</details>",
+        encoding="utf-8",
+    )
+    with patch("pathlib.Path.home", return_value=home):
+        result = get_vibe_heal_context([SubDir(path=".")], str(tmp_path), "main")
+    assert result == ""
+    assert "<details>" not in result
+    assert "</details>" not in result
+
+
 def test_branch_with_path_traversal_segments_returns_empty(tmp_path):
     (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=fe\n", encoding="utf-8")
     home = tmp_path / "home"
