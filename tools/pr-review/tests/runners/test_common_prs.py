@@ -177,6 +177,13 @@ def test_pr_from_url_parses_number_and_fetches_pr():
     assert "8484" in args
 
 
+def test_pr_from_url_returns_empty_on_gh_failure():
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"auth failed")
+        result = pr_from_url("https://github.com/acme/repo/pull/999", "acme/repo", {}, "number")
+    assert result == {}
+
+
 def test_add_reviewer_invokes_gh_pr_edit():
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0)
