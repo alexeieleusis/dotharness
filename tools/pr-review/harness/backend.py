@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import os
 import signal
@@ -50,7 +51,8 @@ class Backend:
                 return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
             except subprocess.TimeoutExpired:
                 if proc is not None:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                     proc.communicate()
                     self._warn_if_backend_survived()
                 if attempt < total_attempts:
