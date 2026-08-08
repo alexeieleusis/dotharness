@@ -23,6 +23,24 @@ def _setup_knowledge(tmp_path, content="instructions"):
     (kdir / "review-summary.md").write_text(content)
 
 
+def _strict_run_cmd(mapping: dict[str, MagicMock]):
+    """Build a run_cmd side_effect that raises on any unmocked command.
+
+    `mapping` maps a substring of the command line to a pre-built MagicMock result.
+    This turns silent test failures into loud assertion errors when a command
+    in the source changes or a mapping key has a typo.
+    """
+
+    def side_effect(cmd, **_kwargs):
+        key = " ".join(str(a) for a in cmd)
+        for k, v in mapping.items():
+            if k in key:
+                return v
+        raise AssertionError(f"Unmocked command: {' '.join(str(a) for a in cmd)}")  # noqa: TRY003
+
+    return side_effect
+
+
 def test_skips_already_approved_pr(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
@@ -129,8 +147,10 @@ def test_get_prs_returns_head_ref_name_from_single_call(tmp_xdg, tmp_path):
     # of gh search prs + individual gh pr view calls.
     list_result = [{"number": 42, "url": "https://github.com/acme/frontend/pull/42", "headRefName": "feat/my-branch"}]
 
-    with patch("harness.runners.review_requested.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(list_result).encode())
+    with patch(
+        "harness.runners.review_requested.run_cmd",
+        side_effect=_strict_run_cmd({"gh pr list": MagicMock(returncode=0, stdout=json.dumps(list_result).encode())}),
+    ) as mock_run:
         prs = review_requested._get_prs("acme/frontend", {})
 
     assert prs == list_result
@@ -138,11 +158,10 @@ def test_get_prs_returns_head_ref_name_from_single_call(tmp_xdg, tmp_path):
 
 
 def test_get_prs_returns_empty_on_search_failure(tmp_xdg, tmp_path):
-    with patch("harness.runners.review_requested.run_cmd") as mock_run:
-        m = MagicMock()
-        m.returncode = 1
-        m.stdout = b""
-        mock_run.return_value = m
+    with patch(
+        "harness.runners.review_requested.run_cmd",
+        side_effect=_strict_run_cmd({"gh pr list": MagicMock(returncode=1, stdout=b"")}),
+    ):
         prs = review_requested._get_prs("acme/frontend", {})
     assert prs == []
 
