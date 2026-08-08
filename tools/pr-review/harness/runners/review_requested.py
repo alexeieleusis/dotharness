@@ -206,7 +206,10 @@ def _run_file_reviews(
             vibe_heal_context,
         )
         try:
-            backend.run(prompt, cwd=wdir)
+            result = backend.run(prompt, cwd=wdir)
+            if result.returncode != 0:
+                logger.error("PR #%d file %s: backend exited %d", pr_number, file, result.returncode)
+                all_ok = False
         except subprocess.TimeoutExpired:
             logger.exception("PR #%d file %s: backend timed out", pr_number, file)
             all_ok = False
@@ -261,7 +264,10 @@ def _run_summary_review(
         + (f"\n\n## Static Analysis\n{vibe_heal_context}" if vibe_heal_context else "")
     )
     try:
-        backend.run(summary_prompt, cwd=wdir)
+        result = backend.run(summary_prompt, cwd=wdir)
+        if result.returncode != 0:
+            logger.error("PR #%d: summary backend exited %d", pr_number, result.returncode)
+            return False
     except subprocess.TimeoutExpired:
         logger.exception("PR #%d: summary backend timed out", pr_number)
         return False
