@@ -109,7 +109,11 @@ class Backend:
         fd, path_str = tempfile.mkstemp(suffix=".md", dir=tmp_dir, prefix="harness_")
         tmp_path = Path(path_str)
         os.close(fd)
-        tmp_path.write_text(instructions, encoding="utf-8")
+        try:
+            tmp_path.write_text(instructions, encoding="utf-8")
+        except OSError:
+            tmp_path.unlink(missing_ok=True)
+            raise
         prompt = f"Read {tmp_path} and follow the instructions exactly."
 
         return self._cmd_for(prompt, opencode_dir), tmp_path
