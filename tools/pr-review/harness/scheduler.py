@@ -7,9 +7,15 @@ from pathlib import Path
 
 def parse_duration(s: str) -> int:
     if s.endswith("h") and s[:-1].isdigit():
-        return int(s[:-1]) * 3600
+        val = int(s[:-1])
+        if val == 0:
+            raise ValueError(f"Invalid duration '{s}': interval must be greater than 0")  # noqa: TRY003
+        return val * 3600
     if s.endswith("m") and s[:-1].isdigit():
-        return int(s[:-1]) * 60
+        val = int(s[:-1])
+        if val == 0:
+            raise ValueError(f"Invalid duration '{s}': interval must be greater than 0")  # noqa: TRY003
+        return val * 60
     raise ValueError(f"Invalid duration '{s}': use <N>h or <N>m (e.g. 2h, 30m)")  # noqa: TRY003
 
 

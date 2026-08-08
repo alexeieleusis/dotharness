@@ -22,6 +22,21 @@ def test_parse_invalid_raises():
         parse_duration("1d")
 
 
+def test_parse_0h_raises():
+    with pytest.raises(ValueError):
+        parse_duration("0h")
+
+
+def test_parse_0m_raises():
+    with pytest.raises(ValueError):
+        parse_duration("0m")
+
+
+def test_parse_empty_string_raises():
+    with pytest.raises(ValueError, match="duration"):
+        parse_duration("")
+
+
 def test_cron_90min_not_supported():
     with pytest.raises(ValueError, match="does not divide evenly into hours"):
         build_cron_expression(5400)
