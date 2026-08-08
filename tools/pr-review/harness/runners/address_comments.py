@@ -260,6 +260,70 @@ def _process_gated_comments(
     return comments + approved
 
 
+def _filter_by_trusted_commenters(
+    comments: list[dict], pr_number: int, trusted_commenters: str | list[str]
+) -> list[dict]:
+    if trusted_commenters == "*":
+        return comments
+    trusted_set = set(trusted_commenters) if isinstance(trusted_commenters, list) else {trusted_commenters}
+    before = len(comments)
+    comments = [c for c in comments if c.get("author", "") in trusted_set]
+    if len(comments) < before:
+        logger.info(
+            "PR #%d: filtered to %d comment(s) from trusted authors (was %d)",
+            pr_number,
+            len(comments),
+            before,
+        )
+    return comments
+
+
+def _filter_by_unresolved(comments: list[dict], pr_number: int, repo: str, env: dict) -> list[dict]:
+    unresolved_ids = _get_unresolved_comment_ids(pr_number, repo, env)
+    if unresolved_ids is None:
+        return comments
+    before = len(comments)
+    comments = [c for c in comments if c["type"] != "inline" or c.get("id") in unresolved_ids]
+    if len(comments) < before:
+        logger.info(
+            "PR #%d: filtered to %d unresolved comment(s) (was %d)",
+            pr_number,
+            len(comments),
+            before,
+        )
+    return comments
+
+
+def _filter_already_replied(comments: list[dict], pr_number: int, our_login: str | None) -> list[dict]:
+    if not our_login:
+        return comments
+    before = len(comments)
+    comments = [c for c in comments if not _is_comment_already_replied(c, our_login)]
+    if len(comments) < before:
+        logger.info(
+            "PR #%d: skipped %d already-replied comment(s)",
+            pr_number,
+            before - len(comments),
+        )
+    return comments
+
+
+def _filter_by_plugin_prefix(comments: list[dict], pr_number: int, plugin_prefix: str | None) -> list[dict]:
+    if not plugin_prefix:
+        return comments
+    before = len(comments)
+    comments = [c for c in comments if c["type"] != "inline" or c.get("path", "").startswith(plugin_prefix + "/")]
+    if len(comments) < before:
+        logger.info(
+            "PR #%d: filtered to %d comment(s) in subdir '%s' (was %d)",
+            pr_number,
+            len(comments),
+            plugin_prefix,
+            before,
+        )
+    return comments
+
+
 def _filter_comments(
     comments: list[dict],
     pr_number: int,
@@ -270,57 +334,13 @@ def _filter_comments(
     trusted_commenters: str | list[str] = "*",
     plugin_prefix: str | None = None,
 ) -> list[dict]:
-    if trusted_commenters != "*":
-        trusted_set = set(trusted_commenters) if isinstance(trusted_commenters, list) else {trusted_commenters}
-        before = len(comments)
-        comments = [c for c in comments if c.get("author", "") in trusted_set]
-        if len(comments) < before:
-            logger.info(
-                "PR #%d: filtered to %d comment(s) from trusted authors (was %d)",
-                pr_number,
-                len(comments),
-                before,
-            )
-
-    unresolved_ids = _get_unresolved_comment_ids(pr_number, repo, env)
-    if unresolved_ids is not None:
-        before = len(comments)
-        comments = [c for c in comments if c["type"] != "inline" or c.get("id") in unresolved_ids]
-        if len(comments) < before:
-            logger.info(
-                "PR #%d: filtered to %d unresolved comment(s) (was %d)",
-                pr_number,
-                len(comments),
-                before,
-            )
-
+    comments = _filter_by_trusted_commenters(comments, pr_number, trusted_commenters)
+    comments = _filter_by_unresolved(comments, pr_number, repo, env)
     gated, comments = _split_gated_focused_review_comments(comments, require_reaction_for_focused_review)
-
-    if our_login:
-        before = len(comments)
-        comments = [c for c in comments if not _is_comment_already_replied(c, our_login)]
-        if len(comments) < before:
-            logger.info(
-                "PR #%d: skipped %d already-replied comment(s)",
-                pr_number,
-                before - len(comments),
-            )
-
+    comments = _filter_already_replied(comments, pr_number, our_login)
     if gated:
         comments = _process_gated_comments(gated, comments, pr_number, repo, our_login, env)
-
-    if plugin_prefix:
-        before = len(comments)
-        comments = [c for c in comments if c["type"] != "inline" or c.get("path", "").startswith(plugin_prefix + "/")]
-        if len(comments) < before:
-            logger.info(
-                "PR #%d: filtered to %d comment(s) in subdir '%s' (was %d)",
-                pr_number,
-                len(comments),
-                plugin_prefix,
-                before,
-            )
-
+    comments = _filter_by_plugin_prefix(comments, pr_number, plugin_prefix)
     return comments
 
 
