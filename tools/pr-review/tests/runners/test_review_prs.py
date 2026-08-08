@@ -392,6 +392,72 @@ def test_run_base_analysis_does_not_persist_sha_when_subdir_fails(tmp_xdg, tmp_p
     mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
 
 
+def test_run_base_analysis_returns_false_on_git_fetch_failure(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    with patch.object(type(cfg), "repo_slug", "acme/frontend"):
+        state.write_vibe_heal_state("acme/frontend", last_main_sha="old-sha")
+
+    def fake_run_cmd(cmd, **kwargs):
+        if "git" in cmd and "fetch" in cmd:
+            return MagicMock(returncode=1, stdout=b"", stderr=b"fetch error")
+        return MagicMock(returncode=0, stdout=b"new-sha\n", stderr=b"")
+
+    with (
+        patch.object(type(cfg), "repo_slug", "acme/frontend"),
+        patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd) as mock_run,
+    ):
+        result = review_prs._run_base_analysis(cfg, {})
+    assert result is False
+    assert mock_run.call_count == 1
+    assert "fetch" in str(mock_run.call_args_list[0])
+
+
+def test_run_base_analysis_returns_false_on_rev_parse_failure(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    with patch.object(type(cfg), "repo_slug", "acme/frontend"):
+        state.write_vibe_heal_state("acme/frontend", last_main_sha="old-sha")
+
+    def fake_run_cmd(cmd, **kwargs):
+        if "git" in cmd and "fetch" in cmd:
+            return MagicMock(returncode=0, stdout=b"", stderr=b"")
+        if "rev-parse" in cmd:
+            return MagicMock(returncode=1, stdout=b"", stderr=b"rev-parse error")
+        return MagicMock(returncode=0, stdout=b"new-sha\n", stderr=b"")
+
+    with (
+        patch.object(type(cfg), "repo_slug", "acme/frontend"),
+        patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd) as mock_run,
+    ):
+        result = review_prs._run_base_analysis(cfg, {})
+    assert result is False
+    assert mock_run.call_count == 2
+
+
+def test_run_base_analysis_returns_false_on_checkout_failure(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    with patch.object(type(cfg), "repo_slug", "acme/frontend"):
+        state.write_vibe_heal_state("acme/frontend", last_main_sha="old-sha")
+
+    def fake_run_cmd(cmd, **kwargs):
+        if "git" in cmd and "fetch" in cmd:
+            return MagicMock(returncode=0, stdout=b"", stderr=b"")
+        if "rev-parse" in cmd:
+            return MagicMock(returncode=0, stdout=b"new-sha\n", stderr=b"")
+        if "checkout" in cmd:
+            return MagicMock(returncode=1, stdout=b"", stderr=b"checkout error")
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    with (
+        patch.object(type(cfg), "repo_slug", "acme/frontend"),
+        patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd),
+        patch("harness.runners.review_prs.git_detach_and_record", return_value="original-sha"),
+        patch("harness.runners.review_prs.git_restore") as mock_restore,
+    ):
+        result = review_prs._run_base_analysis(cfg, {})
+    assert result is False
+    mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
+
+
 def test_run_locked_skips_when_subdirs_empty(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path)
     with (
