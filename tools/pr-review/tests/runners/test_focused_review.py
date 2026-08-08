@@ -28,7 +28,9 @@ def test_matches_inline_comment_with_knowledge_url():
 
 def test_ignores_url_with_trailing_sentence_punctuation():
     comments = [{"type": "inline", "body": f"See: {_URL}.", "replies": []}]
-    _comment, _commit, path = _matching_comments(comments)[0]
+    result = _matching_comments(comments)
+    assert len(result) == 1
+    _comment, _commit, path = result[0]
     assert path == "plugin/skills/typescript/catalog/T02-union-intersection.md"
 
 
