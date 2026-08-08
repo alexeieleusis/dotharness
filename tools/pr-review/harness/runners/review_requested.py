@@ -9,6 +9,7 @@ from harness.config import HarnessConfig
 from harness.lock import acquire_lock
 from harness.runners.common import (
     TIMEOUT_GH,
+    FatalGitError,
     build_file_review_section,
     build_subprocess_env,
     get_changed_files,
@@ -64,7 +65,13 @@ def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
     for pr in prs:
         if _should_skip_pr(pr, config.repo.name, current_user, env):
             continue
-        _process_pr(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user)
+        try:
+            _process_pr(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user)
+        except FatalGitError:
+            logger.exception("PR #%d: fatal git error", pr["number"])
+            break
+        except Exception:
+            logger.exception("PR #%d: error", pr["number"])
 
 
 def _get_prs(repo: str, env: dict) -> list[dict]:
