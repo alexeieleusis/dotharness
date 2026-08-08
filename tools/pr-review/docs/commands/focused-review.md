@@ -15,7 +15,7 @@ harness run [--config PATH] [--verbose] focused-review
 2. If `focused_review.enabled` is `false`, logs and exits — the whole command is a no-op. (Independent of `vibe_heal.enabled` — the two toggles are not linked.)
 3. Resolves a GitHub token via `harness.gh_token_cmd` and builds a subprocess environment from `harness.path_prepend` / `harness.env` plus `GITHUB_TOKEN`.
 4. Loads the prompt template `pr-review/focused-review.md` from `harness.knowledge_dir`, and constructs a `Backend` for `harness.backend` (`opencode` or `claude`), with `GITHUB_TOKEN` merged into its environment.
-5. Lists open, non-draft PRs whose author matches `vibe_heal.authors` — the same eligibility `review-prs` uses (reused via a shared helper). If none, exits.
+5. Lists open, non-draft PRs where the currently active `gh` account (`@me`) is the author, assignee, or has a review requested (union of the three), deduplicated by PR number and sorted ascending. This uses `list_open_prs_for_current_user`, which does **not** read `vibe_heal.authors` — unlike `review-prs`, which uses `list_open_prs_matching_authors` against the configured author list. If no eligible PRs, exits.
 6. Detaches HEAD and records the current commit so the working tree can be restored after each PR.
 7. For each eligible PR, in ascending order:
    - Fetches all comments via `scripts/pr-comments.py fetch --pr <N>` (same mechanism `address-comments` uses) without checking out the branch yet.
@@ -38,7 +38,6 @@ Only these `.harness.toml` fields affect `focused-review`; see [`../configuratio
 |---|---|
 | `focused_review.enabled` | Master switch — command is a no-op unless `true` |
 | `focused_review.vibe_types_repo` | Local git checkout of `jpablo/vibe-types` used to resolve knowledge-file content via `git show` |
-| `vibe_heal.authors` | Reused as-is to decide which PRs are eligible (same set `review-prs` uses) |
 | `harness.backend` / `harness.backend_timeout_seconds` | Which AI backend writes each refactor description, and its timeout |
 | `harness.gh_token_cmd` | Command used to fetch the GitHub token exported as `GITHUB_TOKEN` |
 | `harness.knowledge_dir` | Must contain `pr-review/focused-review.md`, the prompt template for this runner |
@@ -46,7 +45,7 @@ Only these `.harness.toml` fields affect `focused-review`; see [`../configuratio
 | `repo.name` | GitHub repo (`org/repo`) queried via `gh`, and the basis of the lock key (`repo_slug`) |
 | `repo.working_dir` | Local git checkout that gets detached, fetched, and checked out branch-by-branch |
 
-Fields this runner does **not** read: `vibe_heal.enabled`, `vibe_heal.python`, `vibe_heal.vibe_heal_timeout`, `vibe_heal.vibe_heal_post_timeout`, `repo.subdir[]` (any of its fields), `repo.opencode_dir`, `harness.review_knowledge_file` — none of those affect `focused-review`.
+Fields this runner does **not** read: `vibe_heal.authors`, `vibe_heal.enabled`, `vibe_heal.python`, `vibe_heal.vibe_heal_timeout`, `vibe_heal.vibe_heal_post_timeout`, `repo.subdir[]` (any of its fields), `repo.opencode_dir`, `harness.review_knowledge_file` — none of those affect `focused-review`.
 
 ## State and idempotency
 
