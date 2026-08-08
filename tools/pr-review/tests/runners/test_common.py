@@ -56,8 +56,10 @@ def test_git_fetch_and_checkout_calls(tmp_path):
 
 
 def test_build_env_prepends_path():
+    original_path = os.environ.get("PATH", "")
     env = build_subprocess_env(["/java/bin", "/node/bin"], {}, "tok")
     assert env["PATH"].startswith("/java/bin:/node/bin:")
+    assert original_path in env["PATH"]
 
 
 def test_build_env_sets_github_token():
