@@ -139,6 +139,24 @@ def test_nested_details_tags_stripped_completely(tmp_path):
     assert "</details>" not in result
 
 
+def test_project_key_with_path_traversal_is_rejected(tmp_path):
+    (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=../../../../tmp/evil\n", encoding="utf-8")
+    result = get_vibe_heal_context([SubDir(path=".")], str(tmp_path), "main")
+    assert result == ""
+
+
+def test_project_key_with_backslash_is_rejected(tmp_path):
+    (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=fe..\\..\\tmp\\evil\n", encoding="utf-8")
+    result = get_vibe_heal_context([SubDir(path=".")], str(tmp_path), "main")
+    assert result == ""
+
+
+def test_project_key_with_slash_is_rejected(tmp_path):
+    (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=fe/evil\n", encoding="utf-8")
+    result = get_vibe_heal_context([SubDir(path=".")], str(tmp_path), "main")
+    assert result == ""
+
+
 def test_branch_with_path_traversal_segments_returns_empty(tmp_path):
     (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=fe\n", encoding="utf-8")
     home = tmp_path / "home"

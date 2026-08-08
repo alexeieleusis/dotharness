@@ -596,7 +596,12 @@ def _read_sonar_project_key(props_path: Path) -> str | None:
             if stripped.startswith("#"):
                 continue
             if stripped.startswith("sonar.projectKey="):
-                return stripped.split("=", 1)[1].strip() or None
+                value = stripped.split("=", 1)[1].strip()
+                if not value:
+                    return None
+                if "/" in value or "\\" in value or ".." in value:
+                    return None
+                return value
     except Exception:  # noqa: S110
         pass
     return None
