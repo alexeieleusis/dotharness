@@ -608,6 +608,34 @@ def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path):
     assert mock_restore.call_count == 2
 
 
+def test_fatal_git_error_from_process_pr_stops_remaining_prs(tmp_xdg, tmp_path):
+    from harness.runners.common import FatalGitError
+
+    state.write_vibe_heal_state("acme-frontend", 0)
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    prs = [
+        {"number": 5, "headRefName": "pr5", "author": {"login": "alice"}, "isDraft": False},
+        {"number": 6, "headRefName": "pr6", "author": {"login": "alice"}, "isDraft": False},
+    ]
+    with (
+        patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_prs.get_current_user", return_value="alice"),
+        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("harness.runners.review_prs._run_base_analysis", return_value=True),
+        patch(
+            "harness.runners.review_prs._process_pr",
+            side_effect=[FatalGitError("git broke"), True],
+        ) as mock_process,
+        patch("harness.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")),
+        patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.review_prs.git_restore"),
+    ):
+        review_prs._run_locked(cfg)
+    # _process_pr was called exactly once — PR 6 was never attempted after PR 5's fatal error.
+    assert mock_process.call_count == 1
+
+
 def test_generic_exception_continues_pr_processing_loop(tmp_xdg, tmp_path):
     state.write_vibe_heal_state("acme-frontend", 0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
