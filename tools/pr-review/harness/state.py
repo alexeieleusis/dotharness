@@ -1,6 +1,7 @@
 import fcntl
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -33,7 +34,7 @@ def _state_path(repo_slug: str, filename: str) -> Path:
 
 
 def _atomic_write(path: Path, data: dict) -> None:
-    tmp = path.with_suffix(".tmp")
+    tmp = path.with_suffix(f".tmp.{os.getpid()}")
     tmp.write_text(json.dumps(data), encoding="utf-8")
     tmp.rename(path)
 
@@ -87,21 +88,47 @@ def write_vibe_heal_state(repo_slug: str, last_pr: int | None = None, *, last_ma
 
 
 def read_self_review_state(repo_slug: str) -> dict:
-    defaults = {"version": 1, "reviewed_prs": []}
+    defaults = {"version": 1, "reviewed_prs": [], "partial_reviews": {}}
     p = _state_path(repo_slug, SELF_REVIEW_FILE)
     if not p.exists():
         return defaults
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         logger.warning("Corrupted state file %s: %s — returning defaults", p, exc)
         return defaults
+    data.setdefault("reviewed_prs", [])
+    data.setdefault("partial_reviews", {})
+    return data
 
 
-def write_self_review_state(repo_slug: str, reviewed_prs: list[int]) -> None:
+def write_self_review_state(repo_slug: str, reviewed_prs: list[int], partial_reviews: dict | None = None) -> None:
     p = _state_path(repo_slug, SELF_REVIEW_FILE)
     with _state_lock(p):
-        _atomic_write(p, {"version": 1, "reviewed_prs": reviewed_prs})
+        current = read_self_review_state(repo_slug)
+        if partial_reviews is not None:
+            current["partial_reviews"] = partial_reviews
+        _atomic_write(
+            p,
+            {
+                "version": current["version"],
+                "reviewed_prs": reviewed_prs,
+                "partial_reviews": current["partial_reviews"],
+            },
+        )
+
+
+def get_partial_reviewed_files(repo_slug: str, pr_number: int) -> list[str]:
+    data = read_self_review_state(repo_slug)
+    return list(data.get("partial_reviews", {}).get(str(pr_number), []))
+
+
+def set_partial_reviewed_files(repo_slug: str, pr_number: int, files: list[str]) -> None:
+    p = _state_path(repo_slug, SELF_REVIEW_FILE)
+    with _state_lock(p):
+        current = read_self_review_state(repo_slug)
+        current["partial_reviews"][str(pr_number)] = list(files)
+        _atomic_write(p, current)
 
 
 def delete_state(repo_slug: str, command: str) -> None:
