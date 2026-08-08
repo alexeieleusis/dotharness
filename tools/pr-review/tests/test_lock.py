@@ -45,3 +45,8 @@ def test_lock_released_on_exception(tmp_xdg):
     # Lock must be released — re-acquisition must succeed
     with acquire_lock("acme-frontend"):
         pass
+
+
+def test_body_blocking_io_error_is_not_mislabeled(tmp_xdg):
+    with pytest.raises(BlockingIOError), acquire_lock("acme-frontend"):
+        raise BlockingIOError
