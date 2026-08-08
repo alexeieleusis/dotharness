@@ -1,0 +1,15 @@
+# dotharness config files — contain local paths and credentials
+.harness*.toml
+
+# Local Claude Code settings — can carry credentials/internal paths; must not
+# rely solely on a contributor's personal global gitignore
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+.pytest_cache/
+cache
