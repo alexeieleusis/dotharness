@@ -66,7 +66,11 @@ def test_write_vibe_heal_state_no_op_raises(tmp_xdg):
 
 
 def test_read_vibe_heal_state_defaults_missing_last_main_sha(tmp_xdg):
-    state.write_vibe_heal_state("acme-frontend", 3)
+    import json
+
+    path = tmp_xdg / "state" / "acme-frontend" / "vibe_heal.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"version": 1, "last_pr": 3}))
     result = state.read_vibe_heal_state("acme-frontend")
     assert result["last_main_sha"] == ""
 
