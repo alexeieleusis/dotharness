@@ -1,3 +1,4 @@
+import subprocess
 from unittest.mock import MagicMock, patch
 
 from harness import state
@@ -221,3 +222,55 @@ def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
         self_review._run_locked(cfg)
     prompts = [c.args[0] for c in mock_be.return_value.run.call_args_list]
     assert all("## Static Analysis" not in p for p in prompts)
+
+
+def test_git_restore_called_on_context_gathering_exception(tmp_xdg, tmp_path):
+    """When a context-gathering call raises, git_restore still runs in finally."""
+    state.write_self_review_state("acme-frontend", [])
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch(
+            "harness.runners.self_review._list_my_prs", return_value=[{"number": 20, "url": "u", "headRefName": "b"}]
+        ),
+        patch("harness.runners.self_review.has_review_summary_comment", return_value=False),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore") as mock_restore,
+        patch("harness.runners.self_review.get_pr_base_branch", side_effect=RuntimeError("network failure")),
+        patch("harness.runners.self_review.Backend"),
+    ):
+        self_review._run_locked(cfg)
+    mock_restore.assert_called_once_with("sha", "b", str(tmp_path), mock_restore.call_args[0][3])
+    assert 20 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
+
+
+def test_timeout_expired_does_not_mark_reviewed(tmp_xdg, tmp_path):
+    """When backend.run raises TimeoutExpired, the PR is not marked reviewed and no crash propagates."""
+    state.write_self_review_state("acme-frontend", [])
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch(
+            "harness.runners.self_review._list_my_prs", return_value=[{"number": 21, "url": "u", "headRefName": "b"}]
+        ),
+        patch("harness.runners.self_review.has_review_summary_comment", return_value=False),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
+        patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
+        patch("harness.runners.self_review.os") as mock_os,
+        patch("harness.runners.self_review.Backend") as mock_be,
+    ):
+        mock_be.return_value.run.side_effect = subprocess.TimeoutExpired("cmd", 10)
+        mock_os.path.exists.return_value = True
+        mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
+        self_review._run_locked(cfg)
+    assert 21 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
