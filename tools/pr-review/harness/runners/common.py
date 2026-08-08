@@ -639,7 +639,7 @@ def fetch_pr_comments(pr_number: int, script_path: Path, wdir: str, env: dict) -
 
 def find_reply_with_marker(comment: dict, marker: str = FOCUSED_REVIEW_MARKER) -> dict | None:
     """Return the first reply on `comment` whose body contains `marker`, or None."""
-    for reply in comment.get("replies", []):
+    for reply in comment.get("replies") or []:
         if marker in reply.get("body", ""):
             return reply
     return None

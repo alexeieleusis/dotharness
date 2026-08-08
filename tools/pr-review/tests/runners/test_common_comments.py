@@ -71,6 +71,10 @@ def test_find_reply_with_marker_handles_missing_replies_key():
     assert find_reply_with_marker({}) is None
 
 
+def test_find_reply_with_marker_handles_none_replies():
+    assert find_reply_with_marker({"replies": None}) is None
+
+
 def test_reply_has_reaction_from_true_when_reaction_present():
     payload = [
         {"content": "heart", "user": {"login": "someone-else"}},
