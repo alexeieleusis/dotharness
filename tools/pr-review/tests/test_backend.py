@@ -145,6 +145,27 @@ def test_retries_once_on_timeout_then_succeeds(tmp_xdg):
     assert mock_proc.communicate.call_count == 3
 
 
+def test_temp_file_cleaned_across_retry_loop(tmp_xdg):
+    b = _make_backend(tmp_xdg)
+    long = "x" * (INLINE_THRESHOLD_BYTES + 1)
+    mock_proc = MagicMock()
+    mock_proc.communicate.side_effect = [
+        subprocess.TimeoutExpired([], 10),  # attempt 1: times out, tmp file created
+        (b"", b""),  # attempt 1: post-kill flush
+        (b"ok", b""),  # attempt 2: succeeds, tmp file cleaned
+    ]
+    mock_proc.pid = os.getpid()
+    mock_proc.returncode = 0
+    with (
+        patch("subprocess.Popen", return_value=mock_proc),
+        patch("os.killpg"),
+        patch("subprocess.run", return_value=MagicMock(stdout="")),
+    ):
+        result = b.run(long, cwd="/tmp")  # noqa: S108
+    assert result.stdout == b"ok"
+    assert not list((tmp_xdg / "tmp").glob("harness_*.md"))
+
+
 def test_no_retry_when_max_retries_zero(tmp_xdg):
     b = Backend(backend="opencode", timeout=10, path_prepend=[], env_vars={}, max_retries=0)
     mock_proc = MagicMock()
