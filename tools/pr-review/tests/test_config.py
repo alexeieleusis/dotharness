@@ -41,6 +41,25 @@ working_dir = "/tmp"
     assert not str(cfg.harness.knowledge_dir).startswith("~")
 
 
+def test_tilde_expanded_in_review_knowledge_file(tmp_path):
+    p = tmp_path / ".harness.toml"
+    p.write_text("""
+[harness]
+review_knowledge_file = "~/.harness/review-guide.md"
+[repo]
+name = "a/b"
+working_dir = "/tmp"
+""")
+    cfg = load_config(p)
+    assert cfg.harness.review_knowledge_file is not None
+    assert not str(cfg.harness.review_knowledge_file).startswith("~")
+
+
+def test_review_knowledge_file_defaults_to_none(minimal_toml):
+    cfg = load_config(minimal_toml)
+    assert cfg.harness.review_knowledge_file is None
+
+
 def test_path_prepend_order_preserved(tmp_path):
     p = tmp_path / ".harness.toml"
     p.write_text("""
