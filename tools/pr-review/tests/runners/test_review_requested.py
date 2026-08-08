@@ -147,6 +147,30 @@ def test_get_prs_returns_empty_on_search_failure(tmp_xdg, tmp_path):
     assert prs == []
 
 
+def test_get_prs_searches_review_requested_not_reviewer(tmp_xdg, tmp_path):
+    # "reviewer:@me" does not reliably match pending review requests on GitHub's
+    # search API; only "review-requested:@me" does. Regression test for a bug where
+    # this qualifier was swapped during a refactor, silently making the runner find
+    # zero PRs.
+    with patch("harness.runners.review_requested.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
+        review_requested._get_prs("acme/frontend", {})
+
+    args = mock_run.call_args[0][0]
+    assert "--search" in args
+    assert args[args.index("--search") + 1] == "review-requested:@me"
+
+
+def test_has_user_approved_returns_false_on_non_list_response(tmp_xdg, tmp_path):
+    # gh api can return a JSON error object (e.g. {"message": "Not Found"}) instead
+    # of a list of reviews; iterating over that dict yields its keys as strings,
+    # which used to crash with "string indices must be integers, not 'str'".
+    with patch("harness.runners.review_requested.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps({"message": "Not Found"}).encode())
+        approved = review_requested._has_user_approved(1, "acme/frontend", "me", {})
+    assert approved is False
+
+
 def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)

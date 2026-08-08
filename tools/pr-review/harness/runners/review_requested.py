@@ -80,7 +80,7 @@ def _get_prs(repo: str, env: dict) -> list[dict]:
             "--state",
             "open",
             "--search",
-            "reviewer:@me",
+            "review-requested:@me",
             "--json",
             "number,url,headRefName",
             "--limit",
@@ -119,7 +119,7 @@ def _has_user_approved(pr_number: int, repo: str, current_user: str, env: dict) 
         if result.returncode != 0:
             return False
         reviews = json.loads(result.stdout)
-        if not reviews:
+        if not reviews or not isinstance(reviews, list):
             return False
         if any(r["state"] == "APPROVED" and r["user"]["login"] == current_user for r in reviews):
             return True
