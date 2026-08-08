@@ -47,7 +47,7 @@ def test_fetch_pr_comments_tags_types_and_filters_bots(tmp_path, monkeypatch):
     assert types["review-2"] == "review"
     assert types[3] == "issue"
     assert 4 not in types
-    assert 5 not in types
+    assert types[5] == "issue"
 
 
 def test_find_reply_with_marker_returns_matching_reply():

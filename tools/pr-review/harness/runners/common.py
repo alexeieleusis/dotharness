@@ -623,8 +623,7 @@ def fetch_pr_comments(pr_number: int, script_path: Path, wdir: str, env: dict) -
 
     for c in data.get("issue_comments", []):
         author = c.get("author", "")
-        body = c.get("body", "")
-        if not author.endswith("[bot]") and "bot]" not in body.lower():
+        if not author.endswith("[bot]"):
             comments.append({"type": "issue", **c})
 
     logger.debug(
