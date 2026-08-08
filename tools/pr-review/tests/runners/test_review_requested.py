@@ -1,5 +1,5 @@
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from harness.runners import review_requested
 
@@ -298,4 +298,4 @@ def test_restores_head_on_backend_failure(tmp_xdg, tmp_path):
         mock_os.path.exists.return_value = True
         mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
         review_requested._run_locked(cfg, pr_url=None)
-    mock_restore.assert_called_once_with("sha", "feat", str(cfg.repo.working_dir), MagicMock())
+    mock_restore.assert_called_once_with("sha", "feat", str(cfg.repo.working_dir), ANY)

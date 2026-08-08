@@ -17,7 +17,7 @@ def test_write_then_read_vibe_heal(tmp_xdg):
 
 def test_read_self_review_defaults(tmp_xdg):
     result = state.read_self_review_state("acme-frontend")
-    assert result == {"version": 1, "reviewed_prs": []}
+    assert result == {"version": 1, "reviewed_prs": [], "partial_reviews": {}}
 
 
 def test_write_then_read_self_review(tmp_xdg):
@@ -89,5 +89,5 @@ def test_read_self_review_corrupted_json_fallback(tmp_xdg, caplog):
     state_file.parent.mkdir(parents=True, exist_ok=True)
     state_file.write_text('{"version": 1, "reviewed_prs": [1, 2')
     result = state.read_self_review_state("acme-frontend")
-    assert result == {"version": 1, "reviewed_prs": []}
+    assert result == {"version": 1, "reviewed_prs": [], "partial_reviews": {}}
     assert "Corrupted state file" in caplog.text

@@ -430,8 +430,8 @@ def test_run_base_analysis_does_not_persist_sha_when_subdir_fails(tmp_xdg, tmp_p
 
 def test_run_base_analysis_returns_false_on_git_fetch_failure(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
-    with patch.object(type(cfg), "repo_slug", "acme/frontend"):
-        state.write_vibe_heal_state("acme/frontend", last_main_sha="old-sha")
+    with patch.object(type(cfg), "repo_slug", "acme-frontend"):
+        state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
 
     def fake_run_cmd(cmd, **kwargs):
         if "git" in cmd and "fetch" in cmd:
@@ -439,7 +439,7 @@ def test_run_base_analysis_returns_false_on_git_fetch_failure(tmp_xdg, tmp_path)
         return MagicMock(returncode=0, stdout=b"new-sha\n", stderr=b"")
 
     with (
-        patch.object(type(cfg), "repo_slug", "acme/frontend"),
+        patch.object(type(cfg), "repo_slug", "acme-frontend"),
         patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd) as mock_run,
     ):
         result = review_prs._run_base_analysis(cfg, {})
@@ -450,8 +450,8 @@ def test_run_base_analysis_returns_false_on_git_fetch_failure(tmp_xdg, tmp_path)
 
 def test_run_base_analysis_returns_false_on_rev_parse_failure(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
-    with patch.object(type(cfg), "repo_slug", "acme/frontend"):
-        state.write_vibe_heal_state("acme/frontend", last_main_sha="old-sha")
+    with patch.object(type(cfg), "repo_slug", "acme-frontend"):
+        state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
 
     def fake_run_cmd(cmd, **kwargs):
         if "git" in cmd and "fetch" in cmd:
@@ -461,7 +461,7 @@ def test_run_base_analysis_returns_false_on_rev_parse_failure(tmp_xdg, tmp_path)
         return MagicMock(returncode=0, stdout=b"new-sha\n", stderr=b"")
 
     with (
-        patch.object(type(cfg), "repo_slug", "acme/frontend"),
+        patch.object(type(cfg), "repo_slug", "acme-frontend"),
         patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd) as mock_run,
     ):
         result = review_prs._run_base_analysis(cfg, {})
@@ -471,8 +471,8 @@ def test_run_base_analysis_returns_false_on_rev_parse_failure(tmp_xdg, tmp_path)
 
 def test_run_base_analysis_returns_false_on_checkout_failure(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
-    with patch.object(type(cfg), "repo_slug", "acme/frontend"):
-        state.write_vibe_heal_state("acme/frontend", last_main_sha="old-sha")
+    with patch.object(type(cfg), "repo_slug", "acme-frontend"):
+        state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
 
     def fake_run_cmd(cmd, **kwargs):
         if "git" in cmd and "fetch" in cmd:
@@ -484,7 +484,7 @@ def test_run_base_analysis_returns_false_on_checkout_failure(tmp_xdg, tmp_path):
         return MagicMock(returncode=0, stdout=b"", stderr=b"")
 
     with (
-        patch.object(type(cfg), "repo_slug", "acme/frontend"),
+        patch.object(type(cfg), "repo_slug", "acme-frontend"),
         patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd),
         patch("harness.runners.review_prs.git_detach_and_record", return_value="original-sha"),
         patch("harness.runners.review_prs.git_restore") as mock_restore,
@@ -602,8 +602,8 @@ def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path):
     ):
         mock_fetch.side_effect = [None, FatalGitError("corrupted ref")]
         review_prs._run_locked(cfg)
-    # Only PR 3 was processed; FatalGitError on PR 4 broke the loop.
-    assert mock_fetch.call_count == 1
+    # PR 3 completed successfully; FatalGitError on PR 4's fetch broke the loop before PR 4 could finish.
+    assert mock_fetch.call_count == 2
     assert state.read_vibe_heal_state("acme-frontend")["last_pr"] == 3
     assert mock_restore.call_count == 2
 
