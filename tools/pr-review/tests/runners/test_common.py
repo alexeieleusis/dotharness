@@ -27,7 +27,7 @@ def test_run_cmd_nonzero_raises(tmp_path):
 
 def test_run_cmd_timeout_kills_process_group(tmp_path):
     mock_proc = MagicMock()
-    mock_proc.communicate.side_effect = subprocess.TimeoutExpired([], 1)
+    mock_proc.communicate.side_effect = [subprocess.TimeoutExpired([], 1), (b"", b"")]
     mock_proc.pid = os.getpid()
     with (
         patch("subprocess.Popen", return_value=mock_proc),
