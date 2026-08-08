@@ -1,3 +1,4 @@
+import json
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -504,3 +505,21 @@ def test_generic_exception_continues_pr_processing_loop(tmp_xdg, tmp_path):
     assert mock_fetch.call_count == 2
     assert state.read_vibe_heal_state("acme-frontend")["last_pr"] == 4
     assert mock_restore.call_count == 2
+
+
+def test_post_comment_if_needed_skips_when_marker_exists():
+    comments = [{"body": "Some comment", "id": 1}, {"body": "[vibe-heal-bot] already posted", "id": 2}]
+    stdout = json.dumps(comments).encode()
+
+    call_count = 0
+
+    def fake_run_cmd(cmd, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return MagicMock(returncode=0, stdout=stdout)
+
+    with patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd):
+        review_prs._post_comment_if_needed(
+            1, "acme/frontend", {"GH_TOKEN": "tok"}, marker="[vibe-heal-bot]", body="new comment"
+        )
+    assert call_count == 1
