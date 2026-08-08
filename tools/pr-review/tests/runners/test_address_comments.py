@@ -70,6 +70,7 @@ def test_runs_backend_when_unresolved_threads(tmp_xdg, tmp_path):
         patch("harness.runners.address_comments.git_fetch_and_checkout"),
         patch("harness.runners.address_comments.git_restore"),
         patch("harness.runners.address_comments.run_cmd") as mock_run,
+        patch("harness.runners.common.run_cmd", mock_run),
         patch("harness.runners.address_comments.Backend") as mock_be,
     ):
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
@@ -94,6 +95,7 @@ def test_pushes_branch_after_backend(tmp_xdg, tmp_path):
         patch("harness.runners.address_comments.git_fetch_and_checkout"),
         patch("harness.runners.address_comments.git_restore"),
         patch("harness.runners.address_comments.run_cmd") as mock_run,
+        patch("harness.runners.common.run_cmd", mock_run),
         patch("harness.runners.address_comments.Backend") as mock_be,
     ):
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
@@ -120,6 +122,7 @@ def test_pushes_after_each_comment_not_once_at_end(tmp_xdg, tmp_path):
         patch("harness.runners.address_comments.git_fetch_and_checkout"),
         patch("harness.runners.address_comments.git_restore"),
         patch("harness.runners.address_comments.run_cmd") as mock_run,
+        patch("harness.runners.common.run_cmd", mock_run),
         patch("harness.runners.address_comments.Backend") as mock_be,
     ):
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
@@ -153,6 +156,7 @@ def test_stops_processing_comments_after_push_failure(tmp_xdg, tmp_path):
         patch("harness.runners.address_comments.git_fetch_and_checkout"),
         patch("harness.runners.address_comments.git_restore") as mock_restore,
         patch("harness.runners.address_comments.run_cmd", side_effect=run_cmd_side_effect),
+        patch("harness.runners.common.run_cmd", side_effect=run_cmd_side_effect),
         patch("harness.runners.address_comments.Backend") as mock_be,
     ):
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
@@ -237,6 +241,7 @@ def test_restores_head_even_on_backend_failure(tmp_xdg, tmp_path):
         patch("harness.runners.address_comments.git_fetch_and_checkout"),
         patch("harness.runners.address_comments.git_restore") as mock_restore,
         patch("harness.runners.address_comments.run_cmd"),
+        patch("harness.runners.common.run_cmd"),
         patch("harness.runners.address_comments.Backend") as mock_be,
     ):
         mock_be.return_value.run.side_effect = Exception("backend exploded")
