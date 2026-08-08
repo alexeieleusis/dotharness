@@ -5,7 +5,7 @@ from click.testing import CliRunner
 from harness.cli import cli
 
 
-def test_run_review_prs_dispatches(minimal_toml):
+def test_run_review_prs_dispatches(minimal_toml, tmp_xdg):
     runner = CliRunner()
     with patch("harness.runners.review_prs.run") as mock_run:
         result = runner.invoke(cli, ["run", "--config", str(minimal_toml), "review-prs"])
@@ -13,7 +13,7 @@ def test_run_review_prs_dispatches(minimal_toml):
     mock_run.assert_called_once()
 
 
-def test_run_review_prs_with_pr_url(minimal_toml):
+def test_run_review_prs_with_pr_url(minimal_toml, tmp_xdg):
     runner = CliRunner()
     with patch("harness.runners.review_prs.run") as mock_run:
         runner.invoke(
@@ -31,14 +31,14 @@ def test_run_review_prs_with_pr_url(minimal_toml):
     assert kwargs.get("pr_url") == "https://github.com/acme/frontend/pull/1"
 
 
-def test_run_review_requested_dispatches(minimal_toml):
+def test_run_review_requested_dispatches(minimal_toml, tmp_xdg):
     runner = CliRunner()
     with patch("harness.runners.review_requested.run") as mock_run:
         _ = runner.invoke(cli, ["run", "--config", str(minimal_toml), "review-requested"])
     mock_run.assert_called_once()
 
 
-def test_run_review_requested_with_pr_url(minimal_toml):
+def test_run_review_requested_with_pr_url(minimal_toml, tmp_xdg):
     runner = CliRunner()
     with patch("harness.runners.review_requested.run") as mock_run:
         runner.invoke(
@@ -56,7 +56,7 @@ def test_run_review_requested_with_pr_url(minimal_toml):
     assert kwargs.get("pr_url") == "https://github.com/acme/frontend/pull/1"
 
 
-def test_run_focused_review_dispatches(minimal_toml):
+def test_run_focused_review_dispatches(minimal_toml, tmp_xdg):
     runner = CliRunner()
     with patch("harness.runners.focused_review.run") as mock_run:
         result = runner.invoke(cli, ["run", "--config", str(minimal_toml), "focused-review"])
@@ -96,7 +96,7 @@ def test_validate_exits_1_on_invalid(tmp_path):
     assert result.exit_code == 1
 
 
-def test_run_all_calls_runners_in_order(minimal_toml):
+def test_run_all_calls_runners_in_order(minimal_toml, tmp_xdg):
     runner = CliRunner()
     call_order = []
 
@@ -119,7 +119,7 @@ def test_run_all_calls_runners_in_order(minimal_toml):
     assert call_order == ["review_prs", "focused_review", "self_review", "review_requested", "address_comments"]
 
 
-def test_run_all_continues_after_failure_and_exits_nonzero(minimal_toml):
+def test_run_all_continues_after_failure_and_exits_nonzero(minimal_toml, tmp_xdg):
     runner = CliRunner()
     call_order = []
 

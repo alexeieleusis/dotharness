@@ -9,6 +9,7 @@ def tmp_xdg(tmp_path, monkeypatch):
     monkeypatch.setattr("harness.backend.XDG_DATA", xdg)
     monkeypatch.setattr("harness.state.XDG_DATA", xdg)
     monkeypatch.setattr("harness.lock.XDG_RUNTIME", xdg)
+    monkeypatch.setattr("harness.cli.XDG_LOGS", tmp_path / "logs")
     return xdg
 
 
