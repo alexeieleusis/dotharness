@@ -22,6 +22,11 @@ def test_parse_invalid_raises():
         parse_duration("1d")
 
 
+def test_cron_90min_not_supported():
+    with pytest.raises(ValueError, match="does not divide evenly into hours"):
+        build_cron_expression(5400)
+
+
 def test_cron_2h():
     assert build_cron_expression(7200) == "0 */2 * * *"
 

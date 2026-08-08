@@ -18,6 +18,12 @@ def build_cron_expression(interval_seconds: int) -> str:
         raise ValueError("Minimum interval is 60 seconds for cron scheduler")  # noqa: TRY003
     minutes = interval_seconds // 60
     if minutes >= 60:
+        remainder = minutes % 60
+        if remainder != 0:
+            raise ValueError(  # noqa: TRY003
+                f"Interval {interval_seconds}s ({minutes}min) does not divide evenly into hours. "
+                f"Cannot represent remainder of {remainder}min in hour-based cron expression."
+            )
         hours = minutes // 60
         return f"0 */{hours} * * *"
     return f"*/{minutes} * * * *"
