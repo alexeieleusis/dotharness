@@ -182,6 +182,24 @@ pre_commands = [
     ]
 
 
+def test_pre_command_missing_cmd_raises(tmp_path):
+    p = tmp_path / ".harness.toml"
+    p.write_text("""
+[harness]
+[repo]
+name = "a/b"
+working_dir = "/tmp"
+
+[[repo.subdir]]
+path = "."
+pre_commands = [
+  { critical = true },
+]
+""")
+    with pytest.raises(ConfigError, match="cmd"):
+        load_config(p)
+
+
 def test_repo_slug(minimal_toml):
     cfg = load_config(minimal_toml)
     assert cfg.repo_slug == "acme-frontend"

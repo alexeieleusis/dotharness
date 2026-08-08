@@ -18,6 +18,8 @@ class PreCommand:
 def _parse_pre_command(entry: str | dict) -> PreCommand:
     if isinstance(entry, str):
         return PreCommand(cmd=entry)
+    if "cmd" not in entry:
+        raise ConfigError("pre_commands dict entry is missing required key 'cmd'")  # noqa: TRY003
     return PreCommand(cmd=entry["cmd"], critical=entry.get("critical", False))
 
 
