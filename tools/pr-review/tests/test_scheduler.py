@@ -99,3 +99,53 @@ def test_find_harness_cron_entries_parses(tmp_path):
     assert entries[0]["slug"] == "acme-frontend"
     assert entries[0]["interval_seconds"] == 7200
     assert entries[0]["config_path"] == "/p/.harness.toml"
+
+
+def test_find_harness_cron_entries_multiple():
+    crontab = (
+        "0 */2 * * * /bin/harness run cmd-a --config /a/.harness.toml\n"
+        "# harness: cmd-a slug-a 7200 /a/.harness.toml\n"
+        "0 */4 * * * /bin/harness run cmd-b --config /b/.harness.toml\n"
+        "# harness: cmd-b slug-b 14400 /b/.harness.toml\n"
+        "# harness: cmd-c slug-c 3600 /c/.harness.toml\n"
+    )
+    entries = find_harness_cron_entries(crontab)
+    assert len(entries) == 3
+    assert entries[0]["command"] == "cmd-a"
+    assert entries[0]["slug"] == "slug-a"
+    assert entries[0]["interval_seconds"] == 7200
+    assert entries[0]["config_path"] == "/a/.harness.toml"
+    assert entries[1]["command"] == "cmd-b"
+    assert entries[1]["slug"] == "slug-b"
+    assert entries[1]["interval_seconds"] == 14400
+    assert entries[1]["config_path"] == "/b/.harness.toml"
+    assert entries[2]["command"] == "cmd-c"
+    assert entries[2]["slug"] == "slug-c"
+    assert entries[2]["interval_seconds"] == 3600
+    assert entries[2]["config_path"] == "/c/.harness.toml"
+
+
+def test_find_harness_cron_entries_malformed_marker():
+    crontab = (
+        "# harness: only-two-fields\n"
+        "# harness: one-field\n"
+        "0 */2 * * * /bin/harness run review-prs --config /p/.harness.toml\n"
+        "# harness: review-prs acme-frontend 7200 /p/.harness.toml\n"
+    )
+    entries = find_harness_cron_entries(crontab)
+    assert len(entries) == 1
+    assert entries[0]["command"] == "review-prs"
+
+
+def test_find_harness_cron_entries_non_numeric_interval():
+    crontab = "# harness: cmd slug abc /p/.harness.toml\n# harness: review-prs acme-frontend 7200 /p/.harness.toml\n"
+    entries = find_harness_cron_entries(crontab)
+    assert len(entries) == 1
+    assert entries[0]["command"] == "review-prs"
+
+
+def test_find_harness_cron_entries_path_with_spaces():
+    crontab = "# harness: cmd slug 7200 /path with spaces/.harness.toml\n"
+    entries = find_harness_cron_entries(crontab)
+    assert len(entries) == 1
+    assert entries[0]["config_path"] == "/path"
