@@ -69,3 +69,21 @@ def test_read_vibe_heal_state_defaults_missing_last_main_sha(tmp_xdg):
     state.write_vibe_heal_state("acme-frontend", 3)
     result = state.read_vibe_heal_state("acme-frontend")
     assert result["last_main_sha"] == ""
+
+
+def test_read_vibe_heal_corrupted_json_fallback(tmp_xdg, caplog):
+    state_file = tmp_xdg / "state" / "acme-frontend" / "vibe_heal.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text('{"version": 1, "last_pr", }')
+    result = state.read_vibe_heal_state("acme-frontend")
+    assert result == {"version": 1, "last_pr": 0, "last_main_sha": ""}
+    assert "Corrupted state file" in caplog.text
+
+
+def test_read_self_review_corrupted_json_fallback(tmp_xdg, caplog):
+    state_file = tmp_xdg / "state" / "acme-frontend" / "self_review.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text('{"version": 1, "reviewed_prs": [1, 2')
+    result = state.read_self_review_state("acme-frontend")
+    assert result == {"version": 1, "reviewed_prs": []}
+    assert "Corrupted state file" in caplog.text

@@ -1,7 +1,10 @@
 import fcntl
 import json
+import logging
 import re
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 XDG_DATA = Path.home() / ".local/share/dotharness"
 
@@ -57,10 +60,15 @@ class _state_lock:
 
 
 def read_vibe_heal_state(repo_slug: str) -> dict:
+    defaults = {"version": 1, "last_pr": 0, "last_main_sha": ""}
     p = _state_path(repo_slug, VIBE_HEAL_FILE)
     if not p.exists():
-        return {"version": 1, "last_pr": 0, "last_main_sha": ""}
-    data = json.loads(p.read_text(encoding="utf-8"))
+        return defaults
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        logger.warning("Corrupted state file %s: %s — returning defaults", p, exc)
+        return defaults
     data.setdefault("last_main_sha", "")
     return data
 
@@ -79,10 +87,15 @@ def write_vibe_heal_state(repo_slug: str, last_pr: int | None = None, *, last_ma
 
 
 def read_self_review_state(repo_slug: str) -> dict:
+    defaults = {"version": 1, "reviewed_prs": []}
     p = _state_path(repo_slug, SELF_REVIEW_FILE)
     if not p.exists():
-        return {"version": 1, "reviewed_prs": []}
-    return json.loads(p.read_text(encoding="utf-8"))
+        return defaults
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        logger.warning("Corrupted state file %s: %s — returning defaults", p, exc)
+        return defaults
 
 
 def write_self_review_state(repo_slug: str, reviewed_prs: list[int]) -> None:
