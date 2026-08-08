@@ -39,7 +39,8 @@ def run(config: HarnessConfig, pr_url: str | None = None) -> None:
 
 def _discover_prs(config: HarnessConfig, pr_url: str | None, env: dict) -> list[dict]:
     if pr_url:
-        return [pr_from_url(pr_url, config.repo.name, env, "number,headRefName,baseRefName")]
+        pr = pr_from_url(pr_url, config.repo.name, env, "number,headRefName,baseRefName")
+        return [pr] if pr else []
 
     vh_state = state.read_vibe_heal_state(config.repo_slug)
     last_pr = vh_state["last_pr"]

@@ -2,6 +2,8 @@ import json
 import subprocess
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from harness import state
 from harness.config import PreCommand, SubDir
 from harness.runners import review_prs
@@ -114,6 +116,40 @@ def test_coverage_flag_passed_when_true(tmp_xdg, tmp_path):
         review_prs._run_locked(cfg)
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c) and "--coverage" in str(c)]
     assert len(vibe_calls) >= 1
+
+
+def test_pr_url_graceful_on_pr_from_url_returns_empty(tmp_xdg, tmp_path):
+    state.write_vibe_heal_state("acme-frontend", 10)
+    cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
+    with (
+        patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_prs.pr_from_url", return_value={}),
+        patch("harness.runners.review_prs._run_base_analysis", return_value=True),
+        patch("harness.runners.review_prs.run_cmd") as mock_run,
+        patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.review_prs.git_restore"),
+        patch("harness.runners.review_prs.git_fetch_and_checkout"),
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
+        review_prs._run_locked(cfg, pr_url="https://github.com/acme/frontend/pull/3")
+    vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
+    assert vibe_calls == []
+
+
+def test_pr_url_graceful_on_pr_from_url_raises(tmp_xdg, tmp_path):
+    state.write_vibe_heal_state("acme-frontend", 10)
+    cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
+    with (
+        patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_prs.pr_from_url", side_effect=RuntimeError("network error")),
+        patch("harness.runners.review_prs._run_base_analysis", return_value=True),
+        patch("harness.runners.review_prs.run_cmd") as mock_run,
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
+        with pytest.raises(RuntimeError):
+            review_prs._run_locked(cfg, pr_url="https://github.com/acme/frontend/pull/3")
+    vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
+    assert vibe_calls == []
 
 
 def test_pr_url_bypasses_last_pr_filtering(tmp_xdg, tmp_path):
