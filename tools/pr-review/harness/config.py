@@ -132,7 +132,7 @@ def load_config(path: Path) -> HarnessConfig:
     if raw_odir:
         opencode_dir = Path(raw_odir).expanduser()
         try:
-            opencode_dir.relative_to(working_dir)
+            opencode_dir.resolve().relative_to(working_dir.resolve())
         except ValueError:
             raise ConfigError(  # noqa: TRY003
                 f"repo.opencode_dir '{opencode_dir}' must be inside repo.working_dir '{working_dir}'"
