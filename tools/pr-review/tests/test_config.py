@@ -112,6 +112,17 @@ working_dir = "/tmp"
         load_config(p)
 
 
+def test_missing_working_dir_raises(tmp_path):
+    p = tmp_path / ".harness.toml"
+    p.write_text("""
+[harness]
+[repo]
+name = "a/b"
+""")
+    with pytest.raises(ConfigError, match=r"repo\.working_dir"):
+        load_config(p)
+
+
 def test_subdir_missing_path_raises(tmp_path):
     p = tmp_path / ".harness.toml"
     p.write_text("""
