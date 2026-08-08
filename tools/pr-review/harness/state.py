@@ -15,7 +15,9 @@ _COMMAND_FILES = {
 
 
 def _validate_repo_slug(slug: str) -> str:
-    if not re.match(r"^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$", slug):
+    # HarnessConfig.repo_slug hyphenates "owner/repo" into a single path segment
+    # (e.g. "Oscilar-backend") before it reaches here, so no "/" is expected.
+    if not re.match(r"^[a-zA-Z0-9._-]+$", slug):
         raise ValueError(f"Invalid repo slug: {slug!r}")  # noqa: TRY003
     return slug
 
@@ -34,10 +36,15 @@ def _atomic_write(path: Path, data: dict) -> None:
 
 
 class _state_lock:
-    """Acquire an exclusive flock on a state file's parent directory entry."""
+    """Acquire an exclusive flock on a dedicated lock file next to the state file.
+
+    Locking a separate file (rather than the state file itself) avoids the side
+    effect of `open(path, "a")` creating the state file on disk before its first
+    real write, which would make callers see it as an existing-but-empty file.
+    """
 
     def __init__(self, path: Path) -> None:
-        self.path = path
+        self.path = path.with_suffix(path.suffix + ".lock")
 
     def __enter__(self):
         self._fd = open(self.path, "a")
