@@ -222,3 +222,32 @@ def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
         review_requested._run_locked(cfg, pr_url=None)
     prompts = [c.args[0] for c in mock_be.return_value.run.call_args_list]
     assert all("## Static Analysis" not in p for p in prompts)
+
+
+def test_restores_head_on_backend_failure(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.review_requested.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_requested.get_current_user", return_value="bot"),
+        patch(
+            "harness.runners.review_requested._get_prs", return_value=[{"number": 1, "url": "u", "headRefName": "feat"}]
+        ),
+        patch("harness.runners.review_requested._should_skip_pr", return_value=False),
+        patch("harness.runners.review_requested.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.review_requested.git_fetch_and_checkout"),
+        patch("harness.runners.review_requested.git_restore") as mock_restore,
+        patch("harness.runners.review_requested.run_cmd") as mock_run,
+        patch("harness.runners.review_requested.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.review_requested.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.review_requested.get_changed_files", return_value=["src/foo.py"]),
+        patch("harness.runners.review_requested.get_file_diff", return_value="@@diff"),
+        patch("harness.runners.review_requested.os") as mock_os,
+        patch("harness.runners.review_requested.Backend") as mock_be,
+    ):
+        mock_be.return_value.run.side_effect = RuntimeError("backend crash")
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"")
+        mock_os.path.exists.return_value = True
+        mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
+        review_requested._run_locked(cfg, pr_url=None)
+    mock_restore.assert_called_once_with("sha", "feat", str(cfg.repo.working_dir), MagicMock())
