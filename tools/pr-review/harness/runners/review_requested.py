@@ -80,7 +80,7 @@ def _get_prs(repo: str, env: dict) -> list[dict]:
             "--state",
             "open",
             "--search",
-            "review-requested:@me",
+            "user-review-requested:@me",
             "--json",
             "number,url,headRefName",
             "--limit",

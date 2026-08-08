@@ -147,18 +147,20 @@ def test_get_prs_returns_empty_on_search_failure(tmp_xdg, tmp_path):
     assert prs == []
 
 
-def test_get_prs_searches_review_requested_not_reviewer(tmp_xdg, tmp_path):
+def test_get_prs_searches_user_review_requested_not_reviewer(tmp_xdg, tmp_path):
     # "reviewer:@me" does not reliably match pending review requests on GitHub's
-    # search API; only "review-requested:@me" does. Regression test for a bug where
-    # this qualifier was swapped during a refactor, silently making the runner find
-    # zero PRs.
+    # search API; only "user-review-requested:@me" does. Regression test for a bug
+    # where this qualifier was swapped during a refactor, silently making the runner
+    # find zero PRs. Must be "user-review-requested:@me" specifically (not the bare
+    # "review-requested:@me"), which also matches team-based requests Alexei doesn't
+    # want surfaced here.
     with patch("harness.runners.review_requested.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
         review_requested._get_prs("acme/frontend", {})
 
     args = mock_run.call_args[0][0]
     assert "--search" in args
-    assert args[args.index("--search") + 1] == "review-requested:@me"
+    assert args[args.index("--search") + 1] == "user-review-requested:@me"
 
 
 def test_has_user_approved_returns_false_on_non_list_response(tmp_xdg, tmp_path):
