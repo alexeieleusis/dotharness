@@ -103,7 +103,7 @@ def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"")
         mock_os.path.exists.return_value = True
         mock_os.path.join.side_effect = lambda *parts: "/".join(parts)
-        review_requested.run(cfg)
+        review_requested._run_locked(cfg, pr_url=None)
     # 2 files + 1 summary = 3 backend calls
     assert mock_be.return_value.run.call_count == 3
 
