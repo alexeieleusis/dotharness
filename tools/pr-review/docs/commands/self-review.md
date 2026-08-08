@@ -81,7 +81,7 @@ The following mitigations are already in place in `backend.py`:
 
 - **`--pure` (opencode only):** Disables external plugins, preventing a skill or plugin from creating branches, worktrees, or otherwise mutating git state independently.
 - **`--disable-slash-commands` (claude only):** Disables slash commands that could trigger built-in actions beyond the prompt scope.
-- **New process session (`start_new_session=True`):** Each backend runs in its own process group, allowing the tool to kill the entire tree on timeout.
+- **New process session (`start_new_session=True`):** Each backend runs in its own process group, allowing the tool to kill the entire tree on timeout via `killpg` + `SIGKILL`. **Caveat:** a backend that double-forks into its own session (common for daemonizing subprocess managers) can escape the process group entirely and keep running with access to the working directory and `GITHUB_TOKEN`. The timeout path detects survivors by command name and logs a warning, but does not attempt a secondary kill — containment is not guaranteed in this case.
 - **Working tree restoration:** After each PR is processed, the working tree is reset to a recorded detached `HEAD`, limiting the persistence of any file mutations.
 
 ### Mitigations to evaluate
