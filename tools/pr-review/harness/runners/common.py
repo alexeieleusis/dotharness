@@ -4,6 +4,7 @@ import os
 import re
 import signal
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from harness.backend import Backend
@@ -14,10 +15,12 @@ logger = logging.getLogger(__name__)
 TIMEOUT_GH = 30
 TIMEOUT_GIT = 60
 TIMEOUT_FETCH_COMMENTS = 120
+GRACE_PERIOD_SECONDS = 10
 
 PR_COMMENTS_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "pr-comments.py"
 
 FOCUSED_REVIEW_MARKER = "[focused-review-bot]"
+INLINE_REVIEW_MARKER = "<!-- osc-review-inline -->"
 
 
 def load_review_context(config: HarnessConfig, env: dict) -> tuple:
@@ -74,8 +77,13 @@ def run_cmd(
         else:
             return result
     except subprocess.TimeoutExpired:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        proc.communicate()
+        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, signal.SIGTERM)
+        try:
+            proc.communicate(timeout=GRACE_PERIOD_SECONDS)
+        except subprocess.TimeoutExpired:
+            os.killpg(pgid, signal.SIGKILL)
+            proc.communicate()
         raise
 
 
@@ -249,21 +257,11 @@ def is_review_summary_comment(body: str) -> bool:
     return "review summary" in lower or "osc-review" in lower
 
 
-def has_review_summary_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+def _has_matching_comment(comments_path: str, current_user: str, env: dict, predicate: Callable[[str], bool]) -> bool:
     page = 1
     while True:
         result = run_cmd(
-            [
-                "gh",
-                "api",
-                "--method",
-                "GET",
-                f"repos/{repo}/issues/{pr_number}/comments",
-                "-F",
-                "per_page=100",
-                "-F",
-                f"page={page}",
-            ],
+            ["gh", "api", "--method", "GET", comments_path, "-F", "per_page=100", "-F", f"page={page}"],
             cwd="/",
             env=env,
             timeout=TIMEOUT_GH,
@@ -274,46 +272,27 @@ def has_review_summary_comment(pr_number: int, repo: str, current_user: str, env
         comments = json.loads(result.stdout)
         if not comments:
             return False
-        if any(
-            c.get("user", {}).get("login") == current_user and is_review_summary_comment(c.get("body", ""))
-            for c in comments
-        ):
+        if any(c.get("user", {}).get("login") == current_user and predicate(c.get("body", "")) for c in comments):
             return True
         if len(comments) < 100:
             return False
         page += 1
+
+
+def has_review_summary_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+    return _has_matching_comment(
+        f"repos/{repo}/issues/{pr_number}/comments", current_user, env, is_review_summary_comment
+    )
+
+
+def is_inline_review_comment(body: str) -> bool:
+    return INLINE_REVIEW_MARKER in body
 
 
 def has_inline_review_comments(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
-    page = 1
-    while True:
-        result = run_cmd(
-            [
-                "gh",
-                "api",
-                "--method",
-                "GET",
-                f"repos/{repo}/pulls/{pr_number}/comments",
-                "-F",
-                "per_page=100",
-                "-F",
-                f"page={page}",
-            ],
-            cwd="/",
-            env=env,
-            timeout=TIMEOUT_GH,
-            check=False,
-        )
-        if result.returncode != 0:
-            return False
-        comments = json.loads(result.stdout)
-        if not comments:
-            return False
-        if any(c.get("user", {}).get("login") == current_user for c in comments):
-            return True
-        if len(comments) < 100:
-            return False
-        page += 1
+    return _has_matching_comment(
+        f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, is_inline_review_comment
+    )
 
 
 def author_matches(login: str, authors_config: str | list) -> bool:

@@ -31,10 +31,13 @@ For application code: when identifying a bug, include a concrete input/state tha
 would reproduce it — something that could directly become a unit test case.
 
 ## Output
-For each P0 (critical) or P1 (high priority) finding, post an inline review comment:
+For each P0 (critical) or P1 (high priority) finding, post an inline review comment.
+Append the literal marker `<!-- osc-review-inline -->` to the end of the body — it is
+invisible when rendered on GitHub and is how this tool recognizes its own comments on a
+later run, so it must be present on every comment you post here:
 
     gh api repos/{REPO}/pulls/{PR_NUMBER}/comments \
-      -f body="..." -f commit_id="{COMMIT}" -f path="..." -F line=<N>
+      -f body="...<!-- osc-review-inline -->" -f commit_id="{COMMIT}" -f path="..." -F line=<N>
 
 If the exact line is unavailable, fall back to line 1 of the file.
 Be specific: reference the exact code, explain why it is a problem, and suggest
