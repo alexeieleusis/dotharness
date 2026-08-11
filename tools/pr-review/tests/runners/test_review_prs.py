@@ -58,6 +58,32 @@ def test_skips_prs_with_unchanged_head_sha(tmp_xdg, tmp_path):
     mock_detach.assert_not_called()
 
 
+def test_reprocesses_pr_when_head_sha_changes(tmp_xdg, tmp_path):
+    from harness.config import SubDir
+
+    state.record_reviewed_sha("acme-frontend", 7, "old-sha")
+    cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
+    prs = [
+        {"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "new-sha"}
+    ]
+    with (
+        patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_prs.get_current_user", return_value="alice"),
+        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("harness.runners.review_prs._run_base_analysis", return_value=True),
+        patch("harness.runners.review_prs.run_cmd") as mock_run,
+        patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.review_prs.git_restore"),
+        patch("harness.runners.review_prs.git_fetch_and_checkout"),
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
+        review_prs._run_locked(cfg)
+    vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
+    assert len(vibe_calls) >= 1
+    assert state.get_reviewed_sha("acme-frontend", 7) == "new-sha"
+
+
 def test_processes_new_prs(tmp_xdg, tmp_path):
     from harness.config import SubDir
 
