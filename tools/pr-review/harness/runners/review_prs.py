@@ -38,8 +38,8 @@ def _discover_prs(config: HarnessConfig, pr_url: str | None, env: dict) -> list[
     return list_open_prs_matching_authors(config.repo.name, config.vibe_heal.authors, str(config.repo.working_dir), env)
 
 
-def _already_reviewed(config: HarnessConfig, pr: dict) -> bool:
-    reviewed_sha = state.get_reviewed_sha(config.repo_slug, pr["number"])
+def _already_reviewed(reviewed_shas: dict, pr: dict) -> bool:
+    reviewed_sha = reviewed_shas.get(str(pr["number"]))
     if reviewed_sha is not None and reviewed_sha == pr.get("headRefOid"):
         logger.info("PR #%d: head unchanged since last review (%.8s), skipping", pr["number"], reviewed_sha)
         return True
@@ -66,13 +66,15 @@ def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
 
     candidates = _discover_prs(config, pr_url, env)
 
-    if pr_url is None:
+    if pr_url is not None:
+        to_process = candidates
+    else:
         # Authoritative "still open" set for this batch — prune closed/merged PRs out of
         # reviewed_shas even on a cycle that finds nothing new to process, so stale entries
         # don't linger just because no fresh PR number showed up.
         state.prune_reviewed_shas(config.repo_slug, {p["number"] for p in candidates})
-
-    to_process = candidates if pr_url is not None else [pr for pr in candidates if not _already_reviewed(config, pr)]
+        reviewed_shas = state.read_vibe_heal_state(config.repo_slug)["reviewed_shas"]
+        to_process = [pr for pr in candidates if not _already_reviewed(reviewed_shas, pr)]
 
     if not to_process:
         return

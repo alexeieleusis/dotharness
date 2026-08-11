@@ -75,12 +75,25 @@ def read_vibe_heal_state(repo_slug: str) -> dict:
     return data
 
 
-def write_vibe_heal_state(repo_slug: str, *, last_main_sha: str) -> None:
+def _update_vibe_heal_state(repo_slug: str, mutate) -> None:
+    """Read-modify-write the vibe_heal state file under an exclusive lock.
+
+    `mutate` receives the current state dict and returns True if it changed anything;
+    the file is only rewritten when it did.
+    """
     p = _state_path(repo_slug, VIBE_HEAL_FILE)
     with _state_lock(p):
         current = read_vibe_heal_state(repo_slug)
+        if mutate(current):
+            _atomic_write(p, current)
+
+
+def write_vibe_heal_state(repo_slug: str, *, last_main_sha: str) -> None:
+    def mutate(current: dict) -> bool:
         current["last_main_sha"] = last_main_sha
-        _atomic_write(p, current)
+        return True
+
+    _update_vibe_heal_state(repo_slug, mutate)
 
 
 def get_reviewed_sha(repo_slug: str, pr_number: int) -> str | None:
@@ -92,24 +105,26 @@ def record_reviewed_sha(repo_slug: str, pr_number: int, sha: str) -> None:
     """Mark a PR as successfully reviewed at the given head SHA, immediately and independently
     of any other PR in the same batch — this is what lets one perpetually-failing PR stop
     blocking credit for every other PR discovered alongside it."""
-    p = _state_path(repo_slug, VIBE_HEAL_FILE)
-    with _state_lock(p):
-        current = read_vibe_heal_state(repo_slug)
+
+    def mutate(current: dict) -> bool:
         current["reviewed_shas"][str(pr_number)] = sha
-        _atomic_write(p, current)
+        return True
+
+    _update_vibe_heal_state(repo_slug, mutate)
 
 
 def prune_reviewed_shas(repo_slug: str, open_pr_numbers: set[int]) -> None:
     """Drop reviewed_shas entries for PRs that are no longer open, so the map doesn't
     grow unboundedly as PRs get closed/merged over time."""
     keep = {str(n) for n in open_pr_numbers}
-    p = _state_path(repo_slug, VIBE_HEAL_FILE)
-    with _state_lock(p):
-        current = read_vibe_heal_state(repo_slug)
-        pruned = {pr: sha for pr, sha in current["reviewed_shas"].items() if pr in keep}
-        if pruned != current["reviewed_shas"]:
-            current["reviewed_shas"] = pruned
-            _atomic_write(p, current)
+
+    def mutate(current: dict) -> bool:
+        to_drop = current["reviewed_shas"].keys() - keep
+        for pr in to_drop:
+            del current["reviewed_shas"][pr]
+        return bool(to_drop)
+
+    _update_vibe_heal_state(repo_slug, mutate)
 
 
 def read_self_review_state(repo_slug: str) -> dict:
