@@ -79,6 +79,28 @@ def test_processes_new_prs(tmp_xdg, tmp_path):
     assert len(vibe_calls) >= 1
 
 
+def test_failed_pr_fetch_does_not_prune_reviewed_shas(tmp_xdg, tmp_path):
+    from harness.config import SubDir
+
+    state.record_reviewed_sha("acme-frontend", 5, "sha5")
+    state.record_reviewed_sha("acme-frontend", 6, "sha6")
+    cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
+    with (
+        patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=None),
+        patch("harness.runners.review_prs._run_base_analysis", return_value=True),
+        patch("harness.runners.review_prs.run_cmd") as mock_run,
+        patch("harness.runners.review_prs.git_detach_and_record") as mock_detach,
+        patch("harness.runners.review_prs.git_restore"),
+        patch("harness.runners.review_prs.git_fetch_and_checkout"),
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
+        review_prs._run_locked(cfg)
+    assert state.get_reviewed_sha("acme-frontend", 5) == "sha5"
+    assert state.get_reviewed_sha("acme-frontend", 6) == "sha6"
+    mock_detach.assert_not_called()
+
+
 def test_updates_state_after_success(tmp_xdg, tmp_path):
     from harness.config import SubDir
 

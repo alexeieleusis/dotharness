@@ -30,7 +30,7 @@ def run(config: HarnessConfig, pr_url: str | None = None) -> None:
         _run_locked(config, pr_url)
 
 
-def _discover_prs(config: HarnessConfig, pr_url: str | None, env: dict) -> list[dict]:
+def _discover_prs(config: HarnessConfig, pr_url: str | None, env: dict) -> list[dict] | None:
     if pr_url:
         pr = pr_from_url(pr_url, config.repo.name, env, "number,headRefName,baseRefName,headRefOid")
         return [pr] if pr else []
@@ -69,6 +69,10 @@ def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
     if pr_url is not None:
         to_process = candidates
     else:
+        if candidates is None:
+            logger.warning("Failed to fetch open PRs; skipping this cycle without touching reviewed_shas")
+            return
+
         # Authoritative "still open" set for this batch — prune closed/merged PRs out of
         # reviewed_shas even on a cycle that finds nothing new to process, so stale entries
         # don't linger just because no fresh PR number showed up.
