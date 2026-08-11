@@ -16,10 +16,10 @@ harness run [--config PATH] [--verbose] review-prs [--pr PR_URL]
 - `--verbose` — enables DEBUG-level logging and mirrors log output to stdout (normally only written to the
   per-day log file under `~/.local/share/dotharness/logs/review-prs/`).
 - `--pr PR_URL` — optional. When given, runs the vibe_heal pipeline against only that one PR (the PR number is
-  parsed as the last path segment of the URL) instead of discovering PRs via the `last_pr` watermark. This
-  mode does not consult `last_pr` to decide eligibility, and does not advance `last_pr` afterward — so the
+  parsed as the last path segment of the URL) instead of discovering open PRs automatically. This mode does
+  not consult the per-PR reviewed-SHA record to decide eligibility, and does not update it afterward — so the
   same PR can be re-run any number of times (e.g. to pick up a config change or re-run after a transient
-  failure) without affecting which PRs future watermark-based runs pick up. It still performs the baseline
+  failure) without affecting which PRs future automatic runs pick up. It still performs the baseline
   analysis step (step 3a below), which reads and may write `last_main_sha` in the state file. It also skips
   the draft and `vibe_heal.authors` filtering that the batch case applies — a single PR fetched this way is
   processed regardless of draft status or author.
@@ -43,13 +43,18 @@ harness run [--config PATH] [--verbose] review-prs [--pr PR_URL]
    After the step completes (success or failure), the working directory is restored to its original state.
 4. Looks up the current `gh` user's login.
 5. Builds the list of PRs to process:
-   - If `--pr` was given, resolves just that PR via `gh pr view` (`number`, `headRefName`, `baseRefName`).
-   - Otherwise, reads `last_pr` from state, lists open PRs via `gh pr list --repo <repo.name> --state open
-     --limit 500`, and filters to **eligible** PRs: PR number greater than `last_pr`, **not a draft**, and
-     author matching `vibe_heal.authors` (`"*"` or an explicit login list). Eligible PRs are sorted ascending
-     by number.
-6. If there are no PRs to process, the command exits.
-7. Detaches HEAD and records the current SHA, then processes each PR in order:
+   - If `--pr` was given, resolves just that PR via `gh pr view` (`number`, `headRefName`, `baseRefName`,
+     `headRefOid`).
+   - Otherwise, lists open PRs via `gh pr list --repo <repo.name> --state open --limit 500`, filters to
+     **not a draft** and author matching `vibe_heal.authors` (`"*"` or an explicit login list), then drops any
+     PR whose current head commit (`headRefOid`) matches the SHA already recorded for it in `reviewed_shas`
+     (see [State and idempotency](#state-and-idempotency)) — i.e. it hasn't changed since it was last
+     successfully reviewed. What's left is sorted ascending by number.
+   - Before any checkout happens, the full open+author-matching PR-number set from this step is used to prune
+     `reviewed_shas` of entries for PRs that are no longer open (closed/merged) — this runs even if the list
+     of PRs left to process ends up empty.
+6. If there are no PRs left to process, the command exits.
+7. Detaches HEAD and records the current SHA, then processes each remaining PR in order:
    - Fetches and checks out the PR's head branch (see rebase/reset behavior in
      [Commands → Shared behavior](index.md#shared-behavior)).
    - Posts a one-time general marker comment on the PR (`[vibe-heal-bot]` marker) explaining that automated
@@ -66,10 +71,10 @@ harness run [--config PATH] [--verbose] review-prs [--pr PR_URL]
    - If any subdir posted a review and the user was a requested reviewer before checkout, re-requests them as
      a reviewer — submitting a review via the GitHub API clears the submitter from the PR's requested-reviewer
      list, which would otherwise hide the PR from `review-requested`'s search for the rest of a `run all` cycle.
-   - Unless running with `--pr`, advances `last_pr` in state to this PR's number. This happens regardless of
-     whether any subdir's `vibe_heal` invocation succeeded — only an *unhandled* exception while processing the
-     PR (an unexpected error, or a `FatalGitError` from an unrecoverable checkout) prevents the state write for
-     that PR.
+   - Unless running with `--pr`, records this PR's current head SHA in `reviewed_shas` **only if every subdir
+     it was processed in succeeded** — this write happens immediately, right after this PR finishes, and does
+     not depend on how any other PR in this batch turns out. A PR that fails (or partially fails across
+     subdirs) is retried against the same head SHA on the next run.
    - A `FatalGitError` aborts processing of all remaining PRs in this run. Any other exception is logged and
      processing moves on to the next PR.
     - After each PR (success, failure, or exception), the working directory is restored to the SHA recorded in
@@ -104,26 +109,31 @@ that invoke harness's own AI backend directly.
 
 State is stored at `~/.local/share/dotharness/state/<repo_slug>/vibe_heal.json` (`repo_slug` is `repo.name`
 with `/` replaced by `-`). It tracks two fields:
-- `last_pr` — the highest PR number processed by a batch (non-`--pr`) run; only PRs with a greater number are
-  eligible on the next batch run.
+- `reviewed_shas` — a map of PR number (as a string) to the head commit SHA it was last *successfully*
+  reviewed at. A batch run skips any PR whose current `headRefOid` matches its entry here. Each entry is
+  written the moment that PR finishes successfully — independent of every other PR in the same run — and is
+  removed once that PR is no longer open. This is what makes success durable even when some other PR in the
+  same batch keeps failing (e.g. hangs and times out): a perpetually-broken PR only ever blocks itself, never
+  the PRs discovered alongside it.
 - `last_main_sha` — the SHA of `origin/main` last processed during baseline analysis (step 3a). When the
   current `origin/main` SHA differs from this value, the baseline analysis runs `vibe_heal review --baseline`
   in each subdir and then persists the new SHA. Both batch and `--pr` runs read and may write this field.
 
 Run `harness state reset review-prs` (add `--yes` to skip the confirmation prompt) to delete this file, which
-resets `last_pr` to 0 and clears `last_main_sha` — the next run will re-consider every open PR from scratch
-and re-run baseline analysis unconditionally.
+clears `reviewed_shas` and `last_main_sha` — the next run will re-consider every open PR from scratch and
+re-run baseline analysis unconditionally.
 
-`--pr` runs do not read or write `last_pr`, but they do read and may write `last_main_sha` during the baseline
-analysis step — see the `--pr` description under [Usage](#usage) and step 3a above.
+`--pr` runs do not read or write `reviewed_shas`, but they do read and may write `last_main_sha` during the
+baseline analysis step — see the `--pr` description under [Usage](#usage) and step 3a above.
 
 ## Notes
 
 - **Draft PRs are always skipped** in the batch case, unconditionally — there is no config flag to include
   them. A PR passed explicitly via `--pr` is processed even if it's a draft.
-- `last_pr` is a single monotonic watermark, not a per-PR "already reviewed" set. Eligible PRs are processed in
-  ascending order, and `last_pr` advances after each one is processed (success or subdir failure alike) unless
-  an unhandled exception interrupts that PR — see step 7 above.
+- `reviewed_shas` is a per-PR "already reviewed, at this exact commit" record, not a monotonic watermark — a PR
+  is only ever skipped if its current head SHA matches what's recorded, so a new commit (or a force-push) makes
+  it eligible again regardless of PR number. Only genuinely successful PRs get an entry; a failure leaves that
+  PR eligible for retry on the next run.
 - Checking out a PR's branch uses the shared rebase/reset behavior described in
   [Commands → Shared behavior](index.md#shared-behavior).
 - The `[vibe-heal-bot]` general notice comment is idempotent: existing PR comments are checked for the marker

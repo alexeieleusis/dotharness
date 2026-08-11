@@ -5,13 +5,13 @@ from harness import state
 
 def test_read_vibe_heal_defaults(tmp_xdg):
     result = state.read_vibe_heal_state("acme-frontend")
-    assert result == {"version": 1, "last_pr": 0, "last_main_sha": ""}
+    assert result == {"version": 1, "reviewed_shas": {}, "last_main_sha": ""}
 
 
 def test_write_then_read_vibe_heal(tmp_xdg):
-    state.write_vibe_heal_state("acme-frontend", 42)
+    state.write_vibe_heal_state("acme-frontend", last_main_sha="abc123")
     result = state.read_vibe_heal_state("acme-frontend")
-    assert result["last_pr"] == 42
+    assert result["last_main_sha"] == "abc123"
     assert result["version"] == 1
 
 
@@ -27,16 +27,16 @@ def test_write_then_read_self_review(tmp_xdg):
 
 
 def test_atomic_write_no_tmp_left(tmp_xdg):
-    state.write_vibe_heal_state("acme-frontend", 5)
+    state.write_vibe_heal_state("acme-frontend", last_main_sha="deadbeef")
     leftovers = list((tmp_xdg / "state" / "acme-frontend").glob("*.tmp"))
     assert leftovers == []
 
 
 def test_delete_state_review_prs(tmp_xdg):
-    state.write_vibe_heal_state("acme-frontend", 10)
+    state.record_reviewed_sha("acme-frontend", 10, "sha1")
     state.delete_state("acme-frontend", "review-prs")
     result = state.read_vibe_heal_state("acme-frontend")
-    assert result["last_pr"] == 0  # reset to default
+    assert result["reviewed_shas"] == {}  # reset to default
 
 
 def test_delete_state_unknown_command_raises(tmp_xdg):
@@ -44,25 +44,51 @@ def test_delete_state_unknown_command_raises(tmp_xdg):
         state.delete_state("acme-frontend", "address-comments")
 
 
-def test_write_last_main_sha_preserves_last_pr(tmp_xdg):
-    state.write_vibe_heal_state("acme-frontend", 7)
+def test_write_last_main_sha_preserves_reviewed_shas(tmp_xdg):
+    state.record_reviewed_sha("acme-frontend", 7, "sha7")
     state.write_vibe_heal_state("acme-frontend", last_main_sha="abc123")
     result = state.read_vibe_heal_state("acme-frontend")
-    assert result["last_pr"] == 7
+    assert result["reviewed_shas"] == {"7": "sha7"}
     assert result["last_main_sha"] == "abc123"
 
 
-def test_write_last_pr_preserves_last_main_sha(tmp_xdg):
+def test_record_reviewed_sha_preserves_last_main_sha(tmp_xdg):
     state.write_vibe_heal_state("acme-frontend", last_main_sha="abc123")
-    state.write_vibe_heal_state("acme-frontend", 7)
+    state.record_reviewed_sha("acme-frontend", 7, "sha7")
     result = state.read_vibe_heal_state("acme-frontend")
-    assert result["last_pr"] == 7
+    assert result["reviewed_shas"] == {"7": "sha7"}
     assert result["last_main_sha"] == "abc123"
 
 
-def test_write_vibe_heal_state_no_op_raises(tmp_xdg):
-    with pytest.raises(ValueError, match="no fields to update"):
-        state.write_vibe_heal_state("acme-frontend")
+def test_get_reviewed_sha_returns_none_when_absent(tmp_xdg):
+    assert state.get_reviewed_sha("acme-frontend", 99) is None
+
+
+def test_get_reviewed_sha_returns_recorded_value(tmp_xdg):
+    state.record_reviewed_sha("acme-frontend", 7, "sha7")
+    assert state.get_reviewed_sha("acme-frontend", 7) == "sha7"
+
+
+def test_record_reviewed_sha_overwrites_existing_entry(tmp_xdg):
+    state.record_reviewed_sha("acme-frontend", 7, "sha7")
+    state.record_reviewed_sha("acme-frontend", 7, "sha7-new")
+    assert state.get_reviewed_sha("acme-frontend", 7) == "sha7-new"
+
+
+def test_prune_reviewed_shas_drops_closed_prs(tmp_xdg):
+    state.record_reviewed_sha("acme-frontend", 7, "sha7")
+    state.record_reviewed_sha("acme-frontend", 9, "sha9")
+    state.prune_reviewed_shas("acme-frontend", {9})
+    result = state.read_vibe_heal_state("acme-frontend")
+    assert result["reviewed_shas"] == {"9": "sha9"}
+
+
+def test_prune_reviewed_shas_no_op_when_nothing_changes(tmp_xdg):
+    state.record_reviewed_sha("acme-frontend", 7, "sha7")
+    state.prune_reviewed_shas("acme-frontend", {7})
+    leftovers = list((tmp_xdg / "state" / "acme-frontend").glob("*.tmp"))
+    assert leftovers == []
+    assert state.read_vibe_heal_state("acme-frontend")["reviewed_shas"] == {"7": "sha7"}
 
 
 def test_read_vibe_heal_state_defaults_missing_last_main_sha(tmp_xdg):
@@ -70,9 +96,19 @@ def test_read_vibe_heal_state_defaults_missing_last_main_sha(tmp_xdg):
 
     path = tmp_xdg / "state" / "acme-frontend" / "vibe_heal.json"
     path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({"version": 1, "last_pr": 3}))
+    path.write_text(json.dumps({"version": 1, "reviewed_shas": {}}))
     result = state.read_vibe_heal_state("acme-frontend")
     assert result["last_main_sha"] == ""
+
+
+def test_read_vibe_heal_state_defaults_missing_reviewed_shas(tmp_xdg):
+    import json
+
+    path = tmp_xdg / "state" / "acme-frontend" / "vibe_heal.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"version": 1, "last_main_sha": "abc"}))
+    result = state.read_vibe_heal_state("acme-frontend")
+    assert result["reviewed_shas"] == {}
 
 
 def test_read_vibe_heal_corrupted_json_fallback(tmp_xdg, caplog):
@@ -80,7 +116,7 @@ def test_read_vibe_heal_corrupted_json_fallback(tmp_xdg, caplog):
     state_file.parent.mkdir(parents=True, exist_ok=True)
     state_file.write_text('{"version": 1, "last_pr", }')
     result = state.read_vibe_heal_state("acme-frontend")
-    assert result == {"version": 1, "last_pr": 0, "last_main_sha": ""}
+    assert result == {"version": 1, "reviewed_shas": {}, "last_main_sha": ""}
     assert "Corrupted state file" in caplog.text
 
 

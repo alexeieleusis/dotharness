@@ -313,7 +313,7 @@ def list_open_prs_matching_authors(repo: str, authors_config: str | list, cwd: s
             "--state",
             "open",
             "--json",
-            "number,headRefName,author,isDraft,baseRefName",
+            "number,headRefName,author,isDraft,baseRefName,headRefOid",
             "--limit",
             "500",
         ],

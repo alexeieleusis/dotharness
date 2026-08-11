@@ -147,7 +147,7 @@ def test_run_all_continues_after_failure_and_exits_nonzero(minimal_toml, tmp_xdg
 def test_state_reset_yes_deletes_state(minimal_toml, tmp_xdg):
     from harness import state
 
-    state.write_vibe_heal_state("acme-frontend", 5)
+    state.record_reviewed_sha("acme-frontend", 5, "sha5")
     runner = CliRunner()
     _ = runner.invoke(cli, ["state", "reset", "review-prs", "--config", str(minimal_toml), "--yes"])
-    assert state.read_vibe_heal_state("acme-frontend")["last_pr"] == 0
+    assert state.read_vibe_heal_state("acme-frontend")["reviewed_shas"] == {}

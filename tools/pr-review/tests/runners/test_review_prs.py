@@ -31,18 +31,22 @@ def _make_config(tmp_path, authors="*", subdirs=None):
     )
 
 
-def test_skips_prs_at_or_below_last_pr(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", 10)
-    cfg = _make_config(tmp_path)
+def test_skips_prs_with_unchanged_head_sha(tmp_xdg, tmp_path):
+    from harness.config import SubDir
+
+    state.record_reviewed_sha("acme-frontend", 8, "sha8")
+    state.record_reviewed_sha("acme-frontend", 10, "sha10")
+    cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     prs = [
-        {"number": 8, "headRefName": "b", "author": {"login": "alice"}, "isDraft": False},
-        {"number": 10, "headRefName": "b", "author": {"login": "alice"}, "isDraft": False},
+        {"number": 8, "headRefName": "b", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha8"},
+        {"number": 10, "headRefName": "b", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha10"},
     ]
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("harness.runners.review_prs._run_base_analysis", return_value=True),
         patch("harness.runners.review_prs.run_cmd") as mock_run,
-        patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.review_prs.git_detach_and_record") as mock_detach,
         patch("harness.runners.review_prs.git_restore"),
         patch("harness.runners.review_prs.git_fetch_and_checkout"),
     ):
@@ -50,14 +54,15 @@ def test_skips_prs_at_or_below_last_pr(tmp_xdg, tmp_path):
         review_prs._run_locked(cfg)
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert vibe_calls == []
+    # Both PRs were skipped before any checkout was needed.
+    mock_detach.assert_not_called()
 
 
 def test_processes_new_prs(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", 0)
     from harness.config import SubDir
 
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
-    prs = [{"number": 5, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False}]
+    prs = [{"number": 5, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha5"}]
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
@@ -75,11 +80,10 @@ def test_processes_new_prs(tmp_xdg, tmp_path):
 
 
 def test_updates_state_after_success(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", 0)
     from harness.config import SubDir
 
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
-    prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False}]
+    prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha7"}]
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
@@ -92,15 +96,14 @@ def test_updates_state_after_success(tmp_xdg, tmp_path):
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
         review_prs._run_locked(cfg)
-    assert state.read_vibe_heal_state("acme-frontend")["last_pr"] == 7
+    assert state.get_reviewed_sha("acme-frontend", 7) == "sha7"
 
 
 def test_coverage_flag_passed_when_true(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", 0)
     from harness.config import SubDir
 
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], coverage=True, timeout=30)])
-    prs = [{"number": 3, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False}]
+    prs = [{"number": 3, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha3"}]
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
@@ -118,7 +121,6 @@ def test_coverage_flag_passed_when_true(tmp_xdg, tmp_path):
 
 
 def test_pr_url_graceful_on_pr_from_url_returns_empty(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", 10)
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
@@ -136,7 +138,6 @@ def test_pr_url_graceful_on_pr_from_url_returns_empty(tmp_xdg, tmp_path):
 
 
 def test_pr_url_graceful_on_pr_from_url_raises(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", 10)
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
@@ -151,10 +152,12 @@ def test_pr_url_graceful_on_pr_from_url_raises(tmp_xdg, tmp_path):
     assert vibe_calls == []
 
 
-def test_pr_url_bypasses_last_pr_filtering(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", 10)
+def test_pr_url_bypasses_reviewed_sha_filtering(tmp_xdg, tmp_path):
+    # Even though this PR's current head SHA is already recorded as reviewed, --pr forces
+    # it to run anyway — the whole point of the manual override.
+    state.record_reviewed_sha("acme-frontend", 3, "sha3")
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
-    pr = {"number": 3, "headRefName": "feat", "baseRefName": "main"}
+    pr = {"number": 3, "headRefName": "feat", "baseRefName": "main", "headRefOid": "sha3"}
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
@@ -171,10 +174,9 @@ def test_pr_url_bypasses_last_pr_filtering(tmp_xdg, tmp_path):
     assert len(vibe_calls) >= 1
 
 
-def test_pr_url_does_not_update_state(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", 10)
+def test_pr_url_does_not_update_reviewed_shas(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
-    pr = {"number": 3, "headRefName": "feat", "baseRefName": "main"}
+    pr = {"number": 3, "headRefName": "feat", "baseRefName": "main", "headRefOid": "sha3"}
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
@@ -187,7 +189,7 @@ def test_pr_url_does_not_update_state(tmp_xdg, tmp_path):
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
         review_prs._run_locked(cfg, pr_url="https://github.com/acme/frontend/pull/3")
-    assert state.read_vibe_heal_state("acme-frontend")["last_pr"] == 10
+    assert state.read_vibe_heal_state("acme-frontend")["reviewed_shas"] == {}
 
 
 def test_run_pre_commands_continues_after_non_critical_failure(tmp_path):
@@ -261,13 +263,20 @@ def test_run_pre_commands_aborts_after_critical_timeout(tmp_path):
 
 
 def test_run_locked_re_requests_review_once_per_pr_across_subdirs(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", 0)
-
     cfg = _make_config(
         tmp_path,
         subdirs=[SubDir(path="a", pre_commands=[], coverage=False, timeout=30), SubDir(path="b")],
     )
-    prs = [{"number": 9, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "baseRefName": "main"}]
+    prs = [
+        {
+            "number": 9,
+            "headRefName": "feat",
+            "author": {"login": "alice"},
+            "isDraft": False,
+            "baseRefName": "main",
+            "headRefOid": "sha9",
+        }
+    ]
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
@@ -289,10 +298,8 @@ def test_run_locked_re_requests_review_once_per_pr_across_subdirs(tmp_xdg, tmp_p
 
 
 def test_run_locked_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", 0)
-
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
-    prs = [{"number": 9, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False}]
+    prs = [{"number": 9, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha9"}]
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
@@ -352,13 +359,20 @@ def test_subdir_has_changes_handles_trailing_slash_in_config():
 
 
 def test_run_locked_skips_subdir_with_no_changes(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", 0)
-
     cfg = _make_config(
         tmp_path,
         subdirs=[SubDir(path="a", pre_commands=[], coverage=False, timeout=30), SubDir(path="b")],
     )
-    prs = [{"number": 11, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "baseRefName": "main"}]
+    prs = [
+        {
+            "number": 11,
+            "headRefName": "feat",
+            "author": {"login": "alice"},
+            "isDraft": False,
+            "baseRefName": "main",
+            "headRefOid": "sha11",
+        }
+    ]
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
@@ -514,10 +528,9 @@ def test_run_locked_skips_pr_processing_when_base_analysis_fails(tmp_xdg, tmp_pa
     mock_list.assert_not_called()
 
 
-def test_run_locked_does_not_advance_state_on_subdir_failure(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", 0)
+def test_run_locked_does_not_record_reviewed_sha_on_subdir_failure(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
-    prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False}]
+    prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha7"}]
 
     def fake_run_cmd(cmd, **kwargs):
         if "vibe_heal" in str(cmd) and "--pr" in cmd:
@@ -536,13 +549,12 @@ def test_run_locked_does_not_advance_state_on_subdir_failure(tmp_xdg, tmp_path):
         patch("harness.runners.review_prs.git_fetch_and_checkout"),
     ):
         review_prs._run_locked(cfg)
-    assert state.read_vibe_heal_state("acme-frontend")["last_pr"] == 0
+    assert state.get_reviewed_sha("acme-frontend", 7) is None
 
 
-def test_run_locked_does_not_advance_state_on_generic_exception(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", 0)
+def test_run_locked_does_not_record_reviewed_sha_on_generic_exception(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
-    prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False}]
+    prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha7"}]
 
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
@@ -557,7 +569,7 @@ def test_run_locked_does_not_advance_state_on_generic_exception(tmp_xdg, tmp_pat
         patch("harness.runners.review_prs.git_fetch_and_checkout"),
     ):
         review_prs._run_locked(cfg)
-    assert state.read_vibe_heal_state("acme-frontend")["last_pr"] == 0
+    assert state.get_reviewed_sha("acme-frontend", 7) is None
 
 
 def test_run_locked_returns_early_when_vibe_heal_disabled(tmp_path):
@@ -576,11 +588,10 @@ def test_run_locked_returns_early_when_vibe_heal_disabled(tmp_path):
 def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path):
     from harness.runners.common import FatalGitError
 
-    state.write_vibe_heal_state("acme-frontend", 0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     prs = [
-        {"number": 3, "headRefName": "pr3", "author": {"login": "alice"}, "isDraft": False},
-        {"number": 4, "headRefName": "pr4", "author": {"login": "alice"}, "isDraft": False},
+        {"number": 3, "headRefName": "pr3", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha3"},
+        {"number": 4, "headRefName": "pr4", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha4"},
     ]
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
@@ -597,18 +608,18 @@ def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path):
         review_prs._run_locked(cfg)
     # PR 3 completed successfully; FatalGitError on PR 4's fetch broke the loop before PR 4 could finish.
     assert mock_fetch.call_count == 2
-    assert state.read_vibe_heal_state("acme-frontend")["last_pr"] == 3
+    assert state.get_reviewed_sha("acme-frontend", 3) == "sha3"
+    assert state.get_reviewed_sha("acme-frontend", 4) is None
     assert mock_restore.call_count == 2
 
 
 def test_fatal_git_error_from_process_pr_stops_remaining_prs(tmp_xdg, tmp_path):
     from harness.runners.common import FatalGitError
 
-    state.write_vibe_heal_state("acme-frontend", 0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     prs = [
-        {"number": 5, "headRefName": "pr5", "author": {"login": "alice"}, "isDraft": False},
-        {"number": 6, "headRefName": "pr6", "author": {"login": "alice"}, "isDraft": False},
+        {"number": 5, "headRefName": "pr5", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha5"},
+        {"number": 6, "headRefName": "pr6", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha6"},
     ]
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
@@ -629,12 +640,11 @@ def test_fatal_git_error_from_process_pr_stops_remaining_prs(tmp_xdg, tmp_path):
     assert mock_process.call_count == 1
 
 
-def test_generic_exception_continues_pr_processing_loop(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", 0)
+def test_generic_exception_does_not_block_credit_for_other_prs(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     prs = [
-        {"number": 2, "headRefName": "pr2", "author": {"login": "alice"}, "isDraft": False},
-        {"number": 4, "headRefName": "pr4", "author": {"login": "alice"}, "isDraft": False},
+        {"number": 2, "headRefName": "pr2", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha2"},
+        {"number": 4, "headRefName": "pr4", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha4"},
     ]
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
@@ -649,17 +659,18 @@ def test_generic_exception_continues_pr_processing_loop(tmp_xdg, tmp_path):
     ):
         mock_fetch.side_effect = [None, RuntimeError("unexpected failure")]
         review_prs._run_locked(cfg)
-    # Both PRs were processed; generic Exception on PR 2 did not break the loop.
+    # Both PRs were processed; generic Exception on PR 4 did not break the loop.
     assert mock_fetch.call_count == 2
     assert mock_restore.call_count == 2
-    # batch_failed=True from PR 2 prevents state advancement for remaining PRs.
-    assert state.read_vibe_heal_state("acme-frontend")["last_pr"] == 0
+    # PR 2 succeeded and is credited immediately — PR 4's later failure doesn't retroactively
+    # withhold that credit (this is the fix: no more batch-wide all-or-nothing gating).
+    assert state.get_reviewed_sha("acme-frontend", 2) == "sha2"
+    assert state.get_reviewed_sha("acme-frontend", 4) is None
 
 
 def test_run_locked_calls_git_restore_when_process_pr_raises(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", 0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
-    prs = [{"number": 5, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False}]
+    prs = [{"number": 5, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha5"}]
 
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
