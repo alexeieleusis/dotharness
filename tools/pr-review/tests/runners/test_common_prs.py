@@ -39,6 +39,7 @@ def test_list_open_prs_filters_drafts_and_authors(tmp_path):
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(payload).encode())
         result = list_open_prs_matching_authors("acme/repo", ["alice"], str(tmp_path), {})
+    assert result is not None
     assert [p["number"] for p in result] == [3]
 
 
@@ -50,6 +51,7 @@ def test_list_open_prs_sorted_ascending():
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(payload).encode())
         result = list_open_prs_matching_authors("acme/repo", "*", "/", {})
+    assert result is not None
     assert [p["number"] for p in result] == [2, 9]
 
 
