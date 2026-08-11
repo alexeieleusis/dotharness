@@ -8,7 +8,9 @@ from harness.runners.common import (
     author_matches,
     get_current_user,
     get_requested_reviewers,
+    has_inline_review_comments,
     has_review_summary_comment,
+    is_inline_review_comment,
     is_review_summary_comment,
     list_open_prs_for_current_user,
     list_open_prs_matching_authors,
@@ -232,3 +234,49 @@ def test_has_review_summary_comment_returns_false_on_gh_failure():
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
         assert has_review_summary_comment(1, "acme/repo", "alice", {}) is False
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("Nitpick: rename this variable.<!-- osc-review-inline -->", True),
+        ("<!-- osc-review-inline -->", True),
+        ("Nitpick: rename this variable.", False),
+        ("**S1234** Refactor this to reduce complexity.", False),
+        ("", False),
+    ],
+)
+def test_is_inline_review_comment(body, expected):
+    assert is_inline_review_comment(body) is expected
+
+
+def test_has_inline_review_comments_true_when_marker_and_user_match():
+    comments = [
+        {"user": {"login": "someone-else"}, "body": "unrelated<!-- osc-review-inline -->"},
+        {"user": {"login": "alice"}, "body": "Nitpick: rename this.<!-- osc-review-inline -->"},
+    ]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_inline_review_comments(1, "acme/repo", "alice", {}) is True
+
+
+def test_has_inline_review_comments_false_when_same_user_but_no_marker():
+    # Regression test: a vibe-heal/SonarQube review comment posted under the same GitHub
+    # account must not be mistaken for a partial review_requested run.
+    comments = [{"user": {"login": "alice"}, "body": "**S1234** Refactor this to reduce complexity."}]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_inline_review_comments(1, "acme/repo", "alice", {}) is False
+
+
+def test_has_inline_review_comments_false_when_other_user_posted_with_marker():
+    comments = [{"user": {"login": "someone-else"}, "body": "Nitpick.<!-- osc-review-inline -->"}]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_inline_review_comments(1, "acme/repo", "alice", {}) is False
+
+
+def test_has_inline_review_comments_returns_false_on_gh_failure():
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
+        assert has_inline_review_comments(1, "acme/repo", "alice", {}) is False

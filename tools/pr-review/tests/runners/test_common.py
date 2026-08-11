@@ -1,6 +1,7 @@
 import os
 import signal
 import subprocess
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,18 +27,39 @@ def test_run_cmd_nonzero_raises(tmp_path):
         run_cmd(["false"], cwd=str(tmp_path), env=os.environ.copy(), timeout=5)
 
 
-def test_run_cmd_timeout_kills_process_group(tmp_path):
+@contextmanager
+def _patched_timeout_kill(communicate_side_effect):
     mock_proc = MagicMock()
-    mock_proc.communicate.side_effect = [subprocess.TimeoutExpired([], 1), (b"", b"")]
+    mock_proc.communicate.side_effect = communicate_side_effect
     mock_proc.pid = os.getpid()
     with (
         patch("subprocess.Popen", return_value=mock_proc),
         patch("os.getpgid", return_value=1234),
         patch("os.killpg") as mock_kill,
+    ):
+        yield mock_kill
+
+
+def test_run_cmd_timeout_sends_sigterm_first(tmp_path):
+    with (
+        _patched_timeout_kill([subprocess.TimeoutExpired([], 1), (b"", b"")]) as mock_kill,
         pytest.raises(subprocess.TimeoutExpired),
     ):
         run_cmd(["sleep", "999"], cwd=str(tmp_path), env={}, timeout=1)
-    mock_kill.assert_called_once_with(1234, signal.SIGKILL)
+    mock_kill.assert_called_once_with(1234, signal.SIGTERM)
+
+
+def test_run_cmd_timeout_sigkills_if_still_alive_after_grace_period(tmp_path):
+    side_effect = [subprocess.TimeoutExpired([], 1), subprocess.TimeoutExpired([], 10), (b"", b"")]
+    with (
+        _patched_timeout_kill(side_effect) as mock_kill,
+        pytest.raises(subprocess.TimeoutExpired),
+    ):
+        run_cmd(["sleep", "999"], cwd=str(tmp_path), env={}, timeout=1)
+    assert mock_kill.call_args_list == [
+        ((1234, signal.SIGTERM),),
+        ((1234, signal.SIGKILL),),
+    ]
 
 
 def test_git_detach_records_sha(tmp_path):
