@@ -30,15 +30,20 @@ def run(config: HarnessConfig, pr_url: str | None = None) -> None:
         _run_locked(config, pr_url)
 
 
-def _discover_prs(config: HarnessConfig, pr_url: str | None, env: dict) -> list[dict]:
+def _discover_prs(config: HarnessConfig, pr_url: str | None, env: dict) -> list[dict] | None:
     if pr_url:
-        pr = pr_from_url(pr_url, config.repo.name, env, "number,headRefName,baseRefName")
+        pr = pr_from_url(pr_url, config.repo.name, env, "number,headRefName,baseRefName,headRefOid")
         return [pr] if pr else []
 
-    vh_state = state.read_vibe_heal_state(config.repo_slug)
-    last_pr = vh_state["last_pr"]
-    prs = list_open_prs_matching_authors(config.repo.name, config.vibe_heal.authors, str(config.repo.working_dir), env)
-    return [p for p in prs if p["number"] > last_pr]
+    return list_open_prs_matching_authors(config.repo.name, config.vibe_heal.authors, str(config.repo.working_dir), env)
+
+
+def _already_reviewed(reviewed_shas: dict, pr: dict) -> bool:
+    reviewed_sha = reviewed_shas.get(str(pr["number"]))
+    if reviewed_sha is not None and reviewed_sha == pr.get("headRefOid"):
+        logger.info("PR #%d: head unchanged since last review (%.8s), skipping", pr["number"], reviewed_sha)
+        return True
+    return False
 
 
 def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
@@ -59,34 +64,40 @@ def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
 
     current_user = get_current_user(env)
 
-    eligible = _discover_prs(config, pr_url, env)
+    candidates = _discover_prs(config, pr_url, env)
 
-    if not eligible:
+    if pr_url is not None:
+        to_process = candidates
+    else:
+        if candidates is None:
+            logger.warning("Failed to fetch open PRs; skipping this cycle without touching reviewed_shas")
+            return
+
+        # Authoritative "still open" set for this batch — prune closed/merged PRs out of
+        # reviewed_shas even on a cycle that finds nothing new to process, so stale entries
+        # don't linger just because no fresh PR number showed up.
+        state.prune_reviewed_shas(config.repo_slug, {p["number"] for p in candidates})
+        reviewed_shas = state.read_vibe_heal_state(config.repo_slug)["reviewed_shas"]
+        to_process = [pr for pr in candidates if not _already_reviewed(reviewed_shas, pr)]
+
+    if not to_process:
         return
 
     wdir = str(config.repo.working_dir)
     original_sha = git_detach_and_record(wdir, env)
 
-    # last_pr only advances once the whole batch has been processed with no failures
-    # at all — a generic exception on any PR taints the run and every already-succeeded
-    # PR is retried next time (cheap, since comment posting is marker-idempotent) rather
-    # than risk skipping past a PR that never actually got reviewed. A FatalGitError
-    # breaks the loop immediately instead, so PRs processed before it still get credited.
-    batch_failed = False
-    last_success_pr: int | None = None
-    for pr in eligible:
+    # Each PR's success is recorded the moment it happens (via record_reviewed_sha below),
+    # independent of every other PR in this batch — so one perpetually-failing PR (e.g. a
+    # vibe_heal review that hangs) never withholds credit from PRs that already succeeded.
+    # A FatalGitError still breaks the loop immediately; PRs processed before it keep their
+    # credit regardless.
+    for pr in to_process:
         success, fatal = _process_pr_safely(pr, config, env, current_user, wdir, original_sha)
         if fatal:
             break
 
-        if pr_url is None:
-            if success:
-                last_success_pr = pr["number"]
-            else:
-                batch_failed = True
-
-    if pr_url is None and not batch_failed and last_success_pr is not None:
-        state.write_vibe_heal_state(config.repo_slug, last_pr=last_success_pr)
+        if pr_url is None and success:
+            state.record_reviewed_sha(config.repo_slug, pr["number"], pr["headRefOid"])
 
 
 def _process_pr_safely(

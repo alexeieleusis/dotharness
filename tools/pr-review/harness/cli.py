@@ -138,9 +138,10 @@ def cmd_run(ctx, config_path, verbose):
     "pr_url",
     default=None,
     help=(
-        "Review a single PR URL instead of discovering PRs via the "
-        "last_pr watermark. Bypasses state entirely: the watermark is not read or updated, "
-        "so this PR can be re-run any number of times without affecting future review-prs runs."
+        "Review a single PR URL instead of discovering open PRs automatically. "
+        "Bypasses state entirely: the per-PR reviewed-SHA record is neither read nor "
+        "updated, so this PR can be re-run any number of times without affecting future "
+        "review-prs runs."
     ),
 )
 @click.pass_context

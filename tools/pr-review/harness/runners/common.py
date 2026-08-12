@@ -301,8 +301,13 @@ def author_matches(login: str, authors_config: str | list) -> bool:
     return login in authors_config
 
 
-def list_open_prs_matching_authors(repo: str, authors_config: str | list, cwd: str, env: dict) -> list[dict]:
-    """List open, non-draft PRs whose author matches authors_config, sorted ascending by number."""
+def list_open_prs_matching_authors(repo: str, authors_config: str | list, cwd: str, env: dict) -> list[dict] | None:
+    """List open, non-draft PRs whose author matches authors_config, sorted ascending by number.
+
+    Returns None (rather than []) on fetch failure, so callers can distinguish "gh pr list
+    failed" from "confirmed zero open PRs" instead of treating a transient API hiccup as an
+    authoritative empty set.
+    """
     result = run_cmd(
         [
             "gh",
@@ -313,7 +318,7 @@ def list_open_prs_matching_authors(repo: str, authors_config: str | list, cwd: s
             "--state",
             "open",
             "--json",
-            "number,headRefName,author,isDraft,baseRefName",
+            "number,headRefName,author,isDraft,baseRefName,headRefOid",
             "--limit",
             "500",
         ],
@@ -324,7 +329,7 @@ def list_open_prs_matching_authors(repo: str, authors_config: str | list, cwd: s
     )
     if result.returncode != 0:
         logger.error("Failed to list PRs: %s", result.stderr.decode("utf-8", errors="replace"))
-        return []
+        return None
     prs = json.loads(result.stdout)
     eligible = [p for p in prs if not is_draft_pr(p) and author_matches(p["author"]["login"], authors_config)]
     return sorted(eligible, key=lambda p: p["number"])

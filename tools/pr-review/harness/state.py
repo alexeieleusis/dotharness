@@ -61,7 +61,7 @@ class _state_lock:
 
 
 def read_vibe_heal_state(repo_slug: str) -> dict:
-    defaults = {"version": 1, "last_pr": 0, "last_main_sha": ""}
+    defaults = {"version": 1, "reviewed_shas": {}, "last_main_sha": ""}
     p = _state_path(repo_slug, VIBE_HEAL_FILE)
     if not p.exists():
         return defaults
@@ -71,20 +71,60 @@ def read_vibe_heal_state(repo_slug: str) -> dict:
         logger.warning("Corrupted state file %s: %s — returning defaults", p, exc)
         return defaults
     data.setdefault("last_main_sha", "")
+    data.setdefault("reviewed_shas", {})
     return data
 
 
-def write_vibe_heal_state(repo_slug: str, last_pr: int | None = None, *, last_main_sha: str | None = None) -> None:
-    if last_pr is None and last_main_sha is None:
-        raise ValueError("write_vibe_heal_state called with no fields to update")  # noqa: TRY003
+def _update_vibe_heal_state(repo_slug: str, mutate) -> None:
+    """Read-modify-write the vibe_heal state file under an exclusive lock.
+
+    `mutate` receives the current state dict and returns True if it changed anything;
+    the file is only rewritten when it did.
+    """
     p = _state_path(repo_slug, VIBE_HEAL_FILE)
     with _state_lock(p):
         current = read_vibe_heal_state(repo_slug)
-        if last_pr is not None:
-            current["last_pr"] = last_pr
-        if last_main_sha is not None:
-            current["last_main_sha"] = last_main_sha
-        _atomic_write(p, current)
+        if mutate(current):
+            _atomic_write(p, current)
+
+
+def write_vibe_heal_state(repo_slug: str, *, last_main_sha: str) -> None:
+    def mutate(current: dict) -> bool:
+        current["last_main_sha"] = last_main_sha
+        return True
+
+    _update_vibe_heal_state(repo_slug, mutate)
+
+
+def get_reviewed_sha(repo_slug: str, pr_number: int) -> str | None:
+    """Return the head SHA this PR was last successfully reviewed at, or None if never."""
+    return read_vibe_heal_state(repo_slug)["reviewed_shas"].get(str(pr_number))
+
+
+def record_reviewed_sha(repo_slug: str, pr_number: int, sha: str) -> None:
+    """Mark a PR as successfully reviewed at the given head SHA, immediately and independently
+    of any other PR in the same batch — this is what lets one perpetually-failing PR stop
+    blocking credit for every other PR discovered alongside it."""
+
+    def mutate(current: dict) -> bool:
+        current["reviewed_shas"][str(pr_number)] = sha
+        return True
+
+    _update_vibe_heal_state(repo_slug, mutate)
+
+
+def prune_reviewed_shas(repo_slug: str, open_pr_numbers: set[int]) -> None:
+    """Drop reviewed_shas entries for PRs that are no longer open, so the map doesn't
+    grow unboundedly as PRs get closed/merged over time."""
+    keep = {str(n) for n in open_pr_numbers}
+
+    def mutate(current: dict) -> bool:
+        to_drop = current["reviewed_shas"].keys() - keep
+        for pr in to_drop:
+            del current["reviewed_shas"][pr]
+        return bool(to_drop)
+
+    _update_vibe_heal_state(repo_slug, mutate)
 
 
 def read_self_review_state(repo_slug: str) -> dict:
