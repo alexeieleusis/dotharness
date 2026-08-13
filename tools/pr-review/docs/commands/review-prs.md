@@ -47,9 +47,10 @@ harness run [--config PATH] [--verbose] review-prs [--pr PR_URL]
      `headRefOid`).
    - Otherwise, lists open PRs via `gh pr list --repo <repo.name> --state open --limit 500`, filters to
      **not a draft** and author matching `vibe_heal.authors` (`"*"` or an explicit login list), then drops any
-     PR whose current head commit (`headRefOid`) matches the SHA already recorded for it in `reviewed_shas`
-     (see [State and idempotency](#state-and-idempotency)) — i.e. it hasn't changed since it was last
-     successfully reviewed. What's left is sorted ascending by number.
+     PR that's ineligible per its `reviewed_shas` entry (see [State and idempotency](#state-and-idempotency)):
+     either its current head commit (`headRefOid`) matches the SHA already recorded for it (unchanged since
+     last successful review), or it changed but less than `vibe_heal.min_reanalysis_interval_hours` has passed
+     since that last successful review. What's left is sorted ascending by number.
    - Before any checkout happens, the full open+author-matching PR-number set from this step is used to prune
      `reviewed_shas` of entries for PRs that are no longer open (closed/merged) — this runs even if the list
      of PRs left to process ends up empty.
@@ -71,10 +72,10 @@ harness run [--config PATH] [--verbose] review-prs [--pr PR_URL]
    - If any subdir posted a review and the user was a requested reviewer before checkout, re-requests them as
      a reviewer — submitting a review via the GitHub API clears the submitter from the PR's requested-reviewer
      list, which would otherwise hide the PR from `review-requested`'s search for the rest of a `run all` cycle.
-   - Unless running with `--pr`, records this PR's current head SHA in `reviewed_shas` **only if every subdir
-     it was processed in succeeded** — this write happens immediately, right after this PR finishes, and does
-     not depend on how any other PR in this batch turns out. A PR that fails (or partially fails across
-     subdirs) is retried against the same head SHA on the next run.
+   - Unless running with `--pr`, records this PR's current head SHA and the current time in `reviewed_shas`
+     **only if every subdir it was processed in succeeded** — this write happens immediately, right after this
+     PR finishes, and does not depend on how any other PR in this batch turns out. A PR that fails (or
+     partially fails across subdirs) is retried against the same head SHA on the next run.
    - A `FatalGitError` aborts processing of all remaining PRs in this run. Any other exception is logged and
      processing moves on to the next PR.
     - After each PR (success, failure, or exception), the working directory is restored to the SHA recorded in
@@ -100,6 +101,7 @@ Only the fields below affect this command. See [`../configuration.md`](../config
 | `vibe_heal.authors` | `"*"` (any author) or a list of GitHub logins; PRs from non-matching authors are filtered out of eligibility in the batch (non-`--pr`) case. |
 | `vibe_heal.vibe_heal_timeout` | Timeout for the `vibe_heal review --pr` and `vibe_heal review --baseline` invocations. |
 | `vibe_heal.vibe_heal_post_timeout` | Timeout for the `vibe_heal review --post --pr` invocation. |
+| `vibe_heal.min_reanalysis_interval_hours` | Minimum time since a PR's last successful review before it becomes eligible again in batch mode, even if its head SHA has changed. Ignored with `--pr`. |
 
 Fields this runner does **not** read: `harness.backend`, `harness.backend_timeout_seconds`,
 `harness.knowledge_dir`, `harness.review_knowledge_file`, `repo.opencode_dir` — those only matter to runners
@@ -109,12 +111,17 @@ that invoke harness's own AI backend directly.
 
 State is stored at `~/.local/share/dotharness/state/<repo_slug>/vibe_heal.json` (`repo_slug` is `repo.name`
 with `/` replaced by `-`). It tracks two fields:
-- `reviewed_shas` — a map of PR number (as a string) to the head commit SHA it was last *successfully*
-  reviewed at. A batch run skips any PR whose current `headRefOid` matches its entry here. Each entry is
-  written the moment that PR finishes successfully — independent of every other PR in the same run — and is
-  removed once that PR is no longer open. This is what makes success durable even when some other PR in the
-  same batch keeps failing (e.g. hangs and times out): a perpetually-broken PR only ever blocks itself, never
-  the PRs discovered alongside it.
+- `reviewed_shas` — a map of PR number (as a string) to `{"sha": ..., "reviewed_at": ...}`, the head commit
+  SHA and epoch-seconds timestamp of the PR's last *successful* review. A batch run skips a PR if either:
+  its current `headRefOid` matches the recorded `sha` (nothing changed since the last review), or the head
+  changed but fewer than `vibe_heal.min_reanalysis_interval_hours` have passed since `reviewed_at` (too soon
+  to re-run, even though new commits landed). Each entry is written the moment that PR finishes successfully
+  — independent of every other PR in the same run — and is removed once that PR is no longer open. This is
+  what makes success durable even when some other PR in the same batch keeps failing (e.g. hangs and times
+  out): a perpetually-broken PR only ever blocks itself, never the PRs discovered alongside it.
+  State files written before this option existed store `reviewed_shas` values as plain SHA strings; these are
+  transparently upgraded on read to `{"sha": <value>, "reviewed_at": 0}`, which makes them immediately eligible
+  for re-review regardless of `min_reanalysis_interval_hours` (since their real last-reviewed time is unknown).
 - `last_main_sha` — the SHA of `origin/main` last processed during baseline analysis (step 3a). When the
   current `origin/main` SHA differs from this value, the baseline analysis runs `vibe_heal review --baseline`
   in each subdir and then persists the new SHA. Both batch and `--pr` runs read and may write this field.
@@ -130,10 +137,12 @@ baseline analysis step — see the `--pr` description under [Usage](#usage) and 
 
 - **Draft PRs are always skipped** in the batch case, unconditionally — there is no config flag to include
   them. A PR passed explicitly via `--pr` is processed even if it's a draft.
-- `reviewed_shas` is a per-PR "already reviewed, at this exact commit" record, not a monotonic watermark — a PR
-  is only ever skipped if its current head SHA matches what's recorded, so a new commit (or a force-push) makes
-  it eligible again regardless of PR number. Only genuinely successful PRs get an entry; a failure leaves that
-  PR eligible for retry on the next run.
+- `reviewed_shas` is a per-PR "already reviewed, at this exact commit, at this time" record, not a monotonic
+  watermark — a PR whose head SHA has changed becomes eligible again once `min_reanalysis_interval_hours` has
+  passed since its last successful review, regardless of PR number. Only genuinely successful PRs get an
+  entry; a failure leaves that PR eligible for retry on the next run (the interval only gates *successful*
+  re-review of a PR that already has a recorded entry — a never-reviewed or previously-failed PR is always
+  eligible).
 - Checking out a PR's branch uses the shared rebase/reset behavior described in
   [Commands → Shared behavior](index.md#shared-behavior).
 - The `[vibe-heal-bot]` general notice comment is idempotent: existing PR comments are checked for the marker

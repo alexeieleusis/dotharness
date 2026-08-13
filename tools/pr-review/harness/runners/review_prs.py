@@ -1,6 +1,7 @@
 import logging
 import shlex
 import subprocess
+import time
 
 from harness import state
 from harness.config import HarnessConfig
@@ -38,10 +39,21 @@ def _discover_prs(config: HarnessConfig, pr_url: str | None, env: dict) -> list[
     return list_open_prs_matching_authors(config.repo.name, config.vibe_heal.authors, str(config.repo.working_dir), env)
 
 
-def _already_reviewed(reviewed_shas: dict, pr: dict) -> bool:
-    reviewed_sha = reviewed_shas.get(str(pr["number"]))
-    if reviewed_sha is not None and reviewed_sha == pr.get("headRefOid"):
-        logger.info("PR #%d: head unchanged since last review (%.8s), skipping", pr["number"], reviewed_sha)
+def _already_reviewed(reviewed_shas: dict, pr: dict, min_interval_seconds: float, now: float) -> bool:
+    entry = reviewed_shas.get(str(pr["number"]))
+    if entry is None:
+        return False
+    if entry["sha"] == pr.get("headRefOid"):
+        logger.info("PR #%d: head unchanged since last review (%.8s), skipping", pr["number"], entry["sha"])
+        return True
+    elapsed = now - entry["reviewed_at"]
+    if elapsed < min_interval_seconds:
+        logger.info(
+            "PR #%d: reviewed %.1fh ago, below the %.1fh minimum reanalysis interval, skipping",
+            pr["number"],
+            elapsed / 3600,
+            min_interval_seconds / 3600,
+        )
         return True
     return False
 
@@ -78,7 +90,9 @@ def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
         # don't linger just because no fresh PR number showed up.
         state.prune_reviewed_shas(config.repo_slug, {p["number"] for p in candidates})
         reviewed_shas = state.read_vibe_heal_state(config.repo_slug)["reviewed_shas"]
-        to_process = [pr for pr in candidates if not _already_reviewed(reviewed_shas, pr)]
+        min_interval_seconds = config.vibe_heal.min_reanalysis_interval_hours * 3600
+        now = time.time()
+        to_process = [pr for pr in candidates if not _already_reviewed(reviewed_shas, pr, min_interval_seconds, now)]
 
     if not to_process:
         return
@@ -97,7 +111,7 @@ def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
             break
 
         if pr_url is None and success:
-            state.record_reviewed_sha(config.repo_slug, pr["number"], pr["headRefOid"])
+            state.record_reviewed_sha(config.repo_slug, pr["number"], pr["headRefOid"], time.time())
 
 
 def _process_pr_safely(

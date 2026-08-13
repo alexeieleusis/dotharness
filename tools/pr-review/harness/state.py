@@ -72,6 +72,11 @@ def read_vibe_heal_state(repo_slug: str) -> dict:
         return defaults
     data.setdefault("last_main_sha", "")
     data.setdefault("reviewed_shas", {})
+    if any(not isinstance(entry, dict) for entry in data["reviewed_shas"].values()):
+        data["reviewed_shas"] = {
+            pr: (entry if isinstance(entry, dict) else {"sha": entry, "reviewed_at": 0})
+            for pr, entry in data["reviewed_shas"].items()
+        }
     return data
 
 
@@ -98,16 +103,17 @@ def write_vibe_heal_state(repo_slug: str, *, last_main_sha: str) -> None:
 
 def get_reviewed_sha(repo_slug: str, pr_number: int) -> str | None:
     """Return the head SHA this PR was last successfully reviewed at, or None if never."""
-    return read_vibe_heal_state(repo_slug)["reviewed_shas"].get(str(pr_number))
+    entry = read_vibe_heal_state(repo_slug)["reviewed_shas"].get(str(pr_number))
+    return entry["sha"] if entry is not None else None
 
 
-def record_reviewed_sha(repo_slug: str, pr_number: int, sha: str) -> None:
-    """Mark a PR as successfully reviewed at the given head SHA, immediately and independently
-    of any other PR in the same batch — this is what lets one perpetually-failing PR stop
-    blocking credit for every other PR discovered alongside it."""
+def record_reviewed_sha(repo_slug: str, pr_number: int, sha: str, reviewed_at: float) -> None:
+    """Mark a PR as successfully reviewed at the given head SHA and time, immediately and
+    independently of any other PR in the same batch — this is what lets one perpetually-failing
+    PR stop blocking credit for every other PR discovered alongside it."""
 
     def mutate(current: dict) -> bool:
-        current["reviewed_shas"][str(pr_number)] = sha
+        current["reviewed_shas"][str(pr_number)] = {"sha": sha, "reviewed_at": reviewed_at}
         return True
 
     _update_vibe_heal_state(repo_slug, mutate)
