@@ -74,6 +74,7 @@ review or pre-commit step.
 | `authors` | string or list of strings | `"*"` | Which PR authors vibe_heal should apply to in `review-prs`'s batch mode. `"*"` means all authors; otherwise a list of GitHub usernames. Ignored when `review-prs` is run with `--pr`. |
 | `vibe_heal_timeout` | integer | `600` | Timeout (seconds) for the per-PR `vibe_heal review` run. |
 | `vibe_heal_post_timeout` | integer | `120` | Timeout (seconds) for posting/finalizing vibe_heal output (e.g. writing results, comments) after the run itself completes. |
+| `min_reanalysis_interval_hours` | number | `24.0` | Minimum time that must pass since a PR's last successful review before `review-prs`'s batch mode will re-analyze it, even if the head SHA has changed in the meantime (e.g. from rapid pushes). Ignored when `review-prs` is run with `--pr`. |
 
 ### `[focused_review]`
 
@@ -121,6 +122,7 @@ enabled = false
 # authors = "*"
 # vibe_heal_timeout = 600
 # vibe_heal_post_timeout = 120
+# min_reanalysis_interval_hours = 24.0
 
 [focused_review]
 enabled = false

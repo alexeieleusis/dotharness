@@ -34,8 +34,8 @@ def _make_config(tmp_path, authors="*", subdirs=None):
 def test_skips_prs_with_unchanged_head_sha(tmp_xdg, tmp_path):
     from harness.config import SubDir
 
-    state.record_reviewed_sha("acme-frontend", 8, "sha8")
-    state.record_reviewed_sha("acme-frontend", 10, "sha10")
+    state.record_reviewed_sha("acme-frontend", 8, "sha8", 1000.0)
+    state.record_reviewed_sha("acme-frontend", 10, "sha10", 1000.0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     prs = [
         {"number": 8, "headRefName": "b", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha8"},
@@ -58,10 +58,118 @@ def test_skips_prs_with_unchanged_head_sha(tmp_xdg, tmp_path):
     mock_detach.assert_not_called()
 
 
+def test_already_reviewed_false_for_never_reviewed_pr():
+    pr = {"number": 1, "headRefOid": "sha1"}
+    assert review_prs._already_reviewed({}, pr, min_interval_seconds=86400, now=2_000_000.0) is False
+
+
+def test_already_reviewed_true_when_sha_unchanged_regardless_of_interval():
+    reviewed_shas = {"8": {"sha": "sha8", "reviewed_at": 1000.0}}
+    pr = {"number": 8, "headRefOid": "sha8"}
+    # Interval is 0 (already elapsed) but the SHA still matches, so it's skipped anyway.
+    assert review_prs._already_reviewed(reviewed_shas, pr, min_interval_seconds=0, now=2_000_000.0) is True
+
+
+def test_already_reviewed_true_when_sha_changed_but_within_interval():
+    reviewed_shas = {"7": {"sha": "old-sha", "reviewed_at": 1000.0}}
+    pr = {"number": 7, "headRefOid": "new-sha"}
+    # Only 100s have passed since the last review; the 24h (86400s) interval hasn't elapsed.
+    assert review_prs._already_reviewed(reviewed_shas, pr, min_interval_seconds=86400, now=1100.0) is True
+
+
+def test_already_reviewed_false_when_sha_changed_and_interval_elapsed():
+    reviewed_shas = {"7": {"sha": "old-sha", "reviewed_at": 1000.0}}
+    pr = {"number": 7, "headRefOid": "new-sha"}
+    # 25 hours have passed, past the 24h (86400s) interval.
+    assert review_prs._already_reviewed(reviewed_shas, pr, min_interval_seconds=86400, now=1000.0 + 25 * 3600) is False
+
+
+def test_run_locked_skips_pr_with_new_sha_within_min_reanalysis_interval(tmp_xdg, tmp_path):
+    from harness.config import SubDir
+
+    state.record_reviewed_sha("acme-frontend", 7, "old-sha", 1_000_000.0)
+    cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
+    prs = [
+        {"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "new-sha"}
+    ]
+    with (
+        patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("harness.runners.review_prs._run_base_analysis", return_value=True),
+        patch("harness.runners.review_prs.run_cmd") as mock_run,
+        patch("harness.runners.review_prs.git_detach_and_record") as mock_detach,
+        patch("harness.runners.review_prs.git_restore"),
+        patch("harness.runners.review_prs.git_fetch_and_checkout"),
+        patch("harness.runners.review_prs.time.time", return_value=1_000_000.0 + 3600),  # 1h later, within 24h default
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
+        review_prs._run_locked(cfg)
+    vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
+    assert vibe_calls == []
+    mock_detach.assert_not_called()
+
+
+def test_run_locked_reprocesses_pr_with_new_sha_after_min_reanalysis_interval_elapses(tmp_xdg, tmp_path):
+    from harness.config import SubDir
+
+    state.record_reviewed_sha("acme-frontend", 7, "old-sha", 1_000_000.0)
+    cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
+    prs = [
+        {"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "new-sha"}
+    ]
+    with (
+        patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_prs.get_current_user", return_value="alice"),
+        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("harness.runners.review_prs._run_base_analysis", return_value=True),
+        patch("harness.runners.review_prs.run_cmd") as mock_run,
+        patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.review_prs.git_restore"),
+        patch("harness.runners.review_prs.git_fetch_and_checkout"),
+        patch(
+            "harness.runners.review_prs.time.time", return_value=1_000_000.0 + 25 * 3600
+        ),  # 25h later, past 24h default
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
+        review_prs._run_locked(cfg)
+    vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
+    assert len(vibe_calls) >= 1
+    assert state.get_reviewed_sha("acme-frontend", 7) == "new-sha"
+
+
+def test_run_locked_respects_configured_min_reanalysis_interval_hours(tmp_xdg, tmp_path):
+    from harness.config import SubDir
+
+    state.record_reviewed_sha("acme-frontend", 7, "old-sha", 1_000_000.0)
+    cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
+    cfg.vibe_heal.min_reanalysis_interval_hours = 1
+    prs = [
+        {"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "new-sha"}
+    ]
+    with (
+        patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_prs.get_current_user", return_value="alice"),
+        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("harness.runners.review_prs._run_base_analysis", return_value=True),
+        patch("harness.runners.review_prs.run_cmd") as mock_run,
+        patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.review_prs.git_restore"),
+        patch("harness.runners.review_prs.git_fetch_and_checkout"),
+        # 2h later: past the configured 1h interval, even though it's within the 24h default.
+        patch("harness.runners.review_prs.time.time", return_value=1_000_000.0 + 2 * 3600),
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
+        review_prs._run_locked(cfg)
+    vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
+    assert len(vibe_calls) >= 1
+
+
 def test_reprocesses_pr_when_head_sha_changes(tmp_xdg, tmp_path):
     from harness.config import SubDir
 
-    state.record_reviewed_sha("acme-frontend", 7, "old-sha")
+    state.record_reviewed_sha("acme-frontend", 7, "old-sha", 1000.0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     prs = [
         {"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "new-sha"}
@@ -108,8 +216,8 @@ def test_processes_new_prs(tmp_xdg, tmp_path):
 def test_failed_pr_fetch_does_not_prune_reviewed_shas(tmp_xdg, tmp_path):
     from harness.config import SubDir
 
-    state.record_reviewed_sha("acme-frontend", 5, "sha5")
-    state.record_reviewed_sha("acme-frontend", 6, "sha6")
+    state.record_reviewed_sha("acme-frontend", 5, "sha5", 1000.0)
+    state.record_reviewed_sha("acme-frontend", 6, "sha6", 1000.0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
@@ -203,7 +311,7 @@ def test_pr_url_graceful_on_pr_from_url_raises(tmp_xdg, tmp_path):
 def test_pr_url_bypasses_reviewed_sha_filtering(tmp_xdg, tmp_path):
     # Even though this PR's current head SHA is already recorded as reviewed, --pr forces
     # it to run anyway — the whole point of the manual override.
-    state.record_reviewed_sha("acme-frontend", 3, "sha3")
+    state.record_reviewed_sha("acme-frontend", 3, "sha3", 1000.0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     pr = {"number": 3, "headRefName": "feat", "baseRefName": "main", "headRefOid": "sha3"}
     with (

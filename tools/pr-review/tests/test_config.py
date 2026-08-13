@@ -254,6 +254,26 @@ def test_address_comments_defaults(minimal_toml):
     assert cfg.address_comments.require_reaction_for_focused_review is False
 
 
+def test_min_reanalysis_interval_hours_default(minimal_toml):
+    cfg = load_config(minimal_toml)
+    assert cfg.vibe_heal.min_reanalysis_interval_hours == 24.0
+
+
+def test_min_reanalysis_interval_hours_parsed(tmp_path):
+    p = tmp_path / ".harness.toml"
+    p.write_text("""
+[harness]
+[repo]
+name = "a/b"
+working_dir = "/tmp"
+
+[vibe_heal]
+min_reanalysis_interval_hours = 6
+""")
+    cfg = load_config(p)
+    assert cfg.vibe_heal.min_reanalysis_interval_hours == 6
+
+
 def test_address_comments_parsed(tmp_path):
     p = tmp_path / ".harness.toml"
     p.write_text("""
