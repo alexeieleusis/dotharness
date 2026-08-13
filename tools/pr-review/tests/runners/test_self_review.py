@@ -110,6 +110,7 @@ def test_does_not_update_state_when_summary_comment_missing(tmp_xdg, tmp_path):
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
         self_review._run_locked(cfg)
     assert 15 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
+    assert state.get_partial_reviewed_files("acme-frontend", 15) == ["src/foo.py"]
 
 
 def test_does_not_update_state_on_failure(tmp_xdg, tmp_path):
