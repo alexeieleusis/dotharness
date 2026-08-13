@@ -66,7 +66,7 @@ def test_updates_state_on_success(tmp_xdg, tmp_path):
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 7, "url": "u", "headRefName": "b"}]),
-        patch("harness.runners.self_review.has_review_summary_comment", return_value=False),
+        patch("harness.runners.self_review.has_review_summary_comment", side_effect=[False, True]),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.self_review.git_fetch_and_checkout"),
         patch("harness.runners.self_review.git_restore"),
@@ -79,6 +79,37 @@ def test_updates_state_on_success(tmp_xdg, tmp_path):
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
         self_review._run_locked(cfg)
     assert 7 in state.read_self_review_state("acme-frontend")["reviewed_prs"]
+
+
+def test_does_not_update_state_when_summary_comment_missing(tmp_xdg, tmp_path):
+    """Backend exits 0 for every call, but no summary comment is found on GitHub afterward —
+    the PR must not be marked reviewed so the summary gets retried on the next run."""
+    state.write_self_review_state("acme-frontend", [])
+    _setup_knowledge(tmp_path)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch(
+            "harness.runners.self_review._list_my_prs", return_value=[{"number": 15, "url": "u", "headRefName": "b"}]
+        ),
+        # first call: _should_skip_pr's up-front check (not already reviewed);
+        # second call: _run_summary's post-backend verification (comment missing)
+        patch("harness.runners.self_review.has_review_summary_comment", side_effect=[False, False]),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
+        patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
+        patch("harness.runners.self_review.Backend") as mock_be,
+    ):
+        mock_be.return_value.run.return_value = MagicMock(returncode=0)
+        self_review._run_locked(cfg)
+    assert 15 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
 
 
 def test_does_not_update_state_on_failure(tmp_xdg, tmp_path):
@@ -119,7 +150,7 @@ def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
         patch(
             "harness.runners.self_review._list_my_prs", return_value=[{"number": 11, "url": "u", "headRefName": "feat"}]
         ),
-        patch("harness.runners.self_review.has_review_summary_comment", return_value=False),
+        patch("harness.runners.self_review.has_review_summary_comment", side_effect=[False, True]),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.self_review.git_fetch_and_checkout"),
         patch("harness.runners.self_review.git_restore"),

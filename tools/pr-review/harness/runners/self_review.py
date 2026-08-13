@@ -175,6 +175,8 @@ def _run_summary(
     vibe_heal_context: str | None,
     backend: Backend,
     wdir: str,
+    current_user: str,
+    env: dict,
 ) -> bool:
     summary_prompt = (
         summary_instructions
@@ -193,6 +195,13 @@ def _run_summary(
     except subprocess.TimeoutExpired:
         logger.exception("PR #%d: summary backend timed out", number)
         return True
+    if not has_review_summary_comment(number, config.repo.name, current_user, env):
+        logger.error(
+            "PR #%d: summary backend exited 0 but no summary comment found on GitHub — treating as failure",
+            number,
+        )
+        return True
+    logger.info("PR #%d: summary comment confirmed", number)
     return False
 
 
@@ -209,6 +218,7 @@ def _process_single_pr(
     reviewed: set,
     original_sha: str,
     partial_files: set[str],
+    current_user: str,
 ) -> None:
     try:
         ctx = _gather_pr_context(pr, number, config, wdir, env)
@@ -236,6 +246,8 @@ def _process_single_pr(
             ctx["vibe_heal_context"],
             backend,
             wdir,
+            current_user,
+            env,
         )
         if not file_failure and not summary_failure:
             reviewed.add(number)
@@ -288,6 +300,7 @@ def _run_locked(config: HarnessConfig) -> None:
             reviewed,
             original_sha,
             partial_files,
+            current_user,
         )
 
 
