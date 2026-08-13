@@ -12,6 +12,7 @@ from harness.runners.common import (
     TIMEOUT_GH,
     build_file_review_section,
     build_subprocess_env,
+    check_review_summary_comment_status,
     get_changed_files,
     get_current_user,
     get_file_diff,
@@ -23,7 +24,6 @@ from harness.runners.common import (
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
-    has_review_summary_comment,
     run_cmd,
 )
 
@@ -53,10 +53,12 @@ def _build_backend(config, env: dict) -> Backend:
     )
 
 
-def _should_skip_pr(number: int, repo: str, current_user: str, reviewed: set, env: dict) -> bool:
+def _should_skip_pr(number: int, repo: str, current_user: str, reviewed: set, env: dict) -> bool | None:
+    """Returns True to skip (confirmed done), False to process, or None if the comment
+    check was inconclusive (API failure) and the caller should defer judgment."""
     if number in reviewed:
         return True
-    return has_review_summary_comment(number, repo, current_user, env)
+    return check_review_summary_comment_status(number, repo, current_user, env)
 
 
 def _gather_pr_context(pr: dict, number: int, config, wdir: str, env: dict) -> dict:
@@ -175,6 +177,8 @@ def _run_summary(
     vibe_heal_context: str | None,
     backend: Backend,
     wdir: str,
+    current_user: str,
+    env: dict,
 ) -> bool:
     summary_prompt = (
         summary_instructions
@@ -193,6 +197,21 @@ def _run_summary(
     except subprocess.TimeoutExpired:
         logger.exception("PR #%d: summary backend timed out", number)
         return True
+    comment_status = check_review_summary_comment_status(number, config.repo.name, current_user, env)
+    if comment_status is None:
+        logger.warning(
+            "PR #%d: could not confirm summary comment status (comment check failed) — "
+            "treating as unconfirmed rather than assuming it's missing",
+            number,
+        )
+        return True
+    if not comment_status:
+        logger.error(
+            "PR #%d: summary backend exited 0 but no summary comment found on GitHub — treating as failure",
+            number,
+        )
+        return True
+    logger.info("PR #%d: summary comment confirmed", number)
     return False
 
 
@@ -209,6 +228,7 @@ def _process_single_pr(
     reviewed: set,
     original_sha: str,
     partial_files: set[str],
+    current_user: str,
 ) -> None:
     try:
         ctx = _gather_pr_context(pr, number, config, wdir, env)
@@ -236,6 +256,8 @@ def _process_single_pr(
             ctx["vibe_heal_context"],
             backend,
             wdir,
+            current_user,
+            env,
         )
         if not file_failure and not summary_failure:
             reviewed.add(number)
@@ -268,7 +290,15 @@ def _run_locked(config: HarnessConfig) -> None:
 
     for pr in prs:
         number = pr["number"]
-        if _should_skip_pr(number, config.repo.name, current_user, reviewed, env):
+        skip = _should_skip_pr(number, config.repo.name, current_user, reviewed, env)
+        if skip is None:
+            logger.warning(
+                "PR #%d: could not confirm review status (comment check failed) — "
+                "skipping this cycle without marking reviewed",
+                number,
+            )
+            continue
+        if skip:
             if number not in reviewed:
                 reviewed.add(number)
                 state.write_self_review_state(config.repo_slug, list(reviewed))
@@ -288,6 +318,7 @@ def _run_locked(config: HarnessConfig) -> None:
             reviewed,
             original_sha,
             partial_files,
+            current_user,
         )
 
 

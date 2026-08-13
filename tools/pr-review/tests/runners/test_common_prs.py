@@ -6,6 +6,7 @@ import pytest
 from harness.runners.common import (
     add_reviewer,
     author_matches,
+    check_review_summary_comment_status,
     get_current_user,
     get_requested_reviewers,
     has_inline_review_comments,
@@ -252,6 +253,20 @@ def test_has_review_summary_comment_returns_false_on_gh_failure():
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
         assert has_review_summary_comment(1, "acme/repo", "alice", {}) is False
+
+
+def test_check_review_summary_comment_status_returns_none_on_gh_failure():
+    # Unlike has_review_summary_comment's collapsed bool, the tri-state check must let
+    # callers distinguish "confirmed no comment" from "the API call itself failed".
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
+        assert check_review_summary_comment_status(1, "acme/repo", "alice", {}) is None
+
+
+def test_check_review_summary_comment_status_returns_false_on_confirmed_absence():
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps([]).encode())
+        assert check_review_summary_comment_status(1, "acme/repo", "alice", {}) is False
 
 
 @pytest.mark.parametrize(

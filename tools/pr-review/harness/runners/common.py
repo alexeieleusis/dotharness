@@ -275,7 +275,11 @@ def is_review_summary_comment(body: str) -> bool:
     return "review summary" in lower or "osc-review" in lower
 
 
-def _has_matching_comment(comments_path: str, current_user: str, env: dict, predicate: Callable[[str], bool]) -> bool:
+def _has_matching_comment(
+    comments_path: str, current_user: str, env: dict, predicate: Callable[[str], bool]
+) -> bool | None:
+    """Returns True/False for a confirmed match/no-match, or None if the GitHub API
+    call itself failed (e.g. rate limit, transient 5xx) and the result is inconclusive."""
     page = 1
     while True:
         result = run_cmd(
@@ -286,7 +290,7 @@ def _has_matching_comment(comments_path: str, current_user: str, env: dict, pred
             check=False,
         )
         if result.returncode != 0:
-            return False
+            return None
         comments = json.loads(result.stdout)
         if not comments:
             return False
@@ -298,6 +302,12 @@ def _has_matching_comment(comments_path: str, current_user: str, env: dict, pred
 
 
 def has_review_summary_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+    return bool(check_review_summary_comment_status(pr_number, repo, current_user, env))
+
+
+def check_review_summary_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
+    """Tri-state version of has_review_summary_comment: None means the check itself was
+    inconclusive (API failure), as opposed to a confirmed absence of the comment."""
     return _has_matching_comment(
         f"repos/{repo}/issues/{pr_number}/comments", current_user, env, is_review_summary_comment
     )
@@ -308,8 +318,8 @@ def is_inline_review_comment(body: str) -> bool:
 
 
 def has_inline_review_comments(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
-    return _has_matching_comment(
-        f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, is_inline_review_comment
+    return bool(
+        _has_matching_comment(f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, is_inline_review_comment)
     )
 
 
