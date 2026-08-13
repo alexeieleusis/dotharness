@@ -11,6 +11,7 @@ from harness.runners.common import (
     has_inline_review_comments,
     has_review_summary_comment,
     is_inline_review_comment,
+    is_pr_open,
     is_review_summary_comment,
     list_open_prs_for_current_user,
     list_open_prs_matching_authors,
@@ -28,6 +29,21 @@ def test_author_matches_list_rejects_unknown():
 
 def test_author_matches_list_allows_known():
     assert author_matches("alice", ["alice", "bob"]) is True
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "expected"),
+    [
+        (0, b"OPEN\n", True),
+        (0, b"CLOSED\n", False),
+        (0, b"MERGED\n", False),
+        (1, b"", False),  # fails closed when gh lookup fails
+    ],
+)
+def test_is_pr_open(returncode, stdout, expected):
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=returncode, stdout=stdout, stderr=b"")
+        assert is_pr_open(8809, "acme/repo", {}) is expected
 
 
 def test_list_open_prs_filters_drafts_and_authors(tmp_path):

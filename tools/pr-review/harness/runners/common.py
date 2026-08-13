@@ -198,6 +198,24 @@ def is_draft_pr(pr: dict) -> bool:
     return bool(pr.get("isDraft"))
 
 
+def is_pr_open(pr_number: int, repo: str, env: dict) -> bool:
+    """Return True if `pr_number` is still open on GitHub right now.
+
+    Fails closed (returns False) if the lookup fails — a long-running batch shouldn't
+    post a review to a PR that may have been closed or merged while it was processing.
+    """
+    result = run_cmd(
+        ["gh", "pr", "view", str(pr_number), "--repo", repo, "--json", "state", "--jq", ".state"],
+        cwd="/",
+        env=env,
+        timeout=TIMEOUT_GH,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    return result.stdout.decode("utf-8").strip() == "OPEN"
+
+
 def get_current_user(env: dict) -> str:
     result = run_cmd(["gh", "api", "user", "--jq", ".login"], cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
     return result.stdout.decode("utf-8", errors="replace").strip()
