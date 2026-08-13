@@ -17,6 +17,7 @@ from harness.runners.common import (
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
+    is_pr_open,
     list_open_prs_matching_authors,
     pr_from_url,
     run_cmd,
@@ -120,6 +121,10 @@ def _process_pr_safely(
 
 
 def _process_pr(pr: dict, config: HarnessConfig, env: dict, current_user: str, wdir: str) -> bool:
+    if not is_pr_open(pr["number"], config.repo.name, env):
+        logger.info("PR #%d: closed or merged since discovery, skipping", pr["number"])
+        return False
+
     git_fetch_and_checkout(pr["headRefName"], wdir, env)
     was_requested = current_user in get_requested_reviewers(pr["number"], config.repo.name, env)
     results: list[bool] = []
@@ -202,6 +207,10 @@ def _process_subdir(pr_number: int, subdir, config: HarnessConfig, env: dict) ->
         vh_cmd.append("--coverage")
     logger.info("Running vibe_heal review in %s for PR #%d", subdir_path, pr_number)
     if not _run_vh_command(vh_cmd, "vibe_heal review", subdir_path, config.vibe_heal.vibe_heal_timeout, env):
+        return False
+
+    if not is_pr_open(pr_number, config.repo.name, env):
+        logger.info("PR #%d: closed or merged during review, skipping post", pr_number)
         return False
 
     vh_post = [config.vibe_heal.python, "-m", "vibe_heal", "review", "--post", "--pr", str(pr_number)]

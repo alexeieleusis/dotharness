@@ -8,6 +8,16 @@ from harness.config import PreCommand, SubDir
 from harness.runners import review_prs
 
 
+@pytest.fixture(autouse=True)
+def _pr_open_by_default():
+    """Most tests don't care about PR-closed handling, so default it to open.
+
+    Tests exercising the skip-when-closed behavior override this within their own `with` block.
+    """
+    with patch("harness.runners.review_prs.is_pr_open", return_value=True):
+        yield
+
+
 def _make_config(tmp_path, authors="*", subdirs=None):
     from harness.config import HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
 
@@ -379,6 +389,37 @@ def test_process_subdir_skips_vibe_heal_after_critical_pre_command_failure(tmp_p
     assert result is False
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert vibe_calls == []
+
+
+def test_process_pr_skips_when_closed_since_discovery(tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
+    pr = {"number": 42, "headRefName": "feat", "baseRefName": "main", "headRefOid": "sha42"}
+    with (
+        patch("harness.runners.review_prs.is_pr_open", return_value=False),
+        patch("harness.runners.review_prs.git_fetch_and_checkout") as mock_fetch,
+    ):
+        result = review_prs._process_pr(pr, cfg, {}, "alice", str(tmp_path))
+    assert result is False
+    mock_fetch.assert_not_called()
+
+
+def test_process_subdir_skips_post_when_pr_closed_during_review(tmp_path):
+    from harness.config import HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
+
+    cfg = HarnessConfig(
+        harness=HarnessSection(),
+        repo=RepoConfig(name="acme/frontend", working_dir=tmp_path),
+        vibe_heal=VibehealConfig(enabled=True, python="/venv/bin/python3"),
+    )
+    subdir = SubDir(path=".", pre_commands=[])
+    with (
+        patch("harness.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")) as mock_run,
+        patch("harness.runners.review_prs.is_pr_open", return_value=False),
+    ):
+        result = review_prs._process_subdir(1, subdir, cfg, {})
+    assert result is False
+    post_calls = [c for c in mock_run.call_args_list if "--post" in str(c)]
+    assert post_calls == []
 
 
 def test_subdir_has_changes_root_always_matches():
