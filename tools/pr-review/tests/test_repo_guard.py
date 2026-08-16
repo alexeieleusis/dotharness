@@ -39,6 +39,40 @@ def test_matches_across_url_forms(tmp_path, origin_url):
     assert_repo_identity(tmp_path, "acme/frontend")
 
 
+def test_matches_via_ssh_config_host_alias(tmp_path, monkeypatch):
+    from harness import repo_guard
+
+    real_run = subprocess.run
+
+    def fake_run(args, **kwargs):
+        if args[:2] == ["ssh", "-G"]:
+            assert args[2] == "github-personal"
+            return subprocess.CompletedProcess(args, 0, stdout="hostname github.com\n", stderr="")
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(repo_guard.subprocess, "run", fake_run)
+
+    _init_repo(tmp_path, "git@github-personal:acme/frontend.git")
+    assert_repo_identity(tmp_path, "acme/frontend")
+
+
+def test_unresolvable_ssh_alias_fails_closed(tmp_path, monkeypatch):
+    from harness import repo_guard
+
+    real_run = subprocess.run
+
+    def fake_run(args, **kwargs):
+        if args[:2] == ["ssh", "-G"]:
+            raise FileNotFoundError
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(repo_guard.subprocess, "run", fake_run)
+
+    _init_repo(tmp_path, "git@some-alias:acme/frontend.git")
+    with pytest.raises(RepoIdentityError, match="does not match"):
+        assert_repo_identity(tmp_path, "acme/frontend")
+
+
 def test_raises_on_mismatched_origin(tmp_path):
     _init_repo(tmp_path, "git@github.com:alexeieleusis/dotharness.git")
     with pytest.raises(RepoIdentityError, match="does not match"):

@@ -24,14 +24,9 @@ legitimate reason to commit into this one.
 
 from __future__ import annotations
 
+import functools
 import subprocess
 from pathlib import Path
-
-_GITHUB_URL_PREFIXES = (
-    "git@github.com:",
-    "https://github.com/",
-    "ssh://git@github.com/",
-)
 
 _GIT_TIMEOUT_SECONDS = 30
 
@@ -40,14 +35,18 @@ class RepoIdentityError(RuntimeError):
     """`working_dir` is not the git repo `repo.name` says it should be."""
 
 
-def _run_git(working_dir: Path, *args: str) -> subprocess.CompletedProcess:
+def _run(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(  # noqa: S603
-        ["git", "-C", str(working_dir), *args],  # noqa: S607
+        list(args),
         capture_output=True,
         text=True,
         check=False,
         timeout=_GIT_TIMEOUT_SECONDS,
     )
+
+
+def _run_git(working_dir: Path, *args: str) -> subprocess.CompletedProcess:
+    return _run("git", "-C", str(working_dir), *args)
 
 
 def assert_repo_identity(working_dir: Path, expected_repo_name: str) -> None:
@@ -120,13 +119,51 @@ def assert_repo_unchanged(working_dir: Path, expected_head: str) -> None:
         )
 
 
+def _split_host_and_path(url: str) -> tuple[str, str] | None:
+    """Split a git remote URL into (host-or-alias, 'owner/repo' path), or
+    None if it doesn't look like an scp-style/ssh/https git URL."""
+    normalized = url.strip().removesuffix(".git").rstrip("/")
+
+    if normalized.startswith(("https://", "ssh://")):
+        normalized = normalized.split("://", 1)[1]
+        authority, sep, path = normalized.partition("/")
+    else:
+        # scp-style: [user@]host:path
+        authority, sep, path = normalized.partition(":")
+
+    if not sep or not path:
+        return None
+    return authority.rpartition("@")[2] or authority, path
+
+
+@functools.cache
+def _resolve_ssh_host(host: str) -> str:
+    """Resolve an SSH config host alias (e.g. 'github-personal', mapped via
+    `Host github-personal` / `HostName github.com`) to its real HostName.
+    Falls back to the alias itself if `ssh -G` is unavailable or fails, which
+    keeps this check fail-closed rather than silently permissive. Cached
+    since the SSH config backing a given alias doesn't change mid-run, and
+    this is checked on every backend invocation."""
+    if host.lower() == "github.com":
+        return "github.com"  # common case: skip the subprocess
+    try:
+        result = _run("ssh", "-G", host)
+    except (OSError, subprocess.SubprocessError):
+        return host
+    if result.returncode != 0:
+        return host
+    for line in result.stdout.splitlines():
+        if line.startswith("hostname "):
+            return line.split(maxsplit=1)[1].strip()
+    return host
+
+
 def _origin_matches_repo(url: str, repo_name: str) -> bool:
     """`repo_name` is an 'owner/repo' slug; `url` is origin's fetch URL in
-    whatever form git reports it (SSH, HTTPS, with or without '.git')."""
-    normalized = url.strip()
-    for prefix in _GITHUB_URL_PREFIXES:
-        if normalized.startswith(prefix):
-            normalized = normalized[len(prefix) :]
-            break
-    normalized = normalized.removesuffix(".git").rstrip("/")
-    return normalized == repo_name
+    whatever form git reports it (SSH, HTTPS, with or without '.git'),
+    possibly through an SSH config host alias like `github-personal`."""
+    split = _split_host_and_path(url)
+    if split is None:
+        return False
+    host, path = split
+    return _resolve_ssh_host(host).lower() == "github.com" and path == repo_name
