@@ -6,7 +6,13 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from harness.repo_guard import assert_repo_identity, assert_repo_unchanged, discover_repo_root, head_sha
+from harness.repo_guard import (
+    RepoIdentityError,
+    assert_repo_identity,
+    assert_repo_unchanged,
+    discover_repo_root,
+    head_sha,
+)
 
 XDG_DATA = Path.home() / ".local/share/dotharness"
 
@@ -81,6 +87,10 @@ class Backend:
                 if attempt < total_attempts:
                     logger.warning("%sBackend timed out, retrying (attempt %d/%d)", prefix, attempt + 1, total_attempts)
                     continue
+                try:
+                    self._check_repo_identity(cwd)
+                except RepoIdentityError:
+                    logger.exception("%sRepo identity check failed after a timeout-kill", prefix)
                 raise
             finally:
                 tmp_path.unlink(missing_ok=True)
