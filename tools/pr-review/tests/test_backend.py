@@ -252,6 +252,37 @@ def test_repo_identity_checked_before_and_after_backend_invocation(tmp_xdg):
     popen.assert_called_once()
 
 
+def test_repo_identity_checked_before_each_retry_attempt(tmp_xdg):
+    b = Backend(
+        backend="opencode",
+        timeout=10,
+        path_prepend=[],
+        env_vars={},
+        expected_repo_name="acme/frontend",
+    )
+    mock_proc = MagicMock()
+    mock_proc.communicate.side_effect = [
+        subprocess.TimeoutExpired([], 10),  # attempt 1: times out
+        (b"", b""),  # attempt 1: post-kill flush
+        (b"ok", b""),  # attempt 2: succeeds
+    ]
+    mock_proc.pid = os.getpid()
+    mock_proc.returncode = 0
+    with (
+        patch("subprocess.Popen", return_value=mock_proc),
+        patch("os.killpg"),
+        patch("subprocess.run", return_value=MagicMock(stdout="")),
+        patch("harness.backend.assert_repo_identity") as guard,
+    ):
+        b.run("Do this.", cwd="/some/repo")
+
+    # pre-attempt-1, pre-attempt-2, post-attempt-2 — a regression that hoists
+    # the check outside the retry loop would leave this at 1.
+    assert guard.call_count == 3
+    for call in guard.call_args_list:
+        assert call.args == (Path("/some/repo"), "acme/frontend")
+
+
 def test_repo_identity_failure_aborts_before_spawning_backend(tmp_xdg):
     b = Backend(
         backend="opencode",
