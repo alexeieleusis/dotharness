@@ -158,11 +158,12 @@ def test_prune_self_review_state_drops_partial_reviews_too(tmp_xdg):
     assert result["partial_reviews"] == {"9": ["b.py"]}
 
 
-def test_prune_self_review_state_no_op_when_nothing_changes(tmp_xdg):
+def test_prune_self_review_state_no_op_when_nothing_changes(tmp_xdg, monkeypatch):
     state.write_self_review_state("acme-frontend", [7])
+    calls = []
+    monkeypatch.setattr(state, "_atomic_write", lambda *a: calls.append(a))
     state.prune_self_review_state("acme-frontend", {7})
-    leftovers = list((tmp_xdg / "state" / "acme-frontend").glob("*.tmp"))
-    assert leftovers == []
+    assert calls == []
     assert state.read_self_review_state("acme-frontend")["reviewed_prs"] == [7]
 
 
