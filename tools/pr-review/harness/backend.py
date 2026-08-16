@@ -6,6 +6,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from harness.repo_guard import assert_repo_identity
+
 XDG_DATA = Path.home() / ".local/share/dotharness"
 
 logger = logging.getLogger(__name__)
@@ -13,7 +15,14 @@ logger = logging.getLogger(__name__)
 
 class Backend:
     def __init__(
-        self, backend: str, timeout: int, path_prepend: list[str], env_vars: dict[str, str], max_retries: int = 1
+        self,
+        backend: str,
+        timeout: int,
+        path_prepend: list[str],
+        env_vars: dict[str, str],
+        max_retries: int = 1,
+        *,
+        expected_repo_name: str | None = None,
     ):
         if backend not in ("opencode", "claude"):
             raise ValueError(f"Unknown backend: {backend}")  # noqa: TRY003
@@ -22,6 +31,7 @@ class Backend:
         self.path_prepend = path_prepend
         self.env_vars = env_vars
         self.max_retries = max_retries
+        self.expected_repo_name = expected_repo_name
 
     def run(
         self, instructions: str, cwd: str, opencode_dir: str | None = None, context: str | None = None
@@ -29,6 +39,8 @@ class Backend:
         prefix = f"{context}: " if context else ""
         total_attempts = self.max_retries + 1
         for attempt in range(1, total_attempts + 1):
+            if self.expected_repo_name is not None:
+                assert_repo_identity(Path(cwd), self.expected_repo_name)
             cmd, tmp_path = self._build_command(instructions, opencode_dir)
             env = self._build_env()
             logger.info("%sRunning backend: %s (cwd=%s)", prefix, " ".join(cmd[:4]), cwd)
@@ -51,6 +63,8 @@ class Backend:
                         stdout.decode("utf-8", errors="replace")[:2000],
                         stderr.decode("utf-8", errors="replace")[:2000],
                     )
+                if self.expected_repo_name is not None:
+                    assert_repo_identity(Path(cwd), self.expected_repo_name)
                 return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
             except subprocess.TimeoutExpired:
                 if proc is not None:

@@ -42,6 +42,7 @@ def load_review_context(config: HarnessConfig, env: dict) -> tuple:
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
         {**config.harness.env, "GITHUB_TOKEN": env.get("GITHUB_TOKEN", "")},
+        expected_repo_name=config.repo.name,
     )
     wdir = str(config.repo.working_dir)
     original_sha = git_detach_and_record(wdir, env)

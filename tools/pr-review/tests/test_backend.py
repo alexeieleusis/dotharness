@@ -1,10 +1,12 @@
 import os
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from harness.backend import Backend
+from harness.repo_guard import RepoIdentityError
 
 
 def _make_backend(tmp_xdg, backend="opencode"):
@@ -212,3 +214,81 @@ def test_env_vars_injected(tmp_xdg):
 def test_invalid_backend_raises():
     with pytest.raises(ValueError, match="Unknown backend"):
         Backend("gpt4", timeout=10, path_prepend=[], env_vars={})
+
+
+def test_repo_identity_not_checked_when_expected_repo_name_unset(tmp_xdg):
+    b = _make_backend(tmp_xdg)
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    with (
+        patch("subprocess.Popen", return_value=mock_proc),
+        patch("harness.backend.assert_repo_identity") as guard,
+    ):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+    guard.assert_not_called()
+
+
+def test_repo_identity_checked_before_and_after_backend_invocation(tmp_xdg):
+    b = Backend(
+        backend="opencode",
+        timeout=10,
+        path_prepend=[],
+        env_vars={},
+        expected_repo_name="acme/frontend",
+    )
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    with (
+        patch("subprocess.Popen", return_value=mock_proc) as popen,
+        patch("harness.backend.assert_repo_identity") as guard,
+    ):
+        b.run("Do this.", cwd="/some/repo")
+
+    assert guard.call_count == 2
+    for call in guard.call_args_list:
+        assert call.args == (Path("/some/repo"), "acme/frontend")
+    popen.assert_called_once()
+
+
+def test_repo_identity_failure_aborts_before_spawning_backend(tmp_xdg):
+    b = Backend(
+        backend="opencode",
+        timeout=10,
+        path_prepend=[],
+        env_vars={},
+        expected_repo_name="acme/frontend",
+    )
+    with (
+        patch("subprocess.Popen") as popen,
+        patch(
+            "harness.backend.assert_repo_identity",
+            side_effect=RepoIdentityError("wrong repo"),
+        ),
+        pytest.raises(RepoIdentityError, match="wrong repo"),
+    ):
+        b.run("Do this.", cwd="/some/repo")
+    popen.assert_not_called()
+
+
+def test_repo_identity_failure_after_backend_invocation_propagates(tmp_xdg):
+    b = Backend(
+        backend="opencode",
+        timeout=10,
+        path_prepend=[],
+        env_vars={},
+        expected_repo_name="acme/frontend",
+    )
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    with (
+        patch("subprocess.Popen", return_value=mock_proc),
+        patch(
+            "harness.backend.assert_repo_identity",
+            side_effect=[None, RepoIdentityError("wrong repo")],
+        ),
+        pytest.raises(RepoIdentityError, match="wrong repo"),
+    ):
+        b.run("Do this.", cwd="/some/repo")

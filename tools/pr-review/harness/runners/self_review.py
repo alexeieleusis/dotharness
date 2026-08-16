@@ -50,6 +50,7 @@ def _build_backend(config, env: dict) -> Backend:
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
         {**config.harness.env, "GITHUB_TOKEN": token},
+        expected_repo_name=config.repo.name,
     )
 
 
