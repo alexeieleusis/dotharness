@@ -8,10 +8,18 @@ writeup), but nothing in this codebase's own git/subprocess calls explains
 it — every one of them already uses `cwd=`/`-C` derived from
 `config.repo.working_dir`. The leading hypothesis is a backend (opencode)
 process that outlived its intended invocation and kept running with a stale
-cwd. Either way, this check is the belt-and-suspenders backstop: if the
-directory a commit/push is about to happen in isn't actually the configured
-repo, abort loudly before anything happens, rather than silently committing
-into whatever repo happens to be sitting there.
+cwd. Either way, `assert_repo_identity` is the belt-and-suspenders backstop: if
+the directory a commit/push is about to happen in isn't actually the
+configured repo, abort loudly before anything happens, rather than silently
+committing into whatever repo happens to be sitting there.
+
+That check only inspects the directory the backend was *told* to operate in,
+which in the incident above was never the directory actually mutated — the
+rogue instance landed in the harness's own repo regardless of `--dir`/`cwd`.
+`assert_repo_unchanged` (with `discover_repo_root`/`head_sha`) covers that
+other side: snapshot the harness's own repo before a run and confirm its HEAD
+hasn't moved afterward, since a run targeting some other repo has no
+legitimate reason to commit into this one.
 """
 
 from __future__ import annotations
@@ -73,6 +81,42 @@ def assert_repo_identity(working_dir: Path, expected_repo_name: str) -> None:
             f"{working_dir}'s origin ({origin_url!r}) does not match the configured "
             f"repo.name {expected_repo_name!r} — refusing to run a backend/git "
             "operation against what looks like the wrong repo"
+        )
+
+
+def discover_repo_root(start: Path) -> Path | None:
+    """Best-effort toplevel of the git repo containing `start`, or None if `start`
+    isn't inside one (e.g. an unusual install layout). Used to locate this harness's
+    own repo checkout so it can be watched for the rogue-backend-writes-elsewhere
+    scenario described in this module's docstring: `expected_repo_name` covers the
+    repo a backend run is *supposed* to touch, but says nothing about a different
+    directory — such as the harness's own repo — that a runaway backend process
+    might write into instead."""
+    result = _run_git(start, "rev-parse", "--show-toplevel")
+    if result.returncode != 0:
+        return None
+    return Path(result.stdout.strip()).resolve()
+
+
+def head_sha(working_dir: Path) -> str:
+    """Current HEAD commit sha for `working_dir`'s repo."""
+    result = _run_git(working_dir, "rev-parse", "HEAD")
+    if result.returncode != 0:
+        raise RepoIdentityError(f"could not read HEAD for {working_dir}: {result.stderr.strip()}")  # noqa: TRY003
+    return result.stdout.strip()
+
+
+def assert_repo_unchanged(working_dir: Path, expected_head: str) -> None:
+    """Raise RepoIdentityError if `working_dir`'s HEAD has moved since `expected_head`
+    was captured. A backend run that isn't supposed to touch `working_dir` at all
+    (e.g. this harness's own repo, while it's meant to be operating on some other
+    configured repo) has no legitimate reason to move its HEAD."""
+    current = head_sha(working_dir)
+    if current != expected_head:
+        raise RepoIdentityError(  # noqa: TRY003
+            f"{working_dir}'s HEAD moved from {expected_head} to {current} during a backend run that "
+            "wasn't supposed to touch it — looks like the rogue-backend-writes-elsewhere scenario this "
+            "guard exists to catch"
         )
 
 

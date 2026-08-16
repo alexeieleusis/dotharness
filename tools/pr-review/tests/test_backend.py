@@ -292,3 +292,62 @@ def test_repo_identity_failure_after_backend_invocation_propagates(tmp_xdg):
         pytest.raises(RepoIdentityError, match="wrong repo"),
     ):
         b.run("Do this.", cwd="/some/repo")
+
+
+def test_harness_repo_not_watched_when_no_harness_repo_discovered(tmp_xdg):
+    b = _make_backend(tmp_xdg)
+    with patch("harness.backend._HARNESS_REPO_ROOT", None), patch("harness.backend.head_sha") as head_sha_mock:
+        assert b._snapshot_harness_repo("/some/repo") is None
+    head_sha_mock.assert_not_called()
+
+
+def test_harness_repo_not_watched_when_cwd_is_the_harness_repo(tmp_xdg):
+    b = _make_backend(tmp_xdg)
+    with (
+        patch("harness.backend._HARNESS_REPO_ROOT", Path("/harness/root")),
+        patch("harness.backend.head_sha") as head_sha_mock,
+    ):
+        assert b._snapshot_harness_repo("/harness/root") is None
+    head_sha_mock.assert_not_called()
+
+
+def test_harness_repo_snapshotted_when_cwd_is_a_different_repo(tmp_xdg):
+    b = _make_backend(tmp_xdg)
+    with (
+        patch("harness.backend._HARNESS_REPO_ROOT", Path("/harness/root")),
+        patch("harness.backend.head_sha", return_value="abc123") as head_sha_mock,
+    ):
+        assert b._snapshot_harness_repo("/some/other/repo") == "abc123"
+    head_sha_mock.assert_called_once_with(Path("/harness/root"))
+
+
+def test_harness_repo_unchanged_check_skipped_when_no_snapshot_taken(tmp_xdg):
+    b = _make_backend(tmp_xdg)
+    with patch("harness.backend.assert_repo_unchanged") as guard:
+        b._assert_harness_repo_unchanged(None)
+    guard.assert_not_called()
+
+
+def test_harness_repo_moving_during_run_raises(tmp_xdg):
+    b = Backend(
+        backend="opencode",
+        timeout=10,
+        path_prepend=[],
+        env_vars={},
+        expected_repo_name="acme/frontend",
+    )
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    with (
+        patch("harness.backend._HARNESS_REPO_ROOT", Path("/harness/root")),
+        patch("harness.backend.head_sha", return_value="abc123"),
+        patch("subprocess.Popen", return_value=mock_proc),
+        patch("harness.backend.assert_repo_identity"),
+        patch(
+            "harness.backend.assert_repo_unchanged",
+            side_effect=RepoIdentityError("harness repo's HEAD moved"),
+        ),
+        pytest.raises(RepoIdentityError, match="harness repo's HEAD moved"),
+    ):
+        b.run("Do this.", cwd="/some/other/repo")
