@@ -25,9 +25,21 @@ _GITHUB_URL_PREFIXES = (
     "ssh://git@github.com/",
 )
 
+_GIT_TIMEOUT_SECONDS = 30
+
 
 class RepoIdentityError(RuntimeError):
     """`working_dir` is not the git repo `repo.name` says it should be."""
+
+
+def _run_git(working_dir: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(  # noqa: S603
+        ["git", "-C", str(working_dir), *args],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=_GIT_TIMEOUT_SECONDS,
+    )
 
 
 def assert_repo_identity(working_dir: Path, expected_repo_name: str) -> None:
@@ -36,12 +48,7 @@ def assert_repo_identity(working_dir: Path, expected_repo_name: str) -> None:
     'owner/repo' slug, as configured in `repo.name`)."""
     working_dir = working_dir.resolve()
 
-    toplevel = subprocess.run(  # noqa: S603
-        ["git", "-C", str(working_dir), "rev-parse", "--show-toplevel"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    toplevel = _run_git(working_dir, "rev-parse", "--show-toplevel")
     if toplevel.returncode != 0:
         raise RepoIdentityError(  # noqa: TRY003
             f"{working_dir} is not inside a git repository "
@@ -55,12 +62,7 @@ def assert_repo_identity(working_dir: Path, expected_repo_name: str) -> None:
             "looks like a subdirectory of some other checkout"
         )
 
-    origin = subprocess.run(  # noqa: S603
-        ["git", "-C", str(working_dir), "remote", "get-url", "origin"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    origin = _run_git(working_dir, "remote", "get-url", "origin")
     if origin.returncode != 0:
         raise RepoIdentityError(  # noqa: TRY003
             f"{working_dir} has no 'origin' remote (git remote get-url origin failed: {origin.stderr.strip()})"

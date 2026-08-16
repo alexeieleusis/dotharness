@@ -39,8 +39,7 @@ class Backend:
         prefix = f"{context}: " if context else ""
         total_attempts = self.max_retries + 1
         for attempt in range(1, total_attempts + 1):
-            if self.expected_repo_name is not None:
-                assert_repo_identity(Path(cwd), self.expected_repo_name)
+            self._check_repo_identity(cwd)
             cmd, tmp_path = self._build_command(instructions, opencode_dir)
             env = self._build_env()
             logger.info("%sRunning backend: %s (cwd=%s)", prefix, " ".join(cmd[:4]), cwd)
@@ -63,8 +62,7 @@ class Backend:
                         stdout.decode("utf-8", errors="replace")[:2000],
                         stderr.decode("utf-8", errors="replace")[:2000],
                     )
-                if self.expected_repo_name is not None:
-                    assert_repo_identity(Path(cwd), self.expected_repo_name)
+                self._check_repo_identity(cwd)
                 return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
             except subprocess.TimeoutExpired:
                 if proc is not None:
@@ -79,6 +77,10 @@ class Backend:
             finally:
                 tmp_path.unlink(missing_ok=True)
         raise RuntimeError("run loop exhausted without returning")  # noqa: TRY003
+
+    def _check_repo_identity(self, cwd: str) -> None:
+        if self.expected_repo_name is not None:
+            assert_repo_identity(Path(cwd), self.expected_repo_name)
 
     def _warn_if_backend_survived(self, prefix: str) -> None:
         """killpg only reaches processes still in the killed group; a backend that
