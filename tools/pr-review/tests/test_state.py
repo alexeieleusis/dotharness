@@ -143,6 +143,29 @@ def test_read_vibe_heal_corrupted_json_fallback(tmp_xdg, caplog):
     assert "Corrupted state file" in caplog.text
 
 
+def test_prune_self_review_state_drops_closed_prs(tmp_xdg):
+    state.write_self_review_state("acme-frontend", [7, 9])
+    state.prune_self_review_state("acme-frontend", {9})
+    result = state.read_self_review_state("acme-frontend")
+    assert result["reviewed_prs"] == [9]
+
+
+def test_prune_self_review_state_drops_partial_reviews_too(tmp_xdg):
+    state.set_partial_reviewed_files("acme-frontend", 7, ["a.py"])
+    state.set_partial_reviewed_files("acme-frontend", 9, ["b.py"])
+    state.prune_self_review_state("acme-frontend", {9})
+    result = state.read_self_review_state("acme-frontend")
+    assert result["partial_reviews"] == {"9": ["b.py"]}
+
+
+def test_prune_self_review_state_no_op_when_nothing_changes(tmp_xdg):
+    state.write_self_review_state("acme-frontend", [7])
+    state.prune_self_review_state("acme-frontend", {7})
+    leftovers = list((tmp_xdg / "state" / "acme-frontend").glob("*.tmp"))
+    assert leftovers == []
+    assert state.read_self_review_state("acme-frontend")["reviewed_prs"] == [7]
+
+
 def test_read_self_review_corrupted_json_fallback(tmp_xdg, caplog):
     state_file = tmp_xdg / "state" / "acme-frontend" / "self_review.json"
     state_file.parent.mkdir(parents=True, exist_ok=True)
