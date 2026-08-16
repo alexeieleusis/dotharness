@@ -362,6 +362,16 @@ def test_failed_pr_fetch_skips_cycle_without_touching_state(tmp_xdg, tmp_path):
     assert state.read_self_review_state("acme-frontend")["reviewed_prs"] == [5]
 
 
+def test_list_my_prs_returns_none_on_gh_failure():
+    with patch("harness.runners.self_review.run_cmd", return_value=MagicMock(returncode=1, stdout=b"")):
+        assert self_review._list_my_prs("acme/frontend", {}) is None
+
+
+def test_list_my_prs_returns_none_on_malformed_json():
+    with patch("harness.runners.self_review.run_cmd", return_value=MagicMock(returncode=0, stdout=b"not json")):
+        assert self_review._list_my_prs("acme/frontend", {}) is None
+
+
 def test_does_not_update_state_when_summary_check_inconclusive(tmp_xdg, tmp_path):
     """If the post-backend verification GET fails transiently, that's inconclusive, not a
     confirmed missing comment — the PR must still not be marked reviewed on this run."""
