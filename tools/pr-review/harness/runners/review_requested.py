@@ -59,6 +59,7 @@ def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
         {**config.harness.env, "GITHUB_TOKEN": env.get("GITHUB_TOKEN", "")},
+        expected_repo_name=config.repo.name,
     )
     wdir = str(config.repo.working_dir)
 

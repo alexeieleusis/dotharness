@@ -6,14 +6,35 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from harness.repo_guard import (
+    RepoIdentityError,
+    assert_repo_identity,
+    assert_repo_unchanged,
+    discover_repo_root,
+    head_sha,
+)
+
 XDG_DATA = Path.home() / ".local/share/dotharness"
 
 logger = logging.getLogger(__name__)
 
+# The harness's own repo checkout, discovered relative to this file rather than
+# hardcoded so it works regardless of where dotharness is cloned to. None if this
+# file somehow isn't inside a git repo (e.g. an unusual install layout) — in that
+# case the self-repo guard below is simply skipped.
+_HARNESS_REPO_ROOT = discover_repo_root(Path(__file__).resolve().parent)
+
 
 class Backend:
     def __init__(
-        self, backend: str, timeout: int, path_prepend: list[str], env_vars: dict[str, str], max_retries: int = 1
+        self,
+        backend: str,
+        timeout: int,
+        path_prepend: list[str],
+        env_vars: dict[str, str],
+        max_retries: int = 1,
+        *,
+        expected_repo_name: str | None = None,
     ):
         if backend not in ("opencode", "claude"):
             raise ValueError(f"Unknown backend: {backend}")  # noqa: TRY003
@@ -22,6 +43,7 @@ class Backend:
         self.path_prepend = path_prepend
         self.env_vars = env_vars
         self.max_retries = max_retries
+        self.expected_repo_name = expected_repo_name
 
     def run(
         self, instructions: str, cwd: str, opencode_dir: str | None = None, context: str | None = None
@@ -29,6 +51,8 @@ class Backend:
         prefix = f"{context}: " if context else ""
         total_attempts = self.max_retries + 1
         for attempt in range(1, total_attempts + 1):
+            self._check_repo_identity(cwd)
+            harness_head = self._snapshot_harness_repo(cwd)
             cmd, tmp_path = self._build_command(instructions, opencode_dir)
             env = self._build_env()
             logger.info("%sRunning backend: %s (cwd=%s)", prefix, " ".join(cmd[:4]), cwd)
@@ -51,6 +75,8 @@ class Backend:
                         stdout.decode("utf-8", errors="replace")[:2000],
                         stderr.decode("utf-8", errors="replace")[:2000],
                     )
+                self._check_repo_identity(cwd)
+                self._assert_harness_repo_unchanged(harness_head)
                 return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
             except subprocess.TimeoutExpired:
                 if proc is not None:
@@ -61,10 +87,31 @@ class Backend:
                 if attempt < total_attempts:
                     logger.warning("%sBackend timed out, retrying (attempt %d/%d)", prefix, attempt + 1, total_attempts)
                     continue
+                try:
+                    self._check_repo_identity(cwd)
+                except RepoIdentityError:
+                    logger.exception("%sRepo identity check failed after a timeout-kill", prefix)
                 raise
             finally:
                 tmp_path.unlink(missing_ok=True)
         raise RuntimeError("run loop exhausted without returning")  # noqa: TRY003
+
+    def _check_repo_identity(self, cwd: str) -> None:
+        if self.expected_repo_name is not None:
+            assert_repo_identity(Path(cwd), self.expected_repo_name)
+
+    def _snapshot_harness_repo(self, cwd: str) -> str | None:
+        """None when there's nothing to watch: no harness repo was discovered, or
+        `cwd` already *is* the harness repo, in which case this run is expected to
+        commit into it."""
+        if _HARNESS_REPO_ROOT is None or Path(cwd).resolve() == _HARNESS_REPO_ROOT:
+            return None
+        return head_sha(_HARNESS_REPO_ROOT)
+
+    def _assert_harness_repo_unchanged(self, harness_head: str | None) -> None:
+        if harness_head is not None:
+            assert _HARNESS_REPO_ROOT is not None  # noqa: S101 — implied by harness_head being set
+            assert_repo_unchanged(_HARNESS_REPO_ROOT, harness_head)
 
     def _warn_if_backend_survived(self, prefix: str) -> None:
         """killpg only reaches processes still in the killed group; a backend that
