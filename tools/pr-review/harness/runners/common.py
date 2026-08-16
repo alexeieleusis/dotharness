@@ -7,8 +7,7 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
-from harness.backend import Backend
-from harness.config import HarnessConfig, SubDir
+from harness.config import SubDir
 
 logger = logging.getLogger(__name__)
 
@@ -21,32 +20,6 @@ PR_COMMENTS_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scrip
 
 FOCUSED_REVIEW_MARKER = "[focused-review-bot]"
 INLINE_REVIEW_MARKER = "<!-- osc-review-inline -->"
-
-
-def load_review_context(config: HarnessConfig, env: dict) -> tuple:
-    """Load shared review instructions, knowledge, backend, and git state.
-
-    Returns (file_instructions, summary_instructions, extra_knowledge, backend, wdir, original_sha).
-    """
-    file_instructions = (config.harness.knowledge_dir / "pr-review" / "review-file.md").read_text(encoding="utf-8")
-    summary_instructions = (config.harness.knowledge_dir / "pr-review" / "review-summary.md").read_text(
-        encoding="utf-8"
-    )
-    extra_knowledge = (
-        config.harness.review_knowledge_file.read_text(encoding="utf-8")
-        if config.harness.review_knowledge_file and config.harness.review_knowledge_file.exists()
-        else None
-    )
-    backend = Backend(
-        config.harness.backend,
-        config.harness.backend_timeout_seconds,
-        config.harness.path_prepend,
-        {**config.harness.env, "GITHUB_TOKEN": env.get("GITHUB_TOKEN", "")},
-        expected_repo_name=config.repo.name,
-    )
-    wdir = str(config.repo.working_dir)
-    original_sha = git_detach_and_record(wdir, env)
-    return file_instructions, summary_instructions, extra_knowledge, backend, wdir, original_sha
 
 
 class FatalGitError(Exception):
