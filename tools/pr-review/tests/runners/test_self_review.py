@@ -324,6 +324,54 @@ def test_inconclusive_comment_check_skips_cycle_without_marking_reviewed(tmp_xdg
     assert 30 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
 
 
+def test_prunes_stale_entries_for_closed_prs(tmp_xdg, tmp_path):
+    """A PR that's no longer in the open-PR list gets its reviewed_prs/partial_reviews
+    entries dropped, even though it's not reprocessed this cycle."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [5, 40])
+    state.set_partial_reviewed_files("acme-frontend", 40, ["stale.py"])
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 5, "url": "u", "headRefName": "b"}]),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.Backend") as mock_be,
+    ):
+        self_review._run_locked(cfg)
+    mock_be.return_value.run.assert_not_called()
+    result = state.read_self_review_state("acme-frontend")
+    assert result["reviewed_prs"] == [5]
+    assert result["partial_reviews"] == {}
+
+
+def test_failed_pr_fetch_skips_cycle_without_touching_state(tmp_xdg, tmp_path):
+    """When _list_my_prs can't confirm the open-PR set (gh failure or malformed JSON), the
+    cycle must skip entirely rather than pruning against a possibly-wrong empty set."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [5])
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch("harness.runners.self_review._list_my_prs", return_value=None),
+        patch("harness.runners.self_review.Backend") as mock_be,
+    ):
+        self_review._run_locked(cfg)
+    mock_be.return_value.run.assert_not_called()
+    assert state.read_self_review_state("acme-frontend")["reviewed_prs"] == [5]
+
+
+def test_list_my_prs_returns_none_on_gh_failure():
+    with patch("harness.runners.self_review.run_cmd", return_value=MagicMock(returncode=1, stdout=b"")):
+        assert self_review._list_my_prs("acme/frontend", {}) is None
+
+
+def test_list_my_prs_returns_none_on_malformed_json():
+    with patch("harness.runners.self_review.run_cmd", return_value=MagicMock(returncode=0, stdout=b"not json")):
+        assert self_review._list_my_prs("acme/frontend", {}) is None
+
+
 def test_does_not_update_state_when_summary_check_inconclusive(tmp_xdg, tmp_path):
     """If the post-backend verification GET fails transiently, that's inconclusive, not a
     confirmed missing comment — the PR must still not be marked reviewed on this run."""

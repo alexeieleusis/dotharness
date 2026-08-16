@@ -277,8 +277,12 @@ def _run_locked(config: HarnessConfig) -> None:
     env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
     current_user = get_current_user(env)
 
-    reviewed = set(state.read_self_review_state(config.repo_slug)["reviewed_prs"])
     prs = _list_my_prs(config.repo.name, env)
+    if prs is None:
+        logger.warning("Failed to fetch open PRs; skipping this cycle without touching self_review state")
+        return
+    pruned_state = state.prune_self_review_state(config.repo_slug, {p["number"] for p in prs})
+    reviewed = set(pruned_state["reviewed_prs"])
 
     knowledge_dir = Path(config.harness.knowledge_dir) / "pr-review"
     file_instructions = (knowledge_dir / "review-file.md").read_text(encoding="utf-8")
@@ -322,7 +326,10 @@ def _run_locked(config: HarnessConfig) -> None:
         )
 
 
-def _list_my_prs(repo: str, env: dict) -> list[dict]:
+def _list_my_prs(repo: str, env: dict) -> list[dict] | None:
+    """Returns None (rather than []) on fetch failure, so callers can distinguish "gh pr list
+    failed" from "confirmed zero open PRs" instead of treating a transient API hiccup as an
+    authoritative empty set."""
     result = run_cmd(
         [
             "gh",
@@ -345,9 +352,9 @@ def _list_my_prs(repo: str, env: dict) -> list[dict]:
         check=False,
     )
     if result.returncode != 0:
-        return []
+        return None
     try:
         return sorted(json.loads(result.stdout), key=lambda p: p["number"])
     except ValueError:
         logger.exception("_list_my_prs: malformed JSON from gh CLI")
-        return []
+        return None

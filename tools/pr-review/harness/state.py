@@ -80,17 +80,18 @@ def read_vibe_heal_state(repo_slug: str) -> dict:
     return data
 
 
-def _update_vibe_heal_state(repo_slug: str, mutate) -> None:
-    """Read-modify-write the vibe_heal state file under an exclusive lock.
+def _update_state(repo_slug: str, filename: str, read_fn, mutate) -> dict:
+    """Read-modify-write a state file under an exclusive lock.
 
     `mutate` receives the current state dict and returns True if it changed anything;
-    the file is only rewritten when it did.
+    the file is only rewritten when it did. Returns the resulting state dict.
     """
-    p = _state_path(repo_slug, VIBE_HEAL_FILE)
+    p = _state_path(repo_slug, filename)
     with _state_lock(p):
-        current = read_vibe_heal_state(repo_slug)
+        current = read_fn(repo_slug)
         if mutate(current):
             _atomic_write(p, current)
+        return current
 
 
 def write_vibe_heal_state(repo_slug: str, *, last_main_sha: str) -> None:
@@ -98,7 +99,7 @@ def write_vibe_heal_state(repo_slug: str, *, last_main_sha: str) -> None:
         current["last_main_sha"] = last_main_sha
         return True
 
-    _update_vibe_heal_state(repo_slug, mutate)
+    _update_state(repo_slug, VIBE_HEAL_FILE, read_vibe_heal_state, mutate)
 
 
 def get_reviewed_sha(repo_slug: str, pr_number: int) -> str | None:
@@ -116,7 +117,7 @@ def record_reviewed_sha(repo_slug: str, pr_number: int, sha: str, reviewed_at: f
         current["reviewed_shas"][str(pr_number)] = {"sha": sha, "reviewed_at": reviewed_at}
         return True
 
-    _update_vibe_heal_state(repo_slug, mutate)
+    _update_state(repo_slug, VIBE_HEAL_FILE, read_vibe_heal_state, mutate)
 
 
 def prune_reviewed_shas(repo_slug: str, open_pr_numbers: set[int]) -> None:
@@ -130,7 +131,7 @@ def prune_reviewed_shas(repo_slug: str, open_pr_numbers: set[int]) -> None:
             del current["reviewed_shas"][pr]
         return bool(to_drop)
 
-    _update_vibe_heal_state(repo_slug, mutate)
+    _update_state(repo_slug, VIBE_HEAL_FILE, read_vibe_heal_state, mutate)
 
 
 def read_self_review_state(repo_slug: str) -> dict:
@@ -149,19 +150,13 @@ def read_self_review_state(repo_slug: str) -> dict:
 
 
 def write_self_review_state(repo_slug: str, reviewed_prs: list[int], partial_reviews: dict | None = None) -> None:
-    p = _state_path(repo_slug, SELF_REVIEW_FILE)
-    with _state_lock(p):
-        current = read_self_review_state(repo_slug)
+    def mutate(current: dict) -> bool:
+        current["reviewed_prs"] = reviewed_prs
         if partial_reviews is not None:
             current["partial_reviews"] = partial_reviews
-        _atomic_write(
-            p,
-            {
-                "version": current["version"],
-                "reviewed_prs": reviewed_prs,
-                "partial_reviews": current["partial_reviews"],
-            },
-        )
+        return True
+
+    _update_state(repo_slug, SELF_REVIEW_FILE, read_self_review_state, mutate)
 
 
 def get_partial_reviewed_files(repo_slug: str, pr_number: int) -> list[str]:
@@ -170,11 +165,28 @@ def get_partial_reviewed_files(repo_slug: str, pr_number: int) -> list[str]:
 
 
 def set_partial_reviewed_files(repo_slug: str, pr_number: int, files: list[str]) -> None:
-    p = _state_path(repo_slug, SELF_REVIEW_FILE)
-    with _state_lock(p):
-        current = read_self_review_state(repo_slug)
+    def mutate(current: dict) -> bool:
         current["partial_reviews"][str(pr_number)] = list(files)
-        _atomic_write(p, current)
+        return True
+
+    _update_state(repo_slug, SELF_REVIEW_FILE, read_self_review_state, mutate)
+
+
+def prune_self_review_state(repo_slug: str, open_pr_numbers: set[int]) -> dict:
+    """Drop reviewed_prs / partial_reviews entries for PRs that are no longer open, so
+    self_review.json doesn't grow unboundedly as the user's own PRs get merged/closed
+    over time. Returns the resulting state dict."""
+    keep = {str(n) for n in open_pr_numbers}
+
+    def mutate(current: dict) -> bool:
+        reviewed_after = [n for n in current["reviewed_prs"] if str(n) in keep]
+        partial_after = {k: v for k, v in current["partial_reviews"].items() if k in keep}
+        changed = reviewed_after != current["reviewed_prs"] or partial_after != current["partial_reviews"]
+        current["reviewed_prs"] = reviewed_after
+        current["partial_reviews"] = partial_after
+        return changed
+
+    return _update_state(repo_slug, SELF_REVIEW_FILE, read_self_review_state, mutate)
 
 
 def delete_state(repo_slug: str, command: str) -> None:
