@@ -401,8 +401,10 @@ def _reply_observed(comment: dict, pr_number: int, repo: str, our_login: str, si
     # "review" comments have no reply linkage in the GitHub API — a `gh pr comment` reply
     # just lands as a plain issue comment. Fall back to "our_login posted anything since
     # we started this comment", which is exact as long as comments are processed
-    # sequentially (they are — see the loop in _process_single_pr).
-    return any(c.get("user", {}).get("login") == our_login and c.get("created_at", "") > since_iso for c in items)
+    # sequentially (they are — see the loop in _process_single_pr). GitHub timestamps are
+    # second-precision, so use >= to avoid missing a reply posted in the same second as
+    # since_iso.
+    return any(c.get("user", {}).get("login") == our_login and c.get("created_at", "") >= since_iso for c in items)
 
 
 def _address_single_comment(
