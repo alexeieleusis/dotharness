@@ -545,6 +545,18 @@ def test_reply_observed_review_falls_back_to_timestamp():
         )
 
 
+def test_reply_observed_review_matches_reply_in_same_second_as_since_iso():
+    review_comment = {**_FAKE_COMMENT, "type": "review"}
+    comments = [{"user": {"login": "harness-bot"}, "created_at": "2026-01-01T00:00:00Z", "body": "reply"}]
+    with patch(
+        "harness.runners.address_comments.run_cmd",
+        return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
+    ):
+        assert address_comments._reply_observed(
+            review_comment, 1, "acme/frontend", "harness-bot", "2026-01-01T00:00:00Z", {}
+        )
+
+
 def test_reply_observed_returns_true_when_api_fails_inconclusive():
     with patch("harness.runners.address_comments.run_cmd", return_value=MagicMock(returncode=1, stdout=b"")):
         assert address_comments._reply_observed(_FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {})
