@@ -608,6 +608,28 @@ def test_address_single_comment_no_warning_when_commit_made(caplog):
     assert not any("silent skip" in r.message for r in caplog.records)
 
 
+def test_address_single_comment_no_warning_when_reply_observed_check_raises(caplog):
+    mock_backend = MagicMock()
+    mock_backend.run.return_value = MagicMock(returncode=0)
+    with (
+        patch("harness.runners.address_comments.get_head_sha", return_value="sha-before"),
+        patch("harness.runners.address_comments._reply_observed", side_effect=RuntimeError("boom")),
+        caplog.at_level("WARNING"),
+    ):
+        _address_single_comment(
+            _FAKE_COMMENT,
+            1,
+            "instructions",
+            mock_backend,
+            "/repo",
+            "acme/frontend",
+            {},
+            "sha-before",
+            our_login="harness-bot",
+        )
+    assert not any("silent skip" in r.message for r in caplog.records)
+
+
 def test_address_single_comment_skips_reply_check_when_our_login_not_provided(caplog):
     mock_backend = MagicMock()
     mock_backend.run.return_value = MagicMock(returncode=0)
