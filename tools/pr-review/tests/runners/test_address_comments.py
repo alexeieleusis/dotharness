@@ -503,3 +503,108 @@ def test_has_pending_feedback_finds_unresolved_thread_on_second_page():
     with patch("harness.runners.address_comments.run_cmd", side_effect=lambda *a, **k: next(responses)):
         result = address_comments._has_pending_feedback(1, "acme/frontend", {})
     assert result is True
+
+
+def test_reply_observed_inline_matches_by_in_reply_to_id():
+    replies = [{"in_reply_to_id": 42, "user": {"login": "harness-bot"}}]
+    with patch(
+        "harness.runners.address_comments.run_cmd",
+        return_value=MagicMock(returncode=0, stdout=json.dumps(replies).encode()),
+    ):
+        assert address_comments._reply_observed(_FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {})
+
+
+def test_reply_observed_inline_false_when_reply_from_someone_else():
+    replies = [{"in_reply_to_id": 42, "user": {"login": "alice"}}]
+    with patch(
+        "harness.runners.address_comments.run_cmd",
+        return_value=MagicMock(returncode=0, stdout=json.dumps(replies).encode()),
+    ):
+        assert not address_comments._reply_observed(_FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {})
+
+
+def test_reply_observed_issue_matches_by_url_in_body():
+    issue_comment = {**_FAKE_COMMENT, "type": "issue", "url": "http://x/issue/1"}
+    comments = [{"user": {"login": "harness-bot"}, "body": "> http://x/issue/1\n\nsome reply"}]
+    with patch(
+        "harness.runners.address_comments.run_cmd",
+        return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
+    ):
+        assert address_comments._reply_observed(issue_comment, 1, "acme/frontend", "harness-bot", "2026-01-01", {})
+
+
+def test_reply_observed_review_falls_back_to_timestamp():
+    review_comment = {**_FAKE_COMMENT, "type": "review"}
+    comments = [{"user": {"login": "harness-bot"}, "created_at": "2026-01-02T00:00:00Z", "body": "reply"}]
+    with patch(
+        "harness.runners.address_comments.run_cmd",
+        return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
+    ):
+        assert address_comments._reply_observed(
+            review_comment, 1, "acme/frontend", "harness-bot", "2026-01-01T00:00:00Z", {}
+        )
+
+
+def test_reply_observed_returns_true_when_api_fails_inconclusive():
+    with patch("harness.runners.address_comments.run_cmd", return_value=MagicMock(returncode=1, stdout=b"")):
+        assert address_comments._reply_observed(_FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {})
+
+
+def test_address_single_comment_warns_when_no_commit_and_no_reply_observed(caplog):
+    mock_backend = MagicMock()
+    mock_backend.run.return_value = MagicMock(returncode=0)
+    with (
+        patch("harness.runners.address_comments.get_head_sha", return_value="sha-before"),
+        patch("harness.runners.address_comments._reply_observed", return_value=False),
+        caplog.at_level("WARNING"),
+    ):
+        _address_single_comment(
+            _FAKE_COMMENT,
+            1,
+            "instructions",
+            mock_backend,
+            "/repo",
+            "acme/frontend",
+            {},
+            "sha-before",
+            our_login="harness-bot",
+        )
+    assert any("silent skip" in r.message for r in caplog.records)
+
+
+def test_address_single_comment_no_warning_when_commit_made(caplog):
+    mock_backend = MagicMock()
+    mock_backend.run.return_value = MagicMock(returncode=0)
+    with (
+        patch("harness.runners.address_comments.get_head_sha", return_value="sha-after"),
+        patch("harness.runners.address_comments._is_ancestor", return_value=True),
+        patch("harness.runners.address_comments._reply_observed") as mock_reply_observed,
+        caplog.at_level("WARNING"),
+    ):
+        _address_single_comment(
+            _FAKE_COMMENT,
+            1,
+            "instructions",
+            mock_backend,
+            "/repo",
+            "acme/frontend",
+            {},
+            "sha-before",
+            our_login="harness-bot",
+        )
+    mock_reply_observed.assert_not_called()
+    assert not any("silent skip" in r.message for r in caplog.records)
+
+
+def test_address_single_comment_skips_reply_check_when_our_login_not_provided(caplog):
+    mock_backend = MagicMock()
+    mock_backend.run.return_value = MagicMock(returncode=0)
+    with (
+        patch("harness.runners.address_comments.get_head_sha", return_value="sha-before"),
+        patch("harness.runners.address_comments._reply_observed") as mock_reply_observed,
+        caplog.at_level("WARNING"),
+    ):
+        _address_single_comment(
+            _FAKE_COMMENT, 1, "instructions", mock_backend, "/repo", "acme/frontend", {}, "sha-before"
+        )
+    mock_reply_observed.assert_not_called()

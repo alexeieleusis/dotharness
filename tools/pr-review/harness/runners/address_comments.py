@@ -1,6 +1,7 @@
 import json
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from harness.backend import Backend
@@ -184,6 +185,7 @@ def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -> None
                 ctx.env,
                 head_sha,
                 ctx.opencode_dir,
+                ctx.our_login,
             )
             if rewritten:
                 logger.warning(
@@ -356,6 +358,53 @@ def _is_ancestor(candidate_sha: str, descendant_sha: str, wdir: str, env: dict) 
     return result.returncode == 0
 
 
+def _fetch_all_pages(path: str, env: dict) -> list[dict] | None:
+    """GET-paginate a GitHub REST list endpoint. Returns None if any page fails."""
+    items: list[dict] = []
+    page = 1
+    while True:
+        result = run_cmd(
+            ["gh", "api", "--method", "GET", path, "-F", "per_page=100", "-F", f"page={page}"],
+            cwd="/",
+            env=env,
+            timeout=TIMEOUT_GH,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        batch = json.loads(result.stdout)
+        items.extend(batch)
+        if len(batch) < 100:
+            return items
+        page += 1
+
+
+def _reply_observed(comment: dict, pr_number: int, repo: str, our_login: str, since_iso: str, env: dict) -> bool:
+    """Best-effort check that *some* reply attributable to this comment was posted by
+    our_login. Returns True on an inconclusive API failure — this only exists to surface
+    silent skips, not to police a flaky GitHub API, so it must not cry wolf."""
+    ctype = comment.get("type")
+    endpoint = (
+        f"repos/{repo}/pulls/{pr_number}/comments" if ctype == "inline" else f"repos/{repo}/issues/{pr_number}/comments"
+    )
+    items = _fetch_all_pages(endpoint, env)
+    if items is None:
+        return True
+    if ctype == "inline":
+        cid = comment.get("id")
+        return any(c.get("in_reply_to_id") == cid and c.get("user", {}).get("login") == our_login for c in items)
+    if ctype == "issue":
+        url = comment.get("url", "")
+        return bool(url) and any(
+            c.get("user", {}).get("login") == our_login and url in c.get("body", "") for c in items
+        )
+    # "review" comments have no reply linkage in the GitHub API — a `gh pr comment` reply
+    # just lands as a plain issue comment. Fall back to "our_login posted anything since
+    # we started this comment", which is exact as long as comments are processed
+    # sequentially (they are — see the loop in _process_single_pr).
+    return any(c.get("user", {}).get("login") == our_login and c.get("created_at", "") > since_iso for c in items)
+
+
 def _address_single_comment(
     comment: dict,
     pr_number: int,
@@ -366,6 +415,7 @@ def _address_single_comment(
     env: dict,
     pre_sha: str,
     opencode_dir: str | None = None,
+    our_login: str | None = None,
 ) -> tuple[str, bool]:
     """Run the backend for `comment`, then return the resulting HEAD sha (or `pre_sha`
     unchanged if HEAD didn't move / couldn't be read) so the caller can pass it as the
@@ -386,6 +436,10 @@ def _address_single_comment(
     comment_instructions = _build_comment_instructions(instructions_template, comment, pr_number, repo)
     post_sha = pre_sha
     rewritten = False
+    # Captured before the backend runs (not lazily, on-demand) because it marks the start
+    # of this comment's processing window — _reply_observed's review-comment fallback
+    # relies on it to exclude replies posted for earlier comments in this same PR run.
+    since_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         backend.run(comment_instructions, cwd=wdir, opencode_dir=opencode_dir, context=f"PR #{pr_number} comment {cid}")
         logger.info("PR #%d: comment %s — backend finished", pr_number, cid)
@@ -402,6 +456,20 @@ def _address_single_comment(
                 cid,
                 pre_sha,
                 post_sha,
+            )
+    made_commit = post_sha != pre_sha
+    if our_login and not made_commit:
+        try:
+            observed = _reply_observed(comment, pr_number, repo, our_login, since_iso, env)
+        except Exception:
+            logger.debug("PR #%d comment %s: reply-observed check itself failed", pr_number, cid, exc_info=True)
+            observed = True  # inconclusive — don't warn on a flaky check, not a confirmed skip
+        if not observed:
+            logger.warning(
+                "PR #%d comment %s: backend finished with no commit and no reply detected — "
+                "this may be a silent skip (verify manually rather than assuming it was intentional noise)",
+                pr_number,
+                cid,
             )
     return post_sha, rewritten
 
