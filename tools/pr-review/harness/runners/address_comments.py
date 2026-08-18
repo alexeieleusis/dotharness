@@ -393,17 +393,12 @@ def _reply_observed(comment: dict, pr_number: int, repo: str, our_login: str, si
     if ctype == "inline":
         cid = comment.get("id")
         return any(c.get("in_reply_to_id") == cid and c.get("user", {}).get("login") == our_login for c in items)
-    if ctype == "issue":
-        url = comment.get("url", "")
-        return bool(url) and any(
-            c.get("user", {}).get("login") == our_login and url in c.get("body", "") for c in items
-        )
-    # "review" comments have no reply linkage in the GitHub API — a `gh pr comment` reply
-    # just lands as a plain issue comment. Fall back to "our_login posted anything since
-    # we started this comment", which is exact as long as comments are processed
-    # sequentially (they are — see the loop in _process_single_pr). GitHub timestamps are
-    # second-precision, so use >= to avoid missing a reply posted in the same second as
-    # since_iso.
+    # "issue" and "review" comments have no reply linkage in the GitHub API — a reply just
+    # lands as a plain issue comment with no `in_reply_to_id` tying it back to the parent.
+    # Fall back to "our_login posted anything since we started this comment", which is
+    # exact as long as comments are processed sequentially (they are — see the loop in
+    # _process_single_pr). GitHub timestamps are second-precision, so use >= to avoid
+    # missing a reply posted in the same second as since_iso.
     return any(c.get("user", {}).get("login") == our_login and c.get("created_at", "") >= since_iso for c in items)
 
 

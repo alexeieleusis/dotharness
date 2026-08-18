@@ -523,14 +523,31 @@ def test_reply_observed_inline_false_when_reply_from_someone_else():
         assert not address_comments._reply_observed(_FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {})
 
 
-def test_reply_observed_issue_matches_by_url_in_body():
+def test_reply_observed_issue_falls_back_to_timestamp():
     issue_comment = {**_FAKE_COMMENT, "type": "issue", "url": "http://x/issue/1"}
-    comments = [{"user": {"login": "harness-bot"}, "body": "> http://x/issue/1\n\nsome reply"}]
+    # A reply posted by us that does NOT quote the parent URL: issue comments have no
+    # reply linkage, so it must be detected via the timestamp fallback (the old
+    # URL-substring check missed it and logged a false "no reply detected" warning).
+    comments = [{"user": {"login": "harness-bot"}, "created_at": "2026-01-02T00:00:00Z", "body": "some reply"}]
     with patch(
         "harness.runners.address_comments.run_cmd",
         return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
     ):
-        assert address_comments._reply_observed(issue_comment, 1, "acme/frontend", "harness-bot", "2026-01-01", {})
+        assert address_comments._reply_observed(
+            issue_comment, 1, "acme/frontend", "harness-bot", "2026-01-01T00:00:00Z", {}
+        )
+
+
+def test_reply_observed_issue_false_when_reply_not_from_us():
+    issue_comment = {**_FAKE_COMMENT, "type": "issue", "url": "http://x/issue/1"}
+    comments = [{"user": {"login": "alice"}, "created_at": "2026-01-02T00:00:00Z", "body": "> http://x/issue/1"}]
+    with patch(
+        "harness.runners.address_comments.run_cmd",
+        return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
+    ):
+        assert not address_comments._reply_observed(
+            issue_comment, 1, "acme/frontend", "harness-bot", "2026-01-01T00:00:00Z", {}
+        )
 
 
 def test_reply_observed_review_falls_back_to_timestamp():
