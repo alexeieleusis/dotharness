@@ -87,7 +87,9 @@ review or pre-commit step.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `require_reaction_for_focused_review` | boolean | `false` | When `true`, an inline comment thread carrying a `focused-review`-bot reply (marked `[focused-review-bot]`) is only added to `address-comments`'s actionable list once the harness's own `gh` account has left a `+1` reaction on that specific reply. Unapproved threads are skipped (and re-checked) every run. When `false`, such threads are left to the pre-existing `our_login`-last-reply skip, same as before this option existed. |
+| `trusted_commenters` | `"*"` or list of strings | `"*"` | Restricts which comment authors `address-comments` will act on at all; `"*"` (default) considers everyone. |
+
+An inline comment thread carrying a `focused-review`-bot reply (marked `[focused-review-bot]`) is always held back until the harness's own `gh` account has left a `+1` reaction on that specific reply — checked live on every run, with no config flag to change this. Once approved, the thread is addressed using that reply's own content as the actual "comment to address" (not the terse original finding it responded to) — see [`address-comments`](commands/address-comments.md#notes) for details.
 
 ## Full example
 
@@ -129,7 +131,7 @@ enabled = false
 # vibe_types_repo = "~/.harness/vendor/vibe-types"
 
 [address_comments]
-# require_reaction_for_focused_review = false
+# trusted_commenters = "*"
 
 # [[repo.subdir]]
 # path = "."

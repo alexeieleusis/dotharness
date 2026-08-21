@@ -46,7 +46,7 @@ Read the comment body carefully.
 
 - If it contains HTML (e.g. SonarQube wraps rule details in `<details>` tags), parse the HTML to extract the rule name and the exact fix required.
 - For **inline** comments, read the specified file at the specified line to understand the surrounding code and the diff context.
-- If there are thread replies, check whether the comment has already been addressed — if so, skip the fix and skip the commit; just post a brief acknowledgment reply.
+- If there are thread replies, check whether the comment has already been addressed — if so, skip the fix and skip the commit; just post a brief acknowledgment reply. **"Already addressed" means a reply pointing at a real, already-landed change** — e.g. an "Addressed in `<commit-url>`" reply, or a human confirming a prior fix already shipped. A reply that merely *describes* a proposed fix in detail (even with a full code snippet) is not the same thing — that's a proposal for you to apply, not a change that already exists. When in doubt, check the file: if the described change isn't actually there, it isn't done.
 
 ---
 
@@ -60,6 +60,8 @@ If Step 0 classified this comment as **reply-only**, skip straight to Step 4 —
 4. Draft a reply for the comment — what was changed and why, or a respectful pushback if you disagree. Be specific; avoid generic phrases like "addressed" or "fixed".
 
 If no code change is needed (the comment turns out to be already fixed, or you're pushing back after investigating), skip Step 3 and reply directly in Step 4 with your explanation.
+
+**Never describe a reply as "Done", "Fixed", or as having made a change unless you actually edited the file(s) and completed Step 3 with a real commit.** If you only worked out what the fix should be but didn't apply and commit it, that is not done — either go back and actually make the edit and commit it, or write a reply that accurately says what you found without claiming it's applied.
 
 ---
 
