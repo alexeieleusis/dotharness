@@ -8,6 +8,7 @@ from harness.backend import Backend
 from harness.config import HarnessConfig
 from harness.lock import acquire_lock
 from harness.runners.common import (
+    FOCUSED_REVIEW_MARKER,
     PR_COMMENTS_SCRIPT_PATH,
     TIMEOUT_GH,
     TIMEOUT_GIT,
@@ -113,7 +114,6 @@ def _run_locked(config: HarnessConfig) -> None:
         original_sha=original_sha,
         repo=config.repo.name,
         env=env,
-        require_reaction_for_focused_review=config.address_comments.require_reaction_for_focused_review,
         trusted_commenters=config.address_comments.trusted_commenters,
         opencode_dir=opencode_dir,
         plugin_prefix=plugin_prefix,
@@ -145,7 +145,6 @@ class _ProcessPrContext:
     original_sha: str
     repo: str
     env: dict
-    require_reaction_for_focused_review: bool
     trusted_commenters: str | list[str]
     opencode_dir: str | None = None
     plugin_prefix: str | None = None
@@ -165,7 +164,6 @@ def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -> None
             ctx.repo,
             ctx.our_login,
             ctx.env,
-            ctx.require_reaction_for_focused_review,
             ctx.trusted_commenters,
             ctx.plugin_prefix,
         )
@@ -208,22 +206,6 @@ def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -> None
         git_restore(ctx.original_sha, branch, ctx.wdir, ctx.env)
 
 
-def _split_gated_focused_review_comments(comments: list[dict], enabled: bool) -> tuple[list[dict], list[dict]]:
-    """Split comments into (gated, ungated). Gated comments are inline threads whose most
-    recent reply carries a focused-review-bot marker — meaning it hasn't been addressed
-    yet. Once anything is posted after that marker reply (our own completion reply, or a
-    further human comment), the thread is no longer gated. Empty when `enabled` is False."""
-    if not enabled:
-        return [], comments
-    gated, ungated = [], []
-    for c in comments:
-        if c.get("type") == "inline" and find_last_reply_if_marked(c) is not None:
-            gated.append(c)
-        else:
-            ungated.append(c)
-    return gated, ungated
-
-
 def _focused_review_approved(comment: dict, repo: str, our_login: str | None, env: dict) -> bool:
     """True if our_login left a +1 reaction on this comment's (last, marker-carrying) reply."""
     if not our_login:
@@ -234,6 +216,51 @@ def _focused_review_approved(comment: dict, repo: str, our_login: str | None, en
     return reply_has_reaction_from(last_reply["id"], repo, our_login, env)
 
 
+def _as_focused_review_comment(parent: dict, marker_reply: dict) -> dict:
+    """Re-point an approved focused-review thread at its marker reply — the real fix spec —
+    as the actual "comment to address", instead of the terse automated finding it replied
+    to. File location and diff context are inherited from the parent; the parent itself is
+    carried along as background-only context under `focused_review_original`."""
+    parent_url = parent.get("url", "")
+    base_url = parent_url.split("#", 1)[0]
+    return {
+        "type": "inline",
+        # The reply's own id/author, so replies thread correctly off it rather than the root.
+        "id": marker_reply["id"],
+        "author": marker_reply["author"],
+        "path": parent["path"],
+        "line": parent.get("line"),
+        "body": marker_reply["body"],
+        "url": f"{base_url}#discussion_r{marker_reply['id']}" if base_url else parent_url,
+        "diff_hunk": parent.get("diff_hunk", ""),
+        "replies": [],
+        "focused_review_original": {
+            "author": parent.get("author", "?"),
+            "body": parent.get("body", ""),
+        },
+    }
+
+
+def _select_approved_focused_review_comments(
+    comments: list[dict], pr_number: int, repo: str, our_login: str | None, env: dict
+) -> tuple[list[dict], list[dict]]:
+    """Split out inline comments whose last reply carries the focused-review-bot marker and
+    has a +1 reaction from our_login, re-pointed at that reply via `_as_focused_review_comment`.
+    Selection is deterministic and programmatic rather than left to the backend's judgment,
+    since a detailed marker reply can otherwise be misread as evidence of prior completion.
+    Everything else is left in `rest` for the ordinary unresolved/already-replied pipeline."""
+    selected, rest = [], []
+    for c in comments:
+        marker_reply = find_last_reply_if_marked(c) if c.get("type") == "inline" else None
+        if marker_reply is not None and _focused_review_approved(c, repo, our_login, env):
+            selected.append(_as_focused_review_comment(c, marker_reply))
+        else:
+            rest.append(c)
+    if selected:
+        logger.info("PR #%d: %d approved focused-review comment(s) selected for addressing", pr_number, len(selected))
+    return selected, rest
+
+
 def _is_comment_already_replied(comment: dict, our_login: str) -> bool:
     """Return True if `our_login` has already replied to this comment."""
     if comment["type"] == "inline":
@@ -241,26 +268,6 @@ def _is_comment_already_replied(comment: dict, our_login: str) -> bool:
         if replies and replies[-1].get("author") == our_login:
             return True
     return comment["type"] == "issue" and comment.get("author") == our_login
-
-
-def _process_gated_comments(
-    gated: list[dict],
-    comments: list[dict],
-    pr_number: int,
-    repo: str,
-    our_login: str | None,
-    env: dict,
-) -> list[dict]:
-    """Filter gated comments by approval status, log pending count, and append approved to comments."""
-    approved = [c for c in gated if _focused_review_approved(c, repo, our_login, env)]
-    pending = len(gated) - len(approved)
-    if pending:
-        logger.info(
-            "PR #%d: %d focused-review comment(s) awaiting a \U0001f44d reaction before addressing",
-            pr_number,
-            pending,
-        )
-    return comments + approved
 
 
 def _filter_by_trusted_commenters(
@@ -333,16 +340,14 @@ def _filter_comments(
     repo: str,
     our_login: str | None,
     env: dict,
-    require_reaction_for_focused_review: bool = False,
     trusted_commenters: str | list[str] = "*",
     plugin_prefix: str | None = None,
 ) -> list[dict]:
     comments = _filter_by_trusted_commenters(comments, pr_number, trusted_commenters)
     comments = _filter_by_unresolved(comments, pr_number, repo, env)
-    gated, comments = _split_gated_focused_review_comments(comments, require_reaction_for_focused_review)
+    selected, comments = _select_approved_focused_review_comments(comments, pr_number, repo, our_login, env)
     comments = _filter_already_replied(comments, pr_number, our_login)
-    if gated:
-        comments = _process_gated_comments(gated, comments, pr_number, repo, our_login, env)
+    comments = selected + comments
     comments = _filter_by_plugin_prefix(comments, pr_number, plugin_prefix)
     return comments
 
@@ -515,6 +520,18 @@ def _build_comment_instructions(template: str, comment: dict, pr_number: int, re
     body = _sanitize_comment_body(comment["body"])
 
     if ctype == "inline":
+        original = comment.get("focused_review_original")
+        if original is not None:
+            lines += [
+                f"This comment is our own {FOCUSED_REVIEW_MARKER} bot's fix spec, and it has "
+                "already been approved with a \U0001f44d reaction — it was selected "
+                "programmatically because it needs a real fix, not because it merits a "
+                "judgment call. Skip Step 0 of the instructions above entirely: go straight "
+                "to Steps 2-4 (make the fix, commit, reply). Do not reply with just an "
+                "acknowledgment, and do not claim the fix is done unless you actually made "
+                "and committed it.",
+                "",
+            ]
         lines += [
             f"File: {comment['path']}:{comment['line']}",
             f"Comment ID: {comment['id']}",
@@ -538,6 +555,14 @@ def _build_comment_instructions(template: str, comment: dict, pr_number: int, re
             for r in comment["replies"]:
                 sanitized_reply = _sanitize_comment_body(r["body"])
                 lines.append(f"  @{r['author']}: {sanitized_reply}")
+        if original is not None:
+            lines += [
+                "",
+                f"Background only — do NOT treat this as the thing to implement (the comment "
+                "body above already is the fix spec): the original automated finding from "
+                f"@{original.get('author', '?')} that prompted this focused-review pass was:",
+                f"  {_sanitize_comment_body(original.get('body', ''))}",
+            ]
     elif ctype == "review":
         lines += [
             f"Comment ID: {comment['id']}",

@@ -251,7 +251,7 @@ vibe_types_repo = "~/custom/vibe-types"
 
 def test_address_comments_defaults(minimal_toml):
     cfg = load_config(minimal_toml)
-    assert cfg.address_comments.require_reaction_for_focused_review is False
+    assert cfg.address_comments.trusted_commenters == "*"
 
 
 def test_min_reanalysis_interval_hours_default(minimal_toml):
@@ -283,10 +283,10 @@ name = "a/b"
 working_dir = "/tmp"
 
 [address_comments]
-require_reaction_for_focused_review = true
+trusted_commenters = ["alice", "bob"]
 """)
     cfg = load_config(p)
-    assert cfg.address_comments.require_reaction_for_focused_review is True
+    assert cfg.address_comments.trusted_commenters == ["alice", "bob"]
 
 
 def test_malformed_toml_raises_config_error(tmp_path):

@@ -49,7 +49,6 @@ class FocusedReviewConfig:
 
 @dataclass
 class AddressCommentsConfig:
-    require_reaction_for_focused_review: bool = False
     trusted_commenters: str | list[str] = "*"
 
 
@@ -170,7 +169,6 @@ def load_config(path: Path) -> HarnessConfig:
     else:
         trusted_commenters = list(raw_tc)
     address_comments = AddressCommentsConfig(
-        require_reaction_for_focused_review=ac.get("require_reaction_for_focused_review", False),
         trusted_commenters=trusted_commenters,
     )
 

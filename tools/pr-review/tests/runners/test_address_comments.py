@@ -7,7 +7,6 @@ from harness.runners import address_comments
 from harness.runners.address_comments import (
     _address_single_comment,
     _focused_review_approved,
-    _split_gated_focused_review_comments,
 )
 from harness.runners.common import FOCUSED_REVIEW_MARKER
 
@@ -320,32 +319,86 @@ _ADDRESSED_MARKED_COMMENT = {
 }
 
 
-def test_split_gated_focused_review_comments_disabled_returns_all_ungated():
-    gated, ungated = _split_gated_focused_review_comments([_MARKED_COMMENT, _PLAIN_COMMENT], enabled=False)
-    assert gated == []
-    assert ungated == [_MARKED_COMMENT, _PLAIN_COMMENT]
+_MARKER_REPLY = _MARKED_COMMENT["replies"][0]
+
+_FOCUSED_REVIEW_COMMENT = address_comments._as_focused_review_comment(_MARKED_COMMENT, _MARKER_REPLY)
 
 
-def test_split_gated_focused_review_comments_enabled_splits_marked_from_plain():
-    gated, ungated = _split_gated_focused_review_comments([_MARKED_COMMENT, _PLAIN_COMMENT], enabled=True)
-    assert gated == [_MARKED_COMMENT]
-    assert ungated == [_PLAIN_COMMENT]
+def test_as_focused_review_comment_repoints_id_author_body_to_reply():
+    result = address_comments._as_focused_review_comment(_MARKED_COMMENT, _MARKER_REPLY)
+    assert result["id"] == 99
+    assert result["author"] == "alexei"
+    assert result["body"] == _MARKER_REPLY["body"]
+    assert result["replies"] == []
 
 
-def test_split_gated_focused_review_comments_ignores_non_inline_types():
+def test_as_focused_review_comment_inherits_location_from_parent():
+    result = address_comments._as_focused_review_comment(_MARKED_COMMENT, _MARKER_REPLY)
+    assert result["path"] == "a.py"
+    assert result["line"] == 1
+    assert result["url"] == "http://x#discussion_r99"
+
+
+def test_as_focused_review_comment_carries_parent_as_context():
+    result = address_comments._as_focused_review_comment(_MARKED_COMMENT, _MARKER_REPLY)
+    assert result["focused_review_original"] == {"author": "sonar", "body": "terse sonar message"}
+
+
+def test_build_comment_instructions_steers_backend_for_approved_focused_review_comment():
+    # Regression test for #18: the marker reply carries the actual, detailed fix spec — the
+    # top-level comment it responded to is just the terse automated trigger — and the
+    # backend must not be left to judge that for itself (it previously misjudged a
+    # detailed marker reply as evidence of prior completion and skipped the real fix).
+    instructions = address_comments._build_comment_instructions("template", _FOCUSED_REVIEW_COMMENT, 1, "acme/frontend")
+    assert "Skip Step 0" in instructions
+    assert "sonar" in instructions
+    assert "terse sonar message" in instructions
+    # The fix spec (marker reply body) must appear before the background-only original
+    # finding, so a backend reading top-to-bottom sees the actionable content first.
+    assert instructions.index("suggested fix") < instructions.index("terse sonar message")
+
+
+def test_build_comment_instructions_no_marker_note_for_plain_comment():
+    instructions = address_comments._build_comment_instructions("template", _PLAIN_COMMENT, 1, "acme/frontend")
+    assert "Skip Step 0" not in instructions
+
+
+def test_select_approved_focused_review_comments_selects_reacted_marked_comment():
+    with patch("harness.runners.address_comments.reply_has_reaction_from", return_value=True):
+        selected, rest = address_comments._select_approved_focused_review_comments(
+            [_MARKED_COMMENT, _PLAIN_COMMENT], 1, "acme/frontend", "alexei", {}
+        )
+    assert selected == [_FOCUSED_REVIEW_COMMENT]
+    assert rest == [_PLAIN_COMMENT]
+
+
+def test_select_approved_focused_review_comments_leaves_unreacted_comment_in_rest():
+    with patch("harness.runners.address_comments.reply_has_reaction_from", return_value=False):
+        selected, rest = address_comments._select_approved_focused_review_comments(
+            [_MARKED_COMMENT], 1, "acme/frontend", "alexei", {}
+        )
+    assert selected == []
+    assert rest == [_MARKED_COMMENT]
+
+
+def test_select_approved_focused_review_comments_ignores_non_inline_types():
     review_comment = {"type": "review", "id": "review-1", "body": FOCUSED_REVIEW_MARKER, "replies": []}
-    gated, ungated = _split_gated_focused_review_comments([review_comment], enabled=True)
-    assert gated == []
-    assert ungated == [review_comment]
+    selected, rest = address_comments._select_approved_focused_review_comments(
+        [review_comment], 1, "acme/frontend", "alexei", {}
+    )
+    assert selected == []
+    assert rest == [review_comment]
 
 
-def test_split_gated_focused_review_comments_excludes_already_addressed_thread():
-    # The marker reply is no longer the LAST reply (our own completion reply is), so
-    # this thread must NOT be re-gated — it should fall through to normal filtering,
-    # where the pre-existing our_login-last-reply skip takes over.
-    gated, ungated = _split_gated_focused_review_comments([_ADDRESSED_MARKED_COMMENT], enabled=True)
-    assert gated == []
-    assert ungated == [_ADDRESSED_MARKED_COMMENT]
+def test_select_approved_focused_review_comments_leaves_already_addressed_thread_in_rest():
+    # The marker reply is no longer the LAST reply (our own completion reply is), so this
+    # thread must NOT be re-selected — it should fall through to `rest`, where the
+    # pre-existing our_login-last-reply skip takes over.
+    selected, rest = address_comments._select_approved_focused_review_comments(
+        [_ADDRESSED_MARKED_COMMENT], 1, "acme/frontend", "alexei", {}
+    )
+    assert selected == []
+    assert rest == [_ADDRESSED_MARKED_COMMENT]
 
 
 def test_focused_review_approved_true_when_reaction_present():
@@ -368,60 +421,47 @@ def test_focused_review_approved_false_when_no_our_login():
 
 def test_focused_review_approved_false_when_marker_reply_is_not_last():
     # _focused_review_approved should not even be relevant here since
-    # _split_gated_focused_review_comments already excludes this comment from "gated" —
+    # _select_approved_focused_review_comments already excludes this comment from "selected" —
     # but verify directly too, since it's a separate function with its own contract.
     result = _focused_review_approved(_ADDRESSED_MARKED_COMMENT, "acme/frontend", "alexei", {})
     assert result is False
 
 
-def test_filter_comments_gate_disabled_keeps_marked_comment_subject_to_normal_skip():
-    # our_login authored the marker reply, so with the gate disabled the existing
-    # our_login-last-reply skip still swallows it (today's accidental behavior).
-    with patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value=None):
-        result = address_comments._filter_comments(
-            [_MARKED_COMMENT], 1, "acme/frontend", "alexei", {}, require_reaction_for_focused_review=False
-        )
-    assert result == []
-
-
-def test_filter_comments_gate_enabled_holds_back_unapproved_marked_comment():
+def test_filter_comments_holds_back_unapproved_marked_comment():
+    # our_login authored the marker reply, which is just a flagged note, not a real fix —
+    # without a 👍 approval, the marked comment must be excluded entirely (regression test
+    # for #18: this used to be silently swallowed forever even after approval, since
+    # nothing distinguished "flagged" from "already replied").
     with (
         patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value=None),
         patch("harness.runners.address_comments.reply_has_reaction_from", return_value=False),
     ):
-        result = address_comments._filter_comments(
-            [_MARKED_COMMENT], 1, "acme/frontend", "alexei", {}, require_reaction_for_focused_review=True
-        )
+        result = address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
     assert result == []
 
 
-def test_filter_comments_gate_enabled_admits_approved_marked_comment():
+def test_filter_comments_admits_approved_marked_comment_transformed():
+    # The comment reaching the backend must be the marker reply itself (re-pointed via
+    # `_as_focused_review_comment`), not the terse parent it responded to.
     with (
         patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value=None),
         patch("harness.runners.address_comments.reply_has_reaction_from", return_value=True),
     ):
-        result = address_comments._filter_comments(
-            [_MARKED_COMMENT], 1, "acme/frontend", "alexei", {}, require_reaction_for_focused_review=True
-        )
-    assert result == [_MARKED_COMMENT]
+        result = address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
+    assert result == [_FOCUSED_REVIEW_COMMENT]
 
 
-def test_filter_comments_gate_enabled_does_not_affect_plain_comments():
+def test_filter_comments_does_not_affect_plain_comments():
     with patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value=None):
-        result = address_comments._filter_comments(
-            [_PLAIN_COMMENT], 1, "acme/frontend", "alexei", {}, require_reaction_for_focused_review=True
-        )
+        result = address_comments._filter_comments([_PLAIN_COMMENT], 1, "acme/frontend", "alexei", {})
     assert result == [_PLAIN_COMMENT]
 
 
-def test_filter_comments_gate_enabled_does_not_reprocess_already_addressed_thread():
-    # End-to-end: with the gate enabled, a thread whose marker reply has already been
-    # superseded by our own completion reply must be dropped by the ordinary
-    # our_login-last-reply skip, not resent to the backend again.
+def test_filter_comments_does_not_reprocess_already_addressed_thread():
+    # A thread whose marker reply has already been superseded by our own completion reply
+    # must be dropped by the ordinary our_login-last-reply skip, not resent to the backend.
     with patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value=None):
-        result = address_comments._filter_comments(
-            [_ADDRESSED_MARKED_COMMENT], 1, "acme/frontend", "alexei", {}, require_reaction_for_focused_review=True
-        )
+        result = address_comments._filter_comments([_ADDRESSED_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
     assert result == []
 
 
