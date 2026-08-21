@@ -372,13 +372,32 @@ def test_select_approved_focused_review_comments_selects_reacted_marked_comment(
     assert rest == [_PLAIN_COMMENT]
 
 
-def test_select_approved_focused_review_comments_leaves_unreacted_comment_in_rest():
+def test_select_approved_focused_review_comments_drops_unreacted_marked_comment():
+    # Marked-but-unapproved must be dropped outright, not left in `rest` — leaving it in
+    # `rest` would rely on `_filter_already_replied`'s incidental our_login-last-reply-author
+    # match to keep it out of the ordinary pipeline, which breaks if our_login ever diverges
+    # from whoever posted the marker reply (see test_select_approved_focused_review_comments_
+    # drops_unreacted_marked_comment_even_when_our_login_did_not_post_marker below).
     with patch("harness.runners.address_comments.reply_has_reaction_from", return_value=False):
         selected, rest = address_comments._select_approved_focused_review_comments(
             [_MARKED_COMMENT], 1, "acme/frontend", "alexei", {}
         )
     assert selected == []
-    assert rest == [_MARKED_COMMENT]
+    assert rest == []
+
+
+def test_select_approved_focused_review_comments_drops_unreacted_marked_comment_even_when_our_login_did_not_post_marker():
+    # Regression test for the gap flagged in PR #19 review: when our_login resolves to a
+    # different login than whoever posted the marker reply (stale gh session, account
+    # switch, token rotation), the old code relied on `_filter_already_replied`'s
+    # replies[-1].author == our_login check to keep the marked-but-unapproved comment out of
+    # the ordinary pipeline. That coincidence breaks here — but the drop must still happen.
+    with patch("harness.runners.address_comments.reply_has_reaction_from", return_value=False):
+        selected, rest = address_comments._select_approved_focused_review_comments(
+            [_MARKED_COMMENT], 1, "acme/frontend", "someone-else", {}
+        )
+    assert selected == []
+    assert rest == []
 
 
 def test_select_approved_focused_review_comments_ignores_non_inline_types():
@@ -437,6 +456,19 @@ def test_filter_comments_holds_back_unapproved_marked_comment():
         patch("harness.runners.address_comments.reply_has_reaction_from", return_value=False),
     ):
         result = address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
+    assert result == []
+
+
+def test_filter_comments_holds_back_unapproved_marked_comment_when_our_login_did_not_post_marker():
+    # Regression test for PR #19 review: if `_select_approved_focused_review_comments` fell
+    # back to `_filter_already_replied`'s replies[-1].author == our_login match here, this
+    # would let the raw, untransformed _MARKED_COMMENT through untouched (the bug this PR
+    # exists to fix) instead of holding it back.
+    with (
+        patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value=None),
+        patch("harness.runners.address_comments.reply_has_reaction_from", return_value=False),
+    ):
+        result = address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "someone-else", {})
     assert result == []
 
 

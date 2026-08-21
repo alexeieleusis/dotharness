@@ -248,16 +248,26 @@ def _select_approved_focused_review_comments(
     has a +1 reaction from our_login, re-pointed at that reply via `_as_focused_review_comment`.
     Selection is deterministic and programmatic rather than left to the backend's judgment,
     since a detailed marker reply can otherwise be misread as evidence of prior completion.
-    Everything else is left in `rest` for the ordinary unresolved/already-replied pipeline."""
+    A marked-but-not-yet-approved comment is dropped outright, here, rather than left in
+    `rest` for `_filter_already_replied`'s last-reply-author check to catch — that check only
+    happens to work while `our_login` matches whoever posted the marker reply, and stops
+    matching the moment those two logins diverge (stale gh session, account switch, token
+    rotation), which would let the untransformed marker-carrying comment back into the
+    ordinary pipeline. Everything else (no marker at all) is left in `rest`."""
     selected, rest = [], []
+    dropped = 0
     for c in comments:
         marker_reply = find_last_reply_if_marked(c) if c.get("type") == "inline" else None
-        if marker_reply is not None and _focused_review_approved(c, repo, our_login, env):
+        if marker_reply is None:
+            rest.append(c)
+        elif _focused_review_approved(c, repo, our_login, env):
             selected.append(_as_focused_review_comment(c, marker_reply))
         else:
-            rest.append(c)
+            dropped += 1
     if selected:
         logger.info("PR #%d: %d approved focused-review comment(s) selected for addressing", pr_number, len(selected))
+    if dropped:
+        logger.info("PR #%d: %d marked focused-review comment(s) not yet approved, held back", pr_number, dropped)
     return selected, rest
 
 
