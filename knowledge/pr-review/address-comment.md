@@ -14,17 +14,25 @@ After you are done, the runner will automatically push the branch to origin — 
 
 ## Step 0 — Decide whether to act
 
-Before doing anything, check whether this comment warrants a response at all.
+Before doing anything, check whether this comment warrants a reply, a fix, or neither. There are three buckets — read all three before deciding, since it's easy to misclassify a comment as noise just because it's phrased politely or marked non-blocking.
 
-**Skip entirely (no reply, no commit, no action)** if the comment is:
+**Skip entirely (no reply, no commit, no action)** — only for comments with *no technical content to respond to*:
 - A bot or automated notification (Linear, Jira, ticket references, CI summaries)
-- Purely informational with no actionable ask ("SonarQube: no findings", "Build passed", "Deployed to staging")
-- Purely positive with no change requested ("LGTM", "Looks good!", "Thanks for the fix!", "Great work!", "Happy with this")
-- A congratulatory or closing remark after an issue has already been resolved
+- A status report with nothing to react to ("SonarQube: no findings", "Build passed", "Deployed to staging")
+- A plain acknowledgment or compliment with nothing else attached ("LGTM", "Looks good!", "Thanks for the fix!", "Great work!", "Happy with this")
+- A congratulatory or closing remark after an issue has already been resolved, that doesn't raise anything new
 
 Posting a reply to noise creates more noise. If the comment falls into any of these categories, **do nothing and stop**.
 
-Only proceed to Steps 1–4 if the comment contains:
+**Reply-only, no fix (skip Steps 2–3, go straight to Step 4)** — for a comment that makes a real technical point but isn't asking for a change. This is the case most often missed: a comment can be worded as praise, marked "minor" / "non-blocking" / "nit", or framed as a future follow-up, and *still* be substantive because it describes an actual property of the code. Treat it as reply-only, not skip-entirely, whenever it does any of these:
+- Praises a decision but also notes a side effect, tradeoff, or consequence of it (e.g. "nice, though this means X happens twice — harmless, but maybe worth consolidating later")
+- Flags something to watch for or revisit later without asking for a change now (e.g. "worth revisiting if a third call site shows up")
+- Points out a fact about the code (a duplicate, a count, an edge case) even when no action is demanded
+- Is explicitly labeled "minor" / "non-blocking" / "nit" — that label describes urgency, not whether it deserves a reply
+
+A reviewer who took the time to write a specific observation expects at least an acknowledgment, even when the right answer is "yes, and here's why it's fine as-is." When genuinely torn between this bucket and skip-entirely, pick this one — a redundant reply is cheap; a silently ignored reviewer is not.
+
+**Fix and reply (the full Steps 1–4)** — only proceed here if the comment contains:
 - A concrete request for a code change
 - A question that needs an answer
 - A bug report or edge case to address
@@ -44,12 +52,14 @@ Read the comment body carefully.
 
 ## Step 2 — Make the fix
 
+If Step 0 classified this comment as **reply-only**, skip straight to Step 4 — nothing to do here.
+
 1. Read the relevant file(s).
 2. Make the smallest change that satisfies the feedback.
 3. Do **not** fix unrelated issues — stay focused on what was asked.
 4. Draft a reply for the comment — what was changed and why, or a respectful pushback if you disagree. Be specific; avoid generic phrases like "addressed" or "fixed".
 
-If no code change is needed (the comment is informational, already fixed, or you are pushing back), skip Steps 3 and reply directly in Step 4 with your explanation.
+If no code change is needed (the comment turns out to be already fixed, or you're pushing back after investigating), skip Step 3 and reply directly in Step 4 with your explanation.
 
 ---
 
