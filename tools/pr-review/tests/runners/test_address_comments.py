@@ -175,6 +175,20 @@ def test_skips_comment_whose_thread_resolves_mid_run(tmp_xdg, tmp_path):
     assert len(push_calls) == 1
 
 
+def test_comment_still_unresolved_fails_open_when_check_returns_none():
+    with patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value=None):
+        result = address_comments._comment_still_unresolved(_FAKE_COMMENT, 2, "acme/frontend", {})
+    assert result is True
+
+
+def test_comment_still_unresolved_true_for_non_int_id():
+    comment = {**_FAKE_COMMENT, "id": "not-an-int"}
+    with patch("harness.runners.address_comments._get_unresolved_comment_ids") as mock_ids:
+        result = address_comments._comment_still_unresolved(comment, 2, "acme/frontend", {})
+    mock_ids.assert_not_called()
+    assert result is True
+
+
 def test_stops_processing_comments_after_push_failure(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
