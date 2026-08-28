@@ -173,6 +173,13 @@ def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -> None
         logger.info("PR #%d: found %d comment(s) to address", number, len(comments))
         head_sha = get_head_sha(ctx.wdir, ctx.env)
         for comment in comments:
+            if comment.get("type") == "inline" and not _comment_still_unresolved(comment, number, ctx.repo, ctx.env):
+                logger.info(
+                    "PR #%d: comment %s's thread was resolved since this run started, skipping",
+                    number,
+                    comment.get("id", "?"),
+                )
+                continue
             head_sha, rewritten = _address_single_comment(
                 comment,
                 number,
@@ -312,6 +319,25 @@ def _filter_by_unresolved(comments: list[dict], pr_number: int, repo: str, env: 
             before,
         )
     return comments
+
+
+def _comment_still_unresolved(comment: dict, pr_number: int, repo: str, env: dict) -> bool:
+    """Re-check one comment's thread resolution status right before addressing it.
+
+    `_filter_by_unresolved` only queries resolution state once, up front, for the whole
+    batch of comments in this run. Processing a batch means one backend session (plus a
+    push) per comment, which can take long enough that a thread gets resolved — by a
+    human, or as a side effect of an earlier comment's fix in this same run — before its
+    own turn comes up later in the loop. Fails open (True) if the GraphQL check itself
+    fails, matching `_filter_by_unresolved`'s policy of not blocking on a flaky API.
+    """
+    comment_id = comment.get("id")
+    if not isinstance(comment_id, int):
+        return True
+    unresolved_ids = _get_unresolved_comment_ids(pr_number, repo, env)
+    if unresolved_ids is None:
+        return True
+    return comment_id in unresolved_ids
 
 
 def _filter_already_replied(comments: list[dict], pr_number: int, our_login: str | None) -> list[dict]:

@@ -132,6 +132,63 @@ def test_pushes_after_each_comment_not_once_at_end(tmp_xdg, tmp_path):
     assert mock_be.return_value.run.call_count == 2  # both comments' backends ran
 
 
+def test_skips_comment_whose_thread_resolves_mid_run(tmp_xdg, tmp_path):
+    """A thread resolved (by a human, or as a side effect of an earlier comment's fix in
+    this same run) after the upfront unresolved-filter pass but before its own turn comes
+    up in the loop must not be addressed."""
+    cfg = _cfg(tmp_path)
+    (tmp_path / "k" / "pr-review").mkdir(parents=True)
+    (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
+    comment_2 = {**_FAKE_COMMENT, "id": 43}
+
+    # First call is the upfront `_filter_by_unresolved` pass — both threads open. Every
+    # call after that is a per-comment recheck — comment 43's thread has since resolved.
+    call_count = {"n": 0}
+
+    def fake_unresolved_ids(pr_number, repo, env):
+        call_count["n"] += 1
+        return {42, 43} if call_count["n"] == 1 else {42}
+
+    with (
+        patch("harness.runners.address_comments.get_gh_token", return_value="tok"),
+        patch(
+            "harness.runners.address_comments._list_prs_to_check",
+            return_value=[{"number": 2, "headRefName": "my-branch"}],
+        ),
+        patch("harness.runners.address_comments._has_pending_feedback", return_value=True),
+        patch("harness.runners.address_comments.fetch_pr_comments", return_value=[_FAKE_COMMENT, comment_2]),
+        patch("harness.runners.address_comments._get_unresolved_comment_ids", side_effect=fake_unresolved_ids),
+        patch("harness.runners.address_comments.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.address_comments.git_fetch_and_checkout"),
+        patch("harness.runners.address_comments.git_restore"),
+        patch("harness.runners.address_comments.run_cmd") as mock_run,
+        patch("harness.runners.common.run_cmd", mock_run),
+        patch("harness.runners.address_comments.Backend") as mock_be,
+    ):
+        mock_be.return_value.run.return_value = MagicMock(returncode=0)
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        address_comments._run_locked(cfg)
+    # comment 43 passed the upfront filter but its thread resolved before its turn —
+    # its backend must never run, and only one push (for comment 42) happens
+    assert mock_be.return_value.run.call_count == 1
+    push_calls = [c for c in mock_run.call_args_list if c.args and "push" in c.args[0]]
+    assert len(push_calls) == 1
+
+
+def test_comment_still_unresolved_fails_open_when_check_returns_none():
+    with patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value=None):
+        result = address_comments._comment_still_unresolved(_FAKE_COMMENT, 2, "acme/frontend", {})
+    assert result is True
+
+
+def test_comment_still_unresolved_true_for_non_int_id():
+    comment = {**_FAKE_COMMENT, "id": "not-an-int"}
+    with patch("harness.runners.address_comments._get_unresolved_comment_ids") as mock_ids:
+        result = address_comments._comment_still_unresolved(comment, 2, "acme/frontend", {})
+    mock_ids.assert_not_called()
+    assert result is True
+
+
 def test_stops_processing_comments_after_push_failure(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
