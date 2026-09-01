@@ -26,12 +26,11 @@ class FatalGitError(Exception):
     pass
 
 
-def log_called_process_output(e: subprocess.CalledProcessError, level: str) -> None:
-    log_func = logger.exception if level == "exception" else logger.warning
+def log_called_process_output(e: subprocess.CalledProcessError, log_func: Callable[..., None], label: str) -> None:
     if e.stdout:
-        log_func("%s stdout: %s", level, e.stdout.decode("utf-8", errors="replace"))
+        log_func("%s stdout: %s", label, e.stdout.decode("utf-8", errors="replace"))
     if e.stderr:
-        log_func("%s stderr: %s", level, e.stderr.decode("utf-8", errors="replace"))
+        log_func("%s stderr: %s", label, e.stderr.decode("utf-8", errors="replace"))
 
 
 def run_cmd(

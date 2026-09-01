@@ -41,4 +41,4 @@ def _prune_subdir(subdir: SubDir, config: HarnessConfig, env: dict) -> None:
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.warning("vibe_heal prune-projects failed in %s: %s", subdir_path, e)
         if isinstance(e, subprocess.CalledProcessError):
-            log_called_process_output(e, "vibe_heal prune-projects")
+            log_called_process_output(e, logger.warning, "vibe_heal prune-projects")

@@ -190,7 +190,7 @@ def _run_pre_commands(subdir, config: HarnessConfig, env: dict) -> bool:
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
             logger.warning("Pre-command failed '%s': %s", cmd_str, e)
             if isinstance(e, subprocess.CalledProcessError):
-                log_called_process_output(e, "Pre-command")
+                log_called_process_output(e, logger.warning, "Pre-command")
             if pre_command.critical:
                 return False
     return True
@@ -202,7 +202,7 @@ def _run_vh_command(cmd: list, label: str, cwd: str, timeout: int, env: dict) ->
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.exception("%s failed", label)
         if isinstance(e, subprocess.CalledProcessError):
-            log_called_process_output(e, label)
+            log_called_process_output(e, logger.exception, label)
         return False
     return True
 
