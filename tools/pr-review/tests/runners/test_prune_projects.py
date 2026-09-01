@@ -72,3 +72,14 @@ def test_timeout_is_caught_and_logged(tmp_path):
         mock_run.side_effect = subprocess.TimeoutExpired("vibe_heal", 45)
         prune_projects.run(cfg, {})
     mock_run.assert_called_once()
+
+
+def test_os_error_in_one_subdir_does_not_stop_the_next(tmp_path):
+    cfg = _make_config(tmp_path, [SubDir(path="a"), SubDir(path="b")], prune_projects_enabled=True)
+    with patch("harness.runners.prune_projects.run_cmd") as mock_run:
+        mock_run.side_effect = [
+            FileNotFoundError("/venv/bin/python3"),
+            MagicMock(returncode=0, stdout=b"", stderr=b""),
+        ]
+        prune_projects.run(cfg, {})
+    assert mock_run.call_count == 2
