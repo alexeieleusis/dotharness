@@ -6,6 +6,7 @@ import time
 from harness import state
 from harness.config import HarnessConfig
 from harness.lock import acquire_lock
+from harness.runners import prune_projects
 from harness.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
@@ -20,6 +21,7 @@ from harness.runners.common import (
     git_restore,
     is_pr_open,
     list_open_prs_matching_authors,
+    log_called_process_output,
     pr_from_url,
     run_cmd,
 )
@@ -70,6 +72,8 @@ def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
 
     gh_token = get_gh_token(config.harness.gh_token_cmd)
     env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
+
+    prune_projects.run(config, env)
 
     if not _run_base_analysis(config, env):
         logger.warning("Base analysis failed; skipping PR review for this run")
@@ -168,14 +172,6 @@ def _get_changed_files_for_pr(pr: dict, config: HarnessConfig, wdir: str, env: d
     return get_changed_files(pr["baseRefName"], wdir, env)
 
 
-def _log_called_process_output(e: subprocess.CalledProcessError, level: str) -> None:
-    log_func = logger.exception if level == "exception" else logger.warning
-    if e.stdout:
-        log_func("%s stdout: %s", level, e.stdout.decode("utf-8", errors="replace"))
-    if e.stderr:
-        log_func("%s stderr: %s", level, e.stderr.decode("utf-8", errors="replace"))
-
-
 def _subdir_has_changes(subdir_path: str, changed_files: list[str]) -> bool:
     if _is_root_subdir(subdir_path):
         return True
@@ -194,7 +190,7 @@ def _run_pre_commands(subdir, config: HarnessConfig, env: dict) -> bool:
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
             logger.warning("Pre-command failed '%s': %s", cmd_str, e)
             if isinstance(e, subprocess.CalledProcessError):
-                _log_called_process_output(e, "Pre-command")
+                log_called_process_output(e, logger.warning, "Pre-command")
             if pre_command.critical:
                 return False
     return True
@@ -206,7 +202,7 @@ def _run_vh_command(cmd: list, label: str, cwd: str, timeout: int, env: dict) ->
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.exception("%s failed", label)
         if isinstance(e, subprocess.CalledProcessError):
-            _log_called_process_output(e, label)
+            log_called_process_output(e, logger.exception, label)
         return False
     return True
 

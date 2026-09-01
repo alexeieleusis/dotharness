@@ -19,8 +19,9 @@ harness run [--config PATH] [--verbose] review-prs [--pr PR_URL]
   parsed as the last path segment of the URL) instead of discovering open PRs automatically. This mode does
   not consult the per-PR reviewed-SHA record to decide eligibility, and does not update it afterward — so the
   same PR can be re-run any number of times (e.g. to pick up a config change or re-run after a transient
-  failure) without affecting which PRs future automatic runs pick up. It still performs the baseline
-  analysis step (step 3a below), which reads and may write `last_main_sha` in the state file. It also skips
+  failure) without affecting which PRs future automatic runs pick up. It still performs the prune-stale-projects
+  step (step 3a below, if `vibe_heal.prune_projects_enabled` is `true`) and the baseline analysis step (step 3b
+  below), the latter of which reads and may write `last_main_sha` in the state file. It also skips
   the draft and `vibe_heal.authors` filtering that the batch case applies — a single PR fetched this way is
   processed regardless of draft status or author.
 
@@ -32,7 +33,18 @@ harness run [--config PATH] [--verbose] review-prs [--pr PR_URL]
 2. If `vibe_heal.enabled` is `false` in config, logs and exits — the whole command is a no-op.
 3. Builds a subprocess environment: resolves a GitHub token via `harness.gh_token_cmd`, applies
    `harness.path_prepend` / `harness.env`.
-3a. **Baseline analysis** (`_run_base_analysis`): fetches `origin/main`, resolves its SHA, and checks the
+3a. **Prune stale projects** (`prune_projects.run`): if `vibe_heal.prune_projects_enabled` is `true`, runs
+   `vibe_heal prune-projects --yes --older-than <vibe_heal.prune_older_than_minutes>` once in each
+   `repo.subdir` — each subdir supplies its own SonarQube project key via its own `.env.vibeheal` file, so
+   there's no single repo-wide project key to prune against. `--yes` skips vibe_heal's own confirmation
+   prompt, so matching stale projects (temp projects left behind by an interrupted vibe_heal run, with zero
+   finished analyses, older than the threshold) are deleted immediately. A failure or timeout in one subdir
+   (bounded by `vibe_heal.prune_projects_timeout`) is logged and does not stop pruning in the remaining
+   subdirs, and never blocks baseline analysis or PR review below — this step is best-effort cleanup, not a
+   prerequisite. No-op (not even attempted) if `prune_projects_enabled` is `false` (the default). Also a no-op —
+   regardless of `prune_projects_enabled` — if `vibe_heal.enabled` is `false` (see step 2 above) or `repo.subdirs`
+   is empty, since `_run_locked` returns before reaching this step in either case.
+3b. **Baseline analysis** (`_run_base_analysis`): fetches `origin/main`, resolves its SHA, and checks the
    stored `last_main_sha` in the `vibe_heal.json` state file. If the SHA has changed since the last run,
    detaches HEAD, checks out `origin/main` (`--recurse-submodules`), and runs
    `vibe_heal review --baseline` in every `repo.subdir`. On success, persists the new `last_main_sha`. On any
@@ -102,6 +114,9 @@ Only the fields below affect this command. See [`../configuration.md`](../config
 | `vibe_heal.vibe_heal_timeout` | Timeout for the `vibe_heal review --pr` and `vibe_heal review --baseline` invocations. |
 | `vibe_heal.vibe_heal_post_timeout` | Timeout for the `vibe_heal review --post --pr` invocation. |
 | `vibe_heal.min_reanalysis_interval_hours` | Minimum time since a PR's last successful review before it becomes eligible again in batch mode, even if its head SHA has changed. Ignored with `--pr`. |
+| `vibe_heal.prune_projects_enabled` | Master switch for the prune-stale-projects step (step 3a) — a no-op unless `true`. |
+| `vibe_heal.prune_older_than_minutes` | Age threshold (minutes) passed as `vibe_heal prune-projects --older-than`. Ignored if `prune_projects_enabled` is `false`. |
+| `vibe_heal.prune_projects_timeout` | Timeout for each subdir's `vibe_heal prune-projects` invocation. Ignored if `prune_projects_enabled` is `false`. |
 
 Fields this runner does **not** read: `harness.backend`, `harness.backend_timeout_seconds`,
 `harness.knowledge_dir`, `harness.review_knowledge_file`, `repo.opencode_dir` — those only matter to runners
@@ -122,7 +137,7 @@ with `/` replaced by `-`). It tracks two fields:
   State files written before this option existed store `reviewed_shas` values as plain SHA strings; these are
   transparently upgraded on read to `{"sha": <value>, "reviewed_at": 0}`, which makes them immediately eligible
   for re-review regardless of `min_reanalysis_interval_hours` (since their real last-reviewed time is unknown).
-- `last_main_sha` — the SHA of `origin/main` last processed during baseline analysis (step 3a). When the
+- `last_main_sha` — the SHA of `origin/main` last processed during baseline analysis (step 3b). When the
   current `origin/main` SHA differs from this value, the baseline analysis runs `vibe_heal review --baseline`
   in each subdir and then persists the new SHA. Both batch and `--pr` runs read and may write this field.
 
@@ -131,7 +146,7 @@ clears `reviewed_shas` and `last_main_sha` — the next run will re-consider eve
 re-run baseline analysis unconditionally.
 
 `--pr` runs do not read or write `reviewed_shas`, but they do read and may write `last_main_sha` during the
-baseline analysis step — see the `--pr` description under [Usage](#usage) and step 3a above.
+baseline analysis step — see the `--pr` description under [Usage](#usage) and step 3b above.
 
 ## Notes
 
