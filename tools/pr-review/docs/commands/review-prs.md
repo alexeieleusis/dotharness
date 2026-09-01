@@ -41,7 +41,9 @@ harness run [--config PATH] [--verbose] review-prs [--pr PR_URL]
    finished analyses, older than the threshold) are deleted immediately. A failure or timeout in one subdir
    (bounded by `vibe_heal.prune_projects_timeout`) is logged and does not stop pruning in the remaining
    subdirs, and never blocks baseline analysis or PR review below — this step is best-effort cleanup, not a
-   prerequisite. No-op (not even attempted) if `prune_projects_enabled` is `false` (the default).
+   prerequisite. No-op (not even attempted) if `prune_projects_enabled` is `false` (the default). Also a no-op —
+   regardless of `prune_projects_enabled` — if `vibe_heal.enabled` is `false` (see step 2 above) or `repo.subdirs`
+   is empty, since `_run_locked` returns before reaching this step in either case.
 3b. **Baseline analysis** (`_run_base_analysis`): fetches `origin/main`, resolves its SHA, and checks the
    stored `last_main_sha` in the `vibe_heal.json` state file. If the SHA has changed since the last run,
    detaches HEAD, checks out `origin/main` (`--recurse-submodules`), and runs
