@@ -39,6 +39,9 @@ class VibehealConfig:
     vibe_heal_timeout: int = 600
     vibe_heal_post_timeout: int = 120
     min_reanalysis_interval_hours: float = 24.0
+    prune_projects_enabled: bool = False
+    prune_older_than_minutes: int = 60
+    prune_projects_timeout: int = 120
 
 
 @dataclass
@@ -154,6 +157,9 @@ def load_config(path: Path) -> HarnessConfig:
         vibe_heal_timeout=vh.get("vibe_heal_timeout", 600),
         vibe_heal_post_timeout=vh.get("vibe_heal_post_timeout", 120),
         min_reanalysis_interval_hours=vh.get("min_reanalysis_interval_hours", 24.0),
+        prune_projects_enabled=vh.get("prune_projects_enabled", False),
+        prune_older_than_minutes=vh.get("prune_older_than_minutes", 60),
+        prune_projects_timeout=vh.get("prune_projects_timeout", 120),
     )
 
     fr = data.get("focused_review", {})

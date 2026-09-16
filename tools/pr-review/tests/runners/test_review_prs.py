@@ -704,6 +704,37 @@ def test_run_base_analysis_returns_false_on_checkout_failure(tmp_xdg, tmp_path):
     mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
 
 
+def test_run_locked_calls_prune_projects_before_base_analysis(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    calls = []
+    with (
+        patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_prs.prune_projects.run", side_effect=lambda *a: calls.append("prune")),
+        patch(
+            "harness.runners.review_prs._run_base_analysis",
+            side_effect=lambda *a: calls.append("base_analysis") or False,
+        ),
+        patch("harness.runners.review_prs.list_open_prs_matching_authors") as mock_list,
+    ):
+        review_prs._run_locked(cfg)
+    assert calls == ["prune", "base_analysis"]
+    mock_list.assert_not_called()
+
+
+def test_run_locked_does_not_prune_when_disabled(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    assert cfg.vibe_heal.prune_projects_enabled is False
+    with (
+        patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_prs._run_base_analysis", return_value=True),
+        patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=[]),
+        patch("harness.runners.review_prs.run_cmd") as mock_run,
+    ):
+        review_prs._run_locked(cfg)
+    prune_calls = [c for c in mock_run.call_args_list if "prune-projects" in str(c)]
+    assert prune_calls == []
+
+
 def test_run_locked_skips_when_subdirs_empty(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path)
     with (

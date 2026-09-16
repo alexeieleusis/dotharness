@@ -75,6 +75,9 @@ review or pre-commit step.
 | `vibe_heal_timeout` | integer | `600` | Timeout (seconds) for the per-PR `vibe_heal review` run. |
 | `vibe_heal_post_timeout` | integer | `120` | Timeout (seconds) for posting/finalizing vibe_heal output (e.g. writing results, comments) after the run itself completes. |
 | `min_reanalysis_interval_hours` | number | `24.0` | Minimum time that must pass since a PR's last successful review before `review-prs`'s batch mode will re-analyze it, even if the head SHA has changed in the meantime (e.g. from rapid pushes). Ignored when `review-prs` is run with `--pr`. |
+| `prune_projects_enabled` | boolean | `false` | Turns on a `vibe_heal prune-projects --yes` step, run in every `repo.subdir` at the start of every `review-prs` invocation, before baseline analysis. Deletes stale temp SonarQube projects (left behind by failed/interrupted vibe_heal runs) **without the CLI's confirmation prompt**. Off by default since it's a destructive, no-confirmation delete. Has no effect unless `vibe_heal.enabled` is also `true` and `repo.subdirs` is non-empty — `review-prs` checks both (with an early return) before this step ever runs. |
+| `prune_older_than_minutes` | integer | `60` | Passed as `vibe_heal prune-projects --older-than`; only temp projects with zero finished analyses older than this are eligible for deletion. Ignored if `prune_projects_enabled` is `false`. |
+| `prune_projects_timeout` | integer | `120` | Timeout (seconds) for each subdir's `vibe_heal prune-projects` invocation. A timeout or failure is logged and does not block baseline analysis or PR review. |
 
 ### `[focused_review]`
 
@@ -125,6 +128,9 @@ enabled = false
 # vibe_heal_timeout = 600
 # vibe_heal_post_timeout = 120
 # min_reanalysis_interval_hours = 24.0
+# prune_projects_enabled = false
+# prune_older_than_minutes = 60
+# prune_projects_timeout = 120
 
 [focused_review]
 enabled = false

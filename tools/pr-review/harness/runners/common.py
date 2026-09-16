@@ -26,6 +26,13 @@ class FatalGitError(Exception):
     pass
 
 
+def log_called_process_output(e: subprocess.CalledProcessError, log_func: Callable[..., None], label: str) -> None:
+    if e.stdout:
+        log_func("%s stdout: %s", label, e.stdout.decode("utf-8", errors="replace"))
+    if e.stderr:
+        log_func("%s stderr: %s", label, e.stderr.decode("utf-8", errors="replace"))
+
+
 def run_cmd(
     cmd: list[str] | str,
     cwd: str,
