@@ -256,6 +256,80 @@ def test_resolve_linked_tickets_comment_scan_dedupes_repeated_references():
     assert len(tickets) == 1
 
 
+def _linear_linkback_body(ticket_id: str = "AGNT-1215", title: str = "Structured approval card") -> str:
+    return (
+        "<!-- linear-linkback -->\n<details>\n"
+        f'<summary><a href="https://linear.app/acme/issue/{ticket_id}/slug">{ticket_id} {title}</a></summary>\n'
+        "<p>\n\n## Problem\n\nSomething is broken.\n\n## Expected\n\nIt should work.\n</p>\n</details>\n"
+        '<!-- linear-review-link -->\n<p><a href="https://linear.app/acme/review/xyz">Review in Linear</a></p>\n'
+    )
+
+
+def test_resolve_linked_tickets_falls_back_to_linear_linkback_comment():
+    pr = {"number": 39, "createdAt": "2026-01-01T00:00:00Z", "closingIssuesReferences": []}
+    comments = [_comment(_linear_linkback_body(), "2026-01-01T00:01:00Z")]
+    router = _router({(f"repos/{REPO}/issues/39/comments", 1): comments}, {})
+    with patch("harness.runners.common.run_cmd", side_effect=router):
+        tickets = resolve_linked_tickets(pr, REPO, {})
+    assert tickets is not None
+    assert len(tickets) == 1
+    ticket = tickets[0]
+    assert ticket["number"] == "AGNT-1215"
+    assert ticket["repo"] == "Linear"
+    assert ticket["title"] == "Structured approval card"
+    assert ticket["source"] == "linear_linkback"
+    assert "## Problem" in ticket["body"]
+    assert "Review in Linear" not in ticket["body"]
+    assert "<details>" not in ticket["body"]
+
+
+def test_resolve_linked_tickets_linear_linkback_does_not_also_scan_for_issue_refs():
+    """A linkback comment's body can incidentally contain "#N"-shaped text; it must not be
+    double-counted as a GitHub issue reference on top of the Linear ticket it already is."""
+    pr = {"number": 39, "createdAt": "2026-01-01T00:00:00Z", "closingIssuesReferences": []}
+    body = _linear_linkback_body().replace("Something is broken.", "Something is broken, see #3.")
+    comments = [_comment(body, "2026-01-01T00:01:00Z")]
+
+    def _dispatch(cmd, **_kwargs):
+        if cmd[:2] == ["gh", "api"]:
+            page = int(cmd[-1].split("=")[1])
+            payload = comments if page == 1 else []
+            return MagicMock(returncode=0, stdout=json.dumps(payload).encode())
+        msg = f"unexpected cmd: {cmd} (a linkback comment must not trigger gh issue view)"
+        raise AssertionError(msg)
+
+    with patch("harness.runners.common.run_cmd", side_effect=_dispatch):
+        tickets = resolve_linked_tickets(pr, REPO, {})
+    assert tickets is not None
+    assert len(tickets) == 1
+    assert tickets[0]["source"] == "linear_linkback"
+
+
+def test_resolve_linked_tickets_linear_linkback_dedupes_same_ticket():
+    pr = {"number": 39, "createdAt": "2026-01-01T00:00:00Z", "closingIssuesReferences": []}
+    comments = [
+        _comment(_linear_linkback_body(), "2026-01-01T00:01:00Z", comment_id=1),
+        _comment(_linear_linkback_body(), "2026-01-01T00:02:00Z", comment_id=2),
+    ]
+    router = _router({(f"repos/{REPO}/issues/39/comments", 1): comments}, {})
+    with patch("harness.runners.common.run_cmd", side_effect=router):
+        tickets = resolve_linked_tickets(pr, REPO, {})
+    assert tickets is not None
+    assert len(tickets) == 1
+
+
+def test_resolve_linked_tickets_ignores_marker_with_unrecognized_shape():
+    """The marker alone, without the expected <summary><a href=...> shape, is treated as
+    no ticket found — not surfaced as an error — since there's no bot API failure here to
+    distinguish from a confirmed absence."""
+    pr = {"number": 39, "createdAt": "2026-01-01T00:00:00Z", "closingIssuesReferences": []}
+    comments = [_comment("<!-- linear-linkback -->\nsomething unexpected", "2026-01-01T00:01:00Z")]
+    router = _router({(f"repos/{REPO}/issues/39/comments", 1): comments}, {})
+    with patch("harness.runners.common.run_cmd", side_effect=router):
+        tickets = resolve_linked_tickets(pr, REPO, {})
+    assert tickets == []
+
+
 def test_resolve_linked_tickets_returns_empty_when_nothing_resolves():
     pr = {"number": 39, "createdAt": "2026-01-01T00:00:00Z", "closingIssuesReferences": []}
     router = _router({(f"repos/{REPO}/issues/39/comments", 1): []}, {})

@@ -101,7 +101,15 @@ expensive point to discover a mismatch.
 - **G5.** The linked ticket is resolved without requiring any new tracker integration
   (Linear/Jira) in this iteration — GitHub's own PR-to-issue linking plus an
   issue-comment fallback is sufficient, since dotharness already operates entirely
-  against GitHub via `gh` (§4, §7.2).
+  against GitHub via `gh` (§4, §7.2). **Update (2026-09-17, found against PR
+  Oscilar/backend#14140):** a repo that tracks requirements in Linear exclusively — no
+  GitHub Issues at all — has no `closingIssuesReferences` and no `#N`-shaped mentions for
+  either mechanism to find, so the pass could never resolve a ticket there and would
+  always fall through to the terminal "no linked ticket found" comment. The
+  comment-scan fallback now also recognizes the `linear[bot]` GitHub App's linkback
+  comment (`<!-- linear-linkback -->` marker) and reads the ticket id/title/description
+  directly out of its body (§7.2) — still no tracker-specific API client, since the bot
+  already mirrors that content into the GitHub comment `gh` fetches anyway.
 - **G6.** Findings are traceable to the specific file(s) they concern when they can be
   (scope-creep findings anchor to the file introducing unauthorized scope); gap findings,
   which by definition point at something *absent* from the diff, are PR-level only, since
@@ -113,7 +121,11 @@ expensive point to discover a mismatch.
   iteration — resolved directly per the user's refined brief (§1). The originating
   issue's "configurable convention" language is satisfied entirely by GitHub's own
   closing-keyword linking plus the comment-scan fallback; no tracker-specific API client
-  is introduced.
+  is introduced. Still holds after the §4/G5 update: recognizing the `linear[bot]`
+  linkback comment's already-mirrored content is not a Linear API integration — no
+  Linear-specific request is ever made, and a Linear ticket with no linkback comment on
+  the PR (or a Linear workspace not wired to GitHub via that App) remains unresolvable,
+  same as before.
 - **Not wiring into `review-prs`.** Same rationale as `design-review-requirements.md` §4:
   `review-prs` is a structurally different pipeline (`vibe_heal`) with no existing
   per-file/summary pass to sit alongside.
@@ -413,7 +425,9 @@ framework":
 
 ## 9. Out-of-scope / explicit exclusions
 
-- Any tracker other than GitHub Issues (Linear, Jira) — see §4, G5.
+- Any tracker other than GitHub Issues (Linear, Jira) via a dedicated API client — see
+  §4, G5. (The `linear[bot]` linkback comment recognized per the §4/G5 update is a
+  GitHub-comment fallback, not a tracker integration — it makes no Linear API call.)
 - Any narrowing of `review-file.md`/`review-summary.md`/`review-design.md`'s existing
   scope — this pass is purely additive.
 - Generalizing the per-pass state-list or runner `_ok`-gate patterns beyond the one named

@@ -47,6 +47,19 @@ _ISSUE_REF_RE = re.compile(
     r"|(?<![\w/])#(?P<num3>\d+)"
 )
 
+# The `linear[bot]` GitHub App's marker for the comment it posts on a PR that closes a
+# Linear ticket (requirement-traceability-requirements.md §4/G5 update: a repo that uses
+# Linear exclusively has no GitHub Issues at all, so neither _resolve_native_linked_tickets
+# nor _ISSUE_REF_RE can ever find anything there — this comment is that repo's only signal).
+LINEAR_LINKBACK_MARKER = "<!-- linear-linkback -->"
+
+# Matches the bot comment's `<details><summary><a href="...">TICKET-ID Title</a></summary>`
+# opening line, from which the ticket id/URL/title are read directly — no Linear API call.
+_LINEAR_LINKBACK_RE = re.compile(
+    r'<summary><a href="(?P<url>https://linear\.app/\S+?)">'
+    r"(?P<ticket_id>[A-Z][A-Z0-9]*-\d+)\s+(?P<title>[^<]*)</a></summary>"
+)
+
 
 class FatalGitError(Exception):
     pass
@@ -593,15 +606,75 @@ def _resolve_match_repo_and_number(match: re.Match, default_repo: str) -> tuple[
     return default_repo, None
 
 
+def _parse_linear_linkback_comment(body: str) -> dict | None:
+    """Parses a `linear[bot]` linkback comment (identified by LINEAR_LINKBACK_MARKER) into
+    a ticket dict shaped like the GitHub-issue tickets _resolve_native_linked_tickets/the
+    rest of _resolve_comment_linked_tickets produce. No Linear API call is made — the bot
+    already embeds the ticket's title and full description directly in the comment body it
+    posts to GitHub, which is enough to synthesize the "formal requirement"
+    review-traceability.md needs. Returns None if the marker is present but the expected
+    `<summary><a href=...>` shape isn't found (unrecognized/changed bot output) — treated
+    by the caller the same as "no ticket in this comment", not as an inconclusive lookup,
+    since there's no API failure to distinguish from a confirmed absence here."""
+    if LINEAR_LINKBACK_MARKER not in body:
+        return None
+    match = _LINEAR_LINKBACK_RE.search(body)
+    if match is None:
+        return None
+    detail_body = body[match.end() :].split("<!-- linear-review-link -->", 1)[0]
+    detail_body = re.sub(r"</?(?:details|p)>", "", detail_body).strip()
+    return {
+        "number": match.group("ticket_id"),
+        "repo": "Linear",
+        "title": match.group("title").strip(),
+        "body": detail_body,
+        "source": "linear_linkback",
+    }
+
+
+def _resolve_comment_issue_refs(body: str, repo: str, env: dict, seen: set[tuple[str, int | str]]) -> list[dict]:
+    """Scans a single comment body for GitHub issue references and resolves each via `gh
+    issue view`, split out of _resolve_comment_linked_tickets purely to keep that
+    function's branching complexity down. A match that 404s, names a pull request rather
+    than an issue, or fails to resolve for any other reason (rate limit, transient 5xx) is
+    dropped rather than treated as a ticket (see _fetch_issue) — unlike the native
+    mechanism, a regex match in free-text comments is already a guess, so an API failure
+    here doesn't warrant the same inconclusive-vs-absent distinction resolve_linked_tickets
+    makes for closing-keyword references. `seen` is shared and mutated across every
+    comment in the scan, so a ticket already found (by this or the Linear-linkback path)
+    isn't re-fetched or duplicated."""
+    tickets: list[dict] = []
+    for match in _ISSUE_REF_RE.finditer(body):
+        ticket_repo, number = _resolve_match_repo_and_number(match, repo)
+        if number is None:
+            continue
+        key = (ticket_repo, number)
+        if key in seen:
+            continue
+        try:
+            issue = _fetch_issue(number, ticket_repo, env)
+        except _IssueFetchError:
+            continue
+        if issue is None:
+            continue
+        seen.add(key)
+        tickets.append({
+            "number": issue.get("number", number),
+            "repo": ticket_repo,
+            "title": issue.get("title", ""),
+            "body": issue.get("body", ""),
+            "source": "comment",
+        })
+    return tickets
+
+
 def _resolve_comment_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | None = None) -> list[dict]:
     """Fallback mechanism (§7.2 step 2), only ever called when native linking finds
     nothing: scan every early-window comment (any author, including bots — §1 decision 4)
-    for an issue reference, and resolve each match via `gh issue view`. A match that 404s,
-    names a pull request rather than an issue, or fails to resolve for any other reason
-    (rate limit, transient 5xx) is dropped rather than treated as a ticket (see
-    _fetch_issue) — unlike the native mechanism, a regex match in free-text comments is
-    already a guess, so an API failure here doesn't warrant the same inconclusive-vs-absent
-    distinction resolve_linked_tickets makes for closing-keyword references."""
+    for a Linear linkback (_parse_linear_linkback_comment) or a GitHub issue reference
+    (_resolve_comment_issue_refs). A comment recognized as a Linear linkback is not also
+    scanned for GitHub issue references, since it's bot-authored structured output, not
+    free text a manual `#N` mention could appear in."""
     pr_number = pr.get("number")
     if pr_number is None:
         return []
@@ -609,41 +682,31 @@ def _resolve_comment_linked_tickets(pr: dict, repo: str, env: dict, cache: dict 
     if not comments:
         return []
     tickets: list[dict] = []
-    seen: set[tuple[str, int]] = set()
+    seen: set[tuple[str, int | str]] = set()
     for comment in comments:
-        for match in _ISSUE_REF_RE.finditer(comment.get("body") or ""):
-            ticket_repo, number = _resolve_match_repo_and_number(match, repo)
-            if number is None:
-                continue
-            key = (ticket_repo, number)
-            if key in seen:
-                continue
-            try:
-                issue = _fetch_issue(number, ticket_repo, env)
-            except _IssueFetchError:
-                continue
-            if issue is None:
-                continue
-            seen.add(key)
-            tickets.append({
-                "number": issue.get("number", number),
-                "repo": ticket_repo,
-                "title": issue.get("title", ""),
-                "body": issue.get("body", ""),
-                "source": "comment",
-            })
+        body = comment.get("body") or ""
+        linear_ticket = _parse_linear_linkback_comment(body)
+        if linear_ticket is not None:
+            key = (linear_ticket["repo"], linear_ticket["number"])
+            if key not in seen:
+                seen.add(key)
+                tickets.append(linear_ticket)
+            continue
+        tickets.extend(_resolve_comment_issue_refs(body, repo, env, seen))
     return tickets
 
 
 def resolve_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | None = None) -> list[dict] | None:
-    """Resolve the GitHub issue(s) this PR answers (requirement-traceability-requirements.md
-    §7.2): GitHub's own closing-keyword linking is tried first and, only if it finds
-    nothing, an early-comment scan is tried as a fallback. `pr` must carry
-    `closingIssuesReferences` and `createdAt` (both runners' PR-listing --json field lists
-    are extended to include them). Returns a possibly-empty list of
-    {number, repo, title, body, source} dicts, `source` being "closing_keyword" or
-    "comment" — or None if the native mechanism found a closing-keyword reference it
-    couldn't resolve due to an API failure rather than a confirmed absence (see
+    """Resolve the ticket(s) this PR answers (requirement-traceability-requirements.md
+    §7.2, §4/G5 update): GitHub's own closing-keyword linking is tried first and, only if
+    it finds nothing, an early-comment scan is tried as a fallback — a `linear[bot]`
+    linkback comment first, then a GitHub issue reference (see
+    _resolve_comment_linked_tickets). `pr` must carry `closingIssuesReferences` and
+    `createdAt` (both runners' PR-listing --json field lists are extended to include
+    them). Returns a possibly-empty list of {number, repo, title, body, source} dicts,
+    `source` being "closing_keyword", "comment", or "linear_linkback" — or None if the
+    native mechanism found a closing-keyword reference it couldn't resolve due to an API
+    failure rather than a confirmed absence (see
     _resolve_native_linked_tickets). Callers must treat None as "inconclusive, retry next
     run" and never as "no linked ticket" — the comment-scan fallback is skipped in that
     case rather than risked as a second source of false negatives. Pass the same `cache`
