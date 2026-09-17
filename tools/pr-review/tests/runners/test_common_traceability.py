@@ -331,3 +331,33 @@ def test_build_early_comment_context_paginates():
     with patch("harness.runners.common.run_cmd", side_effect=router):
         context = build_early_comment_context(39, REPO, "2026-01-01T00:00:00Z", {})
     assert context.count("note") == 101
+
+
+# --- shared cache: resolve_linked_tickets + build_early_comment_context -----------------
+
+
+def test_resolve_linked_tickets_and_build_early_comment_context_share_one_comment_fetch():
+    """Regression test for the double-fetch fixed in e7acdc6: when both functions are given
+    the same `cache` dict for the same PR, the comment-scan fallback's paginated fetch must
+    run exactly once, not once per caller."""
+    pr = {"number": 39, "createdAt": "2026-01-01T00:00:00Z", "closingIssuesReferences": []}
+    comments = [_comment("Related ticket: #3", "2026-01-01T00:01:00Z")]
+    router = _router(
+        {(f"repos/{REPO}/issues/39/comments", 1): comments},
+        {(REPO, 3): _issue(3, "Do the thing")},
+    )
+    mock_run = MagicMock(side_effect=router)
+    cache: dict = {}
+    with patch("harness.runners.common.run_cmd", mock_run):
+        tickets = resolve_linked_tickets(pr, REPO, {}, cache=cache)
+        context = build_early_comment_context(pr["number"], REPO, pr["createdAt"], {}, cache=cache)
+    assert tickets is not None
+    assert [t["number"] for t in tickets] == [3]
+    assert context == "Related ticket: #3"
+    comment_fetch_calls = [
+        call
+        for call in mock_run.call_args_list
+        if call.args[0][:4] == ["gh", "api", "--method", "GET"]
+        and call.args[0][4] == f"repos/{REPO}/issues/39/comments"
+    ]
+    assert len(comment_fetch_calls) == 1
