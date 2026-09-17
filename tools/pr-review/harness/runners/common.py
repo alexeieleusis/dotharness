@@ -5,6 +5,7 @@ import re
 import signal
 import subprocess
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from harness.config import SubDir
@@ -22,6 +23,21 @@ FOCUSED_REVIEW_MARKER = "[focused-review-bot]"
 INLINE_REVIEW_MARKER = "<!-- osc-review-inline -->"
 DESIGN_REVIEW_MARKER = "<!-- osc-review-design -->"
 TRACEABILITY_REVIEW_MARKER = "<!-- osc-review-traceability -->"
+
+# requirement-traceability-requirements.md §7.2/§11.2: the early-comment window is a
+# hardcoded constant this iteration, not a harness.toml field.
+TRACEABILITY_COMMENT_WINDOW_SECONDS = 300
+
+# Matches, in priority order: a full GitHub issue URL, an "owner/repo#N" cross-repo
+# shorthand, or a bare "#N" same-repo shorthand (requirement-traceability-requirements.md
+# §7.2). The negative lookbehind on the bare form stops it from also matching the "#N"
+# tail of an owner/repo#N reference that failed to match as such (it won't, in practice,
+# since alternation already consumes that case first) or from matching mid-identifier.
+_ISSUE_REF_RE = re.compile(
+    r"https://github\.com/(?P<owner1>[\w.-]+)/(?P<repo1>[\w.-]+)/issues/(?P<num1>\d+)"
+    r"|(?P<owner2>[\w.-]+)/(?P<repo2>[\w.-]+)#(?P<num2>\d+)"
+    r"|(?<![\w/])#(?P<num3>\d+)"
+)
 
 
 class FatalGitError(Exception):
@@ -400,6 +416,190 @@ def get_design_review_flagged_locations(
         if path and line is not None:
             locations.append((path, line))
     return locations
+
+
+def _fetch_all_comment_pages(path: str, env: dict) -> list[dict] | None:
+    """GET-paginate a GitHub REST comments endpoint, returning every comment regardless
+    of author (mirrors address_comments.py's _fetch_all_pages pattern). Deliberately
+    separate from _fetch_matching_comments, which filters to current_user's own comments
+    only — exactly backwards from what resolve_linked_tickets/build_early_comment_context
+    need, since the ticket link or clarifying context is typically posted by someone else
+    (a human or an integration bot), not by us. Also, unlike fetch_pr_comments (which goes
+    through scripts/pr-comments.py's cache), this returns raw REST dicts that keep the
+    snake_case `created_at` timestamp the cache drops. Returns None if any page fails."""
+    items: list[dict] = []
+    page = 1
+    while True:
+        result = run_cmd(
+            ["gh", "api", "--method", "GET", path, "-F", "per_page=100", "-F", f"page={page}"],
+            cwd="/",
+            env=env,
+            timeout=TIMEOUT_GH,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        batch = json.loads(result.stdout)
+        items.extend(batch)
+        if len(batch) < 100:
+            return items
+        page += 1
+
+
+def _window_end_iso(pr_created_at: str) -> str | None:
+    """pr_created_at + TRACEABILITY_COMMENT_WINDOW_SECONDS, formatted so it string-compares
+    correctly against GitHub REST comments' `created_at` (safe the same way
+    address_comments.py:441 already relies on for ISO-8601 timestamps). Returns None if
+    pr_created_at is missing or unparseable."""
+    if not pr_created_at:
+        return None
+    try:
+        created = datetime.fromisoformat(pr_created_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    end = created + timedelta(seconds=TRACEABILITY_COMMENT_WINDOW_SECONDS)
+    return end.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _fetch_early_window_comments(pr_number: int, repo: str, pr_created_at: str, env: dict) -> list[dict] | None:
+    """All issue-timeline comments on pr_number posted at or before the end of the
+    early-comment window, regardless of author. Shared by build_early_comment_context and
+    resolve_linked_tickets' comment-scan fallback (§7.2) so there's exactly one paginated
+    fetch, not two. Returns None on a fetch failure (as opposed to a confirmed-empty
+    window), so callers can fail open without confusing "API call failed" with "no
+    comments in the window"."""
+    comments = _fetch_all_comment_pages(f"repos/{repo}/issues/{pr_number}/comments", env)
+    if comments is None:
+        return None
+    window_end = _window_end_iso(pr_created_at)
+    if window_end is None:
+        return []
+    return [c for c in comments if c.get("created_at", "") <= window_end]
+
+
+def build_early_comment_context(pr_number: int, repo: str, pr_created_at: str, env: dict) -> str:
+    """Concatenated bodies of every issue-timeline comment (any author, including bots)
+    posted within TRACEABILITY_COMMENT_WINDOW_SECONDS of pr_created_at
+    (requirement-traceability-requirements.md §7.2). Included in the traceability prompt
+    regardless of how the linked ticket was resolved — a clarifying comment posted right
+    after opening is useful context even for a natively-linked ticket. Returns "" if there
+    are none, or if the fetch itself fails (fails open — a missing early-comment fetch
+    degrades the pass's context, not its correctness)."""
+    comments = _fetch_early_window_comments(pr_number, repo, pr_created_at, env)
+    if not comments:
+        return ""
+    return "\n\n".join(body for c in comments if (body := c.get("body", "")))
+
+
+def _fetch_issue(number: int, repo: str, env: dict) -> dict | None:
+    """title/body for a single GitHub issue, or None if the lookup fails — including when
+    `number` actually names a pull request rather than an issue, since `gh issue view`
+    itself fails to resolve a PR number (GitHub's GraphQL schema treats Issue/PullRequest
+    as distinct types even though they share one number sequence per repo)."""
+    result = run_cmd(
+        ["gh", "issue", "view", str(number), "--repo", repo, "--json", "number,title,body"],
+        cwd="/",
+        env=env,
+        timeout=TIMEOUT_GH,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout)
+    except ValueError:
+        return None
+
+
+def _resolve_native_linked_tickets(pr: dict, env: dict) -> list[dict]:
+    """Primary mechanism (§7.2 step 1): resolve every entry in pr["closingIssuesReferences"]
+    via `gh issue view`, using each entry's own repository (a closing reference can point at
+    a different repo than the PR's own). Entries that fail to resolve are dropped."""
+    tickets: list[dict] = []
+    seen: set[tuple[str, int]] = set()
+    for ref in pr.get("closingIssuesReferences") or []:
+        number = ref.get("number")
+        repository = ref.get("repository") or {}
+        owner = (repository.get("owner") or {}).get("login")
+        name = repository.get("name")
+        if number is None or not owner or not name:
+            continue
+        ticket_repo = f"{owner}/{name}"
+        key = (ticket_repo, number)
+        if key in seen:
+            continue
+        issue = _fetch_issue(number, ticket_repo, env)
+        if issue is None:
+            continue
+        seen.add(key)
+        tickets.append({
+            "number": issue.get("number", number),
+            "repo": ticket_repo,
+            "title": issue.get("title", ""),
+            "body": issue.get("body", ""),
+            "source": "closing_keyword",
+        })
+    return tickets
+
+
+def _resolve_match_repo_and_number(match: re.Match, default_repo: str) -> tuple[str, int | None]:
+    if match.group("num1"):
+        return f"{match.group('owner1')}/{match.group('repo1')}", int(match.group("num1"))
+    if match.group("num2"):
+        return f"{match.group('owner2')}/{match.group('repo2')}", int(match.group("num2"))
+    if match.group("num3"):
+        return default_repo, int(match.group("num3"))
+    return default_repo, None
+
+
+def _resolve_comment_linked_tickets(pr: dict, repo: str, env: dict) -> list[dict]:
+    """Fallback mechanism (§7.2 step 2), only ever called when native linking finds
+    nothing: scan every early-window comment (any author, including bots — §1 decision 4)
+    for an issue reference, and resolve each match via `gh issue view`. A match that 404s,
+    or that names a pull request rather than an issue, is dropped rather than treated as a
+    ticket (see _fetch_issue)."""
+    pr_number = pr.get("number")
+    if pr_number is None:
+        return []
+    comments = _fetch_early_window_comments(pr_number, repo, pr.get("createdAt", ""), env)
+    if not comments:
+        return []
+    tickets: list[dict] = []
+    seen: set[tuple[str, int]] = set()
+    for comment in comments:
+        for match in _ISSUE_REF_RE.finditer(comment.get("body") or ""):
+            ticket_repo, number = _resolve_match_repo_and_number(match, repo)
+            if number is None:
+                continue
+            key = (ticket_repo, number)
+            if key in seen:
+                continue
+            issue = _fetch_issue(number, ticket_repo, env)
+            if issue is None:
+                continue
+            seen.add(key)
+            tickets.append({
+                "number": issue.get("number", number),
+                "repo": ticket_repo,
+                "title": issue.get("title", ""),
+                "body": issue.get("body", ""),
+                "source": "comment",
+            })
+    return tickets
+
+
+def resolve_linked_tickets(pr: dict, repo: str, env: dict) -> list[dict]:
+    """Resolve the GitHub issue(s) this PR answers (requirement-traceability-requirements.md
+    §7.2): GitHub's own closing-keyword linking is tried first and, only if it finds
+    nothing, an early-comment scan is tried as a fallback. `pr` must carry
+    `closingIssuesReferences` and `createdAt` (both runners' PR-listing --json field lists
+    are extended to include them). Returns a possibly-empty list of
+    {number, repo, title, body, source} dicts, `source` being "closing_keyword" or
+    "comment"."""
+    tickets = _resolve_native_linked_tickets(pr, env)
+    if tickets:
+        return tickets
+    return _resolve_comment_linked_tickets(pr, repo, env)
 
 
 def author_matches(login: str, authors_config: str | list) -> bool:

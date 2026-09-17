@@ -47,7 +47,7 @@ def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
     current_user = get_current_user(env)
 
     if pr_url:
-        prs = [pr_from_url(pr_url, config.repo.name, env, "number,url,headRefName")]
+        prs = [pr_from_url(pr_url, config.repo.name, env, "number,url,headRefName,createdAt,closingIssuesReferences")]
     else:
         prs = [p for p in _get_prs(config.repo.name, env) if p.get("headRefName")]
 
@@ -109,7 +109,7 @@ def _get_prs(repo: str, env: dict) -> list[dict]:
             "--search",
             "user-review-requested:@me",
             "--json",
-            "number,url,headRefName",
+            "number,url,headRefName,createdAt,closingIssuesReferences",
             "--limit",
             "500",
         ],

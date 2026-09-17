@@ -494,8 +494,13 @@ design-review wrappers (lowest risk, unblocks nothing else but should land first
   `TRACEABILITY_REVIEW_MARKER` + `is_/has_/check_traceability_review_comment*` added;
   19 new tests in `tests/runners/test_common_prs.py`; full suite 444 passed, ruff +
   `ty check` clean). Requirements doc itself landed in commit `6e584d3`.
-- [ ] (b) `resolve_linked_tickets` / `build_early_comment_context` / the new
-  paginated-all-authors comment fetch in `common.py` (§7.2) — not started.
+- [x] (b) done — `resolve_linked_tickets` / `build_early_comment_context` / the new
+  `_fetch_all_comment_pages` paginated-all-authors comment fetch added to `common.py`
+  (§7.2), plus `TRACEABILITY_COMMENT_WINDOW_SECONDS`. Both runners' PR-listing `--json`
+  field lists (and `review_requested.py`'s single-PR `pr_from_url` call) extended with
+  `createdAt,closingIssuesReferences`. 20 new tests in
+  `tests/runners/test_common_traceability.py`; full suite 464 passed, ruff + `ruff format`
+  + `ty check` clean.
 - [ ] (c) `knowledge/pr-review/review-traceability.md` prompt content (§7.1) — not
   started.
 - [ ] (d) `self_review.py` + `state.py` wiring (§7.4) — not started.

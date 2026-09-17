@@ -454,7 +454,7 @@ def _list_my_prs(repo: str, env: dict) -> list[dict] | None:
             "--state",
             "open",
             "--json",
-            "number,url,headRefName",
+            "number,url,headRefName,createdAt,closingIssuesReferences",
             "--limit",
             "500",
         ],
