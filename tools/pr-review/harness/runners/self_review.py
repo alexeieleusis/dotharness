@@ -403,7 +403,9 @@ def _run_locked(config: HarnessConfig) -> None:
             )
         elif skip and number not in reviewed:
             reviewed.add(number)
-            state.write_self_review_state(config.repo_slug, list(reviewed))
+            sr_state = state.read_self_review_state(config.repo_slug)
+            sr_state["partial_reviews"].pop(str(number), None)
+            state.write_self_review_state(config.repo_slug, list(reviewed), sr_state["partial_reviews"])
 
         if not run_files_summary and not run_design:
             continue
