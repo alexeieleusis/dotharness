@@ -15,6 +15,7 @@ from harness.runners.common import (
     build_subprocess_env,
     get_changed_files,
     get_current_user,
+    get_design_review_flagged_locations,
     get_file_diff,
     get_gh_token,
     get_pr_base_branch,
@@ -291,7 +292,13 @@ def _run_design_review(
     stay decoupled from files_ok/summary_ok. A backend exit of 0 is not itself proof the
     marker comment was posted, so success is re-verified against the same check before
     returning True; a false positive here would make remove_reviewer fire and the design
-    pass never retry."""
+    pass never retry.
+
+    design_done only tells us the pass never fully completed; it can't tell a from-scratch
+    retry apart from a retry after a crash that already posted some inline findings. That's
+    why get_design_review_flagged_locations is fetched below on every invocation (not
+    gated by design_done) and fed into the prompt — see design-review-requirements.md
+    §7.1 for the partial-failure duplicate-inline-comment gap this closes."""
     pr_number = pr["number"]
     repo_name = config.repo.name
     if design_done:
@@ -309,6 +316,7 @@ def _run_design_review(
         for file in files
     )
 
+    prior_flagged_locations = get_design_review_flagged_locations(pr_number, repo_name, current_user, env)
     design_prompt = build_design_review_prompt(
         design_instructions,
         extra_knowledge,
@@ -319,6 +327,7 @@ def _run_design_review(
         commit_sha,
         pr_description,
         vibe_heal_context,
+        prior_flagged_locations,
     )
     try:
         result = backend.run(design_prompt, cwd=wdir, context=f"PR #{pr_number} design review")

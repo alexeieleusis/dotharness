@@ -17,6 +17,7 @@ from harness.runners.common import (
     check_review_summary_comment_status,
     get_changed_files,
     get_current_user,
+    get_design_review_flagged_locations,
     get_file_diff,
     get_gh_token,
     get_pr_base_branch,
@@ -187,12 +188,14 @@ def _build_design_prompt(
     config,
     ctx: dict,
     wdir: str,
+    current_user: str,
     env: dict,
 ) -> str:
     diff_sections = "".join(
         build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
         for file in ctx["files"]
     )
+    prior_flagged_locations = get_design_review_flagged_locations(number, config.repo.name, current_user, env)
     return build_design_review_prompt(
         design_instructions,
         extra_knowledge,
@@ -203,6 +206,7 @@ def _build_design_prompt(
         ctx["commit_sha"],
         ctx["pr_description"],
         ctx["vibe_heal_context"],
+        prior_flagged_locations,
     )
 
 
@@ -228,7 +232,9 @@ def _run_design_review(
     if has_design_review_comment(number, config.repo.name, current_user, env):
         state.add_design_reviewed_pr(config.repo_slug, number)
         return
-    design_prompt = _build_design_prompt(design_instructions, extra_knowledge, pr, number, config, ctx, wdir, env)
+    design_prompt = _build_design_prompt(
+        design_instructions, extra_knowledge, pr, number, config, ctx, wdir, current_user, env
+    )
     try:
         result = backend.run(design_prompt, cwd=wdir, context=f"PR #{number} design review")
         if result.returncode != 0:
