@@ -17,7 +17,13 @@ def test_write_then_read_vibe_heal(tmp_xdg):
 
 def test_read_self_review_defaults(tmp_xdg):
     result = state.read_self_review_state("acme-frontend")
-    assert result == {"version": 1, "reviewed_prs": [], "partial_reviews": {}, "design_reviewed_prs": []}
+    assert result == {
+        "version": 1,
+        "reviewed_prs": [],
+        "partial_reviews": {},
+        "design_reviewed_prs": [],
+        "traceability_reviewed_prs": [],
+    }
 
 
 def test_write_then_read_self_review(tmp_xdg):
@@ -198,5 +204,36 @@ def test_read_self_review_corrupted_json_fallback(tmp_xdg, caplog):
     state_file.parent.mkdir(parents=True, exist_ok=True)
     state_file.write_text('{"version": 1, "reviewed_prs": [1, 2')
     result = state.read_self_review_state("acme-frontend")
-    assert result == {"version": 1, "reviewed_prs": [], "partial_reviews": {}, "design_reviewed_prs": []}
+    assert result == {
+        "version": 1,
+        "reviewed_prs": [],
+        "partial_reviews": {},
+        "design_reviewed_prs": [],
+        "traceability_reviewed_prs": [],
+    }
     assert "Corrupted state file" in caplog.text
+
+
+def test_add_traceability_reviewed_pr_is_independent_of_other_state(tmp_xdg):
+    state.write_self_review_state("acme-frontend", [7])
+    state.add_design_reviewed_pr("acme-frontend", 8)
+    state.add_traceability_reviewed_pr("acme-frontend", 9)
+    assert state.get_traceability_reviewed_prs("acme-frontend") == {9}
+    assert state.get_design_reviewed_prs("acme-frontend") == {8}
+    assert state.read_self_review_state("acme-frontend")["reviewed_prs"] == [7]
+
+
+def test_add_traceability_reviewed_pr_is_idempotent(tmp_xdg, monkeypatch):
+    state.add_traceability_reviewed_pr("acme-frontend", 9)
+    calls = []
+    monkeypatch.setattr(state, "_atomic_write", lambda *a: calls.append(a))
+    state.add_traceability_reviewed_pr("acme-frontend", 9)
+    assert calls == []
+    assert state.get_traceability_reviewed_prs("acme-frontend") == {9}
+
+
+def test_prune_self_review_state_drops_traceability_reviewed_prs_too(tmp_xdg):
+    state.add_traceability_reviewed_pr("acme-frontend", 7)
+    state.add_traceability_reviewed_pr("acme-frontend", 9)
+    state.prune_self_review_state("acme-frontend", {9})
+    assert state.get_traceability_reviewed_prs("acme-frontend") == {9}

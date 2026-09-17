@@ -511,7 +511,18 @@ design-review wrappers (lowest risk, unblocks nothing else but should land first
   `## Early PR Comments`, and (when applicable) `## Already-flagged scope-creep findings`
   input sections; these header names are now a contract with
   `build_traceability_review_prompt`, to be added in (d).
-- [ ] (d) `self_review.py` + `state.py` wiring (§7.4) — not started.
+- [x] (d) done — `state.py` gained `traceability_reviewed_prs` (defaults, pruning,
+  `get_traceability_reviewed_prs`/`add_traceability_reviewed_pr`, independent of
+  `design_reviewed_prs` exactly as §7.4 requires). `common.py` gained
+  `get_traceability_review_flagged_locations`, `build_traceability_review_prompt`, and
+  `post_no_linked_ticket_comment` (the §7.3 "no ticket" comment, posted directly via
+  `gh pr comment` with no shell interpolation). `self_review.py` wired in
+  `_run_traceability_review`/`_build_traceability_prompt`, mirroring `_run_design_review`
+  exactly, plus the defense-in-depth `has_traceability_review_comment` check. Existing
+  tests updated to short-circuit the new pass (`has_traceability_review_comment=True`)
+  where it's not the thing under test, since it now always runs by default; 12 new
+  dedicated traceability tests added. Full suite 475 passed, ruff + `ruff format` +
+  `ty check` clean.
 - [ ] (e) `review_requested.py` wiring (§7.5) — not started.
 - [ ] Docs updates to `docs/commands/self-review.md` / `docs/commands/review-requested.md`
   (§10) — not started; do this alongside (d)/(e), not as an afterthought.

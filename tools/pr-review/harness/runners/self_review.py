@@ -11,10 +11,13 @@ from harness.lock import acquire_lock
 from harness.runners.common import (
     TIMEOUT_GH,
     build_design_review_prompt,
+    build_early_comment_context,
     build_file_review_section,
     build_subprocess_env,
+    build_traceability_review_prompt,
     check_design_review_comment_status,
     check_review_summary_comment_status,
+    check_traceability_review_comment_status,
     get_changed_files,
     get_current_user,
     get_design_review_flagged_locations,
@@ -23,11 +26,15 @@ from harness.runners.common import (
     get_pr_base_branch,
     get_pr_description,
     get_pr_head_sha,
+    get_traceability_review_flagged_locations,
     get_vibe_heal_context,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
     has_design_review_comment,
+    has_traceability_review_comment,
+    post_no_linked_ticket_comment,
+    resolve_linked_tickets,
     run_cmd,
 )
 
@@ -260,6 +267,99 @@ def _run_design_review(
     state.add_design_reviewed_pr(config.repo_slug, number)
 
 
+def _build_traceability_prompt(
+    traceability_instructions: str,
+    extra_knowledge: str | None,
+    pr: dict,
+    number: int,
+    config,
+    ctx: dict,
+    wdir: str,
+    current_user: str,
+    env: dict,
+    tickets: list[dict],
+) -> str:
+    diff_sections = "".join(
+        build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
+        for file in ctx["files"]
+    )
+    prior_flagged_locations = get_traceability_review_flagged_locations(number, config.repo.name, current_user, env)
+    early_comment_context = build_early_comment_context(number, config.repo.name, pr.get("createdAt", ""), env)
+    return build_traceability_review_prompt(
+        traceability_instructions,
+        extra_knowledge,
+        diff_sections,
+        pr,
+        number,
+        config.repo.name,
+        ctx["commit_sha"],
+        ctx["pr_description"],
+        ctx["vibe_heal_context"],
+        prior_flagged_locations,
+        tickets,
+        early_comment_context,
+    )
+
+
+def _run_traceability_review(
+    traceability_instructions: str,
+    extra_knowledge: str | None,
+    pr: dict,
+    number: int,
+    config,
+    ctx: dict,
+    backend: Backend,
+    wdir: str,
+    current_user: str,
+    env: dict,
+) -> None:
+    """Tracked independently of reviewed_prs/partial_reviews/design_reviewed_prs
+    (state.traceability_reviewed_prs), mirroring _run_design_review exactly
+    (requirement-traceability-requirements.md §7.4). If no linked ticket can be resolved,
+    the "no ticket" outcome is posted directly (no backend invocation — there's nothing
+    for a model to judge) and is terminal (§7.3/§11.1): it is never retried, even if a
+    ticket link is added to the PR later."""
+    if has_traceability_review_comment(number, config.repo.name, current_user, env):
+        state.add_traceability_reviewed_pr(config.repo_slug, number)
+        return
+
+    tickets = resolve_linked_tickets(pr, config.repo.name, env)
+    if not tickets:
+        if post_no_linked_ticket_comment(number, config.repo.name, env):
+            state.add_traceability_reviewed_pr(config.repo_slug, number)
+        else:
+            logger.error("PR #%d: failed to post 'no linked ticket found' comment — will retry next run", number)
+        return
+
+    traceability_prompt = _build_traceability_prompt(
+        traceability_instructions, extra_knowledge, pr, number, config, ctx, wdir, current_user, env, tickets
+    )
+    try:
+        result = backend.run(traceability_prompt, cwd=wdir, context=f"PR #{number} traceability review")
+        if result.returncode != 0:
+            logger.error("PR #%d: traceability review backend exited %d", number, result.returncode)
+            return
+    except subprocess.TimeoutExpired:
+        logger.exception("PR #%d: traceability review backend timed out", number)
+        return
+    comment_status = check_traceability_review_comment_status(number, config.repo.name, current_user, env)
+    if comment_status is None:
+        logger.warning(
+            "PR #%d: could not confirm traceability review comment status (comment check failed) — "
+            "treating as unconfirmed rather than assuming it's missing",
+            number,
+        )
+        return
+    if not comment_status:
+        logger.error(
+            "PR #%d: traceability review backend exited 0 but no traceability review comment found "
+            "on GitHub — treating as failure",
+            number,
+        )
+        return
+    state.add_traceability_reviewed_pr(config.repo_slug, number)
+
+
 def _run_summary(
     summary_instructions: str,
     extra_knowledge: str | None,
@@ -319,6 +419,7 @@ def _process_single_pr(
     file_instructions: str,
     summary_instructions: str,
     design_instructions: str,
+    traceability_instructions: str,
     extra_knowledge: str | None,
     reviewed: set,
     original_sha: str,
@@ -326,6 +427,7 @@ def _process_single_pr(
     current_user: str,
     run_files_summary: bool,
     run_design: bool,
+    run_traceability: bool,
 ) -> None:
     try:
         ctx = _gather_pr_context(pr, number, config, wdir, env)
@@ -368,6 +470,10 @@ def _process_single_pr(
             _run_design_review(
                 design_instructions, extra_knowledge, pr, number, config, ctx, backend, wdir, current_user, env
             )
+        if run_traceability:
+            _run_traceability_review(
+                traceability_instructions, extra_knowledge, pr, number, config, ctx, backend, wdir, current_user, env
+            )
     except Exception:
         logger.exception("PR #%d: error", number)
     finally:
@@ -386,11 +492,13 @@ def _run_locked(config: HarnessConfig) -> None:
     pruned_state = state.prune_self_review_state(config.repo_slug, {p["number"] for p in prs})
     reviewed = set(pruned_state["reviewed_prs"])
     design_reviewed = set(pruned_state["design_reviewed_prs"])
+    traceability_reviewed = set(pruned_state["traceability_reviewed_prs"])
 
     knowledge_dir = Path(config.harness.knowledge_dir) / "pr-review"
     file_instructions = (knowledge_dir / "review-file.md").read_text(encoding="utf-8")
     summary_instructions = (knowledge_dir / "review-summary.md").read_text(encoding="utf-8")
     design_instructions = (knowledge_dir / "review-design.md").read_text(encoding="utf-8")
+    traceability_instructions = (knowledge_dir / "review-traceability.md").read_text(encoding="utf-8")
     extra_knowledge = _get_extra_knowledge(config)
     backend = _build_backend(config, env)
     wdir = str(config.repo.working_dir)
@@ -399,6 +507,7 @@ def _run_locked(config: HarnessConfig) -> None:
     for pr in prs:
         number = pr["number"]
         run_design = number not in design_reviewed
+        run_traceability = number not in traceability_reviewed
         skip = _should_skip_pr(number, config.repo.name, current_user, reviewed, env)
         run_files_summary = skip is False
         if skip is None:
@@ -413,7 +522,7 @@ def _run_locked(config: HarnessConfig) -> None:
             sr_state["partial_reviews"].pop(str(number), None)
             state.write_self_review_state(config.repo_slug, list(reviewed), sr_state["partial_reviews"])
 
-        if not run_files_summary and not run_design:
+        if not run_files_summary and not run_design and not run_traceability:
             continue
 
         logger.info("PR #%d: starting", number)
@@ -428,6 +537,7 @@ def _run_locked(config: HarnessConfig) -> None:
             file_instructions,
             summary_instructions,
             design_instructions,
+            traceability_instructions,
             extra_knowledge,
             reviewed,
             original_sha,
@@ -435,6 +545,7 @@ def _run_locked(config: HarnessConfig) -> None:
             current_user,
             run_files_summary,
             run_design,
+            run_traceability,
         )
 
 

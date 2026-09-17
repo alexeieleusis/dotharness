@@ -418,6 +418,27 @@ def get_design_review_flagged_locations(
     return locations
 
 
+def get_traceability_review_flagged_locations(
+    pr_number: int, repo: str, current_user: str, env: dict
+) -> list[tuple[str, int]]:
+    """Mirrors get_design_review_flagged_locations exactly, for TRACEABILITY_REVIEW_MARKER
+    inline (scope-creep) comments instead of design ones
+    (requirement-traceability-requirements.md §7.1). Fetched on every invocation, not
+    gated by the "already done" check, so a retry after a partial failure doesn't
+    re-flag a scope-creep finding a previous attempt already posted inline."""
+    matches = _fetch_matching_comments(
+        f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, is_traceability_review_comment
+    )
+    if not matches:
+        return []
+    locations = []
+    for comment in matches:
+        path, line = comment.get("path"), comment.get("line")
+        if path and line is not None:
+            locations.append((path, line))
+    return locations
+
+
 def _fetch_all_comment_pages(path: str, env: dict) -> list[dict] | None:
     """GET-paginate a GitHub REST comments endpoint, returning every comment regardless
     of author (mirrors address_comments.py's _fetch_all_pages pattern). Deliberately
@@ -600,6 +621,85 @@ def resolve_linked_tickets(pr: dict, repo: str, env: dict) -> list[dict]:
     if tickets:
         return tickets
     return _resolve_comment_linked_tickets(pr, repo, env)
+
+
+def post_no_linked_ticket_comment(pr_number: int, repo: str, env: dict) -> bool:
+    """Posts the §7.3 "no linked ticket found" PR-level comment directly — no backend
+    invocation, since there's nothing for a model to judge when resolve_linked_tickets
+    found nothing via either mechanism. This outcome is terminal (§7.3/§11.1): once
+    posted, has_traceability_review_comment treats this PR as done forever. Returns True
+    if the comment was posted successfully."""
+    body = (
+        "# Requirement Traceability\n"
+        "No linked ticket found (no closing-keyword link and no issue reference in the "
+        "first 5 minutes of comments) — skipping scope/gap comparison.\n"
+        f"{TRACEABILITY_REVIEW_MARKER}"
+    )
+    result = run_cmd(
+        ["gh", "pr", "comment", str(pr_number), "--repo", repo, "--body", body],
+        cwd="/",
+        env=env,
+        timeout=TIMEOUT_GH,
+        check=False,
+    )
+    if result.returncode != 0:
+        logger.error(
+            "PR #%d: failed to post 'no linked ticket found' comment: %s",
+            pr_number,
+            result.stderr.decode("utf-8", errors="replace"),
+        )
+        return False
+    return True
+
+
+def build_traceability_review_prompt(
+    traceability_instructions: str,
+    extra_knowledge: str | None,
+    diff_sections: str,
+    pr: dict,
+    pr_number: int,
+    repo_name: str,
+    commit_sha: str,
+    pr_description: str | None,
+    vibe_heal_context: str | None,
+    prior_flagged_locations: list[tuple[str, int]],
+    tickets: list[dict],
+    early_comment_context: str,
+) -> str:
+    """Shared by self_review.py and review_requested.py, mirroring
+    build_design_review_prompt's shape (requirement-traceability-requirements.md §7.1).
+    Only ever called once resolve_linked_tickets has already found at least one ticket —
+    callers post the "no linked ticket found" comment directly instead of building this
+    prompt when there are none (§7.3). `tickets` and `early_comment_context` become the
+    `## Linked Ticket(s)`/`## Early PR Comments` sections review-traceability.md expects
+    as input; prior_flagged_locations becomes `## Already-flagged scope-creep findings`,
+    same shape as build_design_review_prompt's equivalent section."""
+    tickets_section = "\n\n## Linked Ticket(s)\n" + "\n\n".join(
+        f"### #{t['number']} ({t['repo']}) — source: {t['source']}\n**Title:** {t['title']}\n\n{t['body']}"
+        for t in tickets
+    )
+    early_comments_section = f"\n\n## Early PR Comments\n{early_comment_context}" if early_comment_context else ""
+    prior_findings_section = ""
+    if prior_flagged_locations:
+        locations = "\n".join(f"- {path}:{line}" for path, line in prior_flagged_locations)
+        prior_findings_section = (
+            "\n\n## Already-flagged scope-creep findings\n"
+            "The following file/line locations already have an inline traceability-review "
+            "comment from a previous attempt on this PR. Do not post a new inline comment "
+            f"for any of them:\n{locations}"
+        )
+    return (
+        traceability_instructions
+        + (f"\n\n## Additional Review Guide\n{extra_knowledge}" if extra_knowledge else "")
+        + tickets_section
+        + early_comments_section
+        + diff_sections
+        + prior_findings_section
+        + f"\n\nPR URL: {pr.get('url', '')}\nPR number: {pr_number}\n"
+        + f"Repo: {repo_name}\nCommit: {commit_sha}"
+        + (f"\n\n{pr_description}" if pr_description else "")
+        + (f"\n\n## Static Analysis\n{vibe_heal_context}" if vibe_heal_context else "")
+    )
 
 
 def author_matches(login: str, authors_config: str | list) -> bool:
