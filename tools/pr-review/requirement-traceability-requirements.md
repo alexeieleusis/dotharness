@@ -504,11 +504,12 @@ design-review wrappers (lowest risk, unblocks nothing else but should land first
 - [x] (c) done — `knowledge/pr-review/review-traceability.md` written, mirroring
   `review-design.md`'s tone/perspective/role/output structure, with the P0/P1 severity
   definitions from §7.1 drafted in verbatim and the `<!-- osc-review-traceability -->`
-  marker used directly. (Aside, unrelated to this file: commit `bb2c121` had renamed the
-  code-side markers to `dotharness-review-*`, but `8335883` reverted that rename — it
-  wasn't in scope and changed matching behavior for previously-posted comments — so both
-  `review-design.md` and this new marker stay on the `osc-review-*` naming.) Expects
-  `## Linked Ticket(s)`,
+  marker used directly. (Aside, unrelated to this file: commit `bb2c121` renamed the
+  code-side markers to `dotharness-review-*`, and a follow-up commit brought
+  `review-design.md`/`review-file.md`'s literal markers into line with that; commit
+  `8335883` then reverted the whole rename — it wasn't in scope and changed matching
+  behavior for previously-posted comments — so `review-design.md`, `review-file.md`, and
+  this new marker all stay on the `osc-review-*` naming.) Expects `## Linked Ticket(s)`,
   `## Early PR Comments`, and (when applicable) `## Already-flagged scope-creep findings`
   input sections; these header names are now a contract with
   `build_traceability_review_prompt`, to be added in (d).
