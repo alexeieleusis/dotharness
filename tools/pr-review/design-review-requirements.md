@@ -196,6 +196,14 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
   - Optional `harness.review_knowledge_file` extra-guidance section and vibe-heal static
     analysis context, exactly as already appended to every other prompt in both
     runners, for consistency.
+  - **Prior `DESIGN_REVIEW_MARKER` inline comments already posted on this PR** (added in
+    review; see the partial-failure note under Output contract below) — fetched via
+    `repos/{REPO}/pulls/{PR_NUMBER}/comments`, filtered to those whose body contains
+    `DESIGN_REVIEW_MARKER`, and passed to the prompt as a list of `(file, line)` pairs
+    already flagged, with an instruction not to re-post a finding for any pair already in
+    that list. Unlike the PR-level noop checks in §7.2/§7.3, this fetch runs on *every*
+    invocation, not just when deciding whether to invoke at all — that's what lets it
+    catch a partial prior attempt.
 - **Output contract (resolved, §11.2/§11.3/§11.4), stated precisely enough to be quoted
   verbatim into the actual template:**
   1. **Inline findings** (file-specific, P0/P1 only): posted exactly like
@@ -222,6 +230,26 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
      signal `has_design_review_comment` (§7.3) checks for.
   3. `DESIGN_REVIEW_MARKER` is appended to **both** comment forms above, verbatim.
 
+  **Partial-failure duplicate-inline-comment gap (identified in review, closed here):**
+  because inline findings (item 1) and the closing PR-level comment (item 2) are posted
+  via separate `gh api`/`gh pr comment` calls within a single invocation, a crash or
+  timeout after one or more inline comments have posted but before the PR-level comment
+  is reached leaves `has_design_review_comment` (§7.3) still returning `false` on the
+  next run — the *only* "already done" signal either runner currently checks. A naive
+  retry would then re-run the whole prompt from scratch with no memory of the partial
+  attempt, very likely regenerating and re-posting the same inline findings, duplicating
+  them every retry cycle until a run finally succeeds end-to-end. This is the same
+  failure shape (non-idempotent posting plus a completion signal that doesn't match the
+  actual unit of work) as a prior SonarQube duplicate-comment bug in this codebase, and
+  it applies symmetrically to §7.2's defense-in-depth check, which relies on the same
+  marker. The fix is the "Prior `DESIGN_REVIEW_MARKER` inline comments" prompt input
+  added above: because that fetch happens on every invocation — not gated by the
+  PR-level noop check — a retry after a partial failure still sees its own earlier
+  inline comments and skips re-flagging the same `(file, line)` pairs, even though
+  `has_design_review_comment` itself hasn't flipped to `true` yet. Genuinely new findings
+  at other file/line combinations, or new cross-cutting findings, are still posted
+  normally, and the run still finishes by posting the closing PR-level comment.
+
 ### 7.2 Wiring into `self-review` (fate decoupled — resolved, §11.1)
 
 - Add a design-review step to `_process_single_pr` (`harness/runners/self_review.py`),
@@ -247,7 +275,10 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
   `review-requested` relies on as its *only* mechanism (§7.3) — this guards against a
   state write that didn't persist (the same class of edge case the existing
   comment-marker check at the top of `_run_locked` already guards against for the whole
-  PR).
+  PR). Like §7.3, this check alone cannot detect a partial failure that posted some
+  inline comments without ever reaching the PR-level comment; the prior-inline-comments
+  prompt input (§7.1) closes that gap here too, since it runs on every invocation
+  regardless of which idempotency check gated the decision to invoke.
 
 ### 7.3 Wiring into `review-requested` (resolved, §11.2)
 
@@ -264,7 +295,12 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
   If a matching comment is already present, **treat the design step as a noop this
   cycle**: do not invoke the backend again, and treat it as succeeded for the gate
   below.
-- If no matching comment is found, invoke the backend once with the design prompt.
+- If no matching comment is found, invoke the backend once with the design prompt. This
+  invocation always includes the prior-inline-comments input from §7.1, which is what
+  actually protects against duplicate inline findings if an earlier invocation crashed
+  mid-way through posting (see the partial-failure note in §7.1's Output contract) — the
+  marker check above only protects against re-running a pass that already completed
+  end-to-end.
 - **`remove_reviewer` (`review_requested.py:171`) now requires all three of:**
   `files_ok and summary_ok and design_ok`, where `design_ok` is `True` either because
   the noop check above found an existing marker, or because this run's invocation
