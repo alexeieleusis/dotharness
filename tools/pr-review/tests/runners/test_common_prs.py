@@ -411,12 +411,12 @@ def test_check_pr_level_pass_comment_status_returns_false_on_confirmed_absence()
     ("body", "expected"),
     [
         (
-            "# Requirement Traceability\nNo scope creep or requirement gaps found.<!-- dotharness-review-traceability -->",
+            "# Requirement Traceability\nNo scope creep or requirement gaps found.<!-- osc-review-traceability -->",
             True,
         ),
-        ("<!-- dotharness-review-traceability -->", True),
+        ("<!-- osc-review-traceability -->", True),
         ("# Requirement Traceability\nNo linked ticket found.", False),
-        ("# Design Review\n...<!-- dotharness-review-design -->", False),
+        ("# Design Review\n...<!-- osc-review-design -->", False),
         ("", False),
     ],
 )
@@ -426,10 +426,10 @@ def test_is_traceability_review_comment(body, expected):
 
 def test_has_traceability_review_comment_true_when_marker_and_user_match():
     comments = [
-        {"user": {"login": "someone-else"}, "body": "unrelated<!-- dotharness-review-traceability -->"},
+        {"user": {"login": "someone-else"}, "body": "unrelated<!-- osc-review-traceability -->"},
         {
             "user": {"login": "alice"},
-            "body": "# Requirement Traceability\nfindings...<!-- dotharness-review-traceability -->",
+            "body": "# Requirement Traceability\nfindings...<!-- osc-review-traceability -->",
         },
     ]
     with patch("harness.runners.common.run_cmd") as mock_run:
@@ -445,7 +445,7 @@ def test_has_traceability_review_comment_true_for_terminal_no_ticket_found_comme
         {
             "user": {"login": "alice"},
             "body": "# Requirement Traceability\nNo linked ticket found — skipping scope/gap comparison."
-            "<!-- dotharness-review-traceability -->",
+            "<!-- osc-review-traceability -->",
         }
     ]
     with patch("harness.runners.common.run_cmd") as mock_run:
@@ -464,7 +464,7 @@ def test_has_traceability_review_comment_false_when_other_user_posted_with_marke
     comments = [
         {
             "user": {"login": "someone-else"},
-            "body": "# Requirement Traceability\n...<!-- dotharness-review-traceability -->",
+            "body": "# Requirement Traceability\n...<!-- osc-review-traceability -->",
         }
     ]
     with patch("harness.runners.common.run_cmd") as mock_run:

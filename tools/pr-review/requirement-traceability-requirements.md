@@ -153,7 +153,7 @@ expensive point to discover a mismatch.
 - **Gap finding** — a P0/P1 judgment that the linked ticket asked for something the diff
   does not (fully) deliver.
 - **`TRACEABILITY_REVIEW_MARKER`** — the new marker this effort introduces:
-  `"<!-- dotharness-review-traceability -->"`, appended to every comment this pass posts,
+  `"<!-- osc-review-traceability -->"`, appended to every comment this pass posts,
   whether inline or PR-level, mirroring `DESIGN_REVIEW_MARKER`
   (`harness/runners/common.py:23`).
 
@@ -303,7 +303,7 @@ New functions in `harness/runners/common.py`:
 If `resolve_linked_tickets` returns an empty list (both mechanisms found nothing):
 
 ```
-gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Requirement Traceability\nNo linked ticket found (no closing-keyword link and no issue reference in the first 5 minutes of comments) — skipping scope/gap comparison.\n<!-- dotharness-review-traceability -->'
+gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Requirement Traceability\nNo linked ticket found (no closing-keyword link and no issue reference in the first 5 minutes of comments) — skipping scope/gap comparison.\n<!-- osc-review-traceability -->'
 ```
 
 posted directly by the runner (no backend invocation — see §7.1). **This outcome is
@@ -503,11 +503,12 @@ design-review wrappers (lowest risk, unblocks nothing else but should land first
   + `ty check` clean.
 - [x] (c) done — `knowledge/pr-review/review-traceability.md` written, mirroring
   `review-design.md`'s tone/perspective/role/output structure, with the P0/P1 severity
-  definitions from §7.1 drafted in verbatim and the `<!-- dotharness-review-traceability -->`
-  marker used directly. (Aside, unrelated to this file: `review-design.md` itself still
-  literally says `<!-- osc-review-design -->`, not `<!-- dotharness-review-design -->` —
-  commit `bb2c121` renamed the code-side marker but missed this knowledge file; pre-existing,
-  out of scope here, flagged for a separate fix.) Expects `## Linked Ticket(s)`,
+  definitions from §7.1 drafted in verbatim and the `<!-- osc-review-traceability -->`
+  marker used directly. (Aside, unrelated to this file: commit `bb2c121` had renamed the
+  code-side markers to `dotharness-review-*`, but `8335883` reverted that rename — it
+  wasn't in scope and changed matching behavior for previously-posted comments — so both
+  `review-design.md` and this new marker stay on the `osc-review-*` naming.) Expects
+  `## Linked Ticket(s)`,
   `## Early PR Comments`, and (when applicable) `## Already-flagged scope-creep findings`
   input sections; these header names are now a contract with
   `build_traceability_review_prompt`, to be added in (d).
@@ -534,5 +535,17 @@ design-review wrappers (lowest risk, unblocks nothing else but should land first
   unauthenticated `gh` network calls before the fix (caught via a real "HTTP 401: Bad
   credentials" failure during the first test run — now eliminated by the short-circuit).
   Full suite 482 passed, ruff + `ruff format` + `ty check` clean.
-- [ ] Docs updates to `docs/commands/self-review.md` / `docs/commands/review-requested.md`
-  (§10) — not started; do this alongside (d)/(e), not as an afterthought.
+- [x] Docs updates to `docs/commands/self-review.md` / `docs/commands/review-requested.md`
+  (§10) — done. Both updated to describe the traceability pass at the same level of
+  detail as the design pass: intro line, `--json` field-list extension, prompt-template
+  loading, per-PR processing steps, the `remove_reviewer`/reviewed-set AND-gate,
+  Configuration table, State and idempotency, and Notes (extra `gh` cost, independent
+  tracking, terminal "no ticket" outcome). Also corrected a pre-existing stale claim in
+  `review-requested.md` (§3/Notes) that PR listing used `gh search prs` + per-PR
+  `gh pr view` hydration — the code (`_get_prs`) has used a single `gh pr list --search`
+  call since before this branch; noticed while touching that exact section.
+
+All of §12's steps (a)-(e) plus docs are now complete. Every step landed with `uv run
+pytest` (482 passing, up from the 444 baseline), `uv run ruff check`/`ruff format
+--check`, and `uv run ty check` all clean. Remaining: open the PR (deliberately deferred
+per the user's instruction — all commits first, PR at the end).

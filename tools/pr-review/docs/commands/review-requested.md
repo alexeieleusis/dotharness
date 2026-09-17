@@ -2,10 +2,10 @@
 
 Reviews open pull requests where GitHub review has been explicitly requested from
 the current `gh` user (i.e. PRs that show up under "Review requests" for that
-account), posting per-file, summary, and PR-level design/architecture review
-comments via the configured AI backend. Run it whenever you want the bot/user
-account to act on pending review requests instead of scanning every open PR
-(that's what `review-prs` is for).
+account), posting per-file, summary, PR-level design/architecture, and PR-level
+requirement-traceability review comments via the configured AI backend. Run it
+whenever you want the bot/user account to act on pending review requests instead
+of scanning every open PR (that's what `review-prs` is for).
 
 ## Usage
 ```
@@ -32,25 +32,27 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
    environment (`PATH` prepends + `harness.env` + `GITHUB_TOKEN`). Looks up
    the current `gh` user's login (`gh api user --jq .login`).
 3. Builds the list of PRs to process:
-   - If `--pr` was given, resolves just that PR via `gh pr view` (number,
-     url, headRefName).
-   - Otherwise, runs `gh search prs user-review-requested:@me --repo <repo> --state open`
-     to get candidate PR numbers/URLs, then hydrates each with its
-     `headRefName` via `gh pr view` (search doesn't return that field
-     directly). PRs without a resolvable `headRefName` are dropped.
+   - If `--pr` was given, resolves just that PR via `gh pr view` (number, url,
+     headRefName, createdAt, closingIssuesReferences).
+   - Otherwise, runs `gh pr list --repo <repo> --state open --search user-review-requested:@me`
+     with the same `--json` field list in one call.
+   `createdAt` and `closingIssuesReferences` (GitHub's own closing-keyword-derived
+   issue links, e.g. from a `Fixes #N` in the PR body) feed the traceability pass's
+   ticket resolution (see below) at no extra `gh` cost, since both fields come back
+   from this same call.
 4. Loads the review prompts from `harness.knowledge_dir/pr-review/review-file.md`,
-   `.../review-summary.md`, and `.../review-design.md`, plus the optional
-   `harness.review_knowledge_file` if configured, and constructs a `Backend`
-   for `harness.backend` (`opencode` or `claude`).
+   `.../review-summary.md`, `.../review-design.md`, and `.../review-traceability.md`,
+   plus the optional `harness.review_knowledge_file` if configured, and constructs a
+   `Backend` for `harness.backend` (`opencode` or `claude`).
 5. Records the repo's current commit (`git checkout --detach HEAD`) so it can
    be restored after each PR.
 6. For each candidate PR, in order:
    - Determines whether the file+summary pipeline still has work to do (the
      "already approved / already reviewed" check below), and separately
-     whether the design pass has already posted its own marked comment. If
-     both are already done, the PR is skipped entirely with no checkout. If
-     only one is outstanding, the PR is still processed, but only that part
-     runs.
+     whether the design pass and the traceability pass have each already
+     posted their own marked comment. If all three are already done, the PR
+     is skipped entirely with no checkout. If only some are outstanding, the
+     PR is still processed, but only those parts run.
    - The file+summary part is skipped if the current user already left an
      `APPROVED` review on the PR, or if the current user already posted a
      comment whose body starts with `[bot]osc-review` or `Review Summary`
@@ -86,17 +88,34 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
      the files touched this run) and invokes the backend once; per
      `review-design.md` this posts inline comments for file-specific P0/P1
      design findings plus exactly one PR-level `# Design Review` comment. A
-     timeout here is likewise caught and logged; reviewer removal requires
-     `files_ok and summary_ok and design_ok`, so this timeout keeps the PR on
-     the queue for retry the same way a per-file or summary timeout does (see
-     next point).
+     timeout here is likewise caught and logged.
+   - **Traceability pass:** before invoking, checks GitHub directly for an
+     existing `<!-- osc-review-traceability -->`-marked comment on the
+     PR (this runner's only idempotency signal for this pass too) — if found,
+     it's a noop. Otherwise, resolves the PR's linked ticket(s): primarily via
+     `closingIssuesReferences` (GitHub's own closing-keyword linking), each
+     entry fetched with `gh issue view {number} --repo {owner}/{name}`;
+     falling back, only if that finds nothing, to scanning issue-timeline
+     comments posted within 5 minutes of the PR's `createdAt` (any author,
+     including bots) for an issue reference. If neither mechanism resolves a
+     ticket, the runner posts `# Requirement Traceability\nNo linked ticket
+     found...` directly via `gh pr comment` — **no backend call** — and this
+     outcome is terminal (never retried for this PR, even if a ticket link is
+     added later). Otherwise it builds one PR-wide prompt from
+     `review-traceability.md` (the same concatenated diff as the design pass,
+     plus the resolved ticket(s)' title/body and any early-comment context)
+     and invokes the backend once; per `review-traceability.md` this posts
+     inline comments for file-anchored P0/P1 **scope-creep** findings only
+     (gap findings, having no line to anchor to, are PR-level-only) plus
+     exactly one PR-level `# Requirement Traceability` comment. A timeout here
+     is likewise caught and logged.
    - Removes the current user as a requested reviewer on the PR
      (`gh pr edit --remove-reviewer <login>`), which is what clears it from
      future `user-review-requested:@me` searches — but only if the
-     file+summary pipeline *and* the design pass both succeeded (or were
-     already done). A failing or timed-out design pass alone is enough to
-     keep the PR on the reviewer's queue for a retry next run, even if the
-     file+summary part succeeded.
+     file+summary pipeline, the design pass, *and* the traceability pass all
+     succeeded (or were already done). A failing or timed-out pass in any one
+     of the four is enough to keep the PR on the reviewer's queue for a retry
+     next run, even if the other parts succeeded.
    - Any other exception while processing a PR is caught and logged; the
      command moves on to the next PR rather than aborting the whole run.
    - Regardless of outcome, restores the repo to the commit recorded in step 5
@@ -109,12 +128,12 @@ Only these `.harness.toml` fields affect this runner (full schema in
 | Field | Used for |
 |---|---|
 | `harness.backend` | Which AI backend (`opencode`/`claude`) runs the reviews |
-| `harness.backend_timeout_seconds` | Per-invocation timeout for each backend call (per file, for the summary, and for the design pass when it hasn't already succeeded) |
+| `harness.backend_timeout_seconds` | Per-invocation timeout for each backend call (per file, for the summary, and for the design/traceability passes when they haven't already succeeded) |
 | `harness.gh_token_cmd` | Command used to fetch the `GITHUB_TOKEN` passed to `gh` and the backend |
-| `harness.knowledge_dir` | Where `pr-review/review-file.md`, `pr-review/review-summary.md`, and `pr-review/review-design.md` prompt templates live |
+| `harness.knowledge_dir` | Where `pr-review/review-file.md`, `pr-review/review-summary.md`, `pr-review/review-design.md`, and `pr-review/review-traceability.md` prompt templates live |
 | `harness.path_prepend` | Extra `PATH` entries for subprocesses (git/gh/backend) |
 | `harness.env` | Extra environment variables merged into the subprocess/backend env |
-| `harness.review_knowledge_file` | Optional extra instructions appended to the file, summary, and design prompts |
+| `harness.review_knowledge_file` | Optional extra instructions appended to the file, summary, design, and traceability prompts |
 | `repo.name` | GitHub repo slug used for all `gh` calls, and the lock key (`name` with `/` replaced by `-`) |
 | `repo.working_dir` | Local git checkout the runner detaches, fetches, and checks branches out in |
 | `repo.subdir[].path` | Used to locate each subdir's `sonar-project.properties` project key, to find cached vibe-heal review output for the PR branch |
@@ -136,12 +155,20 @@ duplicate work using live signals read from GitHub on every run:
    — this is the design pass's *only* idempotency signal, and its fate is
    deliberately decoupled from (1)/(2) so neither part's retry forces the
    other's.
-4. After reviewing, it removes itself as a requested reviewer — but only once
-   both the file+summary part and the design pass have succeeded (or were
-   already done) — which is what drops the PR out of the
-   `user-review-requested:@me` search used to build the batch list next run.
+4. It skips the traceability-review part, independently of (1)-(3), if the
+   current user already posted a comment containing
+   `<!-- osc-review-traceability -->` — this covers both a completed
+   scope/gap comparison *and* the terminal "no linked ticket found" outcome,
+   since both post that same marker. Like the design pass, this is the
+   traceability pass's *only* idempotency signal in this runner, and its
+   fate is decoupled from (1)-(3).
+5. After reviewing, it removes itself as a requested reviewer — but only once
+   the file+summary part, the design pass, *and* the traceability pass have
+   all succeeded (or were already done) — which is what drops the PR out of
+   the `user-review-requested:@me` search used to build the batch list next
+   run.
 
-Because of (4), re-requesting review from the bot/user account (or pushing
+Because of (5), re-requesting review from the bot/user account (or pushing
 new commits, which GitHub re-requests review for automatically depending on
 branch protection settings) is what triggers reprocessing — there's no SHA
 comparison, so if the reviewer is manually re-requested without new commits
@@ -156,13 +183,18 @@ and no matching comment/approval exists, the PR will be reviewed again.
   call) is logged and skipped — it does not stop the rest of the batch, and it
   does not get marked "done" in any way, so it will be retried on the next
   run.
-- Backend timeouts are non-fatal at the per-file, summary, and design steps:
-  they're logged and the run proceeds to the next step, so a slow/hung backend
-  on one file doesn't block review of the rest. Reviewer removal requires
-  `files_ok and summary_ok and design_ok`, so a timeout at any of the three
-  keeps the PR on the queue for a retry next run — there's no special-casing of
-  the design pass relative to the other two (see
-  [State and idempotency](#state-and-idempotency)).
-- Building the batch list makes one `gh search prs` call plus one `gh pr view` call per
-  candidate PR (to hydrate `headRefName`), so a repo with many pending review
-  requests means proportionally many `gh` invocations.
+- Backend timeouts are non-fatal at the per-file, summary, design, and
+  traceability steps: they're logged and the run proceeds to the next step, so
+  a slow/hung backend on one file doesn't block review of the rest. Reviewer
+  removal requires `files_ok and summary_ok and design_ok and traceability_ok`,
+  so a timeout at any of the four keeps the PR on the queue for a retry next
+  run — there's no special-casing of the design or traceability pass relative
+  to the other two (see [State and idempotency](#state-and-idempotency)).
+- Building the batch list makes one `gh pr list --search` call (no per-PR
+  hydration needed — `headRefName`, `createdAt`, and `closingIssuesReferences`
+  all come back from that one call).
+- The traceability pass's extra `gh` cost: one `gh issue view` call per
+  resolved ticket (typically one), plus — only when the closing-keyword
+  mechanism finds nothing — one paginated fetch of the PR's issue-timeline
+  comments for the early-comment-window fallback scan. Both are cheap,
+  non-LLM `gh` calls in the same class as the other passes' marker checks.
