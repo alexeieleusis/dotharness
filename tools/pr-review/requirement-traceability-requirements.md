@@ -501,8 +501,16 @@ design-review wrappers (lowest risk, unblocks nothing else but should land first
   `createdAt,closingIssuesReferences`. 20 new tests in
   `tests/runners/test_common_traceability.py`; full suite 464 passed, ruff + `ruff format`
   + `ty check` clean.
-- [ ] (c) `knowledge/pr-review/review-traceability.md` prompt content (§7.1) — not
-  started.
+- [x] (c) done — `knowledge/pr-review/review-traceability.md` written, mirroring
+  `review-design.md`'s tone/perspective/role/output structure, with the P0/P1 severity
+  definitions from §7.1 drafted in verbatim and the `<!-- dotharness-review-traceability -->`
+  marker used directly. (Aside, unrelated to this file: `review-design.md` itself still
+  literally says `<!-- osc-review-design -->`, not `<!-- dotharness-review-design -->` —
+  commit `bb2c121` renamed the code-side marker but missed this knowledge file; pre-existing,
+  out of scope here, flagged for a separate fix.) Expects `## Linked Ticket(s)`,
+  `## Early PR Comments`, and (when applicable) `## Already-flagged scope-creep findings`
+  input sections; these header names are now a contract with
+  `build_traceability_review_prompt`, to be added in (d).
 - [ ] (d) `self_review.py` + `state.py` wiring (§7.4) — not started.
 - [ ] (e) `review_requested.py` wiring (§7.5) — not started.
 - [ ] Docs updates to `docs/commands/self-review.md` / `docs/commands/review-requested.md`
