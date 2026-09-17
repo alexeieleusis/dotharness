@@ -32,15 +32,23 @@ def test_skips_already_reviewed_pr(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
-        # Design pass is decoupled and out of scope for these correctness/state tests —
-        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        # design_reviewed_prs is empty, so the design pass still runs even though
+        # files/summary are already reviewed — has_design_review_comment must actually
+        # be reached (and the context-gathering mocks below let it get there) for this
+        # test to prove the backend is skipped for the right reason.
         patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 5, "url": "u", "headRefName": "b"}]),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=[]),
         patch("harness.runners.self_review.Backend") as mock_be,
     ):
         self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
+    assert 5 in state.get_design_reviewed_prs("acme-frontend")
 
 
 def test_backup_check_marks_reviewed_without_running(tmp_xdg, tmp_path):
@@ -50,17 +58,25 @@ def test_backup_check_marks_reviewed_without_running(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
-        # Design pass is decoupled and out of scope for these correctness/state tests —
-        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        # design_reviewed_prs is empty, so the design pass still runs even though
+        # files/summary are already reviewed — has_design_review_comment must actually
+        # be reached (and the context-gathering mocks below let it get there) for this
+        # test to prove the backend is skipped for the right reason.
         patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 3, "url": "u", "headRefName": "b"}]),
         patch("harness.runners.self_review.check_review_summary_comment_status", return_value=True),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=[]),
         patch("harness.runners.self_review.Backend") as mock_be,
     ):
         self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     assert 3 in state.read_self_review_state("acme-frontend")["reviewed_prs"]
+    assert 3 in state.get_design_reviewed_prs("acme-frontend")
 
 
 def test_updates_state_on_success(tmp_xdg, tmp_path):
@@ -346,19 +362,27 @@ def test_inconclusive_comment_check_skips_cycle_without_marking_reviewed(tmp_xdg
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
-        # Design pass is decoupled and out of scope for these correctness/state tests —
-        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        # design_reviewed_prs is empty, so the design pass still runs even though
+        # files/summary status is inconclusive — has_design_review_comment must
+        # actually be reached (and the context-gathering mocks below let it get there)
+        # for this test to prove the backend is skipped for the right reason.
         patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch(
             "harness.runners.self_review._list_my_prs", return_value=[{"number": 30, "url": "u", "headRefName": "b"}]
         ),
         patch("harness.runners.self_review.check_review_summary_comment_status", return_value=None),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=[]),
         patch("harness.runners.self_review.Backend") as mock_be,
     ):
         self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     assert 30 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
+    assert 30 in state.get_design_reviewed_prs("acme-frontend")
 
 
 def test_prunes_stale_entries_for_closed_prs(tmp_xdg, tmp_path):
@@ -371,11 +395,19 @@ def test_prunes_stale_entries_for_closed_prs(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
-        # Design pass is decoupled and out of scope for these correctness/state tests —
-        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        # design_reviewed_prs is empty, so the design pass still runs for the
+        # surviving PR even though files/summary are already reviewed —
+        # has_design_review_comment must actually be reached (and the
+        # context-gathering mocks below let it get there) for this test to prove
+        # the backend is skipped for the right reason.
         patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 5, "url": "u", "headRefName": "b"}]),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=[]),
         patch("harness.runners.self_review.Backend") as mock_be,
     ):
         self_review._run_locked(cfg)
@@ -383,6 +415,7 @@ def test_prunes_stale_entries_for_closed_prs(tmp_xdg, tmp_path):
     result = state.read_self_review_state("acme-frontend")
     assert result["reviewed_prs"] == [5]
     assert result["partial_reviews"] == {}
+    assert 5 in state.get_design_reviewed_prs("acme-frontend")
 
 
 def test_failed_pr_fetch_skips_cycle_without_touching_state(tmp_xdg, tmp_path):
