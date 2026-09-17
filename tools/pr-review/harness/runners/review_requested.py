@@ -186,9 +186,14 @@ def _process_pr(
     original_sha = git_detach_and_record(wdir, env)
     try:
         git_fetch_and_checkout(pr["headRefName"], wdir, env)
+        # Gathered once and shared by all three passes below (mirrors self_review.py's
+        # _gather_pr_context/_cached_file_diff) so a PR needing both the correctness
+        # pipeline and the design pass in the same cycle doesn't refetch PR metadata or
+        # re-diff every changed file for each pass.
+        ctx = _gather_pr_context(pr, config, wdir, env)
         if run_files_summary:
-            files_ok = _run_file_reviews(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env)
-            summary_ok = _run_summary_review(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env)
+            files_ok = _run_file_reviews(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, ctx)
+            summary_ok = _run_summary_review(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, ctx)
         else:
             files_ok = True
             summary_ok = True
@@ -198,7 +203,7 @@ def _process_pr(
         # future PR-level pass (issue #4) would extend this same AND-gate below with its
         # own `_ok` boolean rather than invent a parallel gating mechanism.
         design_ok = _run_design_review(
-            pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, design_done
+            pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, design_done, ctx
         )
         if files_ok and summary_ok and design_ok:
             remove_reviewer(pr_number, config.repo.name, current_user, env)
@@ -206,6 +211,32 @@ def _process_pr(
         logger.exception("PR #%d: error", pr_number)
     finally:
         git_restore(original_sha, pr["headRefName"], wdir, env)
+
+
+def _gather_pr_context(pr: dict, config: HarnessConfig, wdir: str, env: dict) -> dict:
+    pr_number = pr["number"]
+    vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr["headRefName"])
+    pr_description = get_pr_description(pr_number, config.repo.name, env)
+    base_branch = get_pr_base_branch(pr_number, config.repo.name, env)
+    commit_sha = get_pr_head_sha(pr_number, config.repo.name, env)
+    files = get_changed_files(base_branch, wdir, env, expected_sha=commit_sha)
+    return {
+        "vibe_heal_context": vibe_heal_context,
+        "pr_description": pr_description,
+        "base_branch": base_branch,
+        "commit_sha": commit_sha,
+        "files": files,
+        "diff_cache": {},
+    }
+
+
+def _cached_file_diff(ctx: dict, file: str, wdir: str, env: dict) -> str:
+    """The file/summary pass and the design pass both need every changed file's diff;
+    caching on ctx means a PR processed by both in the same cycle only runs `git diff`
+    once per file instead of twice."""
+    if file not in ctx["diff_cache"]:
+        ctx["diff_cache"][file] = get_file_diff(file, ctx["base_branch"], wdir, env)
+    return ctx["diff_cache"][file]
 
 
 def _run_file_reviews(
@@ -216,18 +247,18 @@ def _run_file_reviews(
     backend: Backend,
     wdir: str,
     env: dict,
+    ctx: dict,
 ) -> bool:
     pr_number = pr["number"]
     file_instructions = (knowledge_dir / "review-file.md").read_text(encoding="utf-8")
-    vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr["headRefName"])
-    pr_description = get_pr_description(pr_number, config.repo.name, env)
-    base_branch = get_pr_base_branch(pr_number, config.repo.name, env)
-    commit_sha = get_pr_head_sha(pr_number, config.repo.name, env)
-    files = get_changed_files(base_branch, wdir, env, expected_sha=commit_sha)
+    files = ctx["files"]
+    commit_sha = ctx["commit_sha"]
+    pr_description = ctx["pr_description"]
+    vibe_heal_context = ctx["vibe_heal_context"]
 
     all_ok = True
     for file in files:
-        diff = get_file_diff(file, base_branch, wdir, env)
+        diff = _cached_file_diff(ctx, file, wdir, env)
         abs_path = os.path.join(wdir, file)
         file_section = build_file_review_section(file, diff, abs_path)
         prompt = _build_file_prompt(
@@ -282,6 +313,7 @@ def _run_design_review(
     env: dict,
     current_user: str,
     design_done: bool,
+    ctx: dict,
 ) -> bool:
     """No persisted state exists for this runner, so has_design_review_comment (checked
     once by the caller and passed in as design_done) is the *only* idempotency signal
@@ -306,14 +338,9 @@ def _run_design_review(
         return True
 
     design_instructions = (knowledge_dir / "review-design.md").read_text(encoding="utf-8")
-    vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr["headRefName"])
-    pr_description = get_pr_description(pr_number, repo_name, env)
-    base_branch = get_pr_base_branch(pr_number, repo_name, env)
-    commit_sha = get_pr_head_sha(pr_number, repo_name, env)
-    files = get_changed_files(base_branch, wdir, env, expected_sha=commit_sha)
     diff_sections = "".join(
-        build_file_review_section(file, get_file_diff(file, base_branch, wdir, env), os.path.join(wdir, file))
-        for file in files
+        build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
+        for file in ctx["files"]
     )
 
     prior_flagged_locations = get_design_review_flagged_locations(pr_number, repo_name, current_user, env)
@@ -324,9 +351,9 @@ def _run_design_review(
         pr,
         pr_number,
         repo_name,
-        commit_sha,
-        pr_description,
-        vibe_heal_context,
+        ctx["commit_sha"],
+        ctx["pr_description"],
+        ctx["vibe_heal_context"],
         prior_flagged_locations,
     )
     try:
@@ -351,14 +378,13 @@ def _run_summary_review(
     backend: Backend,
     wdir: str,
     env: dict,
+    ctx: dict,
 ) -> bool:
     pr_number = pr["number"]
     summary_instructions = (knowledge_dir / "review-summary.md").read_text(encoding="utf-8")
-    vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr["headRefName"])
-    pr_description = get_pr_description(pr_number, config.repo.name, env)
-    base_branch = get_pr_base_branch(pr_number, config.repo.name, env)
-    commit_sha = get_pr_head_sha(pr_number, config.repo.name, env)
-    files = get_changed_files(base_branch, wdir, env, expected_sha=commit_sha)
+    files = ctx["files"]
+    pr_description = ctx["pr_description"]
+    vibe_heal_context = ctx["vibe_heal_context"]
 
     summary_prompt = (
         summary_instructions
