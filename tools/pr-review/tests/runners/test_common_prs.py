@@ -6,16 +6,21 @@ import pytest
 from harness.runners.common import (
     add_reviewer,
     author_matches,
+    check_pr_level_pass_comment_status,
     check_review_summary_comment_status,
+    check_traceability_review_comment_status,
     get_current_user,
     get_requested_reviewers,
     has_design_review_comment,
     has_inline_review_comments,
+    has_pr_level_pass_comment,
     has_review_summary_comment,
+    has_traceability_review_comment,
     is_design_review_comment,
     is_inline_review_comment,
     is_pr_open,
     is_review_summary_comment,
+    is_traceability_review_comment,
     list_open_prs_for_current_user,
     list_open_prs_matching_authors,
     pr_from_url,
@@ -364,3 +369,122 @@ def test_has_design_review_comment_returns_false_on_gh_failure():
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
         assert has_design_review_comment(1, "acme/repo", "alice", {}) is False
+
+
+def test_has_pr_level_pass_comment_true_when_marker_and_user_match():
+    # Generic helper design/traceability's has_*_review_comment wrap
+    # (requirement-traceability-requirements.md §7.6) — exercised here with an arbitrary
+    # marker to prove it isn't hardcoded to one pass's marker.
+    marker = "<!-- some-future-pass-marker -->"
+    comments = [
+        {"user": {"login": "someone-else"}, "body": f"unrelated{marker}"},
+        {"user": {"login": "alice"}, "body": f"# Some Pass\nfindings...{marker}"},
+    ]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_pr_level_pass_comment(marker, 1, "acme/repo", "alice", {}) is True
+
+
+def test_has_pr_level_pass_comment_false_when_same_user_but_no_marker():
+    marker = "<!-- some-future-pass-marker -->"
+    comments = [{"user": {"login": "alice"}, "body": "# Review Summary\nNo blocking issues found."}]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_pr_level_pass_comment(marker, 1, "acme/repo", "alice", {}) is False
+
+
+def test_check_pr_level_pass_comment_status_returns_none_on_gh_failure():
+    marker = "<!-- some-future-pass-marker -->"
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
+        assert check_pr_level_pass_comment_status(marker, 1, "acme/repo", "alice", {}) is None
+
+
+def test_check_pr_level_pass_comment_status_returns_false_on_confirmed_absence():
+    marker = "<!-- some-future-pass-marker -->"
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps([]).encode())
+        assert check_pr_level_pass_comment_status(marker, 1, "acme/repo", "alice", {}) is False
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (
+            "# Requirement Traceability\nNo scope creep or requirement gaps found.<!-- dotharness-review-traceability -->",
+            True,
+        ),
+        ("<!-- dotharness-review-traceability -->", True),
+        ("# Requirement Traceability\nNo linked ticket found.", False),
+        ("# Design Review\n...<!-- dotharness-review-design -->", False),
+        ("", False),
+    ],
+)
+def test_is_traceability_review_comment(body, expected):
+    assert is_traceability_review_comment(body) is expected
+
+
+def test_has_traceability_review_comment_true_when_marker_and_user_match():
+    comments = [
+        {"user": {"login": "someone-else"}, "body": "unrelated<!-- dotharness-review-traceability -->"},
+        {
+            "user": {"login": "alice"},
+            "body": "# Requirement Traceability\nfindings...<!-- dotharness-review-traceability -->",
+        },
+    ]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_traceability_review_comment(1, "acme/repo", "alice", {}) is True
+
+
+def test_has_traceability_review_comment_true_for_terminal_no_ticket_found_comment():
+    # The "no linked ticket found" outcome is terminal (requirement-traceability-
+    # requirements.md §7.3/§11.1) — it carries the same marker as a completed
+    # comparison, so it must also read as "done".
+    comments = [
+        {
+            "user": {"login": "alice"},
+            "body": "# Requirement Traceability\nNo linked ticket found — skipping scope/gap comparison."
+            "<!-- dotharness-review-traceability -->",
+        }
+    ]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_traceability_review_comment(1, "acme/repo", "alice", {}) is True
+
+
+def test_has_traceability_review_comment_false_when_same_user_but_no_marker():
+    comments = [{"user": {"login": "alice"}, "body": "# Design Review\nNo blocking design/architecture issues found."}]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_traceability_review_comment(1, "acme/repo", "alice", {}) is False
+
+
+def test_has_traceability_review_comment_false_when_other_user_posted_with_marker():
+    comments = [
+        {
+            "user": {"login": "someone-else"},
+            "body": "# Requirement Traceability\n...<!-- dotharness-review-traceability -->",
+        }
+    ]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_traceability_review_comment(1, "acme/repo", "alice", {}) is False
+
+
+def test_has_traceability_review_comment_returns_false_on_gh_failure():
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
+        assert has_traceability_review_comment(1, "acme/repo", "alice", {}) is False
+
+
+def test_check_traceability_review_comment_status_returns_none_on_gh_failure():
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
+        assert check_traceability_review_comment_status(1, "acme/repo", "alice", {}) is None
+
+
+def test_check_traceability_review_comment_status_returns_false_on_confirmed_absence():
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps([]).encode())
+        assert check_traceability_review_comment_status(1, "acme/repo", "alice", {}) is False

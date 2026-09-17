@@ -21,6 +21,7 @@ PR_COMMENTS_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scrip
 FOCUSED_REVIEW_MARKER = "[focused-review-bot]"
 INLINE_REVIEW_MARKER = "<!-- osc-review-inline -->"
 DESIGN_REVIEW_MARKER = "<!-- osc-review-design -->"
+TRACEABILITY_REVIEW_MARKER = "<!-- osc-review-traceability -->"
 
 
 class FatalGitError(Exception):
@@ -317,28 +318,62 @@ def has_inline_review_comments(pr_number: int, repo: str, current_user: str, env
     )
 
 
+def has_pr_level_pass_comment(marker: str, pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+    """Shared by every PR-level pass (design review, requirement-traceability review,
+    ...) whose completion signal is "did I already post an issue-level PR comment
+    containing this marker" — extracted per requirement-traceability-requirements.md §7.6,
+    closing the reuse pointer design-review-requirements.md §11.5 left here. A PR-level
+    pass always posts exactly one PR-level comment per successful run (findings, or a
+    "nothing to report" quiet path), so checking issue-level comments alone is enough —
+    no need to also check the inline pulls/comments endpoint the way
+    has_inline_review_comments does."""
+    return bool(check_pr_level_pass_comment_status(marker, pr_number, repo, current_user, env))
+
+
+def check_pr_level_pass_comment_status(
+    marker: str, pr_number: int, repo: str, current_user: str, env: dict
+) -> bool | None:
+    """Tri-state version of has_pr_level_pass_comment: None means the check itself was
+    inconclusive (API failure), as opposed to a confirmed absence of the comment."""
+    return _has_matching_comment(
+        f"repos/{repo}/issues/{pr_number}/comments", current_user, env, lambda body: marker in body
+    )
+
+
 def is_design_review_comment(body: str) -> bool:
     return DESIGN_REVIEW_MARKER in body
 
 
 def has_design_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
-    """The design-review pass always posts exactly one PR-level comment per successful
-    run (findings or "no blocking issues"), so checking issue-level comments alone is
-    enough — no need to also check the inline pulls/comments endpoint the way
-    has_inline_review_comments does. This is the design pass's *only* idempotency
-    signal in review-requested (no persisted state there); self-review uses it only as
-    defense-in-depth alongside its own persisted design_reviewed_prs state. A future
-    PR-level pass (e.g. requirement-traceability, dotharness#4) could reuse this same
-    shape as has_pr_level_pass_comment(marker) rather than duplicating it."""
-    return bool(check_design_review_comment_status(pr_number, repo, current_user, env))
+    """This is the design pass's *only* idempotency signal in review-requested (no
+    persisted state there); self-review uses it only as defense-in-depth alongside its
+    own persisted design_reviewed_prs state."""
+    return has_pr_level_pass_comment(DESIGN_REVIEW_MARKER, pr_number, repo, current_user, env)
 
 
 def check_design_review_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
     """Tri-state version of has_design_review_comment: None means the check itself was
     inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return _has_matching_comment(
-        f"repos/{repo}/issues/{pr_number}/comments", current_user, env, is_design_review_comment
-    )
+    return check_pr_level_pass_comment_status(DESIGN_REVIEW_MARKER, pr_number, repo, current_user, env)
+
+
+def is_traceability_review_comment(body: str) -> bool:
+    return TRACEABILITY_REVIEW_MARKER in body
+
+
+def has_traceability_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+    """Mirrors has_design_review_comment exactly (see requirement-traceability-requirements.md
+    §7.4/§7.5): review-requested's only idempotency signal for this pass; self-review's
+    defense-in-depth check alongside its own persisted traceability_reviewed_prs state.
+    Also covers the "no linked ticket found" outcome, which is terminal (§7.3/§11.1) —
+    any comment carrying this marker, including that one, counts as done."""
+    return has_pr_level_pass_comment(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
+
+
+def check_traceability_review_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
+    """Tri-state version of has_traceability_review_comment: None means the check itself
+    was inconclusive (API failure), as opposed to a confirmed absence of the comment."""
+    return check_pr_level_pass_comment_status(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
 
 
 def get_design_review_flagged_locations(
