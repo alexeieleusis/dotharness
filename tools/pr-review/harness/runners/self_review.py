@@ -10,6 +10,7 @@ from harness.config import HarnessConfig
 from harness.lock import acquire_lock
 from harness.runners.common import (
     TIMEOUT_GH,
+    build_design_review_prompt,
     build_file_review_section,
     build_subprocess_env,
     check_review_summary_comment_status,
@@ -24,6 +25,7 @@ from harness.runners.common import (
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
+    has_design_review_comment,
     run_cmd,
 )
 
@@ -75,7 +77,17 @@ def _gather_pr_context(pr: dict, number: int, config, wdir: str, env: dict) -> d
         "base_branch": base_branch,
         "commit_sha": commit_sha,
         "files": files,
+        "diff_cache": {},
     }
+
+
+def _cached_file_diff(ctx: dict, file: str, wdir: str, env: dict) -> str:
+    """The file+summary pass and the design pass both need every changed file's diff;
+    caching on ctx means a PR processed by both in the same cycle only runs `git diff`
+    once per file instead of twice."""
+    if file not in ctx["diff_cache"]:
+        ctx["diff_cache"][file] = get_file_diff(file, ctx["base_branch"], wdir, env)
+    return ctx["diff_cache"][file]
 
 
 def _build_file_review_prompt(
@@ -135,7 +147,6 @@ def _review_files(
     repo_slug: str,
 ) -> tuple[bool, set[str]]:
     files = ctx["files"]
-    base_branch = ctx["base_branch"]
     commit_sha = ctx["commit_sha"]
     pr_description = ctx["pr_description"]
     vibe_heal_context = ctx["vibe_heal_context"]
@@ -144,7 +155,7 @@ def _review_files(
         if file in partial_files:
             logger.info("PR #%d: file %s already reviewed in a prior run — skipping", number, file)
             continue
-        diff = get_file_diff(file, base_branch, wdir, env)
+        diff = _cached_file_diff(ctx, file, wdir, env)
         abs_path = os.path.join(wdir, file)
         prompt = _build_file_review_prompt(
             file,
@@ -165,6 +176,65 @@ def _review_files(
             partial_files.add(file)
             state.set_partial_reviewed_files(repo_slug, number, list(partial_files))
     return any_failure, partial_files
+
+
+def _build_design_prompt(
+    design_instructions: str,
+    extra_knowledge: str | None,
+    pr: dict,
+    number: int,
+    config,
+    ctx: dict,
+    wdir: str,
+    env: dict,
+) -> str:
+    diff_sections = "".join(
+        build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
+        for file in ctx["files"]
+    )
+    return build_design_review_prompt(
+        design_instructions,
+        extra_knowledge,
+        diff_sections,
+        pr,
+        number,
+        config.repo.name,
+        ctx["commit_sha"],
+        ctx["pr_description"],
+        ctx["vibe_heal_context"],
+    )
+
+
+def _run_design_review(
+    design_instructions: str,
+    extra_knowledge: str | None,
+    pr: dict,
+    number: int,
+    config,
+    ctx: dict,
+    backend: Backend,
+    wdir: str,
+    current_user: str,
+    env: dict,
+) -> None:
+    """Tracked independently of reviewed_prs/partial_reviews (state.design_reviewed_prs)
+    so this pass's own retry never forces, or is forced by, the per-file review's
+    retry-from-scratch behavior. The live comment check below is defense-in-depth only
+    (the persisted state is the source of truth here) — review_requested.py, which has
+    no persisted state at all, relies on the equivalent check as its *only* signal."""
+    if has_design_review_comment(number, config.repo.name, current_user, env):
+        state.add_design_reviewed_pr(config.repo_slug, number)
+        return
+    design_prompt = _build_design_prompt(design_instructions, extra_knowledge, pr, number, config, ctx, wdir, env)
+    try:
+        result = backend.run(design_prompt, cwd=wdir, context=f"PR #{number} design review")
+        if result.returncode != 0:
+            logger.error("PR #%d: design review backend exited %d", number, result.returncode)
+            return
+    except subprocess.TimeoutExpired:
+        logger.exception("PR #%d: design review backend timed out", number)
+        return
+    state.add_design_reviewed_pr(config.repo_slug, number)
 
 
 def _run_summary(
@@ -225,48 +295,56 @@ def _process_single_pr(
     backend: Backend,
     file_instructions: str,
     summary_instructions: str,
+    design_instructions: str,
     extra_knowledge: str | None,
     reviewed: set,
     original_sha: str,
     partial_files: set[str],
     current_user: str,
+    run_files_summary: bool,
+    run_design: bool,
 ) -> None:
     try:
         ctx = _gather_pr_context(pr, number, config, wdir, env)
-        file_failure, partial_files = _review_files(
-            ctx,
-            wdir,
-            env,
-            backend,
-            file_instructions,
-            extra_knowledge,
-            pr,
-            number,
-            config,
-            partial_files,
-            config.repo_slug,
-        )
-        summary_failure = _run_summary(
-            summary_instructions,
-            extra_knowledge,
-            pr,
-            number,
-            config,
-            ctx["files"],
-            ctx["pr_description"],
-            ctx["vibe_heal_context"],
-            backend,
-            wdir,
-            current_user,
-            env,
-        )
-        if not file_failure and not summary_failure:
-            reviewed.add(number)
-            sr_state = state.read_self_review_state(config.repo_slug)
-            sr_state["partial_reviews"].pop(str(number), None)
-            state.write_self_review_state(config.repo_slug, list(reviewed), sr_state["partial_reviews"])
-        elif not file_failure:
-            state.set_partial_reviewed_files(config.repo_slug, number, list(partial_files))
+        if run_files_summary:
+            file_failure, partial_files = _review_files(
+                ctx,
+                wdir,
+                env,
+                backend,
+                file_instructions,
+                extra_knowledge,
+                pr,
+                number,
+                config,
+                partial_files,
+                config.repo_slug,
+            )
+            summary_failure = _run_summary(
+                summary_instructions,
+                extra_knowledge,
+                pr,
+                number,
+                config,
+                ctx["files"],
+                ctx["pr_description"],
+                ctx["vibe_heal_context"],
+                backend,
+                wdir,
+                current_user,
+                env,
+            )
+            if not file_failure and not summary_failure:
+                reviewed.add(number)
+                sr_state = state.read_self_review_state(config.repo_slug)
+                sr_state["partial_reviews"].pop(str(number), None)
+                state.write_self_review_state(config.repo_slug, list(reviewed), sr_state["partial_reviews"])
+            elif not file_failure:
+                state.set_partial_reviewed_files(config.repo_slug, number, list(partial_files))
+        if run_design:
+            _run_design_review(
+                design_instructions, extra_knowledge, pr, number, config, ctx, backend, wdir, current_user, env
+            )
     except Exception:
         logger.exception("PR #%d: error", number)
     finally:
@@ -284,10 +362,12 @@ def _run_locked(config: HarnessConfig) -> None:
         return
     pruned_state = state.prune_self_review_state(config.repo_slug, {p["number"] for p in prs})
     reviewed = set(pruned_state["reviewed_prs"])
+    design_reviewed = set(pruned_state["design_reviewed_prs"])
 
     knowledge_dir = Path(config.harness.knowledge_dir) / "pr-review"
     file_instructions = (knowledge_dir / "review-file.md").read_text(encoding="utf-8")
     summary_instructions = (knowledge_dir / "review-summary.md").read_text(encoding="utf-8")
+    design_instructions = (knowledge_dir / "review-design.md").read_text(encoding="utf-8")
     extra_knowledge = _get_extra_knowledge(config)
     backend = _build_backend(config, env)
     wdir = str(config.repo.working_dir)
@@ -295,19 +375,22 @@ def _run_locked(config: HarnessConfig) -> None:
 
     for pr in prs:
         number = pr["number"]
+        run_design = number not in design_reviewed
         skip = _should_skip_pr(number, config.repo.name, current_user, reviewed, env)
+        run_files_summary = skip is False
         if skip is None:
             logger.warning(
                 "PR #%d: could not confirm review status (comment check failed) — "
-                "skipping this cycle without marking reviewed",
+                "skipping file/summary review this cycle without marking reviewed",
                 number,
             )
+        elif skip and number not in reviewed:
+            reviewed.add(number)
+            state.write_self_review_state(config.repo_slug, list(reviewed))
+
+        if not run_files_summary and not run_design:
             continue
-        if skip:
-            if number not in reviewed:
-                reviewed.add(number)
-                state.write_self_review_state(config.repo_slug, list(reviewed))
-            continue
+
         logger.info("PR #%d: starting", number)
         partial_files = set(state.get_partial_reviewed_files(config.repo_slug, number))
         _process_single_pr(
@@ -319,11 +402,14 @@ def _run_locked(config: HarnessConfig) -> None:
             backend,
             file_instructions,
             summary_instructions,
+            design_instructions,
             extra_knowledge,
             reviewed,
             original_sha,
             partial_files,
             current_user,
+            run_files_summary,
+            run_design,
         )
 
 

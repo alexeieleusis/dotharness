@@ -9,8 +9,10 @@ from harness.runners.common import (
     check_review_summary_comment_status,
     get_current_user,
     get_requested_reviewers,
+    has_design_review_comment,
     has_inline_review_comments,
     has_review_summary_comment,
+    is_design_review_comment,
     is_inline_review_comment,
     is_pr_open,
     is_review_summary_comment,
@@ -313,3 +315,52 @@ def test_has_inline_review_comments_returns_false_on_gh_failure():
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
         assert has_inline_review_comments(1, "acme/repo", "alice", {}) is False
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("# Design Review\nNo blocking design/architecture issues found.<!-- osc-review-design -->", True),
+        ("<!-- osc-review-design -->", True),
+        ("# Design Review\nNo blocking design/architecture issues found.", False),
+        ("# Review Summary\nNo blocking issues found.", False),
+        ("Nitpick: rename this variable.<!-- osc-review-inline -->", False),
+        ("", False),
+    ],
+)
+def test_is_design_review_comment(body, expected):
+    assert is_design_review_comment(body) is expected
+
+
+def test_has_design_review_comment_true_when_marker_and_user_match():
+    # The design pass always posts its marked comment at the PR (issue) level, never
+    # only inline, so has_design_review_comment only needs to check that endpoint.
+    comments = [
+        {"user": {"login": "someone-else"}, "body": "unrelated<!-- osc-review-design -->"},
+        {"user": {"login": "alice"}, "body": "# Design Review\nfindings...<!-- osc-review-design -->"},
+    ]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_design_review_comment(1, "acme/repo", "alice", {}) is True
+
+
+def test_has_design_review_comment_false_when_same_user_but_no_marker():
+    # A regular self-review summary comment from the same account must not be mistaken
+    # for a completed design review.
+    comments = [{"user": {"login": "alice"}, "body": "# Review Summary\nNo blocking issues found."}]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_design_review_comment(1, "acme/repo", "alice", {}) is False
+
+
+def test_has_design_review_comment_false_when_other_user_posted_with_marker():
+    comments = [{"user": {"login": "someone-else"}, "body": "# Design Review\n...<!-- osc-review-design -->"}]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_design_review_comment(1, "acme/repo", "alice", {}) is False
+
+
+def test_has_design_review_comment_returns_false_on_gh_failure():
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
+        assert has_design_review_comment(1, "acme/repo", "alice", {}) is False

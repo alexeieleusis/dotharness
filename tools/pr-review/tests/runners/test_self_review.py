@@ -22,6 +22,7 @@ def _setup_knowledge(tmp_path, content="instructions"):
     kdir.mkdir(parents=True, exist_ok=True)
     (kdir / "review-file.md").write_text(content)
     (kdir / "review-summary.md").write_text(content)
+    (kdir / "review-design.md").write_text(content)
 
 
 def test_skips_already_reviewed_pr(tmp_xdg, tmp_path):
@@ -31,6 +32,9 @@ def test_skips_already_reviewed_pr(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 5, "url": "u", "headRefName": "b"}]),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.self_review.Backend") as mock_be,
@@ -46,6 +50,9 @@ def test_backup_check_marks_reviewed_without_running(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 3, "url": "u", "headRefName": "b"}]),
         patch("harness.runners.self_review.check_review_summary_comment_status", return_value=True),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -65,6 +72,9 @@ def test_updates_state_on_success(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 7, "url": "u", "headRefName": "b"}]),
         patch("harness.runners.self_review.check_review_summary_comment_status", side_effect=[False, True]),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -92,6 +102,9 @@ def test_does_not_update_state_when_summary_comment_missing(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch(
             "harness.runners.self_review._list_my_prs", return_value=[{"number": 15, "url": "u", "headRefName": "b"}]
         ),
@@ -122,6 +135,9 @@ def test_does_not_update_state_on_failure(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 9, "url": "u", "headRefName": "b"}]),
         patch("harness.runners.self_review.check_review_summary_comment_status", return_value=False),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -148,6 +164,9 @@ def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch(
             "harness.runners.self_review._list_my_prs", return_value=[{"number": 11, "url": "u", "headRefName": "feat"}]
         ),
@@ -177,6 +196,9 @@ def test_does_not_update_state_when_file_call_fails(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch(
             "harness.runners.self_review._list_my_prs", return_value=[{"number": 13, "url": "u", "headRefName": "feat"}]
         ),
@@ -204,6 +226,9 @@ def test_vibe_heal_context_included_in_prompts(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 7, "url": "u", "headRefName": "b"}]),
         patch("harness.runners.self_review.check_review_summary_comment_status", return_value=False),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -233,6 +258,9 @@ def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 7, "url": "u", "headRefName": "b"}]),
         patch("harness.runners.self_review.check_review_summary_comment_status", return_value=False),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -259,6 +287,9 @@ def test_git_restore_called_on_context_gathering_exception(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch(
             "harness.runners.self_review._list_my_prs", return_value=[{"number": 20, "url": "u", "headRefName": "b"}]
         ),
@@ -284,6 +315,9 @@ def test_timeout_expired_does_not_mark_reviewed(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch(
             "harness.runners.self_review._list_my_prs", return_value=[{"number": 21, "url": "u", "headRefName": "b"}]
         ),
@@ -312,6 +346,9 @@ def test_inconclusive_comment_check_skips_cycle_without_marking_reviewed(tmp_xdg
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch(
             "harness.runners.self_review._list_my_prs", return_value=[{"number": 30, "url": "u", "headRefName": "b"}]
         ),
@@ -334,6 +371,9 @@ def test_prunes_stale_entries_for_closed_prs(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 5, "url": "u", "headRefName": "b"}]),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.self_review.Backend") as mock_be,
@@ -354,6 +394,9 @@ def test_failed_pr_fetch_skips_cycle_without_touching_state(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review._list_my_prs", return_value=None),
         patch("harness.runners.self_review.Backend") as mock_be,
     ):
@@ -372,6 +415,117 @@ def test_list_my_prs_returns_none_on_malformed_json():
         assert self_review._list_my_prs("acme/frontend", {}) is None
 
 
+def test_design_review_runs_independently_of_already_reviewed_files(tmp_xdg, tmp_path):
+    """A PR whose files/summary already succeeded (reviewed_prs) still gets a design
+    pass if design_reviewed_prs doesn't have it yet — fate is decoupled (dotharness#3)."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [7])
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 7, "url": "u", "headRefName": "b"}]),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=False),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
+        patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
+        patch("harness.runners.self_review.Backend") as mock_be,
+    ):
+        mock_be.return_value.run.return_value = MagicMock(returncode=0)
+        self_review._run_locked(cfg)
+    # Only the design pass runs (files/summary already done) — one backend call.
+    assert mock_be.return_value.run.call_count == 1
+    assert mock_be.return_value.run.call_args.kwargs["context"] == "PR #7 design review"
+    assert 7 in state.get_design_reviewed_prs("acme-frontend")
+
+
+def test_design_review_failure_does_not_block_files_summary_state(tmp_xdg, tmp_path):
+    """A design-pass failure must not prevent reviewed_prs from being updated, and must
+    not itself be recorded as done — the two are tracked independently."""
+    state.write_self_review_state("acme-frontend", [])
+    _setup_knowledge(tmp_path)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 8, "url": "u", "headRefName": "b"}]),
+        patch("harness.runners.self_review.check_review_summary_comment_status", side_effect=[False, True]),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=False),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
+        patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
+        patch("harness.runners.self_review.Backend") as mock_be,
+    ):
+        # File review + summary succeed (returncode 0); the design-review call — the
+        # third and last backend invocation — fails.
+        mock_be.return_value.run.side_effect = [
+            MagicMock(returncode=0),
+            MagicMock(returncode=0),
+            MagicMock(returncode=1),
+        ]
+        self_review._run_locked(cfg)
+    assert 8 in state.read_self_review_state("acme-frontend")["reviewed_prs"]
+    assert 8 not in state.get_design_reviewed_prs("acme-frontend")
+
+
+def test_design_review_already_done_is_skipped_without_any_backend_call(tmp_xdg, tmp_path):
+    """Once design_reviewed_prs has the PR, and files/summary are also already done,
+    nothing runs at all this cycle — not even a checkout."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [9])
+    state.add_design_reviewed_pr("acme-frontend", 9)
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 9, "url": "u", "headRefName": "b"}]),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout") as mock_checkout,
+        patch("harness.runners.self_review.Backend") as mock_be,
+    ):
+        self_review._run_locked(cfg)
+    mock_be.return_value.run.assert_not_called()
+    mock_checkout.assert_not_called()
+
+
+def test_design_review_marker_found_marks_done_without_invoking_backend(tmp_xdg, tmp_path):
+    """Defense-in-depth: if a design-review comment is already on GitHub (e.g. a prior
+    state write didn't persist), the pass is recorded as done without re-invoking."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [10])
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch(
+            "harness.runners.self_review._list_my_prs", return_value=[{"number": 10, "url": "u", "headRefName": "b"}]
+        ),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=[]),
+        patch("harness.runners.self_review.Backend") as mock_be,
+    ):
+        self_review._run_locked(cfg)
+    mock_be.return_value.run.assert_not_called()
+    assert 10 in state.get_design_reviewed_prs("acme-frontend")
+
+
 def test_does_not_update_state_when_summary_check_inconclusive(tmp_xdg, tmp_path):
     """If the post-backend verification GET fails transiently, that's inconclusive, not a
     confirmed missing comment — the PR must still not be marked reviewed on this run."""
@@ -383,6 +537,9 @@ def test_does_not_update_state_when_summary_check_inconclusive(tmp_xdg, tmp_path
     with (
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real.
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch(
             "harness.runners.self_review._list_my_prs", return_value=[{"number": 31, "url": "u", "headRefName": "b"}]
         ),

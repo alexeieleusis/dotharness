@@ -1,6 +1,6 @@
 # self-review
 
-`self-review` finds your own open pull requests on GitHub and has the configured AI backend review them, file by file, posting inline feedback and a summary — the same way a colleague would review your PR before you ask a human to look at it. Unlike `review-prs` (which reviews other people's PRs) or `review-requested` (which reacts to explicit review requests), this command filters strictly by PR author: it only ever looks at PRs opened by the currently authenticated `gh` user (`--author @me`). Run it after pushing a PR, or on a schedule, to get an automated first pass before requesting human review.
+`self-review` finds your own open pull requests on GitHub and has the configured AI backend review them, file by file, posting inline feedback and a summary — the same way a colleague would review your PR before you ask a human to look at it. It also runs a separate, PR-level design/architecture review pass once per PR (see [State and idempotency](#state-and-idempotency)). Unlike `review-prs` (which reviews other people's PRs) or `review-requested` (which reacts to explicit review requests), this command filters strictly by PR author: it only ever looks at PRs opened by the currently authenticated `gh` user (`--author @me`). Run it after pushing a PR, or on a schedule, to get an automated first pass before requesting human review.
 
 ## Usage
 ```
@@ -15,15 +15,16 @@ harness run [--config PATH] [--verbose] self-review
 1. Acquires a per-repo file lock (`repo_slug`), shared with the other four commands, so two invocations against the same repo — `self-review` or any of the other four — can't run concurrently; a second run exits immediately with an error instead of racing the first.
 2. Resolves a GitHub token by running `harness.gh_token_cmd` (default `gh auth token`) and builds a subprocess environment from `harness.path_prepend` / `harness.env` plus `GITHUB_TOKEN`.
 3. Loads the set of PR numbers already recorded as reviewed from state, then lists the caller's own open PRs via `gh pr list --repo <repo> --author @me --state open`, sorted by PR number.
-4. Loads the shared prompt templates `review-file.md` and `review-summary.md` from `harness.knowledge_dir/pr-review/`, plus the optional `harness.review_knowledge_file` (appended to every prompt as an "Additional Review Guide" section).
+4. Loads the shared prompt templates `review-file.md`, `review-summary.md`, and `review-design.md` from `harness.knowledge_dir/pr-review/`, plus the optional `harness.review_knowledge_file` (appended to every prompt as an "Additional Review Guide" section).
 5. Constructs the `Backend` (opencode or claude, per `harness.backend`) and records the repo's current `HEAD` as a detached commit, so the working tree can always be restored.
-6. For each PR not already in the reviewed set:
-   - If a prior comment on the PR already starts with a `[bot]osc-review` or `Review Summary` marker (i.e. it's already been reviewed, possibly by a previous run whose state write didn't happen), the PR is marked reviewed in state and skipped — no new review is generated.
+6. For each PR: whether the file+summary pipeline still needs to run is decided independently from whether the design-review pass still needs to run (see [State and idempotency](#state-and-idempotency)) — a PR already fully reviewed for files/summary can still get a design pass, and vice versa. If neither is outstanding, the PR is skipped entirely with no checkout. Otherwise:
+   - If a prior comment on the PR already starts with a `[bot]osc-review` or `Review Summary` marker (i.e. it's already been reviewed, possibly by a previous run whose state write didn't happen), the file/summary part of the pipeline is marked reviewed in state and skipped for this PR — no new file/summary review is generated, though a still-outstanding design pass still runs.
    - Otherwise it fetches and checks out the PR's head branch (using the shared rebase/reset behavior — see [Shared behavior](index.md#shared-behavior)), then computes the diff against the PR's base branch.
    - For each changed file, it builds a review prompt (file diff, or the whole file if it's new or the diff touches ≥75% of it) plus PR metadata, the PR description, and any matching vibe-heal static-analysis context, and runs the backend against it. The backend is responsible for producing/posting the actual inline PR review comments — this command supplies the prompt and repo checkout, not the GitHub API calls. The backend runs with unrestricted shell access (see [Security](#security)).
    - After all files, it builds one more prompt from `review-summary.md` (listing every file reviewed) and runs the backend once more to produce the overall PR summary/comment.
+   - If the design pass hasn't already succeeded for this PR, it builds one PR-wide prompt from `review-design.md` (every changed file's diff, concatenated) and runs the backend once more. As defense-in-depth, before invoking, it also checks GitHub directly for an existing `<!-- osc-review-design -->`-marked comment — if found, the pass is recorded as done without a new backend call.
    - The working tree is always restored to the recorded detached `HEAD` afterward (even on failure), before the next PR is processed.
-   - The PR is only added to the reviewed set in state — and only then persisted to disk — if every backend invocation for that PR (all files plus the summary) exited 0 without timing out. If any invocation fails or times out, the PR is left unmarked so the *entire* file list is retried from scratch on the next run.
+   - The PR is only added to the reviewed set in state — and only then persisted to disk — if every backend invocation for the file/summary part (all files plus the summary) exited 0 without timing out. If any invocation fails or times out, the PR is left unmarked so the *entire* file list is retried from scratch on the next run. The design pass's own completion is tracked in a separate state field and is unaffected by this.
    - Errors while processing a single PR (e.g. a git checkout failure) are logged and that PR is skipped; the loop continues with the remaining PRs.
 
 ## Configuration
@@ -32,10 +33,10 @@ Only these `.harness.toml` fields affect `self-review`; see [`../configuration.m
 
 | Field | Used for |
 |---|---|
-| `harness.backend` | Which AI backend (`opencode` or `claude`) runs the review and summary prompts |
-| `harness.backend_timeout_seconds` | Timeout for each backend invocation (one per changed file, plus one for the summary) |
+| `harness.backend` | Which AI backend (`opencode` or `claude`) runs the review, summary, and design prompts |
+| `harness.backend_timeout_seconds` | Timeout for each backend invocation (one per changed file, one for the summary, and one for the design pass when it hasn't already succeeded) |
 | `harness.gh_token_cmd` | Command used to fetch the GitHub token exported as `GITHUB_TOKEN` |
-| `harness.knowledge_dir` | Must contain `pr-review/review-file.md` and `pr-review/review-summary.md` prompt templates |
+| `harness.knowledge_dir` | Must contain `pr-review/review-file.md`, `pr-review/review-summary.md`, and `pr-review/review-design.md` prompt templates |
 | `harness.review_knowledge_file` | Optional extra guidance appended to every prompt, if the path exists |
 | `harness.path_prepend` / `harness.env` | Extra `PATH` entries / env vars for both git subprocesses and the backend |
 | `repo.name` | The GitHub repo (`owner/name`) queried via `gh` |
@@ -48,7 +49,9 @@ Only these `.harness.toml` fields affect `self-review`; see [`../configuration.m
 
 State is stored at `~/.local/share/dotharness/state/<repo_slug>/self_review.json` and tracks:
 - `version` — schema version (currently `1`)
-- `reviewed_prs` — list of PR numbers already reviewed (or already carrying a `[bot]osc-review`/`Review Summary` comment)
+- `reviewed_prs` — list of PR numbers whose file+summary review already succeeded (or already carries a `[bot]osc-review`/`Review Summary` comment)
+- `partial_reviews` — per-PR list of files already successfully reviewed in a prior, still-incomplete run (see [Notes](#notes))
+- `design_reviewed_prs` — list of PR numbers whose design-review pass already succeeded. This is **tracked completely independently of `reviewed_prs`**: a design-pass failure never blocks or resets `reviewed_prs`/`partial_reviews`, and a file/summary failure never blocks or resets `design_reviewed_prs`. A PR is only skipped entirely (no checkout at all) once it appears in *both* places.
 
 PRs in `reviewed_prs` are skipped on subsequent runs, so re-running `self-review` is safe and only does work for PRs opened (or newly qualifying) since the last successful pass. To force everything to be re-reviewed, clear the state:
 ```
@@ -58,8 +61,9 @@ This deletes `self_review.json` for the repo after an interactive confirmation (
 
 ## Notes
 
-- A PR is marked reviewed only if *every* file's review and the final summary all succeeded in the same run; a single timed-out or failing file means the whole PR — including files that succeeded — gets re-sent to the backend next time. There's no per-file progress tracking within a PR.
-- **Cost implication:** When a file fails mid-PR, the `_review_files` loop continues processing all remaining files, then the summary also runs. On the next invocation the *entire* file list is retried from scratch. For a PR with N files, the cost is N+1 invocations on the failed pass (N files + 1 summary), then N+1 again on the retry — approximately 2(N+1) total, regardless of which file failed. There's no partial credit for files processed before the failure. With expensive backends this approaches 2x the normal cost for large PRs. Consider setting `harness.backend_timeout_seconds` conservatively to avoid mid-run timeouts, and monitor `~/.local/share/dotharness/logs/self-review/` for timeout patterns.
+- A PR's file+summary review is only marked reviewed if every file's review and the final summary all succeeded in the same run; a single timed-out or failing file means the whole file/summary pipeline — including files that succeeded — gets re-sent to the backend next time (`partial_reviews` gives per-file credit within that retry, see below).
+- **Cost implication:** When a file fails mid-PR, the `_review_files` loop continues processing all remaining files, then the summary also runs. On the next invocation, files already recorded in `partial_reviews` are skipped and only the remaining files plus the summary are retried. With expensive backends and a file that keeps failing, this still approaches 2x the normal cost for large PRs in the worst case. Consider setting `harness.backend_timeout_seconds` conservatively to avoid mid-run timeouts, and monitor `~/.local/share/dotharness/logs/self-review/` for timeout patterns.
+- **The design pass's cost is separate from the above and does not multiply it.** It's exactly one backend invocation per PR, tracked in its own `design_reviewed_prs` state independent of `reviewed_prs`/`partial_reviews` — a failing design pass is retried on its own next run without re-triggering any file/summary work, and a failing file/summary retry never re-triggers an already-succeeded design pass.
 - The "already reviewed" check is comment-based, not state-based: it looks for any PR comment whose body starts with `[bot]osc-review` or `Review Summary` (after stripping leading `#`/spaces). The `[bot]` prefix on `osc-review` was chosen to reduce collision risk with organic comments. If a comment with one of these exact prefixes is posted manually (or by another tool), `self-review` will treat the PR as already reviewed and skip it. To recover from this, clear the state with `harness state reset self-review`.
 - Subject to the shared `gh` account and working-directory-mutation caveats in
    [Shared behavior](index.md#shared-behavior) — worth pinning `gh_token_cmd` to a specific

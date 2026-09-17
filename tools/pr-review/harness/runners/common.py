@@ -20,6 +20,7 @@ PR_COMMENTS_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scrip
 
 FOCUSED_REVIEW_MARKER = "[focused-review-bot]"
 INLINE_REVIEW_MARKER = "<!-- osc-review-inline -->"
+DESIGN_REVIEW_MARKER = "<!-- osc-review-design -->"
 
 
 class FatalGitError(Exception):
@@ -304,6 +305,24 @@ def has_inline_review_comments(pr_number: int, repo: str, current_user: str, env
     )
 
 
+def is_design_review_comment(body: str) -> bool:
+    return DESIGN_REVIEW_MARKER in body
+
+
+def has_design_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+    """The design-review pass always posts exactly one PR-level comment per successful
+    run (findings or "no blocking issues"), so checking issue-level comments alone is
+    enough — no need to also check the inline pulls/comments endpoint the way
+    has_inline_review_comments does. This is the design pass's *only* idempotency
+    signal in review-requested (no persisted state there); self-review uses it only as
+    defense-in-depth alongside its own persisted design_reviewed_prs state. A future
+    PR-level pass (e.g. requirement-traceability, dotharness#4) could reuse this same
+    shape as has_pr_level_pass_comment(marker) rather than duplicating it."""
+    return bool(
+        _has_matching_comment(f"repos/{repo}/issues/{pr_number}/comments", current_user, env, is_design_review_comment)
+    )
+
+
 def author_matches(login: str, authors_config: str | list) -> bool:
     if authors_config == "*":
         return True
@@ -543,6 +562,30 @@ def build_file_review_section(file: str, diff: str, abs_path: str) -> str:
         note = f"Note: {reason} The diff has been omitted; please review the whole file instead."
         return f"\n\n{file_ref}\n\n## File: {file}\n{note}"
     return f"\n\n{file_ref}\n\n## Diff for {file}\n{diff}"
+
+
+def build_design_review_prompt(
+    design_instructions: str,
+    extra_knowledge: str | None,
+    diff_sections: str,
+    pr: dict,
+    pr_number: int,
+    repo_name: str,
+    commit_sha: str,
+    pr_description: str | None,
+    vibe_heal_context: str | None,
+) -> str:
+    """Shared by self_review.py and review_requested.py so the design pass's prompt
+    shape lives in one place rather than being assembled twice."""
+    return (
+        design_instructions
+        + (f"\n\n## Additional Review Guide\n{extra_knowledge}" if extra_knowledge else "")
+        + diff_sections
+        + f"\n\nPR URL: {pr.get('url', '')}\nPR number: {pr_number}\n"
+        + f"Repo: {repo_name}\nCommit: {commit_sha}"
+        + (f"\n\n{pr_description}" if pr_description else "")
+        + (f"\n\n## Static Analysis\n{vibe_heal_context}" if vibe_heal_context else "")
+    )
 
 
 def get_vibe_heal_context(subdirs: list[SubDir], working_dir: str, branch: str) -> str:
