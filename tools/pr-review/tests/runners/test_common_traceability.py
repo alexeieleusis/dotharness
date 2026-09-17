@@ -29,7 +29,11 @@ def _router(comments_by_path_and_page: dict, issues_by_repo_and_number: dict):
             repo = cmd[cmd.index("--repo") + 1]
             entry = issues_by_repo_and_number.get((repo, number))
             if entry is None:
-                return MagicMock(returncode=1, stdout=b"", stderr=b"not found")
+                return MagicMock(
+                    returncode=1,
+                    stdout=b"",
+                    stderr=f"GraphQL: Could not resolve to an issue or pull request with the number of {number}.".encode(),
+                )
             return MagicMock(returncode=0, stdout=json.dumps(entry).encode())
         msg = f"unexpected cmd: {cmd}"
         raise AssertionError(msg)
@@ -94,6 +98,7 @@ def test_resolve_linked_tickets_native_link_dedupes_by_repo_and_number():
     router = _router({}, {(REPO, 3): _issue(3)})
     with patch("harness.runners.common.run_cmd", side_effect=router):
         tickets = resolve_linked_tickets(pr, REPO, {})
+    assert tickets is not None
     assert len(tickets) == 1
 
 
@@ -109,6 +114,7 @@ def test_resolve_linked_tickets_native_link_drops_unresolvable_entries():
     router = _router({}, {(REPO, 3): _issue(3)})
     with patch("harness.runners.common.run_cmd", side_effect=router):
         tickets = resolve_linked_tickets(pr, REPO, {})
+    assert tickets is not None
     assert [t["number"] for t in tickets] == [3]
 
 
@@ -120,6 +126,41 @@ def test_resolve_linked_tickets_native_link_skips_malformed_entries():
     }
     # The malformed entry is dropped, native linking yields nothing, and resolution falls
     # through to the (here, also empty) comment-scan fallback.
+    router = _router({(f"repos/{REPO}/issues/39/comments", 1): []}, {})
+    with patch("harness.runners.common.run_cmd", side_effect=router):
+        tickets = resolve_linked_tickets(pr, REPO, {})
+    assert tickets == []
+
+
+def test_resolve_linked_tickets_native_link_returns_none_when_ref_lookup_is_inconclusive():
+    """A closing-keyword ref that fails to resolve for a reason other than confirmed
+    absence (rate limit, transient 5xx) must surface as None, not as "no ticket" — and the
+    comment-scan fallback must not even run, since it would very likely also come up empty
+    and let a real linked ticket get lost behind the terminal "no ticket" comment."""
+    pr = {
+        "number": 39,
+        "createdAt": "2026-01-01T00:00:00Z",
+        "closingIssuesReferences": [{"number": 3, "repository": {"name": "repo", "owner": {"login": "acme"}}}],
+    }
+
+    def _dispatch(cmd, **_kwargs):
+        assert cmd[:2] == ["gh", "issue"], f"comment-scan fallback must not run, got: {cmd}"
+        return MagicMock(returncode=1, stdout=b"", stderr=b"API rate limit exceeded")
+
+    with patch("harness.runners.common.run_cmd", side_effect=_dispatch):
+        tickets = resolve_linked_tickets(pr, REPO, {})
+    assert tickets is None
+
+
+def test_resolve_linked_tickets_native_link_confirmed_absent_falls_back_to_comment_scan():
+    """Unlike an inconclusive failure, a confirmed-absent ref (404, or a number that names
+    a pull request rather than an issue) is treated the same as "no native link" and does
+    fall through to the comment-scan fallback."""
+    pr = {
+        "number": 39,
+        "createdAt": "2026-01-01T00:00:00Z",
+        "closingIssuesReferences": [{"number": 404, "repository": {"name": "repo", "owner": {"login": "acme"}}}],
+    }
     router = _router({(f"repos/{REPO}/issues/39/comments", 1): []}, {})
     with patch("harness.runners.common.run_cmd", side_effect=router):
         tickets = resolve_linked_tickets(pr, REPO, {})
@@ -150,6 +191,7 @@ def test_resolve_linked_tickets_comment_scan_full_url_reference():
     )
     with patch("harness.runners.common.run_cmd", side_effect=router):
         tickets = resolve_linked_tickets(pr, REPO, {})
+    assert tickets is not None
     assert [t["number"] for t in tickets] == [3]
     assert tickets[0]["source"] == "comment"
 
@@ -163,6 +205,7 @@ def test_resolve_linked_tickets_comment_scan_cross_repo_shorthand():
     )
     with patch("harness.runners.common.run_cmd", side_effect=router):
         tickets = resolve_linked_tickets(pr, REPO, {})
+    assert tickets is not None
     assert tickets[0]["repo"] == "someorg/othereproj"
     assert tickets[0]["number"] == 42
 
@@ -187,6 +230,7 @@ def test_resolve_linked_tickets_comment_scan_includes_bot_authored_comments():
     )
     with patch("harness.runners.common.run_cmd", side_effect=router):
         tickets = resolve_linked_tickets(pr, REPO, {})
+    assert tickets is not None
     assert [t["number"] for t in tickets] == [3]
 
 
@@ -208,6 +252,7 @@ def test_resolve_linked_tickets_comment_scan_dedupes_repeated_references():
     router = _router({(f"repos/{REPO}/issues/39/comments", 1): comments}, {(REPO, 3): _issue(3)})
     with patch("harness.runners.common.run_cmd", side_effect=router):
         tickets = resolve_linked_tickets(pr, REPO, {})
+    assert tickets is not None
     assert len(tickets) == 1
 
 

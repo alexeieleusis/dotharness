@@ -328,6 +328,9 @@ def _run_traceability_review(
 
     comment_cache: dict = {}
     tickets = resolve_linked_tickets(pr, config.repo.name, env, comment_cache)
+    if tickets is None:
+        logger.info("PR #%d: linked ticket lookup was inconclusive (API failure) — will retry next run", number)
+        return
     if not tickets:
         if post_no_linked_ticket_comment(number, config.repo.name, env):
             state.add_traceability_reviewed_pr(config.repo_slug, number)

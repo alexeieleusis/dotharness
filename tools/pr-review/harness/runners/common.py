@@ -496,11 +496,23 @@ def build_early_comment_context(
     return "\n\n".join(body for c in comments if (body := c.get("body", "")))
 
 
+class _IssueFetchError(Exception):
+    """Raised by _fetch_issue when a lookup fails inconclusively (rate limit, transient
+    5xx, network blip, malformed response) — as opposed to a confirmed absence (see
+    _ISSUE_NOT_FOUND_RE) — so callers can distinguish "this number isn't an issue" from
+    "we don't know yet" rather than conflating both into None."""
+
+
+_ISSUE_NOT_FOUND_RE = re.compile(r"could not resolve to an issue", re.IGNORECASE)
+
+
 def _fetch_issue(number: int, repo: str, env: dict) -> dict | None:
-    """title/body for a single GitHub issue, or None if the lookup fails — including when
-    `number` actually names a pull request rather than an issue, since `gh issue view`
-    itself fails to resolve a PR number (GitHub's GraphQL schema treats Issue/PullRequest
-    as distinct types even though they share one number sequence per repo)."""
+    """title/body for a single GitHub issue, or None for a *confirmed* absence — either
+    `number` doesn't exist, or it names a pull request rather than an issue, since `gh
+    issue view` itself fails to resolve a PR number (GitHub's GraphQL schema treats
+    Issue/PullRequest as distinct types even though they share one number sequence per
+    repo). Raises _IssueFetchError for any other failure, since that's inconclusive rather
+    than a confirmed absence."""
     result = run_cmd(
         ["gh", "issue", "view", str(number), "--repo", repo, "--json", "number,title,body"],
         cwd="/",
@@ -509,19 +521,27 @@ def _fetch_issue(number: int, repo: str, env: dict) -> dict | None:
         check=False,
     )
     if result.returncode != 0:
-        return None
+        stderr = result.stderr.decode("utf-8", errors="replace")
+        if _ISSUE_NOT_FOUND_RE.search(stderr):
+            return None
+        raise _IssueFetchError(stderr)
     try:
         return json.loads(result.stdout)
-    except ValueError:
-        return None
+    except ValueError as e:
+        raise _IssueFetchError(str(e)) from e
 
 
-def _resolve_native_linked_tickets(pr: dict, env: dict) -> list[dict]:
+def _resolve_native_linked_tickets(pr: dict, env: dict) -> list[dict] | None:
     """Primary mechanism (§7.2 step 1): resolve every entry in pr["closingIssuesReferences"]
     via `gh issue view`, using each entry's own repository (a closing reference can point at
-    a different repo than the PR's own). Entries that fail to resolve are dropped."""
+    a different repo than the PR's own). Entries that are confirmed absent (see
+    _fetch_issue) are dropped. Returns None — rather than the confirmed-empty `[]` — if no
+    ticket resolved AND at least one ref failed inconclusively (rate limit, transient 5xx),
+    so resolve_linked_tickets can tell "no ticket" apart from "don't know yet" instead of
+    treating a transient API hiccup as proof there's no linked ticket."""
     tickets: list[dict] = []
     seen: set[tuple[str, int]] = set()
+    inconclusive = False
     for ref in pr.get("closingIssuesReferences") or []:
         number = ref.get("number")
         repository = ref.get("repository") or {}
@@ -533,7 +553,11 @@ def _resolve_native_linked_tickets(pr: dict, env: dict) -> list[dict]:
         key = (ticket_repo, number)
         if key in seen:
             continue
-        issue = _fetch_issue(number, ticket_repo, env)
+        try:
+            issue = _fetch_issue(number, ticket_repo, env)
+        except _IssueFetchError:
+            inconclusive = True
+            continue
         if issue is None:
             continue
         seen.add(key)
@@ -544,7 +568,9 @@ def _resolve_native_linked_tickets(pr: dict, env: dict) -> list[dict]:
             "body": issue.get("body", ""),
             "source": "closing_keyword",
         })
-    return tickets
+    if tickets:
+        return tickets
+    return None if inconclusive else []
 
 
 def _resolve_match_repo_and_number(match: re.Match, default_repo: str) -> tuple[str, int | None]:
@@ -561,8 +587,11 @@ def _resolve_comment_linked_tickets(pr: dict, repo: str, env: dict, cache: dict 
     """Fallback mechanism (§7.2 step 2), only ever called when native linking finds
     nothing: scan every early-window comment (any author, including bots — §1 decision 4)
     for an issue reference, and resolve each match via `gh issue view`. A match that 404s,
-    or that names a pull request rather than an issue, is dropped rather than treated as a
-    ticket (see _fetch_issue)."""
+    names a pull request rather than an issue, or fails to resolve for any other reason
+    (rate limit, transient 5xx) is dropped rather than treated as a ticket (see
+    _fetch_issue) — unlike the native mechanism, a regex match in free-text comments is
+    already a guess, so an API failure here doesn't warrant the same inconclusive-vs-absent
+    distinction resolve_linked_tickets makes for closing-keyword references."""
     pr_number = pr.get("number")
     if pr_number is None:
         return []
@@ -579,7 +608,10 @@ def _resolve_comment_linked_tickets(pr: dict, repo: str, env: dict, cache: dict 
             key = (ticket_repo, number)
             if key in seen:
                 continue
-            issue = _fetch_issue(number, ticket_repo, env)
+            try:
+                issue = _fetch_issue(number, ticket_repo, env)
+            except _IssueFetchError:
+                continue
             if issue is None:
                 continue
             seen.add(key)
@@ -593,17 +625,23 @@ def _resolve_comment_linked_tickets(pr: dict, repo: str, env: dict, cache: dict 
     return tickets
 
 
-def resolve_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | None = None) -> list[dict]:
+def resolve_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | None = None) -> list[dict] | None:
     """Resolve the GitHub issue(s) this PR answers (requirement-traceability-requirements.md
     §7.2): GitHub's own closing-keyword linking is tried first and, only if it finds
     nothing, an early-comment scan is tried as a fallback. `pr` must carry
     `closingIssuesReferences` and `createdAt` (both runners' PR-listing --json field lists
     are extended to include them). Returns a possibly-empty list of
     {number, repo, title, body, source} dicts, `source` being "closing_keyword" or
-    "comment". Pass the same `cache` dict to a later build_early_comment_context call for
-    this PR so its comment-scan fallback's paginated fetch (if it ran) is reused instead
-    of repeated."""
+    "comment" — or None if the native mechanism found a closing-keyword reference it
+    couldn't resolve due to an API failure rather than a confirmed absence (see
+    _resolve_native_linked_tickets). Callers must treat None as "inconclusive, retry next
+    run" and never as "no linked ticket" — the comment-scan fallback is skipped in that
+    case rather than risked as a second source of false negatives. Pass the same `cache`
+    dict to a later build_early_comment_context call for this PR so its comment-scan
+    fallback's paginated fetch (if it ran) is reused instead of repeated."""
     tickets = _resolve_native_linked_tickets(pr, env)
+    if tickets is None:
+        return None
     if tickets:
         return tickets
     return _resolve_comment_linked_tickets(pr, repo, env, cache)

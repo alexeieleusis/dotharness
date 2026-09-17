@@ -383,6 +383,25 @@ def test_traceability_review_no_linked_ticket_posts_comment_without_backend(tmp_
     mock_remove.assert_called_once()
 
 
+def test_remove_reviewer_blocked_when_ticket_lookup_is_inconclusive(tmp_xdg, tmp_path):
+    """When resolve_linked_tickets returns None (a closing-keyword ref existed but failed
+    to resolve due to an API failure, not a confirmed absence), the reviewer must not be
+    removed and no terminal "no linked ticket" comment must be posted — the PR is retried
+    next cycle instead of being permanently marked as having no ticket."""
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        _full_run_mocks(),
+        patch("harness.runners.review_requested.has_traceability_review_comment", return_value=False),
+        patch("harness.runners.review_requested.resolve_linked_tickets", return_value=None),
+        patch("harness.runners.review_requested.post_no_linked_ticket_comment") as mock_post,
+        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
+    ):
+        review_requested._run_locked(cfg, pr_url=None)
+    mock_post.assert_not_called()
+    mock_remove.assert_not_called()
+
+
 def test_remove_reviewer_blocked_when_traceability_no_ticket_comment_post_fails(tmp_xdg, tmp_path):
     """If posting the "no linked ticket" comment itself fails, the reviewer must not be
     removed, so the outcome is retried next cycle rather than silently lost."""

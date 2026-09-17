@@ -749,6 +749,36 @@ def test_traceability_review_no_linked_ticket_posts_comment_without_backend(tmp_
     assert 7 in state.get_traceability_reviewed_prs("acme-frontend")
 
 
+def test_traceability_review_inconclusive_ticket_lookup_skips_without_posting(tmp_xdg, tmp_path):
+    """When resolve_linked_tickets returns None (a closing-keyword ref existed but failed
+    to resolve due to an API failure, not a confirmed absence), the PR must be skipped —
+    no backend call, no terminal "no linked ticket" comment, and left off
+    traceability_reviewed_prs so the next run retries."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [7])
+    state.add_design_reviewed_pr("acme-frontend", 7)
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 7, "url": "u", "headRefName": "b"}]),
+        patch("harness.runners.self_review.has_traceability_review_comment", return_value=False),
+        patch("harness.runners.self_review.resolve_linked_tickets", return_value=None),
+        patch("harness.runners.self_review.post_no_linked_ticket_comment") as mock_post,
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=[]),
+        patch("harness.runners.self_review.Backend") as mock_be,
+    ):
+        self_review._run_locked(cfg)
+    mock_be.return_value.run.assert_not_called()
+    mock_post.assert_not_called()
+    assert 7 not in state.get_traceability_reviewed_prs("acme-frontend")
+
+
 def test_traceability_review_no_linked_ticket_comment_post_failure_leaves_unmarked(tmp_xdg, tmp_path):
     """If posting the "no linked ticket" comment itself fails, the PR is left off
     traceability_reviewed_prs so the next run retries rather than silently losing the
