@@ -37,6 +37,7 @@ from harness.runners.common import (
     remove_reviewer,
     resolve_linked_tickets,
     run_cmd,
+    run_pr_level_pass,
 )
 
 logger = logging.getLogger(__name__)
@@ -343,44 +344,46 @@ def _run_design_review(
     retry apart from a retry after a crash that already posted some inline findings. That's
     why get_design_review_flagged_locations is fetched below on every invocation (not
     gated by design_done) and fed into the prompt — see design-review-requirements.md
-    §7.1 for the partial-failure duplicate-inline-comment gap this closes."""
+    §7.1 for the partial-failure duplicate-inline-comment gap this closes.
+
+    Orchestration itself (noop check → build prompt → run backend → re-verify marker) is
+    shared with _run_traceability_review below, and with self_review.py's equivalent pair,
+    via common.run_pr_level_pass; only the pieces below (instructions file, flagged-
+    locations getter, prompt builder) are specific to the design pass."""
     pr_number = pr["number"]
     repo_name = config.repo.name
-    if design_done:
-        logger.info("PR #%d: design review already posted, skipping", pr_number)
-        return True
 
-    design_instructions = (knowledge_dir / "review-design.md").read_text(encoding="utf-8")
-    diff_sections = "".join(
-        build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
-        for file in ctx["files"]
-    )
+    def build_prompt() -> str:
+        design_instructions = (knowledge_dir / "review-design.md").read_text(encoding="utf-8")
+        diff_sections = "".join(
+            build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
+            for file in ctx["files"]
+        )
+        prior_flagged_locations = get_design_review_flagged_locations(pr_number, repo_name, current_user, env)
+        return build_design_review_prompt(
+            design_instructions,
+            extra_knowledge,
+            diff_sections,
+            pr,
+            pr_number,
+            repo_name,
+            ctx["commit_sha"],
+            ctx["pr_description"],
+            ctx["vibe_heal_context"],
+            prior_flagged_locations,
+        )
 
-    prior_flagged_locations = get_design_review_flagged_locations(pr_number, repo_name, current_user, env)
-    design_prompt = build_design_review_prompt(
-        design_instructions,
-        extra_knowledge,
-        diff_sections,
-        pr,
-        pr_number,
-        repo_name,
-        ctx["commit_sha"],
-        ctx["pr_description"],
-        ctx["vibe_heal_context"],
-        prior_flagged_locations,
+    return bool(
+        run_pr_level_pass(
+            pr_number,
+            backend,
+            wdir,
+            is_done=design_done,
+            build_prompt=build_prompt,
+            has_comment_fn=lambda: has_design_review_comment(pr_number, repo_name, current_user, env),
+            label="design review",
+        )
     )
-    try:
-        result = backend.run(design_prompt, cwd=wdir, context=f"PR #{pr_number} design review")
-        if result.returncode != 0:
-            logger.error("PR #%d: design review backend exited %d", pr_number, result.returncode)
-            return False
-    except subprocess.TimeoutExpired:
-        logger.exception("PR #%d: design review backend timed out", pr_number)
-        return False
-    if not has_design_review_comment(pr_number, repo_name, current_user, env):
-        logger.error("PR #%d: design review backend exited 0 but no marker comment was found", pr_number)
-        return False
-    return True
 
 
 def _run_traceability_review(
@@ -402,60 +405,66 @@ def _run_traceability_review(
     One difference from the design pass: when resolve_linked_tickets finds no ticket via
     either mechanism, the "no linked ticket found" outcome is posted directly (§7.3) — no
     backend invocation, since there's nothing for a model to judge — and that comment
-    posting itself (not a marker re-check) is what determines success here."""
+    posting itself (not a marker re-check) is what determines success here. That short-
+    circuit is threaded into common.run_pr_level_pass's `short_circuit` hook; a resolved
+    ticket list is stashed in `resolved` for build_prompt to pick up once short_circuit
+    itself declines to handle the pass (returns None, meaning "a ticket was found, proceed
+    normally")."""
     pr_number = pr["number"]
     repo_name = config.repo.name
-    if traceability_done:
-        logger.info("PR #%d: traceability review already posted, skipping", pr_number)
-        return True
-
     comment_cache: dict = {}
-    tickets = resolve_linked_tickets(pr, repo_name, env, comment_cache)
-    if tickets is None:
-        logger.info("PR #%d: linked ticket lookup was inconclusive (API failure) — will retry next run", pr_number)
-        return False
-    if not tickets:
-        if post_no_linked_ticket_comment(pr_number, repo_name, env):
-            return True
-        logger.error("PR #%d: failed to post 'no linked ticket found' comment", pr_number)
-        return False
+    resolved: dict = {}
 
-    traceability_instructions = (knowledge_dir / "review-traceability.md").read_text(encoding="utf-8")
-    diff_sections = "".join(
-        build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
-        for file in ctx["files"]
-    )
-
-    prior_flagged_locations = get_traceability_review_flagged_locations(pr_number, repo_name, current_user, env)
-    early_comment_context = build_early_comment_context(
-        pr_number, repo_name, pr.get("createdAt", ""), env, comment_cache
-    )
-    traceability_prompt = build_traceability_review_prompt(
-        traceability_instructions,
-        extra_knowledge,
-        diff_sections,
-        pr,
-        pr_number,
-        repo_name,
-        ctx["commit_sha"],
-        ctx["pr_description"],
-        ctx["vibe_heal_context"],
-        prior_flagged_locations,
-        tickets,
-        early_comment_context,
-    )
-    try:
-        result = backend.run(traceability_prompt, cwd=wdir, context=f"PR #{pr_number} traceability review")
-        if result.returncode != 0:
-            logger.error("PR #%d: traceability review backend exited %d", pr_number, result.returncode)
+    def short_circuit() -> bool | None:
+        tickets = resolve_linked_tickets(pr, repo_name, env, comment_cache)
+        if tickets is None:
+            logger.info("PR #%d: linked ticket lookup was inconclusive (API failure) — will retry next run", pr_number)
             return False
-    except subprocess.TimeoutExpired:
-        logger.exception("PR #%d: traceability review backend timed out", pr_number)
-        return False
-    if not has_traceability_review_comment(pr_number, repo_name, current_user, env):
-        logger.error("PR #%d: traceability review backend exited 0 but no marker comment was found", pr_number)
-        return False
-    return True
+        if not tickets:
+            if post_no_linked_ticket_comment(pr_number, repo_name, env):
+                return True
+            logger.error("PR #%d: failed to post 'no linked ticket found' comment", pr_number)
+            return False
+        resolved["tickets"] = tickets
+        return None
+
+    def build_prompt() -> str:
+        traceability_instructions = (knowledge_dir / "review-traceability.md").read_text(encoding="utf-8")
+        diff_sections = "".join(
+            build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
+            for file in ctx["files"]
+        )
+        prior_flagged_locations = get_traceability_review_flagged_locations(pr_number, repo_name, current_user, env)
+        early_comment_context = build_early_comment_context(
+            pr_number, repo_name, pr.get("createdAt", ""), env, comment_cache
+        )
+        return build_traceability_review_prompt(
+            traceability_instructions,
+            extra_knowledge,
+            diff_sections,
+            pr,
+            pr_number,
+            repo_name,
+            ctx["commit_sha"],
+            ctx["pr_description"],
+            ctx["vibe_heal_context"],
+            prior_flagged_locations,
+            resolved["tickets"],
+            early_comment_context,
+        )
+
+    return bool(
+        run_pr_level_pass(
+            pr_number,
+            backend,
+            wdir,
+            is_done=traceability_done,
+            build_prompt=build_prompt,
+            has_comment_fn=lambda: has_traceability_review_comment(pr_number, repo_name, current_user, env),
+            label="traceability review",
+            short_circuit=short_circuit,
+        )
+    )
 
 
 def _run_summary_review(

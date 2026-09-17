@@ -36,6 +36,7 @@ from harness.runners.common import (
     post_no_linked_ticket_comment,
     resolve_linked_tickets,
     run_cmd,
+    run_pr_level_pass,
 )
 
 logger = logging.getLogger(__name__)
@@ -235,36 +236,26 @@ def _run_design_review(
     redundant backend run; the comment check after the backend run is the one that
     actually gates state.add_design_reviewed_pr, since a returncode of 0 only means the
     backend exited cleanly, not that it actually posted — review_requested.py, which has
-    no persisted state at all, relies on the equivalent check as its *only* signal."""
-    if has_design_review_comment(number, config.repo.name, current_user, env):
-        state.add_design_reviewed_pr(config.repo_slug, number)
-        return
-    design_prompt = _build_design_prompt(
-        design_instructions, extra_knowledge, pr, number, config, ctx, wdir, current_user, env
+    no persisted state at all, relies on the equivalent check as its *only* signal.
+
+    Orchestration itself (noop check → build prompt → run backend → re-verify marker) is
+    shared with _run_traceability_review below, and with review_requested.py's equivalent
+    pair, via common.run_pr_level_pass; this wrapper only adds the persisted-state
+    mutation run_pr_level_pass has no reason to know about."""
+    is_done = has_design_review_comment(number, config.repo.name, current_user, env)
+    result = run_pr_level_pass(
+        number,
+        backend,
+        wdir,
+        is_done=is_done,
+        build_prompt=lambda: _build_design_prompt(
+            design_instructions, extra_knowledge, pr, number, config, ctx, wdir, current_user, env
+        ),
+        has_comment_fn=lambda: check_design_review_comment_status(number, config.repo.name, current_user, env),
+        label="design review",
     )
-    try:
-        result = backend.run(design_prompt, cwd=wdir, context=f"PR #{number} design review")
-        if result.returncode != 0:
-            logger.error("PR #%d: design review backend exited %d", number, result.returncode)
-            return
-    except subprocess.TimeoutExpired:
-        logger.exception("PR #%d: design review backend timed out", number)
-        return
-    comment_status = check_design_review_comment_status(number, config.repo.name, current_user, env)
-    if comment_status is None:
-        logger.warning(
-            "PR #%d: could not confirm design review comment status (comment check failed) — "
-            "treating as unconfirmed rather than assuming it's missing",
-            number,
-        )
-        return
-    if not comment_status:
-        logger.error(
-            "PR #%d: design review backend exited 0 but no design review comment found on GitHub — treating as failure",
-            number,
-        )
-        return
-    state.add_design_reviewed_pr(config.repo_slug, number)
+    if result:
+        state.add_design_reviewed_pr(config.repo_slug, number)
 
 
 def _build_traceability_prompt(
@@ -321,60 +312,53 @@ def _run_traceability_review(
     (requirement-traceability-requirements.md §7.4). If no linked ticket can be resolved,
     the "no ticket" outcome is posted directly (no backend invocation — there's nothing
     for a model to judge) and is terminal (§7.3/§11.1): it is never retried, even if a
-    ticket link is added to the PR later."""
-    if has_traceability_review_comment(number, config.repo.name, current_user, env):
-        state.add_traceability_reviewed_pr(config.repo_slug, number)
-        return
+    ticket link is added to the PR later.
 
+    That short-circuit is threaded into common.run_pr_level_pass's `short_circuit` hook;
+    a resolved ticket list is stashed in `resolved` for build_prompt to pick up once
+    short_circuit itself declines to handle the pass (returns None, meaning "a ticket was
+    found, proceed normally")."""
+    is_done = has_traceability_review_comment(number, config.repo.name, current_user, env)
     comment_cache: dict = {}
-    tickets = resolve_linked_tickets(pr, config.repo.name, env, comment_cache)
-    if tickets is None:
-        logger.info("PR #%d: linked ticket lookup was inconclusive (API failure) — will retry next run", number)
-        return
-    if not tickets:
-        if post_no_linked_ticket_comment(number, config.repo.name, env):
-            state.add_traceability_reviewed_pr(config.repo_slug, number)
-        else:
-            logger.error("PR #%d: failed to post 'no linked ticket found' comment — will retry next run", number)
-        return
+    resolved: dict = {}
 
-    traceability_prompt = _build_traceability_prompt(
-        traceability_instructions,
-        extra_knowledge,
-        pr,
+    def short_circuit() -> bool | None:
+        tickets = resolve_linked_tickets(pr, config.repo.name, env, comment_cache)
+        if tickets is None:
+            logger.info("PR #%d: linked ticket lookup was inconclusive (API failure) — will retry next run", number)
+            return False
+        if not tickets:
+            if post_no_linked_ticket_comment(number, config.repo.name, env):
+                return True
+            logger.error("PR #%d: failed to post 'no linked ticket found' comment — will retry next run", number)
+            return False
+        resolved["tickets"] = tickets
+        return None
+
+    result = run_pr_level_pass(
         number,
-        config,
-        ctx,
+        backend,
         wdir,
-        current_user,
-        env,
-        tickets,
-        comment_cache,
+        is_done=is_done,
+        build_prompt=lambda: _build_traceability_prompt(
+            traceability_instructions,
+            extra_knowledge,
+            pr,
+            number,
+            config,
+            ctx,
+            wdir,
+            current_user,
+            env,
+            resolved["tickets"],
+            comment_cache,
+        ),
+        has_comment_fn=lambda: check_traceability_review_comment_status(number, config.repo.name, current_user, env),
+        label="traceability review",
+        short_circuit=short_circuit,
     )
-    try:
-        result = backend.run(traceability_prompt, cwd=wdir, context=f"PR #{number} traceability review")
-        if result.returncode != 0:
-            logger.error("PR #%d: traceability review backend exited %d", number, result.returncode)
-            return
-    except subprocess.TimeoutExpired:
-        logger.exception("PR #%d: traceability review backend timed out", number)
-        return
-    comment_status = check_traceability_review_comment_status(number, config.repo.name, current_user, env)
-    if comment_status is None:
-        logger.warning(
-            "PR #%d: could not confirm traceability review comment status (comment check failed) — "
-            "treating as unconfirmed rather than assuming it's missing",
-            number,
-        )
-        return
-    if not comment_status:
-        logger.error(
-            "PR #%d: traceability review backend exited 0 but no traceability review comment found "
-            "on GitHub — treating as failure",
-            number,
-        )
-        return
-    state.add_traceability_reviewed_pr(config.repo_slug, number)
+    if result:
+        state.add_traceability_reviewed_pr(config.repo_slug, number)
 
 
 def _run_summary(

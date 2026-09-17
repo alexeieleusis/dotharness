@@ -8,6 +8,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from harness.backend import Backend
 from harness.config import SubDir
 
 logger = logging.getLogger(__name__)
@@ -680,6 +681,73 @@ def post_no_linked_ticket_comment(pr_number: int, repo: str, env: dict) -> bool:
             "PR #%d: failed to post 'no linked ticket found' comment: %s",
             pr_number,
             result.stderr.decode("utf-8", errors="replace"),
+        )
+        return False
+    return True
+
+
+def run_pr_level_pass(
+    pr_number: int,
+    backend: Backend,
+    wdir: str,
+    is_done: bool,
+    build_prompt: Callable[[], str],
+    has_comment_fn: Callable[[], bool | None],
+    label: str,
+    short_circuit: Callable[[], bool | None] | None = None,
+) -> bool | None:
+    """Shared orchestration skeleton for every PR-level pass (design review, requirement-
+    traceability review, ...): noop-if-already-done → optional short-circuit (e.g.
+    traceability's "no linked ticket" outcome, which needs no backend invocation) →
+    build prompt → run backend → re-verify the completion marker actually landed. Both
+    runners' `_run_design_review`/`_run_traceability_review` were structurally identical
+    copies of this skeleton (only the instructions file, flagged-locations getter, prompt
+    builder, and traceability's ticket short-circuit differed) — extracted here so a 5th
+    PR-level pass (dotharness#4) doesn't have to copy it a 5th time.
+
+    `has_comment_fn` may return None for an inconclusive check (API failure) as opposed to
+    a confirmed absence — that distinction is preserved in this function's own return value
+    (None vs False) rather than collapsed, since self_review.py's callers must not persist
+    "done" state on an inconclusive check the same way they must not on a confirmed miss,
+    but still want to log the two cases differently. review_requested.py's checkers never
+    return None (no persisted state to protect there), so that branch is simply never hit
+    for its callers.
+
+    Returns True if the pass is confirmed complete (already done, short-circuited to
+    success, or backend ran and the marker was confirmed), False if it's confirmed not
+    complete, or None if a post-backend completion check was inconclusive.
+    """
+    if is_done:
+        logger.info("PR #%d: %s already posted, skipping", pr_number, label)
+        return True
+    if short_circuit is not None:
+        outcome = short_circuit()
+        if outcome is not None:
+            return outcome
+    prompt = build_prompt()
+    try:
+        result = backend.run(prompt, cwd=wdir, context=f"PR #{pr_number} {label}")
+        if result.returncode != 0:
+            logger.error("PR #%d: %s backend exited %d", pr_number, label, result.returncode)
+            return False
+    except subprocess.TimeoutExpired:
+        logger.exception("PR #%d: %s backend timed out", pr_number, label)
+        return False
+    comment_status = has_comment_fn()
+    if comment_status is None:
+        logger.warning(
+            "PR #%d: could not confirm %s comment status (comment check failed) — "
+            "treating as unconfirmed rather than assuming it's missing",
+            pr_number,
+            label,
+        )
+        return None
+    if not comment_status:
+        logger.error(
+            "PR #%d: %s backend exited 0 but no %s comment found — treating as failure",
+            pr_number,
+            label,
+            label,
         )
         return False
     return True
