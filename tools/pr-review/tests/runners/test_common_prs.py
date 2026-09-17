@@ -223,7 +223,7 @@ def test_add_reviewer_invokes_gh_pr_edit():
         ("## REVIEW SUMMARY", True),
         ("Review summary without a leading hash", True),
         ("# Some title\n\nReview Summary: no issues", True),
-        ("dotharness-review passed", True),
+        ("osc-review passed", True),
         ("# Just a heading about something else", False),
         ("", False),
         ("   \n\n  ", False),
@@ -274,8 +274,8 @@ def test_check_review_summary_comment_status_returns_false_on_confirmed_absence(
 @pytest.mark.parametrize(
     ("body", "expected"),
     [
-        ("Nitpick: rename this variable.<!-- dotharness-review-inline -->", True),
-        ("<!-- dotharness-review-inline -->", True),
+        ("Nitpick: rename this variable.<!-- osc-review-inline -->", True),
+        ("<!-- osc-review-inline -->", True),
         ("Nitpick: rename this variable.", False),
         ("**S1234** Refactor this to reduce complexity.", False),
         ("", False),
@@ -287,8 +287,8 @@ def test_is_inline_review_comment(body, expected):
 
 def test_has_inline_review_comments_true_when_marker_and_user_match():
     comments = [
-        {"user": {"login": "someone-else"}, "body": "unrelated<!-- dotharness-review-inline -->"},
-        {"user": {"login": "alice"}, "body": "Nitpick: rename this.<!-- dotharness-review-inline -->"},
+        {"user": {"login": "someone-else"}, "body": "unrelated<!-- osc-review-inline -->"},
+        {"user": {"login": "alice"}, "body": "Nitpick: rename this.<!-- osc-review-inline -->"},
     ]
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
@@ -305,7 +305,7 @@ def test_has_inline_review_comments_false_when_same_user_but_no_marker():
 
 
 def test_has_inline_review_comments_false_when_other_user_posted_with_marker():
-    comments = [{"user": {"login": "someone-else"}, "body": "Nitpick.<!-- dotharness-review-inline -->"}]
+    comments = [{"user": {"login": "someone-else"}, "body": "Nitpick.<!-- osc-review-inline -->"}]
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
         assert has_inline_review_comments(1, "acme/repo", "alice", {}) is False
@@ -320,11 +320,11 @@ def test_has_inline_review_comments_returns_false_on_gh_failure():
 @pytest.mark.parametrize(
     ("body", "expected"),
     [
-        ("# Design Review\nNo blocking design/architecture issues found.<!-- dotharness-review-design -->", True),
-        ("<!-- dotharness-review-design -->", True),
+        ("# Design Review\nNo blocking design/architecture issues found.<!-- osc-review-design -->", True),
+        ("<!-- osc-review-design -->", True),
         ("# Design Review\nNo blocking design/architecture issues found.", False),
         ("# Review Summary\nNo blocking issues found.", False),
-        ("Nitpick: rename this variable.<!-- dotharness-review-inline -->", False),
+        ("Nitpick: rename this variable.<!-- osc-review-inline -->", False),
         ("", False),
     ],
 )
@@ -336,8 +336,8 @@ def test_has_design_review_comment_true_when_marker_and_user_match():
     # The design pass always posts its marked comment at the PR (issue) level, never
     # only inline, so has_design_review_comment only needs to check that endpoint.
     comments = [
-        {"user": {"login": "someone-else"}, "body": "unrelated<!-- dotharness-review-design -->"},
-        {"user": {"login": "alice"}, "body": "# Design Review\nfindings...<!-- dotharness-review-design -->"},
+        {"user": {"login": "someone-else"}, "body": "unrelated<!-- osc-review-design -->"},
+        {"user": {"login": "alice"}, "body": "# Design Review\nfindings...<!-- osc-review-design -->"},
     ]
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
@@ -354,7 +354,7 @@ def test_has_design_review_comment_false_when_same_user_but_no_marker():
 
 
 def test_has_design_review_comment_false_when_other_user_posted_with_marker():
-    comments = [{"user": {"login": "someone-else"}, "body": "# Design Review\n...<!-- dotharness-review-design -->"}]
+    comments = [{"user": {"login": "someone-else"}, "body": "# Design Review\n...<!-- osc-review-design -->"}]
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
         assert has_design_review_comment(1, "acme/repo", "alice", {}) is False

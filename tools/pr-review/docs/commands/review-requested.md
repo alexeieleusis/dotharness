@@ -53,7 +53,7 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
      runs.
    - The file+summary part is skipped if the current user already left an
      `APPROVED` review on the PR, or if the current user already posted a
-     comment whose body starts with `[bot]dotharness-review` or `Review Summary`
+     comment whose body starts with `[bot]osc-review` or `Review Summary`
      (after stripping leading `#`/whitespace) — this is the mechanism that
      prevents re-reviewing the same PR revision.
    - Otherwise: fetches and checks out the PR's head branch (using the shared
@@ -78,7 +78,7 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
      `review-summary.md` this posts a single `gh pr comment` starting with
       `# Review Summary`. A timeout here is likewise caught and logged.
    - **Design pass:** before invoking, checks GitHub directly for an existing
-     `<!-- dotharness-review-design -->`-marked comment on the PR (the *only*
+     `<!-- osc-review-design -->`-marked comment on the PR (the *only*
      idempotency signal for this pass, since this runner has no persisted
      state) — if found, this is a noop: no backend call, and the pass counts
      as already succeeded. Otherwise, builds one PR-wide prompt from
@@ -130,9 +130,9 @@ duplicate work using live signals read from GitHub on every run:
 1. It skips the file+summary part of the pipeline if the current user already
    has an `APPROVED` review on the PR.
 2. It skips the file+summary part if the current user already posted a comment
-   starting with `[bot]dotharness-review` or `Review Summary`.
+   starting with `[bot]osc-review` or `Review Summary`.
 3. It skips the design-review part, independently of (1) and (2), if the
-   current user already posted a comment containing `<!-- dotharness-review-design -->`
+   current user already posted a comment containing `<!-- osc-review-design -->`
    — this is the design pass's *only* idempotency signal, and its fate is
    deliberately decoupled from (1)/(2) so neither part's retry forces the
    other's.

@@ -107,8 +107,8 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
   `review-file.md`/`review-summary.md` aren't independently toggleable today. No new
   `harness.toml` schema surface.
 - **Not changing `review-requested`'s or `self-review`'s file-level review dimensions,
-  output format, or existing marker conventions** (`<!-- dotharness-review-inline -->`, the
-  `[bot]dotharness-review`/`Review Summary` comment-prefix checks) — the new pass gets its own,
+  output format, or existing marker conventions** (`<!-- osc-review-inline -->`, the
+  `[bot]osc-review`/`Review Summary` comment-prefix checks) — the new pass gets its own,
   additive marker instead of reusing or altering these (§11.4, §7.1).
 
 ## 5. Glossary
@@ -134,10 +134,10 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
   a **correctness finding** (P0/P1 bug, owned by `review-file.md`).
 - **Marker** — a literal string a runner searches for in a PR's existing GitHub comments
   to detect "this bot already did X here." Existing examples: `INLINE_REVIEW_MARKER =
-  "<!-- dotharness-review-inline -->"`, and the `Review Summary`/`dotharness-review` substring check
+  "<!-- osc-review-inline -->"`, and the `Review Summary`/`osc-review` substring check
   in `is_review_summary_comment` (`harness/runners/common.py:21-22,254-256`).
 - **`DESIGN_REVIEW_MARKER`** — the new marker this effort introduces (resolved, §11.4):
-  `"<!-- dotharness-review-design -->"`, appended to every comment the design pass posts,
+  `"<!-- osc-review-design -->"`, appended to every comment the design pass posts,
   whether inline or PR-level (§7.1).
 
 ## 6. Feature/component breakdown
@@ -210,9 +210,9 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
      `review-file.md`'s inline comments —
      ```
      gh api repos/{REPO}/pulls/{PR_NUMBER}/comments \
-       -f body="...<!-- dotharness-review-design -->" -f commit_id="{COMMIT}" -f path="..." -F line=<N>
+       -f body="...<!-- osc-review-design -->" -f commit_id="{COMMIT}" -f path="..." -F line=<N>
      ```
-     with `DESIGN_REVIEW_MARKER` (`<!-- dotharness-review-design -->`) in place of
+     with `DESIGN_REVIEW_MARKER` (`<!-- osc-review-design -->`) in place of
      `INLINE_REVIEW_MARKER`, so the two passes' inline comments are distinguishable by
      marker even though they use the same GitHub endpoint.
   2. **One PR-level comment, always posted exactly once per successful run** (this is
@@ -220,7 +220,7 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
      that don't anchor to one file/line, and this comment is also the reliable
      idempotency signal described in §7.3):
      ```
-     gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Design Review\n...<!-- dotharness-review-design -->'
+     gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Design Review\n...<!-- osc-review-design -->'
      ```
      If there are no P0/P1 design findings at all, this comment is still posted, with
      body along the lines of `# Design Review\nNo blocking design/architecture issues
