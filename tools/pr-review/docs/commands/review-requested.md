@@ -86,8 +86,10 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
      the files touched this run) and invokes the backend once; per
      `review-design.md` this posts inline comments for file-specific P0/P1
      design findings plus exactly one PR-level `# Design Review` comment. A
-     timeout here is likewise caught and logged, and — unlike the per-file
-     and summary steps — **is treated as blocking** (see next point).
+     timeout here is likewise caught and logged; reviewer removal requires
+     `files_ok and summary_ok and design_ok`, so this timeout keeps the PR on
+     the queue for retry the same way a per-file or summary timeout does (see
+     next point).
    - Removes the current user as a requested reviewer on the PR
      (`gh pr edit --remove-reviewer <login>`), which is what clears it from
      future `user-review-requested:@me` searches — but only if the
@@ -154,12 +156,13 @@ and no matching comment/approval exists, the PR will be reviewed again.
   call) is logged and skipped — it does not stop the rest of the batch, and it
   does not get marked "done" in any way, so it will be retried on the next
   run.
-- Backend timeouts are non-fatal at both the per-file and summary steps: they're
-  logged and the run proceeds (to the next file, or to the design pass), so a
-  slow/hung backend on one file doesn't block review of the rest. A design-pass
-  timeout is also logged and non-fatal to the run itself, but — unlike the
-  per-file/summary steps — it does block removing the reviewer for that PR
-  this cycle (see [State and idempotency](#state-and-idempotency)).
+- Backend timeouts are non-fatal at the per-file, summary, and design steps:
+  they're logged and the run proceeds to the next step, so a slow/hung backend
+  on one file doesn't block review of the rest. Reviewer removal requires
+  `files_ok and summary_ok and design_ok`, so a timeout at any of the three
+  keeps the PR on the queue for a retry next run — there's no special-casing of
+  the design pass relative to the other two (see
+  [State and idempotency](#state-and-idempotency)).
 - Building the batch list makes one `gh search prs` call plus one `gh pr view` call per
   candidate PR (to hydrate `headRefName`), so a repo with many pending review
   requests means proportionally many `gh` invocations.
