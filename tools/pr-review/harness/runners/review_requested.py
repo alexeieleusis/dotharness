@@ -196,7 +196,9 @@ def _process_pr(
         # the correctness pipeline's, so neither one's retry forces the other's. A
         # future PR-level pass (issue #4) would extend this same AND-gate below with its
         # own `_ok` boolean rather than invent a parallel gating mechanism.
-        design_ok = _run_design_review(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, design_done)
+        design_ok = _run_design_review(
+            pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, design_done
+        )
         if files_ok and summary_ok and design_ok:
             remove_reviewer(pr_number, config.repo.name, current_user, env)
     except Exception:
@@ -277,6 +279,7 @@ def _run_design_review(
     backend: Backend,
     wdir: str,
     env: dict,
+    current_user: str,
     design_done: bool,
 ) -> bool:
     """No persisted state exists for this runner, so has_design_review_comment (checked
@@ -285,7 +288,10 @@ def _run_design_review(
     of its own persisted design_reviewed_prs state). If a marked comment from a previous
     attempt is already present, this is a noop: the backend isn't invoked again, and the
     pass counts as already succeeded — this is what lets the design pass's own retry
-    stay decoupled from files_ok/summary_ok."""
+    stay decoupled from files_ok/summary_ok. A backend exit of 0 is not itself proof the
+    marker comment was posted, so success is re-verified against the same check before
+    returning True; a false positive here would make remove_reviewer fire and the design
+    pass never retry."""
     pr_number = pr["number"]
     repo_name = config.repo.name
     if design_done:
@@ -322,8 +328,10 @@ def _run_design_review(
     except subprocess.TimeoutExpired:
         logger.exception("PR #%d: design review backend timed out", pr_number)
         return False
-    else:
-        return True
+    if not has_design_review_comment(pr_number, repo_name, current_user, env):
+        logger.error("PR #%d: design review backend exited 0 but no marker comment was found", pr_number)
+        return False
+    return True
 
 
 def _run_summary_review(

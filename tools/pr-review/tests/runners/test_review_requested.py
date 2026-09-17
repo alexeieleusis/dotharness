@@ -261,6 +261,22 @@ def test_remove_reviewer_blocked_when_design_review_fails(tmp_xdg, tmp_path):
     mock_remove.assert_not_called()
 
 
+def test_remove_reviewer_blocked_when_marker_comment_never_lands(tmp_xdg, tmp_path):
+    """The backend can exit 0 without the PR-level marker comment actually landing (e.g.
+    it crashed after doing the work but before posting). That must not be treated as
+    success — the reviewer stays on the PR so the design pass retries next cycle."""
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        _full_run_mocks() as mocks,
+        patch("harness.runners.review_requested.has_design_review_comment", return_value=False),
+        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
+    ):
+        mocks.backend.return_value.run.return_value = MagicMock(returncode=0)
+        review_requested._run_locked(cfg, pr_url=None)
+    mock_remove.assert_not_called()
+
+
 def test_remove_reviewer_proceeds_when_design_review_noops(tmp_xdg, tmp_path):
     """An already-posted design comment still counts as success for the remove_reviewer
     gate — the pass being a noop must not block clearing the review request."""
