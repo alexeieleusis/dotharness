@@ -19,8 +19,8 @@ GRACE_PERIOD_SECONDS = 10
 PR_COMMENTS_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "pr-comments.py"
 
 FOCUSED_REVIEW_MARKER = "[focused-review-bot]"
-INLINE_REVIEW_MARKER = "<!-- osc-review-inline -->"
-DESIGN_REVIEW_MARKER = "<!-- osc-review-design -->"
+INLINE_REVIEW_MARKER = "<!-- dotharness-review-inline -->"
+DESIGN_REVIEW_MARKER = "<!-- dotharness-review-design -->"
 
 
 class FatalGitError(Exception):
@@ -254,7 +254,7 @@ def remove_reviewer(pr_number: int, repo: str, login: str, env: dict) -> None:
 
 def is_review_summary_comment(body: str) -> bool:
     lower = body.lower()
-    return "review summary" in lower or "osc-review" in lower
+    return "review summary" in lower or "dotharness-review" in lower
 
 
 def _fetch_matching_comments(

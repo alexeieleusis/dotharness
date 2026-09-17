@@ -169,7 +169,7 @@ def run_focused_review(ctx):
 )
 @click.pass_context
 def run_review_requested(ctx, pr_url):
-    """Post an osc-review on PRs where you're a requested reviewer (or a single PR with --pr)."""
+    """Post a dotharness-review on PRs where you're a requested reviewer (or a single PR with --pr)."""
     _setup_logging("review-requested", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
     review_requested.run(cfg, pr_url=pr_url)
