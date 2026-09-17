@@ -486,3 +486,19 @@ design-review wrappers (lowest risk, unblocks nothing else but should land first
 `common.py` (§7.2), (c) writing `review-traceability.md`'s actual prompt content (§7.1),
 (d) the `self_review.py` + `state.py` wiring (§7.4), (e) the `review_requested.py` wiring
 (§7.5) — in that order, since (a)/(b) are what (c)-(e) build on.
+
+**Progress (branch `4_requirement-traceability`):**
+- [x] (a) done — commit `365d380` (`common.py`: `has_pr_level_pass_comment` /
+  `check_pr_level_pass_comment_status` extracted, `has_design_review_comment` /
+  `check_design_review_comment_status` are now thin wrappers with no behavior change,
+  `TRACEABILITY_REVIEW_MARKER` + `is_/has_/check_traceability_review_comment*` added;
+  19 new tests in `tests/runners/test_common_prs.py`; full suite 444 passed, ruff +
+  `ty check` clean). Requirements doc itself landed in commit `6e584d3`.
+- [ ] (b) `resolve_linked_tickets` / `build_early_comment_context` / the new
+  paginated-all-authors comment fetch in `common.py` (§7.2) — not started.
+- [ ] (c) `knowledge/pr-review/review-traceability.md` prompt content (§7.1) — not
+  started.
+- [ ] (d) `self_review.py` + `state.py` wiring (§7.4) — not started.
+- [ ] (e) `review_requested.py` wiring (§7.5) — not started.
+- [ ] Docs updates to `docs/commands/self-review.md` / `docs/commands/review-requested.md`
+  (§10) — not started; do this alongside (d)/(e), not as an afterthought.
