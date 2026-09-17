@@ -274,17 +274,17 @@ def is_review_summary_comment(body: str) -> bool:
     return "review summary" in lower or "osc-review" in lower
 
 
-def _fetch_matching_comments(
-    comments_path: str, current_user: str, env: dict, predicate: Callable[[str], bool]
-) -> list[dict] | None:
-    """Returns the current_user's comments matching predicate (possibly empty), or None
-    if the GitHub API call itself failed (e.g. rate limit, transient 5xx) and the result
-    is inconclusive."""
-    matches: list[dict] = []
+def _paginate_gh_comments(path: str, env: dict) -> list[dict] | None:
+    """GET-paginate a GitHub REST comments endpoint, returning every comment regardless
+    of author (mirrors address_comments.py's _fetch_all_pages pattern). Unlike
+    fetch_pr_comments (which goes through scripts/pr-comments.py's cache), this returns
+    raw REST dicts that keep the snake_case `created_at` timestamp the cache drops.
+    Returns None if any page fails."""
+    items: list[dict] = []
     page = 1
     while True:
         result = run_cmd(
-            ["gh", "api", "--method", "GET", comments_path, "-F", "per_page=100", "-F", f"page={page}"],
+            ["gh", "api", "--method", "GET", path, "-F", "per_page=100", "-F", f"page={page}"],
             cwd="/",
             env=env,
             timeout=TIMEOUT_GH,
@@ -292,15 +292,23 @@ def _fetch_matching_comments(
         )
         if result.returncode != 0:
             return None
-        comments = json.loads(result.stdout)
-        if not comments:
-            return matches
-        matches.extend(
-            c for c in comments if c.get("user", {}).get("login") == current_user and predicate(c.get("body", ""))
-        )
-        if len(comments) < 100:
-            return matches
+        batch = json.loads(result.stdout)
+        items.extend(batch)
+        if len(batch) < 100:
+            return items
         page += 1
+
+
+def _fetch_matching_comments(
+    comments_path: str, current_user: str, env: dict, predicate: Callable[[str], bool]
+) -> list[dict] | None:
+    """Returns the current_user's comments matching predicate (possibly empty), or None
+    if the GitHub API call itself failed (e.g. rate limit, transient 5xx) and the result
+    is inconclusive."""
+    comments = _paginate_gh_comments(comments_path, env)
+    if comments is None:
+        return None
+    return [c for c in comments if c.get("user", {}).get("login") == current_user and predicate(c.get("body", ""))]
 
 
 def _has_matching_comment(
@@ -392,21 +400,23 @@ def check_traceability_review_comment_status(pr_number: int, repo: str, current_
     return check_pr_level_pass_comment_status(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
 
 
-def get_design_review_flagged_locations(
-    pr_number: int, repo: str, current_user: str, env: dict
+def get_pr_level_flagged_locations(
+    marker: str, pr_number: int, repo: str, current_user: str, env: dict
 ) -> list[tuple[str, int]]:
-    """(path, line) pairs already flagged by a prior DESIGN_REVIEW_MARKER inline comment
-    on this PR (design-review-requirements.md §7.1). Unlike has_design_review_comment,
-    this checks the pulls/comments endpoint directly and is meant to be called on every
-    design-review invocation, not just when deciding whether to skip the pass: the design
-    backend posts inline findings and the closing PR-level comment as separate calls, so a
-    crash in between leaves has_design_review_comment false while inline comments already
-    exist. Feeding those locations back into the prompt lets a retry avoid re-flagging
-    them. Returns an empty list on an inconclusive API failure, rather than blocking the
-    run — worst case a retry re-flags an already-posted location instead of the whole
-    design pass silently never running."""
+    """Shared by every PR-level pass's flagged-locations fetch (design review,
+    requirement-traceability review, ...), mirroring has_pr_level_pass_comment's
+    extraction (requirement-traceability-requirements.md §7.6). (path, line) pairs
+    already flagged by a prior inline comment containing marker on this PR. Checks the
+    pulls/comments endpoint directly and is meant to be called on every invocation, not
+    just when deciding whether to skip the pass: a pass posts inline findings and the
+    closing PR-level comment as separate calls, so a crash in between leaves the
+    PR-level marker comment absent while inline comments already exist. Feeding those
+    locations back into the prompt lets a retry avoid re-flagging them. Returns an empty
+    list on an inconclusive API failure, rather than blocking the run — worst case a
+    retry re-flags an already-posted location instead of the whole pass silently never
+    running."""
     matches = _fetch_matching_comments(
-        f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, is_design_review_comment
+        f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, lambda body: marker in body
     )
     if not matches:
         return []
@@ -416,55 +426,18 @@ def get_design_review_flagged_locations(
         if path and line is not None:
             locations.append((path, line))
     return locations
+
+
+def get_design_review_flagged_locations(
+    pr_number: int, repo: str, current_user: str, env: dict
+) -> list[tuple[str, int]]:
+    return get_pr_level_flagged_locations(DESIGN_REVIEW_MARKER, pr_number, repo, current_user, env)
 
 
 def get_traceability_review_flagged_locations(
     pr_number: int, repo: str, current_user: str, env: dict
 ) -> list[tuple[str, int]]:
-    """Mirrors get_design_review_flagged_locations exactly, for TRACEABILITY_REVIEW_MARKER
-    inline (scope-creep) comments instead of design ones
-    (requirement-traceability-requirements.md §7.1). Fetched on every invocation, not
-    gated by the "already done" check, so a retry after a partial failure doesn't
-    re-flag a scope-creep finding a previous attempt already posted inline."""
-    matches = _fetch_matching_comments(
-        f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, is_traceability_review_comment
-    )
-    if not matches:
-        return []
-    locations = []
-    for comment in matches:
-        path, line = comment.get("path"), comment.get("line")
-        if path and line is not None:
-            locations.append((path, line))
-    return locations
-
-
-def _fetch_all_comment_pages(path: str, env: dict) -> list[dict] | None:
-    """GET-paginate a GitHub REST comments endpoint, returning every comment regardless
-    of author (mirrors address_comments.py's _fetch_all_pages pattern). Deliberately
-    separate from _fetch_matching_comments, which filters to current_user's own comments
-    only — exactly backwards from what resolve_linked_tickets/build_early_comment_context
-    need, since the ticket link or clarifying context is typically posted by someone else
-    (a human or an integration bot), not by us. Also, unlike fetch_pr_comments (which goes
-    through scripts/pr-comments.py's cache), this returns raw REST dicts that keep the
-    snake_case `created_at` timestamp the cache drops. Returns None if any page fails."""
-    items: list[dict] = []
-    page = 1
-    while True:
-        result = run_cmd(
-            ["gh", "api", "--method", "GET", path, "-F", "per_page=100", "-F", f"page={page}"],
-            cwd="/",
-            env=env,
-            timeout=TIMEOUT_GH,
-            check=False,
-        )
-        if result.returncode != 0:
-            return None
-        batch = json.loads(result.stdout)
-        items.extend(batch)
-        if len(batch) < 100:
-            return items
-        page += 1
+    return get_pr_level_flagged_locations(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
 
 
 def _window_end_iso(pr_created_at: str) -> str | None:
@@ -482,31 +455,42 @@ def _window_end_iso(pr_created_at: str) -> str | None:
     return end.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _fetch_early_window_comments(pr_number: int, repo: str, pr_created_at: str, env: dict) -> list[dict] | None:
+def _fetch_early_window_comments(
+    pr_number: int, repo: str, pr_created_at: str, env: dict, cache: dict | None = None
+) -> list[dict] | None:
     """All issue-timeline comments on pr_number posted at or before the end of the
     early-comment window, regardless of author. Shared by build_early_comment_context and
-    resolve_linked_tickets' comment-scan fallback (§7.2) so there's exactly one paginated
-    fetch, not two. Returns None on a fetch failure (as opposed to a confirmed-empty
-    window), so callers can fail open without confusing "API call failed" with "no
-    comments in the window"."""
-    comments = _fetch_all_comment_pages(f"repos/{repo}/issues/{pr_number}/comments", env)
+    resolve_linked_tickets' comment-scan fallback (§7.2). When both are needed for the
+    same PR in the same pass invocation, callers pass the same `cache` dict to each call
+    so there's exactly one paginated fetch, not two. Returns None on a fetch failure (as
+    opposed to a confirmed-empty window), so callers can fail open without confusing "API
+    call failed" with "no comments in the window"."""
+    if cache is not None and "early_window_comments" in cache:
+        return cache["early_window_comments"]
+    comments = _paginate_gh_comments(f"repos/{repo}/issues/{pr_number}/comments", env)
     if comments is None:
-        return None
-    window_end = _window_end_iso(pr_created_at)
-    if window_end is None:
-        return []
-    return [c for c in comments if c.get("created_at", "") <= window_end]
+        result = None
+    else:
+        window_end = _window_end_iso(pr_created_at)
+        result = [] if window_end is None else [c for c in comments if c.get("created_at", "") <= window_end]
+    if cache is not None:
+        cache["early_window_comments"] = result
+    return result
 
 
-def build_early_comment_context(pr_number: int, repo: str, pr_created_at: str, env: dict) -> str:
+def build_early_comment_context(
+    pr_number: int, repo: str, pr_created_at: str, env: dict, cache: dict | None = None
+) -> str:
     """Concatenated bodies of every issue-timeline comment (any author, including bots)
     posted within TRACEABILITY_COMMENT_WINDOW_SECONDS of pr_created_at
     (requirement-traceability-requirements.md §7.2). Included in the traceability prompt
     regardless of how the linked ticket was resolved — a clarifying comment posted right
     after opening is useful context even for a natively-linked ticket. Returns "" if there
     are none, or if the fetch itself fails (fails open — a missing early-comment fetch
-    degrades the pass's context, not its correctness)."""
-    comments = _fetch_early_window_comments(pr_number, repo, pr_created_at, env)
+    degrades the pass's context, not its correctness). Pass the same `cache` dict given to
+    resolve_linked_tickets to reuse its comment-scan fallback's fetch instead of repeating
+    it."""
+    comments = _fetch_early_window_comments(pr_number, repo, pr_created_at, env, cache)
     if not comments:
         return ""
     return "\n\n".join(body for c in comments if (body := c.get("body", "")))
@@ -573,7 +557,7 @@ def _resolve_match_repo_and_number(match: re.Match, default_repo: str) -> tuple[
     return default_repo, None
 
 
-def _resolve_comment_linked_tickets(pr: dict, repo: str, env: dict) -> list[dict]:
+def _resolve_comment_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | None = None) -> list[dict]:
     """Fallback mechanism (§7.2 step 2), only ever called when native linking finds
     nothing: scan every early-window comment (any author, including bots — §1 decision 4)
     for an issue reference, and resolve each match via `gh issue view`. A match that 404s,
@@ -582,7 +566,7 @@ def _resolve_comment_linked_tickets(pr: dict, repo: str, env: dict) -> list[dict
     pr_number = pr.get("number")
     if pr_number is None:
         return []
-    comments = _fetch_early_window_comments(pr_number, repo, pr.get("createdAt", ""), env)
+    comments = _fetch_early_window_comments(pr_number, repo, pr.get("createdAt", ""), env, cache)
     if not comments:
         return []
     tickets: list[dict] = []
@@ -609,18 +593,20 @@ def _resolve_comment_linked_tickets(pr: dict, repo: str, env: dict) -> list[dict
     return tickets
 
 
-def resolve_linked_tickets(pr: dict, repo: str, env: dict) -> list[dict]:
+def resolve_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | None = None) -> list[dict]:
     """Resolve the GitHub issue(s) this PR answers (requirement-traceability-requirements.md
     §7.2): GitHub's own closing-keyword linking is tried first and, only if it finds
     nothing, an early-comment scan is tried as a fallback. `pr` must carry
     `closingIssuesReferences` and `createdAt` (both runners' PR-listing --json field lists
     are extended to include them). Returns a possibly-empty list of
     {number, repo, title, body, source} dicts, `source` being "closing_keyword" or
-    "comment"."""
+    "comment". Pass the same `cache` dict to a later build_early_comment_context call for
+    this PR so its comment-scan fallback's paginated fetch (if it ran) is reused instead
+    of repeated."""
     tickets = _resolve_native_linked_tickets(pr, env)
     if tickets:
         return tickets
-    return _resolve_comment_linked_tickets(pr, repo, env)
+    return _resolve_comment_linked_tickets(pr, repo, env, cache)
 
 
 def post_no_linked_ticket_comment(pr_number: int, repo: str, env: dict) -> bool:
@@ -652,6 +638,41 @@ def post_no_linked_ticket_comment(pr_number: int, repo: str, env: dict) -> bool:
     return True
 
 
+def _build_prior_findings_section(
+    prior_flagged_locations: list[tuple[str, int]], findings_label: str, comment_label: str
+) -> str:
+    """Shared by every PR-level pass's prompt builder (design review, requirement-
+    traceability review, ...): renders prior_flagged_locations as a "## Already-flagged
+    ... findings" section telling the backend not to re-flag them, or "" when empty."""
+    if not prior_flagged_locations:
+        return ""
+    locations = "\n".join(f"- {path}:{line}" for path, line in prior_flagged_locations)
+    return (
+        f"\n\n## Already-flagged {findings_label} findings\n"
+        f"The following file/line locations already have an inline {comment_label} comment "
+        f"from a previous attempt on this PR. Do not post a new inline comment for any of "
+        f"them:\n{locations}"
+    )
+
+
+def _build_pr_metadata_trailer(
+    pr: dict,
+    pr_number: int,
+    repo_name: str,
+    commit_sha: str,
+    pr_description: str | None,
+    vibe_heal_context: str | None,
+) -> str:
+    """Shared by every PR-level pass's prompt builder: the PR URL/number/repo/commit
+    line, plus the optional description and static-analysis sections that follow it."""
+    return (
+        f"\n\nPR URL: {pr.get('url', '')}\nPR number: {pr_number}\n"
+        f"Repo: {repo_name}\nCommit: {commit_sha}"
+        + (f"\n\n{pr_description}" if pr_description else "")
+        + (f"\n\n## Static Analysis\n{vibe_heal_context}" if vibe_heal_context else "")
+    )
+
+
 def build_traceability_review_prompt(
     traceability_instructions: str,
     extra_knowledge: str | None,
@@ -679,15 +700,9 @@ def build_traceability_review_prompt(
         for t in tickets
     )
     early_comments_section = f"\n\n## Early PR Comments\n{early_comment_context}" if early_comment_context else ""
-    prior_findings_section = ""
-    if prior_flagged_locations:
-        locations = "\n".join(f"- {path}:{line}" for path, line in prior_flagged_locations)
-        prior_findings_section = (
-            "\n\n## Already-flagged scope-creep findings\n"
-            "The following file/line locations already have an inline traceability-review "
-            "comment from a previous attempt on this PR. Do not post a new inline comment "
-            f"for any of them:\n{locations}"
-        )
+    prior_findings_section = _build_prior_findings_section(
+        prior_flagged_locations, "scope-creep", "traceability-review"
+    )
     return (
         traceability_instructions
         + (f"\n\n## Additional Review Guide\n{extra_knowledge}" if extra_knowledge else "")
@@ -695,10 +710,7 @@ def build_traceability_review_prompt(
         + early_comments_section
         + diff_sections
         + prior_findings_section
-        + f"\n\nPR URL: {pr.get('url', '')}\nPR number: {pr_number}\n"
-        + f"Repo: {repo_name}\nCommit: {commit_sha}"
-        + (f"\n\n{pr_description}" if pr_description else "")
-        + (f"\n\n## Static Analysis\n{vibe_heal_context}" if vibe_heal_context else "")
+        + _build_pr_metadata_trailer(pr, pr_number, repo_name, commit_sha, pr_description, vibe_heal_context)
     )
 
 
@@ -962,24 +974,13 @@ def build_design_review_prompt(
     optional: callers must fetch it via get_design_review_flagged_locations on every
     invocation, since it's what lets a retry after a partial failure skip re-flagging
     inline findings it already posted."""
-    prior_findings_section = ""
-    if prior_flagged_locations:
-        locations = "\n".join(f"- {path}:{line}" for path, line in prior_flagged_locations)
-        prior_findings_section = (
-            "\n\n## Already-flagged design findings\n"
-            "The following file/line locations already have an inline design-review comment "
-            "from a previous attempt on this PR. Do not post a new inline comment for any of "
-            f"them:\n{locations}"
-        )
+    prior_findings_section = _build_prior_findings_section(prior_flagged_locations, "design", "design-review")
     return (
         design_instructions
         + (f"\n\n## Additional Review Guide\n{extra_knowledge}" if extra_knowledge else "")
         + diff_sections
         + prior_findings_section
-        + f"\n\nPR URL: {pr.get('url', '')}\nPR number: {pr_number}\n"
-        + f"Repo: {repo_name}\nCommit: {commit_sha}"
-        + (f"\n\n{pr_description}" if pr_description else "")
-        + (f"\n\n## Static Analysis\n{vibe_heal_context}" if vibe_heal_context else "")
+        + _build_pr_metadata_trailer(pr, pr_number, repo_name, commit_sha, pr_description, vibe_heal_context)
     )
 
 

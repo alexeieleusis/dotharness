@@ -278,13 +278,16 @@ def _build_traceability_prompt(
     current_user: str,
     env: dict,
     tickets: list[dict],
+    comment_cache: dict,
 ) -> str:
     diff_sections = "".join(
         build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
         for file in ctx["files"]
     )
     prior_flagged_locations = get_traceability_review_flagged_locations(number, config.repo.name, current_user, env)
-    early_comment_context = build_early_comment_context(number, config.repo.name, pr.get("createdAt", ""), env)
+    early_comment_context = build_early_comment_context(
+        number, config.repo.name, pr.get("createdAt", ""), env, comment_cache
+    )
     return build_traceability_review_prompt(
         traceability_instructions,
         extra_knowledge,
@@ -323,7 +326,8 @@ def _run_traceability_review(
         state.add_traceability_reviewed_pr(config.repo_slug, number)
         return
 
-    tickets = resolve_linked_tickets(pr, config.repo.name, env)
+    comment_cache: dict = {}
+    tickets = resolve_linked_tickets(pr, config.repo.name, env, comment_cache)
     if not tickets:
         if post_no_linked_ticket_comment(number, config.repo.name, env):
             state.add_traceability_reviewed_pr(config.repo_slug, number)
@@ -332,7 +336,17 @@ def _run_traceability_review(
         return
 
     traceability_prompt = _build_traceability_prompt(
-        traceability_instructions, extra_knowledge, pr, number, config, ctx, wdir, current_user, env, tickets
+        traceability_instructions,
+        extra_knowledge,
+        pr,
+        number,
+        config,
+        ctx,
+        wdir,
+        current_user,
+        env,
+        tickets,
+        comment_cache,
     )
     try:
         result = backend.run(traceability_prompt, cwd=wdir, context=f"PR #{number} traceability review")

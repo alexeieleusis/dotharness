@@ -409,7 +409,8 @@ def _run_traceability_review(
         logger.info("PR #%d: traceability review already posted, skipping", pr_number)
         return True
 
-    tickets = resolve_linked_tickets(pr, repo_name, env)
+    comment_cache: dict = {}
+    tickets = resolve_linked_tickets(pr, repo_name, env, comment_cache)
     if not tickets:
         if post_no_linked_ticket_comment(pr_number, repo_name, env):
             return True
@@ -423,7 +424,9 @@ def _run_traceability_review(
     )
 
     prior_flagged_locations = get_traceability_review_flagged_locations(pr_number, repo_name, current_user, env)
-    early_comment_context = build_early_comment_context(pr_number, repo_name, pr.get("createdAt", ""), env)
+    early_comment_context = build_early_comment_context(
+        pr_number, repo_name, pr.get("createdAt", ""), env, comment_cache
+    )
     traceability_prompt = build_traceability_review_prompt(
         traceability_instructions,
         extra_knowledge,
