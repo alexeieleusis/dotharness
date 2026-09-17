@@ -523,6 +523,16 @@ design-review wrappers (lowest risk, unblocks nothing else but should land first
   where it's not the thing under test, since it now always runs by default; 12 new
   dedicated traceability tests added. Full suite 475 passed, ruff + `ruff format` +
   `ty check` clean.
-- [ ] (e) `review_requested.py` wiring (§7.5) — not started.
+- [x] (e) done — `_run_traceability_review` added to `review_requested.py`, mirroring
+  `_run_design_review` exactly (no persisted state; `has_traceability_review_comment` is
+  the sole idempotency signal), with the §7.3 "no ticket found" branch posting directly
+  and skipping the backend. `remove_reviewer` now gates on
+  `files_ok and summary_ok and design_ok and traceability_ok`, closing the reuse pointer
+  the existing code comment named. `_full_run_mocks` test helper updated to short-circuit
+  the new pass by default (mirroring the design-pass precedent); 8 new dedicated
+  traceability tests added, including one that would otherwise have made real,
+  unauthenticated `gh` network calls before the fix (caught via a real "HTTP 401: Bad
+  credentials" failure during the first test run — now eliminated by the short-circuit).
+  Full suite 482 passed, ruff + `ruff format` + `ty check` clean.
 - [ ] Docs updates to `docs/commands/self-review.md` / `docs/commands/review-requested.md`
   (§10) — not started; do this alongside (d)/(e), not as an afterthought.
