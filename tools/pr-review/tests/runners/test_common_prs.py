@@ -4,6 +4,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from harness.runners.common import (
+    DESIGN_REVIEW_MARKER,
+    INLINE_REVIEW_MARKER,
+    TRACEABILITY_REVIEW_MARKER,
     add_reviewer,
     author_matches,
     check_pr_level_pass_comment_status,
@@ -236,6 +239,25 @@ def test_add_reviewer_invokes_gh_pr_edit():
 )
 def test_is_review_summary_comment(body, expected):
     assert is_review_summary_comment(body) is expected
+
+
+@pytest.mark.parametrize("marker", [INLINE_REVIEW_MARKER, DESIGN_REVIEW_MARKER, TRACEABILITY_REVIEW_MARKER])
+def test_is_review_summary_comment_excludes_pr_level_pass_markers(marker):
+    # Every PR-level pass marker embeds the `osc-review` substring the summary
+    # predicate looks for. A bare marker-only body must not be mistaken for the
+    # file/summary pass's own completion comment (it would otherwise short-circuit
+    # correctness review — see the traceability pass's "no linked ticket" comment below).
+    assert is_review_summary_comment(marker) is False
+
+
+def test_is_review_summary_comment_excludes_traceability_no_ticket_comment():
+    body = (
+        "# Requirement Traceability\n"
+        "No linked ticket found (no closing-keyword link and no issue reference in the "
+        "first 5 minutes of comments) — skipping scope/gap comparison.\n"
+        f"{TRACEABILITY_REVIEW_MARKER}"
+    )
+    assert is_review_summary_comment(body) is False
 
 
 def test_has_review_summary_comment_matches_only_current_user():

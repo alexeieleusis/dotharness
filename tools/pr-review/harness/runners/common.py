@@ -24,6 +24,13 @@ INLINE_REVIEW_MARKER = "<!-- osc-review-inline -->"
 DESIGN_REVIEW_MARKER = "<!-- osc-review-design -->"
 TRACEABILITY_REVIEW_MARKER = "<!-- osc-review-traceability -->"
 
+# Every PR-level pass marker shares the `osc-review` prefix that
+# is_review_summary_comment's substring check looks for, so a comment carrying one of
+# these (e.g. the traceability pass's terminal "no linked ticket" comment) must be
+# excluded there — otherwise it gets mistaken for the file/summary pass's own
+# completion marker and short-circuits correctness review.
+_PR_LEVEL_PASS_MARKERS = (INLINE_REVIEW_MARKER, DESIGN_REVIEW_MARKER, TRACEABILITY_REVIEW_MARKER)
+
 # requirement-traceability-requirements.md §7.2/§11.2: the early-comment window is a
 # hardcoded constant this iteration, not a harness.toml field.
 TRACEABILITY_COMMENT_WINDOW_SECONDS = 300
@@ -270,6 +277,8 @@ def remove_reviewer(pr_number: int, repo: str, login: str, env: dict) -> None:
 
 
 def is_review_summary_comment(body: str) -> bool:
+    if any(marker in body for marker in _PR_LEVEL_PASS_MARKERS):
+        return False
     lower = body.lower()
     return "review summary" in lower or "osc-review" in lower
 
