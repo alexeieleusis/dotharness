@@ -318,8 +318,14 @@ def has_design_review_comment(pr_number: int, repo: str, current_user: str, env:
     defense-in-depth alongside its own persisted design_reviewed_prs state. A future
     PR-level pass (e.g. requirement-traceability, dotharness#4) could reuse this same
     shape as has_pr_level_pass_comment(marker) rather than duplicating it."""
-    return bool(
-        _has_matching_comment(f"repos/{repo}/issues/{pr_number}/comments", current_user, env, is_design_review_comment)
+    return bool(check_design_review_comment_status(pr_number, repo, current_user, env))
+
+
+def check_design_review_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
+    """Tri-state version of has_design_review_comment: None means the check itself was
+    inconclusive (API failure), as opposed to a confirmed absence of the comment."""
+    return _has_matching_comment(
+        f"repos/{repo}/issues/{pr_number}/comments", current_user, env, is_design_review_comment
     )
 
 

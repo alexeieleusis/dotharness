@@ -428,6 +428,7 @@ def test_design_review_runs_independently_of_already_reviewed_files(tmp_xdg, tmp
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 7, "url": "u", "headRefName": "b"}]),
         patch("harness.runners.self_review.has_design_review_comment", return_value=False),
+        patch("harness.runners.self_review.check_design_review_comment_status", return_value=True),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.self_review.git_fetch_and_checkout"),
         patch("harness.runners.self_review.git_restore"),
@@ -524,6 +525,67 @@ def test_design_review_marker_found_marks_done_without_invoking_backend(tmp_xdg,
         self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     assert 10 in state.get_design_reviewed_prs("acme-frontend")
+
+
+def test_design_review_not_marked_done_when_comment_confirmed_missing(tmp_xdg, tmp_path):
+    """The backend exiting 0 is not proof it posted — if the post-run GitHub check
+    confirms no design-review comment exists, the pass must not be recorded as done,
+    so a future run retries instead of silently skipping it forever."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [11])
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch(
+            "harness.runners.self_review._list_my_prs", return_value=[{"number": 11, "url": "u", "headRefName": "b"}]
+        ),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=False),
+        patch("harness.runners.self_review.check_design_review_comment_status", return_value=False),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
+        patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
+        patch("harness.runners.self_review.Backend") as mock_be,
+    ):
+        mock_be.return_value.run.return_value = MagicMock(returncode=0)
+        self_review._run_locked(cfg)
+    assert 11 not in state.get_design_reviewed_prs("acme-frontend")
+
+
+def test_design_review_not_marked_done_when_comment_check_inconclusive(tmp_xdg, tmp_path):
+    """If the post-run GitHub check itself fails (e.g. transient API error), that's
+    inconclusive, not a confirmed absence — the pass must still not be marked done."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [12])
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch(
+            "harness.runners.self_review._list_my_prs", return_value=[{"number": 12, "url": "u", "headRefName": "b"}]
+        ),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=False),
+        patch("harness.runners.self_review.check_design_review_comment_status", return_value=None),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
+        patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
+        patch("harness.runners.self_review.Backend") as mock_be,
+    ):
+        mock_be.return_value.run.return_value = MagicMock(returncode=0)
+        self_review._run_locked(cfg)
+    assert 12 not in state.get_design_reviewed_prs("acme-frontend")
 
 
 def test_does_not_update_state_when_summary_check_inconclusive(tmp_xdg, tmp_path):

@@ -13,6 +13,7 @@ from harness.runners.common import (
     build_design_review_prompt,
     build_file_review_section,
     build_subprocess_env,
+    check_design_review_comment_status,
     check_review_summary_comment_status,
     get_changed_files,
     get_current_user,
@@ -219,8 +220,10 @@ def _run_design_review(
 ) -> None:
     """Tracked independently of reviewed_prs/partial_reviews (state.design_reviewed_prs)
     so this pass's own retry never forces, or is forced by, the per-file review's
-    retry-from-scratch behavior. The live comment check below is defense-in-depth only
-    (the persisted state is the source of truth here) — review_requested.py, which has
+    retry-from-scratch behavior. The upfront comment check is an optimization to skip a
+    redundant backend run; the comment check after the backend run is the one that
+    actually gates state.add_design_reviewed_pr, since a returncode of 0 only means the
+    backend exited cleanly, not that it actually posted — review_requested.py, which has
     no persisted state at all, relies on the equivalent check as its *only* signal."""
     if has_design_review_comment(number, config.repo.name, current_user, env):
         state.add_design_reviewed_pr(config.repo_slug, number)
@@ -233,6 +236,20 @@ def _run_design_review(
             return
     except subprocess.TimeoutExpired:
         logger.exception("PR #%d: design review backend timed out", number)
+        return
+    comment_status = check_design_review_comment_status(number, config.repo.name, current_user, env)
+    if comment_status is None:
+        logger.warning(
+            "PR #%d: could not confirm design review comment status (comment check failed) — "
+            "treating as unconfirmed rather than assuming it's missing",
+            number,
+        )
+        return
+    if not comment_status:
+        logger.error(
+            "PR #%d: design review backend exited 0 but no design review comment found on GitHub — treating as failure",
+            number,
+        )
         return
     state.add_design_reviewed_pr(config.repo_slug, number)
 
