@@ -135,7 +135,13 @@ def prune_reviewed_shas(repo_slug: str, open_pr_numbers: set[int]) -> None:
 
 
 def read_self_review_state(repo_slug: str) -> dict:
-    defaults = {"version": 1, "reviewed_prs": [], "partial_reviews": {}, "design_reviewed_prs": []}
+    defaults = {
+        "version": 1,
+        "reviewed_prs": [],
+        "partial_reviews": {},
+        "design_reviewed_prs": [],
+        "traceability_reviewed_prs": [],
+    }
     p = _state_path(repo_slug, SELF_REVIEW_FILE)
     if not p.exists():
         return defaults
@@ -147,6 +153,7 @@ def read_self_review_state(repo_slug: str) -> dict:
     data.setdefault("reviewed_prs", [])
     data.setdefault("partial_reviews", {})
     data.setdefault("design_reviewed_prs", [])
+    data.setdefault("traceability_reviewed_prs", [])
     return data
 
 
@@ -174,23 +181,26 @@ def set_partial_reviewed_files(repo_slug: str, pr_number: int, files: list[str])
 
 
 def prune_self_review_state(repo_slug: str, open_pr_numbers: set[int]) -> dict:
-    """Drop reviewed_prs / partial_reviews / design_reviewed_prs entries for PRs that
-    are no longer open, so self_review.json doesn't grow unboundedly as the user's own
-    PRs get merged/closed over time. Returns the resulting state dict."""
+    """Drop reviewed_prs / partial_reviews / design_reviewed_prs / traceability_reviewed_prs
+    entries for PRs that are no longer open, so self_review.json doesn't grow unboundedly
+    as the user's own PRs get merged/closed over time. Returns the resulting state dict."""
     keep = {str(n) for n in open_pr_numbers}
 
     def mutate(current: dict) -> bool:
         reviewed_after = [n for n in current["reviewed_prs"] if str(n) in keep]
         partial_after = {k: v for k, v in current["partial_reviews"].items() if k in keep}
         design_reviewed_after = [n for n in current["design_reviewed_prs"] if str(n) in keep]
+        traceability_reviewed_after = [n for n in current["traceability_reviewed_prs"] if str(n) in keep]
         changed = (
             reviewed_after != current["reviewed_prs"]
             or partial_after != current["partial_reviews"]
             or design_reviewed_after != current["design_reviewed_prs"]
+            or traceability_reviewed_after != current["traceability_reviewed_prs"]
         )
         current["reviewed_prs"] = reviewed_after
         current["partial_reviews"] = partial_after
         current["design_reviewed_prs"] = design_reviewed_after
+        current["traceability_reviewed_prs"] = traceability_reviewed_after
         return changed
 
     return _update_state(repo_slug, SELF_REVIEW_FILE, read_self_review_state, mutate)
@@ -199,9 +209,9 @@ def prune_self_review_state(repo_slug: str, open_pr_numbers: set[int]) -> dict:
 def get_design_reviewed_prs(repo_slug: str) -> set[int]:
     """Independent of reviewed_prs/partial_reviews by design: a design-review pass's
     completion is tracked separately so its own retry never forces (or is forced by)
-    the per-file review's retry-from-scratch behavior. A future PR-level pass (e.g.
-    requirement-traceability, dotharness#4) would need this same decoupled-tracking
-    shape for its own completion set."""
+    the per-file review's retry-from-scratch behavior. See also
+    get_traceability_reviewed_prs, tracked the same way for the independent
+    requirement-traceability pass (dotharness#4)."""
     return set(read_self_review_state(repo_slug).get("design_reviewed_prs", []))
 
 
@@ -212,6 +222,25 @@ def add_design_reviewed_pr(repo_slug: str, pr_number: int) -> None:
             return False
         design_reviewed.add(pr_number)
         current["design_reviewed_prs"] = sorted(design_reviewed)
+        return True
+
+    _update_state(repo_slug, SELF_REVIEW_FILE, read_self_review_state, mutate)
+
+
+def get_traceability_reviewed_prs(repo_slug: str) -> set[int]:
+    """Independent of reviewed_prs/partial_reviews/design_reviewed_prs by design (§7.4 of
+    requirement-traceability-requirements.md): a traceability-pass failure never forces
+    re-running the other three passes, and vice versa."""
+    return set(read_self_review_state(repo_slug).get("traceability_reviewed_prs", []))
+
+
+def add_traceability_reviewed_pr(repo_slug: str, pr_number: int) -> None:
+    def mutate(current: dict) -> bool:
+        traceability_reviewed = set(current.get("traceability_reviewed_prs", []))
+        if pr_number in traceability_reviewed:
+            return False
+        traceability_reviewed.add(pr_number)
+        current["traceability_reviewed_prs"] = sorted(traceability_reviewed)
         return True
 
     _update_state(repo_slug, SELF_REVIEW_FILE, read_self_review_state, mutate)

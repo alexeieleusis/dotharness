@@ -11,8 +11,10 @@ from harness.runners.common import (
     TIMEOUT_GH,
     FatalGitError,
     build_design_review_prompt,
+    build_early_comment_context,
     build_file_review_section,
     build_subprocess_env,
+    build_traceability_review_prompt,
     get_changed_files,
     get_current_user,
     get_design_review_flagged_locations,
@@ -21,6 +23,7 @@ from harness.runners.common import (
     get_pr_base_branch,
     get_pr_description,
     get_pr_head_sha,
+    get_traceability_review_flagged_locations,
     get_vibe_heal_context,
     git_detach_and_record,
     git_fetch_and_checkout,
@@ -28,9 +31,13 @@ from harness.runners.common import (
     has_design_review_comment,
     has_inline_review_comments,
     has_review_summary_comment,
+    has_traceability_review_comment,
+    post_no_linked_ticket_comment,
     pr_from_url,
     remove_reviewer,
+    resolve_linked_tickets,
     run_cmd,
+    run_pr_level_pass,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,7 +54,7 @@ def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
     current_user = get_current_user(env)
 
     if pr_url:
-        prs = [pr_from_url(pr_url, config.repo.name, env, "number,url,headRefName")]
+        prs = [pr_from_url(pr_url, config.repo.name, env, "number,url,headRefName,createdAt,closingIssuesReferences")]
     else:
         prs = [p for p in _get_prs(config.repo.name, env) if p.get("headRefName")]
 
@@ -70,9 +77,10 @@ def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
         pr_number = pr["number"]
         files_summary_done = _should_skip_pr(pr, config.repo.name, current_user, env)
         design_done = has_design_review_comment(pr_number, config.repo.name, current_user, env)
-        if files_summary_done and design_done:
-            # Both the correctness pipeline and the (independently tracked) design
-            # pass already succeeded for this PR revision — nothing left to do.
+        traceability_done = has_traceability_review_comment(pr_number, config.repo.name, current_user, env)
+        if files_summary_done and design_done and traceability_done:
+            # The correctness pipeline and both (independently tracked) PR-level passes
+            # already succeeded for this PR revision — nothing left to do.
             continue
         try:
             _process_pr(
@@ -86,6 +94,7 @@ def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
                 current_user,
                 not files_summary_done,
                 design_done,
+                traceability_done,
             )
         except FatalGitError:
             logger.exception("PR #%d: fatal git error", pr_number)
@@ -109,7 +118,7 @@ def _get_prs(repo: str, env: dict) -> list[dict]:
             "--search",
             "user-review-requested:@me",
             "--json",
-            "number,url,headRefName",
+            "number,url,headRefName,createdAt,closingIssuesReferences",
             "--limit",
             "500",
         ],
@@ -180,15 +189,16 @@ def _process_pr(
     current_user: str,
     run_files_summary: bool,
     design_done: bool,
+    traceability_done: bool,
 ) -> None:
     pr_number = pr["number"]
     logger.info("PR #%d: starting", pr_number)
     original_sha = git_detach_and_record(wdir, env)
     try:
         git_fetch_and_checkout(pr["headRefName"], wdir, env)
-        # Gathered once and shared by all three passes below (mirrors self_review.py's
+        # Gathered once and shared by all four passes below (mirrors self_review.py's
         # _gather_pr_context/_cached_file_diff) so a PR needing both the correctness
-        # pipeline and the design pass in the same cycle doesn't refetch PR metadata or
+        # pipeline and a PR-level pass in the same cycle doesn't refetch PR metadata or
         # re-diff every changed file for each pass.
         ctx = _gather_pr_context(pr, config, wdir, env)
         if run_files_summary:
@@ -199,13 +209,17 @@ def _process_pr(
             summary_ok = True
         # Independent of files_ok/summary_ok by design: this pass's own fate (and its
         # own noop-if-already-posted check inside _run_design_review) is decoupled from
-        # the correctness pipeline's, so neither one's retry forces the other's. A
-        # future PR-level pass (issue #4) would extend this same AND-gate below with its
-        # own `_ok` boolean rather than invent a parallel gating mechanism.
+        # the correctness pipeline's, so neither one's retry forces the other's. This is
+        # the same AND-gate the code comment here used to name as a future reuse point
+        # (issue #4) — traceability_ok below extends it the same way, with its own `_ok`
+        # boolean rather than a parallel gating mechanism.
         design_ok = _run_design_review(
             pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, design_done, ctx
         )
-        if files_ok and summary_ok and design_ok:
+        traceability_ok = _run_traceability_review(
+            pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, traceability_done, ctx
+        )
+        if files_ok and summary_ok and design_ok and traceability_ok:
             remove_reviewer(pr_number, config.repo.name, current_user, env)
     except Exception:
         logger.exception("PR #%d: error", pr_number)
@@ -330,44 +344,127 @@ def _run_design_review(
     retry apart from a retry after a crash that already posted some inline findings. That's
     why get_design_review_flagged_locations is fetched below on every invocation (not
     gated by design_done) and fed into the prompt — see design-review-requirements.md
-    §7.1 for the partial-failure duplicate-inline-comment gap this closes."""
+    §7.1 for the partial-failure duplicate-inline-comment gap this closes.
+
+    Orchestration itself (noop check → build prompt → run backend → re-verify marker) is
+    shared with _run_traceability_review below, and with self_review.py's equivalent pair,
+    via common.run_pr_level_pass; only the pieces below (instructions file, flagged-
+    locations getter, prompt builder) are specific to the design pass."""
     pr_number = pr["number"]
     repo_name = config.repo.name
-    if design_done:
-        logger.info("PR #%d: design review already posted, skipping", pr_number)
-        return True
 
-    design_instructions = (knowledge_dir / "review-design.md").read_text(encoding="utf-8")
-    diff_sections = "".join(
-        build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
-        for file in ctx["files"]
+    def build_prompt() -> str:
+        design_instructions = (knowledge_dir / "review-design.md").read_text(encoding="utf-8")
+        diff_sections = "".join(
+            build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
+            for file in ctx["files"]
+        )
+        prior_flagged_locations = get_design_review_flagged_locations(pr_number, repo_name, current_user, env)
+        return build_design_review_prompt(
+            design_instructions,
+            extra_knowledge,
+            diff_sections,
+            pr,
+            pr_number,
+            repo_name,
+            ctx["commit_sha"],
+            ctx["pr_description"],
+            ctx["vibe_heal_context"],
+            prior_flagged_locations,
+        )
+
+    return bool(
+        run_pr_level_pass(
+            pr_number,
+            backend,
+            wdir,
+            is_done=design_done,
+            build_prompt=build_prompt,
+            has_comment_fn=lambda: has_design_review_comment(pr_number, repo_name, current_user, env),
+            label="design review",
+        )
     )
 
-    prior_flagged_locations = get_design_review_flagged_locations(pr_number, repo_name, current_user, env)
-    design_prompt = build_design_review_prompt(
-        design_instructions,
-        extra_knowledge,
-        diff_sections,
-        pr,
-        pr_number,
-        repo_name,
-        ctx["commit_sha"],
-        ctx["pr_description"],
-        ctx["vibe_heal_context"],
-        prior_flagged_locations,
-    )
-    try:
-        result = backend.run(design_prompt, cwd=wdir, context=f"PR #{pr_number} design review")
-        if result.returncode != 0:
-            logger.error("PR #%d: design review backend exited %d", pr_number, result.returncode)
+
+def _run_traceability_review(
+    pr: dict,
+    config: HarnessConfig,
+    knowledge_dir: Path,
+    extra_knowledge: str | None,
+    backend: Backend,
+    wdir: str,
+    env: dict,
+    current_user: str,
+    traceability_done: bool,
+    ctx: dict,
+) -> bool:
+    """Mirrors _run_design_review exactly (requirement-traceability-requirements.md §7.5):
+    no persisted state exists in this runner, so has_traceability_review_comment (checked
+    once by the caller and passed in as traceability_done) is the only idempotency signal.
+
+    One difference from the design pass: when resolve_linked_tickets finds no ticket via
+    either mechanism, the "no linked ticket found" outcome is posted directly (§7.3) — no
+    backend invocation, since there's nothing for a model to judge — and that comment
+    posting itself (not a marker re-check) is what determines success here. That short-
+    circuit is threaded into common.run_pr_level_pass's `short_circuit` hook; a resolved
+    ticket list is stashed in `resolved` for build_prompt to pick up once short_circuit
+    itself declines to handle the pass (returns None, meaning "a ticket was found, proceed
+    normally")."""
+    pr_number = pr["number"]
+    repo_name = config.repo.name
+    comment_cache: dict = {}
+    resolved: dict = {}
+
+    def short_circuit() -> bool | None:
+        tickets = resolve_linked_tickets(pr, repo_name, env, comment_cache)
+        if tickets is None:
+            logger.info("PR #%d: linked ticket lookup was inconclusive (API failure) — will retry next run", pr_number)
             return False
-    except subprocess.TimeoutExpired:
-        logger.exception("PR #%d: design review backend timed out", pr_number)
-        return False
-    if not has_design_review_comment(pr_number, repo_name, current_user, env):
-        logger.error("PR #%d: design review backend exited 0 but no marker comment was found", pr_number)
-        return False
-    return True
+        if not tickets:
+            if post_no_linked_ticket_comment(pr_number, repo_name, env):
+                return True
+            logger.error("PR #%d: failed to post 'no linked ticket found' comment", pr_number)
+            return False
+        resolved["tickets"] = tickets
+        return None
+
+    def build_prompt() -> str:
+        traceability_instructions = (knowledge_dir / "review-traceability.md").read_text(encoding="utf-8")
+        diff_sections = "".join(
+            build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
+            for file in ctx["files"]
+        )
+        prior_flagged_locations = get_traceability_review_flagged_locations(pr_number, repo_name, current_user, env)
+        early_comment_context = build_early_comment_context(
+            pr_number, repo_name, pr.get("createdAt", ""), env, comment_cache
+        )
+        return build_traceability_review_prompt(
+            traceability_instructions,
+            extra_knowledge,
+            diff_sections,
+            pr,
+            pr_number,
+            repo_name,
+            ctx["commit_sha"],
+            ctx["pr_description"],
+            ctx["vibe_heal_context"],
+            prior_flagged_locations,
+            resolved["tickets"],
+            early_comment_context,
+        )
+
+    return bool(
+        run_pr_level_pass(
+            pr_number,
+            backend,
+            wdir,
+            is_done=traceability_done,
+            build_prompt=build_prompt,
+            has_comment_fn=lambda: has_traceability_review_comment(pr_number, repo_name, current_user, env),
+            label="traceability review",
+            short_circuit=short_circuit,
+        )
+    )
 
 
 def _run_summary_review(

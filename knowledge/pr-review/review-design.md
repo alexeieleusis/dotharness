@@ -38,9 +38,9 @@ pass and are out of scope here. Stay focused on:
 For each P0 (critical — will actively cause defects or major near-term rework) or P1
 (high priority — meaningfully hurts maintainability) design finding that anchors to a
 specific file/line, post an inline review comment. Append the literal marker
-`<!-- osc-review-design -->` to the end of the body — it is invisible when rendered on
-GitHub and is how this tool recognizes its own design-review comments on a later run,
-so it must be present on every comment you post here:
+`<!-- osc-review-design -->` to the end of the body — it is invisible when
+rendered on GitHub and is how this tool recognizes its own design-review comments on a
+later run, so it must be present on every comment you post here:
 
     gh api repos/{REPO}/pulls/{PR_NUMBER}/comments \
       -f body="...<!-- osc-review-design -->" -f commit_id="{COMMIT}" -f path="..." -F line=<N>

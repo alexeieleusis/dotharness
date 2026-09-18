@@ -32,8 +32,8 @@ would reproduce it — something that could directly become a unit test case.
 
 ## Output
 For each P0 (critical) or P1 (high priority) finding, post an inline review comment.
-Append the literal marker `<!-- osc-review-inline -->` to the end of the body — it is
-invisible when rendered on GitHub and is how this tool recognizes its own comments on a
+Append the literal marker `<!-- osc-review-inline -->` to the end of the body — it
+is invisible when rendered on GitHub and is how this tool recognizes its own comments on a
 later run, so it must be present on every comment you post here:
 
     gh api repos/{REPO}/pulls/{PR_NUMBER}/comments \
