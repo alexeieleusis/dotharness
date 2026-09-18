@@ -10,10 +10,12 @@ from harness.lock import acquire_lock
 from harness.runners.common import (
     TIMEOUT_GH,
     FatalGitError,
+    build_design_review_prompt,
     build_file_review_section,
     build_subprocess_env,
     get_changed_files,
     get_current_user,
+    get_design_review_flagged_locations,
     get_file_diff,
     get_gh_token,
     get_pr_base_branch,
@@ -23,6 +25,7 @@ from harness.runners.common import (
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
+    has_design_review_comment,
     has_inline_review_comments,
     has_review_summary_comment,
     pr_from_url,
@@ -64,15 +67,31 @@ def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
     wdir = str(config.repo.working_dir)
 
     for pr in prs:
-        if _should_skip_pr(pr, config.repo.name, current_user, env):
+        pr_number = pr["number"]
+        files_summary_done = _should_skip_pr(pr, config.repo.name, current_user, env)
+        design_done = has_design_review_comment(pr_number, config.repo.name, current_user, env)
+        if files_summary_done and design_done:
+            # Both the correctness pipeline and the (independently tracked) design
+            # pass already succeeded for this PR revision — nothing left to do.
             continue
         try:
-            _process_pr(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user)
+            _process_pr(
+                pr,
+                config,
+                knowledge_dir,
+                extra_knowledge,
+                backend,
+                wdir,
+                env,
+                current_user,
+                not files_summary_done,
+                design_done,
+            )
         except FatalGitError:
-            logger.exception("PR #%d: fatal git error", pr["number"])
+            logger.exception("PR #%d: fatal git error", pr_number)
             break
         except Exception:
-            logger.exception("PR #%d: error", pr["number"])
+            logger.exception("PR #%d: error", pr_number)
 
 
 def _get_prs(repo: str, env: dict) -> list[dict]:
@@ -159,20 +178,65 @@ def _process_pr(
     wdir: str,
     env: dict,
     current_user: str,
+    run_files_summary: bool,
+    design_done: bool,
 ) -> None:
     pr_number = pr["number"]
     logger.info("PR #%d: starting", pr_number)
     original_sha = git_detach_and_record(wdir, env)
     try:
         git_fetch_and_checkout(pr["headRefName"], wdir, env)
-        files_ok = _run_file_reviews(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env)
-        summary_ok = _run_summary_review(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env)
-        if files_ok and summary_ok:
+        # Gathered once and shared by all three passes below (mirrors self_review.py's
+        # _gather_pr_context/_cached_file_diff) so a PR needing both the correctness
+        # pipeline and the design pass in the same cycle doesn't refetch PR metadata or
+        # re-diff every changed file for each pass.
+        ctx = _gather_pr_context(pr, config, wdir, env)
+        if run_files_summary:
+            files_ok = _run_file_reviews(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, ctx)
+            summary_ok = _run_summary_review(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, ctx)
+        else:
+            files_ok = True
+            summary_ok = True
+        # Independent of files_ok/summary_ok by design: this pass's own fate (and its
+        # own noop-if-already-posted check inside _run_design_review) is decoupled from
+        # the correctness pipeline's, so neither one's retry forces the other's. A
+        # future PR-level pass (issue #4) would extend this same AND-gate below with its
+        # own `_ok` boolean rather than invent a parallel gating mechanism.
+        design_ok = _run_design_review(
+            pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, design_done, ctx
+        )
+        if files_ok and summary_ok and design_ok:
             remove_reviewer(pr_number, config.repo.name, current_user, env)
     except Exception:
         logger.exception("PR #%d: error", pr_number)
     finally:
         git_restore(original_sha, pr["headRefName"], wdir, env)
+
+
+def _gather_pr_context(pr: dict, config: HarnessConfig, wdir: str, env: dict) -> dict:
+    pr_number = pr["number"]
+    vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr["headRefName"])
+    pr_description = get_pr_description(pr_number, config.repo.name, env)
+    base_branch = get_pr_base_branch(pr_number, config.repo.name, env)
+    commit_sha = get_pr_head_sha(pr_number, config.repo.name, env)
+    files = get_changed_files(base_branch, wdir, env, expected_sha=commit_sha)
+    return {
+        "vibe_heal_context": vibe_heal_context,
+        "pr_description": pr_description,
+        "base_branch": base_branch,
+        "commit_sha": commit_sha,
+        "files": files,
+        "diff_cache": {},
+    }
+
+
+def _cached_file_diff(ctx: dict, file: str, wdir: str, env: dict) -> str:
+    """The file/summary pass and the design pass both need every changed file's diff;
+    caching on ctx means a PR processed by both in the same cycle only runs `git diff`
+    once per file instead of twice."""
+    if file not in ctx["diff_cache"]:
+        ctx["diff_cache"][file] = get_file_diff(file, ctx["base_branch"], wdir, env)
+    return ctx["diff_cache"][file]
 
 
 def _run_file_reviews(
@@ -183,18 +247,18 @@ def _run_file_reviews(
     backend: Backend,
     wdir: str,
     env: dict,
+    ctx: dict,
 ) -> bool:
     pr_number = pr["number"]
     file_instructions = (knowledge_dir / "review-file.md").read_text(encoding="utf-8")
-    vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr["headRefName"])
-    pr_description = get_pr_description(pr_number, config.repo.name, env)
-    base_branch = get_pr_base_branch(pr_number, config.repo.name, env)
-    commit_sha = get_pr_head_sha(pr_number, config.repo.name, env)
-    files = get_changed_files(base_branch, wdir, env, expected_sha=commit_sha)
+    files = ctx["files"]
+    commit_sha = ctx["commit_sha"]
+    pr_description = ctx["pr_description"]
+    vibe_heal_context = ctx["vibe_heal_context"]
 
     all_ok = True
     for file in files:
-        diff = get_file_diff(file, base_branch, wdir, env)
+        diff = _cached_file_diff(ctx, file, wdir, env)
         abs_path = os.path.join(wdir, file)
         file_section = build_file_review_section(file, diff, abs_path)
         prompt = _build_file_prompt(
@@ -239,6 +303,73 @@ def _build_file_prompt(
     )
 
 
+def _run_design_review(
+    pr: dict,
+    config: HarnessConfig,
+    knowledge_dir: Path,
+    extra_knowledge: str | None,
+    backend: Backend,
+    wdir: str,
+    env: dict,
+    current_user: str,
+    design_done: bool,
+    ctx: dict,
+) -> bool:
+    """No persisted state exists for this runner, so has_design_review_comment (checked
+    once by the caller and passed in as design_done) is the *only* idempotency signal
+    (unlike self_review.py, which treats the equivalent check as defense-in-depth on top
+    of its own persisted design_reviewed_prs state). If a marked comment from a previous
+    attempt is already present, this is a noop: the backend isn't invoked again, and the
+    pass counts as already succeeded — this is what lets the design pass's own retry
+    stay decoupled from files_ok/summary_ok. A backend exit of 0 is not itself proof the
+    marker comment was posted, so success is re-verified against the same check before
+    returning True; a false positive here would make remove_reviewer fire and the design
+    pass never retry.
+
+    design_done only tells us the pass never fully completed; it can't tell a from-scratch
+    retry apart from a retry after a crash that already posted some inline findings. That's
+    why get_design_review_flagged_locations is fetched below on every invocation (not
+    gated by design_done) and fed into the prompt — see design-review-requirements.md
+    §7.1 for the partial-failure duplicate-inline-comment gap this closes."""
+    pr_number = pr["number"]
+    repo_name = config.repo.name
+    if design_done:
+        logger.info("PR #%d: design review already posted, skipping", pr_number)
+        return True
+
+    design_instructions = (knowledge_dir / "review-design.md").read_text(encoding="utf-8")
+    diff_sections = "".join(
+        build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
+        for file in ctx["files"]
+    )
+
+    prior_flagged_locations = get_design_review_flagged_locations(pr_number, repo_name, current_user, env)
+    design_prompt = build_design_review_prompt(
+        design_instructions,
+        extra_knowledge,
+        diff_sections,
+        pr,
+        pr_number,
+        repo_name,
+        ctx["commit_sha"],
+        ctx["pr_description"],
+        ctx["vibe_heal_context"],
+        prior_flagged_locations,
+    )
+    try:
+        result = backend.run(design_prompt, cwd=wdir, context=f"PR #{pr_number} design review")
+        if result.returncode != 0:
+            logger.error("PR #%d: design review backend exited %d", pr_number, result.returncode)
+            return False
+    except subprocess.TimeoutExpired:
+        logger.exception("PR #%d: design review backend timed out", pr_number)
+        return False
+    if not has_design_review_comment(pr_number, repo_name, current_user, env):
+        logger.error("PR #%d: design review backend exited 0 but no marker comment was found", pr_number)
+        return False
+    return True
+
+
 def _run_summary_review(
     pr: dict,
     config: HarnessConfig,
@@ -247,14 +378,13 @@ def _run_summary_review(
     backend: Backend,
     wdir: str,
     env: dict,
+    ctx: dict,
 ) -> bool:
     pr_number = pr["number"]
     summary_instructions = (knowledge_dir / "review-summary.md").read_text(encoding="utf-8")
-    vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr["headRefName"])
-    pr_description = get_pr_description(pr_number, config.repo.name, env)
-    base_branch = get_pr_base_branch(pr_number, config.repo.name, env)
-    commit_sha = get_pr_head_sha(pr_number, config.repo.name, env)
-    files = get_changed_files(base_branch, wdir, env, expected_sha=commit_sha)
+    files = ctx["files"]
+    pr_description = ctx["pr_description"]
+    vibe_heal_context = ctx["vibe_heal_context"]
 
     summary_prompt = (
         summary_instructions

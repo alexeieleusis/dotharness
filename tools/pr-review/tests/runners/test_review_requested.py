@@ -23,6 +23,7 @@ def _setup_knowledge(tmp_path, content="instructions"):
     kdir.mkdir(parents=True, exist_ok=True)
     (kdir / "review-file.md").write_text(content)
     (kdir / "review-summary.md").write_text(content)
+    (kdir / "review-design.md").write_text(content)
 
 
 def _strict_run_cmd(mapping: dict[str, MagicMock]):
@@ -58,6 +59,10 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
         patch("harness.runners.review_requested.get_current_user", return_value="bot"),
         patch("harness.runners.review_requested._get_prs", return_value=prs) as get_prs,
         patch("harness.runners.review_requested._should_skip_pr", return_value=skip_pr) as should_skip_pr,
+        # Design pass is decoupled and out of scope for these correctness/state tests —
+        # treat it as already-done so it never invokes the backend or hits `gh` for real
+        # (it's tested on its own in the design-specific tests below).
+        patch("harness.runners.review_requested.has_design_review_comment", return_value=True),
         patch("harness.runners.review_requested.git_detach_and_record", return_value="sha") as detach,
         patch("harness.runners.review_requested.git_fetch_and_checkout") as fetch_checkout,
         patch("harness.runners.review_requested.git_restore") as restore,
@@ -95,6 +100,7 @@ def test_skips_already_approved_pr(tmp_xdg, tmp_path):
         ),
         patch("harness.runners.review_requested._has_user_approved", return_value=True),
         patch("harness.runners.review_requested.has_review_summary_comment", return_value=False),
+        patch("harness.runners.review_requested.has_design_review_comment", return_value=True),
         patch("harness.runners.review_requested.git_detach_and_record", return_value="sha"),
         patch("harness.runners.review_requested.Backend") as mock_be,
     ):
@@ -113,6 +119,7 @@ def test_skips_pr_with_existing_osc_review(tmp_xdg, tmp_path):
         ),
         patch("harness.runners.review_requested._has_user_approved", return_value=False),
         patch("harness.runners.review_requested.has_review_summary_comment", return_value=True),
+        patch("harness.runners.review_requested.has_design_review_comment", return_value=True),
         patch("harness.runners.review_requested.git_detach_and_record", return_value="sha"),
         patch("harness.runners.review_requested.Backend") as mock_be,
     ):
@@ -203,6 +210,85 @@ def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
         review_requested._run_locked(cfg, pr_url=None)
     prompts = [c.args[0] for c in mocks.backend.return_value.run.call_args_list]
     assert all("## Static Analysis" not in p for p in prompts)
+
+
+def test_design_review_invoked_when_no_marker_present(tmp_xdg, tmp_path):
+    """With no persisted state, has_design_review_comment is the only idempotency
+    signal — when it's absent, the design pass must actually invoke the backend."""
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        _full_run_mocks() as mocks,
+        patch("harness.runners.review_requested.has_design_review_comment", return_value=False),
+    ):
+        review_requested._run_locked(cfg, pr_url=None)
+    # 1 file + 1 summary + 1 design = 3 backend calls
+    assert mocks.backend.return_value.run.call_count == 3
+    assert mocks.backend.return_value.run.call_args_list[-1].kwargs["context"] == "PR #1 design review"
+
+
+def test_design_review_noop_when_marker_already_present(tmp_xdg, tmp_path):
+    """A design-review comment from a prior attempt makes this cycle's design step a
+    noop — the backend must not be invoked a second time for it."""
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        _full_run_mocks() as mocks,
+        patch("harness.runners.review_requested.has_design_review_comment", return_value=True),
+    ):
+        review_requested._run_locked(cfg, pr_url=None)
+    # 1 file + 1 summary = 2 backend calls; design is skipped entirely.
+    assert mocks.backend.return_value.run.call_count == 2
+
+
+def test_remove_reviewer_blocked_when_design_review_fails(tmp_xdg, tmp_path):
+    """Files and summary succeed, but the design pass fails — the reviewer must not be
+    removed, so the PR stays in the queue and gets retried next run."""
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        _full_run_mocks() as mocks,
+        patch("harness.runners.review_requested.has_design_review_comment", return_value=False),
+        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
+    ):
+        # file review, then summary, then a failing design-review call
+        mocks.backend.return_value.run.side_effect = [
+            MagicMock(returncode=0),
+            MagicMock(returncode=0),
+            MagicMock(returncode=1),
+        ]
+        review_requested._run_locked(cfg, pr_url=None)
+    mock_remove.assert_not_called()
+
+
+def test_remove_reviewer_blocked_when_marker_comment_never_lands(tmp_xdg, tmp_path):
+    """The backend can exit 0 without the PR-level marker comment actually landing (e.g.
+    it crashed after doing the work but before posting). That must not be treated as
+    success — the reviewer stays on the PR so the design pass retries next cycle."""
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        _full_run_mocks() as mocks,
+        patch("harness.runners.review_requested.has_design_review_comment", return_value=False),
+        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
+    ):
+        mocks.backend.return_value.run.return_value = MagicMock(returncode=0)
+        review_requested._run_locked(cfg, pr_url=None)
+    mock_remove.assert_not_called()
+
+
+def test_remove_reviewer_proceeds_when_design_review_noops(tmp_xdg, tmp_path):
+    """An already-posted design comment still counts as success for the remove_reviewer
+    gate — the pass being a noop must not block clearing the review request."""
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        _full_run_mocks(),
+        patch("harness.runners.review_requested.has_design_review_comment", return_value=True),
+        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
+    ):
+        review_requested._run_locked(cfg, pr_url=None)
+    mock_remove.assert_called_once()
 
 
 def test_continues_to_next_pr_on_backend_exception(tmp_xdg, tmp_path):

@@ -20,6 +20,7 @@ PR_COMMENTS_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scrip
 
 FOCUSED_REVIEW_MARKER = "[focused-review-bot]"
 INLINE_REVIEW_MARKER = "<!-- osc-review-inline -->"
+DESIGN_REVIEW_MARKER = "<!-- osc-review-design -->"
 
 
 class FatalGitError(Exception):
@@ -256,11 +257,13 @@ def is_review_summary_comment(body: str) -> bool:
     return "review summary" in lower or "osc-review" in lower
 
 
-def _has_matching_comment(
+def _fetch_matching_comments(
     comments_path: str, current_user: str, env: dict, predicate: Callable[[str], bool]
-) -> bool | None:
-    """Returns True/False for a confirmed match/no-match, or None if the GitHub API
-    call itself failed (e.g. rate limit, transient 5xx) and the result is inconclusive."""
+) -> list[dict] | None:
+    """Returns the current_user's comments matching predicate (possibly empty), or None
+    if the GitHub API call itself failed (e.g. rate limit, transient 5xx) and the result
+    is inconclusive."""
+    matches: list[dict] = []
     page = 1
     while True:
         result = run_cmd(
@@ -274,12 +277,22 @@ def _has_matching_comment(
             return None
         comments = json.loads(result.stdout)
         if not comments:
-            return False
-        if any(c.get("user", {}).get("login") == current_user and predicate(c.get("body", "")) for c in comments):
-            return True
+            return matches
+        matches.extend(
+            c for c in comments if c.get("user", {}).get("login") == current_user and predicate(c.get("body", ""))
+        )
         if len(comments) < 100:
-            return False
+            return matches
         page += 1
+
+
+def _has_matching_comment(
+    comments_path: str, current_user: str, env: dict, predicate: Callable[[str], bool]
+) -> bool | None:
+    """Returns True/False for a confirmed match/no-match, or None if the GitHub API
+    call itself failed (e.g. rate limit, transient 5xx) and the result is inconclusive."""
+    matches = _fetch_matching_comments(comments_path, current_user, env, predicate)
+    return None if matches is None else bool(matches)
 
 
 def has_review_summary_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
@@ -302,6 +315,56 @@ def has_inline_review_comments(pr_number: int, repo: str, current_user: str, env
     return bool(
         _has_matching_comment(f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, is_inline_review_comment)
     )
+
+
+def is_design_review_comment(body: str) -> bool:
+    return DESIGN_REVIEW_MARKER in body
+
+
+def has_design_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+    """The design-review pass always posts exactly one PR-level comment per successful
+    run (findings or "no blocking issues"), so checking issue-level comments alone is
+    enough — no need to also check the inline pulls/comments endpoint the way
+    has_inline_review_comments does. This is the design pass's *only* idempotency
+    signal in review-requested (no persisted state there); self-review uses it only as
+    defense-in-depth alongside its own persisted design_reviewed_prs state. A future
+    PR-level pass (e.g. requirement-traceability, dotharness#4) could reuse this same
+    shape as has_pr_level_pass_comment(marker) rather than duplicating it."""
+    return bool(check_design_review_comment_status(pr_number, repo, current_user, env))
+
+
+def check_design_review_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
+    """Tri-state version of has_design_review_comment: None means the check itself was
+    inconclusive (API failure), as opposed to a confirmed absence of the comment."""
+    return _has_matching_comment(
+        f"repos/{repo}/issues/{pr_number}/comments", current_user, env, is_design_review_comment
+    )
+
+
+def get_design_review_flagged_locations(
+    pr_number: int, repo: str, current_user: str, env: dict
+) -> list[tuple[str, int]]:
+    """(path, line) pairs already flagged by a prior DESIGN_REVIEW_MARKER inline comment
+    on this PR (design-review-requirements.md §7.1). Unlike has_design_review_comment,
+    this checks the pulls/comments endpoint directly and is meant to be called on every
+    design-review invocation, not just when deciding whether to skip the pass: the design
+    backend posts inline findings and the closing PR-level comment as separate calls, so a
+    crash in between leaves has_design_review_comment false while inline comments already
+    exist. Feeding those locations back into the prompt lets a retry avoid re-flagging
+    them. Returns an empty list on an inconclusive API failure, rather than blocking the
+    run — worst case a retry re-flags an already-posted location instead of the whole
+    design pass silently never running."""
+    matches = _fetch_matching_comments(
+        f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, is_design_review_comment
+    )
+    if not matches:
+        return []
+    locations = []
+    for comment in matches:
+        path, line = comment.get("path"), comment.get("line")
+        if path and line is not None:
+            locations.append((path, line))
+    return locations
 
 
 def author_matches(login: str, authors_config: str | list) -> bool:
@@ -543,6 +606,46 @@ def build_file_review_section(file: str, diff: str, abs_path: str) -> str:
         note = f"Note: {reason} The diff has been omitted; please review the whole file instead."
         return f"\n\n{file_ref}\n\n## File: {file}\n{note}"
     return f"\n\n{file_ref}\n\n## Diff for {file}\n{diff}"
+
+
+def build_design_review_prompt(
+    design_instructions: str,
+    extra_knowledge: str | None,
+    diff_sections: str,
+    pr: dict,
+    pr_number: int,
+    repo_name: str,
+    commit_sha: str,
+    pr_description: str | None,
+    vibe_heal_context: str | None,
+    prior_flagged_locations: list[tuple[str, int]],
+) -> str:
+    """Shared by self_review.py and review_requested.py so the design pass's prompt
+    shape lives in one place rather than being assembled twice.
+
+    prior_flagged_locations (design-review-requirements.md §7.1) is required, not
+    optional: callers must fetch it via get_design_review_flagged_locations on every
+    invocation, since it's what lets a retry after a partial failure skip re-flagging
+    inline findings it already posted."""
+    prior_findings_section = ""
+    if prior_flagged_locations:
+        locations = "\n".join(f"- {path}:{line}" for path, line in prior_flagged_locations)
+        prior_findings_section = (
+            "\n\n## Already-flagged design findings\n"
+            "The following file/line locations already have an inline design-review comment "
+            "from a previous attempt on this PR. Do not post a new inline comment for any of "
+            f"them:\n{locations}"
+        )
+    return (
+        design_instructions
+        + (f"\n\n## Additional Review Guide\n{extra_knowledge}" if extra_knowledge else "")
+        + diff_sections
+        + prior_findings_section
+        + f"\n\nPR URL: {pr.get('url', '')}\nPR number: {pr_number}\n"
+        + f"Repo: {repo_name}\nCommit: {commit_sha}"
+        + (f"\n\n{pr_description}" if pr_description else "")
+        + (f"\n\n## Static Analysis\n{vibe_heal_context}" if vibe_heal_context else "")
+    )
 
 
 def get_vibe_heal_context(subdirs: list[SubDir], working_dir: str, branch: str) -> str:
