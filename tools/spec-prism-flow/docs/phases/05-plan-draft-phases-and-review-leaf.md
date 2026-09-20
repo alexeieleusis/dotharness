@@ -22,6 +22,9 @@ Reads every `{config.plan.phase_dir}/*-leaf.md` file plus `{config.plan.phase_di
 2. **Graph agreement** — calls Phase 01's `validate_graph` with the loaded `Graph` and parsed `PhaseFile` list; surfaces every returned violation string as-is (missing linear edge, cycle, disjoint-scope breach).
 3. **Section coverage** — for each numbered `requirements.md` section, checks at least one phase file's `Requirements` body contains a quoted excerpt referencing it (matched by the section's header text or number, e.g. `"§7.2"` appearing in a phase's Requirements); unmatched sections are listed by number and title.
 4. **Stale open questions** — parses `OPEN_QUESTIONS.md`'s entries; any entry with no recorded answer and no explicit "deferred" marker is listed.
+
+**Open decision (flagged, not yet resolved — implement as the full `validate_graph` output below until resolved otherwise):** `requirements.md` §7.2 step 8 defines "graph agreement" narrowly — only that every linear-chain edge appears in the graph and the graph is acyclic. Item 2 above instead surfaces `validate_graph`'s entire return value, including the orphan check and the disjoint-scope-breach check — both of which Phase 04's `decompose` already enforces by construction at tree-build time (see Phase 04 §7's `DecomposeError` on a disjoint-scope violation). Whether `plan review`'s Graph-agreement check should stay scoped to just the two spec'd conditions, or whether re-surfacing the construction-time invariants here as a review-time safety net is worth the redundancy, isn't dictated by the spec — flagged here for a human to confirm or override before implementation.
+
 Output is a single structured report (pass/fail per check, with the offending items) printed to console and written to a review-log file in the plan workspace; `plan review` never auto-fixes — a human acts on the report and either re-runs `draft-phases`/`decompose` or explicitly overrides.
 
 ### 7.3 What "done" looks like
