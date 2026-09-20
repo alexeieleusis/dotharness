@@ -390,9 +390,11 @@ gate, §11 #2**) → merge. In parallel mode this pipeline runs once per concurr
   `typer`+`rich`; house style since then has settled on `click`).
 - **Config:** a per-target-project TOML (analogous to `.harness.toml`) declaring: the agent backend
   (Claude Code default / opencode), whether `harness`/`vibe-heal` integration is active and how to
-  reach it, the path to the project's conventions document, the phase directory location, the
-  build/lint/test command list `merge_gates` should run, and `build`'s worker count (default 1 —
-  sequential; >1 switches `track_runner` into parallel mode, §8).
+  reach it, the path to the project's conventions document, the planning workspace location (where
+  `plan init` writes `00-overview.md`/`requirements.md`/`OPEN_QUESTIONS.md`, distinct from the phase
+  directory location below), the phase directory location, the build/lint/test command list
+  `merge_gates` should run, and `build`'s worker count (default 1 — sequential; >1 switches
+  `track_runner` into parallel mode, §8).
 
 ## 11. Open decisions log
 
