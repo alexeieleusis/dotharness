@@ -15,7 +15,7 @@
 Excerpt, chunk A-2-1's mini-requirements doc §7 (Detailed functional requirements), quoted verbatim:
 
 ### 7.1 `plan init` (`spec_prism_flow/cli.py` addition, `spec_prism_flow/workspace.py`)
-- CLI: `spec-prism-flow plan init BRIEF_PATH [--code PATH] [--conventions PATH] [--links TEXT]` (`--links` comma-separated URLs, stored verbatim, no validation of reachability).
+- CLI: `spec-prism-flow plan init BRIEF_PATH [--code PATH] [--conventions PATH] [--links TEXT] [--config PATH] [--yes]` (`--links` comma-separated URLs, stored verbatim, no validation of reachability; `--config` overrides config-file discovery; `--yes` bypasses the overwrite-confirmation prompt).
 - `BRIEF_PATH` must exist and be readable; a missing/unreadable brief is a `click.ClickException`, not a silent no-op.
 - `--code` and `--conventions`, if given, must be existing paths; `--links` has no existence check (URLs aren't local paths).
 - Loads config via Phase 01's `load_config` (config file discovered the same way pr-review discovers `.harness.toml`: `./.spec-prism-flow.toml` unless `--config` overrides it).
