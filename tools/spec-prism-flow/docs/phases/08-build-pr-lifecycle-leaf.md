@@ -13,7 +13,7 @@
 Excerpt, chunk A-3-3-1's mini-requirements doc §7 (Detailed functional requirements), quoted verbatim:
 
 ### 7.1 `spec_prism_flow/build/gh_ops.py`
-- `pr_create(cwd: Path, branch: str, title: str, body: str) -> PRHandle` — shells out to `gh pr create --head {branch} --title {title} --body {body}`, parses the returned PR URL/number into a frozen `PRHandle(number, url)`.
+- `pr_create(cwd: Path, branch: str, title: str, body: str) -> PRHandle` — invokes `gh pr create --head {branch} --title {title} --body {body}` as an argv list (`subprocess.run([...], shell=False)`) — `title`/`body` are passed as individual argv elements, never interpolated into a shell string, so shell metacharacters in either (backticks, `$(...)`, quotes, newlines) are inert. Parses the returned PR URL/number into a frozen `PRHandle(number, url)`.
 - `pr_view(pr_number: int) -> PRStatus` — wraps `gh pr view {pr_number} --json state,mergeable,reviewDecision`.
 - `unresolved_thread_count(pr_number: int) -> int` — paginated GraphQL query (`gh api graphql`) over the PR's `reviewThreads`, counting entries with `isResolved: false`; loops until `pageInfo.hasNextPage` is false. Pagination must not silently truncate at one page — every caller depends on this being the exact count, since it gates whether address-comments (Phase 11) loops again.
 - `pr_merge(pr_number: int) -> None` — `gh pr merge {pr_number} --squash` (or config-driven merge strategy if config exposes one; otherwise squash as the fixed default); raises `PRNotMergeableError` (a `CommandError`-family error, `next_command` hint = `gh pr view {pr_number}`) on a non-zero exit rather than retrying internally.
@@ -27,6 +27,7 @@ Excerpt, chunk A-3-3-1's mini-requirements doc §7 (Detailed functional requirem
 
 ## Acceptance criteria
 - `pr_create` returns a `PRHandle` with the correct number/URL parsed from `gh pr create`'s output.
+- `pr_create` invokes `gh` via an argv list (`shell=False`); a title/body containing shell metacharacters (backticks, `$(...)`, quotes, newlines) is passed through as literal text and never executed.
 - `unresolved_thread_count` correctly paginates a multi-page GraphQL response (verified with a mocked multi-page fixture) and returns the exact count of `isResolved: false` threads.
 - `pr_merge` raises a named `CommandError`-family exception with a `next_command` hint on a non-zero `gh pr merge` exit, and never retries internally.
 - `load_resume_state` returns `None` (not an exception) when no resume file exists at the given path; `save_resume_state`/`load_resume_state` round-trip a `ResumeState` correctly.
