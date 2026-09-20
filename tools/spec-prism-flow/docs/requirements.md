@@ -18,9 +18,9 @@ scope stops short of execution. This is risk mitigation, not risk removal. Its `
 (Feature B, §8) is what actually executes the resulting phase corpus — the same tool, carried
 through to the code it planned for (§11 #8).
 
-This tool generalizes a pattern first proven in the `agentic-neighboku-lensflow` repo's
-[`docs/neighboku-ai-rebuild/`](../../../development/ag-neighboku/agentic-neighboku-lensflow/docs/neighboku-ai-rebuild/)
-planning docs and [`docs/phases/`](../../../development/ag-neighboku/agentic-neighboku-lensflow/docs/phases/)
+This tool generalizes a pattern first proven in the [`agentic-neighboku-lensflow`](https://github.com/alexeieleusis/agentic-neighboku-lensflow)
+repo's [`docs/neighboku-ai-rebuild/`](https://github.com/alexeieleusis/agentic-neighboku-lensflow/tree/main/docs/neighboku-ai-rebuild/)
+planning docs and [`docs/phases/`](https://github.com/alexeieleusis/agentic-neighboku-lensflow/tree/main/docs/phases/)
 corpus (20 files) plus the `scripts/orchestrate/` engine that drives them. That experiment rebuilt
 an existing game from scratch via ~20 small, independently agent-implementable phases, and it
 worked — each phase was self-contained enough that a coding agent could implement it, get
