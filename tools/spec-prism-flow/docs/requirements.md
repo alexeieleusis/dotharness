@@ -111,8 +111,8 @@ introduced.
   it fits the sizing bands (§9, derived from G2). Reaching a leaf is the unfold's termination signal
   (§7.2 step 6); a leaf becomes exactly one phase file (§6), drafted by `draft-phases` (§7.2 step 7).
   A leaf is always a terminal node of the phase tree, never an internal one.
-- **Generator.** The per-chunk agent call `decompose` (§7.2 step 6) makes — not a code generator or
-  a language-level generator function — that maps a chunk to either a leaf (termination) or a set of
+- **Generator.** The per-chunk agent call made by `decompose` (§7.2 step 6) — not a code generator or
+  a language-level generator function — maps a chunk to either a leaf (termination) or a set of
   child chunks (recursion continues). Defined formally, with its type signature, in §7.2 step 6.
 
 ## 5. The two features, at a glance
