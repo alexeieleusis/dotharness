@@ -1,11 +1,11 @@
 [project]
 site_name = "spec-prism-flow"
-repo_url = "https://github.com/alexeieleusis/spec-prism-flow"
-site_url = "https://alexeieleusis.github.io/spec-prism-flow"
+repo_url = "https://github.com/alexeieleusis/dotharness"
+site_url = "https://alexeieleusis.github.io/dotharness"
 site_description = "Specification-driven planning and execution engine: turns a rough idea into agent-sized phase files, then executes them safely against a coding-agent backend"
 site_author = "Alexei Diaz"
-edit_uri = "edit/main/docs/"
-repo_name = "alexeieleusis/spec-prism-flow"
+edit_uri = "edit/main/tools/spec-prism-flow/docs/"
+repo_name = "alexeieleusis/dotharness"
 copyright = 'Maintained by <a href="https://alexeieleusis.com">alexeieleusis</a>.'
 
 nav = [
@@ -67,7 +67,7 @@ toggle.name = "Switch to system preference"
 
 [[project.extra.social]]
 icon = "fontawesome/brands/github"
-link = "https://github.com/alexeieleusis/spec-prism-flow"
+link = "https://github.com/alexeieleusis/dotharness"
 
 [[project.extra.social]]
 icon = "fontawesome/brands/python"
