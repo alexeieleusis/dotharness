@@ -20,7 +20,7 @@ Excerpt, chunk A-3-3-1's mini-requirements doc §7 (Detailed functional requirem
 
 ### 7.2 `spec_prism_flow/build/resume_state.py`
 - `ResumeState` frozen dataclass: `repo: str`, `branch: str`, `pr_number: int`, `pr_url: str`.
-- `resume_state_path(config, phase_number: int) -> Path` — under the config's build-state directory (mirrors pr-review's `XDG_DATA`-style convention), keyed by repo slug + branch.
+- `resume_state_path(config, repo: str, branch: str) -> Path` — `config.build.state_dir / repo.replace("/", "-") / branch / "resume_state.json"` (`state_dir` is Phase 01's `BuildConfig.state_dir` field, mirroring pr-review's `XDG_DATA`-style convention), keyed by repo slug + branch. Callers pass `branch_name(phase)` (Phase 07's `agent_runner.py`) for `branch`.
 - `load_resume_state(path) -> ResumeState | None` / `save_resume_state(path, state) -> None` — plain JSON round-trip; `load` returns `None` (not an error) when no record exists — the normal case for a phase's first run.
 - Callers check `load_resume_state` before calling `pr_create`; call `save_resume_state` immediately after a successful `pr_create`; the record is left in place until the phase merges — no explicit cleanup step required, since a merged phase's resume record is never consulted again.
 
