@@ -10,9 +10,9 @@ end to end: from a high-level idea to merged code. It has two halves. `plan` (Fe
 high-level, singular system prompt or product goal into exhaustive, validated, deterministic
 technical requirements, then recursively breaks those requirements down into chunks (§4) —
 formally, an `unfoldr`-style corecursion (a generate-and-split process that keeps recursing until
-each piece is small enough to stop on; §7.2 step 6 gives it a precise definition) — so a feature
-space gets explored and edge cases get mapped *before* a single line of application code is
-generated. `build` (Feature B, §8) then executes the resulting phase corpus — the same tool, carried
+each piece is small enough to stop on, or a depth cap is hit and the oversized chunk is flagged for
+human review instead; §7.2 step 6 gives it a precise definition) — so a feature space gets explored
+and edge cases get mapped *before* a single line of application code is generated. `build` (Feature B, §8) then executes the resulting phase corpus — the same tool, carried
 through to the code it planned for (§11 #8).
 
 This is risk mitigation, not risk removal: `plan`'s rigor is meant to prevent rework and an agent
