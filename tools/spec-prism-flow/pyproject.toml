@@ -1,0 +1,104 @@
+[project]
+name = "spec-prism-flow"
+version = "0.1.0"
+description = "Specification-driven planning and execution engine: turns a rough idea into agent-sized phase files, then executes them safely against a coding-agent backend"
+authors = [{ name = "Alexei Diaz", email = "alexei.eleusis@gmail.com" }]
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["python", "agents", "spec-driven-development", "code-generation"]
+requires-python = ">=3.11"
+dependencies = ["click>=8.1"]
+
+[project.urls]
+Homepage = "https://alexeieleusis.github.io/spec-prism-flow/"
+Repository = "https://github.com/alexeieleusis/spec-prism-flow"
+Documentation = "https://alexeieleusis.github.io/spec-prism-flow/"
+
+[project.scripts]
+spec-prism-flow = "spec_prism_flow.cli:cli"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pre-commit>=4.5.1",
+    "tox-uv>=1.33.4",
+    "deptry>=0.25.1",
+    "ty>=0.0.24",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.15.7",
+    "zensical>=0.0.26",
+    "mkdocstrings-python>=1.0.3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["spec_prism_flow"]
+
+[tool.ty.environment]
+python = "./.venv"
+python-version = "3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+fix = true
+
+[tool.ruff.lint]
+select = [
+    # flake8-2020
+    "YTT",
+    # flake8-bandit
+    "S",
+    # flake8-bugbear
+    "B",
+    # flake8-builtins
+    "A",
+    # flake8-comprehensions
+    "C4",
+    # flake8-debugger
+    "T10",
+    # flake8-simplify
+    "SIM",
+    # isort
+    "I",
+    # mccabe
+    "C90",
+    # pycodestyle
+    "E", "W",
+    # pyflakes
+    "F",
+    # pygrep-hooks
+    "PGH",
+    # pyupgrade
+    "UP",
+    # ruff
+    "RUF",
+    # tryceratops
+    "TRY",
+]
+ignore = [
+    # LineTooLong
+    "E501",
+    # DoNotAssignLambda
+    "E731",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+[tool.ruff.format]
+preview = true
+
+[tool.coverage.report]
+skip_empty = true
+
+[tool.coverage.run]
+branch = true
+source = ["spec_prism_flow"]
