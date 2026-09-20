@@ -11,9 +11,9 @@ requires-python = ">=3.11"
 dependencies = ["click>=8.1"]
 
 [project.urls]
-Homepage = "https://alexeieleusis.github.io/spec-prism-flow/"
-Repository = "https://github.com/alexeieleusis/spec-prism-flow"
-Documentation = "https://alexeieleusis.github.io/spec-prism-flow/"
+Homepage = "https://alexeieleusis.github.io/dotharness/"
+Repository = "https://github.com/alexeieleusis/dotharness"
+Documentation = "https://alexeieleusis.github.io/dotharness/"
 
 [project.scripts]
 spec-prism-flow = "spec_prism_flow.cli:cli"
