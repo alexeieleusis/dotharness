@@ -30,7 +30,7 @@ Ports `vibe_heal_runner.py`'s `_run`/`scan`/`post`/`fingerprints_from_report`/`s
 ## Manual test checklist
 - Run `uv run pytest tests/build/test_harness_integration.py tests/build/test_vibe_heal_integration.py -v` and confirm all cases above pass, including both no-op-when-disabled assertions.
 - With `config.review.enabled = False`, call `self_review` in a scratch script and confirm (e.g. via a monkeypatched `subprocess.run` that raises if called) that no subprocess is spawned.
-- With `config.vibe_heal.enabled = True` and a mocked `vibe-heal` binary, call `scan` and confirm the constructed command includes explicit `--report-file`/`--env-file`/`--base-branch`/`--pr` arguments.
+- With `config.vibe_heal.enabled = True` and a mocked `vibe-heal` binary, call `scan` and confirm the constructed command includes explicit `--report-file`/`--env-file` arguments.
 - Feed `fingerprints_from_report` a fixture report mixing `on_changed_line=True` and `False` issues and confirm only the `True` ones are included.
 - Confirm no unhandled exceptions appear in any of the above.
 
