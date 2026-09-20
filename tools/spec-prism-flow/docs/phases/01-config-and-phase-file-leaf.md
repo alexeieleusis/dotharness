@@ -20,8 +20,8 @@ Excerpt, chunk A-1's mini-requirements doc §7 (Detailed functional requirements
 A per-target-project TOML, analogous to `.harness.toml`, with these sections and required-vs-optional fields:
 ```toml
 [agent]
-backend = "claude"          # "claude" or "opencode"; required, no default guessed silently — but "claude" is
-                             # explicitly named as the resolved default (§10), so absence of this key is not an error.
+backend = "claude"          # "claude" or "opencode"; defaults to "claude" when the key is absent (§10) — a present
+                             # but invalid value (anything other than "claude"/"opencode") is a ConfigError.
 
 [plan]
 workspace_dir = "docs"                    # required — where 00-overview.md/requirements.md/OPEN_QUESTIONS.md live
@@ -40,7 +40,7 @@ command = "vibe-heal"
 commands = ["pnpm build", "pnpm lint", "pnpm test"]  # required if build.workers ever consumed; empty list is valid (no gate)
 workers = 1
 ```
-`plan.workspace_dir` and `plan.phase_dir` are **required, no implicit default** — per §11 #4's resolution that the tool "never assumes it can create a `docs/` tree," an absent value is a `ConfigError`, not a fallback to `"docs"`. `agent.backend` must be one of `"claude"`/`"opencode"`; any other value is a `ConfigError` (mirrors pr-review's backend validation exactly). Dataclasses: `AgentConfig`, `PlanConfig`, `ReviewConfig`, `VibeHealConfig`, `BuildConfig`, composed into one `SpecPrismFlowConfig`. `load_config(path: Path) -> SpecPrismFlowConfig` is the sole entry point; a missing config file is a `ConfigError`, not a default-config fallback.
+`plan.workspace_dir` and `plan.phase_dir` are **required, no implicit default** — per §11 #4's resolution that the tool "never assumes it can create a `docs/` tree," an absent value is a `ConfigError`, not a fallback to `"docs"`. `agent.backend` defaults to `"claude"` when the `[agent]` section or the `backend` key is absent; when present, it must be one of `"claude"`/`"opencode"`, and any other value is a `ConfigError` (mirrors pr-review's backend validation exactly). Dataclasses: `AgentConfig`, `PlanConfig`, `ReviewConfig`, `VibeHealConfig`, `BuildConfig`, composed into one `SpecPrismFlowConfig`. `load_config(path: Path) -> SpecPrismFlowConfig` is the sole entry point; a missing config file is a `ConfigError`, not a default-config fallback.
 
 **Open decision (flagged at the corpus tree-review checkpoint, not yet resolved — implement with these two fields included, since two sibling phases depend on them):**
 - `BuildConfig` needs a `max_retry_cycles: int` field (default 3), consumed by Phase 06's `RetryBudget`.
@@ -67,8 +67,8 @@ workers = 1
 Pure functions, no I/O: `check_file_scope(paths: list[str]) -> SizingResult` — bands: `in_band` true for 5–10, `over_ceiling` true above 15 (hard ceiling), otherwise flagged-but-not-failed for 11–15 or under 5. `check_word_count(text: str) -> SizingResult` — `in_band` true for 500–1500; `SizingResult` also carries the raw count and a `note` field populated when the count falls outside the full observed Neighboku range (532–2100), for a human-reviewable flag rather than a hard failure. Both are advisory: callers decide what to do with an out-of-band result — this module never itself raises/blocks on a sizing violation.
 
 ## Acceptance criteria
-- `load_config` raises `ConfigError` naming the specific missing/invalid field for: a missing config file, a missing `repo`-equivalent required field, `plan.workspace_dir`/`plan.phase_dir` absent, or `agent.backend` set to anything other than `"claude"`/`"opencode"`.
-- `load_config` never silently defaults `plan.workspace_dir`/`plan.phase_dir` — both are required.
+- `load_config` raises `ConfigError` naming the specific missing/invalid field for: a missing config file, a missing `repo`-equivalent required field, `plan.workspace_dir`/`plan.phase_dir` absent, or `agent.backend` present but set to anything other than `"claude"`/`"opencode"`.
+- `load_config` never silently defaults `plan.workspace_dir`/`plan.phase_dir` — both are required. `agent.backend` is the one exception: when the `[agent]` section or `backend` key is absent, `AgentConfig.backend` resolves to `"claude"` with no error.
 - `BuildConfig` includes `max_retry_cycles: int` (default 3); `ReviewConfig`/`VibeHealConfig` include a tool-dir path field each; a `[harness]` section includes `knowledge_dir` (default `~/.harness/knowledge`).
 - `parse_phase_file` round-trips through `render_phase_file` byte-for-byte for a well-formed five-section file, and raises `PhaseFileError` for a file missing any of the five headers, with headers reordered, or with an extra unexpected `##` section.
 - `phase_file_name(1, "config-and-phase-file")` returns `"01-config-and-phase-file-leaf.md"`; the exposed regex matches that filename and rejects a filename lacking the `-leaf` suffix.
@@ -83,6 +83,7 @@ Pure functions, no I/O: `check_file_scope(paths: list[str]) -> SizingResult` —
 - Run `uv run pytest tests/test_graph.py -v` and confirm all four `validate_graph` violation types plus the valid-graph pass.
 - Run `uv run pytest tests/test_sizing.py -v` and confirm in-band/out-of-band/over-ceiling classification.
 - Manually construct a minimal `.spec-prism-flow.toml` on disk and confirm `load_config` loads it without error; then delete `plan.workspace_dir` from it and confirm `load_config` raises a `ConfigError` naming that field.
+- Remove the `[agent]` section entirely from a minimal config and confirm `load_config` succeeds with `AgentConfig.backend == "claude"`; then set `backend = "bogus"` and confirm `load_config` raises a `ConfigError` naming `agent.backend`.
 - Confirm no unhandled exceptions or stack traces appear in any of the above — every error path surfaces a clean, named `ConfigError`/`PhaseFileError`.
 
 ## Depends on
