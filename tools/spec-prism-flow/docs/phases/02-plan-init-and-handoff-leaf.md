@@ -24,9 +24,9 @@ Excerpt, chunk A-2-1's mini-requirements doc §7 (Detailed functional requiremen
 - Re-running `plan init` on a workspace that already has `init_manifest.json` overwrites it after a `click.confirm` prompt (unless `--yes`), matching pr-review's `state reset` confirm-by-default pattern — never a silent overwrite.
 
 ### 7.2 Hand-off primitive (`spec_prism_flow/handoff.py`)
-- `run_handoff(prompt_text: str, workspace_dir: Path, stage_name: str) -> str`:
+- `run_handoff(prompt_text: str, workspace_dir: Path, stage_name: str, output_filename: str | None = None) -> str`:
   1. Writes `prompt_text` to `workspace_dir/{stage_name}_prompt.md`.
-  2. Computes the expected output path `workspace_dir/{stage_name}_output.md`.
+  2. Computes the expected output path `workspace_dir/{output_filename}` if `output_filename` is given, else `workspace_dir/{stage_name}_output.md`. Callers whose required output has a fixed name (e.g. Phase 03's `00-overview.md`/`requirements.md`) pass `output_filename` explicitly rather than renaming after the fact.
   3. Prints both paths to the console (`click.echo`).
   4. Attempts `pbcopy`-style clipboard copy of the prompt path (best-effort; catches and logs `FileNotFoundError`/non-zero exit, never raises).
   5. If `$TMUX` is set in the environment, attempts `tmux load-buffer -` (piping the prompt path) to copy it into the current tmux paste buffer; same best-effort handling.
