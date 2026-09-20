@@ -1,22 +1,24 @@
 # Spec Prism Flow — Vision & Requirements (draft)
 
-> The tool was drafted under the working name "phaseforge", briefly considered "Spec Prism," and is
-> now named **Spec Prism Flow** (§11's open decisions #1 and #8 are resolved — see §0).
+> This document uses the tool's resolved name, **Spec Prism Flow**, throughout (see §11 item 1 for
+> the naming history).
 
 ## 0. Purpose / origin
 
 **Spec Prism Flow** is an engine for Specification-Driven Development for autonomous agents, run
-end to end: from a high-level idea to merged code. Its `plan` half (Feature A, §7) turns a
-high-level, singular system prompt or product goal into exhaustive, deeply validated, deterministic
-technical requirements — framing requirement generation as an algebraic data synthesis task, the
-`unfoldr`-style corecursion that drives `decompose` (§7.2 step 6) — so a feature space gets explored
-and edge cases get mapped *before* a single line of application code is generated. That phrasing
-names what `plan`'s rigor is trying to prevent — rework, or an agent stalling on ambiguity in the
-middle of an implementation — not a claim that ambiguity is eliminated (impossible; G3 already
-commits to surfacing what can't be resolved rather than pretending otherwise) or that the tool's
-scope stops short of execution. This is risk mitigation, not risk removal. Its `build` half
-(Feature B, §8) is what actually executes the resulting phase corpus — the same tool, carried
+end to end: from a high-level idea to merged code. It has two halves. `plan` (Feature A, §7) turns a
+high-level, singular system prompt or product goal into exhaustive, validated, deterministic
+technical requirements, then recursively breaks those requirements down into chunks (§4) —
+formally, an `unfoldr`-style corecursion (a generate-and-split process that keeps recursing until
+each piece is small enough to stop on; §7.2 step 6 gives it a precise definition) — so a feature
+space gets explored and edge cases get mapped *before* a single line of application code is
+generated. `build` (Feature B, §8) then executes the resulting phase corpus — the same tool, carried
 through to the code it planned for (§11 #8).
+
+This is risk mitigation, not risk removal: `plan`'s rigor is meant to prevent rework and an agent
+stalling on ambiguity mid-implementation — not to eliminate ambiguity outright, and not to imply
+`build` sits outside the tool's scope. Where ambiguity genuinely can't be resolved, G3 has the tool
+surface it as an explicit open decision instead of guessing.
 
 This tool generalizes a pattern first proven in the [`agentic-neighboku-lensflow`](https://github.com/alexeieleusis/agentic-neighboku-lensflow)
 repo's [`docs/neighboku-ai-rebuild/`](https://github.com/alexeieleusis/agentic-neighboku-lensflow/tree/main/docs/neighboku-ai-rebuild/)
@@ -94,16 +96,24 @@ once for a single project.
 
 ## 4. Glossary
 
-- **Chunk.** A named sub-scope of `requirements.md` — the seed `decompose` (§7.2 step 6) operates
-  on. Every chunk carries a rough file-scope estimate and a parent path (e.g. `A`, then `A-1`,
-  `A-1-1`, ...); the root seed is the whole document. A chunk is either a leaf, or it gets split
-  into 2–4 named child chunks that become the next seeds in the recursion.
+This glossary covers only terms whose plain-language meaning could be mistaken for something else
+in context; most process-specific vocabulary is defined once, at the point in §7.2 where it's
+introduced.
+
+- **Chunk.** A named sub-scope of `requirements.md` that `decompose` (§7.2 step 6) operates on —
+  when passed as input to the generator, the same chunk is also called a **seed**. Every chunk
+  carries a rough file-scope estimate and a parent path (e.g. `A`, then `A-1`, `A-1-1`, ...); the
+  root seed is the whole document. A chunk is either a leaf, or it gets split into 2–4 named child
+  chunks that become the next seeds in the recursion.
 - **Leaf.** A chunk for which running `requirements-doc-drafting-prompt.md`'s elicitation process
   would already produce a requirements doc for an already-correctly-scoped task — its own
   Feature/component-breakdown section comes back trivial (one feature, nothing left to split) and
   it fits the sizing bands (§9, derived from G2). Reaching a leaf is the unfold's termination signal
   (§7.2 step 6); a leaf becomes exactly one phase file (§6), drafted by `draft-phases` (§7.2 step 7).
   A leaf is always a terminal node of the phase tree, never an internal one.
+- **Generator.** The per-chunk agent call `decompose` (§7.2 step 6) makes — not a code generator or
+  a language-level generator function — that maps a chunk to either a leaf (termination) or a set of
+  child chunks (recursion continues). Defined formally, with its type signature, in §7.2 step 6.
 
 ## 5. The two features, at a glance
 
@@ -396,15 +406,15 @@ gate, §11 #2**) → merge. In parallel mode this pipeline runs once per concurr
   `merge_gates` should run, and `build`'s worker count (default 1 — sequential; >1 switches
   `track_runner` into parallel mode, §8).
 
-## 11. Open decisions log
+## 11. Decisions log
 
-Flagged explicitly, per the same discipline Neighboku's `requirements.md` §8 used — these should be
-resolved by a human before or during Spec Prism Flow's own implementation, not decided unilaterally
-by an agent building it:
+Flagged explicitly, per the same discipline Neighboku's `requirements.md` §8 used — these were
+resolved by a human before or during Spec Prism Flow's own implementation, rather than decided
+unilaterally by an agent building it:
 
-1. ~~**Tool name.**~~ **Resolved:** the tool is named **Spec Prism Flow** (§0), package/CLI name
-   `spec-prism-flow`. Earlier working names "phaseforge" and "Spec Prism" are retained only in this
-   document's own history/staging notes.
+1. ~~**Tool name.**~~ **Resolved:** the tool is named **Spec Prism Flow**, package/CLI name
+   `spec-prism-flow`. Earlier working names — "phaseforge," then briefly "Spec Prism" — were
+   discarded during drafting and are recorded here only as history.
 2. ~~**Manual-test-checklist gate strength.**~~ **Resolved:** advisory by default (agent proceeds,
    checklist is logged but not enforced), with a `--strict` flag switching it to a hard, blocking
    merge gate (§3, §8).
