@@ -51,8 +51,16 @@
       "01-config-and-phase-file-leaf"
     ],
     [
+      "06-build-safety-rails-leaf",
+      "05-plan-draft-phases-and-review-leaf"
+    ],
+    [
       "07-build-agent-runner-leaf",
       "01-config-and-phase-file-leaf"
+    ],
+    [
+      "07-build-agent-runner-leaf",
+      "06-build-safety-rails-leaf"
     ],
     [
       "08-build-pr-lifecycle-leaf",
@@ -71,12 +79,20 @@
       "06-build-safety-rails-leaf"
     ],
     [
+      "09-build-static-analysis-review-integration-leaf",
+      "08-build-pr-lifecycle-leaf"
+    ],
+    [
       "10-build-manual-test-and-completion-log-leaf",
       "01-config-and-phase-file-leaf"
     ],
     [
       "10-build-manual-test-and-completion-log-leaf",
       "06-build-safety-rails-leaf"
+    ],
+    [
+      "10-build-manual-test-and-completion-log-leaf",
+      "09-build-static-analysis-review-integration-leaf"
     ],
     [
       "11-build-phase-run-orchestrator-leaf",
