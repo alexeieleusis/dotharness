@@ -1,16 +1,17 @@
-# Prompt: Draft an Ideal Requirements Document
+# Prompt: Draft a Requirements Document
 
-> Extracted from `phaseforge-requirements-draft.md` §5–6.2 — that draft is itself an example of the
-> output this prompt produces. Paste this whole file into a coding session, followed by a rough
-> brief (idea, existing code, conventions doc, reference links), to drive drafting of a project's
-> `requirements.md`. This doc is one level up from phase files / user stories: it is the
-> single source of truth those later, smaller work orders will quote from — not the work order
-> itself.
+> Originally extracted from an early draft of what is now `spec-prism-flow/docs/requirements.md`,
+> which remains a live example of the output this prompt produces (that document's own renumbering
+> since extraction means the original section locator no longer maps cleanly, so it's omitted here
+> rather than guessed). Paste this whole file into a coding session, followed by a rough brief (idea,
+> existing code, conventions doc, reference links), to drive drafting of a project's
+> `requirements.md`. This doc is one level up from phase files / user stories: it is the single
+> source of truth those later, smaller work orders will quote from — not the work order itself.
 
 ## Your task
 
 Turn a rough, possibly ambiguous brief into a requirements document precise enough that a later
-process can carve it into small, independently implementable work items (phases, tickets, user
+process can carve it into small, independently implementable work orders (phases, tickets, user
 stories) without needing to re-derive intent, re-ask settled questions, or guess at anything the
 brief left open. You are not writing prose for a human to admire — you are writing the document a
 downstream agent (or engineer) will quote from verbatim. Every ambiguity you cannot resolve from
@@ -19,8 +20,8 @@ the brief becomes an explicit, answerable question — never a silent assumption
 ## Required structure
 
 Use these sections, in this order. Omit a section only if it is genuinely inapplicable (say so
-explicitly rather than leaving a gap) — the closer this doc mirrors it, the more usable everything
-downstream is.
+explicitly rather than leaving a gap) — the closer this doc mirrors this structure, the more usable
+everything downstream is.
 
 1. **Purpose / origin.** Why this document exists and what it descends from: a prior pattern being
    generalized, a reference implementation, a competitor, a rough idea with no reference at all.
@@ -48,12 +49,12 @@ downstream is.
 
 7. **Detailed functional requirements, section by section.** This is the load-bearing part of the
    document. For each functional area:
-   - State behavior specifically enough to quote **verbatim** into a smaller downstream work item
+   - State behavior specifically enough to quote **verbatim** into a smaller downstream work order
      — a later reader should never need to open this document again once they have their excerpt.
    - Name concrete things precisely: exact file/hook/command names, exact CLI subcommands, exact
      data shapes — never "follow conventions" or "handle appropriately."
-   - Where a boundary cuts across this section (part of it belongs to a different downstream unit
-     of work), say so explicitly, the way you'd carve a phase's scope.
+   - Where a boundary cuts across this section (part of it belongs to a different downstream work
+     order), say so explicitly, the way you'd carve a phase's scope.
    - Surface known ambiguities, discrepancies, or "don't fix this" traps inline, with an explicit
      instruction not to unilaterally resolve them.
 
@@ -70,16 +71,16 @@ downstream is.
 
 11. **Open decisions log.** A numbered list of every question you could not resolve from the brief
     alone, each one phrased as a concrete, answerable question (not "TBD" or a vague concern) —
-    with enough context that a human can answer it without re-reading the whole document. This is
-    the single most important section for iterative refinement: an unresolved, flagged question is
-    a valid, honest terminal state — never let one get silently dropped or silently guessed away.
+    with enough context that a human can answer it without re-reading the whole document. An
+    unresolved, flagged question is a valid, honest terminal state for this section — track it here
+    rather than letting it disappear.
 
 12. **Next step.** What happens immediately after this document is approved — concretely, not "then
     we build it."
 
 ## Properties every version of this document must have
 
-- **Verbatim-quotable.** Anything a downstream work item needs, it should be able to copy-paste
+- **Verbatim-quotable.** Anything a downstream work order needs, it should be able to copy-paste
   from here rather than reference-and-hope. Write for that copy-paste, not for narrative flow.
 - **ID'd and traceable.** Goals, phases, decisions — number them so later documents can cite an ID
   instead of re-describing intent, and so a reviewer can check every numbered item got addressed
