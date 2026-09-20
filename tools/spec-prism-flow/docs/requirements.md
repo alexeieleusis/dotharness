@@ -233,10 +233,15 @@ signals the stage is done. Expected to iterate if this proves too manual in prac
      becoming a new seed the traversal recurses into next.
    - **Trivial-breakdown deadlock:** the generator can judge a chunk "one feature" — nothing to
      split into — while that chunk still fails the sizing bands (§9). This is an accepted risk, not
-     a solved problem (§9): when it happens, `decompose` re-runs the generator on that same chunk to
-     force a new leaf, splicing it into the DFS order immediately before whatever chunk would
-     otherwise follow, rather than halting the run. Each occurrence is logged (§9, §11 #6) — no
-     automatic tuning of the generator prompt or sizing bands in v1.
+     a solved problem (§9): when it happens, `decompose` re-runs the generator on that same chunk
+     with an amended prompt — appending an explicit "you already judged this trivial once; force a
+     split anyway" instruction, since re-running the unaltered prompt against unchanged input would
+     likely reproduce the same verdict — to force a new leaf, splicing it into the DFS order
+     immediately before whatever chunk would otherwise follow, rather than halting the run. This
+     forced-split retry is capped at one attempt per chunk, matching the **Termination safeguard**
+     two bullets below: if the retry still comes back trivial, the chunk is flagged for human review
+     rather than retried indefinitely. Each occurrence (retry or escalation) is logged (§9, §11 #6) —
+     no automatic tuning of the generator prompt or sizing bands in v1.
    - **Depth-first, asymmetric by design:** each branch bottoms out independently — `A-2` can
      terminate as a single leaf while `A-1` recurses three levels deep (`A-1-1-1`, `A-1-1-2`, ...)
      and `A-3` bottoms out at two. The stopping condition is purely "does this chunk satisfy the
@@ -347,10 +352,11 @@ gate, §11 #2**) → merge. In parallel mode this pipeline runs once per concurr
 - **Trivial-breakdown deadlock is an accepted risk, not a solved problem.** The generator's
   Feature/component-breakdown judgment (one feature vs. several) and the sizing bands above are
   different axes and can disagree — a chunk can be genuinely "one feature" and still oversized.
-  §7.2 step 6 describes the mitigation (re-run to splice in an extra leaf). Each occurrence is
-  logged (§11 #6, resolved) — no automatic feedback loop into the generator prompt or the sizing
-  bands for v1; that log is for a human to skim later if the pattern turns out to be common enough
-  to warrant tuning either one.
+  §7.2 step 6 describes the mitigation: one prompt-amended retry to force a split, escalating to
+  human review on a second trivial verdict rather than retrying indefinitely. Each occurrence
+  (retry or escalation) is logged (§11 #6, resolved) — no automatic feedback loop into the generator
+  prompt or the sizing bands for v1; that log is for a human to skim later if the pattern turns out
+  to be common enough to warrant tuning either one.
 - **Recursive elicitation favors self-containment over inherited context.** Every `decompose`
   generator call (§7.2 step 6) is deliberately scoped to only the chunk's own requirements slice,
   never the full parent document — trading a possible extra clarification iteration for a leaf
