@@ -19,18 +19,18 @@ Excerpt, chunk A-3-3-1's mini-requirements doc §7 (Detailed functional requirem
 - `pr_merge(pr_number: int) -> None` — `gh pr merge {pr_number} --squash`; squash is the fixed strategy (no config-driven branch — Phase 01's `BuildConfig` has no merge-strategy field), and it raises `PRNotMergeableError` (a `CommandError`-family error, `next_command` hint = `gh pr view {pr_number}`) on a non-zero exit rather than retrying internally.
 
 ### 7.2 `spec_prism_flow/build/resume_state.py`
-- `ResumeState` frozen dataclass: `repo: str`, `branch: str`, `pr_number: int`, `pr_url: str`.
+- `ResumeState` frozen dataclass: `repo: str`, `branch: str`, `pr_number: int`, `pr_url: str`, `cycle_index: int`.
 - `resume_state_path(config, repo: str, branch: str) -> Path` — `config.build.state_dir / repo.replace("/", "-") / branch / "resume_state.json"` (`state_dir` is Phase 01's `BuildConfig.state_dir` field, mirroring pr-review's `XDG_DATA`-style convention), keyed by repo slug + branch. Callers pass `branch_name(phase)` (Phase 07's `agent_runner.py`) for `branch`.
 - `load_resume_state(path) -> ResumeState | None` / `save_resume_state(path, state) -> None` — plain JSON round-trip; `load` returns `None` (not an error) when no record exists — the normal case for a phase's first run.
 - `clear_resume_state(path) -> None` — deletes the resume-state file if present; a no-op (not an error) when no file exists at `path`.
-- Callers check `load_resume_state` before calling `pr_create`; call `save_resume_state` immediately after a successful `pr_create`; the record stays in place across the iterate loop so a crash mid-loop still resumes against the same open PR. Once Phase 11 completes a successful `pr_merge`, it calls `clear_resume_state` on that same path — a merged phase must not leave a resume record behind, since a later `--resume` run would otherwise find a stale record for an already-merged PR and wrongly treat the phase as still open.
+- Callers check `load_resume_state` before calling `pr_create`; call `save_resume_state` immediately after a successful `pr_create`, with `cycle_index=0`; the record stays in place across the iterate loop so a crash mid-loop still resumes against the same open PR. Phase 11 re-saves the same record with an updated `cycle_index` after each iterate-loop cycle, so a crash mid-loop resumes the `RetryBudget` count from where it left off rather than resetting it — this is the mechanism that keeps a crash-and-resume sequence from silently defeating the bounded-retries guarantee (Phase 06 §9 item 8). Once Phase 11 completes a successful `pr_merge`, it calls `clear_resume_state` on that same path — a merged phase must not leave a resume record behind, since a later `--resume` run would otherwise find a stale record for an already-merged PR and wrongly treat the phase as still open.
 
 ## Acceptance criteria
 - `pr_create` returns a `PRHandle` with the correct number/URL parsed from `gh pr create`'s output.
 - `pr_create` invokes `gh` via an argv list (`shell=False`); a title/body containing shell metacharacters (backticks, `$(...)`, quotes, newlines) is passed through as literal text and never executed.
 - `unresolved_thread_count` correctly paginates a multi-page GraphQL response (verified with a mocked multi-page fixture) and returns the exact count of `isResolved: false` threads.
 - `pr_merge` raises a named `CommandError`-family exception with a `next_command` hint on a non-zero `gh pr merge` exit, and never retries internally.
-- `load_resume_state` returns `None` (not an exception) when no resume file exists at the given path; `save_resume_state`/`load_resume_state` round-trip a `ResumeState` correctly.
+- `load_resume_state` returns `None` (not an exception) when no resume file exists at the given path; `save_resume_state`/`load_resume_state` round-trip a `ResumeState`, including `cycle_index`, correctly.
 - `clear_resume_state` removes an existing resume-state file and is a no-op when the file is already absent; after clearing, `load_resume_state` on that path returns `None`.
 - `resume_state_path` is keyed by repo slug + branch, so two different phases' resume records never collide.
 - `uv run pytest` passes for both test files (subprocess/`gh` calls mocked); `ruff check`/`ty` pass with no new violations.
