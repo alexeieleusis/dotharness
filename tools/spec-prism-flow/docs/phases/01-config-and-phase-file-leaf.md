@@ -60,7 +60,7 @@ workers = 1
 1. Every phase file has exactly one corresponding graph node and vice versa (no orphans either direction).
 2. The graph is acyclic (report the cycle's node sequence if not).
 3. Disjoint-scope invariant: for any two nodes with no path between them in the graph, their `PhaseFile.scope` lists must not share any entry — violation names the two leaves and the overlapping entry.
-4. Linear-chain coverage: for every consecutive pair in DFS numeric order (phase *N*'s `Depends on` naming phase *N−1*), the corresponding `[N, N−1]` edge must be present in `graph.edges` — violation names the missing edge.
+4. Linear-chain coverage: for each phase *N* > 1, extract phase-number references from its `Depends on` free text via the regex `Phase\s+(\d+)` (case-insensitive); if *N*−1 appears among the extracted numbers, the corresponding `[N, N−1]` edge must be present in `graph.edges` — violation names the missing edge. The check fires only when `Depends on` actually names *N*−1 — it does not assume every phase depends on its numeric predecessor, since phases starting an independent feature (§7.3 item 3) legitimately depend on a different phase number (e.g. the first phase of a second feature naming phase 01, not its own numeric predecessor).
 (Item 4's caller is `plan review`, owned by a later phase — this phase only supplies the check function.)
 
 ### 7.4 Sizing (`spec_prism_flow/sizing.py`)
