@@ -42,6 +42,7 @@ Excerpt, chunk A-2-1's mini-requirements doc §7 (Detailed functional requiremen
 - `plan init` writes `init_manifest.json` with resolved absolute paths for `brief`/`code`/`conventions` and a list for `links`; missing optional fields serialize as `null`/empty list, not omitted keys.
 - Re-running `plan init` against a workspace with an existing `init_manifest.json` prompts for confirmation (unless `--yes`) before overwriting; declining leaves the existing file untouched.
 - `run_handoff` writes the prompt file, prints both paths, attempts clipboard and (when `$TMUX` is set) tmux-buffer copy without raising on either failing, blocks on confirmation, and raises `HandoffError` (naming the expected path) if the output file doesn't exist when the human confirms.
+- A "no" answer to the `run_handoff` confirmation re-prompts the same confirmation (it is not a final decision); only a "yes" answer proceeds to checking for the output file.
 - Clipboard/tmux failures are logged but never propagate as exceptions out of `run_handoff`.
 - `uv run pytest` passes for all touched test files; `ruff check`/`ty` pass with no new violations.
 
@@ -50,6 +51,7 @@ Excerpt, chunk A-2-1's mini-requirements doc §7 (Detailed functional requiremen
 - From a scratch directory with a minimal `.spec-prism-flow.toml` and a `brief.md` file, run `spec-prism-flow plan init brief.md` and confirm `plan.workspace_dir/init_manifest.json` is created with the correct resolved path.
 - Re-run the same command and confirm a confirmation prompt appears before overwrite; decline it and confirm the file is unchanged.
 - Manually invoke `run_handoff` (e.g. via a small test script) and confirm the prompt/output paths print to console, and confirm behavior is correct both inside and outside a `tmux` session (best-effort tmux copy attempted only when `$TMUX` is set).
+- Manually invoke `run_handoff`, answer "no" once at the confirmation prompt, and confirm it re-prompts the same confirmation rather than raising or returning; then answer "yes" and confirm it proceeds to checking for the output file.
 - Confirm no unhandled exceptions or stack traces appear in any of the above — clipboard/tmux failures are caught and logged without raising (per §7.2 steps 4–5).
 
 ## Depends on
