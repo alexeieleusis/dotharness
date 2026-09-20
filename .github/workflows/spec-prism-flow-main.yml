@@ -1,23 +1,23 @@
-name: Main
+name: Spec Prism Flow Main
 
 on:
   push:
     branches:
       - main
     paths:
-      - "tools/pr-review/**"
-      - ".github/workflows/main.yml"
+      - "tools/spec-prism-flow/**"
+      - ".github/workflows/spec-prism-flow-main.yml"
       - ".github/actions/setup-python-env/**"
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - "tools/pr-review/**"
-      - ".github/workflows/main.yml"
+      - "tools/spec-prism-flow/**"
+      - ".github/workflows/spec-prism-flow-main.yml"
       - ".github/actions/setup-python-env/**"
 
 defaults:
   run:
-    working-directory: tools/pr-review
+    working-directory: tools/spec-prism-flow
 
 jobs:
   quality:
@@ -29,12 +29,12 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/pre-commit
-          key: pre-commit-${{ hashFiles('tools/pr-review/.pre-commit-config.yaml') }}
+          key: pre-commit-${{ hashFiles('tools/spec-prism-flow/.pre-commit-config.yaml') }}
 
       - name: Set up the environment
         uses: ./.github/actions/setup-python-env
         with:
-          working-directory: tools/pr-review
+          working-directory: tools/spec-prism-flow
 
       - name: Run checks
         run: make check
@@ -43,11 +43,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
       fail-fast: false
     defaults:
       run:
-        working-directory: tools/pr-review
+        working-directory: tools/spec-prism-flow
         shell: bash
     steps:
       - name: Check out
@@ -57,7 +57,7 @@ jobs:
         uses: ./.github/actions/setup-python-env
         with:
           python-version: ${{ matrix.python-version }}
-          working-directory: tools/pr-review
+          working-directory: tools/spec-prism-flow
 
       - name: Run tests
         run: uv run python -m pytest tests --cov --cov-config=pyproject.toml --cov-report=xml
@@ -80,8 +80,8 @@ jobs:
       - name: Set up the environment
         uses: ./.github/actions/setup-python-env
         with:
-          working-directory: tools/pr-review
+          working-directory: tools/spec-prism-flow
 
       - name: Check if documentation can be built
         run: uv run zensical build -s
-        working-directory: tools/pr-review
+        working-directory: tools/spec-prism-flow

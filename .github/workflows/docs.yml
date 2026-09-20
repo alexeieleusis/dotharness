@@ -33,6 +33,8 @@ jobs:
 
       - name: Set up the environment
         uses: ./.github/actions/setup-python-env
+        with:
+          working-directory: tools/pr-review
 
       - name: Build docs
         run: uv run zensical build -s
