@@ -115,4 +115,7 @@ def load_tree(path: Path) -> ChunkNode:
         data = json.loads(path.read_text())
     except json.JSONDecodeError as e:
         raise DecomposeError(f"Tree file is not valid JSON: {path}") from e  # noqa: TRY003
-    return node_from_dict(data)
+    try:
+        return node_from_dict(data)
+    except ChunkError as e:
+        raise DecomposeError(str(e)) from e

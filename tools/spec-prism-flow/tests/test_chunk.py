@@ -139,11 +139,24 @@ def test_load_tree_raises_on_invalid_json(tmp_path):
         load_tree(path)
 
 
-def test_load_tree_raises_chunk_error_on_hand_edited_node_missing_required_field(tmp_path):
+def test_load_tree_wraps_chunk_error_on_hand_edited_node_missing_required_field(tmp_path):
     path = tmp_path / "tree.json"
     path.write_text(json.dumps({"chunk": {"path": "a", "name": "a"}, "leaf_doc": "x"}))
 
-    with pytest.raises(ChunkError, match=r"missing required field.*file_scope_estimate"):
+    with pytest.raises(DecomposeError, match=r"missing required field.*file_scope_estimate"):
+        load_tree(path)
+
+
+def test_load_tree_wraps_chunk_error_on_hand_edited_node_with_two_variants_set(tmp_path):
+    root = ChunkNode(chunk=_chunk(), leaf_doc="the doc")
+    path = tmp_path / "tree.json"
+    write_tree(root, path)
+
+    data = node_to_dict(root)
+    data["escalation_reason"] = "hand-added by mistake"
+    path.write_text(json.dumps(data))
+
+    with pytest.raises(DecomposeError, match="exactly one"):
         load_tree(path)
 
 
