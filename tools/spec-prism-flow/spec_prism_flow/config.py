@@ -92,9 +92,9 @@ def load_config(path: Path) -> SpecPrismFlowConfig:
         raise ConfigError("plan.phase_dir is required")  # noqa: TRY003
     raw_conventions_path = p.get("conventions_path")
     plan = PlanConfig(
-        workspace_dir=Path(p["workspace_dir"]),
-        phase_dir=Path(p["phase_dir"]),
-        conventions_path=Path(raw_conventions_path) if raw_conventions_path else None,
+        workspace_dir=Path(p["workspace_dir"]).expanduser(),
+        phase_dir=Path(p["phase_dir"]).expanduser(),
+        conventions_path=Path(raw_conventions_path).expanduser() if raw_conventions_path else None,
     )
 
     r = data.get("review", {})
