@@ -88,6 +88,16 @@ def _parse_split_children(rest: str, chunk: Chunk) -> list[Chunk]:
                 f"Generator SPLIT child #{i} for chunk {chunk.path!r} missing required keys "
                 f"{_SPLIT_CHILD_KEYS}: {raw!r}"
             )
+        if (
+            not isinstance(raw["name"], str)
+            or not isinstance(raw["file_scope_estimate"], list)
+            or not all(isinstance(p, str) for p in raw["file_scope_estimate"])
+            or not isinstance(raw["requirements_slice"], str)
+        ):
+            raise DecomposeError(  # noqa: TRY003
+                f"Generator SPLIT child #{i} for chunk {chunk.path!r} has the wrong types for "
+                f"{_SPLIT_CHILD_KEYS}: {raw!r}"
+            )
         children.append(
             Chunk(
                 path=f"{chunk.path}-{i}",
