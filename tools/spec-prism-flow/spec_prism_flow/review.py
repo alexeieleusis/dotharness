@@ -76,7 +76,7 @@ def _check_section_coverage(requirements_text: str, phase_files: list[PhaseFile]
     combined_requirements = "\n".join(pf.requirements for pf in phase_files)
     violations = []
     for number, title in _parse_requirements_sections(requirements_text):
-        if f"§{number}" not in combined_requirements:
+        if not re.search(rf"§{re.escape(number)}(?![.\d])", combined_requirements):
             violations.append(f"requirements.md §{number} ({title}) is not referenced by any phase file")
     return violations
 
