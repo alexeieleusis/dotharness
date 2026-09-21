@@ -2,7 +2,7 @@ from pathlib import Path
 
 import click
 
-from spec_prism_flow import workspace
+from spec_prism_flow import overview_stage, requirements_stage, workspace
 from spec_prism_flow.config import ConfigError, load_config, resolve_config_path
 
 
@@ -38,6 +38,13 @@ def _require_readable_file(path_str: str, label: str) -> Path:
     return path
 
 
+def _load_cfg_or_raise(config_path_str: str | None):
+    try:
+        return load_config(resolve_config_path(config_path_str).resolve())
+    except ConfigError as e:
+        raise click.ClickException(str(e)) from e
+
+
 @cmd_plan.command("init")
 @click.argument("brief_path", type=click.Path())
 @click.option("--code", "code_path_str", default=None, type=click.Path(), help="Existing path to prior code.")
@@ -54,10 +61,7 @@ def plan_init(brief_path, code_path_str, conventions_path_str, links_text, confi
     conventions = _require_existing_path(conventions_path_str, "--conventions") if conventions_path_str else None
     links = [link.strip() for link in (links_text or "").split(",") if link.strip()]
 
-    try:
-        cfg = load_config(resolve_config_path(config_path_str).resolve())
-    except ConfigError as e:
-        raise click.ClickException(str(e)) from e
+    cfg = _load_cfg_or_raise(config_path_str)
 
     existing_manifest = workspace.manifest_path(cfg.plan.workspace_dir)
     if existing_manifest.exists() and not yes:
@@ -65,6 +69,49 @@ def plan_init(brief_path, code_path_str, conventions_path_str, links_text, confi
 
     written = workspace.init_workspace(cfg.plan.workspace_dir, brief, code, conventions, links)
     click.echo(f"Wrote {written}")
+
+
+@cmd_plan.command("draft-overview")
+@click.option("--config", "config_path_str", default=None, type=click.Path(), help="Config file to use.")
+@click.option("--yes", is_flag=True, default=False, help="Skip the overwrite-confirmation prompt.")
+def plan_draft_overview(config_path_str, yes):
+    """Hand off to an agent to draft 00-overview.md from init_manifest.json."""
+    cfg = _load_cfg_or_raise(config_path_str)
+
+    target_path = cfg.plan.workspace_dir / overview_stage.OVERVIEW_FILENAME
+    if target_path.exists() and not yes:
+        click.confirm(f"Overwrite existing {target_path}?", abort=True)
+
+    try:
+        overview_path, open_questions_path = overview_stage.run_draft_overview(cfg)
+    except overview_stage.OverviewError as e:
+        raise click.ClickException(str(e)) from e
+
+    click.echo(f"Wrote {overview_path}")
+    click.echo(f"Open questions: {open_questions_path}" if open_questions_path else "No open questions raised.")
+    click.echo(
+        "Edit OPEN_QUESTIONS.md (if present) or 00-overview.md directly, then run `plan draft-requirements` when ready."
+    )
+
+
+@cmd_plan.command("draft-requirements")
+@click.option("--config", "config_path_str", default=None, type=click.Path(), help="Config file to use.")
+@click.option("--yes", is_flag=True, default=False, help="Skip the overwrite-confirmation prompt.")
+def plan_draft_requirements(config_path_str, yes):
+    """Hand off to an agent to draft requirements.md from the approved overview."""
+    cfg = _load_cfg_or_raise(config_path_str)
+
+    target_path = cfg.plan.workspace_dir / requirements_stage.REQUIREMENTS_FILENAME
+    if target_path.exists() and not yes:
+        click.confirm(f"Overwrite existing {target_path}?", abort=True)
+
+    try:
+        requirements_path = requirements_stage.run_draft_requirements(cfg)
+    except requirements_stage.RequirementsError as e:
+        raise click.ClickException(str(e)) from e
+
+    click.echo(f"Wrote {requirements_path}")
+    click.echo("Review/edit requirements.md, then proceed to `plan decompose` when ready.")
 
 
 if __name__ == "__main__":
