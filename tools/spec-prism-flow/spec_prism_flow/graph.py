@@ -120,14 +120,14 @@ def _check_orphans(graph: Graph, phase_files: list[PhaseFile]) -> list[str]:
     return violations
 
 
-def _check_acyclic(graph: Graph) -> list[str]:
+def check_acyclic(graph: Graph) -> list[str]:
     cycle = _find_cycle(graph.edges, graph.nodes)
     if cycle is None:
         return []
     return [f"Graph contains a cycle: {' -> '.join(cycle)}"]
 
 
-def _check_disjoint_scope(graph: Graph, phase_files: list[PhaseFile]) -> list[str]:
+def check_disjoint_scope(graph: Graph, phase_files: list[PhaseFile]) -> list[str]:
     node_set = set(graph.nodes)
     scope_by_stem = {_stem(pf): set(pf.scope) for pf in phase_files}
     stems = sorted(stem for stem in scope_by_stem if stem in node_set)
@@ -175,7 +175,7 @@ def _check_linear_chain_coverage(graph: Graph, phase_files: list[PhaseFile]) -> 
 def validate_graph(graph: Graph, phase_files: list[PhaseFile]) -> list[str]:
     return [
         *_check_orphans(graph, phase_files),
-        *_check_acyclic(graph),
-        *_check_disjoint_scope(graph, phase_files),
+        *check_acyclic(graph),
+        *check_disjoint_scope(graph, phase_files),
         *_check_linear_chain_coverage(graph, phase_files),
     ]

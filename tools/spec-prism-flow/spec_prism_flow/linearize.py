@@ -5,13 +5,12 @@ from dataclasses import dataclass
 
 from spec_prism_flow.chunk import Chunk, ChunkNode
 from spec_prism_flow.errors import DecomposeError
-from spec_prism_flow.graph import Graph, validate_graph
+from spec_prism_flow.graph import Graph, check_acyclic, check_disjoint_scope
 from spec_prism_flow.phase_file import PhaseFile, phase_file_stem
 
 _SLUG_INVALID_CHARS = re.compile(r"[^a-z0-9-]+")
 
 _PLACEHOLDER_NOTE = "(drafted by `plan draft-phases`)"
-_DISJOINT_SCOPE_MARKER = "have no dependency path between them but both claim scope entry"
 
 # phase_file_name's "<NN>-<slug>-leaf.md" contract zero-pads to exactly two digits.
 _MAX_LEAVES = 99
@@ -110,11 +109,8 @@ def linearize(root: ChunkNode) -> LinearizationResult:
     derived_graph = Graph(nodes=stems, edges=edges)
 
     phase_files = [_synthetic_phase_file(leaf) for leaf in leaves]
-    violations = validate_graph(derived_graph, phase_files)
-    disjoint_scope_violations = [v for v in violations if _DISJOINT_SCOPE_MARKER in v]
-    if disjoint_scope_violations:
-        raise DecomposeError(
-            "Disjoint-scope violation(s) between unlinked leaves:\n" + "\n".join(disjoint_scope_violations)
-        )
+    violations = [*check_acyclic(derived_graph), *check_disjoint_scope(derived_graph, phase_files)]
+    if violations:
+        raise DecomposeError("Derived leaf graph failed validation:\n" + "\n".join(violations))
 
     return LinearizationResult(leaves=leaves, graph=derived_graph)
