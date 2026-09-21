@@ -52,6 +52,28 @@ def push_branch(clone: Path, branch: str, remote: str = "origin") -> None:
     _run(clone, "push", "--force-with-lease", "-u", remote, branch)
 
 
+def delete_remote_branch_if_exists(clone: Path, branch: str, remote: str = "origin") -> None:
+    """Deletes `remote`/`branch` if it exists. Used when a retried run_phase comes back
+    empty, so a stale branch (and any PR built from it) left behind by an earlier,
+    non-empty attempt doesn't keep pointing at an abandoned commit -- mirrors
+    checkout_fresh_branch's "always reset to a known-good state" philosophy on the
+    remote side too."""
+    result = subprocess.run(  # noqa: S603
+        ["git", "ls-remote", "--exit-code", "--heads", remote, branch],  # noqa: S607
+        cwd=clone,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 2:
+        return
+    if result.returncode != 0:
+        raise GitCommandError(
+            ["git", "ls-remote", "--exit-code", "--heads", remote, branch], result.returncode, result.stderr
+        )
+    _run(clone, "push", remote, "--delete", branch)
+
+
 def fetch_resync(clone: Path, branch: str, remote: str = "origin") -> None:
     """Force `clone` to exactly match `remote`/`branch`."""
     _run(clone, "fetch", remote, branch)

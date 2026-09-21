@@ -59,6 +59,7 @@ def run_phase(phase: PhaseFile, backend: AgentBackend, clone: Path, base_branch:
     git_ops.checkout_fresh_branch(clone, branch, base_branch)
     backend.invoke(build_prompt(phase), clone)
     if not git_ops.commit_all(clone, commit_message(phase)):
+        git_ops.delete_remote_branch_if_exists(clone, branch)
         return AgentRunResult(branch=branch, commit_sha=None, empty=True)
     git_ops.push_branch(clone, branch)
     return AgentRunResult(branch=branch, commit_sha=git_ops.head_sha(clone), empty=False)

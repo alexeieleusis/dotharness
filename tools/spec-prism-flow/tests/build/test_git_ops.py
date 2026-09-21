@@ -88,6 +88,35 @@ def test_push_branch_raises_git_command_error_on_failure(tmp_path, monkeypatch):
     assert exc_info.value.stderr == "rejected"
 
 
+def test_delete_remote_branch_if_exists_pushes_delete_when_branch_present(tmp_path, monkeypatch):
+    responses = [Mock(returncode=0, stdout="deadbeef\trefs/heads/phase-07-x\n", stderr=""), _ok()]
+    run_mock = Mock(side_effect=responses)
+    monkeypatch.setattr("subprocess.run", run_mock)
+
+    git_ops.delete_remote_branch_if_exists(tmp_path, "phase-07-x")
+
+    assert run_mock.call_args_list[0].args[0] == ["git", "ls-remote", "--exit-code", "--heads", "origin", "phase-07-x"]
+    assert run_mock.call_args_list[1].args[0] == ["git", "push", "origin", "--delete", "phase-07-x"]
+
+
+def test_delete_remote_branch_if_exists_does_nothing_when_branch_absent(tmp_path, monkeypatch):
+    run_mock = Mock(return_value=Mock(returncode=2, stdout="", stderr=""))
+    monkeypatch.setattr("subprocess.run", run_mock)
+
+    git_ops.delete_remote_branch_if_exists(tmp_path, "phase-07-x")
+
+    assert run_mock.call_count == 1
+
+
+def test_delete_remote_branch_if_exists_raises_git_command_error_on_ls_remote_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr("subprocess.run", Mock(return_value=Mock(returncode=128, stdout="", stderr="no such remote")))
+
+    with pytest.raises(GitCommandError) as exc_info:
+        git_ops.delete_remote_branch_if_exists(tmp_path, "phase-07-x")
+
+    assert exc_info.value.stderr == "no such remote"
+
+
 def test_fetch_resync_fetches_then_checks_out_dash_b_from_remote_branch(tmp_path, monkeypatch):
     run_mock = Mock(return_value=_ok())
     monkeypatch.setattr("subprocess.run", run_mock)

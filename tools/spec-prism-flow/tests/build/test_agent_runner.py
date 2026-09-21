@@ -108,15 +108,18 @@ def test_run_phase_returns_empty_result_without_pushing_when_commit_all_reports_
 
     push_mock = Mock()
     head_sha_mock = Mock()
+    delete_remote_branch_mock = Mock()
     monkeypatch.setattr(agent_runner.git_ops, "checkout_fresh_branch", Mock())
     monkeypatch.setattr(agent_runner.git_ops, "commit_all", Mock(return_value=False))
     monkeypatch.setattr(agent_runner.git_ops, "push_branch", push_mock)
     monkeypatch.setattr(agent_runner.git_ops, "head_sha", head_sha_mock)
+    monkeypatch.setattr(agent_runner.git_ops, "delete_remote_branch_if_exists", delete_remote_branch_mock)
 
     result = run_phase(phase, backend, tmp_path, "main")
 
     push_mock.assert_not_called()
     head_sha_mock.assert_not_called()
+    delete_remote_branch_mock.assert_called_once_with(tmp_path, "phase-07-build-agent-runner-leaf")
     assert result == AgentRunResult(branch="phase-07-build-agent-runner-leaf", commit_sha=None, empty=True)
 
 
