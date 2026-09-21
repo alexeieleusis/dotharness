@@ -13,6 +13,7 @@ from spec_prism_flow.build.errors import CommandError
 
 DEFAULT_TIMEOUT_SECONDS = 1800
 _GIT_TIMEOUT_SECONDS = 30
+_KILL_GRACE_SECONDS = 5
 _TMP_DIR = Path.home() / ".local/share/dotharness/tmp"
 
 
@@ -176,4 +177,5 @@ class ClaudeBackend:
     def _kill(proc: subprocess.Popen) -> None:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        proc.communicate()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.communicate(timeout=_KILL_GRACE_SECONDS)
