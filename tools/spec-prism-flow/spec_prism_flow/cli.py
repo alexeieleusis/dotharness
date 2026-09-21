@@ -2,7 +2,7 @@ from pathlib import Path
 
 import click
 
-from spec_prism_flow import decompose, overview_stage, requirements_stage, workspace
+from spec_prism_flow import decompose, draft_phases, overview_stage, requirements_stage, review, workspace
 from spec_prism_flow.config import ConfigError, load_config, resolve_config_path
 
 
@@ -140,6 +140,47 @@ def plan_decompose(config_path_str, depth_cap, yes):
     click.echo(f"Wrote {tree_path}")
     click.echo(f"Wrote {graph_path}")
     click.echo("Review the tree and graph, then proceed to `plan draft-phases` when ready.")
+
+
+@cmd_plan.command("draft-phases")
+@click.option("--config", "config_path_str", default=None, type=click.Path(), help="Config file to use.")
+def plan_draft_phases(config_path_str):
+    """Render each leaf of the approved decomposition tree into a `docs/phases/NN-name-leaf.md` file."""
+    cfg = _load_cfg_or_raise(config_path_str)
+
+    try:
+        result = draft_phases.run_draft_phases(cfg)
+    except draft_phases.DraftPhasesError as e:
+        raise click.ClickException(str(e)) from e
+
+    click.echo(f"{result.leaves_drafted} leaves drafted, {result.internal_nodes_skipped} internal nodes skipped.")
+    for path in result.written:
+        click.echo(f"Wrote {path}")
+    if result.outliers:
+        click.echo("Sizing outliers (flagged, not blocking):")
+        for outlier in result.outliers:
+            click.echo(f"  - {outlier}")
+    click.echo("Review the phase files, then run `plan review` when ready.")
+
+
+@cmd_plan.command("review")
+@click.option("--config", "config_path_str", default=None, type=click.Path(), help="Config file to use.")
+def plan_review(config_path_str):
+    """Run the four independent consistency checks over the drafted phase corpus."""
+    cfg = _load_cfg_or_raise(config_path_str)
+
+    try:
+        report = review.run_review(cfg)
+    except review.ReviewError as e:
+        raise click.ClickException(str(e)) from e
+
+    for check in report.checks:
+        click.echo(f"{check.name}: {'PASS' if check.passed else 'FAIL'}")
+        for violation in check.violations:
+            click.echo(f"  - {violation}")
+
+    if not report.all_passed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
