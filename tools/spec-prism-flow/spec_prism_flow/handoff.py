@@ -16,9 +16,12 @@ class HandoffError(Exception):
 
 def _run_best_effort(cmd: list[str], text: str, tool_name: str) -> None:
     try:
-        proc = subprocess.run(cmd, input=text.encode(), capture_output=True)  # noqa: S603
+        proc = subprocess.run(cmd, input=text.encode(), capture_output=True, timeout=3)  # noqa: S603
     except OSError:
         logger.warning("%s not found on PATH; skipping copy", tool_name)
+        return
+    except subprocess.TimeoutExpired:
+        logger.warning("%s timed out; skipping copy", tool_name)
         return
     if proc.returncode != 0:
         logger.warning("%s exited %d: %s", tool_name, proc.returncode, proc.stderr.decode("utf-8", errors="replace"))
