@@ -9,7 +9,13 @@ from spec_prism_flow.chunk import ChunkNode, load_tree
 from spec_prism_flow.config import SpecPrismFlowConfig
 from spec_prism_flow.decompose import TREE_FILENAME
 from spec_prism_flow.errors import DecomposeError
-from spec_prism_flow.phase_file import PHASE_FILE_NAME_PATTERN, PhaseFile, phase_file_name, render_phase_file
+from spec_prism_flow.phase_file import (
+    PHASE_FILE_NAME_PATTERN,
+    PhaseFile,
+    extract_list_items,
+    phase_file_name,
+    render_phase_file,
+)
 
 _HEADING_PATTERN = re.compile(r"^#{1,6}\s")
 _GOALS_HEADING_PATTERN = re.compile(r"^#{1,6}\s+.*\bgoals?\b", re.IGNORECASE)
@@ -50,25 +56,6 @@ def _collect_section_body(lines: list[str], heading_index: int) -> list[str]:
     return body
 
 
-def _extract_top_level_list_items(lines: list[str]) -> list[str]:
-    items: list[str] = []
-    current: list[str] | None = None
-    for line in lines:
-        match = _LIST_ITEM_PATTERN.match(line)
-        if match:
-            if current is not None:
-                items.append(" ".join(current))
-            current = [match.group(1).strip()]
-        elif current is not None and line.strip() and line[:1].isspace():
-            current.append(line.strip())
-        elif current is not None and not line.strip():
-            items.append(" ".join(current))
-            current = None
-    if current is not None:
-        items.append(" ".join(current))
-    return items
-
-
 def _derive_acceptance_criteria(leaf_doc: str) -> list[str]:
     """Heuristic: a mini-doc follows the same drafting template as the root requirements.md,
 
@@ -81,15 +68,10 @@ def _derive_acceptance_criteria(leaf_doc: str) -> list[str]:
     lines = leaf_doc.splitlines()
     goals_heading_index = next((i for i, line in enumerate(lines) if _GOALS_HEADING_PATTERN.match(line.strip())), None)
     if goals_heading_index is not None:
-        body_lines = _collect_section_body(lines, goals_heading_index)
-        criteria = [_GOAL_MARKER_PATTERN.sub("", item).strip() for item in _extract_top_level_list_items(body_lines)]
+        items = extract_list_items(_collect_section_body(lines, goals_heading_index), _LIST_ITEM_PATTERN)
     else:
-        criteria = [
-            _GOAL_MARKER_PATTERN.sub("", item).strip()
-            for item in _extract_top_level_list_items(lines)
-            if _GOAL_MARKER_PATTERN.match(item)
-        ]
-    criteria = [c for c in criteria if c]
+        items = [item for item in extract_list_items(lines, _LIST_ITEM_PATTERN) if _GOAL_MARKER_PATTERN.match(item)]
+    criteria = [c for c in (_GOAL_MARKER_PATTERN.sub("", item).strip() for item in items) if c]
     return criteria or [_NO_TESTABLE_REQUIREMENTS_NOTE]
 
 

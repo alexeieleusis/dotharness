@@ -7,7 +7,7 @@ from spec_prism_flow import graph as graph_module
 from spec_prism_flow.config import SpecPrismFlowConfig
 from spec_prism_flow.decompose import GRAPH_FILENAME
 from spec_prism_flow.overview_stage import OPEN_QUESTIONS_FILENAME
-from spec_prism_flow.phase_file import PhaseFile, PhaseFileError, parse_phase_file
+from spec_prism_flow.phase_file import PhaseFile, PhaseFileError, extract_list_items, parse_phase_file
 from spec_prism_flow.requirements_stage import REQUIREMENTS_FILENAME
 
 REVIEW_LOG_FILENAME = "review_log.md"
@@ -42,8 +42,9 @@ class ReviewReport:
 
 
 def _check_dependency_order(phase_files: list[PhaseFile]) -> list[str]:
+    # Expects `phase_files` already sorted by number, as `run_review` guarantees.
     violations = []
-    for pf in sorted(phase_files, key=lambda p: p.number):
+    for pf in phase_files:
         numbers = pf.depends_on_phase_numbers
         if pf.number == 1:
             if numbers:
@@ -60,10 +61,6 @@ def _check_dependency_order(phase_files: list[PhaseFile]) -> list[str]:
                     f"text, but found {found}: {pf.depends_on!r}"
                 )
     return violations
-
-
-def _check_graph_agreement(graph: graph_module.Graph, phase_files: list[PhaseFile]) -> list[str]:
-    return graph_module.validate_graph(graph, phase_files)
 
 
 def _parse_requirements_sections(requirements_text: str) -> list[tuple[str, str]]:
@@ -84,30 +81,11 @@ def _check_section_coverage(requirements_text: str, phase_files: list[PhaseFile]
     return violations
 
 
-def _extract_list_items(text: str) -> list[str]:
-    items: list[str] = []
-    current: list[str] | None = None
-    for line in text.splitlines():
-        match = _LIST_ITEM_PATTERN.match(line)
-        if match:
-            if current is not None:
-                items.append(" ".join(current))
-            current = [match.group(1).strip()]
-        elif current is not None and line.strip() and line[:1].isspace():
-            current.append(line.strip())
-        elif current is not None and not line.strip():
-            items.append(" ".join(current))
-            current = None
-    if current is not None:
-        items.append(" ".join(current))
-    return items
-
-
 def _check_stale_open_questions(open_questions_text: str | None) -> list[str]:
     if not open_questions_text or not open_questions_text.strip():
         return []
     violations = []
-    for item in _extract_list_items(open_questions_text):
+    for item in extract_list_items(open_questions_text.splitlines(), _LIST_ITEM_PATTERN):
         if _RESOLVED_MARKER_PATTERN.search(item) or _DEFERRED_MARKER_PATTERN.search(item):
             continue
         violations.append(f"Stale open question with no recorded answer or explicit 'deferred' marker: {item}")
@@ -157,7 +135,7 @@ def run_review(cfg: SpecPrismFlowConfig) -> ReviewReport:
 
     checks = [
         CheckResult("Dependency order", _check_dependency_order(phase_files)),
-        CheckResult("Graph agreement", _check_graph_agreement(loaded_graph, phase_files)),
+        CheckResult("Graph agreement", graph_module.validate_graph(loaded_graph, phase_files)),
         CheckResult("Section coverage", _check_section_coverage(requirements_text, phase_files)),
         CheckResult("Stale open questions", _check_stale_open_questions(open_questions_text)),
     ]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -56,6 +57,26 @@ def _parse_bullets(body: str) -> list[str]:
         if not line.startswith("- "):
             raise PhaseFileError(f"Expected a bullet list item starting with '- ', got: {line!r}")  # noqa: TRY003
         items.append(line[2:].strip())
+    return items
+
+
+def extract_list_items(lines: Iterable[str], pattern: re.Pattern[str]) -> list[str]:
+    """Parse markdown list items matching `pattern`, joining indented continuation lines."""
+    items: list[str] = []
+    current: list[str] | None = None
+    for line in lines:
+        match = pattern.match(line)
+        if match:
+            if current is not None:
+                items.append(" ".join(current))
+            current = [match.group(1).strip()]
+        elif current is not None and line.strip() and line[:1].isspace():
+            current.append(line.strip())
+        elif current is not None and not line.strip():
+            items.append(" ".join(current))
+            current = None
+    if current is not None:
+        items.append(" ".join(current))
     return items
 
 
