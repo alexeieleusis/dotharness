@@ -116,6 +116,21 @@ def test_run_draft_overview_raises_when_output_not_written(tmp_path, monkeypatch
         run_draft_overview(cfg)
 
 
+def test_run_draft_overview_raises_when_output_is_stale(tmp_path, monkeypatch):
+    brief = tmp_path / "brief.md"
+    brief.write_text("brief content")
+    cfg = _make_cfg(tmp_path)
+    init_workspace(cfg.plan.workspace_dir, brief, None, None, [])
+    (cfg.plan.workspace_dir / OVERVIEW_FILENAME).write_text("stale overview")
+
+    monkeypatch.setattr(overview_stage.handoff, "run_handoff", lambda *a, **k: None)
+
+    with pytest.raises(OverviewError, match=OVERVIEW_FILENAME):
+        run_draft_overview(cfg)
+
+    assert (cfg.plan.workspace_dir / OVERVIEW_FILENAME).read_text() == "stale overview"
+
+
 def test_run_draft_overview_translates_real_handoff_error_cleanly(tmp_path, monkeypatch):
     brief = tmp_path / "brief.md"
     brief.write_text("brief content")
