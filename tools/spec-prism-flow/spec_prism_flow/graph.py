@@ -6,7 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from spec_prism_flow.phase_file import PhaseFile
+from spec_prism_flow.phase_file import PhaseFile, phase_file_name
 
 _DEPENDS_ON_PHASE_NUMBER_PATTERN = re.compile(r"Phase\s+(\d+)", re.IGNORECASE)
 
@@ -31,10 +31,10 @@ def write_graph(graph: Graph, path: Path) -> None:
 
 
 def _stem(phase_file: PhaseFile) -> str:
-    return f"{phase_file.number:02d}-{phase_file.name}-leaf"
+    return phase_file_name(phase_file.number, phase_file.name).removesuffix(".md")
 
 
-def _reachable(edges: list[tuple[str, str]], start: str, *, forward: bool) -> set[str]:
+def _reachable_from_all(edges: list[tuple[str, str]], nodes: list[str], *, forward: bool) -> dict[str, set[str]]:
     adjacency: dict[str, list[str]] = defaultdict(list)
     for dependent, dependency in edges:
         if forward:
@@ -42,19 +42,18 @@ def _reachable(edges: list[tuple[str, str]], start: str, *, forward: bool) -> se
         else:
             adjacency[dependency].append(dependent)
 
-    seen: set[str] = set()
-    stack = [start]
-    while stack:
-        node = stack.pop()
-        for neighbor in adjacency.get(node, []):
-            if neighbor not in seen:
-                seen.add(neighbor)
-                stack.append(neighbor)
-    return seen
-
-
-def _has_path(edges: list[tuple[str, str]], a: str, b: str) -> bool:
-    return b in _reachable(edges, a, forward=True) or b in _reachable(edges, a, forward=False)
+    reachable: dict[str, set[str]] = {}
+    for start in nodes:
+        seen: set[str] = set()
+        stack = [start]
+        while stack:
+            node = stack.pop()
+            for neighbor in adjacency.get(node, []):
+                if neighbor not in seen:
+                    seen.add(neighbor)
+                    stack.append(neighbor)
+        reachable[start] = seen
+    return reachable
 
 
 def _find_cycle(edges: list[tuple[str, str]], nodes: list[str]) -> list[str] | None:
@@ -75,7 +74,6 @@ def _find_cycle(edges: list[tuple[str, str]], nodes: list[str]) -> list[str] | N
                 cycle_start = path.index(neighbor)
                 return [*path[cycle_start:], neighbor]
             if neighbor_state == unvisited:
-                state[neighbor] = unvisited
                 result = visit(neighbor)
                 if result is not None:
                     return result
@@ -116,10 +114,13 @@ def _check_disjoint_scope(graph: Graph, phase_files: list[PhaseFile]) -> list[st
     scope_by_stem = {_stem(pf): set(pf.scope) for pf in phase_files}
     stems = sorted(stem for stem in scope_by_stem if stem in node_set)
 
+    forward_reachable = _reachable_from_all(graph.edges, graph.nodes, forward=True)
+    backward_reachable = _reachable_from_all(graph.edges, graph.nodes, forward=False)
+
     violations = []
     for i, stem_a in enumerate(stems):
         for stem_b in stems[i + 1 :]:
-            if _has_path(graph.edges, stem_a, stem_b):
+            if stem_b in forward_reachable.get(stem_a, set()) or stem_b in backward_reachable.get(stem_a, set()):
                 continue
             for entry in sorted(scope_by_stem[stem_a] & scope_by_stem[stem_b]):
                 violations.append(

@@ -4,7 +4,15 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-CONFIG_FILENAME = ".spec-prism-flow.toml"
+DEFAULT_AGENT_BACKEND = "claude"
+DEFAULT_REVIEW_COMMAND = "harness"
+DEFAULT_REVIEW_TOOL_DIR = "~/.harness/tools/pr-review"
+DEFAULT_VIBE_HEAL_COMMAND = "vibe-heal"
+DEFAULT_VIBE_HEAL_TOOL_DIR = "~/.harness/vendor/vibe-heal"
+DEFAULT_BUILD_WORKERS = 1
+DEFAULT_BUILD_MAX_RETRY_CYCLES = 3
+DEFAULT_BUILD_STATE_DIR = "~/.local/share/dotharness/spec-prism-flow/state"
+DEFAULT_HARNESS_KNOWLEDGE_DIR = "~/.harness/knowledge"
 
 
 class ConfigError(ValueError):
@@ -13,7 +21,7 @@ class ConfigError(ValueError):
 
 @dataclass
 class AgentConfig:
-    backend: str = "claude"
+    backend: str = DEFAULT_AGENT_BACKEND
 
 
 @dataclass
@@ -26,31 +34,29 @@ class PlanConfig:
 @dataclass
 class ReviewConfig:
     enabled: bool = False
-    command: str = "harness"
-    tool_dir: Path = field(default_factory=lambda: Path("~/.harness/tools/pr-review").expanduser())
+    command: str = DEFAULT_REVIEW_COMMAND
+    tool_dir: Path = field(default_factory=lambda: Path(DEFAULT_REVIEW_TOOL_DIR).expanduser())
     harness_config: Path | None = None
 
 
 @dataclass
 class VibeHealConfig:
     enabled: bool = False
-    command: str = "vibe-heal"
-    tool_dir: Path = field(default_factory=lambda: Path("~/.harness/vendor/vibe-heal").expanduser())
+    command: str = DEFAULT_VIBE_HEAL_COMMAND
+    tool_dir: Path = field(default_factory=lambda: Path(DEFAULT_VIBE_HEAL_TOOL_DIR).expanduser())
 
 
 @dataclass
 class BuildConfig:
     commands: list[str] = field(default_factory=list)
-    workers: int = 1
-    max_retry_cycles: int = 3
-    state_dir: Path = field(
-        default_factory=lambda: Path("~/.local/share/dotharness/spec-prism-flow/state").expanduser()
-    )
+    workers: int = DEFAULT_BUILD_WORKERS
+    max_retry_cycles: int = DEFAULT_BUILD_MAX_RETRY_CYCLES
+    state_dir: Path = field(default_factory=lambda: Path(DEFAULT_BUILD_STATE_DIR).expanduser())
 
 
 @dataclass
 class HarnessSection:
-    knowledge_dir: Path = field(default_factory=lambda: Path("~/.harness/knowledge").expanduser())
+    knowledge_dir: Path = field(default_factory=lambda: Path(DEFAULT_HARNESS_KNOWLEDGE_DIR).expanduser())
 
 
 @dataclass
@@ -74,7 +80,7 @@ def load_config(path: Path) -> SpecPrismFlowConfig:
             raise ConfigError(f"Invalid TOML in config file: {e}") from None  # noqa: TRY003
 
     a = data.get("agent", {})
-    backend = a.get("backend", "claude")
+    backend = a.get("backend", DEFAULT_AGENT_BACKEND)
     if backend not in ("claude", "opencode"):
         raise ConfigError(f"Invalid agent.backend '{backend}': must be 'claude' or 'opencode'")  # noqa: TRY003
     agent = AgentConfig(backend=backend)
@@ -98,29 +104,29 @@ def load_config(path: Path) -> SpecPrismFlowConfig:
         raise ConfigError("review.harness_config is required when review.enabled is true")  # noqa: TRY003
     review = ReviewConfig(
         enabled=review_enabled,
-        command=r.get("command", "harness"),
-        tool_dir=Path(r.get("tool_dir", "~/.harness/tools/pr-review")).expanduser(),
+        command=r.get("command", DEFAULT_REVIEW_COMMAND),
+        tool_dir=Path(r.get("tool_dir", DEFAULT_REVIEW_TOOL_DIR)).expanduser(),
         harness_config=Path(raw_harness_config).expanduser() if raw_harness_config else None,
     )
 
     vh = data.get("vibe_heal", {})
     vibe_heal = VibeHealConfig(
         enabled=vh.get("enabled", False),
-        command=vh.get("command", "vibe-heal"),
-        tool_dir=Path(vh.get("tool_dir", "~/.harness/vendor/vibe-heal")).expanduser(),
+        command=vh.get("command", DEFAULT_VIBE_HEAL_COMMAND),
+        tool_dir=Path(vh.get("tool_dir", DEFAULT_VIBE_HEAL_TOOL_DIR)).expanduser(),
     )
 
     b = data.get("build", {})
     build = BuildConfig(
         commands=list(b.get("commands", [])),
-        workers=b.get("workers", 1),
-        max_retry_cycles=b.get("max_retry_cycles", 3),
-        state_dir=Path(b.get("state_dir", "~/.local/share/dotharness/spec-prism-flow/state")).expanduser(),
+        workers=b.get("workers", DEFAULT_BUILD_WORKERS),
+        max_retry_cycles=b.get("max_retry_cycles", DEFAULT_BUILD_MAX_RETRY_CYCLES),
+        state_dir=Path(b.get("state_dir", DEFAULT_BUILD_STATE_DIR)).expanduser(),
     )
 
     h = data.get("harness", {})
     harness = HarnessSection(
-        knowledge_dir=Path(h.get("knowledge_dir", "~/.harness/knowledge")).expanduser(),
+        knowledge_dir=Path(h.get("knowledge_dir", DEFAULT_HARNESS_KNOWLEDGE_DIR)).expanduser(),
     )
 
     return SpecPrismFlowConfig(
