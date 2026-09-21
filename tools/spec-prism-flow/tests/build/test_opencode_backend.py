@@ -135,7 +135,13 @@ def test_invoke_starts_process_in_its_own_session(tmp_path, monkeypatch):
 
 def test_sigkill_on_timeout_kills_the_whole_process_group(tmp_path, monkeypatch):
     proc = _FakeProc(subprocess.TimeoutExpired(cmd="opencode", timeout=1), pid=111)
-    monkeypatch.setattr(OpencodeBackend, "_start_process", staticmethod(lambda cmd, cwd: proc))
+    seen_paths = []
+
+    def fake_start_process(cmd, cwd):
+        seen_paths.append(cmd[2].removeprefix("Read ").split(" and follow", 1)[0])
+        return proc
+
+    monkeypatch.setattr(OpencodeBackend, "_start_process", staticmethod(fake_start_process))
     killpg_mock = Mock()
     monkeypatch.setattr("os.killpg", killpg_mock)
     monkeypatch.setattr("os.getpgid", lambda pid: pid)
@@ -144,3 +150,4 @@ def test_sigkill_on_timeout_kills_the_whole_process_group(tmp_path, monkeypatch)
         OpencodeBackend().invoke("do the thing", tmp_path)
 
     killpg_mock.assert_called_once_with(111, 9)  # SIGKILL == 9, against the killed process's pid
+    assert not Path(seen_paths[0]).exists()
