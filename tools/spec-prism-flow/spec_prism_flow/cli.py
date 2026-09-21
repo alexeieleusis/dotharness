@@ -144,9 +144,20 @@ def plan_decompose(config_path_str, depth_cap, yes):
 
 @cmd_plan.command("draft-phases")
 @click.option("--config", "config_path_str", default=None, type=click.Path(), help="Config file to use.")
-def plan_draft_phases(config_path_str):
+@click.option("--yes", is_flag=True, default=False, help="Skip the overwrite-confirmation prompt.")
+def plan_draft_phases(config_path_str, yes):
     """Render each leaf of the approved decomposition tree into a `docs/phases/NN-name-leaf.md` file."""
     cfg = _load_cfg_or_raise(config_path_str)
+
+    try:
+        target_paths = draft_phases.target_phase_paths(cfg)
+    except draft_phases.DraftPhasesError as e:
+        raise click.ClickException(str(e)) from e
+
+    existing_paths = [path for path in target_paths if path.exists()]
+    if existing_paths and not yes:
+        names = ", ".join(path.name for path in existing_paths)
+        click.confirm(f"Overwrite existing phase file(s) ({names})?", abort=True)
 
     try:
         result = draft_phases.run_draft_phases(cfg)

@@ -85,7 +85,7 @@ def _depends_on_text(number: int) -> str:
     return "None (first phase)." if number == 1 else f"Phase {number - 1} merged."
 
 
-def run_draft_phases(cfg: SpecPrismFlowConfig) -> DraftPhasesResult:
+def _load_linearized(cfg: SpecPrismFlowConfig) -> tuple[ChunkNode, linearize.LinearizationResult]:
     tree_path = cfg.plan.workspace_dir / TREE_FILENAME
     if not tree_path.exists():
         raise DraftPhasesError(  # noqa: TRY003
@@ -103,6 +103,30 @@ def run_draft_phases(cfg: SpecPrismFlowConfig) -> DraftPhasesResult:
             f"{e}\nResolve any remaining 'escalation_reason' node directly in {tree_path} "
             "(the same manual-edit checkpoint 'plan decompose' pauses for) and re-run 'plan draft-phases'."
         ) from e
+
+    return tree, result
+
+
+def target_phase_paths(cfg: SpecPrismFlowConfig) -> list[Path]:
+    """Compute the `docs/phases/*.md` paths a `run_draft_phases` call would write, without rendering them.
+
+    Lets the CLI layer check for pre-existing files (and confirm before overwriting them) the same
+    way sibling commands check their single target_path, even though draft-phases' targets aren't
+    known until the tree has been loaded and linearized.
+    """
+    _, result = _load_linearized(cfg)
+    paths = []
+    for stem in result.graph.nodes:
+        if not PHASE_FILE_NAME_PATTERN.match(stem + ".md"):
+            raise DraftPhasesError(  # noqa: TRY003
+                f"Derived graph node {stem!r} does not match the '<NN>-<slug>-leaf' naming pattern"
+            )
+        paths.append(cfg.plan.phase_dir / f"{stem}.md")
+    return paths
+
+
+def run_draft_phases(cfg: SpecPrismFlowConfig) -> DraftPhasesResult:
+    tree, result = _load_linearized(cfg)
 
     internal_nodes_skipped = _count_total_nodes(tree) - len(result.leaves)
 

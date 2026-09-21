@@ -1,6 +1,8 @@
 import pytest
+from click.testing import CliRunner
 
 from spec_prism_flow.chunk import Chunk, ChunkNode, write_tree
+from spec_prism_flow.cli import cli
 from spec_prism_flow.config import (
     AgentConfig,
     BuildConfig,
@@ -11,7 +13,7 @@ from spec_prism_flow.config import (
     VibeHealConfig,
 )
 from spec_prism_flow.decompose import TREE_FILENAME
-from spec_prism_flow.draft_phases import DraftPhasesError, run_draft_phases
+from spec_prism_flow.draft_phases import DraftPhasesError, run_draft_phases, target_phase_paths
 from spec_prism_flow.phase_file import parse_phase_file
 
 
@@ -119,6 +121,22 @@ def test_missing_tree_file_raises_draft_phases_error(tmp_path):
         run_draft_phases(cfg)
 
 
+# --- target_phase_paths ---------------------------------------------------------------------------
+
+
+def test_target_phase_paths_matches_what_run_draft_phases_writes(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    leaf_1 = ChunkNode(chunk=_chunk("A-1", "first", ["a.py"], 1), leaf_doc=_goals_doc("First goal."))
+    leaf_2 = ChunkNode(chunk=_chunk("A-2", "second", ["b.py"], 1), leaf_doc=_goals_doc("Second goal."))
+    root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf_1, leaf_2])
+    _write_tree(cfg, root)
+
+    paths_before_write = target_phase_paths(cfg)
+    result = run_draft_phases(cfg)
+
+    assert paths_before_write == result.written
+
+
 # --- sizing outliers -----------------------------------------------------------------------------
 
 
@@ -200,3 +218,58 @@ def test_acceptance_criteria_placeholder_when_nothing_recognizable(tmp_path):
     assert len(phase.acceptance_criteria) == 1
     assert "No structured, testable requirements" in phase.acceptance_criteria[0]
     assert phase.manual_test_checklist == phase.acceptance_criteria
+
+
+# --- CLI overwrite guard ---------------------------------------------------------------------------
+
+MINIMAL_TOML = """
+[plan]
+workspace_dir = "workspace"
+phase_dir = "phases"
+"""
+
+
+def _write_cli_tree(tmp_path) -> None:
+    leaf = ChunkNode(chunk=_chunk("A-1", "only", ["a.py"], 1), leaf_doc=_goals_doc("Only goal."))
+    root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
+    (tmp_path / "workspace").mkdir(parents=True, exist_ok=True)
+    write_tree(root, tmp_path / "workspace" / TREE_FILENAME)
+
+
+def test_cli_draft_phases_prompts_before_overwriting_existing_phase_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+    _write_cli_tree(tmp_path)
+    phase_dir = tmp_path / "phases"
+    phase_dir.mkdir()
+    (phase_dir / "01-only-leaf.md").write_text("hand-edited content")
+
+    result = CliRunner().invoke(cli, ["plan", "draft-phases"], input="n\n")
+
+    assert result.exit_code != 0
+    assert (phase_dir / "01-only-leaf.md").read_text() == "hand-edited content"
+
+
+def test_cli_draft_phases_yes_skips_confirmation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+    _write_cli_tree(tmp_path)
+    phase_dir = tmp_path / "phases"
+    phase_dir.mkdir()
+    (phase_dir / "01-only-leaf.md").write_text("hand-edited content")
+
+    result = CliRunner().invoke(cli, ["plan", "draft-phases", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert (phase_dir / "01-only-leaf.md").read_text() != "hand-edited content"
+
+
+def test_cli_draft_phases_no_prompt_when_nothing_exists_yet(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+    _write_cli_tree(tmp_path)
+
+    result = CliRunner().invoke(cli, ["plan", "draft-phases"])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "phases" / "01-only-leaf.md").exists()
