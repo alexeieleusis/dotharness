@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PHASE_FILE_NAME_PATTERN = re.compile(r"^(\d{2})-([a-z0-9-]+)-leaf\.md$")
+_DEPENDS_ON_PHASE_NUMBER_PATTERN = re.compile(r"Phase\s+(\d+)", re.IGNORECASE)
 
 _ACCEPTANCE_CRITERIA_HEADER = "Acceptance criteria"
 _MANUAL_TEST_CHECKLIST_HEADER = "Manual test checklist"
@@ -32,6 +33,10 @@ class PhaseFile:
     acceptance_criteria: list[str]
     manual_test_checklist: list[str]
     depends_on: str
+
+    @property
+    def depends_on_phase_numbers(self) -> list[int]:
+        return [int(n) for n in _DEPENDS_ON_PHASE_NUMBER_PATTERN.findall(self.depends_on)]
 
 
 def phase_file_name(number: int, name: str) -> str:

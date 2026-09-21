@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import json
-import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 from spec_prism_flow.phase_file import PhaseFile, phase_file_name
-
-_DEPENDS_ON_PHASE_NUMBER_PATTERN = re.compile(r"Phase\s+(\d+)", re.IGNORECASE)
 
 _UNVISITED, _IN_PROGRESS, _DONE = 0, 1, 2
 
@@ -159,7 +156,7 @@ def _check_linear_chain_coverage(graph: Graph, phase_files: list[PhaseFile]) -> 
     for pf in phase_files:
         if pf.number <= 1:
             continue
-        referenced_numbers = {int(n) for n in _DEPENDS_ON_PHASE_NUMBER_PATTERN.findall(pf.depends_on)}
+        referenced_numbers = set(pf.depends_on_phase_numbers)
         predecessor_number = pf.number - 1
         if predecessor_number not in referenced_numbers:
             continue
