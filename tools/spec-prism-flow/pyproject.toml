@@ -44,6 +44,9 @@ python-version = "3.11"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# pytest's default norecursedirs includes the literal name "build" (assuming a setuptools
+# build/ artifact dir), which would otherwise silently skip tests/build/ entirely.
+norecursedirs = [".*", "_darcs", "CVS", "dist", "node_modules", "venv", "{arch}", "*.egg"]
 
 [tool.ruff]
 target-version = "py311"
