@@ -151,6 +151,15 @@ def test_misspelled_header_raises(tmp_path):
         parse_phase_file(p)
 
 
+def test_non_bullet_line_in_scope_raises(tmp_path):
+    text = WELL_FORMED_TEXT.replace("- spec_prism_flow/config.py", "spec_prism_flow/config.py")
+    p = tmp_path / "01-sample-leaf.md"
+    p.write_text(text)
+
+    with pytest.raises(PhaseFileError, match="bullet list item"):
+        parse_phase_file(p)
+
+
 def test_real_phase_file_parses(tmp_path):
     real_path = Path(__file__).parent.parent / "docs" / "phases" / "01-config-and-phase-file-leaf.md"
 
