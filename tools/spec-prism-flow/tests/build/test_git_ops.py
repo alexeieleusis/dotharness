@@ -79,6 +79,19 @@ def test_commit_all_raises_on_add_failure_without_checking_status(tmp_path, monk
     assert run_mock.call_count == 1
 
 
+def test_commit_all_raises_on_commit_failure_after_dirty_tree_detected(tmp_path, monkeypatch):
+    responses = [_ok(), _ok(stdout=" M file.py"), Mock(returncode=1, stdout="", stderr="pre-commit hook failed")]
+    run_mock = Mock(side_effect=responses)
+    monkeypatch.setattr("subprocess.run", run_mock)
+
+    with pytest.raises(GitCommandError) as exc_info:
+        git_ops.commit_all(tmp_path, "phase 07: x")
+
+    assert run_mock.call_count == 3
+    assert exc_info.value.cmd_args == ["git", "commit", "-m", "phase 07: x", "--"]
+    assert exc_info.value.stderr == "pre-commit hook failed"
+
+
 def test_push_branch_uses_force_with_lease(tmp_path, monkeypatch):
     run_mock = Mock(return_value=_ok())
     monkeypatch.setattr("subprocess.run", run_mock)
