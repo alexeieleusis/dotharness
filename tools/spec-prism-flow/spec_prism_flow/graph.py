@@ -10,6 +10,8 @@ from spec_prism_flow.phase_file import PhaseFile, phase_file_name
 
 _DEPENDS_ON_PHASE_NUMBER_PATTERN = re.compile(r"Phase\s+(\d+)", re.IGNORECASE)
 
+_UNVISITED, _IN_PROGRESS, _DONE = 0, 1, 2
+
 
 @dataclass(frozen=True)
 class Graph:
@@ -61,31 +63,35 @@ def _find_cycle(edges: list[tuple[str, str]], nodes: list[str]) -> list[str] | N
     for dependent, dependency in edges:
         adjacency[dependent].append(dependency)
 
-    unvisited, in_progress, done = 0, 1, 2
-    state: dict[str, int] = dict.fromkeys(nodes, unvisited)
-    path: list[str] = []
+    state: dict[str, int] = dict.fromkeys(nodes, _UNVISITED)
+    for start in nodes:
+        if state.get(start, _UNVISITED) != _UNVISITED:
+            continue
+        cycle = _walk_for_cycle(start, adjacency, state)
+        if cycle is not None:
+            return cycle
+    return None
 
-    def visit(node: str) -> list[str] | None:
-        state[node] = in_progress
-        path.append(node)
-        for neighbor in adjacency.get(node, []):
-            neighbor_state = state.get(neighbor, unvisited)
-            if neighbor_state == in_progress:
-                cycle_start = path.index(neighbor)
-                return [*path[cycle_start:], neighbor]
-            if neighbor_state == unvisited:
-                result = visit(neighbor)
-                if result is not None:
-                    return result
-        path.pop()
-        state[node] = done
-        return None
 
-    for node in nodes:
-        if state.get(node, unvisited) == unvisited:
-            result = visit(node)
-            if result is not None:
-                return result
+def _walk_for_cycle(start: str, adjacency: dict[str, list[str]], state: dict[str, int]) -> list[str] | None:
+    path: list[str] = [start]
+    frontiers = [iter(adjacency.get(start, []))]
+    state[start] = _IN_PROGRESS
+
+    while path:
+        neighbor = next(frontiers[-1], None)
+        if neighbor is None:
+            state[path.pop()] = _DONE
+            frontiers.pop()
+            continue
+        neighbor_state = state.get(neighbor, _UNVISITED)
+        if neighbor_state == _IN_PROGRESS:
+            cycle_start = path.index(neighbor)
+            return [*path[cycle_start:], neighbor]
+        if neighbor_state == _UNVISITED:
+            state[neighbor] = _IN_PROGRESS
+            path.append(neighbor)
+            frontiers.append(iter(adjacency.get(neighbor, [])))
     return None
 
 
