@@ -27,6 +27,11 @@ def _run_best_effort(cmd: list[str], text: str, tool_name: str) -> None:
         logger.warning("%s exited %d: %s", tool_name, proc.returncode, proc.stderr.decode("utf-8", errors="replace"))
 
 
+def wait_for_confirmation(prompt: str) -> None:
+    while not click.confirm(prompt):
+        continue
+
+
 def run_handoff(
     prompt_text: str,
     workspace_dir: Path,
@@ -37,6 +42,7 @@ def run_handoff(
     prompt_path.write_text(prompt_text)
 
     output_path = workspace_dir / (output_filename or f"{stage_name}_output.md")
+    output_path.unlink(missing_ok=True)
 
     click.echo(f"Prompt written to: {prompt_path}")
     click.echo(f"Expected output at: {output_path}")
@@ -45,8 +51,7 @@ def run_handoff(
     if os.environ.get("TMUX"):
         _run_best_effort(["tmux", "load-buffer", "-"], str(prompt_path), "tmux load-buffer")
 
-    while not click.confirm("Agent finished writing output? "):
-        continue
+    wait_for_confirmation("Agent finished writing output? ")
 
     if not output_path.exists():
         raise HandoffError(f"Expected output file not found: {output_path}")  # noqa: TRY003

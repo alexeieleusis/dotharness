@@ -10,11 +10,18 @@ def _ok_run(*args, **kwargs):
     return subprocess.CompletedProcess(args[0] if args else kwargs.get("args", []), 0, b"", b"")
 
 
+def _confirm_and_write(output_path, content):
+    def _confirm(*args, **kwargs):
+        output_path.write_text(content)
+        return True
+
+    return _confirm
+
+
 def test_writes_prompt_file_and_prints_paths(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(subprocess, "run", _ok_run)
-    monkeypatch.setattr(handoff.click, "confirm", lambda *a, **k: True)
+    monkeypatch.setattr(handoff.click, "confirm", _confirm_and_write(tmp_path / "stage_output.md", "output content"))
     monkeypatch.delenv("TMUX", raising=False)
-    (tmp_path / "stage_output.md").write_text("output content")
 
     result = run_handoff("do the thing", tmp_path, "stage")
 
@@ -27,9 +34,8 @@ def test_writes_prompt_file_and_prints_paths(tmp_path, monkeypatch, capsys):
 
 def test_uses_explicit_output_filename(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", _ok_run)
-    monkeypatch.setattr(handoff.click, "confirm", lambda *a, **k: True)
+    monkeypatch.setattr(handoff.click, "confirm", _confirm_and_write(tmp_path / "00-overview.md", "overview content"))
     monkeypatch.delenv("TMUX", raising=False)
-    (tmp_path / "00-overview.md").write_text("overview content")
 
     result = run_handoff("prompt", tmp_path, "stage", output_filename="00-overview.md")
 
@@ -46,12 +52,30 @@ def test_raises_handoff_error_when_output_missing(tmp_path, monkeypatch):
     assert str(tmp_path / "stage_output.md") in str(exc_info.value)
 
 
+def test_stale_output_from_prior_attempt_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(subprocess, "run", _ok_run)
+    monkeypatch.setattr(handoff.click, "confirm", lambda *a, **k: True)
+    monkeypatch.delenv("TMUX", raising=False)
+    (tmp_path / "stage_output.md").write_text("stale content from a prior run")
+
+    with pytest.raises(HandoffError) as exc_info:
+        run_handoff("prompt", tmp_path, "stage")
+    assert str(tmp_path / "stage_output.md") in str(exc_info.value)
+
+
 def test_no_answer_reprompts_before_yes(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", _ok_run)
     answers = iter([False, False, True])
-    monkeypatch.setattr(handoff.click, "confirm", lambda *a, **k: next(answers))
+    output_path = tmp_path / "stage_output.md"
+
+    def _confirm(*args, **kwargs):
+        answer = next(answers)
+        if answer:
+            output_path.write_text("output content")
+        return answer
+
+    monkeypatch.setattr(handoff.click, "confirm", _confirm)
     monkeypatch.delenv("TMUX", raising=False)
-    (tmp_path / "stage_output.md").write_text("output content")
 
     result = run_handoff("prompt", tmp_path, "stage")
 
@@ -64,9 +88,8 @@ def test_clipboard_failure_is_caught_and_does_not_raise(tmp_path, monkeypatch):
         raise FileNotFoundError("no pbcopy")  # noqa: TRY003
 
     monkeypatch.setattr(subprocess, "run", _raise_not_found)
-    monkeypatch.setattr(handoff.click, "confirm", lambda *a, **k: True)
+    monkeypatch.setattr(handoff.click, "confirm", _confirm_and_write(tmp_path / "stage_output.md", "output content"))
     monkeypatch.delenv("TMUX", raising=False)
-    (tmp_path / "stage_output.md").write_text("output content")
 
     result = run_handoff("prompt", tmp_path, "stage")
 
@@ -78,9 +101,8 @@ def test_clipboard_nonzero_exit_is_caught_and_does_not_raise(tmp_path, monkeypat
         return subprocess.CompletedProcess(args[0] if args else [], 1, b"", b"boom")
 
     monkeypatch.setattr(subprocess, "run", _fail_run)
-    monkeypatch.setattr(handoff.click, "confirm", lambda *a, **k: True)
+    monkeypatch.setattr(handoff.click, "confirm", _confirm_and_write(tmp_path / "stage_output.md", "output content"))
     monkeypatch.delenv("TMUX", raising=False)
-    (tmp_path / "stage_output.md").write_text("output content")
 
     result = run_handoff("prompt", tmp_path, "stage")
 
@@ -92,9 +114,8 @@ def test_clipboard_permission_error_is_caught_and_does_not_raise(tmp_path, monke
         raise PermissionError("pbcopy not executable")  # noqa: TRY003
 
     monkeypatch.setattr(subprocess, "run", _raise_permission_error)
-    monkeypatch.setattr(handoff.click, "confirm", lambda *a, **k: True)
+    monkeypatch.setattr(handoff.click, "confirm", _confirm_and_write(tmp_path / "stage_output.md", "output content"))
     monkeypatch.delenv("TMUX", raising=False)
-    (tmp_path / "stage_output.md").write_text("output content")
 
     result = run_handoff("prompt", tmp_path, "stage")
 
@@ -110,9 +131,8 @@ def test_tmux_copy_attempted_when_tmux_env_set(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
     monkeypatch.setattr(subprocess, "run", _record_run)
-    monkeypatch.setattr(handoff.click, "confirm", lambda *a, **k: True)
+    monkeypatch.setattr(handoff.click, "confirm", _confirm_and_write(tmp_path / "stage_output.md", "output content"))
     monkeypatch.setenv("TMUX", "fake-tmux-socket,12345,0")
-    (tmp_path / "stage_output.md").write_text("output content")
 
     run_handoff("prompt", tmp_path, "stage")
 
@@ -129,9 +149,8 @@ def test_tmux_copy_skipped_when_tmux_env_unset(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(args[0] if args else [], 0, b"", b"")
 
     monkeypatch.setattr(subprocess, "run", _record_run)
-    monkeypatch.setattr(handoff.click, "confirm", lambda *a, **k: True)
+    monkeypatch.setattr(handoff.click, "confirm", _confirm_and_write(tmp_path / "stage_output.md", "output content"))
     monkeypatch.delenv("TMUX", raising=False)
-    (tmp_path / "stage_output.md").write_text("output content")
 
     run_handoff("prompt", tmp_path, "stage")
 
@@ -145,9 +164,8 @@ def test_tmux_failure_is_caught_and_does_not_raise(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
     monkeypatch.setattr(subprocess, "run", _run_side_effect)
-    monkeypatch.setattr(handoff.click, "confirm", lambda *a, **k: True)
+    monkeypatch.setattr(handoff.click, "confirm", _confirm_and_write(tmp_path / "stage_output.md", "output content"))
     monkeypatch.setenv("TMUX", "fake-tmux-socket,12345,0")
-    (tmp_path / "stage_output.md").write_text("output content")
 
     result = run_handoff("prompt", tmp_path, "stage")
 

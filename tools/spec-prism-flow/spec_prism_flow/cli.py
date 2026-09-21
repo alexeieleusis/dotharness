@@ -2,7 +2,7 @@ from pathlib import Path
 
 import click
 
-from spec_prism_flow import overview_stage, requirements_stage, workspace
+from spec_prism_flow import decompose, overview_stage, requirements_stage, workspace
 from spec_prism_flow.config import ConfigError, load_config, resolve_config_path
 
 
@@ -112,6 +112,34 @@ def plan_draft_requirements(config_path_str, yes):
 
     click.echo(f"Wrote {requirements_path}")
     click.echo("Review/edit requirements.md, then proceed to `plan decompose` when ready.")
+
+
+@cmd_plan.command("decompose")
+@click.option("--config", "config_path_str", default=None, type=click.Path(), help="Config file to use.")
+@click.option(
+    "--depth-cap",
+    default=decompose.DEFAULT_DEPTH_CAP,
+    type=int,
+    show_default=True,
+    help="Max recursion depth before escalating a would-be split for human review.",
+)
+@click.option("--yes", is_flag=True, default=False, help="Skip the overwrite-confirmation prompt.")
+def plan_decompose(config_path_str, depth_cap, yes):
+    """Recursively decompose requirements.md into a leaf tree and derive docs/phases/graph.json."""
+    cfg = _load_cfg_or_raise(config_path_str)
+
+    target_path = cfg.plan.workspace_dir / decompose.TREE_FILENAME
+    if target_path.exists() and not yes:
+        click.confirm(f"Overwrite existing {target_path}?", abort=True)
+
+    try:
+        tree_path, graph_path = decompose.run_decompose(cfg, depth_cap=depth_cap)
+    except decompose.DecomposeError as e:
+        raise click.ClickException(str(e)) from e
+
+    click.echo(f"Wrote {tree_path}")
+    click.echo(f"Wrote {graph_path}")
+    click.echo("Review the tree and graph, then proceed to `plan draft-phases` when ready.")
 
 
 if __name__ == "__main__":

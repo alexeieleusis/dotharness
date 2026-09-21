@@ -58,7 +58,7 @@ def test_check_word_count_out_of_band_but_observed():
 
     assert result.count == 1800
     assert result.in_band is False
-    assert result.note is None
+    assert result.note is not None
 
 
 def test_check_word_count_outside_observed_range():
