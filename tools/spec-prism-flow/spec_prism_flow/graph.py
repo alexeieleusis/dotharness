@@ -13,6 +13,10 @@ _DEPENDS_ON_PHASE_NUMBER_PATTERN = re.compile(r"Phase\s+(\d+)", re.IGNORECASE)
 _UNVISITED, _IN_PROGRESS, _DONE = 0, 1, 2
 
 
+class GraphError(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class Graph:
     nodes: list[str]
@@ -21,9 +25,20 @@ class Graph:
 
 def load_graph(path: Path) -> Graph:
     data = json.loads(path.read_text())
+
+    nodes = data["nodes"]
+    if not isinstance(nodes, list) or not all(isinstance(n, str) for n in nodes):
+        raise GraphError("graph 'nodes' must be a list of strings")  # noqa: TRY003
+
+    edges = data["edges"]
+    if not isinstance(edges, list) or not all(
+        isinstance(e, list) and len(e) == 2 and all(isinstance(n, str) for n in e) for e in edges
+    ):
+        raise GraphError("graph 'edges' must be a list of [dependent, dependency] string pairs")  # noqa: TRY003
+
     return Graph(
-        nodes=list(data["nodes"]),
-        edges=[(dependent, dependency) for dependent, dependency in data["edges"]],
+        nodes=nodes,
+        edges=[(dependent, dependency) for dependent, dependency in edges],
     )
 
 
