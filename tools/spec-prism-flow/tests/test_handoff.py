@@ -87,6 +87,20 @@ def test_clipboard_nonzero_exit_is_caught_and_does_not_raise(tmp_path, monkeypat
     assert result == "output content"
 
 
+def test_clipboard_permission_error_is_caught_and_does_not_raise(tmp_path, monkeypatch):
+    def _raise_permission_error(*args, **kwargs):
+        raise PermissionError("pbcopy not executable")  # noqa: TRY003
+
+    monkeypatch.setattr(subprocess, "run", _raise_permission_error)
+    monkeypatch.setattr(handoff.click, "confirm", lambda *a, **k: True)
+    monkeypatch.delenv("TMUX", raising=False)
+    (tmp_path / "stage_output.md").write_text("output content")
+
+    result = run_handoff("prompt", tmp_path, "stage")
+
+    assert result == "output content"
+
+
 def test_tmux_copy_attempted_when_tmux_env_set(tmp_path, monkeypatch):
     calls = []
 
