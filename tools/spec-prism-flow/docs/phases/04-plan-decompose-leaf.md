@@ -7,7 +7,7 @@
 - spec_prism_flow/decompose.py
 - spec_prism_flow/generator.py
 - spec_prism_flow/linearize.py
-- spec_prism_flow/cli.py (addition: `plan decompose` subcommand, incl. `--resume`)
+- spec_prism_flow/cli.py (addition: `plan decompose` subcommand)
 - tests/test_chunk.py
 - tests/test_decompose.py
 - tests/test_generator.py
@@ -38,7 +38,9 @@ The driver recurses depth-first: for a `Split` result, each child chunk is proce
 Once the tree is fully resolved (every branch terminated in a leaf or an escalation flag), a single DFS traversal over the tree (children visited left-to-right in the order the generator returned them) yields the ordered leaf list; each leaf's 1-based visit index becomes its phase number, and its `Depends on` is fixed as "Phase N−1 merged" (or "None (first phase)" for the first). The same traversal derives `graph.json` edges: for every pair of leaves, an edge is added if either leaf's mini-doc text references the other's chunk path/name, or their `file_scope_estimate` lists share a file path — this uses Phase 01's `Graph`/`validate_graph` to enforce the disjoint-scope invariant by construction, raising a `DecomposeError` (not silently dropping the pair) if two unlinked leaves' `file_scope_estimate` lists are found to share a file path.
 
 ### 7.6 Human checkpoint
-Before any leaf's phase file is drafted, `decompose` serializes the full tree (not a flattened list) to a reviewable file — every internal node's path/name/children alongside every leaf's path/name/mini-doc summary — and invokes Phase 02's hand-off protocol to wait for human approval. Edits made to this file during the checkpoint are trusted as-is on resume: `decompose` re-parses the edited tree rather than re-running any generator calls, per requirements.md §7.2's explicit "edits made here are trusted as-is."
+Before any leaf's phase file is drafted, `decompose` serializes the full tree (not a flattened list) to a reviewable file — every internal node's path/name/children alongside every leaf's path/name/mini-doc summary — and invokes Phase 02's hand-off protocol to wait for human approval. Edits made to this file during the checkpoint are trusted as-is: after the pause, `decompose` re-reads the tree file from disk (picking up any hand-edit) rather than trusting the in-memory tree it built, and proceeds directly to graph derivation/phase-file drafting without re-running any generator call — this satisfies requirements.md §7.2's explicit "edits made here are trusted as-is" within a single `plan decompose` invocation.
+
+**Deferred (not v1):** root `requirements.md` never mandates a standalone `--resume` CLI mode — only that checkpoint edits are honored, which the re-read-after-pause behavior above already covers. A separate crash-recovery mode (re-parsing an already-written tree file from a *fresh* process invocation, with no generator calls at all, for the case where the process was killed after the checkpoint file was written) is out of scope for this phase; on interruption, re-run `plan decompose` from scratch. Revisit if this proves painful in practice.
 
 ## Acceptance criteria
 - `Chunk`/`ChunkNode` model the tree exactly as specified: a `ChunkNode` never carries both `leaf_doc` and `children`.
@@ -47,14 +49,14 @@ Before any leaf's phase file is drafted, `decompose` serializes the full tree (n
 - The depth-first driver processes each `Split` result's children to completion before the next sibling, and enforces the depth cap (default 4) by flagging rather than recursing further at the cap.
 - Every retry and escalation is appended to a log file naming the chunk path and reason.
 - DFS linearization assigns 1-based phase numbers in left-to-right visit order and produces the fixed `Depends on` chain; graph-edge derivation calls Phase 01's `validate_graph` and raises `DecomposeError` (not silent drop) on a disjoint-scope violation.
-- The human-checkpoint tree file preserves full hierarchy (not a flattened list); `plan decompose --resume` re-parses an edited tree file without re-invoking any generator call.
+- The human-checkpoint tree file preserves full hierarchy (not a flattened list); after the checkpoint pause, `decompose` re-reads the tree file from disk (picking up any hand-edit) before deriving the graph / drafting phase files, without re-invoking any generator call.
 - `uv run pytest` passes for all four test files; `ruff check`/`ty` pass with no new violations.
 
 ## Manual test checklist
 - Run `uv run pytest tests/test_chunk.py tests/test_decompose.py tests/test_generator.py tests/test_linearize.py -v` and confirm all cases above pass.
 - Against a small fixture requirements slice with a stubbed generator forced to return `Split` then `Leaf` for its children, run `plan decompose` and confirm the resulting tree file shows correct hierarchy and the DFS-derived numbering/edges are correct.
 - Construct a fixture where the generator returns `Leaf` twice in a row for the same chunk (simulating a trivial-breakdown deadlock) and confirm exactly one forced-split retry occurs, followed by an escalation flag, logged with the chunk's path.
-- Edit the tree file by hand (e.g. reorder two children) and run `plan decompose --resume`; confirm the edit is respected and no generator call re-runs.
+- Edit the tree file by hand (e.g. reorder two children) during the checkpoint pause; confirm the edit is respected in the resulting phase corpus without any extra generator call.
 - Confirm no unhandled exceptions appear in any of the above, and that a disjoint-scope violation raises a named `DecomposeError` rather than silently dropping the conflicting pair.
 
 ## Depends on
