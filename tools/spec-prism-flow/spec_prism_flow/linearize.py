@@ -53,7 +53,9 @@ def _dfs_collect_leaves(node: ChunkNode) -> list[ChunkNode]:
 
 
 def _mentions(doc: str, chunk: Chunk) -> bool:
-    return (bool(chunk.path) and chunk.path in doc) or (bool(chunk.name) and chunk.name in doc)
+    path_hit = bool(chunk.path) and chunk.path in doc
+    name_hit = bool(chunk.name) and re.search(rf"\b{re.escape(chunk.name)}\b", doc) is not None
+    return path_hit or name_hit
 
 
 def _shares_scope(a: LeafVisit, b: LeafVisit) -> bool:
