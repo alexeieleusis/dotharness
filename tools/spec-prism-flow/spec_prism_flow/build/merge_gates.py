@@ -13,7 +13,7 @@ def run_merge_gates(cwd: Path, commands: list[str], *, tail_lines: int = 40) -> 
             result = subprocess.run(  # noqa: S603
                 shlex.split(cmd), cwd=cwd, capture_output=True, text=True, check=False
             )
-        except OSError as e:
+        except (OSError, IndexError, ValueError) as e:
             raise MergeGateFailure(cmd, str(e)) from e
         if result.returncode != 0:
             combined = result.stdout + result.stderr

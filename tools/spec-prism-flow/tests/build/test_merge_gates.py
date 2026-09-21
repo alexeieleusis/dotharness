@@ -66,3 +66,12 @@ def test_oserror_raises_merge_gate_failure(tmp_path):
         run_merge_gates(tmp_path, [cmd])
 
     assert exc_info.value.gate_name == cmd
+
+
+def test_blank_command_raises_merge_gate_failure_not_index_error(tmp_path):
+    cmd = "   "
+
+    with pytest.raises(MergeGateFailure) as exc_info:
+        run_merge_gates(tmp_path, [cmd])
+
+    assert exc_info.value.gate_name == cmd
