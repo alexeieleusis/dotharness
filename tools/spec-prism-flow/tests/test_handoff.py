@@ -91,8 +91,9 @@ def test_tmux_copy_attempted_when_tmux_env_set(tmp_path, monkeypatch):
     calls = []
 
     def _record_run(*args, **kwargs):
-        calls.append(args[0] if args else kwargs.get("args"))
-        return subprocess.CompletedProcess(args[0] if args else [], 0, b"", b"")
+        cmd = args[0] if args else kwargs.get("args", [])
+        calls.append((cmd, kwargs.get("input")))
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
     monkeypatch.setattr(subprocess, "run", _record_run)
     monkeypatch.setattr(handoff.click, "confirm", lambda *a, **k: True)
@@ -101,7 +102,9 @@ def test_tmux_copy_attempted_when_tmux_env_set(tmp_path, monkeypatch):
 
     run_handoff("prompt", tmp_path, "stage")
 
-    assert ["tmux", "load-buffer", "-"] in calls
+    tmux_calls = [call for call in calls if call[0] == ["tmux", "load-buffer", "-"]]
+    assert len(tmux_calls) == 1
+    assert tmux_calls[0][1].decode() == str(tmp_path / "stage_prompt.md")
 
 
 def test_tmux_copy_skipped_when_tmux_env_unset(tmp_path, monkeypatch):
