@@ -22,7 +22,13 @@ def _load_manifest(workspace_dir: Path) -> dict:
     path = manifest_path(workspace_dir)
     if not path.exists():
         raise OverviewError(f"Manifest not found: {path}; run 'plan init' first")  # noqa: TRY003
-    return json.loads(path.read_text())
+    try:
+        manifest = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        raise OverviewError(f"Manifest is not valid JSON: {path}") from e  # noqa: TRY003
+    if "brief" not in manifest:
+        raise OverviewError(f"Manifest is missing required 'brief' key: {path}")  # noqa: TRY003
+    return manifest
 
 
 def build_overview_prompt(manifest: dict) -> str:
