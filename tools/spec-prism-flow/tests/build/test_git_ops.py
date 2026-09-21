@@ -187,6 +187,44 @@ def test_head_sha_raises_on_failure(tmp_path, monkeypatch):
         git_ops.head_sha(tmp_path)
 
 
+def test_discard_working_tree_changes_checks_out_then_cleans(tmp_path, monkeypatch):
+    run_mock = Mock(return_value=_ok())
+    monkeypatch.setattr("subprocess.run", run_mock)
+
+    git_ops.discard_working_tree_changes(tmp_path)
+
+    assert run_mock.call_args_list == [
+        call(
+            ["git", "checkout", "--", "."],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=git_ops._GIT_TIMEOUT_SECONDS,
+        ),
+        call(
+            ["git", "clean", "-fd"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=git_ops._GIT_TIMEOUT_SECONDS,
+        ),
+    ]
+
+
+def test_discard_working_tree_changes_raises_git_command_error_on_checkout_failure(tmp_path, monkeypatch):
+    run_mock = Mock(return_value=Mock(returncode=1, stdout="", stderr="fatal: not a git repository"))
+    monkeypatch.setattr("subprocess.run", run_mock)
+
+    with pytest.raises(GitCommandError) as exc_info:
+        git_ops.discard_working_tree_changes(tmp_path)
+
+    assert exc_info.value.cmd_args == ["git", "checkout", "--", "."]
+    assert exc_info.value.stderr == "fatal: not a git repository"
+    assert run_mock.call_count == 1
+
+
 def test_run_raises_git_command_error_instead_of_hanging_on_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "subprocess.run",
