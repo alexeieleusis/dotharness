@@ -42,6 +42,7 @@ def run_handoff(
     prompt_path.write_text(prompt_text)
 
     output_path = workspace_dir / (output_filename or f"{stage_name}_output.md")
+    output_path.unlink(missing_ok=True)
 
     click.echo(f"Prompt written to: {prompt_path}")
     click.echo(f"Expected output at: {output_path}")
