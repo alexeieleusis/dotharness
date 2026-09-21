@@ -8,7 +8,7 @@ import click
 from spec_prism_flow import generator, graph, handoff, linearize, sizing
 from spec_prism_flow.chunk import Chunk, ChunkNode, load_tree, write_tree
 from spec_prism_flow.config import SpecPrismFlowConfig
-from spec_prism_flow.errors import DecomposeError
+from spec_prism_flow.errors import ChunkError, DecomposeError
 from spec_prism_flow.requirements_stage import REQUIREMENTS_FILENAME
 from spec_prism_flow.workspace import ManifestError, load_manifest
 
@@ -117,7 +117,10 @@ def run_decompose(cfg: SpecPrismFlowConfig, *, depth_cap: int = DEFAULT_DEPTH_CA
 
     _pause_for_tree_review(tree_path)
 
-    approved_tree = load_tree(tree_path)
+    try:
+        approved_tree = load_tree(tree_path)
+    except ChunkError as e:
+        raise DecomposeError(str(e)) from e
     result = linearize.linearize(approved_tree)
 
     cfg.plan.phase_dir.mkdir(parents=True, exist_ok=True)
