@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from spec_prism_flow import handoff
 from spec_prism_flow.config import SpecPrismFlowConfig
 from spec_prism_flow.overview_stage import OPEN_QUESTIONS_FILENAME, OVERVIEW_FILENAME
-from spec_prism_flow.workspace import manifest_path
+from spec_prism_flow.workspace import ManifestError, load_manifest
 
 REQUIREMENTS_FILENAME = "requirements.md"
 TEMPLATE_FILENAME = "requirements-doc-drafting-prompt.md"
@@ -17,13 +16,6 @@ _KNOWLEDGE_SUBDIR = "spec-prism-flow"
 
 class RequirementsError(Exception):
     pass
-
-
-def _load_manifest(workspace_dir: Path) -> dict:
-    path = manifest_path(workspace_dir)
-    if not path.exists():
-        raise RequirementsError(f"Manifest not found: {path}; run 'plan init' first")  # noqa: TRY003
-    return json.loads(path.read_text())
 
 
 def build_requirements_prompt(
@@ -41,7 +33,10 @@ def build_requirements_prompt(
 
 
 def run_draft_requirements(cfg: SpecPrismFlowConfig) -> Path:
-    manifest = _load_manifest(cfg.plan.workspace_dir)
+    try:
+        manifest = load_manifest(cfg.plan.workspace_dir)
+    except ManifestError as e:
+        raise RequirementsError(str(e)) from e
 
     overview_path = cfg.plan.workspace_dir / OVERVIEW_FILENAME
     if not overview_path.exists():

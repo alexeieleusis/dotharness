@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 
 from spec_prism_flow import handoff
 from spec_prism_flow.config import SpecPrismFlowConfig
-from spec_prism_flow.workspace import manifest_path
+from spec_prism_flow.workspace import ManifestError, load_manifest
 
 OVERVIEW_FILENAME = "00-overview.md"
 OPEN_QUESTIONS_FILENAME = "OPEN_QUESTIONS.md"
@@ -16,19 +15,6 @@ _STAGE_NAME = "draft_overview"
 
 class OverviewError(Exception):
     pass
-
-
-def _load_manifest(workspace_dir: Path) -> dict:
-    path = manifest_path(workspace_dir)
-    if not path.exists():
-        raise OverviewError(f"Manifest not found: {path}; run 'plan init' first")  # noqa: TRY003
-    try:
-        manifest = json.loads(path.read_text())
-    except json.JSONDecodeError as e:
-        raise OverviewError(f"Manifest is not valid JSON: {path}") from e  # noqa: TRY003
-    if "brief" not in manifest:
-        raise OverviewError(f"Manifest is missing required 'brief' key: {path}")  # noqa: TRY003
-    return manifest
 
 
 def build_overview_prompt(manifest: dict) -> str:
@@ -65,7 +51,10 @@ def build_overview_prompt(manifest: dict) -> str:
 
 
 def run_draft_overview(cfg: SpecPrismFlowConfig) -> tuple[Path, Path | None]:
-    manifest = _load_manifest(cfg.plan.workspace_dir)
+    try:
+        manifest = load_manifest(cfg.plan.workspace_dir)
+    except ManifestError as e:
+        raise OverviewError(str(e)) from e
     prompt_text = build_overview_prompt(manifest)
 
     handoff_started_at = time.time()
