@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from spec_prism_flow import graph as graph_module
 from spec_prism_flow.config import SpecPrismFlowConfig
 from spec_prism_flow.decompose import GRAPH_FILENAME
+from spec_prism_flow.markdown_utils import extract_list_items
 from spec_prism_flow.overview_stage import OPEN_QUESTIONS_FILENAME
-from spec_prism_flow.phase_file import PhaseFile, PhaseFileError, extract_list_items, parse_phase_file
+from spec_prism_flow.phase_file import PhaseFile, PhaseFileError, parse_phase_file
 from spec_prism_flow.requirements_stage import REQUIREMENTS_FILENAME
 
 REVIEW_LOG_FILENAME = "review_log.md"

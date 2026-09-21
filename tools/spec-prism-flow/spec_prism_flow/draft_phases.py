@@ -9,10 +9,10 @@ from spec_prism_flow.chunk import ChunkNode, load_tree
 from spec_prism_flow.config import SpecPrismFlowConfig
 from spec_prism_flow.decompose import TREE_FILENAME
 from spec_prism_flow.errors import DecomposeError
+from spec_prism_flow.markdown_utils import extract_list_items
 from spec_prism_flow.phase_file import (
     PHASE_FILE_NAME_PATTERN,
     PhaseFile,
-    extract_list_items,
     phase_file_name,
     render_phase_file,
 )
