@@ -206,6 +206,20 @@ def test_acceptance_criteria_falls_back_to_bare_goal_markers_without_heading(tmp
     assert phase.acceptance_criteria == ["Do the thing."]
 
 
+def test_acceptance_criteria_does_not_treat_non_goals_heading_as_goals(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    doc = "### Non-Goals\n- Not this.\n"
+    leaf = ChunkNode(chunk=_chunk("A-1", "leaf", ["a.py"], 1), leaf_doc=doc)
+    root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
+    _write_tree(cfg, root)
+
+    run_draft_phases(cfg)
+
+    phase = parse_phase_file(cfg.plan.phase_dir / "01-leaf-leaf.md")
+    assert len(phase.acceptance_criteria) == 1
+    assert "No structured, testable requirements" in phase.acceptance_criteria[0]
+
+
 def test_acceptance_criteria_placeholder_when_nothing_recognizable(tmp_path):
     cfg = _make_cfg(tmp_path)
     leaf = ChunkNode(chunk=_chunk("A-1", "plain", ["a.py"], 1), leaf_doc="Just an unstructured mini-doc.")

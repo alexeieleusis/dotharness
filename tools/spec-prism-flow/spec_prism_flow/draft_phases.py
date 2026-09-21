@@ -18,7 +18,7 @@ from spec_prism_flow.phase_file import (
 )
 
 _HEADING_PATTERN = re.compile(r"^#{1,6}\s")
-_GOALS_HEADING_PATTERN = re.compile(r"^#{1,6}\s+.*\bgoals?\b", re.IGNORECASE)
+_GOALS_HEADING_PATTERN = re.compile(r"^#{1,6}\s+goals?\b", re.IGNORECASE)
 _LIST_ITEM_PATTERN = re.compile(r"^-\s+(.*)$")
 _GOAL_MARKER_PATTERN = re.compile(r"^\*{0,2}G\d+\.\*{0,2}\s*")
 
