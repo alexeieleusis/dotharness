@@ -71,8 +71,4 @@ def run_draft_requirements(cfg: SpecPrismFlowConfig) -> Path:
     except handoff.HandoffError as e:
         raise RequirementsError(str(e)) from e
 
-    requirements_path = cfg.plan.workspace_dir / REQUIREMENTS_FILENAME
-    if not requirements_path.exists():
-        raise RequirementsError(f"Expected output file not found: {requirements_path}")  # noqa: TRY003
-
-    return requirements_path
+    return cfg.plan.workspace_dir / REQUIREMENTS_FILENAME

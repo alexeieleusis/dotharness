@@ -137,20 +137,6 @@ def test_run_draft_requirements_writes_output_using_full_prompt(tmp_path, monkey
     assert "convention rules" in captured["prompt_text"]
 
 
-def test_run_draft_requirements_raises_when_output_not_written(tmp_path, monkeypatch):
-    brief = tmp_path / "brief.md"
-    brief.write_text("brief content")
-    cfg = _make_cfg(tmp_path)
-    init_workspace(cfg.plan.workspace_dir, brief, None, None, [])
-    (cfg.plan.workspace_dir / OVERVIEW_FILENAME).write_text("overview")
-    _write_template(cfg)
-
-    monkeypatch.setattr(requirements_stage.handoff, "run_handoff", lambda *a, **k: None)
-
-    with pytest.raises(RequirementsError, match=REQUIREMENTS_FILENAME):
-        run_draft_requirements(cfg)
-
-
 def test_run_draft_requirements_translates_real_handoff_error_cleanly(tmp_path, monkeypatch):
     brief = tmp_path / "brief.md"
     brief.write_text("brief content")

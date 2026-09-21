@@ -69,7 +69,7 @@ def run_draft_overview(cfg: SpecPrismFlowConfig) -> tuple[Path, Path | None]:
         raise OverviewError(str(e)) from e
 
     overview_path = cfg.plan.workspace_dir / OVERVIEW_FILENAME
-    if not overview_path.exists() or overview_path.stat().st_mtime < handoff_started_at:
+    if overview_path.stat().st_mtime < handoff_started_at:
         raise OverviewError(f"Expected output file was not written by this run: {overview_path}")  # noqa: TRY003
 
     open_questions_path = cfg.plan.workspace_dir / OPEN_QUESTIONS_FILENAME

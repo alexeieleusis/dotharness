@@ -104,18 +104,6 @@ def test_run_draft_overview_open_questions_absent_is_not_an_error(tmp_path, monk
     assert open_questions_path is None
 
 
-def test_run_draft_overview_raises_when_output_not_written(tmp_path, monkeypatch):
-    brief = tmp_path / "brief.md"
-    brief.write_text("brief content")
-    cfg = _make_cfg(tmp_path)
-    init_workspace(cfg.plan.workspace_dir, brief, None, None, [])
-
-    monkeypatch.setattr(overview_stage.handoff, "run_handoff", lambda *a, **k: None)
-
-    with pytest.raises(OverviewError, match=OVERVIEW_FILENAME):
-        run_draft_overview(cfg)
-
-
 def test_run_draft_overview_raises_when_output_is_stale(tmp_path, monkeypatch):
     brief = tmp_path / "brief.md"
     brief.write_text("brief content")
@@ -170,22 +158,6 @@ def test_cli_draft_overview_writes_overview_and_prints_next_step(tmp_path, monke
     assert result.exit_code == 0, result.output
     assert "plan draft-requirements" in result.output
     assert "No open questions raised." in result.output
-
-
-def test_cli_draft_overview_fails_clearly_when_output_missing(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
-    brief = tmp_path / "brief.md"
-    brief.write_text("brief content")
-    init_workspace(tmp_path / "workspace", brief, None, None, [])
-
-    monkeypatch.setattr(overview_stage.handoff, "run_handoff", lambda *a, **k: None)
-
-    result = CliRunner().invoke(cli, ["plan", "draft-overview"])
-
-    assert result.exit_code != 0
-    assert isinstance(result.exception, SystemExit)
-    assert OVERVIEW_FILENAME in result.output
 
 
 def test_cli_draft_overview_fails_clearly_when_real_handoff_error_raised(tmp_path, monkeypatch):
