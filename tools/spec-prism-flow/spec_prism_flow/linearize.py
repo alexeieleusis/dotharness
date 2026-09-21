@@ -53,15 +53,19 @@ def _mentions(doc: str, chunk: Chunk) -> bool:
     return (bool(chunk.path) and chunk.path in doc) or (bool(chunk.name) and chunk.name in doc)
 
 
-def _references(a: LeafVisit, b: LeafVisit) -> bool:
-    return _mentions(a.leaf_doc, b.chunk) or _mentions(b.leaf_doc, a.chunk)
+def _shares_scope(a: LeafVisit, b: LeafVisit) -> bool:
+    return not set(a.chunk.file_scope_estimate).isdisjoint(b.chunk.file_scope_estimate)
 
 
-def _derive_reference_edges(leaves: list[LeafVisit], stems: list[str]) -> list[tuple[str, str]]:
+def _linked(a: LeafVisit, b: LeafVisit) -> bool:
+    return _mentions(a.leaf_doc, b.chunk) or _mentions(b.leaf_doc, a.chunk) or _shares_scope(a, b)
+
+
+def _derive_edges(leaves: list[LeafVisit], stems: list[str]) -> list[tuple[str, str]]:
     edges: list[tuple[str, str]] = []
     for i in range(len(leaves)):
         for j in range(i):
-            if _references(leaves[i], leaves[j]):
+            if _linked(leaves[i], leaves[j]):
                 edges.append((stems[i], stems[j]))
     return edges
 
@@ -91,7 +95,7 @@ def linearize(root: ChunkNode) -> LinearizationResult:
         leaves.append(LeafVisit(number=number, chunk=node.chunk, leaf_doc=node.leaf_doc, depends_on=depends_on))
 
     stems = [phase_file_stem(leaf.number, _slugify(leaf.chunk.name)) for leaf in leaves]
-    edges = _derive_reference_edges(leaves, stems)
+    edges = _derive_edges(leaves, stems)
     derived_graph = Graph(nodes=stems, edges=edges)
 
     phase_files = [_synthetic_phase_file(leaf) for leaf in leaves]

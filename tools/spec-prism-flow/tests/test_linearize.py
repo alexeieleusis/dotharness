@@ -93,14 +93,16 @@ def test_linearize_adds_edge_when_mini_doc_references_sibling_chunk_name():
     assert ("02-second-leaf", "01-auth-flow-leaf") in result.graph.edges
 
 
-def test_linearize_raises_decompose_error_on_disjoint_scope_violation_between_unlinked_leaves():
+def test_linearize_adds_edge_when_leaves_share_file_scope_with_no_textual_reference():
     leaf_1 = ChunkNode(chunk=_chunk("A-1", "first", ["src/shared.py"], 1), leaf_doc="first doc, standalone")
     leaf_2 = ChunkNode(chunk=_chunk("A-2", "second", ["src/two.py"], 1), leaf_doc="second doc, standalone")
     leaf_3 = ChunkNode(chunk=_chunk("A-3", "third", ["src/shared.py"], 1), leaf_doc="third doc, standalone")
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf_1, leaf_2, leaf_3])
 
-    with pytest.raises(DecomposeError, match="Disjoint-scope violation"):
-        linearize(root)
+    result = linearize(root)
+
+    assert ("03-third-leaf", "01-first-leaf") in result.graph.edges
+    assert ("02-second-leaf", "01-first-leaf") not in result.graph.edges
 
 
 def test_linearize_does_not_raise_when_shared_scope_leaves_are_explicitly_linked():

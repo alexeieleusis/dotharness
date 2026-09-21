@@ -368,7 +368,7 @@ def test_run_decompose_does_not_reinvoke_generator_after_checkpoint(tmp_path, mo
     assert call_count["n"] == 3  # root + 2 leaves; nothing extra after the checkpoint pause
 
 
-def test_run_decompose_propagates_disjoint_scope_violation_as_decompose_error(tmp_path, monkeypatch):
+def test_run_decompose_links_leaves_that_share_file_scope_with_no_cross_reference(tmp_path, monkeypatch):
     cfg = _make_cfg(tmp_path)
     _init_workspace_with_requirements(cfg)
 
@@ -404,5 +404,8 @@ def test_run_decompose_propagates_disjoint_scope_violation_as_decompose_error(tm
     monkeypatch.setattr(decompose.generator, "run_generator", _fake)
     monkeypatch.setattr(decompose.click, "confirm", lambda *a, **k: True)
 
-    with pytest.raises(DecomposeError, match="Disjoint-scope violation"):
-        decompose.run_decompose(cfg)
+    _, graph_path = decompose.run_decompose(cfg)
+
+    graph_data = json.loads(graph_path.read_text())
+    assert ["03-third-leaf", "01-first-leaf"] in graph_data["edges"]
+    assert ["02-second-leaf", "01-first-leaf"] not in graph_data["edges"]
