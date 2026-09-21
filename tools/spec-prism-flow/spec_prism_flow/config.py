@@ -13,10 +13,15 @@ DEFAULT_BUILD_WORKERS = 1
 DEFAULT_BUILD_MAX_RETRY_CYCLES = 3
 DEFAULT_BUILD_STATE_DIR = "~/.local/share/dotharness/spec-prism-flow/state"
 DEFAULT_HARNESS_KNOWLEDGE_DIR = "~/.harness/knowledge"
+DEFAULT_CONFIG_FILE = ".spec-prism-flow.toml"
 
 
 class ConfigError(ValueError):
     pass
+
+
+def resolve_config_path(config_path_str: str | None) -> Path:
+    return Path(config_path_str).expanduser() if config_path_str else Path(DEFAULT_CONFIG_FILE)
 
 
 @dataclass

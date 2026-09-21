@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from spec_prism_flow.config import ConfigError, load_config
+from spec_prism_flow.config import ConfigError, load_config, resolve_config_path
 
 MINIMAL_TOML = """
 [plan]
@@ -24,6 +24,14 @@ def test_load_minimal(tmp_path):
     assert cfg.plan.phase_dir == Path("docs/phases")
     assert cfg.plan.conventions_path is None
     assert cfg.agent.backend == "claude"
+
+
+def test_resolve_config_path_expands_user():
+    assert resolve_config_path("~/.spec-prism-flow.toml") == Path.home() / ".spec-prism-flow.toml"
+
+
+def test_resolve_config_path_defaults_when_absent():
+    assert resolve_config_path(None) == Path(".spec-prism-flow.toml")
 
 
 def test_missing_config_file_raises(tmp_path):
