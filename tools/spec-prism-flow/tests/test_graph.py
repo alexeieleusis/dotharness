@@ -113,6 +113,22 @@ def test_disjoint_scope_no_violation_when_path_exists():
     assert validate_graph(graph, phase_files) == []
 
 
+def test_disjoint_scope_no_violation_when_transitive_path_exists():
+    # Phase 3 depends on phase 2, which depends on phase 1: no direct edge between
+    # 01 and 03, but they are connected through the multi-hop BFS closure.
+    phase_files = [
+        _phase(1, "a", ["shared.py"], "None (first phase)."),
+        _phase(2, "b", ["b.py"], "Phase 1 merged."),
+        _phase(3, "c", ["shared.py"], "Phase 2 merged."),
+    ]
+    graph = Graph(
+        nodes=["01-a-leaf", "02-b-leaf", "03-c-leaf"],
+        edges=[("03-c-leaf", "02-b-leaf"), ("02-b-leaf", "01-a-leaf")],
+    )
+
+    assert validate_graph(graph, phase_files) == []
+
+
 def test_missing_linear_chain_edge_detected():
     phase_files = [
         _phase(1, "a", ["a.py"], "None (first phase)."),
