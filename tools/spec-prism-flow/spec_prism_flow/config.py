@@ -117,8 +117,11 @@ def load_config(path: Path) -> SpecPrismFlowConfig:
     )
 
     b = data.get("build", {})
+    raw_commands = b.get("commands", [])
+    if not isinstance(raw_commands, list) or not all(isinstance(c, str) for c in raw_commands):
+        raise ConfigError("build.commands must be a list of strings")  # noqa: TRY003
     build = BuildConfig(
-        commands=list(b.get("commands", [])),
+        commands=raw_commands,
         workers=b.get("workers", DEFAULT_BUILD_WORKERS),
         max_retry_cycles=b.get("max_retry_cycles", DEFAULT_BUILD_MAX_RETRY_CYCLES),
         state_dir=Path(b.get("state_dir", DEFAULT_BUILD_STATE_DIR)).expanduser(),
