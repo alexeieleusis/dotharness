@@ -73,7 +73,7 @@ def test_invoke_raises_opencode_command_error_on_nonzero_exit(tmp_path, monkeypa
 
     assert exc_info.value.returncode == 3
     assert exc_info.value.stderr == "permission denied"
-    assert "opencode run exited 3: permission denied" in str(exc_info.value)
+    assert exc_info.value.cmd_args[:2] == ["opencode", "run"]
 
 
 def test_invoke_cleans_up_temp_file_even_when_backend_raises(tmp_path, monkeypatch):

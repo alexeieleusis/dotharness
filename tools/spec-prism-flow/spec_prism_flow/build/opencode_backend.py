@@ -5,14 +5,13 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from spec_prism_flow.build.errors import CommandError
+
 DEFAULT_TIMEOUT_SECONDS = 1800
 
 
-class OpencodeCommandError(RuntimeError):
-    def __init__(self, returncode: int, stderr: str) -> None:
-        self.returncode = returncode
-        self.stderr = stderr
-        super().__init__(f"opencode run exited {returncode}: {stderr.strip()}")
+class OpencodeCommandError(CommandError):
+    """Raised when the `opencode run` subprocess exits non-zero."""
 
 
 class OpencodeBackend:
@@ -34,10 +33,11 @@ class OpencodeBackend:
         fd, path_str = tempfile.mkstemp(suffix=".md", prefix="spec_prism_flow_")
         tmp_path = Path(path_str)
         os.close(fd)
+        cmd = self._build_command(tmp_path, cwd)
         try:
             tmp_path.write_text(instructions, encoding="utf-8")
             result = subprocess.run(  # noqa: S603
-                self._build_command(tmp_path, cwd),
+                cmd,
                 cwd=cwd,
                 capture_output=True,
                 text=True,
@@ -48,7 +48,7 @@ class OpencodeBackend:
             tmp_path.unlink(missing_ok=True)
 
         if result.returncode != 0:
-            raise OpencodeCommandError(result.returncode, result.stderr)
+            raise OpencodeCommandError(cmd, result.returncode, result.stderr)
         return result.stdout
 
     @staticmethod

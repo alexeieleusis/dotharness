@@ -8,9 +8,16 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from spec_prism_flow.build import git_ops
+from spec_prism_flow.build.errors import CommandError
+
 DEFAULT_TIMEOUT_SECONDS = 1800
 _GIT_TIMEOUT_SECONDS = 30
 _TMP_DIR = Path.home() / ".local/share/dotharness/tmp"
+
+
+class ClaudeCommandError(CommandError):
+    """Raised when the `claude` subprocess exits non-zero."""
 
 
 class RepoIdentityError(RuntimeError):
@@ -109,23 +116,22 @@ class ClaudeBackend:
         total_attempts = self.max_retries + 1
         for attempt in range(1, total_attempts + 1):
             tmp_path = self._write_instructions(instructions)
+            cmd = self._build_command(tmp_path)
             try:
-                proc = self._start_process(self._build_command(tmp_path), cwd)
+                proc = self._start_process(cmd, cwd)
                 try:
                     stdout, stderr = proc.communicate(timeout=self.timeout)
                 except subprocess.TimeoutExpired:
                     self._kill(proc)
                     if attempt < total_attempts:
-                        self._reset_to_branch_tip(cwd)
+                        git_ops.discard_working_tree_changes(cwd)
                         continue
                     raise
             finally:
                 tmp_path.unlink(missing_ok=True)
 
             if proc.returncode != 0:
-                raise RuntimeError(  # noqa: TRY003
-                    f"claude exited {proc.returncode}: {stderr.decode('utf-8', errors='replace').strip()}"
-                )
+                raise ClaudeCommandError(cmd, proc.returncode, stderr.decode("utf-8", errors="replace"))
 
             _assert_repo_identity_unchanged(cwd, before, expected_repo_name=self.expected_repo_name)
             return stdout.decode("utf-8", errors="replace")
@@ -169,13 +175,3 @@ class ClaudeBackend:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         proc.communicate()
-
-    @staticmethod
-    def _reset_to_branch_tip(cwd: Path) -> None:
-        """A SIGKILLed attempt can leave `cwd` mid-write (partially written/staged
-        files) since the killed process gets no chance to clean up; reset back to the
-        branch tip left by checkout_fresh_branch before the retried invoke() call, so
-        the retry reasons about a clean tree instead of the first attempt's
-        wreckage."""
-        _git(cwd, "checkout", "--", ".")
-        _git(cwd, "clean", "-fd")

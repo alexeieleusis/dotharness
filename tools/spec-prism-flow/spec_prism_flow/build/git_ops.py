@@ -68,3 +68,12 @@ def head_sha(clone: Path) -> str:
     orchestrate.git_ops module's ported set, but needed by agent_runner.run_phase to
     populate AgentRunResult.commit_sha after a successful commit."""
     return _run(clone, "rev-parse", "HEAD").stdout.strip()
+
+
+def discard_working_tree_changes(clone: Path) -> None:
+    """Discard uncommitted tracked edits and untracked files in `clone`, restoring it
+    to its current branch tip. Not part of the source orchestrate.git_ops module's
+    ported set; used by ClaudeBackend to recover from a SIGKILLed attempt that left
+    partially written/staged files before a retry."""
+    _run(clone, "checkout", "--", ".")
+    _run(clone, "clean", "-fd")

@@ -3,7 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from spec_prism_flow.build.claude_backend import ClaudeBackend, RepoIdentityError
+from spec_prism_flow.build.claude_backend import ClaudeBackend, ClaudeCommandError, RepoIdentityError
 
 
 def _git(cwd, *args):
@@ -83,8 +83,11 @@ def test_invoke_raises_on_nonzero_exit(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
     monkeypatch.setattr(ClaudeBackend, "_start_process", staticmethod(lambda cmd, cwd: _FakeProc((b"", b"boom", 1))))
 
-    with pytest.raises(RuntimeError, match="claude exited 1: boom"):
+    with pytest.raises(ClaudeCommandError) as exc_info:
         ClaudeBackend().invoke("do the thing", repo)
+
+    assert exc_info.value.returncode == 1
+    assert exc_info.value.stderr == "boom"
 
 
 def test_invoke_raises_repo_identity_error_when_cwd_is_not_a_git_repo(tmp_path, monkeypatch):
