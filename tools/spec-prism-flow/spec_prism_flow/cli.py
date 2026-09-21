@@ -123,9 +123,14 @@ def plan_draft_requirements(config_path_str, yes):
     show_default=True,
     help="Max recursion depth before escalating a would-be split for human review.",
 )
-def plan_decompose(config_path_str, depth_cap):
+@click.option("--yes", is_flag=True, default=False, help="Skip the overwrite-confirmation prompt.")
+def plan_decompose(config_path_str, depth_cap, yes):
     """Recursively decompose requirements.md into a leaf tree and derive docs/phases/graph.json."""
     cfg = _load_cfg_or_raise(config_path_str)
+
+    target_path = cfg.plan.workspace_dir / decompose.TREE_FILENAME
+    if target_path.exists() and not yes:
+        click.confirm(f"Overwrite existing {target_path}?", abort=True)
 
     try:
         tree_path, graph_path = decompose.run_decompose(cfg, depth_cap=depth_cap)
