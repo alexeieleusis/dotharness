@@ -30,7 +30,10 @@ def test_write_and_load_graph_round_trips(tmp_path):
 
 
 def test_write_graph_edge_order(tmp_path):
-    graph = Graph(nodes=["01-a-leaf", "02-b-leaf"], edges=[("02-b-leaf", "01-a-leaf")])
+    graph = Graph(
+        nodes=["01-a-leaf", "02-b-leaf", "03-c-leaf"],
+        edges=[("03-c-leaf", "02-b-leaf"), ("02-b-leaf", "01-a-leaf")],
+    )
     p = tmp_path / "graph.json"
 
     write_graph(graph, p)
@@ -38,7 +41,7 @@ def test_write_graph_edge_order(tmp_path):
 
     assert '"edges"' in data
     loaded = load_graph(p)
-    assert loaded.edges == [("02-b-leaf", "01-a-leaf")]
+    assert loaded.edges == [("03-c-leaf", "02-b-leaf"), ("02-b-leaf", "01-a-leaf")]
 
 
 def test_valid_graph_returns_no_violations():
