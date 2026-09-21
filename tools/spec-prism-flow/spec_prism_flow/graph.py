@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+import json
+import re
+from collections import defaultdict
+from dataclasses import dataclass
+from pathlib import Path
+
+from spec_prism_flow.phase_file import PhaseFile
+
+_DEPENDS_ON_PHASE_NUMBER_PATTERN = re.compile(r"Phase\s+(\d+)", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class Graph:
+    nodes: list[str]
+    edges: list[tuple[str, str]]
+
+
+def load_graph(path: Path) -> Graph:
+    data = json.loads(path.read_text())
+    return Graph(
+        nodes=list(data["nodes"]),
+        edges=[(dependent, dependency) for dependent, dependency in data["edges"]],
+    )
+
+
+def write_graph(graph: Graph, path: Path) -> None:
+    data = {"nodes": graph.nodes, "edges": [[dependent, dependency] for dependent, dependency in graph.edges]}
+    path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def _stem(phase_file: PhaseFile) -> str:
+    return f"{phase_file.number:02d}-{phase_file.name}-leaf"
+
+
+def _reachable(edges: list[tuple[str, str]], start: str, *, forward: bool) -> set[str]:
+    adjacency: dict[str, list[str]] = defaultdict(list)
+    for dependent, dependency in edges:
+        if forward:
+            adjacency[dependent].append(dependency)
+        else:
+            adjacency[dependency].append(dependent)
+
+    seen: set[str] = set()
+    stack = [start]
+    while stack:
+        node = stack.pop()
+        for neighbor in adjacency.get(node, []):
+            if neighbor not in seen:
+                seen.add(neighbor)
+                stack.append(neighbor)
+    return seen
+
+
+def _has_path(edges: list[tuple[str, str]], a: str, b: str) -> bool:
+    return b in _reachable(edges, a, forward=True) or b in _reachable(edges, a, forward=False)
+
+
+def _find_cycle(edges: list[tuple[str, str]], nodes: list[str]) -> list[str] | None:
+    adjacency: dict[str, list[str]] = defaultdict(list)
+    for dependent, dependency in edges:
+        adjacency[dependent].append(dependency)
+
+    unvisited, in_progress, done = 0, 1, 2
+    state: dict[str, int] = dict.fromkeys(nodes, unvisited)
+    path: list[str] = []
+
+    def visit(node: str) -> list[str] | None:
+        state[node] = in_progress
+        path.append(node)
+        for neighbor in adjacency.get(node, []):
+            neighbor_state = state.get(neighbor, unvisited)
+            if neighbor_state == in_progress:
+                cycle_start = path.index(neighbor)
+                return [*path[cycle_start:], neighbor]
+            if neighbor_state == unvisited:
+                state[neighbor] = unvisited
+                result = visit(neighbor)
+                if result is not None:
+                    return result
+        path.pop()
+        state[node] = done
+        return None
+
+    for node in nodes:
+        if state.get(node, unvisited) == unvisited:
+            result = visit(node)
+            if result is not None:
+                return result
+    return None
+
+
+def _check_orphans(graph: Graph, phase_files: list[PhaseFile]) -> list[str]:
+    stems_from_files = {_stem(pf) for pf in phase_files}
+    node_set = set(graph.nodes)
+
+    violations = [
+        f"Phase file '{stem}' has no corresponding graph node" for stem in sorted(stems_from_files - node_set)
+    ]
+    violations += [
+        f"Graph node '{node}' has no corresponding phase file" for node in sorted(node_set - stems_from_files)
+    ]
+    return violations
+
+
+def _check_acyclic(graph: Graph) -> list[str]:
+    cycle = _find_cycle(graph.edges, graph.nodes)
+    if cycle is None:
+        return []
+    return [f"Graph contains a cycle: {' -> '.join(cycle)}"]
+
+
+def _check_disjoint_scope(graph: Graph, phase_files: list[PhaseFile]) -> list[str]:
+    node_set = set(graph.nodes)
+    scope_by_stem = {_stem(pf): set(pf.scope) for pf in phase_files}
+    stems = sorted(stem for stem in scope_by_stem if stem in node_set)
+
+    violations = []
+    for i, stem_a in enumerate(stems):
+        for stem_b in stems[i + 1 :]:
+            if _has_path(graph.edges, stem_a, stem_b):
+                continue
+            for entry in sorted(scope_by_stem[stem_a] & scope_by_stem[stem_b]):
+                violations.append(
+                    f"Leaves '{stem_a}' and '{stem_b}' have no dependency path between them "
+                    f"but both claim scope entry '{entry}'"
+                )
+    return violations
+
+
+def _check_linear_chain_coverage(graph: Graph, phase_files: list[PhaseFile]) -> list[str]:
+    phase_by_number = {pf.number: pf for pf in phase_files}
+    edge_set = set(graph.edges)
+
+    violations = []
+    for pf in phase_files:
+        if pf.number <= 1:
+            continue
+        referenced_numbers = {int(n) for n in _DEPENDS_ON_PHASE_NUMBER_PATTERN.findall(pf.depends_on)}
+        predecessor_number = pf.number - 1
+        if predecessor_number not in referenced_numbers:
+            continue
+        predecessor = phase_by_number.get(predecessor_number)
+        if predecessor is None:
+            continue
+        edge = (_stem(pf), _stem(predecessor))
+        if edge not in edge_set:
+            violations.append(
+                f"Phase {pf.number} names phase {predecessor_number} in its 'Depends on' text, "
+                f"but graph is missing edge {edge!r}"
+            )
+    return violations
+
+
+def validate_graph(graph: Graph, phase_files: list[PhaseFile]) -> list[str]:
+    return [
+        *_check_orphans(graph, phase_files),
+        *_check_acyclic(graph),
+        *_check_disjoint_scope(graph, phase_files),
+        *_check_linear_chain_coverage(graph, phase_files),
+    ]
