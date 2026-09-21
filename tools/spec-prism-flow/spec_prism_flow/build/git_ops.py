@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import subprocess
 from pathlib import Path
 
@@ -56,7 +57,24 @@ def push_branch(clone: Path, branch: str, remote: str = "origin") -> None:
     """`--force-with-lease` so a retried run_phase (which recreates `branch` fresh off
     origin/base via checkout_fresh_branch) can overwrite a stale remote branch from an
     earlier, abandoned attempt, while still protecting against clobbering an
-    unexpected concurrent push."""
+    unexpected concurrent push.
+
+    `checkout_fresh_branch` never fetches `origin/<branch>`, so a clone with no
+    remote-tracking ref for it (e.g. a --single-branch clone, or any clone made
+    before an earlier attempt's push) would make bare `--force-with-lease` expect
+    the ref to be absent on the remote -- and reject the push with a stale-info
+    error exactly when an abandoned branch is actually there. Fetching `branch`
+    first (tolerating it not existing yet) gives the lease fresh remote state to
+    evaluate against."""
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        subprocess.run(  # noqa: S603
+            ["git", "fetch", remote, branch],  # noqa: S607
+            cwd=clone,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
     _run(clone, "push", "--force-with-lease", "-u", remote, branch)
 
 
