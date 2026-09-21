@@ -57,6 +57,16 @@ def test_failing_command_raises_merge_gate_failure_with_correct_tail(tmp_path):
     assert err.output_tail == "line 7\nline 8\nline 9"
 
 
+def test_failing_command_tail_includes_stderr(tmp_path):
+    body = "import sys; print('boom', file=sys.stderr); sys.exit(1)\n"
+    cmd = _script(tmp_path, body)
+
+    with pytest.raises(MergeGateFailure) as exc_info:
+        run_merge_gates(tmp_path, [cmd])
+
+    assert "boom" in exc_info.value.output_tail
+
+
 def test_failing_command_stops_before_later_commands(tmp_path):
     order_file = tmp_path / "order.txt"
     failing = _script(tmp_path, "import sys; sys.exit(1)\n", filename="failing.py")
