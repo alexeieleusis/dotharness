@@ -3,7 +3,7 @@ from pathlib import Path
 import click
 
 from spec_prism_flow import workspace
-from spec_prism_flow.config import load_config, resolve_config_path
+from spec_prism_flow.config import ConfigError, load_config, resolve_config_path
 
 
 @click.group()
@@ -54,7 +54,10 @@ def plan_init(brief_path, code_path_str, conventions_path_str, links_text, confi
     conventions = _require_existing_path(conventions_path_str, "--conventions") if conventions_path_str else None
     links = [link.strip() for link in (links_text or "").split(",") if link.strip()]
 
-    cfg = load_config(resolve_config_path(config_path_str).resolve())
+    try:
+        cfg = load_config(resolve_config_path(config_path_str).resolve())
+    except ConfigError as e:
+        raise click.ClickException(str(e)) from e
 
     existing_manifest = workspace.manifest_path(cfg.plan.workspace_dir)
     if existing_manifest.exists() and not yes:

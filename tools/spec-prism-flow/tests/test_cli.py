@@ -58,6 +58,18 @@ def test_plan_init_rejects_missing_brief(tmp_path, monkeypatch) -> None:
     assert "does not exist" in result.output
 
 
+def test_plan_init_rejects_missing_config(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "brief.md").write_text("brief content")
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["plan", "init", "brief.md"])
+
+    assert result.exit_code != 0
+    assert "Config file not found" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_plan_init_rejects_missing_code_path(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _write_config(tmp_path)
