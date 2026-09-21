@@ -13,6 +13,9 @@ _SLUG_INVALID_CHARS = re.compile(r"[^a-z0-9-]+")
 _PLACEHOLDER_NOTE = "(drafted by `plan draft-phases`)"
 _DISJOINT_SCOPE_MARKER = "have no dependency path between them but both claim scope entry"
 
+# phase_file_name's "<NN>-<slug>-leaf.md" contract zero-pads to exactly two digits.
+_MAX_LEAVES = 99
+
 
 @dataclass(frozen=True)
 class LeafVisit:
@@ -86,6 +89,12 @@ def linearize(root: ChunkNode) -> LinearizationResult:
     leaf_nodes = _dfs_collect_leaves(root)
     if not leaf_nodes:
         raise DecomposeError("Decomposition tree has no leaves to linearize")  # noqa: TRY003
+    if len(leaf_nodes) > _MAX_LEAVES:
+        raise DecomposeError(  # noqa: TRY003
+            f"Decomposition tree has {len(leaf_nodes)} leaves, exceeding the "
+            f"{_MAX_LEAVES}-leaf limit the two-digit phase file naming contract supports; "
+            "reduce fan-out or lower the depth cap and re-run decompose"
+        )
 
     leaves: list[LeafVisit] = []
     for idx, node in enumerate(leaf_nodes):

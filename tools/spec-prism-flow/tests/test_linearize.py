@@ -119,6 +119,16 @@ def test_linearize_does_not_raise_when_shared_scope_leaves_are_explicitly_linked
     assert ("03-third-leaf", "01-first-leaf") in result.graph.edges
 
 
+def test_linearize_raises_decompose_error_when_leaf_count_exceeds_two_digit_naming_limit():
+    leaves = [
+        ChunkNode(chunk=_chunk(f"A-{i}", f"leaf-{i}", [f"src/{i}.py"], 1), leaf_doc=f"doc {i}") for i in range(100)
+    ]
+    root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=leaves)
+
+    with pytest.raises(DecomposeError, match="100 leaves"):
+        linearize(root)
+
+
 def test_linearize_raises_decompose_error_when_escalated_node_remains():
     escalated = ChunkNode(chunk=_chunk("A-1", "stuck", ["src/a.py"], 1), escalation_reason="depth cap reached")
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[escalated])
