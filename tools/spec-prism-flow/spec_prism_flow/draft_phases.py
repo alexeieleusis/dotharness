@@ -131,6 +131,9 @@ def run_draft_phases(cfg: SpecPrismFlowConfig) -> DraftPhasesResult:
     internal_nodes_skipped = _count_total_nodes(tree) - len(result.leaves)
 
     cfg.plan.phase_dir.mkdir(parents=True, exist_ok=True)
+    for stale_path in cfg.plan.phase_dir.glob("*-leaf.md"):
+        if PHASE_FILE_NAME_PATTERN.match(stale_path.name):
+            stale_path.unlink()
 
     written: list[Path] = []
     outliers: list[str] = []
