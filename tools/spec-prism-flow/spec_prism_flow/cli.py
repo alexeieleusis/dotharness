@@ -38,6 +38,13 @@ def _require_readable_file(path_str: str, label: str) -> Path:
     return path
 
 
+def _load_cfg_or_raise(config_path_str: str | None):
+    try:
+        return load_config(resolve_config_path(config_path_str).resolve())
+    except ConfigError as e:
+        raise click.ClickException(str(e)) from e
+
+
 @cmd_plan.command("init")
 @click.argument("brief_path", type=click.Path())
 @click.option("--code", "code_path_str", default=None, type=click.Path(), help="Existing path to prior code.")
@@ -54,10 +61,7 @@ def plan_init(brief_path, code_path_str, conventions_path_str, links_text, confi
     conventions = _require_existing_path(conventions_path_str, "--conventions") if conventions_path_str else None
     links = [link.strip() for link in (links_text or "").split(",") if link.strip()]
 
-    try:
-        cfg = load_config(resolve_config_path(config_path_str).resolve())
-    except ConfigError as e:
-        raise click.ClickException(str(e)) from e
+    cfg = _load_cfg_or_raise(config_path_str)
 
     existing_manifest = workspace.manifest_path(cfg.plan.workspace_dir)
     if existing_manifest.exists() and not yes:
@@ -65,13 +69,6 @@ def plan_init(brief_path, code_path_str, conventions_path_str, links_text, confi
 
     written = workspace.init_workspace(cfg.plan.workspace_dir, brief, code, conventions, links)
     click.echo(f"Wrote {written}")
-
-
-def _load_cfg_or_raise(config_path_str: str | None):
-    try:
-        return load_config(resolve_config_path(config_path_str).resolve())
-    except ConfigError as e:
-        raise click.ClickException(str(e)) from e
 
 
 @cmd_plan.command("draft-overview")
