@@ -148,30 +148,27 @@ def test_resolve_chunk_escalates_on_natural_split_at_depth_cap(tmp_path, monkeyp
     assert entries[0]["chunk_path"] == "A-1-1-1"
 
 
-def test_resolve_chunk_escalates_when_forced_split_retry_hits_depth_cap(tmp_path, monkeypatch):
+def test_resolve_chunk_escalates_without_forced_split_retry_when_depth_cap_already_reached(tmp_path, monkeypatch):
     cfg = _make_cfg(tmp_path)
     chunk_obj = _leaf_chunk(path="A-1-1-1", name="deep", depth=4)
+    calls = []
 
     def _fake(c, cfg_arg, *, forced_split=False):
-        if not forced_split:
-            return generator.Leaf("too short")
-        return generator.Split(
-            children=[
-                Chunk(path="x-1", name="c1", file_scope_estimate=[], requirements_slice="a", depth=5),
-                Chunk(path="x-2", name="c2", file_scope_estimate=[], requirements_slice="b", depth=5),
-            ]
-        )
+        calls.append(forced_split)
+        return generator.Leaf("too short")
 
     monkeypatch.setattr(decompose.generator, "run_generator", _fake)
     log_path = tmp_path / "log.jsonl"
 
     node = decompose.resolve_chunk(chunk_obj, cfg, depth_cap=4, log_path=log_path)
 
+    assert calls == [False]
     assert node.is_escalated
     assert node.escalation_reason is not None
     assert "Depth cap" in node.escalation_reason
+    assert "skipping forced-split retry" in node.escalation_reason
     entries = _log_entries(log_path)
-    assert [e["event"] for e in entries] == ["retry", "escalate"]
+    assert [e["event"] for e in entries] == ["escalate"]
 
 
 def test_resolve_chunk_processes_split_children_left_to_right_to_completion(tmp_path, monkeypatch):

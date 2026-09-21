@@ -48,6 +48,14 @@ def resolve_chunk(chunk: Chunk, cfg: SpecPrismFlowConfig, depth_cap: int, log_pa
         if not out_of_band:
             return ChunkNode(chunk=chunk, leaf_doc=result.doc)
 
+        if chunk.depth >= depth_cap:
+            return _escalate(
+                log_path,
+                chunk,
+                f"depth cap reached; skipping forced-split retry ({reason})",
+                f"Depth cap ({depth_cap}) reached; skipping forced-split retry ({reason})",
+            )
+
         _append_log(log_path, chunk.path, "retry", f"forced-split retry after natural Leaf verdict: {reason}")
         retry_result = generator.run_generator(chunk, cfg, forced_split=True)
 
@@ -57,14 +65,6 @@ def resolve_chunk(chunk: Chunk, cfg: SpecPrismFlowConfig, depth_cap: int, log_pa
                 chunk,
                 f"forced-split retry still returned Leaf ({reason})",
                 f"Trivial-breakdown deadlock: forced-split retry still returned Leaf ({reason})",
-            )
-
-        if chunk.depth >= depth_cap:
-            return _escalate(
-                log_path,
-                chunk,
-                "forced-split retry returned Split but depth cap reached",
-                f"Depth cap ({depth_cap}) reached after forced-split retry; Split discarded",
             )
 
         children = [resolve_chunk(child, cfg, depth_cap, log_path) for child in retry_result.children]
