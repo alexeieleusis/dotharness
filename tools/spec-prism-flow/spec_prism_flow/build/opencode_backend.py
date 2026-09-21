@@ -4,9 +4,9 @@ import contextlib
 import os
 import signal
 import subprocess
-import tempfile
 from pathlib import Path
 
+from spec_prism_flow.build import agent_instructions
 from spec_prism_flow.build.errors import CommandError
 
 DEFAULT_TIMEOUT_SECONDS = 1800
@@ -33,12 +33,9 @@ class OpencodeBackend:
         self.timeout = timeout
 
     def invoke(self, instructions: str, cwd: Path) -> str:
-        fd, path_str = tempfile.mkstemp(suffix=".md", prefix="spec_prism_flow_")
-        tmp_path = Path(path_str)
-        os.close(fd)
+        tmp_path = agent_instructions.write_instructions_file(instructions)
         cmd = self._build_command(tmp_path, cwd)
         try:
-            tmp_path.write_text(instructions, encoding="utf-8")
             proc = self._start_process(cmd, cwd)
             try:
                 stdout, stderr = proc.communicate(timeout=self.timeout)
@@ -54,7 +51,7 @@ class OpencodeBackend:
 
     @staticmethod
     def _build_command(tmp_path: Path, cwd: Path) -> list[str]:
-        prompt = f"Read {tmp_path} and follow the instructions exactly."
+        prompt = agent_instructions.read_prompt(tmp_path)
         return ["opencode", "run", prompt, "--pure", "--dir", str(cwd)]
 
     @staticmethod

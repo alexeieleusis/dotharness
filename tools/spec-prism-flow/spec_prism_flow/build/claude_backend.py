@@ -4,11 +4,10 @@ import contextlib
 import os
 import signal
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from spec_prism_flow.build import git_ops
+from spec_prism_flow.build import agent_instructions, git_ops
 from spec_prism_flow.build.errors import CommandError
 
 DEFAULT_TIMEOUT_SECONDS = 1800
@@ -143,20 +142,11 @@ class ClaudeBackend:
 
     @staticmethod
     def _write_instructions(instructions: str) -> Path:
-        _TMP_DIR.mkdir(parents=True, exist_ok=True)
-        fd, path_str = tempfile.mkstemp(suffix=".md", dir=_TMP_DIR, prefix="spec_prism_flow_")
-        tmp_path = Path(path_str)
-        os.close(fd)
-        try:
-            tmp_path.write_text(instructions, encoding="utf-8")
-        except OSError:
-            tmp_path.unlink(missing_ok=True)
-            raise
-        return tmp_path
+        return agent_instructions.write_instructions_file(instructions, tmp_dir=_TMP_DIR)
 
     @staticmethod
     def _build_command(tmp_path: Path) -> list[str]:
-        prompt = f"Read {tmp_path} and follow the instructions exactly."
+        prompt = agent_instructions.read_prompt(tmp_path)
         return ["claude", "--dangerously-skip-permissions", "--disable-slash-commands", "-p", prompt]
 
     @staticmethod
