@@ -28,7 +28,12 @@ def test_chunk_node_rejects_neither_leaf_doc_nor_children():
 
 def test_chunk_node_rejects_all_three_variants_set():
     with pytest.raises(ChunkError, match="exactly one"):
-        ChunkNode(chunk=_chunk(), leaf_doc="doc", escalation_reason="flagged")
+        ChunkNode(
+            chunk=_chunk(),
+            leaf_doc="doc",
+            children=[ChunkNode(chunk=_chunk("A-1"), leaf_doc="child doc")],
+            escalation_reason="flagged",
+        )
 
 
 def test_chunk_node_rejects_empty_children_list():
