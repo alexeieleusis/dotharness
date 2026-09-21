@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import os
+import signal
 import subprocess
 import tempfile
 from pathlib import Path
@@ -8,6 +10,7 @@ from pathlib import Path
 from spec_prism_flow.build.errors import CommandError
 
 DEFAULT_TIMEOUT_SECONDS = 1800
+_KILL_GRACE_SECONDS = 5
 
 
 class OpencodeCommandError(CommandError):
@@ -36,22 +39,44 @@ class OpencodeBackend:
         cmd = self._build_command(tmp_path, cwd)
         try:
             tmp_path.write_text(instructions, encoding="utf-8")
-            result = subprocess.run(  # noqa: S603
-                cmd,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=self.timeout,
-            )
+            proc = self._start_process(cmd, cwd)
+            try:
+                stdout, stderr = proc.communicate(timeout=self.timeout)
+            except subprocess.TimeoutExpired:
+                self._kill(proc)
+                raise
         finally:
             tmp_path.unlink(missing_ok=True)
 
-        if result.returncode != 0:
-            raise OpencodeCommandError(cmd, result.returncode, result.stderr)
-        return result.stdout
+        if proc.returncode != 0:
+            raise OpencodeCommandError(cmd, proc.returncode, stderr.decode("utf-8", errors="replace"))
+        return stdout.decode("utf-8", errors="replace")
 
     @staticmethod
     def _build_command(tmp_path: Path, cwd: Path) -> list[str]:
         prompt = f"Read {tmp_path} and follow the instructions exactly."
         return ["opencode", "run", prompt, "--pure", "--dir", str(cwd)]
+
+    @staticmethod
+    def _start_process(cmd: list[str], cwd: Path) -> subprocess.Popen:
+        """Split out from invoke() as its own seam so tests can mock just the
+        opencode-invoking subprocess, mirroring ClaudeBackend._start_process."""
+        return subprocess.Popen(  # noqa: S603
+            cmd,
+            cwd=cwd,
+            start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    @staticmethod
+    def _kill(proc: subprocess.Popen) -> None:
+        """Kill the whole process group opencode was started in, not just the
+        opencode process itself -- mirrors ClaudeBackend._kill. Without this,
+        subprocess.run's built-in timeout handling only killed the immediate
+        opencode process, leaving any child processes it spawned (git, shell tool
+        calls, etc.) running unparented in cwd past the timeout."""
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.communicate(timeout=_KILL_GRACE_SECONDS)
