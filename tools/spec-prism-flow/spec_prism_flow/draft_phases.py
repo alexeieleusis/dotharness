@@ -81,8 +81,8 @@ def _derive_manual_test_checklist(acceptance_criteria: list[str]) -> list[str]:
     return [f"Manually verify: {criterion}" for criterion in acceptance_criteria]
 
 
-def _depends_on_text(number: int) -> str:
-    return "None (first phase)." if number == 1 else f"Phase {number - 1} merged."
+def _depends_on_text(depends_on_number: int | None) -> str:
+    return "None (first phase)." if depends_on_number is None else f"Phase {depends_on_number} merged."
 
 
 def _load_linearized(cfg: SpecPrismFlowConfig) -> tuple[ChunkNode, linearize.LinearizationResult]:
@@ -157,7 +157,7 @@ def run_draft_phases(cfg: SpecPrismFlowConfig) -> DraftPhasesResult:
             requirements=leaf.leaf_doc,
             acceptance_criteria=acceptance_criteria,
             manual_test_checklist=_derive_manual_test_checklist(acceptance_criteria),
-            depends_on=_depends_on_text(leaf.number),
+            depends_on=_depends_on_text(leaf.depends_on_number),
         )
 
         label = phase_file_name(phase.number, phase.name)

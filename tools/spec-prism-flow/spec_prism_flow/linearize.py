@@ -21,7 +21,7 @@ class LeafVisit:
     number: int
     chunk: Chunk
     leaf_doc: str
-    depends_on: str
+    depends_on_number: int | None
 
 
 @dataclass(frozen=True)
@@ -75,6 +75,7 @@ def _derive_edges(leaves: list[LeafVisit], stems: list[str]) -> list[tuple[str, 
 
 
 def _synthetic_phase_file(leaf: LeafVisit) -> PhaseFile:
+    depends_on = "None (first phase)" if leaf.depends_on_number is None else f"Phase {leaf.depends_on_number} merged"
     return PhaseFile(
         number=leaf.number,
         name=_slugify(leaf.chunk.name),
@@ -82,7 +83,7 @@ def _synthetic_phase_file(leaf: LeafVisit) -> PhaseFile:
         requirements=leaf.leaf_doc,
         acceptance_criteria=[_PLACEHOLDER_NOTE],
         manual_test_checklist=[_PLACEHOLDER_NOTE],
-        depends_on=leaf.depends_on,
+        depends_on=depends_on,
     )
 
 
@@ -100,9 +101,11 @@ def linearize(root: ChunkNode) -> LinearizationResult:
     leaves: list[LeafVisit] = []
     for idx, node in enumerate(leaf_nodes):
         number = idx + 1
-        depends_on = "None (first phase)" if idx == 0 else f"Phase {number - 1} merged"
+        depends_on_number = None if idx == 0 else number - 1
         assert node.leaf_doc is not None  # noqa: S101 (node.is_leaf already guarantees this)
-        leaves.append(LeafVisit(number=number, chunk=node.chunk, leaf_doc=node.leaf_doc, depends_on=depends_on))
+        leaves.append(
+            LeafVisit(number=number, chunk=node.chunk, leaf_doc=node.leaf_doc, depends_on_number=depends_on_number)
+        )
 
     stems = [phase_file_stem(leaf.number, _slugify(leaf.chunk.name)) for leaf in leaves]
     edges = _derive_edges(leaves, stems)
