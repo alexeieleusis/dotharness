@@ -22,7 +22,7 @@ def test_linearize_single_leaf_tree():
 
     assert len(result.leaves) == 1
     assert result.leaves[0].number == 1
-    assert result.leaves[0].depends_on == "None (first phase)"
+    assert result.leaves[0].depends_on_number is None
     assert result.graph.nodes == ["01-root-leaf"]
     assert result.graph.edges == []
 
@@ -37,11 +37,7 @@ def test_linearize_dfs_order_and_depends_on_chain():
 
     numbers_and_paths = [(lv.number, lv.chunk.path) for lv in result.leaves]
     assert numbers_and_paths == [(1, "A-1"), (2, "A-2"), (3, "A-3")]
-    assert [lv.depends_on for lv in result.leaves] == [
-        "None (first phase)",
-        "Phase 1 merged",
-        "Phase 2 merged",
-    ]
+    assert [lv.depends_on_number for lv in result.leaves] == [None, 1, 2]
 
 
 def test_linearize_asymmetric_depth_dfs_order():
