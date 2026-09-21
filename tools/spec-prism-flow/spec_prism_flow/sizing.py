@@ -37,7 +37,7 @@ def check_word_count(text: str) -> SizingResult:
     count = len(text.split())
     in_band = count in _WORD_COUNT_IN_BAND
     note = None
-    if count < _WORD_COUNT_OBSERVED_MIN or count > _WORD_COUNT_OBSERVED_MAX:
+    if not in_band and (count < _WORD_COUNT_OBSERVED_MIN or count > _WORD_COUNT_OBSERVED_MAX):
         note = (
             f"{count} words falls outside the observed range of {_WORD_COUNT_OBSERVED_MIN}-{_WORD_COUNT_OBSERVED_MAX}"
         )

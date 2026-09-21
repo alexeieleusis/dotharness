@@ -45,6 +45,14 @@ def test_check_word_count_in_band():
     assert result.note is None
 
 
+def test_check_word_count_in_band_but_below_observed_min():
+    result = check_word_count(" ".join(["word"] * 510))
+
+    assert result.count == 510
+    assert result.in_band is True
+    assert result.note is None
+
+
 def test_check_word_count_out_of_band_but_observed():
     result = check_word_count(" ".join(["word"] * 1800))
 
