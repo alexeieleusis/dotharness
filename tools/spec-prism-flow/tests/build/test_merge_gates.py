@@ -21,6 +21,15 @@ def test_empty_commands_is_a_noop_and_never_calls_subprocess(tmp_path, monkeypat
     run_mock.assert_not_called()
 
 
+def test_command_runs_with_configured_cwd(tmp_path, monkeypatch):
+    run_mock = Mock(return_value=Mock(returncode=0, stdout="", stderr=""))
+    monkeypatch.setattr("subprocess.run", run_mock)
+
+    run_merge_gates(tmp_path, ["true"])
+
+    assert run_mock.call_args.kwargs["cwd"] == tmp_path
+
+
 def test_passing_command_raises_nothing(tmp_path):
     cmd = _script(tmp_path, "print('ok')\n")
 
