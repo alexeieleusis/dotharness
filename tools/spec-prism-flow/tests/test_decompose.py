@@ -3,7 +3,7 @@ import json
 import pytest
 
 from spec_prism_flow import decompose, generator
-from spec_prism_flow.chunk import Chunk, DecomposeError, load_tree
+from spec_prism_flow.chunk import Chunk, load_tree
 from spec_prism_flow.config import (
     AgentConfig,
     BuildConfig,
@@ -13,6 +13,7 @@ from spec_prism_flow.config import (
     SpecPrismFlowConfig,
     VibeHealConfig,
 )
+from spec_prism_flow.errors import DecomposeError
 from spec_prism_flow.workspace import init_workspace
 
 

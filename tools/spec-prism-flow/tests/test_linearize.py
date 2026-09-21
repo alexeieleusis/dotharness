@@ -1,6 +1,7 @@
 import pytest
 
-from spec_prism_flow.chunk import Chunk, ChunkNode, DecomposeError
+from spec_prism_flow.chunk import Chunk, ChunkNode
+from spec_prism_flow.errors import DecomposeError
 from spec_prism_flow.linearize import linearize
 
 

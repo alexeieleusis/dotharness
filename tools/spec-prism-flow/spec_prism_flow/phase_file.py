@@ -43,6 +43,10 @@ def phase_file_name(number: int, name: str) -> str:
     return f"{number:02d}-{name}-leaf.md"
 
 
+def phase_file_stem(number: int, name: str) -> str:
+    return phase_file_name(number, name).removesuffix(".md")
+
+
 def _parse_bullets(body: str) -> list[str]:
     items = []
     for line in body.splitlines():

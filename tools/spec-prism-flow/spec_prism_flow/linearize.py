@@ -3,9 +3,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from spec_prism_flow.chunk import Chunk, ChunkNode, DecomposeError
+from spec_prism_flow.chunk import Chunk, ChunkNode
+from spec_prism_flow.errors import DecomposeError
 from spec_prism_flow.graph import Graph, validate_graph
-from spec_prism_flow.phase_file import PhaseFile, phase_file_name
+from spec_prism_flow.phase_file import PhaseFile, phase_file_stem
 
 _SLUG_INVALID_CHARS = re.compile(r"[^a-z0-9-]+")
 
@@ -32,14 +33,6 @@ def _slugify(name: str) -> str:
     return slug or "leaf"
 
 
-def _slug_for(leaf: LeafVisit) -> str:
-    return _slugify(leaf.chunk.name)
-
-
-def _stem_for(leaf: LeafVisit) -> str:
-    return phase_file_name(leaf.number, _slug_for(leaf)).removesuffix(".md")
-
-
 def _dfs_collect_leaves(node: ChunkNode) -> list[ChunkNode]:
     if node.is_escalated:
         raise DecomposeError(  # noqa: TRY003
@@ -56,13 +49,12 @@ def _dfs_collect_leaves(node: ChunkNode) -> list[ChunkNode]:
     return leaves
 
 
+def _mentions(doc: str, chunk: Chunk) -> bool:
+    return (bool(chunk.path) and chunk.path in doc) or (bool(chunk.name) and chunk.name in doc)
+
+
 def _references(a: LeafVisit, b: LeafVisit) -> bool:
-    return (
-        (bool(b.chunk.path) and b.chunk.path in a.leaf_doc)
-        or (bool(b.chunk.name) and b.chunk.name in a.leaf_doc)
-        or (bool(a.chunk.path) and a.chunk.path in b.leaf_doc)
-        or (bool(a.chunk.name) and a.chunk.name in b.leaf_doc)
-    )
+    return _mentions(a.leaf_doc, b.chunk) or _mentions(b.leaf_doc, a.chunk)
 
 
 def _derive_reference_edges(leaves: list[LeafVisit], stems: list[str]) -> list[tuple[str, str]]:
@@ -77,7 +69,7 @@ def _derive_reference_edges(leaves: list[LeafVisit], stems: list[str]) -> list[t
 def _synthetic_phase_file(leaf: LeafVisit) -> PhaseFile:
     return PhaseFile(
         number=leaf.number,
-        name=_slug_for(leaf),
+        name=_slugify(leaf.chunk.name),
         scope=list(leaf.chunk.file_scope_estimate),
         requirements=leaf.leaf_doc,
         acceptance_criteria=[_PLACEHOLDER_NOTE],
@@ -98,7 +90,7 @@ def linearize(root: ChunkNode) -> LinearizationResult:
         assert node.leaf_doc is not None  # noqa: S101 (node.is_leaf already guarantees this)
         leaves.append(LeafVisit(number=number, chunk=node.chunk, leaf_doc=node.leaf_doc, depends_on=depends_on))
 
-    stems = [_stem_for(leaf) for leaf in leaves]
+    stems = [phase_file_stem(leaf.number, _slugify(leaf.chunk.name)) for leaf in leaves]
     edges = _derive_reference_edges(leaves, stems)
     derived_graph = Graph(nodes=stems, edges=edges)
 

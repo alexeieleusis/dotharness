@@ -2,16 +2,8 @@ import json
 
 import pytest
 
-from spec_prism_flow.chunk import (
-    Chunk,
-    ChunkError,
-    ChunkNode,
-    DecomposeError,
-    load_tree,
-    node_from_dict,
-    node_to_dict,
-    write_tree,
-)
+from spec_prism_flow.chunk import Chunk, ChunkNode, load_tree, node_from_dict, node_to_dict, write_tree
+from spec_prism_flow.errors import ChunkError, DecomposeError
 
 
 def _chunk(path="A", name="root", file_scope_estimate=None, depth=0) -> Chunk:

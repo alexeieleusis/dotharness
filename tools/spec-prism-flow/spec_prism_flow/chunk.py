@@ -4,19 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-
-class ChunkError(ValueError):
-    pass
-
-
-class DecomposeError(Exception):
-    """Shared error for the whole `plan decompose` feature.
-
-    Defined here (rather than in decompose.py) because generator.py and linearize.py both need to
-    raise it and both sit below decompose.py in the import graph; putting it in chunk.py, the
-    acyclic base every other module already depends on, avoids a decompose.py <-> generator.py
-    import cycle. decompose.py re-exports it so callers can still spell it `decompose.DecomposeError`.
-    """
+from spec_prism_flow.errors import ChunkError, DecomposeError
 
 
 @dataclass(frozen=True)

@@ -5,7 +5,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from spec_prism_flow.phase_file import PhaseFile, phase_file_name
+from spec_prism_flow.phase_file import PhaseFile, phase_file_stem
 
 _UNVISITED, _IN_PROGRESS, _DONE = 0, 1, 2
 
@@ -45,7 +45,7 @@ def write_graph(graph: Graph, path: Path) -> None:
 
 
 def _stem(phase_file: PhaseFile) -> str:
-    return phase_file_name(phase_file.number, phase_file.name).removesuffix(".md")
+    return phase_file_stem(phase_file.number, phase_file.name)
 
 
 def _reachable_from_all(edges: list[tuple[str, str]], nodes: list[str], *, forward: bool) -> dict[str, set[str]]:

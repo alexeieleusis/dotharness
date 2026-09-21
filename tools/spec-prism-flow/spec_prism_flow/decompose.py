@@ -5,9 +5,10 @@ from pathlib import Path
 
 import click
 
-from spec_prism_flow import generator, graph, linearize, sizing
-from spec_prism_flow.chunk import Chunk, ChunkNode, DecomposeError, load_tree, write_tree
+from spec_prism_flow import generator, graph, handoff, linearize, sizing
+from spec_prism_flow.chunk import Chunk, ChunkNode, load_tree, write_tree
 from spec_prism_flow.config import SpecPrismFlowConfig
+from spec_prism_flow.errors import DecomposeError
 from spec_prism_flow.requirements_stage import REQUIREMENTS_FILENAME
 from spec_prism_flow.workspace import ManifestError, load_manifest
 
@@ -34,6 +35,11 @@ def _sizing_out_of_band(chunk: Chunk, doc: str) -> tuple[bool, str]:
     return (not file_result.in_band or not word_result.in_band), "; ".join(notes)
 
 
+def _escalate(log_path: Path, chunk: Chunk, log_reason: str, escalation_reason: str) -> ChunkNode:
+    _append_log(log_path, chunk.path, "escalate", log_reason)
+    return ChunkNode(chunk=chunk, escalation_reason=escalation_reason)
+
+
 def resolve_chunk(chunk: Chunk, cfg: SpecPrismFlowConfig, depth_cap: int, log_path: Path) -> ChunkNode:
     result = generator.run_generator(chunk, cfg)
 
@@ -46,25 +52,28 @@ def resolve_chunk(chunk: Chunk, cfg: SpecPrismFlowConfig, depth_cap: int, log_pa
         retry_result = generator.run_generator(chunk, cfg, forced_split=True)
 
         if isinstance(retry_result, generator.Leaf):
-            _append_log(log_path, chunk.path, "escalate", f"forced-split retry still returned Leaf ({reason})")
-            return ChunkNode(
-                chunk=chunk,
-                escalation_reason=f"Trivial-breakdown deadlock: forced-split retry still returned Leaf ({reason})",
+            return _escalate(
+                log_path,
+                chunk,
+                f"forced-split retry still returned Leaf ({reason})",
+                f"Trivial-breakdown deadlock: forced-split retry still returned Leaf ({reason})",
             )
 
         if chunk.depth >= depth_cap:
-            _append_log(log_path, chunk.path, "escalate", "forced-split retry returned Split but depth cap reached")
-            return ChunkNode(
-                chunk=chunk,
-                escalation_reason=f"Depth cap ({depth_cap}) reached after forced-split retry; Split discarded",
+            return _escalate(
+                log_path,
+                chunk,
+                "forced-split retry returned Split but depth cap reached",
+                f"Depth cap ({depth_cap}) reached after forced-split retry; Split discarded",
             )
 
         children = [resolve_chunk(child, cfg, depth_cap, log_path) for child in retry_result.children]
         return ChunkNode(chunk=chunk, children=children)
 
     if chunk.depth >= depth_cap:
-        _append_log(log_path, chunk.path, "escalate", "depth cap reached on Split verdict")
-        return ChunkNode(chunk=chunk, escalation_reason=f"Depth cap ({depth_cap}) reached; Split discarded")
+        return _escalate(
+            log_path, chunk, "depth cap reached on Split verdict", f"Depth cap ({depth_cap}) reached; Split discarded"
+        )
 
     children = [resolve_chunk(child, cfg, depth_cap, log_path) for child in result.children]
     return ChunkNode(chunk=chunk, children=children)
@@ -76,8 +85,7 @@ def _pause_for_tree_review(tree_path: Path) -> None:
         "Review it now: reorder children, force a merge/split, or resolve any 'escalation_reason' "
         "entries by editing the file directly."
     )
-    while not click.confirm("Tree approved and ready to continue?"):
-        continue
+    handoff.wait_for_confirmation("Tree approved and ready to continue?")
 
 
 def run_decompose(cfg: SpecPrismFlowConfig, *, depth_cap: int = DEFAULT_DEPTH_CAP) -> tuple[Path, Path]:

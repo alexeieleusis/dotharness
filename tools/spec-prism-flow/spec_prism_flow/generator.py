@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 from spec_prism_flow import handoff
-from spec_prism_flow.chunk import Chunk, DecomposeError
+from spec_prism_flow.chunk import Chunk
 from spec_prism_flow.config import SpecPrismFlowConfig
+from spec_prism_flow.errors import DecomposeError
 from spec_prism_flow.requirements_stage import TEMPLATE_FILENAME
 
 _KNOWLEDGE_SUBDIR = "spec-prism-flow"
@@ -114,11 +117,16 @@ def _parse_generator_output(output_text: str, chunk: Chunk) -> GeneratorResult:
     )
 
 
-def run_generator(chunk: Chunk, cfg: SpecPrismFlowConfig, *, forced_split: bool = False) -> GeneratorResult:
-    template_path = cfg.harness.knowledge_dir / _KNOWLEDGE_SUBDIR / TEMPLATE_FILENAME
+@lru_cache(maxsize=1)
+def _read_template(template_path: Path) -> str:
     if not template_path.exists():
         raise DecomposeError(f"Requirements drafting template not found: {template_path}")  # noqa: TRY003
-    template_text = template_path.read_text()
+    return template_path.read_text()
+
+
+def run_generator(chunk: Chunk, cfg: SpecPrismFlowConfig, *, forced_split: bool = False) -> GeneratorResult:
+    template_path = cfg.harness.knowledge_dir / _KNOWLEDGE_SUBDIR / TEMPLATE_FILENAME
+    template_text = _read_template(template_path)
 
     prompt_text = build_generator_prompt(chunk, template_text, forced_split=forced_split)
 
