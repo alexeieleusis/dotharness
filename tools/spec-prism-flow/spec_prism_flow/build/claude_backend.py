@@ -78,10 +78,12 @@ def _snapshot_repo_identity(cwd: Path, *, expected_repo_name: str | None) -> _Re
     if origin_result.returncode != 0:
         raise RepoIdentityError(f"{cwd} has no 'origin' remote: {origin_result.stderr.strip()}")  # noqa: TRY003
     origin_url = origin_result.stdout.strip()
-    if expected_repo_name is not None and expected_repo_name not in origin_url:
-        raise RepoIdentityError(  # noqa: TRY003
-            f"{cwd}'s origin ({origin_url!r}) does not match expected repo {expected_repo_name!r}"
-        )
+    if expected_repo_name is not None:
+        origin_repo_name = origin_url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
+        if origin_repo_name != expected_repo_name:
+            raise RepoIdentityError(  # noqa: TRY003
+                f"{cwd}'s origin ({origin_url!r}) does not match expected repo {expected_repo_name!r}"
+            )
 
     return _RepoSnapshot(toplevel=toplevel, origin_url=origin_url)
 
