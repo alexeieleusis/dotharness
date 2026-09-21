@@ -6,16 +6,16 @@ from spec_prism_flow.build.errors import ScopeViolation
 from spec_prism_flow.build.scope_guard import check, matches_any
 
 
-def test_matches_any_true_when_a_glob_matches():
-    assert matches_any("spec_prism_flow/build/scope_guard.py", ["spec_prism_flow/build/*.py"])
-
-
-def test_matches_any_false_when_no_glob_matches():
-    assert not matches_any("spec_prism_flow/cli.py", ["spec_prism_flow/build/*.py"])
-
-
-def test_matches_any_false_for_empty_globs():
-    assert not matches_any("anything.py", [])
+@pytest.mark.parametrize(
+    ("path", "globs", "expected"),
+    [
+        ("spec_prism_flow/build/scope_guard.py", ["spec_prism_flow/build/*.py"], True),
+        ("spec_prism_flow/cli.py", ["spec_prism_flow/build/*.py"], False),
+        ("anything.py", [], False),
+    ],
+)
+def test_matches_any(path, globs, expected):
+    assert matches_any(path, globs) is expected
 
 
 def test_matches_any_rejects_path_match_style_bypass():
