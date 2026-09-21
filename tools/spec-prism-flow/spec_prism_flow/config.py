@@ -21,7 +21,7 @@ class ConfigError(ValueError):
 
 
 def resolve_config_path(config_path_str: str | None) -> Path:
-    return Path(config_path_str) if config_path_str else Path(DEFAULT_CONFIG_FILE)
+    return Path(config_path_str).expanduser() if config_path_str else Path(DEFAULT_CONFIG_FILE)
 
 
 @dataclass
