@@ -143,6 +143,26 @@ def test_run_generator_raises_decompose_error_on_empty_output(tmp_path, monkeypa
         run_generator(_chunk(), cfg)
 
 
+def test_run_generator_raises_decompose_error_on_empty_leaf_doc(tmp_path, monkeypatch):
+    cfg = _make_cfg(tmp_path)
+    _write_template(cfg)
+
+    monkeypatch.setattr(generator.handoff, "run_handoff", lambda *a, **k: "LEAF")
+
+    with pytest.raises(DecomposeError, match="empty requirements doc body"):
+        run_generator(_chunk(), cfg)
+
+
+def test_run_generator_raises_decompose_error_on_whitespace_only_leaf_doc(tmp_path, monkeypatch):
+    cfg = _make_cfg(tmp_path)
+    _write_template(cfg)
+
+    monkeypatch.setattr(generator.handoff, "run_handoff", lambda *a, **k: "LEAF\n   \n\t\n")
+
+    with pytest.raises(DecomposeError, match="empty requirements doc body"):
+        run_generator(_chunk(), cfg)
+
+
 def test_run_generator_raises_decompose_error_on_invalid_split_json(tmp_path, monkeypatch):
     cfg = _make_cfg(tmp_path)
     _write_template(cfg)

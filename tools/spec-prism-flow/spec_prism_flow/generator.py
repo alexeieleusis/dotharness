@@ -119,6 +119,10 @@ def _parse_generator_output(output_text: str, chunk: Chunk) -> GeneratorResult:
     rest = "\n".join(lines[1:]).lstrip("\n")
 
     if marker == _LEAF_MARKER:
+        if not rest.strip():
+            raise DecomposeError(  # noqa: TRY003
+                f"Generator LEAF output for chunk {chunk.path!r} has an empty requirements doc body"
+            )
         return Leaf(doc=rest)
     if marker == _SPLIT_MARKER:
         return Split(children=_parse_split_children(rest, chunk))
