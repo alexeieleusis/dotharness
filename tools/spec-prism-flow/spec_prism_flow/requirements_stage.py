@@ -55,8 +55,9 @@ def run_draft_requirements(cfg: SpecPrismFlowConfig) -> Path:
     conventions_text = None
     if conventions_path_str:
         conventions_path = Path(conventions_path_str)
-        if conventions_path.exists():
-            conventions_text = conventions_path.read_text()
+        if not conventions_path.is_file():
+            raise RequirementsError(f"Conventions file not found: {conventions_path}")  # noqa: TRY003
+        conventions_text = conventions_path.read_text()
 
     template_path = cfg.harness.knowledge_dir / _KNOWLEDGE_SUBDIR / TEMPLATE_FILENAME
     if not template_path.exists():

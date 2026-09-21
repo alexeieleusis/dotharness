@@ -94,6 +94,19 @@ def test_run_draft_requirements_raises_when_template_missing(tmp_path):
         run_draft_requirements(cfg)
 
 
+def test_run_draft_requirements_raises_when_conventions_path_invalid(tmp_path):
+    brief = tmp_path / "brief.md"
+    brief.write_text("brief content")
+    conventions = tmp_path / "CONVENTIONS.md"
+    cfg = _make_cfg(tmp_path)
+    init_workspace(cfg.plan.workspace_dir, brief, None, conventions, [])
+    (cfg.plan.workspace_dir / OVERVIEW_FILENAME).write_text("overview")
+    _write_template(cfg)
+
+    with pytest.raises(RequirementsError, match="Conventions file not found"):
+        run_draft_requirements(cfg)
+
+
 def test_run_draft_requirements_writes_output_using_full_prompt(tmp_path, monkeypatch):
     brief = tmp_path / "brief.md"
     brief.write_text("brief content")
