@@ -53,10 +53,16 @@ def _chunk_to_dict(chunk: Chunk) -> dict:
 
 
 def _chunk_from_dict(data: dict) -> Chunk:
+    file_scope_estimate = data["file_scope_estimate"]
+    if not isinstance(file_scope_estimate, list):
+        raise ChunkError(  # noqa: TRY003
+            f"Chunk {data.get('path')!r} has file_scope_estimate of type "
+            f"{type(file_scope_estimate).__name__}, expected a list"
+        )
     return Chunk(
         path=data["path"],
         name=data["name"],
-        file_scope_estimate=list(data["file_scope_estimate"]),
+        file_scope_estimate=list(file_scope_estimate),
         requirements_slice=data["requirements_slice"],
         depth=data["depth"],
     )
