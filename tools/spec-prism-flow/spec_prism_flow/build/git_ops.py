@@ -5,19 +5,27 @@ from pathlib import Path
 
 from spec_prism_flow.build.errors import CommandError
 
+_GIT_TIMEOUT_SECONDS = 30
+
 
 class GitCommandError(CommandError):
     """A git subprocess exited non-zero."""
 
 
 def _run(clone: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(  # noqa: S603
-        ["git", *args],  # noqa: S607
-        cwd=clone,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", *args],  # noqa: S607
+            cwd=clone,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitCommandError(
+            ["git", *args], -1, f"timed out after {_GIT_TIMEOUT_SECONDS}s: {exc.stderr or ''}"
+        ) from exc
     if result.returncode != 0:
         raise GitCommandError(["git", *args], result.returncode, result.stderr)
     return result

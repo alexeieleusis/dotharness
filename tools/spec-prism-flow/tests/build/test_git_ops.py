@@ -1,3 +1,4 @@
+import subprocess
 from unittest.mock import Mock, call
 
 import pytest
@@ -17,13 +18,21 @@ def test_checkout_fresh_branch_fetches_then_checks_out_dash_b_from_origin(tmp_pa
     git_ops.checkout_fresh_branch(tmp_path, "phase-07-x", "main")
 
     assert run_mock.call_args_list == [
-        call(["git", "fetch", "origin", "main"], cwd=tmp_path, capture_output=True, text=True, check=False),
+        call(
+            ["git", "fetch", "origin", "main"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=git_ops._GIT_TIMEOUT_SECONDS,
+        ),
         call(
             ["git", "checkout", "-B", "phase-07-x", "origin/main"],
             cwd=tmp_path,
             capture_output=True,
             text=True,
             check=False,
+            timeout=git_ops._GIT_TIMEOUT_SECONDS,
         ),
     ]
 
@@ -124,13 +133,21 @@ def test_fetch_resync_fetches_then_checks_out_dash_b_from_remote_branch(tmp_path
     git_ops.fetch_resync(tmp_path, "phase-07-x")
 
     assert run_mock.call_args_list == [
-        call(["git", "fetch", "origin", "phase-07-x"], cwd=tmp_path, capture_output=True, text=True, check=False),
+        call(
+            ["git", "fetch", "origin", "phase-07-x"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=git_ops._GIT_TIMEOUT_SECONDS,
+        ),
         call(
             ["git", "checkout", "-B", "phase-07-x", "origin/phase-07-x"],
             cwd=tmp_path,
             capture_output=True,
             text=True,
             check=False,
+            timeout=git_ops._GIT_TIMEOUT_SECONDS,
         ),
     ]
 
@@ -168,3 +185,16 @@ def test_head_sha_raises_on_failure(tmp_path, monkeypatch):
 
     with pytest.raises(GitCommandError):
         git_ops.head_sha(tmp_path)
+
+
+def test_run_raises_git_command_error_instead_of_hanging_on_timeout(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "subprocess.run",
+        Mock(side_effect=subprocess.TimeoutExpired(cmd=["git", "push"], timeout=git_ops._GIT_TIMEOUT_SECONDS)),
+    )
+
+    with pytest.raises(GitCommandError) as exc_info:
+        git_ops.push_branch(tmp_path, "phase-07-x")
+
+    assert exc_info.value.cmd_args == ["git", "push", "--force-with-lease", "-u", "origin", "phase-07-x"]
+    assert str(git_ops._GIT_TIMEOUT_SECONDS) in exc_info.value.stderr
