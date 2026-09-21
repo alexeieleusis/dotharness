@@ -87,6 +87,8 @@ def test_manual_test_failed_exit_code_and_optional_notes():
 
     assert bare.exit_code == 14
     assert bare.notes is None
+    assert str(bare) == "Manual test failed"
     assert noted.exit_code == 14
     assert noted.notes == "checklist item 3 failed"
+    assert str(noted) == "Manual test failed: checklist item 3 failed"
     assert noted.next_command is None
