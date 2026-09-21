@@ -17,7 +17,7 @@ class HandoffError(Exception):
 def _run_best_effort(cmd: list[str], text: str, tool_name: str) -> None:
     try:
         proc = subprocess.run(cmd, input=text.encode(), capture_output=True)  # noqa: S603
-    except FileNotFoundError:
+    except OSError:
         logger.warning("%s not found on PATH; skipping copy", tool_name)
         return
     if proc.returncode != 0:
