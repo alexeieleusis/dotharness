@@ -90,6 +90,22 @@ def test_write_tree_then_load_tree_round_trips(tmp_path):
     assert restored == root
 
 
+def test_node_from_dict_rejects_hand_edited_node_with_both_leaf_doc_and_children():
+    child = ChunkNode(chunk=_chunk("A-1", depth=1), leaf_doc="child doc")
+    data = node_to_dict(ChunkNode(chunk=_chunk(), children=[child]))
+    data["leaf_doc"] = "hand-added doc"
+
+    with pytest.raises(ChunkError, match="exactly one"):
+        node_from_dict(data)
+
+
+def test_node_from_dict_rejects_node_with_none_of_the_variant_keys():
+    data = {"chunk": node_to_dict(ChunkNode(chunk=_chunk(), leaf_doc="doc"))["chunk"]}
+
+    with pytest.raises(ChunkError, match="exactly one"):
+        node_from_dict(data)
+
+
 def test_write_tree_preserves_hand_edits_on_reload(tmp_path):
     child_a = ChunkNode(chunk=_chunk("A-1", "first", depth=1), leaf_doc="first doc")
     child_b = ChunkNode(chunk=_chunk("A-2", "second", depth=1), leaf_doc="second doc")

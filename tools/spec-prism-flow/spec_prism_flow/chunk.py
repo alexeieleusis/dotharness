@@ -75,15 +75,17 @@ def node_to_dict(node: ChunkNode) -> dict:
 
 def node_from_dict(data: dict) -> ChunkNode:
     chunk = _chunk_from_dict(data["chunk"])
-    if "leaf_doc" in data:
+    variant_keys = [key for key in ("leaf_doc", "children", "escalation_reason") if key in data]
+    if len(variant_keys) != 1:
+        raise ChunkError(  # noqa: TRY003
+            f"Tree node for chunk {chunk.path!r} must have exactly one of leaf_doc/children/"
+            f"escalation_reason, got {variant_keys}"
+        )
+    if variant_keys[0] == "leaf_doc":
         return ChunkNode(chunk=chunk, leaf_doc=data["leaf_doc"])
-    if "children" in data:
+    if variant_keys[0] == "children":
         return ChunkNode(chunk=chunk, children=[node_from_dict(c) for c in data["children"]])
-    if "escalation_reason" in data:
-        return ChunkNode(chunk=chunk, escalation_reason=data["escalation_reason"])
-    raise ChunkError(  # noqa: TRY003
-        f"Tree node for chunk {chunk.path!r} has none of leaf_doc/children/escalation_reason"
-    )
+    return ChunkNode(chunk=chunk, escalation_reason=data["escalation_reason"])
 
 
 def write_tree(node: ChunkNode, path: Path) -> None:
