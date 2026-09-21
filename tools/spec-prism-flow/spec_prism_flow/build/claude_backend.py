@@ -11,7 +11,6 @@ from spec_prism_flow.build import agent_instructions, git_ops
 from spec_prism_flow.build.errors import CommandError
 
 DEFAULT_TIMEOUT_SECONDS = 1800
-_GIT_TIMEOUT_SECONDS = 30
 _KILL_GRACE_SECONDS = 5
 _TMP_DIR = Path.home() / ".local/share/dotharness/tmp"
 
@@ -49,35 +48,23 @@ class _RepoSnapshot:
     origin_url: str
 
 
-def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603
-        ["git", "-C", str(cwd), *args],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=_GIT_TIMEOUT_SECONDS,
-    )
-
-
 def _snapshot_repo_identity(cwd: Path, *, expected_repo_name: str | None) -> _RepoSnapshot:
     cwd = cwd.resolve()
 
-    toplevel_result = _git(cwd, "rev-parse", "--show-toplevel")
-    if toplevel_result.returncode != 0:
-        raise RepoIdentityError(  # noqa: TRY003
-            f"{cwd} is not inside a git repository: {toplevel_result.stderr.strip()}"
-        )
-    toplevel = Path(toplevel_result.stdout.strip()).resolve()
+    try:
+        toplevel = git_ops.toplevel(cwd)
+    except git_ops.GitCommandError as exc:
+        raise RepoIdentityError(f"{cwd} is not inside a git repository: {exc.stderr.strip()}") from exc  # noqa: TRY003
     if toplevel != cwd:
         raise RepoIdentityError(  # noqa: TRY003
             f"{cwd} is not itself the toplevel of its git repo (toplevel is {toplevel}) -- refusing to "
             "operate on what looks like a subdirectory of some other checkout"
         )
 
-    origin_result = _git(cwd, "remote", "get-url", "origin")
-    if origin_result.returncode != 0:
-        raise RepoIdentityError(f"{cwd} has no 'origin' remote: {origin_result.stderr.strip()}")  # noqa: TRY003
-    origin_url = origin_result.stdout.strip()
+    try:
+        origin_url = git_ops.origin_url(cwd)
+    except git_ops.GitCommandError as exc:
+        raise RepoIdentityError(f"{cwd} has no 'origin' remote: {exc.stderr.strip()}") from exc  # noqa: TRY003
     if expected_repo_name is not None:
         origin_repo_name = origin_url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
         if origin_repo_name != expected_repo_name:
@@ -153,8 +140,8 @@ class ClaudeBackend:
     def _start_process(cmd: list[str], cwd: Path) -> subprocess.Popen:
         """Split out from invoke() as its own seam so tests can mock just the
         claude-invoking subprocess without also intercepting the git plumbing
-        subprocess.run calls (_git, above) that invoke() and its helpers make for the
-        repo-identity guard."""
+        subprocess.run calls (git_ops.toplevel/origin_url) that invoke() and its
+        helpers make for the repo-identity guard."""
         return subprocess.Popen(  # noqa: S603
             cmd,
             cwd=cwd,

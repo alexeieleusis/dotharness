@@ -32,6 +32,16 @@ def _run(clone: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return result
 
 
+def toplevel(cwd: Path) -> Path:
+    """Absolute path to the toplevel of the git repo containing `cwd`."""
+    return Path(_run(cwd, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
+
+
+def origin_url(cwd: Path) -> str:
+    """URL of `cwd`'s repo's `origin` remote."""
+    return _run(cwd, "remote", "get-url", "origin").stdout.strip()
+
+
 def checkout_fresh_branch(clone: Path, branch: str, base: str = "main") -> None:
     """Create `branch` off origin/`base` in `clone`, discarding any prior local branch
     of the same name -- safe to re-run (e.g. on a retried run_phase), since it always
