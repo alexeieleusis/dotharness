@@ -119,9 +119,14 @@ def head_sha(clone: Path) -> str:
 
 
 def discard_working_tree_changes(clone: Path) -> None:
-    """Discard uncommitted tracked edits and untracked files in `clone`, restoring it
-    to its current branch tip. Not part of the source orchestrate.git_ops module's
-    ported set; used by ClaudeBackend to recover from a SIGKILLed attempt that left
-    partially written/staged files before a retry."""
-    _run(clone, "checkout", "--", ".")
+    """Discard uncommitted tracked edits (staged or not) and untracked files in
+    `clone`, restoring it to its current branch tip. Not part of the source
+    orchestrate.git_ops module's ported set; used by ClaudeBackend to recover from a
+    SIGKILLed attempt that left partially written/staged files before a retry.
+
+    `reset --hard` (not `checkout -- .`) so a partially staged change from the
+    timed-out attempt is dropped from the index too, not just the worktree --
+    otherwise it would survive this cleanup and the retry's `commit_all` would
+    commit it as if it were new work."""
+    _run(clone, "reset", "--hard", "HEAD")
     _run(clone, "clean", "-fd")
