@@ -74,8 +74,12 @@ def parse_phase_file(path: Path) -> PhaseFile:
         end = header_indices[idx + 1] if idx + 1 < len(header_indices) else len(lines)
         bodies[header] = "\n".join(lines[start:end]).strip("\n")
 
-    depends_body = bodies[_DEPENDS_ON_HEADER].strip()
-    depends_on = depends_body[2:].strip() if depends_body.startswith("- ") else depends_body
+    depends_items = _parse_bullets(bodies[_DEPENDS_ON_HEADER])
+    if len(depends_items) != 1:
+        raise PhaseFileError(  # noqa: TRY003
+            f"'{_DEPENDS_ON_HEADER}' section must contain exactly one bullet item, got {len(depends_items)}"
+        )
+    depends_on = depends_items[0]
 
     return PhaseFile(
         number=number,
