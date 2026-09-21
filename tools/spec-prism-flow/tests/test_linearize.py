@@ -76,8 +76,7 @@ def test_linearize_adds_edge_when_mini_doc_references_sibling_chunk_path():
 
     result = linearize(root)
 
-    assert ("03-third-leaf", "01-first-leaf") in result.graph.edges
-    assert ("02-second-leaf", "01-first-leaf") not in result.graph.edges
+    assert result.graph.edges == [("03-third-leaf", "01-first-leaf")]
 
 
 def test_linearize_adds_edge_when_mini_doc_references_sibling_chunk_name():
