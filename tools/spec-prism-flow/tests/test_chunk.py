@@ -132,3 +132,16 @@ def test_load_tree_raises_on_invalid_json(tmp_path):
     path.write_text("{not json")
     with pytest.raises(DecomposeError, match="not valid JSON"):
         load_tree(path)
+
+
+def test_load_tree_raises_chunk_error_on_hand_edited_node_missing_required_field(tmp_path):
+    path = tmp_path / "tree.json"
+    path.write_text(json.dumps({"chunk": {"path": "a", "name": "a"}, "leaf_doc": "x"}))
+
+    with pytest.raises(ChunkError, match=r"missing required field.*file_scope_estimate"):
+        load_tree(path)
+
+
+def test_node_from_dict_rejects_node_missing_chunk_key():
+    with pytest.raises(ChunkError, match="missing required field: chunk"):
+        node_from_dict({"leaf_doc": "x"})

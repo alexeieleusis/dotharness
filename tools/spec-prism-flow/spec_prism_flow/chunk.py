@@ -52,7 +52,15 @@ def _chunk_to_dict(chunk: Chunk) -> dict:
     }
 
 
+_CHUNK_REQUIRED_FIELDS = ("path", "name", "file_scope_estimate", "requirements_slice", "depth")
+
+
 def _chunk_from_dict(data: dict) -> Chunk:
+    missing = [field for field in _CHUNK_REQUIRED_FIELDS if field not in data]
+    if missing:
+        raise ChunkError(  # noqa: TRY003
+            f"Chunk {data.get('path')!r} is missing required field(s): {', '.join(missing)}"
+        )
     file_scope_estimate = data["file_scope_estimate"]
     if not isinstance(file_scope_estimate, list):
         raise ChunkError(  # noqa: TRY003
@@ -80,6 +88,8 @@ def node_to_dict(node: ChunkNode) -> dict:
 
 
 def node_from_dict(data: dict) -> ChunkNode:
+    if "chunk" not in data:
+        raise ChunkError("Tree node is missing required field: chunk")  # noqa: TRY003
     chunk = _chunk_from_dict(data["chunk"])
     variant_keys = [key for key in ("leaf_doc", "children", "escalation_reason") if key in data]
     if len(variant_keys) != 1:
