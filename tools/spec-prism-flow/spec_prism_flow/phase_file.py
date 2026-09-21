@@ -8,8 +8,15 @@ PHASE_FILE_NAME_PATTERN = re.compile(r"^(\d{2})-([a-z0-9-]+)-leaf\.md$")
 
 _ACCEPTANCE_CRITERIA_HEADER = "Acceptance criteria"
 _MANUAL_TEST_CHECKLIST_HEADER = "Manual test checklist"
+_DEPENDS_ON_HEADER = "Depends on"
 
-_SECTION_HEADERS = ("Scope", "Requirements", _ACCEPTANCE_CRITERIA_HEADER, _MANUAL_TEST_CHECKLIST_HEADER, "Depends on")
+_SECTION_HEADERS = (
+    "Scope",
+    "Requirements",
+    _ACCEPTANCE_CRITERIA_HEADER,
+    _MANUAL_TEST_CHECKLIST_HEADER,
+    _DEPENDS_ON_HEADER,
+)
 
 
 class PhaseFileError(ValueError):
@@ -67,7 +74,7 @@ def parse_phase_file(path: Path) -> PhaseFile:
         end = header_indices[idx + 1] if idx + 1 < len(header_indices) else len(lines)
         bodies[header] = "\n".join(lines[start:end]).strip("\n")
 
-    depends_body = bodies["Depends on"].strip()
+    depends_body = bodies[_DEPENDS_ON_HEADER].strip()
     depends_on = depends_body[2:].strip() if depends_body.startswith("- ") else depends_body
 
     return PhaseFile(
@@ -90,7 +97,7 @@ def render_phase_file(phase: PhaseFile) -> str:
         ("Requirements", phase.requirements),
         (_ACCEPTANCE_CRITERIA_HEADER, render_bullets(phase.acceptance_criteria)),
         (_MANUAL_TEST_CHECKLIST_HEADER, render_bullets(phase.manual_test_checklist)),
-        ("Depends on", f"- {phase.depends_on}"),
+        (_DEPENDS_ON_HEADER, f"- {phase.depends_on}"),
     ]
     blocks = [f"## {header}\n{body}" for header, body in sections]
     return "\n\n".join(blocks) + "\n"
