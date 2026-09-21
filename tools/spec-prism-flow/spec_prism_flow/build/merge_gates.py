@@ -17,5 +17,6 @@ def run_merge_gates(cwd: Path, commands: list[str], *, tail_lines: int = 40) -> 
             raise MergeGateFailure(cmd, str(e)) from e
         if result.returncode != 0:
             combined = result.stdout + result.stderr
-            tail = "\n".join(combined.splitlines()[-tail_lines:])
+            lines = combined.splitlines()
+            tail = "\n".join(lines[-tail_lines:] if tail_lines > 0 else [])
             raise MergeGateFailure(cmd, tail)
