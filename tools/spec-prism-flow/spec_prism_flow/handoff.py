@@ -14,24 +14,14 @@ class HandoffError(Exception):
     pass
 
 
-def _copy_to_clipboard(text: str) -> None:
+def _run_best_effort(cmd: list[str], text: str, tool_name: str) -> None:
     try:
-        proc = subprocess.run(["pbcopy"], input=text.encode(), capture_output=True)  # noqa: S607
+        proc = subprocess.run(cmd, input=text.encode(), capture_output=True)  # noqa: S603
     except FileNotFoundError:
-        logger.warning("pbcopy not found on PATH; skipping clipboard copy")
+        logger.warning("%s not found on PATH; skipping copy", tool_name)
         return
     if proc.returncode != 0:
-        logger.warning("pbcopy exited %d: %s", proc.returncode, proc.stderr.decode("utf-8", errors="replace"))
-
-
-def _copy_to_tmux_buffer(text: str) -> None:
-    try:
-        proc = subprocess.run(["tmux", "load-buffer", "-"], input=text.encode(), capture_output=True)  # noqa: S607
-    except FileNotFoundError:
-        logger.warning("tmux not found on PATH; skipping tmux buffer copy")
-        return
-    if proc.returncode != 0:
-        logger.warning("tmux load-buffer exited %d: %s", proc.returncode, proc.stderr.decode("utf-8", errors="replace"))
+        logger.warning("%s exited %d: %s", tool_name, proc.returncode, proc.stderr.decode("utf-8", errors="replace"))
 
 
 def run_handoff(
@@ -48,12 +38,12 @@ def run_handoff(
     click.echo(f"Prompt written to: {prompt_path}")
     click.echo(f"Expected output at: {output_path}")
 
-    _copy_to_clipboard(str(prompt_path))
+    _run_best_effort(["pbcopy"], str(prompt_path), "pbcopy")
     if os.environ.get("TMUX"):
-        _copy_to_tmux_buffer(str(prompt_path))
+        _run_best_effort(["tmux", "load-buffer", "-"], str(prompt_path), "tmux load-buffer")
 
     while not click.confirm("Agent finished writing output? "):
-        pass
+        continue
 
     if not output_path.exists():
         raise HandoffError(f"Expected output file not found: {output_path}")  # noqa: TRY003
