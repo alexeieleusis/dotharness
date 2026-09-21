@@ -6,9 +6,10 @@ from pathlib import Path
 
 PHASE_FILE_NAME_PATTERN = re.compile(r"^(\d{2})-([a-z0-9-]+)-leaf\.md$")
 
+_ACCEPTANCE_CRITERIA_HEADER = "Acceptance criteria"
 _MANUAL_TEST_CHECKLIST_HEADER = "Manual test checklist"
 
-_SECTION_HEADERS = ("Scope", "Requirements", "Acceptance criteria", _MANUAL_TEST_CHECKLIST_HEADER, "Depends on")
+_SECTION_HEADERS = ("Scope", "Requirements", _ACCEPTANCE_CRITERIA_HEADER, _MANUAL_TEST_CHECKLIST_HEADER, "Depends on")
 
 
 class PhaseFileError(ValueError):
@@ -74,7 +75,7 @@ def parse_phase_file(path: Path) -> PhaseFile:
         name=name,
         scope=_parse_bullets(bodies["Scope"]),
         requirements=bodies["Requirements"].strip("\n"),
-        acceptance_criteria=_parse_bullets(bodies["Acceptance criteria"]),
+        acceptance_criteria=_parse_bullets(bodies[_ACCEPTANCE_CRITERIA_HEADER]),
         manual_test_checklist=_parse_bullets(bodies[_MANUAL_TEST_CHECKLIST_HEADER]),
         depends_on=depends_on,
     )
@@ -87,7 +88,7 @@ def render_phase_file(phase: PhaseFile) -> str:
     sections = [
         ("Scope", render_bullets(phase.scope)),
         ("Requirements", phase.requirements),
-        ("Acceptance criteria", render_bullets(phase.acceptance_criteria)),
+        (_ACCEPTANCE_CRITERIA_HEADER, render_bullets(phase.acceptance_criteria)),
         (_MANUAL_TEST_CHECKLIST_HEADER, render_bullets(phase.manual_test_checklist)),
         ("Depends on", f"- {phase.depends_on}"),
     ]
