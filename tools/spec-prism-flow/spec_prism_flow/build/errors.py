@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
 from typing import ClassVar
 
 
@@ -9,6 +11,31 @@ class CommandError(RuntimeError):
         self.returncode = returncode
         self.stderr = stderr
         super().__init__(f"`{' '.join(args)}` exited {returncode}: {stderr.strip()}")
+
+
+def run_subprocess(
+    cmd: list[str],
+    *,
+    cwd: Path | None,
+    timeout: int,
+    error_cls: type[CommandError],
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """Shared `subprocess.run` primitive for every `*_ops`/`*_integration` module that
+    shells out and needs `TimeoutExpired` (and, when `check`, a non-zero exit) turned
+    into a `CommandError` subclass. `check=False` is for a caller like
+    `gh_ops._run_raw` that must still convert a timeout but wants to inspect a
+    non-zero-exit result itself before deciding how to raise (e.g. `gh_ops.pr_merge`
+    wrapping it into `PRNotMergeableError`)."""
+    try:
+        result = subprocess.run(  # noqa: S603
+            cmd, cwd=cwd, capture_output=True, text=True, check=False, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise error_cls(cmd, -1, f"timed out after {timeout}s: {exc.stderr or ''}") from exc
+    if check and result.returncode != 0:
+        raise error_cls(cmd, result.returncode, result.stderr)
+    return result
 
 
 class OrchestrationError(Exception):

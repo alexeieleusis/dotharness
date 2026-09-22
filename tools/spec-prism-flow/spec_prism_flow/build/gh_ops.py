@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
-from spec_prism_flow.build.errors import CommandError, OrchestrationError
+from spec_prism_flow.build.errors import CommandError, OrchestrationError, run_subprocess
 
 _GH_TIMEOUT_SECONDS = 60
 
@@ -72,17 +72,10 @@ class PRStatus:
 
 
 def _run_raw(cwd: Path | None, *args: str) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(  # noqa: S603
-            ["gh", *args],  # noqa: S607
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_GH_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise GhCommandError(["gh", *args], -1, f"timed out after {_GH_TIMEOUT_SECONDS}s: {exc.stderr or ''}") from exc
+    """Converts a timeout to `GhCommandError` but leaves a non-zero exit for the
+    caller to inspect -- `pr_merge` needs the raw result to wrap into
+    `PRNotMergeableError` instead."""
+    return run_subprocess(["gh", *args], cwd=cwd, timeout=_GH_TIMEOUT_SECONDS, error_cls=GhCommandError, check=False)
 
 
 def _run(cwd: Path | None, *args: str) -> subprocess.CompletedProcess[str]:
