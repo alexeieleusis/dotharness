@@ -1,6 +1,10 @@
-"""Shared fixtures/builders for the phase_runner and toolchain test suites."""
+"""Shared fixtures/builders for the phase_runner, toolchain, track_runner,
+parallel_runner and build-CLI test suites."""
 
+import json
 import subprocess
+from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 from unittest.mock import Mock
@@ -8,6 +12,7 @@ from unittest.mock import Mock
 import pytest
 
 from spec_prism_flow.build import phase_runner
+from spec_prism_flow.build.completion_log import CompletionRecord
 from spec_prism_flow.build.gh_ops import PRHandle, PRStatus
 from spec_prism_flow.build.git_ops import DiffStat
 from spec_prism_flow.build.manual_test import ManualTestOutcome
@@ -21,7 +26,7 @@ from spec_prism_flow.config import (
     SpecPrismFlowConfig,
     VibeHealConfig,
 )
-from spec_prism_flow.phase_file import PhaseFile
+from spec_prism_flow.phase_file import PhaseFile, phase_file_name, render_phase_file
 
 ORIGIN_URL = "git@github.com:acme/widget.git"
 REPO = "acme/widget"
@@ -113,3 +118,47 @@ def init_git_repo(tmp_path: Path, dirname: str = "repo") -> Path:
 def git_commit(clone: Path, message: str) -> None:
     run_git(clone, "add", "-A")
     run_git(clone, "commit", "-q", "-m", message)
+
+
+def write_phase_file(phases_dir: Path, phase: PhaseFile) -> Path:
+    """Renders `phase` to a real `<NN>-<slug>-leaf.md` file under `phases_dir` --
+    used by track_runner/parallel_runner/build-CLI tests that need `parse_phase_file`
+    to succeed on a fixture corpus, not just a bare filename to glob-match."""
+    phases_dir.mkdir(parents=True, exist_ok=True)
+    path = phases_dir / phase_file_name(phase.number, phase.name)
+    path.write_text(render_phase_file(phase))
+    return path
+
+
+def make_completion_record(**overrides) -> CompletionRecord:
+    fields = {
+        "phase_number": 1,
+        "phase_name": "some-leaf",
+        "pr_number": 1,
+        "pr_url": "https://github.com/acme/widget/pull/1",
+        "pr_opened_at": datetime(2026, 1, 1, tzinfo=UTC),
+        "pr_merged_at": datetime(2026, 1, 2, tzinfo=UTC),
+        "manual_test_first_try_pass": True,
+        "escalation_reason": None,
+        "address_comments_cycles": 1,
+        "pr_diff_files": 1,
+        "pr_diff_lines_added": 5,
+        "pr_diff_lines_removed": 2,
+        "human_escalations": 0,
+    }
+    fields.update(overrides)
+    return CompletionRecord(**fields)
+
+
+def write_completion_log(path: Path, records: list[CompletionRecord]) -> None:
+    """Writes `records` as a completion-log.json file at `path` -- mirrors
+    completion_log.py's own (private) serialization so a fixture log round-trips
+    through `completion_log.load_all` exactly like a real one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = []
+    for record in records:
+        data = asdict(record)
+        data["pr_opened_at"] = record.pr_opened_at.isoformat() if record.pr_opened_at else None
+        data["pr_merged_at"] = record.pr_merged_at.isoformat() if record.pr_merged_at else None
+        payload.append(data)
+    path.write_text(json.dumps(payload))
