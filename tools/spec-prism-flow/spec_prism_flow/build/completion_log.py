@@ -11,6 +11,11 @@ from pathlib import Path
 from spec_prism_flow.build import git_ops
 from spec_prism_flow.build.git_ops import GitCommandError
 
+# Fixed, repo-relative location of the shared completion log inside the target clone
+# -- the single source of truth, so toolchain.py and track_runner.py both import it
+# rather than each hardcoding their own copy of the path.
+COMPLETION_LOG_JSON_RELPATH = Path("docs/completion-log.json")
+
 
 @dataclass(frozen=True)
 class CompletionRecord:

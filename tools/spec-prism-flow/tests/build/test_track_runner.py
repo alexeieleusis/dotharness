@@ -1,0 +1,112 @@
+"""Tests for `already_merged_phase_numbers`/`run_track`."""
+
+from unittest.mock import Mock
+
+import pytest
+from conftest import fake_phase_run_result, write_completion_log
+from conftest import make_completion_record as _record
+from conftest import make_config as _config
+from conftest import make_phase as _phase
+from conftest import write_phase_file as _write_phase_file
+
+from spec_prism_flow.build import phase_runner, track_runner
+from spec_prism_flow.build.errors import EmptyImplementationError
+from spec_prism_flow.build.track_runner import (
+    already_merged_phase_numbers,
+    run_track,
+)
+
+# --- already_merged_phase_numbers ------------------------------------------------
+
+
+def test_already_merged_phase_numbers_returns_empty_set_when_log_missing(tmp_path):
+    assert already_merged_phase_numbers(tmp_path / "docs" / "completion-log.json") == set()
+
+
+def test_already_merged_phase_numbers_returns_merged_only(tmp_path):
+    log_path = tmp_path / "docs" / "completion-log.json"
+    write_completion_log(
+        log_path,
+        [
+            _record(phase_number=1, pr_merged_at=None, escalation_reason="boom"),
+            _record(phase_number=2),
+            _record(phase_number=3),
+        ],
+    )
+
+    assert already_merged_phase_numbers(log_path) == {2, 3}
+
+
+# --- run_track ---------------------------------------------------------------------
+
+
+def test_run_track_skips_out_of_bounds_and_already_merged_phases(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    for number in (1, 2, 3, 4, 5):
+        _write_phase_file(config.plan.phase_dir, _phase(number=number, name=f"leaf-{number}"))
+    clone = tmp_path / "clone"
+    write_completion_log(clone / track_runner.COMPLETION_LOG_JSON_RELPATH, [_record(phase_number=2)])
+
+    run_phase = Mock(side_effect=lambda clone, config, phase, **kwargs: fake_phase_run_result(phase.number))
+    monkeypatch.setattr(phase_runner, "run_phase", run_phase)
+
+    results = run_track(config, clone, start_phase=1, stop_phase=4)
+
+    called_numbers = [call.args[2].number for call in run_phase.call_args_list]
+    assert called_numbers == [1, 3, 4]
+    assert [r.phase_number for r in results] == [1, 3, 4]
+
+
+def test_run_track_passes_dry_run_resume_strict_through(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    _write_phase_file(config.plan.phase_dir, _phase(number=1, name="only"))
+    clone = tmp_path / "clone"
+
+    run_phase = Mock(return_value=fake_phase_run_result(1))
+    monkeypatch.setattr(phase_runner, "run_phase", run_phase)
+
+    run_track(config, clone, dry_run=True, resume=True, strict=True)
+
+    run_phase.assert_called_once()
+    args, kwargs = run_phase.call_args
+    assert args[0] is clone
+    assert args[1] is config
+    assert args[2].number == 1
+    assert kwargs == {"dry_run": True, "resume": True, "strict": True}
+
+
+def test_run_track_propagates_orchestration_error_annotated_with_phase_context(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    phases = [_phase(number=n, name=f"leaf-{n}") for n in (1, 2, 3)]
+    for phase in phases:
+        _write_phase_file(config.plan.phase_dir, phase)
+    clone = tmp_path / "clone"
+
+    def _run_phase(clone, config, phase, **kwargs):
+        if phase.number == 2:
+            raise EmptyImplementationError()
+        return fake_phase_run_result(phase.number)
+
+    run_phase = Mock(side_effect=_run_phase)
+    monkeypatch.setattr(phase_runner, "run_phase", run_phase)
+
+    with pytest.raises(EmptyImplementationError) as exc_info:
+        run_track(config, clone)
+
+    assert exc_info.value.phase_number == 2
+    assert exc_info.value.phase_name == "leaf-2"
+    called_numbers = [call.args[2].number for call in run_phase.call_args_list]
+    assert called_numbers == [1, 2]  # phase 3 never attempted after phase 2 escalates
+
+
+def test_run_track_returns_empty_list_when_all_phases_already_merged(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    _write_phase_file(config.plan.phase_dir, _phase(number=1, name="only"))
+    clone = tmp_path / "clone"
+    write_completion_log(clone / track_runner.COMPLETION_LOG_JSON_RELPATH, [_record(phase_number=1)])
+
+    run_phase = Mock()
+    monkeypatch.setattr(phase_runner, "run_phase", run_phase)
+
+    assert run_track(config, clone) == []
+    run_phase.assert_not_called()

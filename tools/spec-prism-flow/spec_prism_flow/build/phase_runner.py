@@ -36,7 +36,7 @@ class PhaseRunResult:
     completion_record: CompletionRecord
 
 
-def _repo_slug(clone: Path) -> str:
+def repo_slug(clone: Path) -> str:
     """`"owner/name"`, derived from `clone`'s `origin` remote -- mirrors
     `claude_backend`'s own repo-identity derivation, adapted to keep the owner
     segment (gh_ops/resume_state need the full `"owner/name"` slug, not just the repo
@@ -45,6 +45,17 @@ def _repo_slug(clone: Path) -> str:
     normalized = origin_url(clone).strip().replace(":", "/").removesuffix("/").removesuffix(".git")
     parts = [p for p in normalized.split("/") if p]
     return "/".join(parts[-2:])
+
+
+def phase_status(record: CompletionRecord | None, state_path: Path) -> str:
+    """One of `"merged"`, `"escalated"`, `"in progress"`, or `"pending"`, per
+    `record`'s completion-log fields and whether `state_path` (the phase's persisted
+    resume-state file, per `resume_state_path`) exists."""
+    if record is not None and record.pr_merged_at is not None:
+        return "merged"
+    if record is not None and record.escalation_reason is not None:
+        return "escalated"
+    return "in progress" if state_path.exists() else "pending"
 
 
 @dataclass
@@ -216,7 +227,7 @@ def run_phase(
     if toolchain is None:
         toolchain = build_dry_run_toolchain() if dry_run else build_live_toolchain(config)
 
-    repo = _repo_slug(clone)
+    repo = repo_slug(clone)
     branch = agent_runner.branch_name(phase)
     state_path = resume_state.resume_state_path(config, repo, branch)
     progress = _Progress()
