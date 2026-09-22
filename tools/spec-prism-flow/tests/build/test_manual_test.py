@@ -21,6 +21,19 @@ def test_prompt_skips_and_returns_passed_on_empty_checklist(monkeypatch):
     prompt_mock.assert_not_called()
 
 
+def test_prompt_skips_and_returns_passed_on_empty_checklist_even_when_strict(monkeypatch):
+    confirm_mock = Mock()
+    prompt_mock = Mock()
+    monkeypatch.setattr(click, "confirm", confirm_mock)
+    monkeypatch.setattr(click, "prompt", prompt_mock)
+
+    outcome = manual_test.prompt(7, "build-agent-runner-leaf", [], strict=True)
+
+    assert outcome == ManualTestOutcome(passed=True, retry=False, notes=None)
+    confirm_mock.assert_not_called()
+    prompt_mock.assert_not_called()
+
+
 def test_prompt_returns_passed_outcome_when_all_items_pass(monkeypatch):
     monkeypatch.setattr(click, "confirm", Mock(return_value=True))
 
