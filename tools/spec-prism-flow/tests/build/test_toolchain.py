@@ -1,6 +1,8 @@
-import subprocess
 from pathlib import Path
 from unittest.mock import Mock
+
+from conftest import git_commit as _commit
+from conftest import init_git_repo as _init_repo
 
 from spec_prism_flow.build import (
     completion_log,
@@ -70,24 +72,6 @@ def _make_cfg(tmp_path, *, backend: str = "claude", review_enabled: bool = True,
         build=BuildConfig(state_dir=tmp_path / "state"),
         harness=HarnessSection(knowledge_dir=tmp_path / "knowledge"),
     )
-
-
-def _git(cwd, *args):
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)  # noqa: S603, S607
-
-
-def _init_repo(tmp_path: Path) -> Path:
-    clone = tmp_path / "repo"
-    clone.mkdir()
-    _git(clone, "init", "-q")
-    _git(clone, "config", "user.email", "test@example.com")
-    _git(clone, "config", "user.name", "Test")
-    return clone
-
-
-def _commit(clone: Path, message: str) -> None:
-    _git(clone, "add", "-A")
-    _git(clone, "commit", "-q", "-m", message)
 
 
 # --- Toolchain dataclass shape -----------------------------------------------------

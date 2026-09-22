@@ -3,12 +3,14 @@ confirming each triggers the documented best-effort partial completion-log write
 (escalation reason + step reached) before the original error re-raises unchanged --
 and that a non-`OrchestrationError` failure gets no such write."""
 
-from typing import cast
 from unittest.mock import Mock
 
 import pytest
+from conftest import as_mock as _m
+from conftest import make_config as _config
+from conftest import make_phase as _phase
+from conftest import make_toolchain as _make_toolchain
 
-from spec_prism_flow.build import phase_runner
 from spec_prism_flow.build.errors import (
     EmptyImplementationError,
     ManualTestFailed,
@@ -16,85 +18,17 @@ from spec_prism_flow.build.errors import (
     RetryBudgetExhausted,
     ScopeViolation,
 )
-from spec_prism_flow.build.gh_ops import PRHandle, PRNotMergeableError, PRStatus
+from spec_prism_flow.build.gh_ops import PRNotMergeableError
 from spec_prism_flow.build.git_ops import GitCommandError
-from spec_prism_flow.build.manual_test import ManualTestOutcome
 from spec_prism_flow.build.phase_runner import run_phase
 from spec_prism_flow.build.toolchain import DiffStat, Toolchain
-from spec_prism_flow.config import (
-    AgentConfig,
-    BuildConfig,
-    HarnessSection,
-    PlanConfig,
-    ReviewConfig,
-    SpecPrismFlowConfig,
-    VibeHealConfig,
-)
-from spec_prism_flow.phase_file import PhaseFile
+from spec_prism_flow.config import BuildConfig
 
-_ORIGIN_URL = "git@github.com:acme/widget.git"
-
-
-@pytest.fixture(autouse=True)
-def _patch_origin_url(monkeypatch):
-    monkeypatch.setattr(phase_runner, "origin_url", Mock(return_value=_ORIGIN_URL))
-
-
-def _phase(**overrides) -> PhaseFile:
-    fields = {
-        "number": 11,
-        "name": "build-phase-run-orchestrator-leaf",
-        "scope": ["spec_prism_flow/build/toolchain.py"],
-        "requirements": "Some requirements text.",
-        "acceptance_criteria": ["Thing one works."],
-        "manual_test_checklist": ["Run the tests."],
-        "depends_on": "Phase 10 merged.",
-    }
-    fields.update(overrides)
-    return PhaseFile(**fields)
-
-
-def _config(tmp_path, **overrides) -> SpecPrismFlowConfig:
-    fields = {
-        "agent": AgentConfig(),
-        "plan": PlanConfig(workspace_dir=tmp_path / "workspace", phase_dir=tmp_path / "phases"),
-        "review": ReviewConfig(enabled=False, tool_dir=tmp_path / "pr-review", harness_config=None),
-        "vibe_heal": VibeHealConfig(enabled=False, tool_dir=tmp_path / "vibe-heal"),
-        "build": BuildConfig(state_dir=tmp_path / "state", max_retry_cycles=3, commands=["true"]),
-        "harness": HarnessSection(knowledge_dir=tmp_path / "knowledge"),
-    }
-    fields.update(overrides)
-    return SpecPrismFlowConfig(**fields)
+_ESCALATION_DIFF_STAT = DiffStat(files=3, lines_added=30, lines_removed=7)
 
 
 def _toolchain(**overrides) -> Toolchain:
-    fields = {
-        "checkout_fresh_branch": Mock(),
-        "agent_run": Mock(return_value="agent output"),
-        "commit_all": Mock(return_value=True),
-        "diff_paths": Mock(return_value=["spec_prism_flow/build/toolchain.py"]),
-        "scope_check": Mock(),
-        "push_branch": Mock(),
-        "fetch_resync": Mock(),
-        "pr_create": Mock(return_value=PRHandle(number=42, url="https://github.com/acme/widget/pull/42")),
-        "pr_view": Mock(return_value=PRStatus(state="OPEN", mergeable="MERGEABLE", review_decision="APPROVED")),
-        "static_analysis_scan": Mock(return_value=None),
-        "static_analysis_post": Mock(),
-        "review_self_review": Mock(return_value=""),
-        "review_address_comments": Mock(return_value=""),
-        "unresolved_thread_count": Mock(return_value=0),
-        "manual_test_prompt": Mock(return_value=ManualTestOutcome(passed=True, retry=False, notes=None)),
-        "diff_stat": Mock(return_value=DiffStat(files=3, lines_added=30, lines_removed=7)),
-        "merge_gates_run": Mock(),
-        "pr_merge": Mock(),
-        "completion_log_append": Mock(),
-    }
-    fields.update(overrides)
-    return Toolchain(**fields)
-
-
-def _m(fn: object) -> Mock:
-    return cast(Mock, fn)
+    return _make_toolchain(diff_stat_value=_ESCALATION_DIFF_STAT, **overrides)
 
 
 def _escalation_record(toolchain: Toolchain):

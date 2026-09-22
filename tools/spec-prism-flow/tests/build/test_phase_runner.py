@@ -1,8 +1,12 @@
 from pathlib import Path
-from typing import cast
 from unittest.mock import Mock
 
 import pytest
+from conftest import REPO as _REPO
+from conftest import as_mock as _m
+from conftest import make_config as _config
+from conftest import make_phase as _phase
+from conftest import make_toolchain as _toolchain
 
 from spec_prism_flow.build import phase_runner
 from spec_prism_flow.build.errors import (
@@ -11,84 +15,12 @@ from spec_prism_flow.build.errors import (
     RetryBudgetExhausted,
     ScopeViolation,
 )
-from spec_prism_flow.build.gh_ops import PRHandle, PRStatus
+from spec_prism_flow.build.gh_ops import PRStatus
 from spec_prism_flow.build.manual_test import ManualTestOutcome
 from spec_prism_flow.build.phase_runner import PhaseRunResult, run_phase
 from spec_prism_flow.build.resume_state import ResumeState, load_resume_state, resume_state_path, save_resume_state
-from spec_prism_flow.build.toolchain import DiffStat, Toolchain, build_dry_run_toolchain
-from spec_prism_flow.config import (
-    AgentConfig,
-    BuildConfig,
-    HarnessSection,
-    PlanConfig,
-    ReviewConfig,
-    SpecPrismFlowConfig,
-    VibeHealConfig,
-)
-from spec_prism_flow.phase_file import PhaseFile
-
-_ORIGIN_URL = "git@github.com:acme/widget.git"
-_REPO = "acme/widget"
-
-
-@pytest.fixture(autouse=True)
-def _patch_origin_url(monkeypatch):
-    monkeypatch.setattr(phase_runner, "origin_url", Mock(return_value=_ORIGIN_URL))
-
-
-def _phase(**overrides) -> PhaseFile:
-    fields = {
-        "number": 11,
-        "name": "build-phase-run-orchestrator-leaf",
-        "scope": ["spec_prism_flow/build/toolchain.py", "spec_prism_flow/build/phase_runner.py"],
-        "requirements": "Some requirements text.",
-        "acceptance_criteria": ["Thing one works."],
-        "manual_test_checklist": ["Run the tests."],
-        "depends_on": "Phase 10 merged.",
-    }
-    fields.update(overrides)
-    return PhaseFile(**fields)
-
-
-def _config(tmp_path, **overrides) -> SpecPrismFlowConfig:
-    fields = {
-        "agent": AgentConfig(),
-        "plan": PlanConfig(workspace_dir=tmp_path / "workspace", phase_dir=tmp_path / "phases"),
-        "review": ReviewConfig(
-            enabled=False, tool_dir=tmp_path / "pr-review", harness_config=tmp_path / ".harness.toml"
-        ),
-        "vibe_heal": VibeHealConfig(enabled=False, tool_dir=tmp_path / "vibe-heal"),
-        "build": BuildConfig(state_dir=tmp_path / "state", max_retry_cycles=3, commands=["true"]),
-        "harness": HarnessSection(knowledge_dir=tmp_path / "knowledge"),
-    }
-    fields.update(overrides)
-    return SpecPrismFlowConfig(**fields)
-
-
-def _toolchain(**overrides) -> Toolchain:
-    fields = {
-        "checkout_fresh_branch": Mock(),
-        "agent_run": Mock(return_value="agent output"),
-        "commit_all": Mock(return_value=True),
-        "diff_paths": Mock(return_value=["spec_prism_flow/build/toolchain.py"]),
-        "scope_check": Mock(),
-        "push_branch": Mock(),
-        "fetch_resync": Mock(),
-        "pr_create": Mock(return_value=PRHandle(number=42, url="https://github.com/acme/widget/pull/42")),
-        "pr_view": Mock(return_value=PRStatus(state="OPEN", mergeable="MERGEABLE", review_decision="APPROVED")),
-        "static_analysis_scan": Mock(return_value=None),
-        "static_analysis_post": Mock(),
-        "review_self_review": Mock(return_value=""),
-        "review_address_comments": Mock(return_value=""),
-        "unresolved_thread_count": Mock(return_value=0),
-        "manual_test_prompt": Mock(return_value=ManualTestOutcome(passed=True, retry=False, notes=None)),
-        "diff_stat": Mock(return_value=DiffStat(files=1, lines_added=5, lines_removed=2)),
-        "merge_gates_run": Mock(),
-        "pr_merge": Mock(),
-        "completion_log_append": Mock(),
-    }
-    fields.update(overrides)
-    return Toolchain(**fields)
+from spec_prism_flow.build.toolchain import build_dry_run_toolchain
+from spec_prism_flow.config import BuildConfig, ReviewConfig, VibeHealConfig
 
 
 def _state_path(config, phase) -> Path:
@@ -96,30 +28,21 @@ def _state_path(config, phase) -> Path:
     return resume_state_path(config, _REPO, branch)
 
 
-def _m(fn: object) -> Mock:
-    """`Toolchain` fields are typed as the dependency signature they wire (e.g.
-    `Callable[[Path, str, str], None]`), so a test that hands one a `Mock` and later
-    wants `.assert_called_with`/`.call_count` off the same attribute needs it narrowed
-    back to `Mock` for the type checker -- the runtime object is unchanged."""
-    return cast(Mock, fn)
-
-
 # --- _repo_slug ----------------------------------------------------------------------
 
 
-def test_repo_slug_parses_ssh_style_origin_url(tmp_path, monkeypatch):
-    monkeypatch.setattr(phase_runner, "origin_url", Mock(return_value="git@github.com:acme/widget.git"))
-    assert phase_runner._repo_slug(tmp_path) == "acme/widget"
-
-
-def test_repo_slug_parses_https_style_origin_url(tmp_path, monkeypatch):
-    monkeypatch.setattr(phase_runner, "origin_url", Mock(return_value="https://github.com/acme/widget.git"))
-    assert phase_runner._repo_slug(tmp_path) == "acme/widget"
-
-
-def test_repo_slug_handles_missing_dot_git_suffix(tmp_path, monkeypatch):
-    monkeypatch.setattr(phase_runner, "origin_url", Mock(return_value="https://github.com/acme/widget"))
-    assert phase_runner._repo_slug(tmp_path) == "acme/widget"
+@pytest.mark.parametrize(
+    ("origin_url_value", "expected"),
+    [
+        ("git@github.com:acme/widget.git", "acme/widget"),
+        ("https://github.com/acme/widget.git", "acme/widget"),
+        ("https://github.com/acme/widget", "acme/widget"),
+    ],
+    ids=["ssh-style", "https-style", "missing-dot-git-suffix"],
+)
+def test_repo_slug_parses_origin_url(tmp_path, monkeypatch, origin_url_value, expected):
+    monkeypatch.setattr(phase_runner, "origin_url", Mock(return_value=origin_url_value))
+    assert phase_runner._repo_slug(tmp_path) == expected
 
 
 # --- Happy path: all 8 steps ----------------------------------------------------------

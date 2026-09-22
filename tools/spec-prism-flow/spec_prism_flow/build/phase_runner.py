@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 from spec_prism_flow.build import agent_runner, resume_state, vibe_heal_integration
 from spec_prism_flow.build.completion_log import CompletionRecord
 from spec_prism_flow.build.errors import EmptyImplementationError, OrchestrationError
+from spec_prism_flow.build.gh_ops import PRHandle
 from spec_prism_flow.build.git_ops import origin_url
 from spec_prism_flow.build.resume_state import ResumeState
 from spec_prism_flow.build.retry_budget import RetryBudget
@@ -54,8 +55,7 @@ class _Progress:
     `_partial_record` for the best-effort escalation write, whatever amount of it
     happens to be filled in at the point an `OrchestrationError` is raised."""
 
-    pr_number: int | None = None
-    pr_url: str | None = None
+    pr: PRHandle | None = None
     pr_opened_at: datetime | None = None
     cycle_index: int = 0
     manual_test_first_try_pass: bool | None = None
@@ -81,8 +81,7 @@ def _implement_or_resume(
     if existing_state is not None:
         status = toolchain.pr_view(repo, existing_state.pr_number)
         if status.state == "OPEN":
-            progress.pr_number = existing_state.pr_number
-            progress.pr_url = existing_state.pr_url
+            progress.pr = PRHandle(number=existing_state.pr_number, url=existing_state.pr_url)
             progress.cycle_index = existing_state.cycle_index
             return
 
@@ -97,8 +96,7 @@ def _implement_or_resume(
     toolchain.push_branch(clone, branch)
     toolchain.fetch_resync(clone, branch)
     pr = toolchain.pr_create(clone, branch, agent_runner.commit_message(phase), agent_runner.build_prompt(phase))
-    progress.pr_number = pr.number
-    progress.pr_url = pr.url
+    progress.pr = pr
     progress.pr_opened_at = datetime.now(UTC)
     progress.cycle_index = 0
     resume_state.save_resume_state(
@@ -140,8 +138,9 @@ def _iterate(
     cycle's work using whatever cycle_index/unresolved-thread-count is already known
     from the previous pass (0 before the first). Loops again on unresolved review
     threads or a retryable failed manual test; otherwise falls through to step 7."""
-    pr_number = cast(int, progress.pr_number)
-    pr_url = cast(str, progress.pr_url)
+    pr = cast(PRHandle, progress.pr)
+    pr_number = pr.number
+    pr_url = pr.url
     retry_budget = RetryBudget(max_cycles=config.build.max_retry_cycles)
     last_unresolved_thread_count = 0
 
@@ -177,20 +176,20 @@ def _iterate(
 
 
 def _partial_record(phase: PhaseFile, progress: _Progress, escalation_reason: str) -> CompletionRecord:
-    diff = progress.diff
+    diff = progress.diff or DiffStat(files=0, lines_added=0, lines_removed=0)
     return CompletionRecord(
         phase_number=phase.number,
         phase_name=phase.name,
-        pr_number=progress.pr_number,
-        pr_url=progress.pr_url,
+        pr_number=progress.pr.number if progress.pr else None,
+        pr_url=progress.pr.url if progress.pr else None,
         pr_opened_at=progress.pr_opened_at,
         pr_merged_at=None,
         manual_test_first_try_pass=progress.manual_test_first_try_pass,
         escalation_reason=escalation_reason,
         address_comments_cycles=progress.address_comments_cycles,
-        pr_diff_files=diff.files if diff is not None else 0,
-        pr_diff_lines_added=diff.lines_added if diff is not None else 0,
-        pr_diff_lines_removed=diff.lines_removed if diff is not None else 0,
+        pr_diff_files=diff.files,
+        pr_diff_lines_added=diff.lines_added,
+        pr_diff_lines_removed=diff.lines_removed,
         human_escalations=1,
     )
 
@@ -230,13 +229,12 @@ def run_phase(
         progress.diff = toolchain.diff_stat(clone, _BASE_REF)
         toolchain.merge_gates_run(clone, config.build.commands)
 
-        pr_number = cast(int, progress.pr_number)
-        pr_url = cast(str, progress.pr_url)
+        pr = cast(PRHandle, progress.pr)
         completion_record = CompletionRecord(
             phase_number=phase.number,
             phase_name=phase.name,
-            pr_number=pr_number,
-            pr_url=pr_url,
+            pr_number=pr.number,
+            pr_url=pr.url,
             pr_opened_at=progress.pr_opened_at,
             pr_merged_at=None,
             manual_test_first_try_pass=progress.manual_test_first_try_pass,
@@ -251,7 +249,7 @@ def run_phase(
         if not auto_merge:
             return PhaseRunResult(phase_number=phase.number, merged=False, completion_record=completion_record)
 
-        toolchain.pr_merge(repo, pr_number)
+        toolchain.pr_merge(repo, pr.number)
         merged_record = replace(completion_record, pr_merged_at=datetime.now(UTC))
         toolchain.completion_log_append(clone, merged_record)
         resume_state.clear_resume_state(state_path)
