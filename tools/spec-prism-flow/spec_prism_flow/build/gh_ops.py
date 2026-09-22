@@ -4,8 +4,9 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
-from spec_prism_flow.build.errors import CommandError
+from spec_prism_flow.build.errors import CommandError, OrchestrationError
 
 _GH_TIMEOUT_SECONDS = 60
 
@@ -32,18 +33,22 @@ class GhCommandError(CommandError):
     mergeability -- see `PRNotMergeableError` for the `gh pr merge`-specific case."""
 
 
-class PRNotMergeableError(GhCommandError):
-    """Raised when `gh pr merge` exits non-zero. Subclasses `GhCommandError` (not
-    `errors.OrchestrationError`, which is where `next_command` normally lives)
-    because `errors.py` is out of this phase's scope to edit -- `next_command` is
-    instead set directly as an attribute here, kept as a plain string rather than a
-    property so callers can read it the same way they would off an
-    OrchestrationError. No internal retry: a single non-zero exit raises
+class PRNotMergeableError(GhCommandError, OrchestrationError):
+    """Raised when `gh pr merge` exits non-zero. Subclasses both `GhCommandError`
+    (for `cmd_args`/`returncode`/`stderr`) and `errors.OrchestrationError` (for
+    `exit_code`/`next_command`/`phase_number`/`phase_name`/`with_context()`) via
+    multiple inheritance, so a Phase 11 orchestrator that catches
+    `OrchestrationError` generically still sees this error -- without editing
+    `errors.py`, which is out of this phase's scope. Each base's `__init__` is
+    called explicitly since `super()` alone can't thread both sets of constructor
+    arguments through the diamond. No internal retry: a single non-zero exit raises
     immediately, matching the "no config-driven retry for merges" requirement."""
 
+    exit_code: ClassVar[int] = 15
+
     def __init__(self, args: list[str], returncode: int, stderr: str, pr_number: int) -> None:
-        super().__init__(args, returncode, stderr)
-        self.next_command = f"gh pr view {pr_number}"
+        GhCommandError.__init__(self, args, returncode, stderr)
+        OrchestrationError.__init__(self, str(self), next_command=f"gh pr view {pr_number}")
 
 
 @dataclass(frozen=True)

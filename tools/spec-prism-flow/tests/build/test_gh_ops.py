@@ -5,6 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from spec_prism_flow.build import gh_ops
+from spec_prism_flow.build.errors import OrchestrationError
 from spec_prism_flow.build.gh_ops import GhCommandError, PRHandle, PRNotMergeableError, PRStatus
 
 
@@ -169,6 +170,23 @@ def test_pr_merge_raises_pr_not_mergeable_error_with_next_command_on_failure(mon
     assert err.stderr == "not mergeable: conflicts"
     assert err.next_command == "gh pr view 42"
     assert "not mergeable: conflicts" in str(err)
+
+
+def test_pr_not_mergeable_error_is_also_an_orchestration_error(monkeypatch):
+    monkeypatch.setattr(
+        "subprocess.run", Mock(return_value=Mock(returncode=1, stdout="", stderr="not mergeable: conflicts"))
+    )
+
+    with pytest.raises(PRNotMergeableError) as exc_info:
+        gh_ops.pr_merge(42)
+
+    err = exc_info.value
+    assert isinstance(err, OrchestrationError)
+    assert err.exit_code == 15
+    assert err.next_command == "gh pr view 42"
+    err.with_context(phase_number=11, phase_name="merge")
+    assert err.phase_number == 11
+    assert err.phase_name == "merge"
 
 
 def test_pr_merge_does_not_retry_on_failure(monkeypatch):
