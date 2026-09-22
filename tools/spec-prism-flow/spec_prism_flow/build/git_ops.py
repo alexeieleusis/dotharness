@@ -37,6 +37,31 @@ def checkout_fresh_branch(clone: Path, branch: str, base: str = "main") -> None:
     _run(clone, "checkout", "-B", branch, f"origin/{base}")
 
 
+def add_worktree(clone: Path, worktree_path: Path) -> None:
+    """Adds a `git worktree` at `worktree_path`, sharing `clone`'s object store but
+    with its own independent index/HEAD/working tree -- so a phase run against
+    `worktree_path` can `checkout_fresh_branch`/`commit_all`/`push_branch` without
+    racing another phase doing the same concurrently against a different worktree of
+    the same `clone` (see `parallel_runner.run_parallel`). Detached, not on any
+    branch, so it can never collide with a branch checked out elsewhere; the phase's
+    own `checkout_fresh_branch` moves it onto the phase's real branch once running.
+    Clears out any worktree left at `worktree_path` by an earlier, abandoned run
+    first -- `git worktree add` refuses to reuse a path that still has worktree
+    metadata registered against it."""
+    if worktree_path.exists():
+        remove_worktree(clone, worktree_path)
+    _run(clone, "worktree", "add", "--detach", str(worktree_path))
+
+
+def remove_worktree(clone: Path, worktree_path: Path) -> None:
+    """Removes the worktree at `worktree_path`, discarding whatever uncommitted state
+    an escalated or killed phase left behind in it. A no-op if the path is already
+    gone."""
+    if not worktree_path.exists():
+        return
+    _run(clone, "worktree", "remove", "--force", str(worktree_path))
+
+
 def commit_all(clone: Path, message: str) -> bool:
     """Stage and commit everything in `clone`. Returns False (no commit made) if the
     working tree was already clean -- the caller uses this to report an empty

@@ -4,6 +4,7 @@ from unittest.mock import Mock, call
 import pytest
 from conftest import git_commit as _commit
 from conftest import init_git_repo as _init_repo
+from conftest import run_git as _run_git
 
 from spec_prism_flow.build import git_ops
 from spec_prism_flow.build.git_ops import DiffStat, GitCommandError
@@ -330,3 +331,86 @@ def test_diff_stat_raises_git_command_error_for_unknown_base_ref(tmp_path):
 
     with pytest.raises(GitCommandError):
         git_ops.diff_stat(clone, "nonexistent-ref")
+
+
+# --- add_worktree/remove_worktree: real scratch git repo --------------------------
+
+
+def test_add_worktree_creates_an_isolated_checkout_of_clones_head(tmp_path):
+    clone = _init_repo(tmp_path)
+    (clone / "a.txt").write_text("line1\n")
+    _commit(clone, "initial")
+    worktree_path = tmp_path / "worktrees" / "phase-01-a"
+
+    git_ops.add_worktree(clone, worktree_path)
+
+    assert (worktree_path / "a.txt").read_text() == "line1\n"
+    assert (worktree_path / ".git").exists()
+
+
+def test_add_worktree_lets_two_worktrees_hold_different_branches_concurrently(tmp_path):
+    """The bug this fix closes: before per-phase worktrees, two concurrently-running
+    phases shared one working tree, so one phase's `checkout -B` reset the branch out
+    from under the other. Two worktrees off the same clone must be able to check out
+    distinct branches at once without either stepping on the other."""
+    clone = _init_repo(tmp_path)
+    (clone / "a.txt").write_text("line1\n")
+    _commit(clone, "initial")
+    wt1 = tmp_path / "worktrees" / "phase-01-a"
+    wt2 = tmp_path / "worktrees" / "phase-02-b"
+
+    git_ops.add_worktree(clone, wt1)
+    git_ops.add_worktree(clone, wt2)
+    _run_git(wt1, "checkout", "-b", "phase-01-a")
+    _run_git(wt2, "checkout", "-b", "phase-02-b")
+    (wt1 / "a.txt").write_text("from phase 1\n")
+    (wt2 / "a.txt").write_text("from phase 2\n")
+
+    assert (wt1 / "a.txt").read_text() == "from phase 1\n"
+    assert (wt2 / "a.txt").read_text() == "from phase 2\n"
+
+
+def test_add_worktree_replaces_a_stale_worktree_left_by_an_abandoned_run(tmp_path):
+    clone = _init_repo(tmp_path)
+    (clone / "a.txt").write_text("line1\n")
+    _commit(clone, "initial")
+    worktree_path = tmp_path / "worktrees" / "phase-01-a"
+    git_ops.add_worktree(clone, worktree_path)
+    (worktree_path / "leftover.txt").write_text("scratch from an abandoned run\n")
+
+    git_ops.add_worktree(clone, worktree_path)
+
+    assert not (worktree_path / "leftover.txt").exists()
+
+
+def test_remove_worktree_deletes_the_directory(tmp_path):
+    clone = _init_repo(tmp_path)
+    (clone / "a.txt").write_text("line1\n")
+    _commit(clone, "initial")
+    worktree_path = tmp_path / "worktrees" / "phase-01-a"
+    git_ops.add_worktree(clone, worktree_path)
+
+    git_ops.remove_worktree(clone, worktree_path)
+
+    assert not worktree_path.exists()
+
+
+def test_remove_worktree_force_removes_even_with_uncommitted_changes(tmp_path):
+    clone = _init_repo(tmp_path)
+    (clone / "a.txt").write_text("line1\n")
+    _commit(clone, "initial")
+    worktree_path = tmp_path / "worktrees" / "phase-01-a"
+    git_ops.add_worktree(clone, worktree_path)
+    (worktree_path / "dirty.txt").write_text("uncommitted\n")
+
+    git_ops.remove_worktree(clone, worktree_path)
+
+    assert not worktree_path.exists()
+
+
+def test_remove_worktree_is_a_noop_when_the_path_does_not_exist(tmp_path):
+    clone = _init_repo(tmp_path)
+    (clone / "a.txt").write_text("line1\n")
+    _commit(clone, "initial")
+
+    git_ops.remove_worktree(clone, tmp_path / "worktrees" / "never-created")

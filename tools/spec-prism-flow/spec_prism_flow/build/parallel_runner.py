@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import contextlib
 from collections import defaultdict
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from spec_prism_flow.build import phase_runner
+from spec_prism_flow.build import agent_runner, git_ops, phase_runner
 from spec_prism_flow.build.completion_log import CompletionRecord, load_all
 from spec_prism_flow.build.errors import OrchestrationError
+from spec_prism_flow.build.git_ops import GitCommandError
 from spec_prism_flow.build.phase_runner import PhaseRunResult
+from spec_prism_flow.build.toolchain import BASE_BRANCH
 from spec_prism_flow.build.track_runner import (
     COMPLETION_LOG_JSON_RELPATH,
     discover_phase_files,
@@ -55,24 +58,34 @@ def run_parallel(
 ) -> list[PhaseRunResult]:
     """Drives `discover_phase_files(config.plan.phase_dir)` to completion against
     `clone` using a bounded `ThreadPoolExecutor`, submitting up to `workers` leaves
-    at a time from whatever `eligible_leaves` reports, re-polling eligibility (from
-    `clone`'s completion log, re-read fresh each time -- concurrent writers coordinate
-    via `completion_log.append_and_commit`'s own retry loop, see toolchain.py) as
-    each leaf completes. An escalated leaf's `OrchestrationError` is not re-raised:
-    it, and every leaf that transitively depends on it, is excluded from all further
-    submission, while unrelated branches keep running. The run ends once nothing is
-    left running and no further leaf is eligible -- i.e. every leaf has either merged
-    or is blocked (transitively) by an escalation."""
+    at a time from whatever `eligible_leaves` reports, re-polling eligibility as each
+    leaf completes. `clone` itself is never handed to a running phase -- each
+    concurrently-submitted leaf gets its own `git_ops.add_worktree`-provisioned
+    working copy (torn down once that leaf's future resolves), so concurrent
+    `checkout_fresh_branch`/`commit_all`/`push_branch` calls from different leaves
+    never race on a shared index/working tree. `clone` instead stays on `BASE_BRANCH`,
+    re-synced via `git_ops.fetch_resync` at the top of every loop iteration so its
+    on-disk completion log reflects whatever a just-finished leaf's own worktree
+    pushed (concurrent writers coordinate via `completion_log.append_and_commit`'s own
+    retry loop, see toolchain.py). An escalated leaf's `OrchestrationError` is not
+    re-raised: it, and every leaf that transitively depends on it, is excluded from
+    all further submission, while unrelated branches keep running. The run ends once
+    nothing is left running and no further leaf is eligible -- i.e. every leaf has
+    either merged or is blocked (transitively) by an escalation."""
     graph = load_graph(config.plan.phase_dir / GRAPH_FILENAME)
     phase_files = [parse_phase_file(path) for path in discover_phase_files(config.plan.phase_dir)]
     completion_log_path = clone / COMPLETION_LOG_JSON_RELPATH
+    worktrees_dir = config.build.state_dir / "worktrees"
 
     results: list[PhaseRunResult] = []
     blocked_nodes: set[str] = set()
     running: dict[Future[PhaseRunResult], PhaseFile] = {}
+    worktrees: dict[Future[PhaseRunResult], Path] = {}
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         while True:
+            with contextlib.suppress(GitCommandError):
+                git_ops.fetch_resync(clone, BASE_BRANCH)
             completion_log = load_all(completion_log_path)
             running_numbers = {phase.number for phase in running.values()}
 
@@ -85,8 +98,13 @@ def run_parallel(
 
             free_slots = workers - len(running)
             for phase in candidates[:free_slots]:
-                future = executor.submit(phase_runner.run_phase, clone, config, phase, dry_run=dry_run, strict=strict)
+                worktree = worktrees_dir / agent_runner.branch_name(phase)
+                git_ops.add_worktree(clone, worktree)
+                future = executor.submit(
+                    phase_runner.run_phase, worktree, config, phase, dry_run=dry_run, strict=strict
+                )
                 running[future] = phase
+                worktrees[future] = worktree
 
             if not running:
                 break
@@ -94,6 +112,8 @@ def run_parallel(
             done, _ = wait(running.keys(), return_when=FIRST_COMPLETED)
             for future in done:
                 phase = running.pop(future)
+                with contextlib.suppress(GitCommandError):
+                    git_ops.remove_worktree(clone, worktrees.pop(future))
                 try:
                     result = future.result()
                 except OrchestrationError as exc:
