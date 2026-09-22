@@ -111,12 +111,15 @@ def test_run_draft_overview_raises_when_output_is_stale(tmp_path, monkeypatch):
     init_workspace(cfg.plan.workspace_dir, brief, None, None, [])
     (cfg.plan.workspace_dir / OVERVIEW_FILENAME).write_text("stale overview")
 
-    monkeypatch.setattr(overview_stage.handoff, "run_handoff", lambda *a, **k: None)
+    def _fake_run_handoff(prompt_text, workspace_dir, stage_name, output_filename=None):
+        (workspace_dir / OVERVIEW_FILENAME).unlink()
+
+    monkeypatch.setattr(overview_stage.handoff, "run_handoff", _fake_run_handoff)
 
     with pytest.raises(OverviewError, match=OVERVIEW_FILENAME):
         run_draft_overview(cfg)
 
-    assert (cfg.plan.workspace_dir / OVERVIEW_FILENAME).read_text() == "stale overview"
+    assert not (cfg.plan.workspace_dir / OVERVIEW_FILENAME).exists()
 
 
 def test_run_draft_overview_translates_real_handoff_error_cleanly(tmp_path, monkeypatch):
