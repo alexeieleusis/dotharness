@@ -108,24 +108,11 @@ def pr_create(cwd: Path, branch: str, title: str, body: str) -> PRHandle:
     return _parse_pr_handle(result.stdout)
 
 
-def _current_repo(cwd: Path | None = None) -> tuple[str, str]:
-    """Resolves the (owner, name) of the repo `gh` would infer from `cwd` (or the
-    process's own cwd when `cwd` is None), the same way a bare `gh pr view <number>`
-    with no `-R` does. Used to supply GraphQL's `owner`/`repo` variables, since
-    `unresolved_thread_count` -- like `pr_view`/`pr_merge` -- takes only a PR
-    number: see the module-level judgment-call note below."""
-    result = _run(cwd, "repo", "view", "--json", "nameWithOwner")
-    name_with_owner = json.loads(result.stdout)["nameWithOwner"]
-    owner, name = name_with_owner.split("/", 1)
-    return owner, name
-
-
-def pr_view(pr_number: int) -> PRStatus:
-    """Judgment call: unlike `pr_create`, this takes no `cwd`/repo argument -- a
-    bare `gh pr view <number>` infers which repo to hit from the current process's
-    working directory's git remote, so callers (Phase 11's orchestrator) are
-    expected to already have `cwd` set to the target clone before calling this."""
-    result = _run(None, "pr", "view", str(pr_number), "--json", "state,mergeable,reviewDecision")
+def pr_view(repo: str, pr_number: int) -> PRStatus:
+    """`repo` is an explicit `"owner/name"` string passed straight to `gh`'s `-R`,
+    mirroring `pr_create`'s explicit-`cwd` style rather than relying on `gh`
+    inferring the target from the process's working directory."""
+    result = _run(None, "pr", "view", str(pr_number), "-R", repo, "--json", "state,mergeable,reviewDecision")
     data = json.loads(result.stdout)
     return PRStatus(
         state=data["state"],
@@ -134,15 +121,15 @@ def pr_view(pr_number: int) -> PRStatus:
     )
 
 
-def unresolved_thread_count(pr_number: int) -> int:
-    """Same cwd-inference judgment call as `pr_view`/`pr_merge` (see there): the
-    repo to query is resolved from the process's current working directory, not
-    passed in.
+def unresolved_thread_count(repo: str, pr_number: int) -> int:
+    """`repo` is an explicit `"owner/name"` string (see `pr_view`), split directly
+    into GraphQL's `owner`/`repo` variables -- no `gh repo view` round trip needed
+    since the caller already has it on hand.
 
     Paginates via `reviewThreads`' Relay-style cursor (`pageInfo.hasNextPage`/
     `endCursor`) rather than trusting a single page, since a PR can accumulate more
     threads than one page holds and callers depend on the exact total."""
-    owner, repo = _current_repo()
+    owner, name = repo.split("/", 1)
     cursor: str | None = None
     count = 0
     while True:
@@ -154,7 +141,7 @@ def unresolved_thread_count(pr_number: int) -> int:
             "-F",
             f"owner={owner}",
             "-F",
-            f"repo={repo}",
+            f"repo={name}",
             "-F",
             f"number={pr_number}",
         ]
@@ -171,18 +158,18 @@ def unresolved_thread_count(pr_number: int) -> int:
     return count
 
 
-def pr_merge(pr_number: int) -> None:
-    """Same cwd-inference judgment call as `pr_view`/`unresolved_thread_count` (see
-    there). Squash is the only strategy -- there's no config-driven choice (Phase
-    01's `BuildConfig` has no merge-strategy field) -- and a non-zero exit raises
-    immediately with no internal retry.
+def pr_merge(repo: str, pr_number: int) -> None:
+    """`repo` is an explicit `"owner/name"` string (see `pr_view`). Squash is the
+    only strategy -- there's no config-driven choice (Phase 01's `BuildConfig` has
+    no merge-strategy field) -- and a non-zero exit raises immediately with no
+    internal retry.
 
     Calls `_run_raw` (not `_run`) so a timeout -- which `_run_raw` reports as a
     plain `GhCommandError`, since it has no way to know that call is a merge -- is
     also converted to `PRNotMergeableError` here: a client-side timeout leaves
     mergeability just as ambiguous as a non-zero exit, so it needs the same
     `next_command` recovery guidance."""
-    argv = ("pr", "merge", str(pr_number), "--squash")
+    argv = ("pr", "merge", str(pr_number), "-R", repo, "--squash")
     try:
         result = _run_raw(None, *argv)
     except GhCommandError as exc:

@@ -52,11 +52,20 @@ def test_pr_view_parses_status_json(monkeypatch):
     )
     monkeypatch.setattr("subprocess.run", run_mock)
 
-    status = gh_ops.pr_view(42)
+    status = gh_ops.pr_view("alexeieleusis/dotharness", 42)
 
     assert status == PRStatus(state="OPEN", mergeable="MERGEABLE", review_decision="APPROVED")
     argv = run_mock.call_args.args[0]
-    assert argv == ["gh", "pr", "view", "42", "--json", "state,mergeable,reviewDecision"]
+    assert argv == [
+        "gh",
+        "pr",
+        "view",
+        "42",
+        "-R",
+        "alexeieleusis/dotharness",
+        "--json",
+        "state,mergeable,reviewDecision",
+    ]
     assert run_mock.call_args.kwargs["cwd"] is None
 
 
@@ -65,7 +74,7 @@ def test_pr_view_defaults_review_decision_to_empty_string_when_absent(monkeypatc
         "subprocess.run", Mock(return_value=_ok(stdout=json.dumps({"state": "OPEN", "mergeable": "UNKNOWN"})))
     )
 
-    status = gh_ops.pr_view(42)
+    status = gh_ops.pr_view("alexeieleusis/dotharness", 42)
 
     assert status.review_decision == ""
 
@@ -74,7 +83,7 @@ def test_pr_view_raises_gh_command_error_on_failure(monkeypatch):
     monkeypatch.setattr("subprocess.run", Mock(return_value=Mock(returncode=1, stdout="", stderr="no such pr")))
 
     with pytest.raises(GhCommandError):
-        gh_ops.pr_view(999)
+        gh_ops.pr_view("alexeieleusis/dotharness", 999)
 
 
 def _threads_response(nodes: list[dict], has_next_page: bool, end_cursor: str | None) -> str:
@@ -94,7 +103,6 @@ def _threads_response(nodes: list[dict], has_next_page: bool, end_cursor: str | 
 
 def test_unresolved_thread_count_single_page(monkeypatch):
     responses = [
-        _ok(stdout=json.dumps({"nameWithOwner": "alexeieleusis/dotharness"})),
         _ok(
             stdout=_threads_response(
                 [{"isResolved": True}, {"isResolved": False}, {"isResolved": False}],
@@ -105,12 +113,11 @@ def test_unresolved_thread_count_single_page(monkeypatch):
     ]
     monkeypatch.setattr("subprocess.run", Mock(side_effect=responses))
 
-    assert gh_ops.unresolved_thread_count(42) == 2
+    assert gh_ops.unresolved_thread_count("alexeieleusis/dotharness", 42) == 2
 
 
 def test_unresolved_thread_count_paginates_across_multiple_pages(monkeypatch):
     responses = [
-        _ok(stdout=json.dumps({"nameWithOwner": "alexeieleusis/dotharness"})),
         _ok(
             stdout=_threads_response(
                 [{"isResolved": False}, {"isResolved": False}], has_next_page=True, end_cursor="cursor-1"
@@ -126,34 +133,30 @@ def test_unresolved_thread_count_paginates_across_multiple_pages(monkeypatch):
     run_mock = Mock(side_effect=responses)
     monkeypatch.setattr("subprocess.run", run_mock)
 
-    total = gh_ops.unresolved_thread_count(42)
+    total = gh_ops.unresolved_thread_count("alexeieleusis/dotharness", 42)
 
     assert total == 4
-    assert run_mock.call_count == 4
-    graphql_calls = run_mock.call_args_list[1:]
+    assert run_mock.call_count == 3
+    graphql_calls = run_mock.call_args_list
     assert "cursor=cursor-1" not in " ".join(graphql_calls[0].args[0])
     assert "cursor=cursor-1" in " ".join(graphql_calls[1].args[0])
     assert "cursor=cursor-2" in " ".join(graphql_calls[2].args[0])
 
 
 def test_unresolved_thread_count_raises_gh_command_error_on_graphql_failure(monkeypatch):
-    responses = [
-        _ok(stdout=json.dumps({"nameWithOwner": "alexeieleusis/dotharness"})),
-        Mock(returncode=1, stdout="", stderr="bad query"),
-    ]
-    monkeypatch.setattr("subprocess.run", Mock(side_effect=responses))
+    monkeypatch.setattr("subprocess.run", Mock(return_value=Mock(returncode=1, stdout="", stderr="bad query")))
 
     with pytest.raises(GhCommandError):
-        gh_ops.unresolved_thread_count(42)
+        gh_ops.unresolved_thread_count("alexeieleusis/dotharness", 42)
 
 
 def test_pr_merge_succeeds_on_zero_exit(monkeypatch):
     run_mock = Mock(return_value=_ok())
     monkeypatch.setattr("subprocess.run", run_mock)
 
-    gh_ops.pr_merge(42)
+    gh_ops.pr_merge("alexeieleusis/dotharness", 42)
 
-    assert run_mock.call_args.args[0] == ["gh", "pr", "merge", "42", "--squash"]
+    assert run_mock.call_args.args[0] == ["gh", "pr", "merge", "42", "-R", "alexeieleusis/dotharness", "--squash"]
     assert run_mock.call_args.kwargs["cwd"] is None
 
 
@@ -163,7 +166,7 @@ def test_pr_merge_raises_pr_not_mergeable_error_with_next_command_on_failure(mon
     )
 
     with pytest.raises(PRNotMergeableError) as exc_info:
-        gh_ops.pr_merge(42)
+        gh_ops.pr_merge("alexeieleusis/dotharness", 42)
 
     err = exc_info.value
     assert err.returncode == 1
@@ -178,7 +181,7 @@ def test_pr_not_mergeable_error_is_also_an_orchestration_error(monkeypatch):
     )
 
     with pytest.raises(PRNotMergeableError) as exc_info:
-        gh_ops.pr_merge(42)
+        gh_ops.pr_merge("alexeieleusis/dotharness", 42)
 
     err = exc_info.value
     assert isinstance(err, OrchestrationError)
@@ -194,7 +197,7 @@ def test_pr_merge_does_not_retry_on_failure(monkeypatch):
     monkeypatch.setattr("subprocess.run", run_mock)
 
     with pytest.raises(PRNotMergeableError):
-        gh_ops.pr_merge(42)
+        gh_ops.pr_merge("alexeieleusis/dotharness", 42)
 
     assert run_mock.call_count == 1
 
@@ -204,13 +207,14 @@ def test_pr_merge_raises_pr_not_mergeable_error_with_next_command_on_timeout(mon
         "subprocess.run",
         Mock(
             side_effect=subprocess.TimeoutExpired(
-                cmd=["gh", "pr", "merge", "42", "--squash"], timeout=gh_ops._GH_TIMEOUT_SECONDS
+                cmd=["gh", "pr", "merge", "42", "-R", "alexeieleusis/dotharness", "--squash"],
+                timeout=gh_ops._GH_TIMEOUT_SECONDS,
             )
         ),
     )
 
     with pytest.raises(PRNotMergeableError) as exc_info:
-        gh_ops.pr_merge(42)
+        gh_ops.pr_merge("alexeieleusis/dotharness", 42)
 
     assert exc_info.value.next_command == "gh pr view 42"
 
@@ -222,6 +226,6 @@ def test_run_raises_gh_command_error_instead_of_hanging_on_timeout(monkeypatch):
     )
 
     with pytest.raises(GhCommandError) as exc_info:
-        gh_ops.pr_view(1)
+        gh_ops.pr_view("alexeieleusis/dotharness", 1)
 
     assert str(gh_ops._GH_TIMEOUT_SECONDS) in exc_info.value.stderr
