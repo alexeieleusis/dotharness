@@ -270,3 +270,11 @@ def test_render_log_md_sorts_rows_by_phase_number():
     rendered = completion_log._render_log_md([_record(phase_number=9), _record(phase_number=7)])
 
     assert rendered.index("07 -- ") < rendered.index("09 -- ")
+
+
+def test_render_log_md_renders_manual_test_first_try_outcome():
+    rendered = completion_log._render_log_md([_record(manual_test_first_try_pass=True)])
+    assert "Passed first try" in rendered
+
+    rendered = completion_log._render_log_md([_record(manual_test_first_try_pass=False)])
+    assert "Failed first try" in rendered
