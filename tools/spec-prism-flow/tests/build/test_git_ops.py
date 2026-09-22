@@ -2,9 +2,11 @@ import subprocess
 from unittest.mock import Mock, call
 
 import pytest
+from conftest import git_commit as _commit
+from conftest import init_git_repo as _init_repo
 
 from spec_prism_flow.build import git_ops
-from spec_prism_flow.build.git_ops import GitCommandError
+from spec_prism_flow.build.git_ops import DiffStat, GitCommandError
 
 
 def _ok(stdout: str = "") -> Mock:
@@ -275,3 +277,56 @@ def test_run_raises_git_command_error_instead_of_hanging_on_timeout(tmp_path, mo
 
     assert exc_info.value.cmd_args == ["git", "push", "--force-with-lease", "-u", "origin", "phase-07-x"]
     assert str(git_ops._GIT_TIMEOUT_SECONDS) in exc_info.value.stderr
+
+
+# --- diff_stat: real scratch git repo ------------------------------------------------
+
+
+def test_diff_stat_counts_files_and_lines_added_and_removed(tmp_path):
+    clone = _init_repo(tmp_path)
+    (clone / "a.txt").write_text("line1\nline2\n")
+    _commit(clone, "initial")
+
+    (clone / "a.txt").write_text("line1\nline2-changed\nline3\n")
+    (clone / "b.txt").write_text("new file\n")
+    _commit(clone, "second")
+
+    stat = git_ops.diff_stat(clone, "HEAD~1")
+
+    assert stat.files == 2
+    assert stat.lines_added == 3  # 1 changed line (add) + 1 new line in a.txt + 1 line in b.txt
+    assert stat.lines_removed == 1  # the replaced line in a.txt
+
+
+def test_diff_stat_returns_zero_when_no_changes(tmp_path):
+    clone = _init_repo(tmp_path)
+    (clone / "a.txt").write_text("line1\n")
+    _commit(clone, "initial")
+
+    stat = git_ops.diff_stat(clone, "HEAD")
+
+    assert stat == DiffStat(files=0, lines_added=0, lines_removed=0)
+
+
+def test_diff_stat_counts_binary_files_without_line_counts(tmp_path):
+    clone = _init_repo(tmp_path)
+    (clone / "a.txt").write_text("line1\n")
+    _commit(clone, "initial")
+
+    (clone / "binary.dat").write_bytes(b"\x00\x01\x02binary")
+    _commit(clone, "add binary")
+
+    stat = git_ops.diff_stat(clone, "HEAD~1")
+
+    assert stat.files == 1
+    assert stat.lines_added == 0
+    assert stat.lines_removed == 0
+
+
+def test_diff_stat_raises_git_command_error_for_unknown_base_ref(tmp_path):
+    clone = _init_repo(tmp_path)
+    (clone / "a.txt").write_text("line1\n")
+    _commit(clone, "initial")
+
+    with pytest.raises(GitCommandError):
+        git_ops.diff_stat(clone, "nonexistent-ref")

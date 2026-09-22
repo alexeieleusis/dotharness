@@ -9,8 +9,9 @@ import pytest
 
 from spec_prism_flow.build import phase_runner
 from spec_prism_flow.build.gh_ops import PRHandle, PRStatus
+from spec_prism_flow.build.git_ops import DiffStat
 from spec_prism_flow.build.manual_test import ManualTestOutcome
-from spec_prism_flow.build.toolchain import DiffStat, Toolchain
+from spec_prism_flow.build.toolchain import Toolchain
 from spec_prism_flow.config import (
     AgentConfig,
     BuildConfig,

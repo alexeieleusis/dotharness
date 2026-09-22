@@ -19,9 +19,9 @@ from spec_prism_flow.build.errors import (
     ScopeViolation,
 )
 from spec_prism_flow.build.gh_ops import PRNotMergeableError
-from spec_prism_flow.build.git_ops import GitCommandError
+from spec_prism_flow.build.git_ops import DiffStat, GitCommandError
 from spec_prism_flow.build.phase_runner import run_phase
-from spec_prism_flow.build.toolchain import DiffStat, Toolchain
+from spec_prism_flow.build.toolchain import Toolchain
 from spec_prism_flow.config import BuildConfig
 
 _ESCALATION_DIFF_STAT = DiffStat(files=3, lines_added=30, lines_removed=7)

@@ -1,10 +1,6 @@
 from pathlib import Path
 from unittest.mock import Mock
 
-import pytest
-from conftest import git_commit as _commit
-from conftest import init_git_repo as _init_repo
-
 from spec_prism_flow.build import (
     completion_log,
     gh_ops,
@@ -18,15 +14,13 @@ from spec_prism_flow.build import (
 from spec_prism_flow.build.claude_backend import ClaudeBackend
 from spec_prism_flow.build.completion_log import CompletionRecord
 from spec_prism_flow.build.gh_ops import PRHandle
-from spec_prism_flow.build.git_ops import GitCommandError
+from spec_prism_flow.build.git_ops import DiffStat
 from spec_prism_flow.build.manual_test import ManualTestOutcome
 from spec_prism_flow.build.opencode_backend import OpencodeBackend
 from spec_prism_flow.build.toolchain import (
-    DiffStat,
     Toolchain,
     build_dry_run_toolchain,
     build_live_toolchain,
-    diff_stat,
 )
 from spec_prism_flow.config import (
     AgentConfig,
@@ -204,7 +198,7 @@ def test_live_toolchain_wires_gh_ops_functions_directly(tmp_path):
 def test_live_toolchain_wires_diff_stat_and_merge_gates_directly(tmp_path):
     toolchain = build_live_toolchain(_make_cfg(tmp_path))
 
-    assert toolchain.diff_stat is diff_stat
+    assert toolchain.diff_stat is git_ops.diff_stat
     assert toolchain.merge_gates_run is merge_gates.run_merge_gates
 
 
@@ -352,56 +346,3 @@ def test_live_toolchain_completion_log_append_wires_docs_paths_and_base_branch(t
         record,
         base_branch="main",
     )
-
-
-# --- diff_stat: real scratch git repo ------------------------------------------------
-
-
-def test_diff_stat_counts_files_and_lines_added_and_removed(tmp_path):
-    clone = _init_repo(tmp_path)
-    (clone / "a.txt").write_text("line1\nline2\n")
-    _commit(clone, "initial")
-
-    (clone / "a.txt").write_text("line1\nline2-changed\nline3\n")
-    (clone / "b.txt").write_text("new file\n")
-    _commit(clone, "second")
-
-    stat = diff_stat(clone, "HEAD~1")
-
-    assert stat.files == 2
-    assert stat.lines_added == 3  # 1 changed line (add) + 1 new line in a.txt + 1 line in b.txt
-    assert stat.lines_removed == 1  # the replaced line in a.txt
-
-
-def test_diff_stat_returns_zero_when_no_changes(tmp_path):
-    clone = _init_repo(tmp_path)
-    (clone / "a.txt").write_text("line1\n")
-    _commit(clone, "initial")
-
-    stat = diff_stat(clone, "HEAD")
-
-    assert stat == DiffStat(files=0, lines_added=0, lines_removed=0)
-
-
-def test_diff_stat_counts_binary_files_without_line_counts(tmp_path):
-    clone = _init_repo(tmp_path)
-    (clone / "a.txt").write_text("line1\n")
-    _commit(clone, "initial")
-
-    (clone / "binary.dat").write_bytes(b"\x00\x01\x02binary")
-    _commit(clone, "add binary")
-
-    stat = diff_stat(clone, "HEAD~1")
-
-    assert stat.files == 1
-    assert stat.lines_added == 0
-    assert stat.lines_removed == 0
-
-
-def test_diff_stat_raises_git_command_error_for_unknown_base_ref(tmp_path):
-    clone = _init_repo(tmp_path)
-    (clone / "a.txt").write_text("line1\n")
-    _commit(clone, "initial")
-
-    with pytest.raises(GitCommandError):
-        diff_stat(clone, "nonexistent-ref")

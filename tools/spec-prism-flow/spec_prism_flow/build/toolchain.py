@@ -18,54 +18,12 @@ from spec_prism_flow.build import (
     vibe_heal_integration,
 )
 from spec_prism_flow.build.completion_log import CompletionRecord
-from spec_prism_flow.build.errors import run_subprocess
 from spec_prism_flow.build.gh_ops import PRHandle, PRStatus
-from spec_prism_flow.build.git_ops import GitCommandError
+from spec_prism_flow.build.git_ops import DiffStat
 from spec_prism_flow.build.manual_test import ManualTestOutcome
 
 if TYPE_CHECKING:
     from spec_prism_flow.config import SpecPrismFlowConfig
-
-_DIFF_STAT_TIMEOUT_SECONDS = 30
-
-
-@dataclass(frozen=True)
-class DiffStat:
-    """Files touched and lines added/removed vs a base ref. Field names/shape aren't
-    dictated anywhere in the phase corpus beyond "files/lines-added/lines-removed" --
-    this is Phase 11's own choice for feeding Phase 10's `pr_diff_*` `CompletionRecord`
-    fields."""
-
-    files: int
-    lines_added: int
-    lines_removed: int
-
-
-def diff_stat(clone: Path, base_ref: str = "origin/main") -> DiffStat:
-    """`git diff --numstat` primitive, living here rather than in `git_ops` per
-    Phase 07's own note that it dropped `diff_stat` as unused -- Phase 11's merge step
-    is its only caller. A binary file's numstat line reports `-`/`-` in place of
-    added/removed counts; it's still counted as a touched file, just contributing zero
-    lines either way."""
-    result = run_subprocess(
-        ["git", "diff", "--numstat", f"{base_ref}...HEAD"],
-        cwd=clone,
-        timeout=_DIFF_STAT_TIMEOUT_SECONDS,
-        error_cls=GitCommandError,
-    )
-    files = 0
-    lines_added = 0
-    lines_removed = 0
-    for line in result.stdout.splitlines():
-        if not line.strip():
-            continue
-        added_str, removed_str, _path = line.split("\t", 2)
-        files += 1
-        if added_str != "-":
-            lines_added += int(added_str)
-        if removed_str != "-":
-            lines_removed += int(removed_str)
-    return DiffStat(files=files, lines_added=lines_added, lines_removed=lines_removed)
 
 
 @dataclass(frozen=True)
@@ -174,7 +132,7 @@ def build_live_toolchain(config: SpecPrismFlowConfig) -> Toolchain:
         review_address_comments=_review_address_comments,
         unresolved_thread_count=gh_ops.unresolved_thread_count,
         manual_test_prompt=_manual_test_prompt,
-        diff_stat=diff_stat,
+        diff_stat=git_ops.diff_stat,
         merge_gates_run=merge_gates.run_merge_gates,
         pr_merge=gh_ops.pr_merge,
         completion_log_append=_completion_log_append,

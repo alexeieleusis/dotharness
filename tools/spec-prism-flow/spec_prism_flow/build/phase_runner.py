@@ -9,12 +9,11 @@ from spec_prism_flow.build import agent_runner, resume_state, vibe_heal_integrat
 from spec_prism_flow.build.completion_log import CompletionRecord
 from spec_prism_flow.build.errors import EmptyImplementationError, OrchestrationError
 from spec_prism_flow.build.gh_ops import PRHandle
-from spec_prism_flow.build.git_ops import GitCommandError, origin_url
+from spec_prism_flow.build.git_ops import DiffStat, GitCommandError, origin_url
 from spec_prism_flow.build.resume_state import ResumeState
 from spec_prism_flow.build.retry_budget import RetryBudget
 from spec_prism_flow.build.toolchain import (
     BASE_BRANCH,
-    DiffStat,
     Toolchain,
     build_dry_run_toolchain,
     build_live_toolchain,
