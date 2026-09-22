@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from spec_prism_flow.build.errors import CommandError, run_subprocess
@@ -118,6 +119,38 @@ def fetch_resync(clone: Path, branch: str, remote: str = "origin") -> None:
 def diff_name_only(clone: Path, base_ref: str = "origin/main") -> list[str]:
     result = _run(clone, "diff", "--name-only", f"{base_ref}...HEAD")
     return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+@dataclass(frozen=True)
+class DiffStat:
+    """Files touched and lines added/removed vs a base ref. Field names/shape aren't
+    dictated anywhere in the phase corpus beyond "files/lines-added/lines-removed" --
+    this is Phase 11's own choice for feeding Phase 10's `pr_diff_*` `CompletionRecord`
+    fields."""
+
+    files: int
+    lines_added: int
+    lines_removed: int
+
+
+def diff_stat(clone: Path, base_ref: str = "origin/main") -> DiffStat:
+    """`git diff --numstat` vs `base_ref`. A binary file's numstat line reports `-`/`-`
+    in place of added/removed counts; it's still counted as a touched file, just
+    contributing zero lines either way."""
+    result = _run(clone, "diff", "--numstat", f"{base_ref}...HEAD")
+    files = 0
+    lines_added = 0
+    lines_removed = 0
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        added_str, removed_str, _path = line.split("\t", 2)
+        files += 1
+        if added_str != "-":
+            lines_added += int(added_str)
+        if removed_str != "-":
+            lines_removed += int(removed_str)
+    return DiffStat(files=files, lines_added=lines_added, lines_removed=lines_removed)
 
 
 def head_sha(clone: Path) -> str:
