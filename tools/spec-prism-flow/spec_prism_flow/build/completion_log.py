@@ -135,7 +135,8 @@ def append_and_commit(
     `git_ops.push_branch`'s `expect_sha` pinned to that fetch's sha, so the remote
     itself atomically rejects the push if another concurrent call's push landed in
     between -- a separate preflight check here couldn't close that gap, since the
-    remote could still move between the preflight and the push. A rejected push is
+    remote could still move between the preflight and the push. A rejected push, or a
+    transient `GitCommandError` from the `fetch_resync`/`head_sha` pair itself, is
     retried the same way, looping back to `fetch_resync` against the new tip, up to
     `max_conflict_retries` times before the last failure propagates. A record
     already present under `record.phase_number` (a prior attempt's push that landed
@@ -146,8 +147,12 @@ def append_and_commit(
         raise ValueError("max_conflict_retries must be >= 1")  # noqa: TRY003
     last_exc: GitCommandError | None = None
     for _ in range(max_conflict_retries):
-        git_ops.fetch_resync(clone, base_branch)
-        base_sha = git_ops.head_sha(clone)
+        try:
+            git_ops.fetch_resync(clone, base_branch)
+            base_sha = git_ops.head_sha(clone)
+        except GitCommandError as exc:
+            last_exc = exc
+            continue
         records = load_all(log_json)
         if not any(existing.phase_number == record.phase_number for existing in records):
             records = [*records, record]
