@@ -207,6 +207,19 @@ def test_append_and_commit_pushes_directly_to_base_branch_not_a_phase_branch(tmp
     assert push_mock.call_args == call(clone, "main", expect_sha="deadbeef")
 
 
+@pytest.mark.parametrize("max_conflict_retries", [0, -1])
+def test_append_and_commit_raises_on_non_positive_max_conflict_retries(tmp_path, monkeypatch, max_conflict_retries):
+    clone = tmp_path
+    log_json = clone / "log.json"
+    log_md = clone / "log.md"
+    _patch_git_ops(monkeypatch)
+
+    with pytest.raises(ValueError, match="max_conflict_retries"):
+        completion_log.append_and_commit(
+            clone, log_json, log_md, _record(), base_branch="main", max_conflict_retries=max_conflict_retries
+        )
+
+
 def test_append_and_commit_pins_expect_sha_to_this_attempts_own_fetch_resync(tmp_path, monkeypatch):
     """Each retry re-fetches `base_branch` and must pin the *new* `head_sha` to its
     own `push_branch` call, not a sha from an earlier attempt -- otherwise a retry
