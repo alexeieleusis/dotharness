@@ -105,14 +105,11 @@ def _render_log_md(records: list[CompletionRecord]) -> str:
         pr = f"[#{record.pr_number}]({record.pr_url})" if record.pr_number is not None and record.pr_url else "None"
         open_to_merge = _format_duration(record.pr_open_to_merge_seconds)
         diff = f"+{record.pr_diff_lines_added}/-{record.pr_diff_lines_removed} ({record.pr_diff_files} files)"
-        if record.human_escalations:
-            escalations = (
-                f"{record.human_escalations} -- {record.escalation_reason}"
-                if record.escalation_reason
-                else str(record.human_escalations)
-            )
-        else:
-            escalations = "0"
+        escalations = (
+            f"{record.human_escalations} -- {record.escalation_reason}"
+            if record.human_escalations and record.escalation_reason
+            else str(record.human_escalations)
+        )
         if record.manual_test_first_try_pass is None:
             manual_test = "None"
         elif record.manual_test_first_try_pass:
@@ -169,6 +166,8 @@ def append_and_commit(
     though this call later saw it as a conflict) is never duplicated -- `commit_all`
     then finds nothing new to commit, so the push is skipped entirely and this
     returns cleanly."""
+    if max_conflict_retries < 1:
+        raise ValueError("max_conflict_retries must be >= 1")  # noqa: TRY003
     last_exc: GitCommandError | None = None
     for _ in range(max_conflict_retries):
         git_ops.fetch_resync(clone, base_branch)
@@ -197,4 +196,3 @@ def append_and_commit(
             return
     if last_exc is not None:
         raise last_exc
-    raise ValueError("max_conflict_retries must be >= 1")  # noqa: TRY003
