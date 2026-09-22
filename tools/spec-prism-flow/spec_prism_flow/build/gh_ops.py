@@ -32,8 +32,8 @@ class GhCommandError(CommandError):
     mergeability -- see `PRNotMergeableError` for the `gh pr merge`-specific case."""
 
 
-class PRNotMergeableError(CommandError):
-    """Raised when `gh pr merge` exits non-zero. Subclasses `CommandError` (not
+class PRNotMergeableError(GhCommandError):
+    """Raised when `gh pr merge` exits non-zero. Subclasses `GhCommandError` (not
     `errors.OrchestrationError`, which is where `next_command` normally lives)
     because `errors.py` is out of this phase's scope to edit -- `next_command` is
     instead set directly as an attribute here, kept as a plain string rather than a
@@ -171,7 +171,7 @@ def pr_merge(pr_number: int) -> None:
     there). Squash is the only strategy -- there's no config-driven choice (Phase
     01's `BuildConfig` has no merge-strategy field) -- and a non-zero exit raises
     immediately with no internal retry."""
-    args = ["gh", "pr", "merge", str(pr_number), "--squash"]
-    result = _run_raw(None, "pr", "merge", str(pr_number), "--squash")
+    argv = ("pr", "merge", str(pr_number), "--squash")
+    result = _run_raw(None, *argv)
     if result.returncode != 0:
-        raise PRNotMergeableError(args, result.returncode, result.stderr, pr_number)
+        raise PRNotMergeableError(["gh", *argv], result.returncode, result.stderr, pr_number)
