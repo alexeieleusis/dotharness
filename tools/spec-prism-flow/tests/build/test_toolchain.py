@@ -283,6 +283,24 @@ def test_live_toolchain_static_analysis_paths_are_outside_the_clone(tmp_path, mo
     assert clone not in report_path.parents
 
 
+def test_live_toolchain_static_analysis_paths_differ_by_clone_name(tmp_path, monkeypatch):
+    """Scratch paths are keyed by `clone.name` so concurrent phases operating on
+    distinct clones get distinct report/env files -- two clones sharing a scratch
+    path would race each other's static-analysis scan."""
+    scan_mock = Mock(return_value=None)
+    monkeypatch.setattr(vibe_heal_integration, "scan", scan_mock)
+    cfg = _make_cfg(tmp_path)
+    toolchain = build_live_toolchain(cfg)
+
+    toolchain.static_analysis_scan(tmp_path / "clone-a")
+    toolchain.static_analysis_scan(tmp_path / "clone-b")
+
+    report_path_a, env_path_a = scan_mock.call_args_list[0].args[2:4]
+    report_path_b, env_path_b = scan_mock.call_args_list[1].args[2:4]
+    assert report_path_a != report_path_b
+    assert env_path_a != env_path_b
+
+
 def test_live_toolchain_review_self_review_wires_review_config(tmp_path, monkeypatch):
     self_review_mock = Mock(return_value="notes")
     monkeypatch.setattr(harness_integration, "self_review", self_review_mock)
