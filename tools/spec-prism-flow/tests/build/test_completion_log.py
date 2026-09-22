@@ -87,30 +87,6 @@ def test_write_log_json_writes_valid_indented_json(tmp_path):
     assert "\n" in log_json.read_text()  # indent=2 produces multi-line output
 
 
-# --- _remote_tip ----------------------------------------------------------------
-
-
-def _ok(stdout: str = "") -> Mock:
-    return Mock(returncode=0, stdout=stdout, stderr="")
-
-
-def test_remote_tip_fetches_then_rev_parses_the_remote_tracking_ref(tmp_path, monkeypatch):
-    run_mock = Mock(side_effect=[_ok(), _ok(stdout="deadbeef\n")])
-    monkeypatch.setattr("subprocess.run", run_mock)
-
-    assert completion_log._remote_tip(tmp_path, "main") == "deadbeef"
-
-    assert run_mock.call_args_list[0].args[0] == ["git", "fetch", "origin", "main"]
-    assert run_mock.call_args_list[1].args[0] == ["git", "rev-parse", "origin/main"]
-
-
-def test_remote_tip_raises_git_command_error_on_failure(tmp_path, monkeypatch):
-    monkeypatch.setattr("subprocess.run", Mock(return_value=Mock(returncode=1, stdout="", stderr="no such remote")))
-
-    with pytest.raises(GitCommandError):
-        completion_log._remote_tip(tmp_path, "main")
-
-
 # --- append_and_commit ---------------------------------------------------------
 
 
@@ -120,40 +96,34 @@ def _patch_git_ops(
     remote_sha: str = "deadbeef",
     commit_all_result: bool = True,
     push_side_effect=None,
-    remote_tip_side_effect=None,
 ):
-    """Patches `git_ops.fetch_resync`/`head_sha`/`commit_all`/`push_branch` and
-    `completion_log._remote_tip` so `append_and_commit`'s retry logic can be
-    exercised without a real git repo. By default `head_sha` and `_remote_tip`
-    agree (`remote_sha`), i.e. nothing moved since `fetch_resync` -- the common
-    case where `push_branch` is reached and can be trusted."""
+    """Patches `git_ops.fetch_resync`/`head_sha`/`commit_all`/`push_branch` so
+    `append_and_commit`'s retry logic can be exercised without a real git repo.
+    `push_branch` is called with `expect_sha` pinned to whatever `fetch_resync`'s
+    `head_sha` reported, so the remote itself -- not a separate preflight check --
+    is what rejects a push built on stale content; tests simulate that rejection by
+    passing `push_side_effect`."""
     fetch_mock = Mock()
     head_sha_mock = Mock(return_value=remote_sha)
     commit_mock = Mock(return_value=commit_all_result)
     push_mock = Mock(side_effect=push_side_effect) if push_side_effect is not None else Mock()
-    remote_tip_mock = (
-        Mock(side_effect=remote_tip_side_effect)
-        if remote_tip_side_effect is not None
-        else Mock(return_value=remote_sha)
-    )
     monkeypatch.setattr(completion_log.git_ops, "fetch_resync", fetch_mock)
     monkeypatch.setattr(completion_log.git_ops, "head_sha", head_sha_mock)
     monkeypatch.setattr(completion_log.git_ops, "commit_all", commit_mock)
     monkeypatch.setattr(completion_log.git_ops, "push_branch", push_mock)
-    monkeypatch.setattr(completion_log, "_remote_tip", remote_tip_mock)
-    return fetch_mock, commit_mock, push_mock, remote_tip_mock
+    return fetch_mock, commit_mock, push_mock
 
 
 def test_append_and_commit_writes_and_pushes_on_first_try(tmp_path, monkeypatch):
     clone = tmp_path
     log_json = clone / "log.json"
     log_md = clone / "log.md"
-    fetch_mock, _, push_mock, _ = _patch_git_ops(monkeypatch)
+    fetch_mock, _, push_mock = _patch_git_ops(monkeypatch)
 
     completion_log.append_and_commit(clone, log_json, log_md, _record(), base_branch="main")
 
     fetch_mock.assert_called_once_with(clone, "main")
-    push_mock.assert_called_once_with(clone, "main")
+    push_mock.assert_called_once_with(clone, "main", expect_sha="deadbeef")
     assert json.loads(log_json.read_text())[0]["phase_number"] == 7
     assert "build-agent-runner-leaf" in log_md.read_text()
 
@@ -162,7 +132,7 @@ def test_append_and_commit_skips_push_when_nothing_to_commit(tmp_path, monkeypat
     clone = tmp_path
     log_json = clone / "log.json"
     log_md = clone / "log.md"
-    _, _, push_mock, _ = _patch_git_ops(monkeypatch, commit_all_result=False)
+    _, _, push_mock = _patch_git_ops(monkeypatch, commit_all_result=False)
 
     completion_log.append_and_commit(clone, log_json, log_md, _record(), base_branch="main")
 
@@ -175,7 +145,7 @@ def test_append_and_commit_does_not_duplicate_an_already_present_record(tmp_path
     log_md = clone / "log.md"
     existing = _record(phase_number=7)
     completion_log._write_log_json(log_json, [existing])
-    _, _, push_mock, _ = _patch_git_ops(monkeypatch, commit_all_result=False)
+    _, _, push_mock = _patch_git_ops(monkeypatch, commit_all_result=False)
 
     completion_log.append_and_commit(clone, log_json, log_md, _record(phase_number=7), base_branch="main")
 
@@ -204,7 +174,7 @@ def test_append_and_commit_retries_after_a_stale_lease_rejection(tmp_path, monke
     log_json = clone / "log.json"
     log_md = clone / "log.md"
     stale_lease = GitCommandError(["git", "push"], 1, "stale info")
-    fetch_mock, _, push_mock, _ = _patch_git_ops(monkeypatch, push_side_effect=[stale_lease, None])
+    fetch_mock, _, push_mock = _patch_git_ops(monkeypatch, push_side_effect=[stale_lease, None])
 
     completion_log.append_and_commit(clone, log_json, log_md, _record(), base_branch="main", max_conflict_retries=5)
 
@@ -217,7 +187,7 @@ def test_append_and_commit_raises_last_error_after_exhausting_push_rejections(tm
     log_json = clone / "log.json"
     log_md = clone / "log.md"
     errors = [GitCommandError(["git", "push"], 1, f"stale info {i}") for i in range(3)]
-    _, _, push_mock, _ = _patch_git_ops(monkeypatch, push_side_effect=errors)
+    _, _, push_mock = _patch_git_ops(monkeypatch, push_side_effect=errors)
 
     with pytest.raises(GitCommandError) as exc_info:
         completion_log.append_and_commit(clone, log_json, log_md, _record(), base_branch="main", max_conflict_retries=3)
@@ -230,44 +200,36 @@ def test_append_and_commit_pushes_directly_to_base_branch_not_a_phase_branch(tmp
     clone = tmp_path
     log_json = clone / "log.json"
     log_md = clone / "log.md"
-    _, _, push_mock, _ = _patch_git_ops(monkeypatch)
+    _, _, push_mock = _patch_git_ops(monkeypatch)
 
     completion_log.append_and_commit(clone, log_json, log_md, _record(), base_branch="main")
 
-    assert push_mock.call_args == call(clone, "main")
+    assert push_mock.call_args == call(clone, "main", expect_sha="deadbeef")
 
 
-def test_append_and_commit_retries_without_pushing_when_remote_moved_since_fetch(tmp_path, monkeypatch):
-    """`git_ops.push_branch` refreshes its own force-with-lease baseline right
-    before pushing (see `completion_log._remote_tip`'s docstring), so it can't be
-    trusted to reject a push built on a now-stale `fetch_resync` snapshot on its
-    own -- `append_and_commit` must catch that itself, before ever calling
-    `push_branch`, and retry from a fresh `fetch_resync` instead."""
+def test_append_and_commit_pins_expect_sha_to_this_attempts_own_fetch_resync(tmp_path, monkeypatch):
+    """Each retry re-fetches `base_branch` and must pin the *new* `head_sha` to its
+    own `push_branch` call, not a sha from an earlier attempt -- otherwise a retry
+    built on fresh content could be rejected against a stale expectation."""
     clone = tmp_path
     log_json = clone / "log.json"
     log_md = clone / "log.md"
-    fetch_mock, commit_mock, push_mock, remote_tip_mock = _patch_git_ops(
-        monkeypatch, remote_tip_side_effect=["moved-on", "deadbeef"]
-    )
+    stale_lease = GitCommandError(["git", "push"], 1, "stale info")
+    fetch_mock = Mock()
+    head_sha_mock = Mock(side_effect=["first-sha", "second-sha"])
+    commit_mock = Mock(return_value=True)
+    push_mock = Mock(side_effect=[stale_lease, None])
+    monkeypatch.setattr(completion_log.git_ops, "fetch_resync", fetch_mock)
+    monkeypatch.setattr(completion_log.git_ops, "head_sha", head_sha_mock)
+    monkeypatch.setattr(completion_log.git_ops, "commit_all", commit_mock)
+    monkeypatch.setattr(completion_log.git_ops, "push_branch", push_mock)
 
     completion_log.append_and_commit(clone, log_json, log_md, _record(), base_branch="main", max_conflict_retries=5)
 
-    assert fetch_mock.call_count == 2
-    assert commit_mock.call_count == 2
-    push_mock.assert_called_once_with(clone, "main")
-    assert remote_tip_mock.call_count == 2
-
-
-def test_append_and_commit_raises_last_error_after_exhausting_remote_moved_retries(tmp_path, monkeypatch):
-    clone = tmp_path
-    log_json = clone / "log.json"
-    log_md = clone / "log.md"
-    _, _, push_mock, _ = _patch_git_ops(monkeypatch, remote_tip_side_effect=["a", "b", "c"])
-
-    with pytest.raises(GitCommandError):
-        completion_log.append_and_commit(clone, log_json, log_md, _record(), base_branch="main", max_conflict_retries=3)
-
-    push_mock.assert_not_called()
+    assert push_mock.call_args_list == [
+        call(clone, "main", expect_sha="first-sha"),
+        call(clone, "main", expect_sha="second-sha"),
+    ]
 
 
 # --- log_md rendering ----------------------------------------------------------

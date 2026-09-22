@@ -9,10 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from spec_prism_flow.build import git_ops
-from spec_prism_flow.build.errors import run_subprocess
 from spec_prism_flow.build.git_ops import GitCommandError
-
-_GIT_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -122,25 +119,6 @@ def _render_log_md(records: list[CompletionRecord]) -> str:
     return header + "\n".join(rows) + ("\n" if rows else "")
 
 
-def _remote_tip(clone: Path, branch: str, remote: str = "origin") -> str:
-    """Fetches `remote`/`branch` and returns its current sha, without touching the
-    local checkout the way `git_ops.fetch_resync` does. Used by `append_and_commit`
-    to detect, immediately before calling `git_ops.push_branch`, whether another
-    concurrent call's push has landed since our own `fetch_resync` -- `push_branch`
-    itself re-fetches this same ref right before its `--force-with-lease` push,
-    which refreshes *its* lease to whatever is current at that instant, so a bare
-    call to it can't be trusted to reject a push built on our now-stale local
-    commit; it would silently force-overwrite the concurrent commit instead of
-    failing. Checking here, right before that call, narrows the unsafe window to
-    the (unavoidable, and by design what `--force-with-lease` guards) gap between
-    this fetch and `push_branch`'s own."""
-    run_subprocess(["git", "fetch", remote, branch], cwd=clone, timeout=_GIT_TIMEOUT_SECONDS, error_cls=GitCommandError)
-    result = run_subprocess(
-        ["git", "rev-parse", f"{remote}/{branch}"], cwd=clone, timeout=_GIT_TIMEOUT_SECONDS, error_cls=GitCommandError
-    )
-    return result.stdout.strip()
-
-
 def append_and_commit(
     clone: Path,
     log_json: Path,
@@ -153,19 +131,17 @@ def append_and_commit(
     """Appends `record` to the shared completion log on `base_branch` and pushes,
     safe to call concurrently from Phase 12's parallel mode where multiple leaves
     finish around the same time with no external lock: each attempt re-fetches
-    `base_branch` fresh via `git_ops.fetch_resync`, then, right before pushing,
-    re-checks the remote tip against that fetch via `_remote_tip` -- if it moved
-    (another concurrent call's push landed in between), this loops back to
-    `fetch_resync` and retries against the new tip instead of calling
-    `git_ops.push_branch` on a commit built on stale content (see `_remote_tip`'s
-    docstring for why `push_branch`'s own force-with-lease can't be trusted alone
-    to catch this). A rejected `push_branch` call (the tighter race the lease *can*
-    catch) is retried the same way. Either kind of failure can recur up to
-    `max_conflict_retries` times before the last one propagates. A record already
-    present under `record.phase_number` (a prior attempt's push that landed even
-    though this call later saw it as a conflict) is never duplicated -- `commit_all`
-    then finds nothing new to commit, so the push is skipped entirely and this
-    returns cleanly."""
+    `base_branch` fresh via `git_ops.fetch_resync`, then pushes with
+    `git_ops.push_branch`'s `expect_sha` pinned to that fetch's sha, so the remote
+    itself atomically rejects the push if another concurrent call's push landed in
+    between -- a separate preflight check here couldn't close that gap, since the
+    remote could still move between the preflight and the push. A rejected push is
+    retried the same way, looping back to `fetch_resync` against the new tip, up to
+    `max_conflict_retries` times before the last failure propagates. A record
+    already present under `record.phase_number` (a prior attempt's push that landed
+    even though this call later saw it as a conflict) is never duplicated --
+    `commit_all` then finds nothing new to commit, so the push is skipped entirely
+    and this returns cleanly."""
     if max_conflict_retries < 1:
         raise ValueError("max_conflict_retries must be >= 1")  # noqa: TRY003
     last_exc: GitCommandError | None = None
@@ -179,16 +155,8 @@ def append_and_commit(
         log_md.write_text(_render_log_md(records))
         if not git_ops.commit_all(clone, f"Record phase {record.phase_number} completion ({record.phase_name})"):
             return
-        current_tip = _remote_tip(clone, base_branch)
-        if current_tip != base_sha:
-            last_exc = GitCommandError(
-                ["git", "push", "--force-with-lease"],
-                1,
-                f"{base_branch} moved from {base_sha} to {current_tip} since fetch_resync",
-            )
-            continue
         try:
-            git_ops.push_branch(clone, base_branch)
+            git_ops.push_branch(clone, base_branch, expect_sha=base_sha)
         except GitCommandError as exc:
             last_exc = exc
             continue
