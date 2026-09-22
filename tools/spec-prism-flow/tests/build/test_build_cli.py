@@ -11,8 +11,8 @@ from conftest import make_phase as _phase
 from conftest import write_phase_file as _write_phase_file
 
 from spec_prism_flow import cli
-from spec_prism_flow.build import track_runner
 from spec_prism_flow.build.agent_runner import branch_name
+from spec_prism_flow.build.completion_log import COMPLETION_LOG_JSON_RELPATH
 from spec_prism_flow.build.errors import EmptyImplementationError
 from spec_prism_flow.build.resume_state import resume_state_path
 from spec_prism_flow.config import BuildConfig
@@ -113,7 +113,7 @@ def test_build_status_classifies_merged_escalated_pending_and_in_progress(tmp_pa
         _record(phase_number=1, phase_name="leaf-1"),
         replace(_record(phase_number=2, phase_name="leaf-2"), pr_merged_at=None, escalation_reason="boom"),
     ]
-    write_completion_log(tmp_path / track_runner.COMPLETION_LOG_JSON_RELPATH, records)
+    write_completion_log(tmp_path / COMPLETION_LOG_JSON_RELPATH, records)
 
     result = CliRunner().invoke(cli.cli, ["build", "status"])
     assert result.exit_code == 0, result.output
@@ -141,7 +141,7 @@ def test_build_status_prints_address_comments_cycles_and_escalations(tmp_path, m
     phase = _phase(number=1, name="only")
     _write_phase_file(cfg.plan.phase_dir, phase)
     write_completion_log(
-        tmp_path / track_runner.COMPLETION_LOG_JSON_RELPATH,
+        tmp_path / COMPLETION_LOG_JSON_RELPATH,
         [_record(phase_number=1, phase_name="only", address_comments_cycles=4, human_escalations=2)],
     )
 

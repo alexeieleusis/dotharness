@@ -13,11 +13,10 @@ from conftest import write_completion_log
 from conftest import write_phase_file as _write_phase_file
 
 from spec_prism_flow.build import phase_runner
-from spec_prism_flow.build.completion_log import load_all
+from spec_prism_flow.build.completion_log import COMPLETION_LOG_JSON_RELPATH, load_all
 from spec_prism_flow.build.errors import EmptyImplementationError
 from spec_prism_flow.build.parallel_runner import eligible_leaves, run_parallel
 from spec_prism_flow.build.phase_runner import PhaseRunResult
-from spec_prism_flow.build.track_runner import COMPLETION_LOG_JSON_RELPATH
 from spec_prism_flow.decompose import GRAPH_FILENAME
 from spec_prism_flow.graph import Graph, write_graph
 from spec_prism_flow.phase_file import phase_file_stem

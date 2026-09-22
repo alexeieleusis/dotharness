@@ -4,32 +4,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from spec_prism_flow.build import phase_runner
-from spec_prism_flow.build.completion_log import COMPLETION_LOG_JSON_RELPATH, CompletionRecord, load_all
+from spec_prism_flow.build.completion_log import COMPLETION_LOG_JSON_RELPATH, load_all
 from spec_prism_flow.build.errors import OrchestrationError
+from spec_prism_flow.build.phase_corpus import discover_phase_files, merged_phase_numbers, phase_number_from_path
 from spec_prism_flow.build.phase_runner import PhaseRunResult
-from spec_prism_flow.phase_file import PHASE_FILE_NAME_PATTERN, parse_phase_file
+from spec_prism_flow.phase_file import parse_phase_file
 
 if TYPE_CHECKING:
     from spec_prism_flow.config import SpecPrismFlowConfig
-
-
-def _phase_number_from_path(path: Path) -> int:
-    match = PHASE_FILE_NAME_PATTERN.match(path.name)
-    if match is None:
-        raise ValueError(f"'{path.name}' does not match the '<NN>-<slug>-leaf.md' pattern")  # noqa: TRY003
-    return int(match.group(1))
-
-
-def discover_phase_files(phases_dir: Path) -> list[Path]:
-    """Every `*-leaf.md` file directly under `phases_dir` matching the `<NN>-<slug>-
-    leaf.md` pattern, sorted by its numeric prefix (not lexicographically, so
-    `10-...` sorts after `09-...`)."""
-    matches = [p for p in phases_dir.glob("*-leaf.md") if PHASE_FILE_NAME_PATTERN.match(p.name)]
-    return sorted(matches, key=_phase_number_from_path)
-
-
-def merged_phase_numbers(records: list[CompletionRecord]) -> set[int]:
-    return {record.phase_number for record in records if record.pr_merged_at is not None}
 
 
 def already_merged_phase_numbers(completion_log_path: Path) -> set[int]:
@@ -58,7 +40,7 @@ def run_track(
 
     results: list[PhaseRunResult] = []
     for phase_path in discover_phase_files(config.plan.phase_dir):
-        number = _phase_number_from_path(phase_path)
+        number = phase_number_from_path(phase_path)
         if start_phase is not None and number < start_phase:
             continue
         if stop_phase is not None and number > stop_phase:

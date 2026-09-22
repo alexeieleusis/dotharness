@@ -5,8 +5,9 @@ import click
 from spec_prism_flow import decompose, draft_phases, overview_stage, requirements_stage, review, workspace
 from spec_prism_flow.build import parallel_runner, phase_runner, track_runner
 from spec_prism_flow.build.agent_runner import branch_name
-from spec_prism_flow.build.completion_log import load_all
+from spec_prism_flow.build.completion_log import COMPLETION_LOG_JSON_RELPATH, load_all
 from spec_prism_flow.build.errors import OrchestrationError
+from spec_prism_flow.build.phase_corpus import discover_phase_files
 from spec_prism_flow.build.resume_state import resume_state_path
 from spec_prism_flow.config import ConfigError, load_config, resolve_config_path
 from spec_prism_flow.phase_file import parse_phase_file
@@ -268,10 +269,8 @@ def build_status(config_path_str):
     clone = Path.cwd()
     repo = phase_runner.repo_slug(clone)
 
-    phases = [parse_phase_file(path) for path in track_runner.discover_phase_files(cfg.plan.phase_dir)]
-    records_by_number = {
-        record.phase_number: record for record in load_all(clone / track_runner.COMPLETION_LOG_JSON_RELPATH)
-    }
+    phases = [parse_phase_file(path) for path in discover_phase_files(cfg.plan.phase_dir)]
+    records_by_number = {record.phase_number: record for record in load_all(clone / COMPLETION_LOG_JSON_RELPATH)}
 
     click.echo(_status_row(tuple(name for name, _ in _STATUS_COLUMNS)))
     for phase in phases:

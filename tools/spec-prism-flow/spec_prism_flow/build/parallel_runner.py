@@ -7,16 +7,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from spec_prism_flow.build import agent_runner, git_ops, phase_runner
-from spec_prism_flow.build.completion_log import CompletionRecord, load_all
+from spec_prism_flow.build.completion_log import COMPLETION_LOG_JSON_RELPATH, CompletionRecord, load_all
 from spec_prism_flow.build.errors import OrchestrationError
 from spec_prism_flow.build.git_ops import GitCommandError
+from spec_prism_flow.build.phase_corpus import discover_phase_files, merged_phase_numbers
 from spec_prism_flow.build.phase_runner import PhaseRunResult
 from spec_prism_flow.build.toolchain import BASE_BRANCH
-from spec_prism_flow.build.track_runner import (
-    COMPLETION_LOG_JSON_RELPATH,
-    discover_phase_files,
-    merged_phase_numbers,
-)
 from spec_prism_flow.decompose import GRAPH_FILENAME
 from spec_prism_flow.graph import Graph, load_graph, reachable_from_all
 from spec_prism_flow.phase_file import PhaseFile, parse_phase_file, phase_file_stem, phase_number_from_stem
