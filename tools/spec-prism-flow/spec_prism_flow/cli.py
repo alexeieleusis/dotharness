@@ -222,9 +222,9 @@ def build_run(start_phase, stop_phase, dry_run, resume, strict, config_path_str)
     workers = cfg.build.workers
     if workers <= 0:
         raise click.UsageError(f"config.build.workers must be a positive integer, got {workers}")  # noqa: TRY003
-    if workers > 1 and (start_phase is not None or stop_phase is not None):
+    if workers > 1 and (start_phase is not None or stop_phase is not None or resume):
         raise click.UsageError(  # noqa: TRY003
-            "--start/--stop are only supported in sequential mode (config.build.workers == 1)"
+            "--start/--stop/--resume are only supported in sequential mode (config.build.workers == 1)"
         )
 
     clone = Path.cwd()
