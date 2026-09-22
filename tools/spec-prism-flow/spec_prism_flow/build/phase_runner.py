@@ -47,6 +47,17 @@ def repo_slug(clone: Path) -> str:
     return "/".join(parts[-2:])
 
 
+def phase_status(record: CompletionRecord | None, state_path: Path) -> str:
+    """One of `"merged"`, `"escalated"`, `"in progress"`, or `"pending"`, per
+    `record`'s completion-log fields and whether `state_path` (the phase's persisted
+    resume-state file, per `resume_state_path`) exists."""
+    if record is not None and record.pr_merged_at is not None:
+        return "merged"
+    if record is not None and record.escalation_reason is not None:
+        return "escalated"
+    return "in progress" if state_path.exists() else "pending"
+
+
 @dataclass
 class _Progress:
     """Whatever's known about this run so far -- mutated in place by

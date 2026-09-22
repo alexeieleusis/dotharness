@@ -275,13 +275,8 @@ def build_status(config_path_str):
     click.echo(_status_row(tuple(name for name, _ in _STATUS_COLUMNS)))
     for phase in phases:
         record = records_by_number.get(phase.number)
-        if record is not None and record.pr_merged_at is not None:
-            status = "merged"
-        elif record is not None and record.escalation_reason is not None:
-            status = "escalated"
-        else:
-            state_path = resume_state_path(cfg, repo, branch_name(phase))
-            status = "in progress" if state_path.exists() else "pending"
+        state_path = resume_state_path(cfg, repo, branch_name(phase))
+        status = phase_runner.phase_status(record, state_path)
 
         address_cycles = record.address_comments_cycles if record is not None else 0
         escalations = record.human_escalations if record is not None else 0

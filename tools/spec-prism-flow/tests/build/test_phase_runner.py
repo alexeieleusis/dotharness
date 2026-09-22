@@ -1,9 +1,11 @@
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 from conftest import REPO as _REPO
 from conftest import as_mock as _m
+from conftest import make_completion_record as _record
 from conftest import make_config as _config
 from conftest import make_phase as _phase
 from conftest import make_toolchain as _toolchain
@@ -44,6 +46,29 @@ def _state_path(config, phase) -> Path:
 def test_repo_slug_parses_origin_url(tmp_path, monkeypatch, origin_url_value, expected):
     monkeypatch.setattr(phase_runner, "origin_url", Mock(return_value=origin_url_value))
     assert phase_runner.repo_slug(tmp_path) == expected
+
+
+# --- phase_status ---------------------------------------------------------------------
+
+
+def test_phase_status_merged_when_record_has_pr_merged_at(tmp_path):
+    record = _record(pr_merged_at=datetime(2026, 1, 2, tzinfo=UTC))
+    assert phase_runner.phase_status(record, tmp_path / "missing-state.json") == "merged"
+
+
+def test_phase_status_escalated_when_record_has_escalation_reason_and_no_merge(tmp_path):
+    record = _record(pr_merged_at=None, escalation_reason="boom")
+    assert phase_runner.phase_status(record, tmp_path / "missing-state.json") == "escalated"
+
+
+def test_phase_status_in_progress_when_no_record_but_state_path_exists(tmp_path):
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}")
+    assert phase_runner.phase_status(None, state_path) == "in progress"
+
+
+def test_phase_status_pending_when_no_record_and_no_state_path(tmp_path):
+    assert phase_runner.phase_status(None, tmp_path / "missing-state.json") == "pending"
 
 
 # --- Happy path: all 8 steps ----------------------------------------------------------
