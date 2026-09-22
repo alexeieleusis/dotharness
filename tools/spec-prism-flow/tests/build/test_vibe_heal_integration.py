@@ -142,6 +142,30 @@ def test_post_passes_explicit_report_file_env_file_and_post_flag(tmp_path, monke
     ]
 
 
+def test_scan_passes_through_caller_supplied_timeout(tmp_path, monkeypatch):
+    monkeypatch.setattr("shutil.which", Mock(return_value="/usr/local/bin/sonar-scanner"))
+    run_mock = Mock(return_value=_ok())
+    monkeypatch.setattr("subprocess.run", run_mock)
+    report_path = tmp_path / "report.json"
+    report_path.write_text(_report_text())
+    env_path = tmp_path / "vibe-heal.env"
+
+    vibe_heal_integration.scan(_config(), tmp_path, report_path, env_path, timeout=45)
+
+    assert run_mock.call_args.kwargs["timeout"] == 45
+
+
+def test_post_passes_through_caller_supplied_timeout(tmp_path, monkeypatch):
+    run_mock = Mock(return_value=_ok())
+    monkeypatch.setattr("subprocess.run", run_mock)
+    report_path = tmp_path / "report.json"
+    env_path = tmp_path / "vibe-heal.env"
+
+    vibe_heal_integration.post(_config(), tmp_path, report_path, env_path, timeout=45)
+
+    assert run_mock.call_args.kwargs["timeout"] == 45
+
+
 def test_post_is_noop_and_makes_no_subprocess_call_when_disabled(tmp_path, monkeypatch):
     run_mock = Mock()
     monkeypatch.setattr("subprocess.run", run_mock)
