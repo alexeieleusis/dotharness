@@ -3,15 +3,14 @@
 from unittest.mock import Mock
 
 import pytest
+from conftest import fake_phase_run_result, write_completion_log
 from conftest import make_completion_record as _record
 from conftest import make_config as _config
 from conftest import make_phase as _phase
-from conftest import write_completion_log
 from conftest import write_phase_file as _write_phase_file
 
 from spec_prism_flow.build import phase_runner, track_runner
 from spec_prism_flow.build.errors import EmptyImplementationError
-from spec_prism_flow.build.phase_runner import PhaseRunResult
 from spec_prism_flow.build.track_runner import (
     already_merged_phase_numbers,
     discover_phase_files,
@@ -74,10 +73,6 @@ def test_already_merged_phase_numbers_returns_merged_only(tmp_path):
 # --- run_track ---------------------------------------------------------------------
 
 
-def _fake_result(number: int) -> PhaseRunResult:
-    return PhaseRunResult(phase_number=number, merged=True, completion_record=_record(phase_number=number))
-
-
 def test_run_track_skips_out_of_bounds_and_already_merged_phases(tmp_path, monkeypatch):
     config = _config(tmp_path)
     for number in (1, 2, 3, 4, 5):
@@ -85,7 +80,7 @@ def test_run_track_skips_out_of_bounds_and_already_merged_phases(tmp_path, monke
     clone = tmp_path / "clone"
     write_completion_log(clone / track_runner.COMPLETION_LOG_JSON_RELPATH, [_record(phase_number=2)])
 
-    run_phase = Mock(side_effect=lambda clone, config, phase, **kwargs: _fake_result(phase.number))
+    run_phase = Mock(side_effect=lambda clone, config, phase, **kwargs: fake_phase_run_result(phase.number))
     monkeypatch.setattr(phase_runner, "run_phase", run_phase)
 
     results = run_track(config, clone, start_phase=1, stop_phase=4)
@@ -100,7 +95,7 @@ def test_run_track_passes_dry_run_resume_strict_through(tmp_path, monkeypatch):
     _write_phase_file(config.plan.phase_dir, _phase(number=1, name="only"))
     clone = tmp_path / "clone"
 
-    run_phase = Mock(return_value=_fake_result(1))
+    run_phase = Mock(return_value=fake_phase_run_result(1))
     monkeypatch.setattr(phase_runner, "run_phase", run_phase)
 
     run_track(config, clone, dry_run=True, resume=True, strict=True)
@@ -123,7 +118,7 @@ def test_run_track_propagates_orchestration_error_annotated_with_phase_context(t
     def _run_phase(clone, config, phase, **kwargs):
         if phase.number == 2:
             raise EmptyImplementationError()
-        return _fake_result(phase.number)
+        return fake_phase_run_result(phase.number)
 
     run_phase = Mock(side_effect=_run_phase)
     monkeypatch.setattr(phase_runner, "run_phase", run_phase)

@@ -48,7 +48,7 @@ def _stem(phase_file: PhaseFile) -> str:
     return phase_file_stem(phase_file.number, phase_file.name)
 
 
-def _reachable_from_all(edges: list[tuple[str, str]], nodes: list[str], *, forward: bool) -> dict[str, set[str]]:
+def reachable_from_all(edges: list[tuple[str, str]], nodes: list[str], *, forward: bool) -> dict[str, set[str]]:
     adjacency: dict[str, list[str]] = defaultdict(list)
     for dependent, dependency in edges:
         if forward:
@@ -132,8 +132,8 @@ def check_disjoint_scope(graph: Graph, phase_files: list[PhaseFile]) -> list[str
     scope_by_stem = {_stem(pf): set(pf.scope) for pf in phase_files}
     stems = sorted(stem for stem in scope_by_stem if stem in node_set)
 
-    forward_reachable = _reachable_from_all(graph.edges, graph.nodes, forward=True)
-    backward_reachable = _reachable_from_all(graph.edges, graph.nodes, forward=False)
+    forward_reachable = reachable_from_all(graph.edges, graph.nodes, forward=True)
+    backward_reachable = reachable_from_all(graph.edges, graph.nodes, forward=False)
 
     violations = []
     for i, stem_a in enumerate(stems):

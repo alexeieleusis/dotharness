@@ -3,7 +3,6 @@ parallel_runner and build-CLI test suites."""
 
 import json
 import subprocess
-from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -12,10 +11,11 @@ from unittest.mock import Mock
 import pytest
 
 from spec_prism_flow.build import phase_runner
-from spec_prism_flow.build.completion_log import CompletionRecord
+from spec_prism_flow.build.completion_log import CompletionRecord, _record_to_dict
 from spec_prism_flow.build.gh_ops import PRHandle, PRStatus
 from spec_prism_flow.build.git_ops import DiffStat
 from spec_prism_flow.build.manual_test import ManualTestOutcome
+from spec_prism_flow.build.phase_runner import PhaseRunResult
 from spec_prism_flow.build.toolchain import Toolchain
 from spec_prism_flow.config import (
     AgentConfig,
@@ -150,15 +150,15 @@ def make_completion_record(**overrides) -> CompletionRecord:
     return CompletionRecord(**fields)
 
 
+def fake_phase_run_result(number: int, *, merged: bool = True) -> PhaseRunResult:
+    return PhaseRunResult(
+        phase_number=number, merged=merged, completion_record=make_completion_record(phase_number=number)
+    )
+
+
 def write_completion_log(path: Path, records: list[CompletionRecord]) -> None:
-    """Writes `records` as a completion-log.json file at `path` -- mirrors
-    completion_log.py's own (private) serialization so a fixture log round-trips
-    through `completion_log.load_all` exactly like a real one."""
+    """Writes `records` as a completion-log.json file at `path`, via
+    completion_log.py's own serialization so a fixture log round-trips through
+    `completion_log.load_all` exactly like a real one."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = []
-    for record in records:
-        data = asdict(record)
-        data["pr_opened_at"] = record.pr_opened_at.isoformat() if record.pr_opened_at else None
-        data["pr_merged_at"] = record.pr_merged_at.isoformat() if record.pr_merged_at else None
-        payload.append(data)
-    path.write_text(json.dumps(payload))
+    path.write_text(json.dumps([_record_to_dict(record) for record in records]))

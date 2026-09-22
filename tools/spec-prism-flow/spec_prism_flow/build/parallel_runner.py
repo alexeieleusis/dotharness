@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -9,20 +9,17 @@ from spec_prism_flow.build import phase_runner
 from spec_prism_flow.build.completion_log import CompletionRecord, load_all
 from spec_prism_flow.build.errors import OrchestrationError
 from spec_prism_flow.build.phase_runner import PhaseRunResult
-from spec_prism_flow.build.track_runner import COMPLETION_LOG_JSON_RELPATH, discover_phase_files
+from spec_prism_flow.build.track_runner import (
+    COMPLETION_LOG_JSON_RELPATH,
+    discover_phase_files,
+    merged_phase_numbers,
+)
 from spec_prism_flow.decompose import GRAPH_FILENAME
-from spec_prism_flow.graph import Graph, load_graph
-from spec_prism_flow.phase_file import PhaseFile, parse_phase_file, phase_file_stem
+from spec_prism_flow.graph import Graph, load_graph, reachable_from_all
+from spec_prism_flow.phase_file import PhaseFile, parse_phase_file, phase_file_stem, phase_number_from_stem
 
 if TYPE_CHECKING:
     from spec_prism_flow.config import SpecPrismFlowConfig
-
-
-def _node_phase_number(node: str) -> int:
-    """Every graph node is a phase-file stem (`phase_file_stem`'s own output), which
-    always starts with the phase's zero-padded number followed by `-` -- see
-    `phase_file.phase_file_name`/`phase_file_stem`."""
-    return int(node.split("-", 1)[0])
 
 
 def eligible_leaves(
@@ -31,7 +28,7 @@ def eligible_leaves(
     """A leaf is eligible iff it hasn't merged yet and every dependency edge from its
     graph node points to a node whose phase has merged (a leaf with no dependency
     edges is always eligible)."""
-    merged_numbers = {record.phase_number for record in completion_log if record.pr_merged_at is not None}
+    merged_numbers = merged_phase_numbers(completion_log)
 
     deps_by_node: dict[str, list[str]] = defaultdict(list)
     for dependent, dependency in graph.edges:
@@ -43,27 +40,9 @@ def eligible_leaves(
             continue
         node = phase_file_stem(phase.number, phase.name)
         deps = deps_by_node.get(node, [])
-        if all(_node_phase_number(dep) in merged_numbers for dep in deps):
+        if all(phase_number_from_stem(dep) in merged_numbers for dep in deps):
             eligible.append(phase)
     return eligible
-
-
-def _transitive_dependents(escalated_node: str, edges: list[tuple[str, str]]) -> set[str]:
-    """Every node reachable by walking edges backwards from `escalated_node` -- i.e.
-    every node that (transitively) depends on it."""
-    dependents_by_dependency: dict[str, list[str]] = defaultdict(list)
-    for dependent, dependency in edges:
-        dependents_by_dependency[dependency].append(dependent)
-
-    blocked: set[str] = set()
-    stack = [escalated_node]
-    while stack:
-        node = stack.pop()
-        for dependent in dependents_by_dependency.get(node, []):
-            if dependent not in blocked:
-                blocked.add(dependent)
-                stack.append(dependent)
-    return blocked
 
 
 def run_parallel(
@@ -90,7 +69,7 @@ def run_parallel(
 
     results: list[PhaseRunResult] = []
     blocked_nodes: set[str] = set()
-    running: dict = {}
+    running: dict[Future[PhaseRunResult], PhaseFile] = {}
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         while True:
@@ -120,7 +99,8 @@ def run_parallel(
                 except OrchestrationError as exc:
                     exc.with_context(phase_number=phase.number, phase_name=phase.name)
                     node = phase_file_stem(phase.number, phase.name)
-                    blocked_nodes |= {node, *_transitive_dependents(node, graph.edges)}
+                    dependents = reachable_from_all(graph.edges, graph.nodes, forward=False).get(node, set())
+                    blocked_nodes |= {node, *dependents}
                 else:
                     results.append(result)
 

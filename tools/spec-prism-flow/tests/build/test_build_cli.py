@@ -4,7 +4,7 @@ from dataclasses import replace
 from unittest.mock import Mock
 
 from click.testing import CliRunner
-from conftest import REPO, write_completion_log
+from conftest import REPO, fake_phase_run_result, write_completion_log
 from conftest import make_completion_record as _record
 from conftest import make_config as _config
 from conftest import make_phase as _phase
@@ -14,17 +14,12 @@ from spec_prism_flow import cli
 from spec_prism_flow.build import track_runner
 from spec_prism_flow.build.agent_runner import branch_name
 from spec_prism_flow.build.errors import EmptyImplementationError
-from spec_prism_flow.build.phase_runner import PhaseRunResult
 from spec_prism_flow.build.resume_state import resume_state_path
 from spec_prism_flow.config import BuildConfig
 
 
 def _install_config(monkeypatch, cfg):
     monkeypatch.setattr(cli, "_load_cfg_or_raise", lambda config_path_str: cfg)
-
-
-def _fake_result(number: int, *, merged: bool = True) -> PhaseRunResult:
-    return PhaseRunResult(phase_number=number, merged=merged, completion_record=_record(phase_number=number))
 
 
 # --- build run: sequential/parallel dispatch ----------------------------------------
@@ -34,7 +29,7 @@ def test_build_run_sequential_dispatches_to_run_track(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cfg = _config(tmp_path, build=BuildConfig(workers=1, state_dir=tmp_path / "state"))
     _install_config(monkeypatch, cfg)
-    run_track = Mock(return_value=[_fake_result(1)])
+    run_track = Mock(return_value=[fake_phase_run_result(1)])
     run_parallel = Mock()
     monkeypatch.setattr(cli.track_runner, "run_track", run_track)
     monkeypatch.setattr(cli.parallel_runner, "run_parallel", run_parallel)
@@ -53,7 +48,7 @@ def test_build_run_parallel_dispatches_to_run_parallel(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cfg = _config(tmp_path, build=BuildConfig(workers=3, state_dir=tmp_path / "state"))
     _install_config(monkeypatch, cfg)
-    run_parallel = Mock(return_value=[_fake_result(2, merged=False)])
+    run_parallel = Mock(return_value=[fake_phase_run_result(2, merged=False)])
     run_track = Mock()
     monkeypatch.setattr(cli.parallel_runner, "run_parallel", run_parallel)
     monkeypatch.setattr(cli.track_runner, "run_track", run_track)

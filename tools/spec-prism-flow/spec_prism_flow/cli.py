@@ -266,7 +266,7 @@ def build_status(config_path_str):
     clone in the current working directory."""
     cfg = _load_cfg_or_raise(config_path_str)
     clone = Path.cwd()
-    repo = phase_runner._repo_slug(clone)
+    repo = phase_runner.repo_slug(clone)
 
     phases = [parse_phase_file(path) for path in track_runner.discover_phase_files(cfg.plan.phase_dir)]
     records_by_number = {

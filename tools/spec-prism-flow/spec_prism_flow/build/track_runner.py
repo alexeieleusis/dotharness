@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from spec_prism_flow.build import phase_runner
-from spec_prism_flow.build.completion_log import load_all
+from spec_prism_flow.build.completion_log import CompletionRecord, load_all
 from spec_prism_flow.build.errors import OrchestrationError
 from spec_prism_flow.build.phase_runner import PhaseRunResult
 from spec_prism_flow.phase_file import PHASE_FILE_NAME_PATTERN, parse_phase_file
@@ -35,11 +35,14 @@ def discover_phase_files(phases_dir: Path) -> list[Path]:
     return sorted(matches, key=_phase_number_from_path)
 
 
+def merged_phase_numbers(records: list[CompletionRecord]) -> set[int]:
+    return {record.phase_number for record in records if record.pr_merged_at is not None}
+
+
 def already_merged_phase_numbers(completion_log_path: Path) -> set[int]:
     """`set()`, not an exception, when the completion log doesn't exist yet -- the
     normal case before any phase has merged."""
-    records = load_all(completion_log_path)
-    return {record.phase_number for record in records if record.pr_merged_at is not None}
+    return merged_phase_numbers(load_all(completion_log_path))
 
 
 def run_track(

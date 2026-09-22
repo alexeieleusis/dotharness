@@ -36,7 +36,7 @@ class PhaseRunResult:
     completion_record: CompletionRecord
 
 
-def _repo_slug(clone: Path) -> str:
+def repo_slug(clone: Path) -> str:
     """`"owner/name"`, derived from `clone`'s `origin` remote -- mirrors
     `claude_backend`'s own repo-identity derivation, adapted to keep the owner
     segment (gh_ops/resume_state need the full `"owner/name"` slug, not just the repo
@@ -216,7 +216,7 @@ def run_phase(
     if toolchain is None:
         toolchain = build_dry_run_toolchain() if dry_run else build_live_toolchain(config)
 
-    repo = _repo_slug(clone)
+    repo = repo_slug(clone)
     branch = agent_runner.branch_name(phase)
     state_path = resume_state.resume_state_path(config, repo, branch)
     progress = _Progress()

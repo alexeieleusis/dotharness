@@ -29,7 +29,7 @@ def _state_path(config, phase) -> Path:
     return resume_state_path(config, _REPO, branch)
 
 
-# --- _repo_slug ----------------------------------------------------------------------
+# --- repo_slug ----------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -43,7 +43,7 @@ def _state_path(config, phase) -> Path:
 )
 def test_repo_slug_parses_origin_url(tmp_path, monkeypatch, origin_url_value, expected):
     monkeypatch.setattr(phase_runner, "origin_url", Mock(return_value=origin_url_value))
-    assert phase_runner._repo_slug(tmp_path) == expected
+    assert phase_runner.repo_slug(tmp_path) == expected
 
 
 # --- Happy path: all 8 steps ----------------------------------------------------------
