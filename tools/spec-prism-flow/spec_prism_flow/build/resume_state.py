@@ -33,7 +33,9 @@ def load_resume_state(path: Path) -> ResumeState | None:
 
 def save_resume_state(path: Path, state: ResumeState) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(state)))
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(asdict(state)))
+    tmp.replace(path)
 
 
 def clear_resume_state(path: Path) -> None:
