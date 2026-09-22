@@ -18,9 +18,10 @@ class ResumeState:
 
 def resume_state_path(config: SpecPrismFlowConfig, repo: str, branch: str) -> Path:
     """Keyed by repo slug + branch so two different phases' resume records never
-    collide. `repo.replace("/", "-")` slugifies an "owner/name"-shaped repo string
-    into a single path segment."""
-    return config.build.state_dir / repo.replace("/", "-") / branch / "resume_state.json"
+    collide. Escapes literal "-" before collapsing "/" to "-" so hyphenated repo
+    names (e.g. "acme/my-repo" vs "acme-my/repo") can't slugify to the same path."""
+    slug = repo.replace("-", "--").replace("/", "-")
+    return config.build.state_dir / slug / branch / "resume_state.json"
 
 
 def load_resume_state(path: Path) -> ResumeState | None:

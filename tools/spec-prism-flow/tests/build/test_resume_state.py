@@ -48,8 +48,10 @@ def test_resume_state_path_different_repos_or_branches_never_collide(tmp_path):
     path_a = resume_state.resume_state_path(cfg, "alexeieleusis/dotharness", "phase-08-x")
     path_b = resume_state.resume_state_path(cfg, "alexeieleusis/other-repo", "phase-08-x")
     path_c = resume_state.resume_state_path(cfg, "alexeieleusis/dotharness", "phase-09-y")
+    path_d = resume_state.resume_state_path(cfg, "acme/my-repo", "b")
+    path_e = resume_state.resume_state_path(cfg, "acme-my/repo", "b")
 
-    assert len({path_a, path_b, path_c}) == 3
+    assert len({path_a, path_b, path_c, path_d, path_e}) == 5
 
 
 def test_load_resume_state_returns_none_when_file_absent(tmp_path):
