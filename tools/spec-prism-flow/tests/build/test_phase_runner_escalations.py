@@ -207,6 +207,8 @@ def test_completion_log_append_failure_during_escalation_is_swallowed(tmp_path):
     with pytest.raises(EmptyImplementationError):
         run_phase(clone, config, phase, toolchain=toolchain)
 
+    _m(toolchain.completion_log_append).assert_called_once()
+
 
 def test_non_orchestration_error_propagates_with_no_completion_log_write(tmp_path):
     phase = _phase()
