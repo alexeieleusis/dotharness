@@ -154,6 +154,8 @@ def test_build_status_prints_address_comments_cycles_and_escalations(tmp_path, m
 
 
 def test_no_rich_or_typer_imports_in_phase_12_modules():
+    import re
+
     import spec_prism_flow.build.parallel_runner as parallel_runner_module
     import spec_prism_flow.build.track_runner as track_runner_module
     import spec_prism_flow.cli as cli_module
@@ -162,5 +164,4 @@ def test_no_rich_or_typer_imports_in_phase_12_modules():
         source = module.__file__
         assert source is not None
         text = open(source).read()  # noqa: SIM115
-        assert "import rich" not in text
-        assert "import typer" not in text
+        assert not re.search(r"^\s*(?:import|from)\s+(rich|typer)\b", text, re.MULTILINE)
