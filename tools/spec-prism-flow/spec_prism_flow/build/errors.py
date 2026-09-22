@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
 from typing import ClassVar
 
 
@@ -9,6 +11,22 @@ class CommandError(RuntimeError):
         self.returncode = returncode
         self.stderr = stderr
         super().__init__(f"`{' '.join(args)}` exited {returncode}: {stderr.strip()}")
+
+
+def run_subprocess(
+    cmd: list[str], cwd: Path, *, timeout: int, error_cls: type[CommandError] = CommandError
+) -> subprocess.CompletedProcess[str]:
+    """Run `cmd` in `cwd`, raising `error_cls` (a CommandError subclass) on non-zero
+    exit or timeout."""
+    try:
+        result = subprocess.run(  # noqa: S603
+            cmd, cwd=cwd, capture_output=True, text=True, check=False, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise error_cls(cmd, -1, f"timed out after {timeout}s: {exc.stderr or ''}") from exc
+    if result.returncode != 0:
+        raise error_cls(cmd, result.returncode, result.stderr)
+    return result
 
 
 class OrchestrationError(Exception):

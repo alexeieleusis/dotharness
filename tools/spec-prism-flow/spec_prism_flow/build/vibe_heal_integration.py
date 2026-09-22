@@ -4,15 +4,14 @@ import json
 import shutil
 import subprocess
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 
-from spec_prism_flow.build.errors import CommandError
+from spec_prism_flow.build.errors import CommandError, run_subprocess
 from spec_prism_flow.config import VibeHealConfig
 
-# Mirrors harness_integration.DEFAULT_HARNESS_TIMEOUT_SECONDS -- Phase 01's
-# VibeHealConfig has no timeout field either, so this is a module-level default every
-# public function accepts as a `timeout` keyword, overridable per call.
+# Mirrors harness_integration.DEFAULT_HARNESS_TIMEOUT_SECONDS -- VibeHealConfig has no
+# timeout field either, so this is a module-level default every public function
+# accepts as a `timeout` keyword, overridable per call.
 DEFAULT_VIBE_HEAL_TIMEOUT_SECONDS = 1800
 
 
@@ -27,28 +26,14 @@ class SonarScannerNotFoundError(RuntimeError):
     SonarQube-config resolution."""
 
 
-@lru_cache(maxsize=1)
-def _sonar_scanner_on_path() -> str | None:
-    return shutil.which("sonar-scanner")
-
-
 def _run(config: VibeHealConfig, clone: Path, *args: str, timeout: int) -> subprocess.CompletedProcess[str]:
     """Shared subprocess primitive for `scan`/`post`: `uv run --project
     <config.tool_dir> <config.command> review <*args>` in `clone`. Both callers pass
     `--report-file`/`--env-file` through `*args` -- omitting either risks an unhandled
-    `sys.exit(1)` on vibe-heal's own default-path SonarQube-config resolution failure,
-    a correctness requirement inherited from the source this phase ports, not a
-    stylistic choice."""
+    `sys.exit(1)` on vibe-heal's own default-path SonarQube-config resolution
+    failure."""
     cmd = ["uv", "run", "--project", str(config.tool_dir), config.command, "review", *args]
-    try:
-        result = subprocess.run(  # noqa: S603
-            cmd, cwd=clone, capture_output=True, text=True, check=False, timeout=timeout
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise VibeHealCommandError(cmd, -1, f"timed out after {timeout}s: {exc.stderr or ''}") from exc
-    if result.returncode != 0:
-        raise VibeHealCommandError(cmd, result.returncode, result.stderr)
-    return result
+    return run_subprocess(cmd, clone, timeout=timeout, error_cls=VibeHealCommandError)
 
 
 def scan(
@@ -67,7 +52,7 @@ def scan(
     `_run`'s docstring for why)."""
     if not config.enabled:
         return None
-    if _sonar_scanner_on_path() is None:
+    if shutil.which("sonar-scanner") is None:
         raise SonarScannerNotFoundError("sonar-scanner not found on PATH")  # noqa: TRY003
     _run(config, clone, "--report-file", str(report_path), "--env-file", str(env_path), timeout=timeout)
     return json.loads(report_path.read_text())
@@ -96,13 +81,7 @@ class Fingerprint:
     is the narrowest triple that's still stable across re-scans of the same PR state --
     vibe-heal's own issue ids, if any, aren't documented anywhere in this codebase as
     stable across runs, and an issue's message text can be reworded between vibe-heal
-    versions without the underlying finding changing, so neither is included.
-
-    There's no Fingerprint type or report-parsing shape anywhere else in this
-    codebase; `report`'s shape below is designed from scratch against §7.2's stated
-    fields (`rule`/`file`/`line`/`on_changed_line`), as the smallest SARIF-like JSON
-    shape that satisfies them -- vibe-heal's actual --report-file format isn't
-    documented in this checkout."""
+    versions without the underlying finding changing, so neither is included."""
 
     rule: str
     file: str
