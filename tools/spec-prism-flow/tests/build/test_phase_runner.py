@@ -16,6 +16,7 @@ from spec_prism_flow.build.errors import (
     ScopeViolation,
 )
 from spec_prism_flow.build.gh_ops import PRStatus
+from spec_prism_flow.build.git_ops import GitCommandError
 from spec_prism_flow.build.manual_test import ManualTestOutcome
 from spec_prism_flow.build.phase_runner import PhaseRunResult, run_phase
 from spec_prism_flow.build.resume_state import ResumeState, load_resume_state, resume_state_path, save_resume_state
@@ -92,6 +93,24 @@ def test_run_phase_clears_resume_state_after_merge(tmp_path):
 
     run_phase(clone, config, phase, toolchain=toolchain)
 
+    assert load_resume_state(_state_path(config, phase)) is None
+
+
+def test_run_phase_completion_log_append_git_error_after_merge_does_not_propagate(tmp_path):
+    """A push conflict that outlives `completion_log_append`'s own retries must not
+    surface as an uncaught `GitCommandError`, and must not leave `resume_state`
+    pointing at the now-merged PR -- both would make a later `--resume` run treat an
+    already-merged phase as unfinished."""
+    phase = _phase()
+    config = _config(tmp_path)
+    toolchain = _toolchain(
+        completion_log_append=Mock(side_effect=GitCommandError(["git", "push"], 1, "conflict")),
+    )
+    clone = tmp_path / "clone"
+
+    result = run_phase(clone, config, phase, toolchain=toolchain)
+
+    assert result.merged is True
     assert load_resume_state(_state_path(config, phase)) is None
 
 

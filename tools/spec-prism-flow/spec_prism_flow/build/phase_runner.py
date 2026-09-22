@@ -9,7 +9,7 @@ from spec_prism_flow.build import agent_runner, resume_state, vibe_heal_integrat
 from spec_prism_flow.build.completion_log import CompletionRecord
 from spec_prism_flow.build.errors import EmptyImplementationError, OrchestrationError
 from spec_prism_flow.build.gh_ops import PRHandle
-from spec_prism_flow.build.git_ops import origin_url
+from spec_prism_flow.build.git_ops import GitCommandError, origin_url
 from spec_prism_flow.build.resume_state import ResumeState
 from spec_prism_flow.build.retry_budget import RetryBudget
 from spec_prism_flow.build.toolchain import (
@@ -251,8 +251,9 @@ def run_phase(
 
         toolchain.pr_merge(repo, pr.number)
         merged_record = replace(completion_record, pr_merged_at=datetime.now(UTC))
-        toolchain.completion_log_append(clone, merged_record)
         resume_state.clear_resume_state(state_path)
+        with contextlib.suppress(GitCommandError):
+            toolchain.completion_log_append(clone, merged_record)
         return PhaseRunResult(phase_number=phase.number, merged=True, completion_record=merged_record)
 
     except OrchestrationError as exc:
