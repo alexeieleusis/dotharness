@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from spec_prism_flow.build.errors import CommandError
+from spec_prism_flow.build.errors import CommandError, run_subprocess
 from spec_prism_flow.config import VibeHealConfig
 
 # Mirrors harness_integration.DEFAULT_HARNESS_TIMEOUT_SECONDS -- Phase 01's
@@ -40,15 +40,7 @@ def _run(config: VibeHealConfig, clone: Path, *args: str, timeout: int) -> subpr
     a correctness requirement inherited from the source this phase ports, not a
     stylistic choice."""
     cmd = ["uv", "run", "--project", str(config.tool_dir), config.command, "review", *args]
-    try:
-        result = subprocess.run(  # noqa: S603
-            cmd, cwd=clone, capture_output=True, text=True, check=False, timeout=timeout
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise VibeHealCommandError(cmd, -1, f"timed out after {timeout}s: {exc.stderr or ''}") from exc
-    if result.returncode != 0:
-        raise VibeHealCommandError(cmd, result.returncode, result.stderr)
-    return result
+    return run_subprocess(cmd, cwd=clone, timeout=timeout, error_cls=VibeHealCommandError)
 
 
 def scan(

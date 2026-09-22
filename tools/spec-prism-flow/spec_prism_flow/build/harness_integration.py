@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
-from spec_prism_flow.build.errors import CommandError
+from spec_prism_flow.build.errors import CommandError, run_subprocess
 from spec_prism_flow.config import ReviewConfig
 
 # Phase 01's ReviewConfig has no timeout field, so this mirrors
@@ -38,15 +37,7 @@ def run(config: ReviewConfig, clone: Path, subcommand: str, *, timeout: int = DE
         str(config.harness_config),
         subcommand,
     ]
-    try:
-        result = subprocess.run(  # noqa: S603
-            cmd, cwd=clone, capture_output=True, text=True, check=False, timeout=timeout
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise HarnessCommandError(cmd, -1, f"timed out after {timeout}s: {exc.stderr or ''}") from exc
-    if result.returncode != 0:
-        raise HarnessCommandError(cmd, result.returncode, result.stderr)
-    return result.stdout
+    return run_subprocess(cmd, cwd=clone, timeout=timeout, error_cls=HarnessCommandError).stdout
 
 
 def self_review(config: ReviewConfig, clone: Path, *, timeout: int = DEFAULT_HARNESS_TIMEOUT_SECONDS) -> str:
