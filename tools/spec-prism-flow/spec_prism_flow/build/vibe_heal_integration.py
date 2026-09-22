@@ -69,8 +69,11 @@ def scan(
         return None
     if _sonar_scanner_on_path() is None:
         raise SonarScannerNotFoundError("sonar-scanner not found on PATH")  # noqa: TRY003
-    _run(config, clone, "--report-file", str(report_path), "--env-file", str(env_path), timeout=timeout)
-    return json.loads(report_path.read_text())
+    cmd = _run(config, clone, "--report-file", str(report_path), "--env-file", str(env_path), timeout=timeout).args
+    try:
+        return json.loads(report_path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise VibeHealCommandError(list(cmd), 0, f"report file missing or unparsable after exit 0: {exc}") from exc
 
 
 def post(
