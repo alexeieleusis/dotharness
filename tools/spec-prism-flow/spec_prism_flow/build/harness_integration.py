@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
-from spec_prism_flow.build.errors import CommandError, run_subprocess
+from spec_prism_flow.build.errors import CommandError
 from spec_prism_flow.config import ReviewConfig
 
-# ReviewConfig has no timeout field, so this mirrors claude_backend's
-# DEFAULT_TIMEOUT_SECONDS: a module-level default every public function accepts as a
-# `timeout` keyword, overridable per call. Same order of magnitude as ClaudeBackend's
-# own agent-invocation timeout, since a self-review/address-comments cycle is itself a
-# full agent run under the hood.
+# Phase 01's ReviewConfig has no timeout field, so this mirrors
+# claude_backend.DEFAULT_TIMEOUT_SECONDS: a module-level default every public function
+# accepts as a `timeout` keyword, overridable per call. Same order of magnitude as
+# ClaudeBackend's own agent-invocation timeout, since a self-review/address-comments
+# cycle is itself a full agent run under the hood.
 DEFAULT_HARNESS_TIMEOUT_SECONDS = 1800
 
 
@@ -37,7 +38,15 @@ def run(config: ReviewConfig, clone: Path, subcommand: str, *, timeout: int = DE
         str(config.harness_config),
         subcommand,
     ]
-    return run_subprocess(cmd, clone, timeout=timeout, error_cls=HarnessCommandError).stdout
+    try:
+        result = subprocess.run(  # noqa: S603
+            cmd, cwd=clone, capture_output=True, text=True, check=False, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HarnessCommandError(cmd, -1, f"timed out after {timeout}s: {exc.stderr or ''}") from exc
+    if result.returncode != 0:
+        raise HarnessCommandError(cmd, result.returncode, result.stderr)
+    return result.stdout
 
 
 def self_review(config: ReviewConfig, clone: Path, *, timeout: int = DEFAULT_HARNESS_TIMEOUT_SECONDS) -> str:

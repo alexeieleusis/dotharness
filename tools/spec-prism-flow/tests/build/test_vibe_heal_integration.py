@@ -22,6 +22,13 @@ def _ok(stdout: str = "") -> Mock:
     return Mock(returncode=0, stdout=stdout, stderr="")
 
 
+@pytest.fixture(autouse=True)
+def _reset_sonar_scanner_cache():
+    vibe_heal_integration._sonar_scanner_on_path.cache_clear()
+    yield
+    vibe_heal_integration._sonar_scanner_on_path.cache_clear()
+
+
 def _report_text() -> str:
     return json.dumps({
         "issues": [
@@ -78,6 +85,16 @@ def test_scan_raises_sonar_scanner_not_found_error_when_missing_from_path(tmp_pa
         vibe_heal_integration.scan(_config(), tmp_path, tmp_path / "r.json", tmp_path / "e.env")
 
     run_mock.assert_not_called()
+
+
+def test_sonar_scanner_discovery_is_cached(monkeypatch):
+    which_mock = Mock(return_value="/usr/local/bin/sonar-scanner")
+    monkeypatch.setattr("shutil.which", which_mock)
+
+    vibe_heal_integration._sonar_scanner_on_path()
+    vibe_heal_integration._sonar_scanner_on_path()
+
+    which_mock.assert_called_once()
 
 
 def test_scan_raises_vibe_heal_command_error_on_failure(tmp_path, monkeypatch):
