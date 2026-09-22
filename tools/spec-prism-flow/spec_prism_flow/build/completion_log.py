@@ -104,7 +104,7 @@ def _render_log_md(records: list[CompletionRecord]) -> str:
         diff = f"+{record.pr_diff_lines_added}/-{record.pr_diff_lines_removed} ({record.pr_diff_files} files)"
         escalations = (
             f"{record.human_escalations} -- {record.escalation_reason}"
-            if record.human_escalations and record.escalation_reason
+            if record.escalation_reason
             else str(record.human_escalations)
         )
         if record.manual_test_first_try_pass is None:
