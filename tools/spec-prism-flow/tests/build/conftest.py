@@ -151,8 +151,11 @@ def make_completion_record(**overrides) -> CompletionRecord:
 
 
 def fake_phase_run_result(number: int, *, merged: bool = True) -> PhaseRunResult:
+    pr_merged_at = datetime(2026, 1, 2, tzinfo=UTC) if merged else None
     return PhaseRunResult(
-        phase_number=number, merged=merged, completion_record=make_completion_record(phase_number=number)
+        phase_number=number,
+        merged=merged,
+        completion_record=make_completion_record(phase_number=number, pr_merged_at=pr_merged_at),
     )
 
 
