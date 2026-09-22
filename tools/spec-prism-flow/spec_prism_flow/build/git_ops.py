@@ -48,7 +48,7 @@ def commit_all(clone: Path, message: str) -> bool:
     return True
 
 
-def push_branch(clone: Path, branch: str, remote: str = "origin") -> None:
+def push_branch(clone: Path, branch: str, remote: str = "origin", *, expect_sha: str | None = None) -> None:
     """`--force-with-lease` so a retried run_phase (which recreates `branch` fresh off
     origin/base via checkout_fresh_branch) can overwrite a stale remote branch from an
     earlier, abandoned attempt, while still protecting against clobbering an
@@ -60,7 +60,21 @@ def push_branch(clone: Path, branch: str, remote: str = "origin") -> None:
     the ref to be absent on the remote -- and reject the push with a stale-info
     error exactly when an abandoned branch is actually there. Fetching `branch`
     first (tolerating it not existing yet) gives the lease fresh remote state to
-    evaluate against."""
+    evaluate against.
+
+    `expect_sha`, when given, pins the lease to that exact sha via
+    `--force-with-lease=<branch>:<expect_sha>` instead of the bare form above. The
+    bare form's expected value comes from the local remote-tracking ref *at push
+    time*, which the fetch above just refreshed to whatever is current on `remote`
+    -- so a caller that checked the remote tip in a separate preflight step earlier
+    can't rely on the bare lease to reject a push built on stale content: by the
+    time this function's own fetch runs, the lease baseline has already moved to
+    match a concurrent push, and the push would silently overwrite it instead of
+    failing. Pinning `expect_sha` closes that gap by making the whole check-and-push
+    atomic on the remote side, so the fetch above is skipped."""
+    if expect_sha is not None:
+        _run(clone, "push", f"--force-with-lease={branch}:{expect_sha}", "-u", remote, branch)
+        return
     with contextlib.suppress(subprocess.TimeoutExpired):
         subprocess.run(  # noqa: S603
             ["git", "fetch", remote, branch],  # noqa: S607

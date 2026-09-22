@@ -110,6 +110,32 @@ def test_push_branch_raises_git_command_error_on_failure(tmp_path, monkeypatch):
     assert exc_info.value.stderr == "rejected"
 
 
+def test_push_branch_with_expect_sha_pins_the_lease_and_skips_the_refresh_fetch(tmp_path, monkeypatch):
+    run_mock = Mock(return_value=_ok())
+    monkeypatch.setattr("subprocess.run", run_mock)
+
+    git_ops.push_branch(tmp_path, "phase-07-x", expect_sha="deadbeef")
+
+    assert run_mock.call_count == 1
+    assert run_mock.call_args.args[0] == [
+        "git",
+        "push",
+        "--force-with-lease=phase-07-x:deadbeef",
+        "-u",
+        "origin",
+        "phase-07-x",
+    ]
+
+
+def test_push_branch_with_expect_sha_raises_git_command_error_on_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr("subprocess.run", Mock(return_value=Mock(returncode=1, stdout="", stderr="stale info")))
+
+    with pytest.raises(GitCommandError) as exc_info:
+        git_ops.push_branch(tmp_path, "phase-07-x", expect_sha="deadbeef")
+
+    assert exc_info.value.stderr == "stale info"
+
+
 def test_delete_remote_branch_if_exists_pushes_delete_when_branch_present(tmp_path, monkeypatch):
     responses = [Mock(returncode=0, stdout="deadbeef\trefs/heads/phase-07-x\n", stderr=""), _ok()]
     run_mock = Mock(side_effect=responses)
