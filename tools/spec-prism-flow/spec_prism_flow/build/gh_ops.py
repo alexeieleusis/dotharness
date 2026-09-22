@@ -170,8 +170,17 @@ def pr_merge(pr_number: int) -> None:
     """Same cwd-inference judgment call as `pr_view`/`unresolved_thread_count` (see
     there). Squash is the only strategy -- there's no config-driven choice (Phase
     01's `BuildConfig` has no merge-strategy field) -- and a non-zero exit raises
-    immediately with no internal retry."""
+    immediately with no internal retry.
+
+    Calls `_run_raw` (not `_run`) so a timeout -- which `_run_raw` reports as a
+    plain `GhCommandError`, since it has no way to know that call is a merge -- is
+    also converted to `PRNotMergeableError` here: a client-side timeout leaves
+    mergeability just as ambiguous as a non-zero exit, so it needs the same
+    `next_command` recovery guidance."""
     argv = ("pr", "merge", str(pr_number), "--squash")
-    result = _run_raw(None, *argv)
+    try:
+        result = _run_raw(None, *argv)
+    except GhCommandError as exc:
+        raise PRNotMergeableError(exc.cmd_args, exc.returncode, exc.stderr, pr_number) from exc
     if result.returncode != 0:
         raise PRNotMergeableError(["gh", *argv], result.returncode, result.stderr, pr_number)

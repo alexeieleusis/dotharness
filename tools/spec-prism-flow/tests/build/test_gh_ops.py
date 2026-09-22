@@ -181,6 +181,22 @@ def test_pr_merge_does_not_retry_on_failure(monkeypatch):
     assert run_mock.call_count == 1
 
 
+def test_pr_merge_raises_pr_not_mergeable_error_with_next_command_on_timeout(monkeypatch):
+    monkeypatch.setattr(
+        "subprocess.run",
+        Mock(
+            side_effect=subprocess.TimeoutExpired(
+                cmd=["gh", "pr", "merge", "42", "--squash"], timeout=gh_ops._GH_TIMEOUT_SECONDS
+            )
+        ),
+    )
+
+    with pytest.raises(PRNotMergeableError) as exc_info:
+        gh_ops.pr_merge(42)
+
+    assert exc_info.value.next_command == "gh pr view 42"
+
+
 def test_run_raises_gh_command_error_instead_of_hanging_on_timeout(monkeypatch):
     monkeypatch.setattr(
         "subprocess.run",
