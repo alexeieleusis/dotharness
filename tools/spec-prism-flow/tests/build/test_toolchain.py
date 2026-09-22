@@ -1,6 +1,7 @@
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
 from conftest import git_commit as _commit
 from conftest import init_git_repo as _init_repo
 
@@ -17,6 +18,7 @@ from spec_prism_flow.build import (
 from spec_prism_flow.build.claude_backend import ClaudeBackend
 from spec_prism_flow.build.completion_log import CompletionRecord
 from spec_prism_flow.build.gh_ops import PRHandle
+from spec_prism_flow.build.git_ops import GitCommandError
 from spec_prism_flow.build.manual_test import ManualTestOutcome
 from spec_prism_flow.build.opencode_backend import OpencodeBackend
 from spec_prism_flow.build.toolchain import (
@@ -376,3 +378,12 @@ def test_diff_stat_counts_binary_files_without_line_counts(tmp_path):
     assert stat.files == 1
     assert stat.lines_added == 0
     assert stat.lines_removed == 0
+
+
+def test_diff_stat_raises_git_command_error_for_unknown_base_ref(tmp_path):
+    clone = _init_repo(tmp_path)
+    (clone / "a.txt").write_text("line1\n")
+    _commit(clone, "initial")
+
+    with pytest.raises(GitCommandError):
+        diff_stat(clone, "nonexistent-ref")
