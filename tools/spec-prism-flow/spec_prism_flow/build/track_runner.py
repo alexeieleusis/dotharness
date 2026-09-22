@@ -4,20 +4,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from spec_prism_flow.build import phase_runner
-from spec_prism_flow.build.completion_log import CompletionRecord, load_all
+from spec_prism_flow.build.completion_log import COMPLETION_LOG_JSON_RELPATH, CompletionRecord, load_all
 from spec_prism_flow.build.errors import OrchestrationError
 from spec_prism_flow.build.phase_runner import PhaseRunResult
 from spec_prism_flow.phase_file import PHASE_FILE_NAME_PATTERN, parse_phase_file
 
 if TYPE_CHECKING:
     from spec_prism_flow.config import SpecPrismFlowConfig
-
-# Fixed, repo-relative location of the shared completion log inside the target
-# clone -- mirrors toolchain.py's own (module-private) `_COMPLETION_LOG_JSON_RELPATH`.
-# Duplicated here (as a public constant, reused by parallel_runner.py and cli.py)
-# rather than imported from toolchain.py, which is outside this phase's declared
-# scope and doesn't export it.
-COMPLETION_LOG_JSON_RELPATH = Path("docs/completion-log.json")
 
 
 def _phase_number_from_path(path: Path) -> int:

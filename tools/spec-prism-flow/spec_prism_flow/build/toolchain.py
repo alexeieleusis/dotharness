@@ -17,7 +17,7 @@ from spec_prism_flow.build import (
     scope_guard,
     vibe_heal_integration,
 )
-from spec_prism_flow.build.completion_log import CompletionRecord
+from spec_prism_flow.build.completion_log import COMPLETION_LOG_JSON_RELPATH, CompletionRecord
 from spec_prism_flow.build.gh_ops import PRHandle, PRStatus
 from spec_prism_flow.build.git_ops import DiffStat
 from spec_prism_flow.build.manual_test import ManualTestOutcome
@@ -58,10 +58,11 @@ class Toolchain:
     completion_log_append: Callable[[Path, CompletionRecord], None]
 
 
-# Fixed, repo-relative locations for the shared completion log -- it's a tracked file
-# meant to live in the target repo itself (alongside docs/phases/), not somewhere
-# derived from `config`, since any clone of that repo must find it at the same path.
-_COMPLETION_LOG_JSON_RELPATH = Path("docs/completion-log.json")
+# Fixed, repo-relative location for the shared completion log's markdown rendering --
+# it's a tracked file meant to live in the target repo itself (alongside
+# docs/phases/), not somewhere derived from `config`, since any clone of that repo
+# must find it at the same path. The JSON counterpart's path is
+# `completion_log.COMPLETION_LOG_JSON_RELPATH`, imported above.
 _COMPLETION_LOG_MD_RELPATH = Path("docs/completion-log.md")
 
 # The base branch every step operates against. Not config-driven -- BuildConfig
@@ -110,7 +111,7 @@ def build_live_toolchain(config: SpecPrismFlowConfig) -> Toolchain:
     def _completion_log_append(clone: Path, record: CompletionRecord) -> None:
         completion_log.append_and_commit(
             clone,
-            clone / _COMPLETION_LOG_JSON_RELPATH,
+            clone / COMPLETION_LOG_JSON_RELPATH,
             clone / _COMPLETION_LOG_MD_RELPATH,
             record,
             base_branch=BASE_BRANCH,
