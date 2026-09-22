@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 from spec_prism_flow import handoff
@@ -57,7 +56,11 @@ def run_draft_overview(cfg: SpecPrismFlowConfig) -> tuple[Path, Path | None]:
         raise OverviewError(str(e)) from e
     prompt_text = build_overview_prompt(manifest)
 
-    handoff_started_at = time.time()
+    overview_path = cfg.plan.workspace_dir / OVERVIEW_FILENAME
+    open_questions_path = cfg.plan.workspace_dir / OPEN_QUESTIONS_FILENAME
+    overview_before = overview_path.read_bytes() if overview_path.exists() else None
+    open_questions_before = open_questions_path.read_bytes() if open_questions_path.exists() else None
+
     try:
         handoff.run_handoff(
             prompt_text,
@@ -68,10 +71,9 @@ def run_draft_overview(cfg: SpecPrismFlowConfig) -> tuple[Path, Path | None]:
     except handoff.HandoffError as e:
         raise OverviewError(str(e)) from e
 
-    overview_path = cfg.plan.workspace_dir / OVERVIEW_FILENAME
-    if overview_path.stat().st_mtime < handoff_started_at:
+    overview_written = overview_path.exists() and overview_path.read_bytes() != overview_before
+    if not overview_written:
         raise OverviewError(f"Expected output file was not written by this run: {overview_path}")  # noqa: TRY003
 
-    open_questions_path = cfg.plan.workspace_dir / OPEN_QUESTIONS_FILENAME
-    open_questions_written = open_questions_path.exists() and open_questions_path.stat().st_mtime >= handoff_started_at
+    open_questions_written = open_questions_path.exists() and open_questions_path.read_bytes() != open_questions_before
     return overview_path, open_questions_path if open_questions_written else None
