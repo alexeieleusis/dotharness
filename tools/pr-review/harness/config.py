@@ -4,6 +4,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from harness.lock import working_dir_lock_key
+
 
 class ConfigError(ValueError):
     pass
@@ -52,6 +54,7 @@ class FocusedReviewConfig:
 
 @dataclass
 class AddressCommentsConfig:
+    enabled: bool = True
     trusted_commenters: str | list[str] = "*"
 
 
@@ -85,6 +88,13 @@ class HarnessConfig:
     @property
     def repo_slug(self) -> str:
         return self.repo.name.replace("/", "-")
+
+    @property
+    def lock_key(self) -> str:
+        """Scoped to repo.working_dir, not just repo.name, so a second clone of the
+        same origin (e.g. one dedicated to a cheaper backend for a single runner)
+        doesn't contend for the same lock as the primary clone."""
+        return working_dir_lock_key(self.repo_slug, self.repo.working_dir)
 
 
 def load_config(path: Path) -> HarnessConfig:
@@ -175,6 +185,7 @@ def load_config(path: Path) -> HarnessConfig:
     else:
         trusted_commenters = list(raw_tc)
     address_comments = AddressCommentsConfig(
+        enabled=ac.get("enabled", True),
         trusted_commenters=trusted_commenters,
     )
 

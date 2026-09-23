@@ -1,6 +1,7 @@
 import pytest
 
 from harness.config import ConfigError, PreCommand, load_config
+from harness.lock import working_dir_lock_key
 
 
 def test_load_minimal(minimal_toml):
@@ -224,6 +225,11 @@ def test_repo_slug(minimal_toml):
     assert cfg.repo_slug == "acme-frontend"
 
 
+def test_lock_key_delegates_to_working_dir_lock_key(minimal_toml):
+    cfg = load_config(minimal_toml)
+    assert cfg.lock_key == working_dir_lock_key(cfg.repo_slug, cfg.repo.working_dir)
+
+
 def test_focused_review_defaults(minimal_toml):
     cfg = load_config(minimal_toml)
     assert cfg.focused_review.enabled is False
@@ -251,7 +257,23 @@ vibe_types_repo = "~/custom/vibe-types"
 
 def test_address_comments_defaults(minimal_toml):
     cfg = load_config(minimal_toml)
+    assert cfg.address_comments.enabled is True
     assert cfg.address_comments.trusted_commenters == "*"
+
+
+def test_address_comments_disabled(tmp_path):
+    p = tmp_path / ".harness.toml"
+    p.write_text("""
+[harness]
+[repo]
+name = "a/b"
+working_dir = "/tmp"
+
+[address_comments]
+enabled = false
+""")
+    cfg = load_config(p)
+    assert cfg.address_comments.enabled is False
 
 
 def test_min_reanalysis_interval_hours_default(minimal_toml):
