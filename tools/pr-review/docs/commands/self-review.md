@@ -74,7 +74,7 @@ This deletes `self_review.json` for the repo after an interactive confirmation (
 
 ## Security
 
-The backend process runs with elevated privileges that create an undocumented command execution surface. Both `opencode` and `claude` are invoked with `--dangerously-skip-permissions`, which grants the AI model unrestricted shell access within the subprocess. In practice this means the backend can:
+The backend process runs with elevated privileges that create an undocumented command execution surface. `claude` is invoked with `--dangerously-skip-permissions`, which grants the AI model unrestricted shell access within the subprocess; `opencode` needs no equivalent flag (see [Existing mitigations](#existing-mitigations) below). In practice this means the backend can:
 
 - Execute **any** shell command, not just the `gh api` calls needed to post review comments
 - Read and write the full working directory tree, including `.git/` metadata and any files checked out during PR processing
@@ -86,8 +86,8 @@ A confused or adversarial model response could exfiltrate source code, modify re
 
 The following mitigations are already in place in `backend.py`:
 
-- **`--pure` (opencode only):** Disables external plugins, preventing a skill or plugin from creating branches, worktrees, or otherwise mutating git state independently.
 - **`--disable-slash-commands` (claude only):** Disables slash commands that could trigger built-in actions beyond the prompt scope.
+- **`--standalone` (opencode only):** `--dangerously-skip-permissions`/`--pure` no longer exist in opencode v2 (non-interactive `run` auto-approves regardless), so this runs a private per-invocation server instead of sharing the background service, preventing concurrent reviews from cross-talking through shared session state.
 - **New process session (`start_new_session=True`):** Each backend runs in its own process group, allowing the tool to kill the entire tree on timeout via `killpg` + `SIGKILL`. **Caveat:** a backend that double-forks into its own session (common for daemonizing subprocess managers) can escape the process group entirely and keep running with access to the working directory and `GITHUB_TOKEN`. The timeout path detects survivors by command name and logs a warning, but does not attempt a secondary kill — containment is not guaranteed in this case.
 - **Working tree restoration:** After each PR is processed, the working tree is reset to a recorded detached `HEAD`, limiting the persistence of any file mutations.
 
@@ -96,6 +96,7 @@ The following mitigations are already in place in `backend.py`:
 The following have not been implemented but reduce the attack surface further:
 
 - **`--disable-slash-commands` for opencode:** Currently applied only to claude; the equivalent flag for opencode would further restrict built-in actions.
+- **Plugin isolation for opencode:** opencode v1's `--pure` flag (external plugins disabled) was removed in v2 with no per-run replacement — as of v2.0.14 there's no CLI flag to prevent a globally-installed plugin from branching/worktreeing independently, and this isn't checked at runtime. `opencode plugin list` showed none installed as of this writing, but that's an unverified, point-in-time snapshot of one host's config, not a property of the code — it can drift silently (a plugin installed later, or a different host running the backend) with nothing to catch it.
 - **Environment sanitization:** Stripping `GITHUB_TOKEN` and other sensitive env vars from the backend subprocess, passing only the tokens the AI actually needs for its specific task. This would require restructuring how the backend receives its GitHub credentials (e.g., writing the token to a temporary file the backend reads, rather than inheriting it from the environment).
 - **Sandboxed execution:** Running the backend in a restricted container, namespace, or `firejail` profile to isolate filesystem and network access.
 - **Read-only checkout:** Checking out PR branches with a read-only filesystem mount, though this would prevent the backend from writing files needed for its prompt files.

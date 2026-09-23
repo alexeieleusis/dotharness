@@ -49,8 +49,9 @@ def test_opencode_command_shape(tmp_xdg):
     cmd, _ = b._build_command("Do this.")
     assert cmd[0] == "opencode"
     assert "run" in cmd
-    assert "--dangerously-skip-permissions" in cmd
-    assert "--pure" in cmd
+    assert "--standalone" in cmd
+    assert "--pure" not in cmd
+    assert "--dangerously-skip-permissions" not in cmd
 
 
 def test_claude_command_shape(tmp_xdg):

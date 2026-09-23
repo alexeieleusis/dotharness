@@ -141,9 +141,9 @@ class Backend:
 
     def _cmd_for(self, text: str, opencode_dir: str | None = None) -> list[str]:
         if self.backend_name == "opencode":
-            # --pure disables external plugins so a skill can't branch/worktree on its
-            # own, mirroring --disable-slash-commands below.
-            cmd = ["opencode", "run", "--dangerously-skip-permissions", "--pure"]
+            # opencode v2 dropped --pure and --dangerously-skip-permissions; see
+            # docs/commands/self-review.md#security for the rationale and gap this leaves.
+            cmd = ["opencode", "run", "--standalone"]
             if opencode_dir:
                 cmd += ["--dir", opencode_dir]
             cmd.append(text)

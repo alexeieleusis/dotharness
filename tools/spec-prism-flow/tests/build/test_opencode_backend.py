@@ -32,15 +32,16 @@ class _FakeProc:
 
 
 def test_build_command_never_includes_dangerously_skip_permissions(tmp_path):
-    """Regression test: --dangerously-skip-permissions is a hard failure on the
-    installed opencode version -- confirmed live. This flag must never appear in a
-    constructed opencode command, unlike the Claude Code backend's command."""
+    """Regression test: --dangerously-skip-permissions is silently ignored (not an
+    error) on the installed opencode v2 version, and non-interactive `run` already
+    auto-approves without it, so it must never appear in a constructed opencode
+    command -- unlike the Claude Code backend's command."""
     cmd = OpencodeBackend._build_command(tmp_path / "instructions.md", tmp_path / "clone")
 
     assert "--dangerously-skip-permissions" not in cmd
 
 
-def test_build_command_includes_pure_and_dir_flags_and_prompt(tmp_path):
+def test_build_command_includes_standalone_and_dir_flags_and_prompt(tmp_path):
     clone = tmp_path / "clone"
     cmd = OpencodeBackend._build_command(tmp_path / "instructions.md", clone)
 
@@ -48,7 +49,7 @@ def test_build_command_includes_pure_and_dir_flags_and_prompt(tmp_path):
         "opencode",
         "run",
         f"Read {tmp_path / 'instructions.md'} and follow the instructions exactly.",
-        "--pure",
+        "--standalone",
         "--dir",
         str(clone),
     ]
