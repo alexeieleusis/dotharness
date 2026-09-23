@@ -103,29 +103,14 @@ Where this project has `review.enabled = true` (backed by `pr-review`, i.e. `har
 that's not the only thing reviewing a PR `build run` opens. In this user's actual
 working setup, `harness run all` is already running on a repeating cycle against
 **every** open PR in the repo — independent of `spec-prism-flow` and unaware that a
-particular PR came from `build run` rather than a human. `harness run all` runs, in
-order, continuing past a failing step and exiting non-zero only if one failed:
+particular PR came from `build run` rather than a human. Practically, this means a PR
+`spec-prism-flow build run` opens gets swept by this cycle the same way any
+hand-opened PR would.
 
-| Step | Scope | What it does |
-|---|---|---|
-| `review-prs` | every open, non-draft PR | vibe_heal/SonarQube-style static-analysis sweep, posted as PR comments — this is the "vibe-heal/sonarqube" step |
-| `focused-review` | PRs where you're author/assignee/requested reviewer | elaborates SonarQube findings that cite a refactor-knowledge file into a detailed comment |
-| `self-review` | your own open PRs (`--author @me`) | AI backend does an automated first-pass review — file-by-file, summary, design, requirement-traceability — before a human looks at it |
-| `review-requested` | PRs where GitHub review was explicitly requested from you | AI backend produces inline + summary review comments, reacting to review-request state |
-| `address-comments` | your open PRs, or ones you're assigned to, with pending feedback | AI backend reads unresolved comments, makes the smallest fix or replies, commits, pushes |
-
-Practically, this means a PR `spec-prism-flow build run` opens gets picked up by this
-cycle the same way any hand-opened PR would — you don't need `.spec-prism-flow.toml`'s
-`review.enabled`/`vibe_heal.enabled` turned on just to get static analysis or an AI
-review; the always-on cycle already covers it on its own cadence.
-
-**Known interaction (now fixed):** `review-prs`' vibe-heal step posts a real GitHub PR
-*review* (not just a comment), which clears you from GitHub's requested-reviewers list
-as a side effect — this used to knock a PR off `review_requested`'s radar for one `all`
-cycle. `review_prs.py`'s `_process_pr` now re-adds the reviewer synchronously right
-after posting (it checks `get_requested_reviewers` up front, then calls `add_reviewer`
-once any subdir was processed), so `review_requested` sees you as requested again
-within the same cycle — no reliance on GitHub's own ~2-minute re-add.
+See `pr-review`'s own command docs for what each `harness run all` step does and the
+known vibe-heal/`review-requested` requested-reviewer race:
+[`tools/pr-review/docs/commands/index.md`](../../pr-review/docs/commands/index.md) and
+[`tools/pr-review/docs/commands/review-prs.md`](../../pr-review/docs/commands/review-prs.md).
 
 Turning on `review.enabled`/`vibe_heal.enabled` in `.spec-prism-flow.toml` on top of
 this is redundant for a repo already covered by the always-on cycle: you'd get two
