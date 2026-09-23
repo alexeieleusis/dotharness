@@ -44,6 +44,7 @@ enabled = false
 # vibe_types_repo = "~/.harness/vendor/vibe-types"
 
 [address_comments]
+# enabled = true
 # trusted_commenters = "*"
 
 # [[repo.subdir]]

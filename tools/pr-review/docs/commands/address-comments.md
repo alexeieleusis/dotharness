@@ -11,7 +11,7 @@ harness run [--config PATH] [--verbose] address-comments
 
 ## What it does
 
-1. Acquires an exclusive file lock keyed on `repo_slug`, shared with the other four commands; a second concurrent invocation for the same repo — running this or any other command — exits immediately with an error instead of waiting.
+1. Acquires an exclusive file lock keyed on the resolved `repo.working_dir` path (not `repo.name`/`repo_slug` — see [Shared behavior](index.md#shared-behavior)), shared with the other four commands; a second concurrent invocation against the same working directory — running this or any other command — exits immediately with an error instead of waiting.
 2. Resolves a GitHub token via `harness.gh_token_cmd` and builds a subprocess environment from `harness.path_prepend` / `harness.env` plus `GITHUB_TOKEN`.
 3. Lists open PRs to check: `gh pr list --repo <repo.name> --author @me ...` and `gh pr list --repo <repo.name> --assignee @me ...` (same `--state open --json number,headRefName,isDraft --limit 500` on both), merged and deduplicated by PR number, sorted ascending.
 4. Loads the single prompt template `pr-review/address-comment.md` from `harness.knowledge_dir`, and constructs a `Backend` for `harness.backend` (`opencode` or `claude`), with `GITHUB_TOKEN` merged into its environment.
@@ -48,9 +48,10 @@ Only these `.harness.toml` fields affect `address-comments`; see [`../configurat
 | `harness.gh_token_cmd` | Command used to fetch the GitHub token exported as `GITHUB_TOKEN` |
 | `harness.knowledge_dir` | Must contain `pr-review/address-comment.md`, the prompt template for this runner |
 | `harness.path_prepend` / `harness.env` | Extra `PATH` entries / env vars for git, `gh`, and the backend subprocess |
-| `repo.name` | GitHub repo (`org/repo`) queried via `gh`, and the basis of the lock key (`repo_slug`) |
-| `repo.working_dir` | Local git checkout that gets detached, fetched, and checked out branch-by-branch |
+| `repo.name` | GitHub repo (`org/repo`) queried via `gh` |
+| `repo.working_dir` | Local git checkout that gets detached, fetched, and checked out branch-by-branch; its resolved path is also the basis of the lock key (see [Shared behavior](index.md#shared-behavior)) |
 | `repo.opencode_dir` | If set: passed to the backend as its `--dir`, and used to restrict inline comments to that subdirectory |
+| `address_comments.enabled` | Turns the command on; `false` skips the run entirely (default `true`) |
 | `address_comments.trusted_commenters` | Restricts which comment authors are considered at all; `"*"` (default) considers everyone |
 
 Fields this runner does **not** read: `harness.review_knowledge_file`, `repo.subdir[]` (any of its fields), and the entire `[vibe_heal]` section — none of those affect `address-comments`.

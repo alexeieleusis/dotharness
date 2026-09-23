@@ -28,11 +28,15 @@ if any of them failed.
 
 ## Shared behavior
 
-- **Locking.** Every command acquires a non-blocking per-repo file lock (`<repo_slug>`)
-  before doing any work. The lock is shared across all five commands, not just
-  same-command invocations — since they all mutate the same `repo.working_dir` checkout,
-  a second concurrent invocation for the same repo, running any of the five commands,
-  exits immediately instead of queuing or racing the first.
+- **Locking.** Every command acquires a non-blocking file lock before doing any work, keyed
+  on the resolved `repo.working_dir` path — not `repo.name`/`repo_slug`. The lock is shared
+  across all five commands, not just same-command invocations — since they all mutate the
+  same `repo.working_dir` checkout, a second concurrent invocation against that same working
+  directory, running any of the five commands, exits immediately instead of queuing or racing
+  the first. Because the key is the resolved path rather than `repo.name`, two configs that
+  point at the same checkout share a lock even if their `repo.name` differs, while two configs
+  with the same `repo.name` but separate `working_dir` clones (e.g. a second clone dedicated to
+  a cheaper backend) get independent locks and can run concurrently.
 - **Logging.** Logs always go to `~/.local/share/dotharness/logs/<command>/<date>.log`.
   `--verbose` additionally enables DEBUG-level logging and mirrors it to stdout.
 - **Working directory mutation.** Commands that talk to an AI backend or `vibe_heal`

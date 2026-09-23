@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 def run(config: HarnessConfig) -> None:
-    with acquire_lock(config.repo_slug):
+    with acquire_lock(config.lock_key):
         _run_locked(config)
 
 

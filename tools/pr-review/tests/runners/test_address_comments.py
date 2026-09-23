@@ -11,8 +11,8 @@ from harness.runners.address_comments import (
 from harness.runners.common import FOCUSED_REVIEW_MARKER
 
 
-def _cfg(tmp_path):
-    from harness.config import HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
+def _cfg(tmp_path, *, enabled=True):
+    from harness.config import AddressCommentsConfig, HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
 
     return HarnessConfig(
         harness=HarnessSection(
@@ -20,6 +20,7 @@ def _cfg(tmp_path):
         ),
         repo=RepoConfig("acme/frontend", tmp_path),
         vibe_heal=VibehealConfig(),
+        address_comments=AddressCommentsConfig(enabled=enabled),
     )
 
 
@@ -27,6 +28,13 @@ def _setup_knowledge(tmp_path, filename, content="instructions"):
     d = tmp_path / "k" / "pr-review"
     d.mkdir(parents=True, exist_ok=True)
     (d / filename).write_text(content)
+
+
+def test_disabled_skips_everything(tmp_path):
+    cfg = _cfg(tmp_path, enabled=False)
+    with patch("harness.runners.address_comments.get_gh_token") as mock_token:
+        address_comments._run_locked(cfg)
+    mock_token.assert_not_called()
 
 
 def test_skips_pr_with_no_pending_feedback(tmp_xdg, tmp_path):

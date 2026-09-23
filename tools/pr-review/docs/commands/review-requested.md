@@ -24,10 +24,10 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
   same review pipeline as the batch case.
 
 ## What it does
-1. Acquires an exclusive file lock keyed on `repo_slug`, shared with the other four commands
-   (see [State and idempotency](#state-and-idempotency)); if another instance — this
-   command or any of the other four — holds it, the command exits immediately with an
-   error instead of blocking.
+1. Acquires an exclusive file lock keyed on the resolved `repo.working_dir` path (not
+   `repo.name`/`repo_slug` — see [Shared behavior](index.md#shared-behavior)), shared with
+   the other four commands; if another instance — this command or any of the other four —
+   holds it, the command exits immediately with an error instead of blocking.
 2. Fetches a `gh` token (via `harness.gh_token_cmd`) and builds a subprocess
    environment (`PATH` prepends + `harness.env` + `GITHUB_TOKEN`). Looks up
    the current `gh` user's login (`gh api user --jq .login`).
@@ -134,8 +134,8 @@ Only these `.harness.toml` fields affect this runner (full schema in
 | `harness.path_prepend` | Extra `PATH` entries for subprocesses (git/gh/backend) |
 | `harness.env` | Extra environment variables merged into the subprocess/backend env |
 | `harness.review_knowledge_file` | Optional extra instructions appended to the file, summary, design, and traceability prompts |
-| `repo.name` | GitHub repo slug used for all `gh` calls, and the lock key (`name` with `/` replaced by `-`) |
-| `repo.working_dir` | Local git checkout the runner detaches, fetches, and checks branches out in |
+| `repo.name` | GitHub repo slug used for all `gh` calls |
+| `repo.working_dir` | Local git checkout the runner detaches, fetches, and checks branches out in; its resolved path is also the basis of the lock key (see [Shared behavior](index.md#shared-behavior)) |
 | `repo.subdir[].path` | Used to locate each subdir's `sonar-project.properties` project key, to find cached vibe-heal review output for the PR branch |
 
 `[vibe_heal]` fields are not read by this runner directly — it only consumes

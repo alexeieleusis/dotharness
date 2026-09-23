@@ -77,11 +77,15 @@ query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
 
 
 def run(config: HarnessConfig) -> None:
-    with acquire_lock(config.repo_slug):
+    with acquire_lock(config.lock_key):
         _run_locked(config)
 
 
 def _run_locked(config: HarnessConfig) -> None:
+    if not config.address_comments.enabled:
+        logger.info("address_comments disabled, skipping")
+        return
+
     gh_token = get_gh_token(config.harness.gh_token_cmd)
     env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
 

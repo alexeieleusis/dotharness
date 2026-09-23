@@ -27,9 +27,11 @@ harness run [--config PATH] [--verbose] review-prs [--pr PR_URL]
 
 ## What it does
 
-1. Acquires a per-repo lock (`repo_slug`), shared with the other four commands. If another
-   run — `review-prs` or any of the other four — is already holding the lock for the same
-   repo, the new invocation exits immediately with an error instead of waiting.
+1. Acquires an exclusive file lock keyed on the resolved `repo.working_dir` path (not
+   `repo.name`/`repo_slug` — see [Shared behavior](index.md#shared-behavior)), shared with
+   the other four commands. If another run — `review-prs` or any of the other four — is
+   already holding the lock for the same working directory, the new invocation exits
+   immediately with an error instead of waiting.
 2. If `vibe_heal.enabled` is `false` in config, logs and exits — the whole command is a no-op.
 3. Builds a subprocess environment: resolves a GitHub token via `harness.gh_token_cmd`, applies
    `harness.path_prepend` / `harness.env`.
