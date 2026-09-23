@@ -202,7 +202,7 @@ class Backend:
             self._check_repo_identity(cwd)
             harness_head = self._snapshot_harness_repo(cwd)
             cmd, tmp_path = self._build_command(instructions, opencode_dir)
-            env = self._build_env()
+            env = self._build_env(cwd)
             logger.info("%sRunning backend: %s (cwd=%s)", prefix, " ".join(cmd[:4]), cwd)
             try:
                 return self._execute(cmd, cwd, env, harness_head, prefix)
@@ -385,9 +385,17 @@ class Backend:
 
         return self._cmd_for(prompt, opencode_dir), tmp_path
 
-    def _build_env(self) -> dict[str, str]:
+    def _build_env(self, cwd: str) -> dict[str, str]:
         env = os.environ.copy()
         if self.path_prepend:
             env["PATH"] = ":".join(self.path_prepend) + ":" + env.get("PATH", "")
         env.update(self.env_vars)
+        # Root cause of the opencode `--standalone` project-misrouting incidents (see
+        # docs/commands/self-review.md): PWD here is otherwise whatever the harness
+        # process itself inherited — e.g. from a wrapper script's `cd` before it ever
+        # invoked `uv run harness run` — and can silently disagree with the directory
+        # Popen actually chdir's the child into below. opencode v2 was confirmed (by
+        # reproducing it directly) to trust a stale PWD over its own getcwd() and
+        # re-chdir itself to match it, landing every tool call in the wrong project.
+        env["PWD"] = cwd
         return env

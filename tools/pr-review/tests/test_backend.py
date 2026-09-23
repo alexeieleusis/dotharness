@@ -212,14 +212,26 @@ def test_no_retry_when_max_retries_zero(tmp_xdg):
 
 def test_path_prepend_in_env(tmp_xdg):
     b = Backend("opencode", timeout=10, path_prepend=["/java/bin", "/node/bin"], env_vars={})
-    env = b._build_env()
+    env = b._build_env("/tmp")  # noqa: S108
     assert env["PATH"].startswith("/java/bin:/node/bin:")
 
 
 def test_env_vars_injected(tmp_xdg):
     b = Backend("opencode", timeout=10, path_prepend=[], env_vars={"JAVA_HOME": "/java"})
-    env = b._build_env()
+    env = b._build_env("/tmp")  # noqa: S108
     assert env["JAVA_HOME"] == "/java"
+
+
+def test_build_env_sets_pwd_to_cwd_regardless_of_inherited_pwd(tmp_xdg, monkeypatch):
+    """Root-cause regression test: opencode v2 was confirmed (by direct reproduction)
+    to trust an inherited PWD env var over its own getcwd() and re-chdir to match it.
+    A wrapper script's `cd` before launching the harness left PWD stale relative to
+    the cwd Backend.run() is actually given, and opencode silently operated out of
+    that stale directory instead."""
+    monkeypatch.setenv("PWD", "/some/stale/dir/the/wrapper/script/cd-ed/into")
+    b = Backend("opencode", timeout=10, path_prepend=[], env_vars={})
+    env = b._build_env("/Users/alexeieleusis/development/code_review/frontend-focused-review")
+    assert env["PWD"] == "/Users/alexeieleusis/development/code_review/frontend-focused-review"  # noqa: S105
 
 
 def test_invalid_backend_raises():
