@@ -4,9 +4,11 @@ import os
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
+from harness.lock import acquire_lock
 from harness.repo_guard import (
     RepoIdentityError,
     assert_repo_identity,
@@ -23,6 +25,15 @@ XDG_DATA = Path.home() / ".local/share/dotharness"
 _GROUP_EXIT_WAIT_SECONDS = 30
 _GROUP_EXIT_POLL_SECONDS = 1
 
+# How often to check a running opencode backend's own OS-level cwd against the
+# directory it was launched in. See _CwdDivergenceMonitor.
+_CWD_MONITOR_POLL_SECONDS = 3
+
+# Fixed (not working-dir-scoped) lock key: serializes every opencode backend
+# invocation across every config/tool on this host, not just within one batch.
+# See the `with lock` in Backend.run().
+_OPENCODE_GLOBAL_LOCK_KEY = "opencode-global-serialize"
+
 logger = logging.getLogger(__name__)
 
 # The harness's own repo checkout, discovered relative to this file rather than
@@ -35,6 +46,74 @@ _HARNESS_REPO_ROOT = discover_repo_root(Path(__file__).resolve().parent)
 class OpencodePluginError(RuntimeError):
     """opencode has a plugin installed, which can act independently of the
     session isolation --standalone otherwise provides."""
+
+
+class BackendCwdDivergedError(RuntimeError):
+    """The backend process's own OS-level cwd no longer matched the directory it
+    was launched in — seen in production as an opencode `--standalone` session
+    silently operating against a different project than the one it was given.
+    Its output can't be trusted, so the process is killed rather than let finish."""
+
+
+def _lsof_cwd(pid: int) -> str | None:
+    """The real, kernel-level cwd of `pid` (not the PWD env var, which a
+    subprocess can inherit stale and which some tools trust over getcwd()).
+    None if the process is gone or lsof can't be read."""
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        if line.startswith("n"):
+            return line[1:]
+    return None
+
+
+class _CwdDivergenceMonitor(threading.Thread):
+    """Watches a running backend process for exactly the failure mode seen in
+    production: `subprocess.Popen(cmd, cwd=cwd, ...)` correctly chdir's the
+    process, but it's later found (via `lsof`) operating out of a different
+    directory — e.g. an opencode `--standalone` session apparently rerouted
+    through the always-running shared background service. Kills the process
+    the moment that's detected; `Backend.run()` treats that as fatal for this
+    invocation rather than trusting whatever it produced."""
+
+    def __init__(self, proc: subprocess.Popen, expected_cwd: str, prefix: str):
+        super().__init__(daemon=True)
+        self._proc = proc
+        self._expected_cwd = str(Path(expected_cwd).resolve())
+        self._prefix = prefix
+        self._stop_event = threading.Event()
+        self.diverged_to: str | None = None
+
+    def run(self) -> None:
+        while not self._stop_event.wait(_CWD_MONITOR_POLL_SECONDS):
+            if self._proc.poll() is not None:
+                return
+            actual = _lsof_cwd(self._proc.pid)
+            if actual is not None and actual != self._expected_cwd:
+                self.diverged_to = actual
+                logger.error(
+                    "%sBackend process (pid %d) cwd diverged from %s to %s mid-run — killing it, "
+                    "its output cannot be trusted",
+                    self._prefix,
+                    self._proc.pid,
+                    self._expected_cwd,
+                    actual,
+                )
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
+                return
+
+    def stop(self) -> None:
+        self._stop_event.set()
 
 
 def assert_no_opencode_plugins(cwd: str) -> None:
@@ -95,6 +174,19 @@ class Backend:
         self, instructions: str, cwd: str, opencode_dir: str | None = None, context: str | None = None
     ) -> subprocess.CompletedProcess:
         prefix = f"{context}: " if context else ""
+        # Serializes every opencode invocation across every config/tool on this host
+        # (not just this batch): opencode's own project-directory resolution has been
+        # observed to misroute under real-world concurrency (see the cwd-divergence
+        # guard below), and no in-process fix has reliably closed that, so the safest
+        # mitigation is making sure there's never more than one opencode process in
+        # flight anywhere. No-op for the claude backend, which isn't implicated.
+        lock = acquire_lock(_OPENCODE_GLOBAL_LOCK_KEY, blocking=True) if self.backend_name == "opencode" else None
+        with lock if lock is not None else contextlib.nullcontext():
+            return self._run_locked(instructions, cwd, opencode_dir, prefix)
+
+    def _run_locked(
+        self, instructions: str, cwd: str, opencode_dir: str | None, prefix: str
+    ) -> subprocess.CompletedProcess:
         # Checked once per (instance, cwd) rather than once per call: a Backend is
         # constructed fresh per batch (one per runner invocation, e.g. one
         # `focused-review` run across many PRs/comments — see the callers in
@@ -112,35 +204,9 @@ class Backend:
             cmd, tmp_path = self._build_command(instructions, opencode_dir)
             env = self._build_env()
             logger.info("%sRunning backend: %s (cwd=%s)", prefix, " ".join(cmd[:4]), cwd)
-            proc = None
             try:
-                proc = subprocess.Popen(  # noqa: S603
-                    cmd,
-                    cwd=cwd,
-                    env=env,
-                    start_new_session=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                stdout, stderr = proc.communicate(timeout=self.timeout)
-                if proc.returncode != 0:
-                    logger.error(
-                        "%sBackend exited %d\nstdout: %s\nstderr: %s",
-                        prefix,
-                        proc.returncode,
-                        stdout.decode("utf-8", errors="replace")[:2000],
-                        stderr.decode("utf-8", errors="replace")[:2000],
-                    )
-                self._wait_for_group_to_exit(proc.pid, prefix)
-                self._check_repo_identity(cwd)
-                self._assert_harness_repo_unchanged(harness_head)
-                return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+                return self._execute(cmd, cwd, env, harness_head, prefix)
             except subprocess.TimeoutExpired:
-                if proc is not None:
-                    with contextlib.suppress(ProcessLookupError):
-                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                    proc.communicate()
-                    self._warn_if_backend_survived(prefix)
                 if attempt < total_attempts:
                     logger.warning("%sBackend timed out, retrying (attempt %d/%d)", prefix, attempt + 1, total_attempts)
                     continue
@@ -152,6 +218,55 @@ class Backend:
             finally:
                 tmp_path.unlink(missing_ok=True)
         raise RuntimeError("run loop exhausted without returning")  # noqa: TRY003
+
+    def _execute(
+        self, cmd: list[str], cwd: str, env: dict[str, str], harness_head: str | None, prefix: str
+    ) -> subprocess.CompletedProcess:
+        """Runs one attempt: spawn, watch, and validate a single backend process.
+        Raises subprocess.TimeoutExpired (handled by the retry loop in
+        _run_locked) or BackendCwdDivergedError (not retried — see that class)."""
+        proc = None
+        monitor = None
+        try:
+            proc = subprocess.Popen(  # noqa: S603
+                cmd,
+                cwd=cwd,
+                env=env,
+                start_new_session=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            if self.backend_name == "opencode":
+                monitor = _CwdDivergenceMonitor(proc, cwd, prefix)
+                monitor.start()
+            stdout, stderr = proc.communicate(timeout=self.timeout)
+            if monitor is not None and monitor.diverged_to is not None:
+                raise BackendCwdDivergedError(  # noqa: TRY003
+                    f"{prefix}backend process (pid {proc.pid}) cwd diverged from {cwd} to "
+                    f"{monitor.diverged_to} mid-run and was killed; its output is untrusted"
+                )
+            if proc.returncode != 0:
+                logger.error(
+                    "%sBackend exited %d\nstdout: %s\nstderr: %s",
+                    prefix,
+                    proc.returncode,
+                    stdout.decode("utf-8", errors="replace")[:2000],
+                    stderr.decode("utf-8", errors="replace")[:2000],
+                )
+            self._wait_for_group_to_exit(proc.pid, prefix)
+            self._check_repo_identity(cwd)
+            self._assert_harness_repo_unchanged(harness_head)
+            return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            if proc is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                proc.communicate()
+                self._warn_if_backend_survived(prefix)
+            raise
+        finally:
+            if monitor is not None:
+                monitor.stop()
 
     def _check_repo_identity(self, cwd: str) -> None:
         if self.expected_repo_name is not None:
@@ -241,7 +356,14 @@ class Backend:
             # opencode v2 dropped --pure and --dangerously-skip-permissions; --standalone
             # isolates concurrent sessions but not plugins, so run() gates on
             # assert_no_opencode_plugins() above. See docs/commands/self-review.md#security.
-            cmd = ["opencode", "run", "--standalone"]
+            # --auto ("auto-approve permissions not explicitly denied") is v2's actual
+            # successor to --dangerously-skip-permissions; the migration originally
+            # assumed non-interactive `run` auto-approves without it, which held for
+            # edit/bash but not necessarily for external_directory permission prompts
+            # (opencode.json defaults those to "ask") — a headless run hitting one of
+            # those with no --auto is a plausible contributor to the project-misrouting
+            # incidents _CwdDivergenceMonitor above guards against.
+            cmd = ["opencode", "run", "--standalone", "--auto"]
             if opencode_dir:
                 cmd += ["--dir", opencode_dir]
             cmd.append(text)

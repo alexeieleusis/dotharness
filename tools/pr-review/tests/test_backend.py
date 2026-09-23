@@ -1,11 +1,20 @@
 import os
+import signal
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from harness.backend import Backend, OpencodePluginError, assert_no_opencode_plugins
+from harness.backend import (
+    Backend,
+    BackendCwdDivergedError,
+    OpencodePluginError,
+    _CwdDivergenceMonitor,
+    _lsof_cwd,
+    assert_no_opencode_plugins,
+)
 from harness.repo_guard import RepoIdentityError
 
 
@@ -50,6 +59,7 @@ def test_opencode_command_shape(tmp_xdg):
     assert cmd[0] == "opencode"
     assert "run" in cmd
     assert "--standalone" in cmd
+    assert "--auto" in cmd
     assert "--pure" not in cmd
     assert "--dangerously-skip-permissions" not in cmd
 
@@ -509,3 +519,106 @@ def test_backend_run_group_wait_times_out_and_warns(tmp_xdg, monkeypatch, caplog
 
     assert "still has member(s)" in caplog.text
     assert "stuck-server" in caplog.text
+
+
+def test_opencode_run_acquires_global_lock(tmp_xdg, monkeypatch):
+    b = _make_backend(tmp_xdg, "opencode")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    mock_proc.pid = 4242
+    calls = []
+
+    @contextmanager
+    def fake_lock(key, *, blocking=False):
+        calls.append((key, blocking))
+        yield
+
+    monkeypatch.setattr("harness.backend.acquire_lock", fake_lock)
+    with patch("subprocess.Popen", return_value=mock_proc):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+    assert calls == [("opencode-global-serialize", True)]
+
+
+def test_claude_run_does_not_acquire_global_lock(tmp_xdg, monkeypatch):
+    b = _make_backend(tmp_xdg, "claude")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    mock_proc.pid = 4242
+    calls = []
+
+    @contextmanager
+    def fake_lock(key, *, blocking=False):
+        calls.append((key, blocking))
+        yield
+
+    monkeypatch.setattr("harness.backend.acquire_lock", fake_lock)
+    with patch("subprocess.Popen", return_value=mock_proc):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+    assert calls == []
+
+
+def test_lsof_cwd_parses_n_line():
+    with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="p4242\nfcwd\nn/some/dir\n")):
+        assert _lsof_cwd(4242) == "/some/dir"
+
+
+def test_lsof_cwd_returns_none_when_process_gone():
+    with patch("subprocess.run", return_value=MagicMock(returncode=1, stdout="")):
+        assert _lsof_cwd(4242) is None
+
+
+def test_cwd_divergence_monitor_kills_process_on_mismatch(monkeypatch):
+    proc = MagicMock()
+    proc.pid = 4242
+    proc.poll.return_value = None  # still running
+    monkeypatch.setattr("harness.backend._lsof_cwd", lambda pid: "/wrong/dir")
+    monkeypatch.setattr("harness.backend.os.getpgid", lambda pid: pid)
+    killed = {}
+    monkeypatch.setattr("harness.backend.os.killpg", lambda pgid, sig: killed.update(pgid=pgid, sig=sig))
+
+    monitor = _CwdDivergenceMonitor(proc, "/expected/dir", "prefix: ")
+    monitor._stop_event.wait = lambda timeout: False
+    monitor.run()
+
+    assert monitor.diverged_to == "/wrong/dir"
+    assert killed == {"pgid": 4242, "sig": signal.SIGKILL}
+
+
+def test_cwd_divergence_monitor_stops_once_process_exits(monkeypatch):
+    proc = MagicMock()
+    proc.pid = 4242
+    proc.poll.return_value = 0  # already exited
+
+    monitor = _CwdDivergenceMonitor(proc, "/expected/dir", "")
+    monitor._stop_event.wait = lambda timeout: False
+    monitor.run()
+
+    assert monitor.diverged_to is None
+
+
+def test_backend_run_raises_and_does_not_trust_output_on_cwd_divergence(tmp_xdg, monkeypatch):
+    b = _make_backend(tmp_xdg, "opencode")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"looks fine", b"")
+    mock_proc.returncode = 0
+    mock_proc.pid = 4242
+
+    class _FakeMonitor:
+        def __init__(self, proc, expected_cwd, prefix):
+            self.diverged_to = "/some/other/repo"
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr("harness.backend._CwdDivergenceMonitor", _FakeMonitor)
+
+    with (
+        patch("subprocess.Popen", return_value=mock_proc),
+        pytest.raises(BackendCwdDivergedError, match="diverged"),
+    ):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
