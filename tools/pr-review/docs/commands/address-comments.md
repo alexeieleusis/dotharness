@@ -51,6 +51,7 @@ Only these `.harness.toml` fields affect `address-comments`; see [`../configurat
 | `repo.name` | GitHub repo (`org/repo`) queried via `gh`, and the basis of the lock key (`repo_slug`) |
 | `repo.working_dir` | Local git checkout that gets detached, fetched, and checked out branch-by-branch |
 | `repo.opencode_dir` | If set: passed to the backend as its `--dir`, and used to restrict inline comments to that subdirectory |
+| `address_comments.enabled` | Turns the command on; `false` skips the run entirely (default `true`) |
 | `address_comments.trusted_commenters` | Restricts which comment authors are considered at all; `"*"` (default) considers everyone |
 
 Fields this runner does **not** read: `harness.review_knowledge_file`, `repo.subdir[]` (any of its fields), and the entire `[vibe_heal]` section — none of those affect `address-comments`.

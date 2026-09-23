@@ -90,6 +90,7 @@ review or pre-commit step.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
+| `enabled` | boolean | `true` | Turns the `address-comments` command on. Set to `false` to disable this push-capable runner. |
 | `trusted_commenters` | `"*"` or list of strings | `"*"` | Restricts which comment authors `address-comments` will act on at all; `"*"` (default) considers everyone. |
 
 An inline comment thread carrying a `focused-review`-bot reply (marked `[focused-review-bot]`) is always held back until the harness's own `gh` account has left a `+1` reaction on that specific reply — checked live on every run, with no config flag to change this. Once approved, the thread is addressed using that reply's own content as the actual "comment to address" (not the terse original finding it responded to) — see [`address-comments`](commands/address-comments.md#notes) for details.
@@ -137,6 +138,7 @@ enabled = false
 # vibe_types_repo = "~/.harness/vendor/vibe-types"
 
 [address_comments]
+# enabled = true
 # trusted_commenters = "*"
 
 # [[repo.subdir]]
