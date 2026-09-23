@@ -119,14 +119,13 @@ cycle the same way any hand-opened PR would — you don't need `.spec-prism-flow
 `review.enabled`/`vibe_heal.enabled` turned on just to get static analysis or an AI
 review; the always-on cycle already covers it on its own cadence.
 
-**Known interaction to watch for:** `review-prs`' vibe-heal step posts a real GitHub PR
+**Known interaction (now fixed):** `review-prs`' vibe-heal step posts a real GitHub PR
 *review* (not just a comment), which clears you from GitHub's requested-reviewers list
-as a side effect. If `review_requested` runs later in the *same* `all` cycle, it can
-silently miss a PR that just had its vibe-heal review posted seconds earlier — no
-error, just absence for that cycle (GitHub re-adds you as a requested reviewer roughly
-two minutes later, in time for the next cycle). If a review seems to have not fired,
-check `~/.local/share/dotharness/logs/all/<date>.log` — the per-command log file for
-whichever step you're chasing stays empty when it ran via `all` rather than standalone.
+as a side effect — this used to knock a PR off `review_requested`'s radar for one `all`
+cycle. `review_prs.py`'s `_process_pr` now re-adds the reviewer synchronously right
+after posting (it checks `get_requested_reviewers` up front, then calls `add_reviewer`
+once any subdir was processed), so `review_requested` sees you as requested again
+within the same cycle — no reliance on GitHub's own ~2-minute re-add.
 
 Turning on `review.enabled`/`vibe_heal.enabled` in `.spec-prism-flow.toml` on top of
 this is redundant for a repo already covered by the always-on cycle: you'd get two
