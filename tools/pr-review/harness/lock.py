@@ -10,14 +10,16 @@ def working_dir_lock_key(prefix: str, working_dir: Path) -> str:
     """Lock key scoped to a specific checked-out working directory rather than just
     a repo name, so two separate clones of the same origin (e.g. a second clone
     dedicated to a cheaper/faster backend for one runner) get independent locks
-    instead of contending for the same one. prefix is kept as a human-readable
-    label; the path hash is what actually guarantees per-clone uniqueness.
+    instead of contending for the same one. The key is derived solely from the
+    resolved path — prefix is accepted for call-site readability but must not
+    affect the key, otherwise two configs pointing at the same checkout under
+    different repo.name/alias values would get different lock files and could
+    concurrently detach/checkout/restore that checkout.
 
     hashlib, not the builtin hash(): str hashing is randomized per-process
     (PYTHONHASHSEED), so hash() would give two concurrent harness processes two
     different lock filenames for the same path — no actual mutual exclusion."""
-    digest = hashlib.sha256(str(working_dir.resolve()).encode()).hexdigest()[:12]
-    return f"{prefix}-{digest}"
+    return hashlib.sha256(str(working_dir.resolve()).encode()).hexdigest()[:12]
 
 
 @contextmanager

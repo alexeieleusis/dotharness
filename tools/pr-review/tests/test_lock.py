@@ -69,6 +69,10 @@ def test_working_dir_lock_key_resolves_relative_paths(tmp_path):
     )
 
 
+def test_working_dir_lock_key_ignores_prefix_for_same_path(tmp_path):
+    assert working_dir_lock_key("acme-frontend", tmp_path) == working_dir_lock_key("acme-frontend-alias", tmp_path)
+
+
 def test_two_clones_of_same_repo_dont_conflict(tmp_path, tmp_xdg):
     clone_a = tmp_path / "clone-a"
     clone_b = tmp_path / "clone-b"
