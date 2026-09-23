@@ -12,7 +12,7 @@ harness run [--config PATH] [--verbose] self-review
 
 ## What it does
 
-1. Acquires a per-repo file lock (`repo_slug`), shared with the other four commands, so two invocations against the same repo — `self-review` or any of the other four — can't run concurrently; a second run exits immediately with an error instead of racing the first.
+1. Acquires an exclusive file lock keyed on the resolved `repo.working_dir` path (not `repo.name`/`repo_slug` — see [Shared behavior](index.md#shared-behavior)), shared with the other four commands, so two invocations against the same working directory — `self-review` or any of the other four — can't run concurrently; a second run exits immediately with an error instead of racing the first.
 2. Resolves a GitHub token by running `harness.gh_token_cmd` (default `gh auth token`) and builds a subprocess environment from `harness.path_prepend` / `harness.env` plus `GITHUB_TOKEN`.
 3. Loads the set of PR numbers already recorded as reviewed from state, then lists the caller's own open PRs via `gh pr list --repo <repo> --author @me --state open --json number,url,headRefName,createdAt,closingIssuesReferences`, sorted by PR number. The last two fields (GitHub's own closing-keyword-derived issue links plus the PR's creation time) come back from this same call at no extra `gh` cost, and feed the traceability pass's ticket resolution below.
 4. Loads the shared prompt templates `review-file.md`, `review-summary.md`, `review-design.md`, and `review-traceability.md` from `harness.knowledge_dir/pr-review/`, plus the optional `harness.review_knowledge_file` (appended to every prompt as an "Additional Review Guide" section).
@@ -41,7 +41,7 @@ Only these `.harness.toml` fields affect `self-review`; see [`../configuration.m
 | `harness.review_knowledge_file` | Optional extra guidance appended to every prompt, if the path exists |
 | `harness.path_prepend` / `harness.env` | Extra `PATH` entries / env vars for both git subprocesses and the backend |
 | `repo.name` | The GitHub repo (`owner/name`) queried via `gh` |
-| `repo.working_dir` | Local git checkout used to fetch/checkout PR branches and diff files |
+| `repo.working_dir` | Local git checkout used to fetch/checkout PR branches and diff files; its resolved path is also the basis of the lock key (see [Shared behavior](index.md#shared-behavior)) |
 | `repo.subdir[].path` | Only used to locate each subdir's `sonar-project.properties`, so a matching vibe-heal `review.md` (if one exists on disk) can be included as static-analysis context |
 
 `[vibe_heal]` settings are **not** read by `self-review` itself — that section controls a separate analysis step elsewhere in the tool. `self-review` only opportunistically picks up whatever vibe-heal review file already exists on disk for the PR's branch and matching Sonar project key. `repo.opencode_dir` is also not used by this command.

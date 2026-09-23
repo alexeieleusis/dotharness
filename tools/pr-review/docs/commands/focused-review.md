@@ -11,7 +11,7 @@ harness run [--config PATH] [--verbose] focused-review
 
 ## What it does
 
-1. Acquires an exclusive file lock keyed on `repo_slug`, shared with the other four commands; a second concurrent invocation for the same repo — running this or any other command — exits immediately with an error instead of waiting.
+1. Acquires an exclusive file lock keyed on the resolved `repo.working_dir` path (not `repo.name`/`repo_slug` — see [Shared behavior](index.md#shared-behavior)), shared with the other four commands; a second concurrent invocation against the same working directory — running this or any other command — exits immediately with an error instead of waiting.
 2. If `focused_review.enabled` is `false`, logs and exits — the whole command is a no-op. (Independent of `vibe_heal.enabled` — the two toggles are not linked.)
 3. Resolves a GitHub token via `harness.gh_token_cmd` and builds a subprocess environment from `harness.path_prepend` / `harness.env` plus `GITHUB_TOKEN`.
 4. Loads the prompt template `pr-review/focused-review.md` from `harness.knowledge_dir`, and constructs a `Backend` for `harness.backend` (`opencode` or `claude`), with `GITHUB_TOKEN` merged into its environment.
@@ -42,8 +42,8 @@ Only these `.harness.toml` fields affect `focused-review`; see [`../configuratio
 | `harness.gh_token_cmd` | Command used to fetch the GitHub token exported as `GITHUB_TOKEN` |
 | `harness.knowledge_dir` | Must contain `pr-review/focused-review.md`, the prompt template for this runner |
 | `harness.path_prepend` / `harness.env` | Extra `PATH` entries / env vars for git, `gh`, and the backend subprocess |
-| `repo.name` | GitHub repo (`org/repo`) queried via `gh`, and the basis of the lock key (`repo_slug`) |
-| `repo.working_dir` | Local git checkout that gets detached, fetched, and checked out branch-by-branch |
+| `repo.name` | GitHub repo (`org/repo`) queried via `gh` |
+| `repo.working_dir` | Local git checkout that gets detached, fetched, and checked out branch-by-branch; its resolved path is also the basis of the lock key (see [Shared behavior](index.md#shared-behavior)) |
 
 Fields this runner does **not** read: `vibe_heal.authors`, `vibe_heal.enabled`, `vibe_heal.python`, `vibe_heal.vibe_heal_timeout`, `vibe_heal.vibe_heal_post_timeout`, `repo.subdir[]` (any of its fields), `repo.opencode_dir`, `harness.review_knowledge_file` — none of those affect `focused-review`.
 
