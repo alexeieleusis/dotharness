@@ -24,8 +24,9 @@ class OpencodeBackend:
     unlike ClaudeBackend, this phase's requirements only ask for one on the Claude
     Code backend (7.2), not this one (7.3).
 
-    --dangerously-skip-permissions is never passed: confirmed a hard failure on the
-    installed opencode version. This is a permanent divergence from ClaudeBackend,
+    --dangerously-skip-permissions is never passed: opencode v2 dropped the flag
+    (it's silently ignored rather than erroring, and non-interactive `run` already
+    auto-approves without it). This is a permanent divergence from ClaudeBackend,
     not an oversight to "fix" toward symmetry.
     """
 
@@ -52,7 +53,7 @@ class OpencodeBackend:
     @staticmethod
     def _build_command(tmp_path: Path, cwd: Path) -> list[str]:
         prompt = agent_instructions.read_prompt(tmp_path)
-        return ["opencode", "run", prompt, "--pure", "--dir", str(cwd)]
+        return ["opencode", "run", prompt, "--standalone", "--dir", str(cwd)]
 
     @staticmethod
     def _start_process(cmd: list[str], cwd: Path) -> subprocess.Popen:

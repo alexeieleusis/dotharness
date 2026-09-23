@@ -1,11 +1,20 @@
 import os
+import signal
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from harness.backend import Backend
+from harness.backend import (
+    Backend,
+    BackendCwdDivergedError,
+    OpencodePluginError,
+    _CwdDivergenceMonitor,
+    _lsof_cwd,
+    assert_no_opencode_plugins,
+)
 from harness.repo_guard import RepoIdentityError
 
 
@@ -49,8 +58,10 @@ def test_opencode_command_shape(tmp_xdg):
     cmd, _ = b._build_command("Do this.")
     assert cmd[0] == "opencode"
     assert "run" in cmd
-    assert "--dangerously-skip-permissions" in cmd
-    assert "--pure" in cmd
+    assert "--standalone" in cmd
+    assert "--auto" in cmd
+    assert "--pure" not in cmd
+    assert "--dangerously-skip-permissions" not in cmd
 
 
 def test_claude_command_shape(tmp_xdg):
@@ -201,14 +212,26 @@ def test_no_retry_when_max_retries_zero(tmp_xdg):
 
 def test_path_prepend_in_env(tmp_xdg):
     b = Backend("opencode", timeout=10, path_prepend=["/java/bin", "/node/bin"], env_vars={})
-    env = b._build_env()
+    env = b._build_env("/tmp")  # noqa: S108
     assert env["PATH"].startswith("/java/bin:/node/bin:")
 
 
 def test_env_vars_injected(tmp_xdg):
     b = Backend("opencode", timeout=10, path_prepend=[], env_vars={"JAVA_HOME": "/java"})
-    env = b._build_env()
+    env = b._build_env("/tmp")  # noqa: S108
     assert env["JAVA_HOME"] == "/java"
+
+
+def test_build_env_sets_pwd_to_cwd_regardless_of_inherited_pwd(tmp_xdg, monkeypatch):
+    """Root-cause regression test: opencode v2 was confirmed (by direct reproduction)
+    to trust an inherited PWD env var over its own getcwd() and re-chdir to match it.
+    A wrapper script's `cd` before launching the harness left PWD stale relative to
+    the cwd Backend.run() is actually given, and opencode silently operated out of
+    that stale directory instead."""
+    monkeypatch.setenv("PWD", "/some/stale/dir/the/wrapper/script/cd-ed/into")
+    b = Backend("opencode", timeout=10, path_prepend=[], env_vars={})
+    env = b._build_env("/Users/alexeieleusis/development/code_review/frontend-focused-review")
+    assert env["PWD"] == "/Users/alexeieleusis/development/code_review/frontend-focused-review"  # noqa: S105
 
 
 def test_invalid_backend_raises():
@@ -382,3 +405,232 @@ def test_harness_repo_moving_during_run_raises(tmp_xdg):
         pytest.raises(RepoIdentityError, match="harness repo's HEAD moved"),
     ):
         b.run("Do this.", cwd="/some/other/repo")
+
+
+def test_opencode_plugin_check_runs_before_backend_invocation(tmp_xdg):
+    b = _make_backend(tmp_xdg, "opencode")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    with (
+        patch("subprocess.Popen", return_value=mock_proc) as popen,
+        patch("harness.backend.assert_no_opencode_plugins") as guard,
+    ):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+    guard.assert_called_once_with("/tmp")  # noqa: S108
+    popen.assert_called_once()
+
+
+def test_opencode_plugin_check_only_runs_once_per_backend_instance(tmp_xdg):
+    """One Backend is built per batch (see harness/runners/*.py) and reused across
+    every comment/file in it, so the plugin check should gate the batch, not each
+    individual backend invocation."""
+    b = _make_backend(tmp_xdg, "opencode")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    with (
+        patch("subprocess.Popen", return_value=mock_proc),
+        patch("harness.backend.assert_no_opencode_plugins") as guard,
+    ):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+        b.run("Do that.", cwd="/tmp")  # noqa: S108
+    guard.assert_called_once_with("/tmp")  # noqa: S108
+
+
+def test_opencode_plugin_check_skipped_for_claude_backend(tmp_xdg):
+    b = _make_backend(tmp_xdg, "claude")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    with (
+        patch("subprocess.Popen", return_value=mock_proc),
+        patch("harness.backend.assert_no_opencode_plugins") as guard,
+    ):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+    guard.assert_not_called()
+
+
+def test_opencode_plugin_check_failure_aborts_before_spawning_backend(tmp_xdg):
+    b = _make_backend(tmp_xdg, "opencode")
+    with (
+        patch("subprocess.Popen") as popen,
+        patch(
+            "harness.backend.assert_no_opencode_plugins",
+            side_effect=OpencodePluginError("a plugin is installed"),
+        ),
+        pytest.raises(OpencodePluginError, match="a plugin is installed"),
+    ):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+    popen.assert_not_called()
+
+
+def test_assert_no_opencode_plugins_passes_when_none_found():
+    with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="No plugins found\n")):
+        assert_no_opencode_plugins("/tmp")  # noqa: S108 — does not raise
+
+
+def test_assert_no_opencode_plugins_scopes_check_to_backend_cwd():
+    with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="No plugins found\n")) as run:
+        assert_no_opencode_plugins("/some/repo")
+    assert run.call_args.kwargs["cwd"] == "/some/repo"
+
+
+def test_assert_no_opencode_plugins_raises_when_plugins_installed():
+    with (
+        patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="some-plugin@1.0.0\n")),
+        pytest.raises(OpencodePluginError, match="one or more plugins installed"),
+    ):
+        assert_no_opencode_plugins("/tmp")  # noqa: S108
+
+
+def test_assert_no_opencode_plugins_raises_when_list_command_fails():
+    with (
+        patch("subprocess.run", return_value=MagicMock(returncode=1, stdout="", stderr="opencode: command not found")),
+        pytest.raises(OpencodePluginError, match="could not verify"),
+    ):
+        assert_no_opencode_plugins("/tmp")  # noqa: S108
+
+
+def test_backend_run_waits_for_process_group_survivors_before_returning(tmp_xdg, monkeypatch):
+    """A spawned server child can still be tearing down when the top-level backend
+    process exits; run() must not return (and let the next comment start its own
+    backend) until the whole process group is gone."""
+    b = _make_backend(tmp_xdg, "opencode")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    mock_proc.pid = 4242
+
+    survivors = iter(["4242 opencode serve --stdio --port 0", ""])
+    monkeypatch.setattr("harness.backend.Backend._processes_in_group", staticmethod(lambda pgid: next(survivors)))
+    sleeps = []
+    monkeypatch.setattr("harness.backend.time.sleep", sleeps.append)
+
+    with patch("subprocess.Popen", return_value=mock_proc):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+
+    assert sleeps == [1]  # polled once, then found no survivors
+
+
+def test_backend_run_group_wait_times_out_and_warns(tmp_xdg, monkeypatch, caplog):
+    b = _make_backend(tmp_xdg, "opencode")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    mock_proc.pid = 4242
+
+    monkeypatch.setattr("harness.backend.Backend._processes_in_group", staticmethod(lambda pgid: "4242 stuck-server"))
+    monkeypatch.setattr("harness.backend.time.sleep", lambda _: None)
+    # Force the deadline to already be past on the first check, so the test doesn't
+    # actually wait out the real _GROUP_EXIT_WAIT_SECONDS.
+    monkeypatch.setattr("harness.backend._GROUP_EXIT_WAIT_SECONDS", -1)
+
+    with patch("subprocess.Popen", return_value=mock_proc), caplog.at_level("WARNING"):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+
+    assert "still has member(s)" in caplog.text
+    assert "stuck-server" in caplog.text
+
+
+def test_opencode_run_acquires_global_lock(tmp_xdg, monkeypatch):
+    b = _make_backend(tmp_xdg, "opencode")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    mock_proc.pid = 4242
+    calls = []
+
+    @contextmanager
+    def fake_lock(key, *, blocking=False):
+        calls.append((key, blocking))
+        yield
+
+    monkeypatch.setattr("harness.backend.acquire_lock", fake_lock)
+    with patch("subprocess.Popen", return_value=mock_proc):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+    assert calls == [("opencode-global-serialize", True)]
+
+
+def test_claude_run_does_not_acquire_global_lock(tmp_xdg, monkeypatch):
+    b = _make_backend(tmp_xdg, "claude")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    mock_proc.pid = 4242
+    calls = []
+
+    @contextmanager
+    def fake_lock(key, *, blocking=False):
+        calls.append((key, blocking))
+        yield
+
+    monkeypatch.setattr("harness.backend.acquire_lock", fake_lock)
+    with patch("subprocess.Popen", return_value=mock_proc):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+    assert calls == []
+
+
+def test_lsof_cwd_parses_n_line():
+    with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="p4242\nfcwd\nn/some/dir\n")):
+        assert _lsof_cwd(4242) == "/some/dir"
+
+
+def test_lsof_cwd_returns_none_when_process_gone():
+    with patch("subprocess.run", return_value=MagicMock(returncode=1, stdout="")):
+        assert _lsof_cwd(4242) is None
+
+
+def test_cwd_divergence_monitor_kills_process_on_mismatch(monkeypatch):
+    proc = MagicMock()
+    proc.pid = 4242
+    proc.poll.return_value = None  # still running
+    monkeypatch.setattr("harness.backend._lsof_cwd", lambda pid: "/wrong/dir")
+    monkeypatch.setattr("harness.backend.os.getpgid", lambda pid: pid)
+    killed = {}
+    monkeypatch.setattr("harness.backend.os.killpg", lambda pgid, sig: killed.update(pgid=pgid, sig=sig))
+
+    monitor = _CwdDivergenceMonitor(proc, "/expected/dir", "prefix: ")
+    monkeypatch.setattr(monitor._stop_event, "wait", lambda timeout: False)
+    monitor.run()
+
+    assert monitor.diverged_to == "/wrong/dir"
+    assert killed == {"pgid": 4242, "sig": signal.SIGKILL}
+
+
+def test_cwd_divergence_monitor_stops_once_process_exits(monkeypatch):
+    proc = MagicMock()
+    proc.pid = 4242
+    proc.poll.return_value = 0  # already exited
+
+    monitor = _CwdDivergenceMonitor(proc, "/expected/dir", "")
+    monkeypatch.setattr(monitor._stop_event, "wait", lambda timeout: False)
+    monitor.run()
+
+    assert monitor.diverged_to is None
+
+
+def test_backend_run_raises_and_does_not_trust_output_on_cwd_divergence(tmp_xdg, monkeypatch):
+    b = _make_backend(tmp_xdg, "opencode")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"looks fine", b"")
+    mock_proc.returncode = 0
+    mock_proc.pid = 4242
+
+    class _FakeMonitor:
+        def __init__(self, proc, expected_cwd, prefix):
+            self.diverged_to = "/some/other/repo"
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr("harness.backend._CwdDivergenceMonitor", _FakeMonitor)
+
+    with (
+        patch("subprocess.Popen", return_value=mock_proc),
+        pytest.raises(BackendCwdDivergedError, match="diverged"),
+    ):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108

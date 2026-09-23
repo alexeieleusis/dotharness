@@ -11,6 +11,25 @@ def no_harness_repo_root(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_opencode_plugin_check(monkeypatch):
+    """Tests mock the backend subprocess directly rather than exercising a real
+    opencode install. Without this, Backend.run() would shell out to a real
+    `opencode plugin list` (or fail outright if opencode isn't installed on the
+    test host) before ever reaching the mocked Popen call."""
+    monkeypatch.setattr("harness.backend.assert_no_opencode_plugins", lambda cwd: None)
+
+
+@pytest.fixture(autouse=True)
+def no_backend_group_wait(monkeypatch):
+    """Tests mock the backend subprocess directly rather than spawning a real one.
+    Without this, the post-run process-group check would shell out to a real
+    `pgrep` for every test that exercises Backend.run()'s success path. Default to
+    "no survivors" so that stays a no-op; tests of the wait/timeout behavior itself
+    override this fixture's patch with their own."""
+    monkeypatch.setattr("harness.backend.Backend._processes_in_group", staticmethod(lambda pgid: ""))
+
+
+@pytest.fixture(autouse=True)
 def _clear_ssh_host_cache():
     """`_resolve_ssh_host` is memoized process-wide; clear it so a mocked
     `ssh -G` result from one test can't leak into another test reusing the

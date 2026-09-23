@@ -26,7 +26,7 @@ repo's.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `backend` | string | `"opencode"` | Which coding-agent CLI to shell out to. Must be `"opencode"` or `"claude"` — any other value raises a `ConfigError` at load time. `"opencode"` invokes `opencode run --dangerously-skip-permissions --pure <instructions>`; `"claude"` invokes `claude --dangerously-skip-permissions --disable-slash-commands -p <instructions>`. Both run with `cwd` set to `repo.working_dir`. |
+| `backend` | string | `"opencode"` | Which coding-agent CLI to shell out to. Must be `"opencode"` or `"claude"` — any other value raises a `ConfigError` at load time. `"opencode"` invokes `opencode run --standalone <instructions>`; `"claude"` invokes `claude --dangerously-skip-permissions --disable-slash-commands -p <instructions>`. Both run with `cwd` set to `repo.working_dir`. |
 | `gh_token_cmd` | string | `"gh auth token"` | Shell command whose stdout is used as the GitHub token. The token is exported to subprocesses as `GITHUB_TOKEN`. |
 | `backend_timeout_seconds` | integer | `900` | Wall-clock timeout (seconds) for a single backend invocation before it is killed. |
 | `knowledge_dir` | path | `"~/.harness/knowledge"` | Directory used for durable knowledge/notes the runners read/write across invocations. `~` is expanded. |
