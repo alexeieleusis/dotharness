@@ -13,7 +13,7 @@ One page, two halves: `plan` turns a rough idea into an agent-sized phase corpus
 | 2 | `spec-prism-flow plan draft-overview` | `00-overview.md`, `OPEN_QUESTIONS.md` | **Yes** — answer open questions / edit overview |
 | 3 | `spec-prism-flow plan draft-requirements` | `requirements.md` | **Yes** — review/edit |
 | 4 | `spec-prism-flow plan decompose [--depth-cap N]` | decomposition tree + `graph.json` | **Yes** — review the whole tree before phase files are drafted (each leaf's mini-requirements doc is already written by this point) |
-| 5 | `spec-prism-flow plan draft-phases` | `docs/phases/NN-name-leaf.md` per leaf | **Yes** — review phase files |
+| 5 | `spec-prism-flow plan draft-phases` | `{config.plan.phase_dir}/NN-name-leaf.md` per leaf | **Yes** — review phase files |
 | 6 | `spec-prism-flow plan review` | pass/fail report (4 consistency checks) | Fix and re-run until it passes |
 | 7 | `spec-prism-flow build run [--dry-run] [--resume] [--strict]` | merged PRs, one per phase, plus a completion log | Manual-test prompt per phase (advisory unless `--strict`) |
 | 8 | `spec-prism-flow build status` | one row per phase: `pending`/`in progress`/`escalated`/`merged` | — |
@@ -34,7 +34,7 @@ spec-prism-flow plan draft-requirements
 spec-prism-flow plan decompose
 # → review the decomposition tree + graph.json, then:
 spec-prism-flow plan draft-phases
-# → review the generated docs/phases/NN-name-leaf.md files, then:
+# → review the generated {config.plan.phase_dir}/NN-name-leaf.md files, then:
 spec-prism-flow plan review
 ```
 
