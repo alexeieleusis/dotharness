@@ -4,6 +4,7 @@ import os
 import signal
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from harness.repo_guard import (
@@ -15,6 +16,12 @@ from harness.repo_guard import (
 )
 
 XDG_DATA = Path.home() / ".local/share/dotharness"
+
+# How long to wait for a backend run's own process group to fully exit before
+# letting the next comment's backend run start, and how often to poll while
+# waiting. See Backend._wait_for_group_to_exit.
+_GROUP_EXIT_WAIT_SECONDS = 30
+_GROUP_EXIT_POLL_SECONDS = 1
 
 logger = logging.getLogger(__name__)
 
@@ -30,15 +37,22 @@ class OpencodePluginError(RuntimeError):
     session isolation --standalone otherwise provides."""
 
 
-def assert_no_opencode_plugins() -> None:
+def assert_no_opencode_plugins(cwd: str) -> None:
     """`--standalone` (see `_cmd_for` below) isolates concurrent review sessions
     from each other, but says nothing about a globally-installed plugin, which
     can branch/worktree or mutate git state on its own — outside anything the
     identity/HEAD checks in repo_guard.py detect, since those only watch the
     directory the backend was *told* to operate in. Raise loudly instead of
-    running the opencode backend if `opencode plugin list` reports any."""
+    running the opencode backend if `opencode plugin list` reports any.
+
+    Must run with `cwd` set to the same directory the backend run itself will
+    use: plugins can be configured per-project, and `opencode plugin list`
+    has no `--standalone` equivalent, so an unscoped call here would both
+    check the wrong project and needlessly hit the shared background service
+    right before a `--standalone` run that's specifically trying to avoid it."""
     result = subprocess.run(
         ["opencode", "plugin", "list"],  # noqa: S607
+        cwd=cwd,
         capture_output=True,
         text=True,
         timeout=30,
@@ -75,13 +89,22 @@ class Backend:
         self.env_vars = env_vars
         self.max_retries = max_retries
         self.expected_repo_name = expected_repo_name
+        self._opencode_plugins_checked_dirs: set[str] = set()
 
     def run(
         self, instructions: str, cwd: str, opencode_dir: str | None = None, context: str | None = None
     ) -> subprocess.CompletedProcess:
         prefix = f"{context}: " if context else ""
-        if self.backend_name == "opencode":
-            assert_no_opencode_plugins()
+        # Checked once per (instance, cwd) rather than once per call: a Backend is
+        # constructed fresh per batch (one per runner invocation, e.g. one
+        # `focused-review` run across many PRs/comments — see the callers in
+        # harness/runners/) and every call in a batch currently shares the same cwd,
+        # so this amounts to once per batch. Keyed on cwd rather than a bare bool so a
+        # Backend that did span multiple directories would still get each checked,
+        # since plugins are configured per-project.
+        if self.backend_name == "opencode" and cwd not in self._opencode_plugins_checked_dirs:
+            assert_no_opencode_plugins(cwd)
+            self._opencode_plugins_checked_dirs.add(cwd)
         total_attempts = self.max_retries + 1
         for attempt in range(1, total_attempts + 1):
             self._check_repo_identity(cwd)
@@ -108,6 +131,7 @@ class Backend:
                         stdout.decode("utf-8", errors="replace")[:2000],
                         stderr.decode("utf-8", errors="replace")[:2000],
                     )
+                self._wait_for_group_to_exit(proc.pid, prefix)
                 self._check_repo_identity(cwd)
                 self._assert_harness_repo_unchanged(harness_head)
                 return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
@@ -146,6 +170,52 @@ class Backend:
             assert _HARNESS_REPO_ROOT is not None  # noqa: S101 — implied by harness_head being set
             assert_repo_unchanged(_HARNESS_REPO_ROOT, harness_head)
 
+    def _wait_for_group_to_exit(self, pgid: int, prefix: str) -> None:
+        """`communicate()` only waits for the top-level backend process; a server
+        child it spawned (e.g. opencode's private --standalone server) can still be
+        tearing down when that returns. The next comment's `run()` starts its own
+        backend right after this one returns, so without this wait the two servers'
+        startup/teardown can overlap — a plausible way for a request to land on the
+        wrong one and answer against the wrong project directory. Bounded, since a
+        member that never exits shouldn't block the batch forever."""
+        deadline = time.monotonic() + _GROUP_EXIT_WAIT_SECONDS
+        while True:
+            survivors = self._processes_in_group(pgid)
+            if not survivors:
+                return
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "%sBackend: process group %d still has member(s) %ds after this run finished, "
+                    "proceeding to the next one anyway:\n%s",
+                    prefix,
+                    pgid,
+                    _GROUP_EXIT_WAIT_SECONDS,
+                    survivors,
+                )
+                return
+            time.sleep(_GROUP_EXIT_POLL_SECONDS)
+
+    @staticmethod
+    def _pgrep(*args: str) -> str:
+        """Runs `pgrep -a <args>` and returns stripped stdout. Raises on failure —
+        callers decide how to log/handle that, since they differ (poll-and-retry vs.
+        one-shot warning)."""
+        result = subprocess.run(  # noqa: S603
+            ["pgrep", "-a", *args],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return result.stdout.strip()
+
+    @classmethod
+    def _processes_in_group(cls, pgid: int) -> str:
+        try:
+            return cls._pgrep("-g", str(pgid))
+        except Exception:
+            logger.warning("Could not check process group %d for survivors", pgid)
+            return ""
+
     def _warn_if_backend_survived(self, prefix: str) -> None:
         """killpg only reaches processes still in the killed group; a backend that
         double-forks into its own session (common for daemonizing subprocess managers)
@@ -153,16 +223,10 @@ class Backend:
         after we've moved on to the next comment. Check by command name, not pgid, since
         the whole point is to catch processes that no longer share the killed group."""
         try:
-            result = subprocess.run(  # noqa: S603
-                ["pgrep", "-a", "-x", self.backend_name],  # noqa: S607
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
+            survivors = self._pgrep("-x", self.backend_name)
         except Exception:
             logger.warning("%sCould not check for surviving %s processes after timeout-kill", prefix, self.backend_name)
             return
-        survivors = result.stdout.strip()
         if survivors:
             logger.warning(
                 "%sBackend timeout-kill: %s process(es) still alive afterward (pgid kill may have missed "

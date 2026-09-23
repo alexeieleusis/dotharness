@@ -395,8 +395,25 @@ def test_opencode_plugin_check_runs_before_backend_invocation(tmp_xdg):
         patch("harness.backend.assert_no_opencode_plugins") as guard,
     ):
         b.run("Do this.", cwd="/tmp")  # noqa: S108
-    guard.assert_called_once_with()
+    guard.assert_called_once_with("/tmp")  # noqa: S108
     popen.assert_called_once()
+
+
+def test_opencode_plugin_check_only_runs_once_per_backend_instance(tmp_xdg):
+    """One Backend is built per batch (see harness/runners/*.py) and reused across
+    every comment/file in it, so the plugin check should gate the batch, not each
+    individual backend invocation."""
+    b = _make_backend(tmp_xdg, "opencode")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    with (
+        patch("subprocess.Popen", return_value=mock_proc),
+        patch("harness.backend.assert_no_opencode_plugins") as guard,
+    ):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+        b.run("Do that.", cwd="/tmp")  # noqa: S108
+    guard.assert_called_once_with("/tmp")  # noqa: S108
 
 
 def test_opencode_plugin_check_skipped_for_claude_backend(tmp_xdg):
@@ -428,7 +445,13 @@ def test_opencode_plugin_check_failure_aborts_before_spawning_backend(tmp_xdg):
 
 def test_assert_no_opencode_plugins_passes_when_none_found():
     with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="No plugins found\n")):
-        assert_no_opencode_plugins()  # does not raise
+        assert_no_opencode_plugins("/tmp")  # noqa: S108 — does not raise
+
+
+def test_assert_no_opencode_plugins_scopes_check_to_backend_cwd():
+    with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="No plugins found\n")) as run:
+        assert_no_opencode_plugins("/some/repo")
+    assert run.call_args.kwargs["cwd"] == "/some/repo"
 
 
 def test_assert_no_opencode_plugins_raises_when_plugins_installed():
@@ -436,7 +459,7 @@ def test_assert_no_opencode_plugins_raises_when_plugins_installed():
         patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="some-plugin@1.0.0\n")),
         pytest.raises(OpencodePluginError, match="one or more plugins installed"),
     ):
-        assert_no_opencode_plugins()
+        assert_no_opencode_plugins("/tmp")  # noqa: S108
 
 
 def test_assert_no_opencode_plugins_raises_when_list_command_fails():
@@ -444,4 +467,45 @@ def test_assert_no_opencode_plugins_raises_when_list_command_fails():
         patch("subprocess.run", return_value=MagicMock(returncode=1, stdout="", stderr="opencode: command not found")),
         pytest.raises(OpencodePluginError, match="could not verify"),
     ):
-        assert_no_opencode_plugins()
+        assert_no_opencode_plugins("/tmp")  # noqa: S108
+
+
+def test_backend_run_waits_for_process_group_survivors_before_returning(tmp_xdg, monkeypatch):
+    """A spawned server child can still be tearing down when the top-level backend
+    process exits; run() must not return (and let the next comment start its own
+    backend) until the whole process group is gone."""
+    b = _make_backend(tmp_xdg, "opencode")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    mock_proc.pid = 4242
+
+    survivors = iter(["4242 opencode serve --stdio --port 0", ""])
+    monkeypatch.setattr("harness.backend.Backend._processes_in_group", staticmethod(lambda pgid: next(survivors)))
+    sleeps = []
+    monkeypatch.setattr("harness.backend.time.sleep", sleeps.append)
+
+    with patch("subprocess.Popen", return_value=mock_proc):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+
+    assert sleeps == [1]  # polled once, then found no survivors
+
+
+def test_backend_run_group_wait_times_out_and_warns(tmp_xdg, monkeypatch, caplog):
+    b = _make_backend(tmp_xdg, "opencode")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    mock_proc.pid = 4242
+
+    monkeypatch.setattr("harness.backend.Backend._processes_in_group", staticmethod(lambda pgid: "4242 stuck-server"))
+    monkeypatch.setattr("harness.backend.time.sleep", lambda _: None)
+    # Force the deadline to already be past on the first check, so the test doesn't
+    # actually wait out the real _GROUP_EXIT_WAIT_SECONDS.
+    monkeypatch.setattr("harness.backend._GROUP_EXIT_WAIT_SECONDS", -1)
+
+    with patch("subprocess.Popen", return_value=mock_proc), caplog.at_level("WARNING"):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+
+    assert "still has member(s)" in caplog.text
+    assert "stuck-server" in caplog.text
