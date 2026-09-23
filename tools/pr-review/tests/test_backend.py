@@ -591,7 +591,7 @@ def test_cwd_divergence_monitor_kills_process_on_mismatch(monkeypatch):
     monkeypatch.setattr("harness.backend.os.killpg", lambda pgid, sig: killed.update(pgid=pgid, sig=sig))
 
     monitor = _CwdDivergenceMonitor(proc, "/expected/dir", "prefix: ")
-    monitor._stop_event.wait = lambda timeout: False
+    monkeypatch.setattr(monitor._stop_event, "wait", lambda timeout: False)
     monitor.run()
 
     assert monitor.diverged_to == "/wrong/dir"
@@ -604,7 +604,7 @@ def test_cwd_divergence_monitor_stops_once_process_exits(monkeypatch):
     proc.poll.return_value = 0  # already exited
 
     monitor = _CwdDivergenceMonitor(proc, "/expected/dir", "")
-    monitor._stop_event.wait = lambda timeout: False
+    monkeypatch.setattr(monitor._stop_event, "wait", lambda timeout: False)
     monitor.run()
 
     assert monitor.diverged_to is None
