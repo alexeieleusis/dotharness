@@ -25,6 +25,37 @@ logger = logging.getLogger(__name__)
 _HARNESS_REPO_ROOT = discover_repo_root(Path(__file__).resolve().parent)
 
 
+class OpencodePluginError(RuntimeError):
+    """opencode has a plugin installed, which can act independently of the
+    session isolation --standalone otherwise provides."""
+
+
+def assert_no_opencode_plugins() -> None:
+    """`--standalone` (see `_cmd_for` below) isolates concurrent review sessions
+    from each other, but says nothing about a globally-installed plugin, which
+    can branch/worktree or mutate git state on its own — outside anything the
+    identity/HEAD checks in repo_guard.py detect, since those only watch the
+    directory the backend was *told* to operate in. Raise loudly instead of
+    running the opencode backend if `opencode plugin list` reports any."""
+    result = subprocess.run(
+        ["opencode", "plugin", "list"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise OpencodePluginError(  # noqa: TRY003
+            f"could not verify opencode has no plugins installed ('opencode plugin list' exited "
+            f"{result.returncode}): {result.stderr.strip()}"
+        )
+    if result.stdout.strip().lower() != "no plugins found":
+        raise OpencodePluginError(  # noqa: TRY003
+            "opencode has one or more plugins installed — refusing to run the opencode backend, "
+            "since a plugin can act independently of --standalone's session isolation "
+            f"('opencode plugin list' reported):\n{result.stdout.strip()}"
+        )
+
+
 class Backend:
     def __init__(
         self,
@@ -49,6 +80,8 @@ class Backend:
         self, instructions: str, cwd: str, opencode_dir: str | None = None, context: str | None = None
     ) -> subprocess.CompletedProcess:
         prefix = f"{context}: " if context else ""
+        if self.backend_name == "opencode":
+            assert_no_opencode_plugins()
         total_attempts = self.max_retries + 1
         for attempt in range(1, total_attempts + 1):
             self._check_repo_identity(cwd)
@@ -141,8 +174,9 @@ class Backend:
 
     def _cmd_for(self, text: str, opencode_dir: str | None = None) -> list[str]:
         if self.backend_name == "opencode":
-            # opencode v2 dropped --pure and --dangerously-skip-permissions; see
-            # docs/commands/self-review.md#security for the rationale and gap this leaves.
+            # opencode v2 dropped --pure and --dangerously-skip-permissions; --standalone
+            # isolates concurrent sessions but not plugins, so run() gates on
+            # assert_no_opencode_plugins() above. See docs/commands/self-review.md#security.
             cmd = ["opencode", "run", "--standalone"]
             if opencode_dir:
                 cmd += ["--dir", opencode_dir]

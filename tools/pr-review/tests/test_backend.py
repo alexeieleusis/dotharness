@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from harness.backend import Backend
+from harness.backend import Backend, OpencodePluginError, assert_no_opencode_plugins
 from harness.repo_guard import RepoIdentityError
 
 
@@ -383,3 +383,65 @@ def test_harness_repo_moving_during_run_raises(tmp_xdg):
         pytest.raises(RepoIdentityError, match="harness repo's HEAD moved"),
     ):
         b.run("Do this.", cwd="/some/other/repo")
+
+
+def test_opencode_plugin_check_runs_before_backend_invocation(tmp_xdg):
+    b = _make_backend(tmp_xdg, "opencode")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    with (
+        patch("subprocess.Popen", return_value=mock_proc) as popen,
+        patch("harness.backend.assert_no_opencode_plugins") as guard,
+    ):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+    guard.assert_called_once_with()
+    popen.assert_called_once()
+
+
+def test_opencode_plugin_check_skipped_for_claude_backend(tmp_xdg):
+    b = _make_backend(tmp_xdg, "claude")
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"", b"")
+    mock_proc.returncode = 0
+    with (
+        patch("subprocess.Popen", return_value=mock_proc),
+        patch("harness.backend.assert_no_opencode_plugins") as guard,
+    ):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+    guard.assert_not_called()
+
+
+def test_opencode_plugin_check_failure_aborts_before_spawning_backend(tmp_xdg):
+    b = _make_backend(tmp_xdg, "opencode")
+    with (
+        patch("subprocess.Popen") as popen,
+        patch(
+            "harness.backend.assert_no_opencode_plugins",
+            side_effect=OpencodePluginError("a plugin is installed"),
+        ),
+        pytest.raises(OpencodePluginError, match="a plugin is installed"),
+    ):
+        b.run("Do this.", cwd="/tmp")  # noqa: S108
+    popen.assert_not_called()
+
+
+def test_assert_no_opencode_plugins_passes_when_none_found():
+    with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="No plugins found\n")):
+        assert_no_opencode_plugins()  # does not raise
+
+
+def test_assert_no_opencode_plugins_raises_when_plugins_installed():
+    with (
+        patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="some-plugin@1.0.0\n")),
+        pytest.raises(OpencodePluginError, match="one or more plugins installed"),
+    ):
+        assert_no_opencode_plugins()
+
+
+def test_assert_no_opencode_plugins_raises_when_list_command_fails():
+    with (
+        patch("subprocess.run", return_value=MagicMock(returncode=1, stdout="", stderr="opencode: command not found")),
+        pytest.raises(OpencodePluginError, match="could not verify"),
+    ):
+        assert_no_opencode_plugins()

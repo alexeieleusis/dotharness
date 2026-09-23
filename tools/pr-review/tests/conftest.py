@@ -11,6 +11,15 @@ def no_harness_repo_root(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_opencode_plugin_check(monkeypatch):
+    """Tests mock the backend subprocess directly rather than exercising a real
+    opencode install. Without this, Backend.run() would shell out to a real
+    `opencode plugin list` (or fail outright if opencode isn't installed on the
+    test host) before ever reaching the mocked Popen call."""
+    monkeypatch.setattr("harness.backend.assert_no_opencode_plugins", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _clear_ssh_host_cache():
     """`_resolve_ssh_host` is memoized process-wide; clear it so a mocked
     `ssh -G` result from one test can't leak into another test reusing the
