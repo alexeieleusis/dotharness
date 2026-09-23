@@ -1,3 +1,4 @@
+import time
 from multiprocessing import Process
 from pathlib import Path
 
@@ -11,6 +12,12 @@ def _child_acquire(xdg_path):
     lock.XDG_RUNTIME = xdg_path
     with acquire_lock("acme-frontend"):
         pass
+
+
+def _child_acquire_blocking(xdg_path, marker_path):
+    lock.XDG_RUNTIME = Path(xdg_path)
+    with acquire_lock("acme-frontend", blocking=True):
+        Path(marker_path).write_text("acquired")
 
 
 def test_lock_acquired(tmp_xdg):
@@ -46,6 +53,18 @@ def test_lock_released_on_exception(tmp_xdg):
     # Lock must be released — re-acquisition must succeed
     with acquire_lock("acme-frontend"):
         pass
+
+
+def test_blocking_lock_waits_instead_of_raising(tmp_xdg, tmp_path):
+    marker = tmp_path / "marker"
+    with acquire_lock("acme-frontend"):
+        p = Process(target=_child_acquire_blocking, args=(str(tmp_xdg), str(marker)))
+        p.start()
+        time.sleep(0.2)
+        assert not marker.exists()  # still waiting on the held lock, not raising
+    p.join(timeout=5)
+    assert p.exitcode == 0
+    assert marker.exists()  # proceeded once the lock was released
 
 
 def test_body_blocking_io_error_is_not_mislabeled(tmp_xdg):

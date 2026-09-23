@@ -23,7 +23,7 @@ def working_dir_lock_key(prefix: str, working_dir: Path) -> str:
 
 
 @contextmanager
-def acquire_lock(lock_key: str):
+def acquire_lock(lock_key: str, *, blocking: bool = False):
     """Lock shared by every runner (address-comments, review-prs, review-requested,
     focused-review, self-review) that operates against a given checked-out working
     directory. All of them mutate that directory via detach/checkout/restore, so two
@@ -31,18 +31,28 @@ def acquire_lock(lock_key: str):
     other's checkout mid-commit. Keying the lock on the working directory (not just
     the command) makes them mutually exclusive regardless of which command each side
     is running — while two runs against *different* checkouts (e.g. two clones of the
-    same repo) don't contend for the same lock at all."""
+    same repo) don't contend for the same lock at all.
+
+    By default, contention raises SystemExit immediately — appropriate when the lock
+    guards a whole second instance of the tool that should just bail out. Pass
+    ``blocking=True`` for locks that instead guard a transient operation (e.g. a
+    shared git checkout): waiting for the holder to finish is cheap and correct there,
+    whereas SystemExit would escape ordinary ``except Exception`` handling and abort
+    the entire run instead of just the one operation."""
     lock_dir = XDG_RUNTIME / "locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock_file = lock_dir / f"{lock_key}.lock"
     if not str(lock_file.resolve()).startswith(str(lock_dir.resolve())):
         raise ValueError(f"Invalid lock_key: {lock_key!r}")  # noqa: TRY003
     fd = lock_file.open("w")
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as ex:
-        fd.close()
-        raise SystemExit(f"Another instance is already running for {lock_key}") from ex  # noqa: TRY003
+    if blocking:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    else:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as ex:
+            fd.close()
+            raise SystemExit(f"Another instance is already running for {lock_key}") from ex  # noqa: TRY003
     try:
         try:
             yield

@@ -142,7 +142,7 @@ def _resolve_knowledge_file(vibe_types_repo: Path, commit: str, rel_path: str, e
     runs across different repos don't race on the same git working copy.
     """
     repo = str(vibe_types_repo)
-    with acquire_lock(working_dir_lock_key("vibe-types", vibe_types_repo)):
+    with acquire_lock(working_dir_lock_key("vibe-types", vibe_types_repo), blocking=True):
         attempts = [(None, commit), (commit, commit), ("main", "origin/main")]
         for fetch_ref, show_ref in attempts:
             if fetch_ref:
