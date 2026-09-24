@@ -8,6 +8,9 @@ on:
       - "tools/pr-review/docs/**"
       - "tools/pr-review/zensical.toml"
       - "tools/pr-review/harness/**"
+      - "tools/spec-prism-flow/docs/**"
+      - "tools/spec-prism-flow/zensical.toml"
+      - "tools/spec-prism-flow/spec_prism_flow/**"
       - ".github/workflows/docs.yml"
       - ".github/actions/setup-python-env/**"
 
@@ -20,10 +23,6 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
-defaults:
-  run:
-    working-directory: tools/pr-review
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -31,18 +30,35 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
-      - name: Set up the environment
+      - name: Set up the pr-review environment
         uses: ./.github/actions/setup-python-env
         with:
           working-directory: tools/pr-review
 
-      - name: Build docs
+      - name: Build pr-review docs
+        working-directory: tools/pr-review
         run: uv run zensical build -s
+
+      - name: Set up the spec-prism-flow environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          working-directory: tools/spec-prism-flow
+
+      - name: Build spec-prism-flow docs
+        working-directory: tools/spec-prism-flow
+        run: uv run zensical build -s
+
+      - name: Combine sites
+        run: |
+          mkdir -p combined-site
+          cp -r tools/pr-review/site/. combined-site/
+          mkdir -p combined-site/spec-prism-flow
+          cp -r tools/spec-prism-flow/site/. combined-site/spec-prism-flow/
 
       - name: Upload pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: tools/pr-review/site
+          path: combined-site
 
   deploy:
     needs: build

@@ -20,6 +20,7 @@ nav = [
         { "address-comments" = "commands/address-comments.md" },
     ] },
     { "Modules" = "modules.md" },
+    { "Spec Prism Flow" = "https://alexeieleusis.github.io/dotharness/spec-prism-flow/" },
 ]
 
 [project.plugins.mkdocstrings.handlers.python]
