@@ -550,7 +550,7 @@ def _run_locked(config: HarnessConfig) -> None:
         )
 
 
-def _list_my_prs(repo: str, env: dict) -> list[dict] | None:
+def _list_prs_by_flag(repo: str, env: dict, filter_flag: str) -> list[dict] | None:
     """Returns None (rather than []) on fetch failure, so callers can distinguish "gh pr list
     failed" from "confirmed zero open PRs" instead of treating a transient API hiccup as an
     authoritative empty set."""
@@ -561,7 +561,7 @@ def _list_my_prs(repo: str, env: dict) -> list[dict] | None:
             "list",
             "--repo",
             repo,
-            "--author",
+            filter_flag,
             "@me",
             "--state",
             "open",
@@ -578,7 +578,22 @@ def _list_my_prs(repo: str, env: dict) -> list[dict] | None:
     if result.returncode != 0:
         return None
     try:
-        return sorted(json.loads(result.stdout), key=lambda p: p["number"])
+        return json.loads(result.stdout)
     except ValueError:
         logger.exception("_list_my_prs: malformed JSON from gh CLI")
         return None
+
+
+def _list_my_prs(repo: str, env: dict) -> list[dict] | None:
+    """PRs the user is responsible for self-reviewing: authored by them, or assigned to
+    them (e.g. a bot-authored PR opened on their behalf), deduplicated by number. Returns
+    None if either underlying query fails (see _list_prs_by_flag), rather than treating a
+    partial result from only one of the two as the authoritative set."""
+    by_number: dict[int, dict] = {}
+    for flag in ("--author", "--assignee"):
+        prs = _list_prs_by_flag(repo, env, flag)
+        if prs is None:
+            return None
+        for pr in prs:
+            by_number.setdefault(pr["number"], pr)
+    return sorted(by_number.values(), key=lambda p: p["number"])

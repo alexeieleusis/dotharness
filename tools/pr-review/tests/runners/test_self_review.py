@@ -1,3 +1,4 @@
+import json
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -458,6 +459,51 @@ def test_list_my_prs_returns_none_on_gh_failure():
 
 def test_list_my_prs_returns_none_on_malformed_json():
     with patch("harness.runners.self_review.run_cmd", return_value=MagicMock(returncode=0, stdout=b"not json")):
+        assert self_review._list_my_prs("acme/frontend", {}) is None
+
+
+def test_list_my_prs_includes_assigned_prs_not_authored(tmp_xdg, tmp_path):
+    """A PR opened by a bot on the user's behalf (not authored by them) but assigned to
+    them must still show up — self_review is about PRs the user is responsible for, not
+    strictly ones they authored."""
+    authored = [{"number": 1, "url": "u1", "headRefName": "b1"}]
+    assigned = [{"number": 2, "url": "u2", "headRefName": "b2"}]
+
+    def side_effect(cmd, **_kwargs):
+        if "--author" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps(authored).encode())
+        if "--assignee" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps(assigned).encode())
+        raise AssertionError(f"unexpected command: {cmd}")  # noqa: TRY003
+
+    with patch("harness.runners.self_review.run_cmd", side_effect=side_effect):
+        prs = self_review._list_my_prs("acme/frontend", {})
+    assert prs is not None
+    assert [p["number"] for p in prs] == [1, 2]
+
+
+def test_list_my_prs_deduplicates_pr_authored_and_assigned(tmp_xdg, tmp_path):
+    both = [{"number": 1, "url": "u1", "headRefName": "b1"}]
+
+    with patch(
+        "harness.runners.self_review.run_cmd", return_value=MagicMock(returncode=0, stdout=json.dumps(both).encode())
+    ):
+        prs = self_review._list_my_prs("acme/frontend", {})
+    assert prs is not None
+    assert [p["number"] for p in prs] == [1]
+
+
+def test_list_my_prs_returns_none_when_assignee_query_fails(tmp_xdg, tmp_path):
+    """The author query can succeed while the assignee query fails (or vice versa) — that
+    partial result must not be treated as the authoritative open-PR set."""
+    authored = [{"number": 1, "url": "u1", "headRefName": "b1"}]
+
+    def side_effect(cmd, **_kwargs):
+        if "--author" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps(authored).encode())
+        return MagicMock(returncode=1, stdout=b"")
+
+    with patch("harness.runners.self_review.run_cmd", side_effect=side_effect):
         assert self_review._list_my_prs("acme/frontend", {}) is None
 
 

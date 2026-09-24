@@ -10,15 +10,18 @@ from harness.runners.common import (
     PR_COMMENTS_SCRIPT_PATH,
     TIMEOUT_GIT,
     FatalGitError,
+    add_reviewer,
     build_subprocess_env,
     fetch_pr_comments,
     find_reply_with_marker,
+    get_current_user,
     get_gh_token,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
     list_open_prs_for_current_user,
     run_cmd,
+    was_review_requested,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,6 +45,7 @@ def _run_locked(config: HarnessConfig) -> None:
 
     gh_token = get_gh_token(config.harness.gh_token_cmd)
     env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
+    current_user = get_current_user(env)
 
     script_path = PR_COMMENTS_SCRIPT_PATH
     instructions_template = (config.harness.knowledge_dir / "pr-review" / "focused-review.md").read_text(
@@ -72,9 +76,14 @@ def _run_locked(config: HarnessConfig) -> None:
             if not matches:
                 continue
             logger.info("PR #%d: starting", number)
+            # We cannot observe from here whether replying to these comments submitted a
+            # review as a side effect, so check unconditionally.
+            was_requested = was_review_requested(number, config.repo.name, current_user, env)
             checkout_attempted = True
             git_fetch_and_checkout(branch, wdir, env)
             _process_matches(matches, config, instructions_template, backend, number, wdir, env)
+            if was_requested:
+                add_reviewer(number, config.repo.name, current_user, env)
         except FatalGitError:
             logger.exception("PR #%d: fatal git error", number)
             continue

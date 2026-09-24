@@ -270,6 +270,17 @@ def get_requested_reviewers(pr_number: int, repo: str, env: dict) -> list[str]:
     return [r["login"] for r in data.get("reviewRequests", []) if "login" in r]
 
 
+def was_review_requested(pr_number: int, repo: str, login: str, env: dict) -> bool:
+    """Whether `login` was already a requested reviewer before processing started.
+
+    Submitting a review via the GitHub API clears the submitter from a PR's
+    requested-reviewers list, which would hide the PR from any runner's
+    "user-review-requested:@me" search. Callers check this up front and, if the
+    review process doesn't conclude with an explicit remove_reviewer(), re-add
+    the reviewer with add_reviewer() so the PR stays visible."""
+    return login in get_requested_reviewers(pr_number, repo, env)
+
+
 def add_reviewer(pr_number: int, repo: str, login: str, env: dict) -> None:
     run_cmd(
         ["gh", "pr", "edit", str(pr_number), "--repo", repo, "--add-reviewer", login],

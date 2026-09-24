@@ -65,6 +65,10 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
         # backend or hits `gh` for real (each is tested on its own below).
         patch("harness.runners.review_requested.has_design_review_comment", return_value=True),
         patch("harness.runners.review_requested.has_traceability_review_comment", return_value=True),
+        # Not previously requested by default, so the re-request path (tested on its own
+        # below) doesn't fire a real `gh` call for tests that don't care about it.
+        patch("harness.runners.review_requested.was_review_requested", return_value=False) as get_requested,
+        patch("harness.runners.review_requested.add_reviewer") as add_reviewer,
         patch("harness.runners.review_requested.git_detach_and_record", return_value="sha") as detach,
         patch("harness.runners.review_requested.git_fetch_and_checkout") as fetch_checkout,
         patch("harness.runners.review_requested.git_restore") as restore,
@@ -88,6 +92,8 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
             run_cmd=run_cmd,
             os=os_mock,
             backend=backend,
+            get_requested=get_requested,
+            add_reviewer=add_reviewer,
         )
 
 
@@ -473,3 +479,60 @@ def test_remove_reviewer_proceeds_when_traceability_review_noops(tmp_xdg, tmp_pa
     ):
         review_requested._run_locked(cfg, pr_url=None)
     mock_remove.assert_called_once()
+
+
+def test_re_requests_review_when_incomplete_and_previously_requested(tmp_xdg, tmp_path):
+    """Submitting a review via the GitHub API clears the submitter from the PR's
+    requested-reviewers list. If the design pass fails (so the PR isn't fully done and
+    remove_reviewer never fires) but the user was a requested reviewer to begin with,
+    the runner must re-add them so the PR stays in the "user-review-requested:@me"
+    inbox other loops (or a later run of this one) rely on — mirrors review_prs.py."""
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        _full_run_mocks() as mocks,
+        patch("harness.runners.review_requested.has_design_review_comment", return_value=False),
+    ):
+        mocks.get_requested.return_value = True
+        # file review, then summary, then a failing design-review call
+        mocks.backend.return_value.run.side_effect = [
+            MagicMock(returncode=0),
+            MagicMock(returncode=0),
+            MagicMock(returncode=1),
+        ]
+        review_requested._run_locked(cfg, pr_url=None)
+    mocks.add_reviewer.assert_called_once_with(1, "acme/frontend", "bot", ANY)
+
+
+def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
+    """The re-add only fires if the user was already a requested reviewer — it must
+    not add a reviewer who was never on the PR to begin with."""
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        _full_run_mocks() as mocks,
+        patch("harness.runners.review_requested.has_design_review_comment", return_value=False),
+    ):
+        mocks.get_requested.return_value = False
+        mocks.backend.return_value.run.side_effect = [
+            MagicMock(returncode=0),
+            MagicMock(returncode=0),
+            MagicMock(returncode=1),
+        ]
+        review_requested._run_locked(cfg, pr_url=None)
+    mocks.add_reviewer.assert_not_called()
+
+
+def test_does_not_re_request_review_when_fully_done(tmp_xdg, tmp_path):
+    """When every pass succeeds, remove_reviewer fires (the intentional final removal)
+    and add_reviewer must not also be called for the same PR/iteration."""
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        _full_run_mocks() as mocks,
+        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
+    ):
+        mocks.get_requested.return_value = True
+        review_requested._run_locked(cfg, pr_url=None)
+    mock_remove.assert_called_once()
+    mocks.add_reviewer.assert_not_called()

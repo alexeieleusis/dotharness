@@ -10,6 +10,7 @@ from harness.lock import acquire_lock
 from harness.runners.common import (
     TIMEOUT_GH,
     FatalGitError,
+    add_reviewer,
     build_design_review_prompt,
     build_early_comment_context,
     build_file_review_section,
@@ -38,6 +39,7 @@ from harness.runners.common import (
     resolve_linked_tickets,
     run_cmd,
     run_pr_level_pass,
+    was_review_requested,
 )
 
 logger = logging.getLogger(__name__)
@@ -193,6 +195,9 @@ def _process_pr(
 ) -> None:
     pr_number = pr["number"]
     logger.info("PR #%d: starting", pr_number)
+    # Checked once up front, before all passes below have actually completed, so the
+    # end-of-iteration re-add fires only when the user was already a requested reviewer.
+    was_requested = was_review_requested(pr_number, config.repo.name, current_user, env)
     original_sha = git_detach_and_record(wdir, env)
     try:
         git_fetch_and_checkout(pr["headRefName"], wdir, env)
@@ -221,6 +226,8 @@ def _process_pr(
         )
         if files_ok and summary_ok and design_ok and traceability_ok:
             remove_reviewer(pr_number, config.repo.name, current_user, env)
+        elif was_requested:
+            add_reviewer(pr_number, config.repo.name, current_user, env)
     except Exception:
         logger.exception("PR #%d: error", pr_number)
     finally:
