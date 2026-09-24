@@ -1,5 +1,5 @@
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from harness.config import FocusedReviewConfig, HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
 from harness.runners import focused_review
@@ -231,7 +231,7 @@ def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
     ):
         focused_review._run_locked(cfg)
     mock_be.return_value.run.assert_called_once()
-    assert mock_was_requested.call_args.args[:2] == (1, "acme/frontend")
+    mock_was_requested.assert_called_once_with(1, "acme/frontend", "bot", ANY)
     mock_add_reviewer.assert_called_once_with(1, "acme/frontend", "bot", mock_add_reviewer.call_args.args[3])
 
 
