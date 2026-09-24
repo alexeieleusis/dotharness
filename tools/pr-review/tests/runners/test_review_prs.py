@@ -130,7 +130,7 @@ def test_run_locked_reprocesses_pr_with_new_sha_after_min_reanalysis_interval_el
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs._run_base_analysis", return_value=True),
         patch("harness.runners.review_prs.run_cmd") as mock_run,
@@ -160,7 +160,7 @@ def test_run_locked_respects_configured_min_reanalysis_interval_hours(tmp_xdg, t
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs._run_base_analysis", return_value=True),
         patch("harness.runners.review_prs.run_cmd") as mock_run,
@@ -187,7 +187,7 @@ def test_reprocesses_pr_when_head_sha_changes(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs._run_base_analysis", return_value=True),
         patch("harness.runners.review_prs.run_cmd") as mock_run,
@@ -210,7 +210,7 @@ def test_processes_new_prs(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs.run_cmd") as mock_run,
         patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -253,7 +253,7 @@ def test_updates_state_after_success(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs.run_cmd") as mock_run,
         patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -273,7 +273,7 @@ def test_coverage_flag_passed_when_true(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs.run_cmd") as mock_run,
         patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -327,7 +327,7 @@ def test_pr_url_bypasses_reviewed_sha_filtering(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.pr_from_url", return_value=pr),
         patch("harness.runners.review_prs.run_cmd") as mock_run,
         patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -346,7 +346,7 @@ def test_pr_url_does_not_update_reviewed_shas(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.pr_from_url", return_value=pr),
         patch("harness.runners.review_prs.run_cmd") as mock_run,
         patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -446,7 +446,7 @@ def test_run_locked_re_requests_review_once_per_pr_across_subdirs(tmp_xdg, tmp_p
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=["alice"]) as mock_get_requested,
+        patch("harness.runners.review_prs.was_review_requested", return_value=True) as mock_was_requested,
         patch("harness.runners.review_prs.add_reviewer") as mock_add_reviewer,
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs.get_changed_files", return_value=["a/foo.py", "b/bar.py"]),
@@ -457,8 +457,8 @@ def test_run_locked_re_requests_review_once_per_pr_across_subdirs(tmp_xdg, tmp_p
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
         review_prs._run_locked(cfg)
-    assert mock_get_requested.call_count == 1
-    assert mock_get_requested.call_args.args[:2] == (9, "acme/frontend")
+    assert mock_was_requested.call_count == 1
+    assert mock_was_requested.call_args.args[:2] == (9, "acme/frontend")
     assert mock_add_reviewer.call_count == 1
     assert mock_add_reviewer.call_args.args[:3] == (9, "acme/frontend", "alice")
 
@@ -469,7 +469,7 @@ def test_run_locked_does_not_re_request_review_if_not_previously_requested(tmp_x
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.add_reviewer") as mock_add_reviewer,
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs.run_cmd") as mock_run,
@@ -573,7 +573,7 @@ def test_run_locked_skips_subdir_with_no_changes(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs.get_changed_files", return_value=["a/src/foo.py"]),
         patch("harness.runners.review_prs._run_base_analysis", return_value=True),
@@ -768,7 +768,7 @@ def test_run_locked_does_not_record_reviewed_sha_on_subdir_failure(tmp_xdg, tmp_
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs._run_base_analysis", return_value=True),
         patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd),
@@ -787,7 +787,7 @@ def test_run_locked_does_not_record_reviewed_sha_on_generic_exception(tmp_xdg, t
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs._run_base_analysis", return_value=True),
         patch("harness.runners.review_prs._process_pr", side_effect=ValueError("boom")),
@@ -824,7 +824,7 @@ def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs._run_base_analysis", return_value=True),
         patch("harness.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")),
@@ -852,7 +852,7 @@ def test_fatal_git_error_from_process_pr_stops_remaining_prs(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs._run_base_analysis", return_value=True),
         patch(
@@ -877,7 +877,7 @@ def test_generic_exception_does_not_block_credit_for_other_prs(tmp_xdg, tmp_path
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs._run_base_analysis", return_value=True),
         patch("harness.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")),
@@ -903,7 +903,7 @@ def test_run_locked_calls_git_restore_when_process_pr_raises(tmp_xdg, tmp_path):
     with (
         patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
         patch("harness.runners.review_prs.get_current_user", return_value="alice"),
-        patch("harness.runners.review_prs.get_requested_reviewers", return_value=[]),
+        patch("harness.runners.review_prs.was_review_requested", return_value=False),
         patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("harness.runners.review_prs._run_base_analysis", return_value=True),
         patch("harness.runners.review_prs._process_pr", side_effect=RuntimeError("boom")),
