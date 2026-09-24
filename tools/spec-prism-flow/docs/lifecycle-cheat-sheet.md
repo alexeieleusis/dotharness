@@ -109,8 +109,8 @@ hand-opened PR would.
 
 See `pr-review`'s own command docs for what each `harness run all` step does and the
 known vibe-heal/`review-requested` requested-reviewer race:
-[`tools/pr-review/docs/commands/index.md`](../../pr-review/docs/commands/index.md) and
-[`tools/pr-review/docs/commands/review-prs.md`](../../pr-review/docs/commands/review-prs.md).
+`tools/pr-review/docs/commands/index.md` and
+`tools/pr-review/docs/commands/review-prs.md`.
 
 Turning on `review.enabled`/`vibe_heal.enabled` in `.spec-prism-flow.toml` on top of
 this is redundant for a repo already covered by the always-on cycle: you'd get two
