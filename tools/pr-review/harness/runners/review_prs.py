@@ -15,7 +15,6 @@ from harness.runners.common import (
     get_changed_files,
     get_current_user,
     get_gh_token,
-    get_requested_reviewers,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
@@ -24,6 +23,7 @@ from harness.runners.common import (
     log_called_process_output,
     pr_from_url,
     run_cmd,
+    was_review_requested,
 )
 
 logger = logging.getLogger(__name__)
@@ -144,7 +144,7 @@ def _process_pr(pr: dict, config: HarnessConfig, env: dict, current_user: str, w
         return False
 
     git_fetch_and_checkout(pr["headRefName"], wdir, env)
-    was_requested = current_user in get_requested_reviewers(pr["number"], config.repo.name, env)
+    was_requested = was_review_requested(pr["number"], config.repo.name, current_user, env)
     results: list[bool] = []
     changed_files = _get_changed_files_for_pr(pr, config, wdir, env)
     for subdir in config.repo.subdirs:
