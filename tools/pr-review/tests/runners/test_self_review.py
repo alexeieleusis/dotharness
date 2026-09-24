@@ -465,13 +465,13 @@ def test_list_my_prs_returns_none_on_malformed_json():
         assert self_review._list_my_prs("acme/frontend", {}) is None
 
 
-def test_list_my_prs_requests_author_and_returns_prs_from_single_call():
-    # gh pr list --json can return everything in a single call; author must be among
-    # the requested fields, because the regret pass's author gate
-    # (regret_review.find_introducing_prs -> _pr_gate_setup) reads
-    # pr["author"]["login"] from the PR dict and fails closed on an authorless PR —
-    # without the field no PR could ever pass the gate in this runner (the same fix
-    # review_requested._get_prs received). The returned PR dicts must carry it through.
+def test_list_my_prs_requests_author_field_in_both_queries():
+    """gh pr list --json must request the "author" field on both the --author and
+    --assignee queries, because the regret pass's author gate
+    (regret_review.find_introducing_prs -> _pr_gate_setup) reads
+    pr["author"]["login"] from the PR dict and fails closed on an authorless PR —
+    without the field no PR could ever pass the gate in this runner (the same fix
+    review_requested._get_prs received). The returned PR dicts must carry it through."""
     pr = {
         "number": 42,
         "url": "https://github.com/acme/frontend/pull/42",
@@ -485,10 +485,56 @@ def test_list_my_prs_requests_author_and_returns_prs_from_single_call():
         prs = self_review._list_my_prs("acme/frontend", {})
 
     assert prs == [pr]
-    mock_run.assert_called_once()
-    args = mock_run.call_args[0][0]
-    fields = args[args.index("--json") + 1].split(",")
-    assert "author" in fields
+    assert mock_run.call_count == 2
+    for call in mock_run.call_args_list:
+        args = call[0][0]
+        fields = args[args.index("--json") + 1].split(",")
+        assert "author" in fields
+
+
+def test_list_my_prs_includes_assigned_prs_not_authored(tmp_xdg, tmp_path):
+    """A PR opened by a bot on the user's behalf (not authored by them) but assigned to
+    them must still show up — self_review is about PRs the user is responsible for, not
+    strictly ones they authored."""
+    authored = [{"number": 1, "url": "u1", "headRefName": "b1"}]
+    assigned = [{"number": 2, "url": "u2", "headRefName": "b2"}]
+
+    def side_effect(cmd, **_kwargs):
+        if "--author" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps(authored).encode())
+        if "--assignee" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps(assigned).encode())
+        raise AssertionError(f"unexpected command: {cmd}")  # noqa: TRY003
+
+    with patch("harness.runners.self_review.run_cmd", side_effect=side_effect):
+        prs = self_review._list_my_prs("acme/frontend", {})
+    assert prs is not None
+    assert [p["number"] for p in prs] == [1, 2]
+
+
+def test_list_my_prs_deduplicates_pr_authored_and_assigned(tmp_xdg, tmp_path):
+    both = [{"number": 1, "url": "u1", "headRefName": "b1"}]
+
+    with patch(
+        "harness.runners.self_review.run_cmd", return_value=MagicMock(returncode=0, stdout=json.dumps(both).encode())
+    ):
+        prs = self_review._list_my_prs("acme/frontend", {})
+    assert prs is not None
+    assert [p["number"] for p in prs] == [1]
+
+
+def test_list_my_prs_returns_none_when_assignee_query_fails(tmp_xdg, tmp_path):
+    """The author query can succeed while the assignee query fails (or vice versa) — that
+    partial result must not be treated as the authoritative open-PR set."""
+    authored = [{"number": 1, "url": "u1", "headRefName": "b1"}]
+
+    def side_effect(cmd, **_kwargs):
+        if "--author" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps(authored).encode())
+        return MagicMock(returncode=1, stdout=b"")
+
+    with patch("harness.runners.self_review.run_cmd", side_effect=side_effect):
+        assert self_review._list_my_prs("acme/frontend", {}) is None
 
 
 def test_design_review_runs_independently_of_already_reviewed_files(tmp_xdg, tmp_path):
