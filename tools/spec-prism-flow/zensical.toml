@@ -10,6 +10,8 @@ copyright = 'Maintained by <a href="https://alexeieleusis.com">alexeieleusis</a>
 
 nav = [
     { "Home" = "index.md" },
+    { "Lifecycle cheat sheet" = "lifecycle-cheat-sheet.md" },
+    { "Requirements" = "requirements.md" },
     { "Modules" = "modules.md" },
 ]
 
