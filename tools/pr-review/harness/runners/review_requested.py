@@ -199,6 +199,10 @@ def _process_pr(
     # end-of-iteration re-add fires only when the user was already a requested reviewer.
     was_requested = was_review_requested(pr_number, config.repo.name, current_user, env)
     original_sha = git_detach_and_record(wdir, env)
+    # Initialized to False (not True) so that a pass left un-run by an exception raised
+    # from an earlier pass in this same iteration is treated as failed, not vacuously
+    # succeeded, when the reviewer-state reconciliation below runs from `finally`.
+    files_ok = summary_ok = design_ok = traceability_ok = False
     try:
         git_fetch_and_checkout(pr["headRefName"], wdir, env)
         # Gathered once and shared by all four passes below (mirrors self_review.py's
@@ -224,13 +228,21 @@ def _process_pr(
         traceability_ok = _run_traceability_review(
             pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, traceability_done, ctx
         )
-        if files_ok and summary_ok and design_ok and traceability_ok:
-            remove_reviewer(pr_number, config.repo.name, current_user, env)
-        elif was_requested:
-            add_reviewer(pr_number, config.repo.name, current_user, env)
     except Exception:
         logger.exception("PR #%d: error", pr_number)
     finally:
+        # Runs even if a pass above raised (e.g. a bare exception from a backend call or
+        # from resolve_linked_tickets) instead of returning False the normal way — otherwise
+        # the reviewer dropped by an earlier pass's own side effect stays dropped for the
+        # rest of the cycle, invisible to future runs of this runner. Guarded so a failure
+        # in the reconciliation calls themselves can't also skip git_restore below.
+        try:
+            if files_ok and summary_ok and design_ok and traceability_ok:
+                remove_reviewer(pr_number, config.repo.name, current_user, env)
+            elif was_requested:
+                add_reviewer(pr_number, config.repo.name, current_user, env)
+        except Exception:
+            logger.exception("PR #%d: error reconciling reviewer state", pr_number)
         git_restore(original_sha, pr["headRefName"], wdir, env)
 
 
