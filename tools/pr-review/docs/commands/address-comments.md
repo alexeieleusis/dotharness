@@ -21,6 +21,7 @@ harness run [--config PATH] [--verbose] address-comments
    - Skips it if it's a draft.
    - Calls a GraphQL query for unresolved review threads; if any thread is unresolved, the PR has "pending feedback." Otherwise it falls back to checking for any issue/timeline comment not authored by `github-actions[bot]` or `dependabot[bot]`. If neither check finds anything, the PR is skipped entirely — no checkout, no backend calls.
    - Resolves the current `gh` user's login the first time it's needed (`gh api user --jq .login`), then reuses it for the rest of the run.
+   - Determines whether the current user is currently a requested reviewer on the PR, before doing anything else for it.
     - Fetches and checks out the PR's head branch (using `git checkout -B` to `origin/<branch>` — see [Shared behavior](index.md#shared-behavior)).
    - Fetches all comments via `scripts/pr-comments.py fetch --pr <N>` and reads the JSON it caches at `~/.harness/cache/pr-<N>-comments.json`. The actionable set is: all inline (review-thread) comments, all PR-level review comments, and issue comments whose author doesn't end in `[bot]` and whose body doesn't contain `[` followed by `bot]` (case-insensitive).
    - If a second GraphQL query (mapping unresolved threads to their comment IDs) succeeds, inline comments are further filtered down to only those belonging to a still-unresolved thread; if that query fails, this filter is skipped and inline comments are left as fetched.
@@ -34,6 +35,7 @@ harness run [--config PATH] [--verbose] address-comments
      - If the backend invocation raises (e.g. a timeout after its internal retry), the error is logged and the loop moves to the next comment for this PR — nothing is pushed for that comment.
      - Otherwise, the runner itself runs `git push origin <branch>` right after the backend returns. If the push succeeds, it moves to the next comment; if it fails, a warning is logged and the **remaining comments for this PR are abandoned for this run** (the per-comment loop breaks, but processing continues with the next PR).
    - Any other exception while processing the PR is caught and logged; the run moves on to the next PR regardless.
+   - If the user was a requested reviewer before this PR was processed, they're re-added as one now, regardless of what happened above — replying to (or fixing) a comment can submit a review via the GitHub API as a side effect, which clears the submitter from the PR's requested-reviewer list and would otherwise hide it from `review-requested`'s search for the rest of a `run all` cycle. This runs even if an exception was raised above.
    - The working tree is always restored to the SHA recorded in step 6 before moving to the next PR.
 8. After all PRs, the working directory is left checked out (detached) at `origin/main`.
 

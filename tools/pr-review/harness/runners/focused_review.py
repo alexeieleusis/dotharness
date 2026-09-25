@@ -10,7 +10,6 @@ from harness.runners.common import (
     PR_COMMENTS_SCRIPT_PATH,
     TIMEOUT_GIT,
     FatalGitError,
-    add_reviewer,
     build_subprocess_env,
     fetch_pr_comments,
     find_reply_with_marker,
@@ -20,8 +19,8 @@ from harness.runners.common import (
     git_fetch_and_checkout,
     git_restore,
     list_open_prs_for_current_user,
+    preserve_reviewer_request,
     run_cmd,
-    was_review_requested,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,14 +75,13 @@ def _run_locked(config: HarnessConfig) -> None:
             if not matches:
                 continue
             logger.info("PR #%d: starting", number)
-            # We cannot observe from here whether replying to these comments submitted a
-            # review as a side effect, so check unconditionally.
-            was_requested = was_review_requested(number, config.repo.name, current_user, env)
             checkout_attempted = True
-            git_fetch_and_checkout(branch, wdir, env)
-            _process_matches(matches, config, instructions_template, backend, number, wdir, env)
-            if was_requested:
-                add_reviewer(number, config.repo.name, current_user, env)
+            # Replying to these comments can submit a review via the GitHub API as a side
+            # effect, which would clear us from the requested-reviewers list — restore it
+            # regardless of outcome, since we cannot observe from here whether that happened.
+            with preserve_reviewer_request(number, config.repo.name, current_user, env):
+                git_fetch_and_checkout(branch, wdir, env)
+                _process_matches(matches, config, instructions_template, backend, number, wdir, env)
         except FatalGitError:
             logger.exception("PR #%d: fatal git error", number)
             continue

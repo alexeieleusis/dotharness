@@ -4,7 +4,8 @@ import os
 import re
 import signal
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -299,6 +300,31 @@ def remove_reviewer(pr_number: int, repo: str, login: str, env: dict) -> None:
         timeout=TIMEOUT_GH,
         check=False,
     )
+
+
+@contextmanager
+def preserve_reviewer_request(pr_number: int, repo: str, login: str, env: dict) -> Iterator[None]:
+    """Wrap a PR-processing block that might submit a GitHub review as a side effect
+    (e.g. replying to comments via the backend), re-adding `login` as a requested
+    reviewer afterward if it held that status beforehand — regardless of whether the
+    wrapped block succeeds, fails, or raises, since none of those outcomes are grounds
+    to conclude the review on this runner's behalf.
+
+    Only for runners that don't themselves decide when a review is "done": review_prs,
+    focused_review, and address_comments all wrap their per-PR work in this. review_requested
+    is the one runner that does conclude the review — it intentionally calls remove_reviewer
+    once all of its passes succeed — so it keeps its own reconcile-in-`finally` logic instead
+    of this unconditional restore.
+
+    A falsy `login` (e.g. address_comments's get_current_user lookup failing) skips the
+    check entirely rather than querying GitHub with an empty login, which could never match
+    a real requested reviewer anyway."""
+    was_requested = bool(login) and was_review_requested(pr_number, repo, login, env)
+    try:
+        yield
+    finally:
+        if was_requested:
+            add_reviewer(pr_number, repo, login, env)
 
 
 def is_review_summary_comment(body: str) -> bool:
