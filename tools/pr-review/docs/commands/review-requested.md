@@ -148,16 +148,18 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
       judges every candidate `NO`, nothing is posted, so the marker check
       stays false and the pass simply re-runs, with a fresh candidate search,
       whenever this PR is next processed.
-    - The runner removes the current user as a requested reviewer on the PR
-      (`gh pr edit --remove-reviewer <login>`). This clears the PR from
-      future `user-review-requested:@me` searches. It happens only if the
-      file+summary part, the design pass, the traceability pass, *and* — when
-      `[regret_review].enabled` is `true` — the regret pass all succeeded (or
-      were already done). A failing or timed-out pass in any one of the
-      passes (files, summary, design, traceability, and regret when enabled —
-      a failed regret comment post counts as a failure) is enough to keep the
-      PR on the reviewer's queue for a retry next run, even if the other
-      parts succeeded.
+    - The runner never removes the current user as a requested reviewer, even
+      once every pass — file+summary, design, traceability, and regret when
+      enabled — has succeeded. This runner only posts automated findings; the
+      human still reviews and approves the PR themselves, which is what
+      actually clears the review request on GitHub. If any pass submits a
+      formal review as a side effect, or races a concurrent runner that does
+      (for example `review-prs`'s vibe_heal post), the PR would otherwise
+      silently vanish from `user-review-requested:@me` before that submission
+      was intentional. So the whole per-PR block re-adds the reviewer
+      afterward if they held that status going in — the same
+      `preserve_reviewer_request` guard `review-prs`, `focused-review`, and
+      `address-comments` use (see [Shared behavior](index.md#shared-behavior)).
     - Any other exception while processing a PR is caught and logged. The
       runner proceeds to the next PR rather than aborting the whole run.
     - Regardless of outcome, the runner restores the repo to the commit
@@ -221,18 +223,23 @@ duplicate work using live signals read from GitHub on every run:
    judges every candidate `NO`, nothing is posted, so the marker stays absent
    and the pass simply re-runs, with a fresh candidate search, whenever this
    PR is next processed.
-6. After reviewing, it removes itself as a requested reviewer. It does this
-   only once the file+summary part, the design pass, the traceability pass,
-   and — when `[regret_review].enabled` is `true` — the regret pass have all
-   succeeded (or were already done). This removes the PR from the
-   `user-review-requested:@me` search used to build the batch list next run.
+6. It never removes itself as a requested reviewer, even once every part
+   above (1)-(5) has succeeded — the human still reviews and approves the PR
+   themselves, and that (or GitHub's own bookkeeping around a submitted
+   review) is what actually clears the request. If a pass submits a formal
+   review as a side effect, or races a concurrent runner that does (for
+   example `review-prs`'s vibe_heal post), the whole per-PR block re-adds the
+   reviewer afterward if they held that status going in — the same
+   `preserve_reviewer_request` guard `review-prs`, `focused-review`, and
+   `address-comments` use.
 
-Because of (6), re-requesting review from the bot/user account is what
-triggers reprocessing. Pushing new commits also triggers it, since GitHub
-re-requests review automatically depending on branch protection settings.
-There is no SHA comparison. So if the reviewer is manually re-requested
-without new commits, and no matching comment or approval exists, the PR will
-be reviewed again.
+Because the PR only drops out of the `user-review-requested:@me` search once
+the human submits their own review, this runner keeps reprocessing a PR every
+run until (1)-(5) are all satisfied. There is no SHA comparison, so pushing
+new commits (which GitHub re-requests review for automatically depending on
+branch protection settings) or manually re-requesting review resets nothing
+extra — it's (1)-(5) reading live GitHub state on every run that keeps this
+idempotent either way.
 
 ## Notes
 - This runner uses the shared locking and working-directory-mutation
@@ -244,15 +251,14 @@ be reviewed again.
   `gh` or git call) is logged and skipped. It does not stop the rest of the
   batch. It is not marked "done" in any way, so the runner retries it on the
   next run.
-- Backend timeouts are non-fatal at the per-file, summary, design, and
-  traceability steps. They are logged, and the run proceeds to the next
-  step. A slow or hung backend on one file does not block review of the rest.
-  Reviewer removal requires `files_ok and summary_ok and design_ok and
-  traceability_ok` — and, when `[regret_review].enabled` is `true`,
-  `regret_ok` as well. So a timeout at any of those keeps the PR on the queue
-  for a retry next run. There is no special-casing of the design or
-  traceability pass relative to the other two. See
-  [State and idempotency](#state-and-idempotency).
+- Backend timeouts are non-fatal at the per-file, summary, design,
+  traceability, and regret steps. They are logged, and the run proceeds to
+  the next step. A slow or hung backend on one file does not block review of
+  the rest. Since a marker/approval check (not an in-memory success flag) is
+  each part's only idempotency signal, a timeout at any of them simply leaves
+  that part's marker unposted, so it's retried next run. There is no
+  special-casing of the design or traceability pass relative to the other
+  two. See [State and idempotency](#state-and-idempotency).
 - Building the batch list makes one `gh pr list --search` call. No extra
   per-PR call is needed: `headRefName`, `createdAt`, and
   `closingIssuesReferences` all come from that one call.
