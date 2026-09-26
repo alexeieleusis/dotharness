@@ -14,7 +14,7 @@ The two main sources of misreading are words with more than one meaning and sent
 
 **Strict** — use it where a wrong reading has a cost: procedures, error messages, tool and function descriptions, inter-agent instructions, and safety text. Apply every rule below.
 
-**Everyday** — ordinary prose: READMEs, PR descriptions, changelogs, documentation, emails, posts, and marketing or persuasive copy. Apply the structure rules in full. Treat the word-choice rules as a preference. Prose needs some word range. Rewriting prose in Strict mode reads as a personality transplant, not as a clarification.
+**Everyday** — ordinary prose: READMEs, PR descriptions, changelogs, documentation, emails, posts, and marketing or persuasive copy. Apply the structure rules in full. Treat the word-choice rules as a preference. Prose needs some word range. Rewriting prose in Strict mode reads as a personality transplant, not as a clarification. For marketing or persuasive copy, let sentence length and parallelism vary where the persuasive effect depends on it — the structure rules exist to prevent misreading, not to flatten a deliberate rhetorical build-up.
 
 Pick one before rewriting. If the user does not say which, infer from the text type.
 
