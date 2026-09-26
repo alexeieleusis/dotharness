@@ -65,6 +65,12 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
         # backend or hits `gh` for real (each is tested on its own below).
         patch("harness.runners.review_requested.has_design_review_comment", return_value=True),
         patch("harness.runners.review_requested.has_traceability_review_comment", return_value=True),
+        # Not previously requested by default, so the re-request path (tested on its own
+        # below) doesn't fire a real `gh` call for tests that don't care about it. These
+        # are called from inside common.preserve_reviewer_request, not review_requested
+        # itself — patched on their defining module accordingly.
+        patch("harness.runners.common.was_review_requested", return_value=False) as get_requested,
+        patch("harness.runners.common.add_reviewer") as add_reviewer,
         patch("harness.runners.review_requested.git_detach_and_record", return_value="sha") as detach,
         patch("harness.runners.review_requested.git_fetch_and_checkout") as fetch_checkout,
         patch("harness.runners.review_requested.git_restore") as restore,
@@ -88,6 +94,8 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
             run_cmd=run_cmd,
             os=os_mock,
             backend=backend,
+            get_requested=get_requested,
+            add_reviewer=add_reviewer,
         )
 
 
@@ -245,56 +253,6 @@ def test_design_review_noop_when_marker_already_present(tmp_xdg, tmp_path):
     assert mocks.backend.return_value.run.call_count == 2
 
 
-def test_remove_reviewer_blocked_when_design_review_fails(tmp_xdg, tmp_path):
-    """Files and summary succeed, but the design pass fails — the reviewer must not be
-    removed, so the PR stays in the queue and gets retried next run."""
-    _setup_knowledge(tmp_path)
-    cfg = _cfg(tmp_path)
-    with (
-        _full_run_mocks() as mocks,
-        patch("harness.runners.review_requested.has_design_review_comment", return_value=False),
-        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
-    ):
-        # file review, then summary, then a failing design-review call
-        mocks.backend.return_value.run.side_effect = [
-            MagicMock(returncode=0),
-            MagicMock(returncode=0),
-            MagicMock(returncode=1),
-        ]
-        review_requested._run_locked(cfg, pr_url=None)
-    mock_remove.assert_not_called()
-
-
-def test_remove_reviewer_blocked_when_marker_comment_never_lands(tmp_xdg, tmp_path):
-    """The backend can exit 0 without the PR-level marker comment actually landing (e.g.
-    it crashed after doing the work but before posting). That must not be treated as
-    success — the reviewer stays on the PR so the design pass retries next cycle."""
-    _setup_knowledge(tmp_path)
-    cfg = _cfg(tmp_path)
-    with (
-        _full_run_mocks() as mocks,
-        patch("harness.runners.review_requested.has_design_review_comment", return_value=False),
-        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
-    ):
-        mocks.backend.return_value.run.return_value = MagicMock(returncode=0)
-        review_requested._run_locked(cfg, pr_url=None)
-    mock_remove.assert_not_called()
-
-
-def test_remove_reviewer_proceeds_when_design_review_noops(tmp_xdg, tmp_path):
-    """An already-posted design comment still counts as success for the remove_reviewer
-    gate — the pass being a noop must not block clearing the review request."""
-    _setup_knowledge(tmp_path)
-    cfg = _cfg(tmp_path)
-    with (
-        _full_run_mocks(),
-        patch("harness.runners.review_requested.has_design_review_comment", return_value=True),
-        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
-    ):
-        review_requested._run_locked(cfg, pr_url=None)
-    mock_remove.assert_called_once()
-
-
 def test_continues_to_next_pr_on_backend_exception(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
@@ -373,103 +331,64 @@ def test_traceability_review_no_linked_ticket_posts_comment_without_backend(tmp_
         patch("harness.runners.review_requested.has_traceability_review_comment", return_value=False),
         patch("harness.runners.review_requested.resolve_linked_tickets", return_value=[]),
         patch("harness.runners.review_requested.post_no_linked_ticket_comment", return_value=True) as mock_post,
-        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
     ):
         review_requested._run_locked(cfg, pr_url=None)
     # 1 file + 1 summary = 2 backend calls; traceability never invokes the backend.
     assert mocks.backend.return_value.run.call_count == 2
     mock_post.assert_called_once()
     assert mock_post.call_args.args[:2] == (1, "acme/frontend")
-    mock_remove.assert_called_once()
 
 
-def test_remove_reviewer_blocked_when_ticket_lookup_is_inconclusive(tmp_xdg, tmp_path):
-    """When resolve_linked_tickets returns None (a closing-keyword ref existed but failed
-    to resolve due to an API failure, not a confirmed absence), the reviewer must not be
-    removed and no terminal "no linked ticket" comment must be posted — the PR is retried
-    next cycle instead of being permanently marked as having no ticket."""
-    _setup_knowledge(tmp_path)
-    cfg = _cfg(tmp_path)
-    with (
-        _full_run_mocks(),
-        patch("harness.runners.review_requested.has_traceability_review_comment", return_value=False),
-        patch("harness.runners.review_requested.resolve_linked_tickets", return_value=None),
-        patch("harness.runners.review_requested.post_no_linked_ticket_comment") as mock_post,
-        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
-    ):
-        review_requested._run_locked(cfg, pr_url=None)
-    mock_post.assert_not_called()
-    mock_remove.assert_not_called()
-
-
-def test_remove_reviewer_blocked_when_traceability_no_ticket_comment_post_fails(tmp_xdg, tmp_path):
-    """If posting the "no linked ticket" comment itself fails, the reviewer must not be
-    removed, so the outcome is retried next cycle rather than silently lost."""
-    _setup_knowledge(tmp_path)
-    cfg = _cfg(tmp_path)
-    with (
-        _full_run_mocks(),
-        patch("harness.runners.review_requested.has_traceability_review_comment", return_value=False),
-        patch("harness.runners.review_requested.resolve_linked_tickets", return_value=[]),
-        patch("harness.runners.review_requested.post_no_linked_ticket_comment", return_value=False),
-        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
-    ):
-        review_requested._run_locked(cfg, pr_url=None)
-    mock_remove.assert_not_called()
-
-
-def test_remove_reviewer_blocked_when_traceability_review_fails(tmp_xdg, tmp_path):
-    """Files and summary succeed, but the traceability pass fails — the reviewer must
-    not be removed, so the PR stays in the queue and gets retried next run."""
+def test_re_requests_review_when_incomplete_and_previously_requested(tmp_xdg, tmp_path):
+    """Submitting a review via the GitHub API clears the submitter from the PR's
+    requested-reviewers list. If the design pass fails but the user was a requested
+    reviewer to begin with, the runner must re-add them so the PR stays in the
+    "user-review-requested:@me" inbox other loops (or a later run of this one) rely
+    on — mirrors review_prs.py."""
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
         _full_run_mocks() as mocks,
-        patch("harness.runners.review_requested.has_traceability_review_comment", return_value=False),
-        patch("harness.runners.review_requested.resolve_linked_tickets", return_value=[_TICKET]),
-        patch("harness.runners.review_requested.build_early_comment_context", return_value=""),
-        patch("harness.runners.review_requested.get_traceability_review_flagged_locations", return_value=[]),
-        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
+        patch("harness.runners.review_requested.has_design_review_comment", return_value=False),
     ):
-        # file review, then summary, then a failing traceability-review call
+        mocks.get_requested.return_value = True
+        # file review, then summary, then a failing design-review call
         mocks.backend.return_value.run.side_effect = [
             MagicMock(returncode=0),
             MagicMock(returncode=0),
             MagicMock(returncode=1),
         ]
         review_requested._run_locked(cfg, pr_url=None)
-    mock_remove.assert_not_called()
+    mocks.add_reviewer.assert_called_once_with(1, "acme/frontend", "bot", ANY)
 
 
-def test_remove_reviewer_blocked_when_traceability_marker_comment_never_lands(tmp_xdg, tmp_path):
-    """The backend can exit 0 without the PR-level marker comment actually landing. That
-    must not be treated as success — the reviewer stays on the PR so the traceability
-    pass retries next cycle."""
+def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
+    """The re-add only fires if the user was already a requested reviewer — it must
+    not add a reviewer who was never on the PR to begin with."""
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
         _full_run_mocks() as mocks,
-        patch("harness.runners.review_requested.has_traceability_review_comment", return_value=False),
-        patch("harness.runners.review_requested.resolve_linked_tickets", return_value=[_TICKET]),
-        patch("harness.runners.review_requested.build_early_comment_context", return_value=""),
-        patch("harness.runners.review_requested.get_traceability_review_flagged_locations", return_value=[]),
-        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
+        patch("harness.runners.review_requested.has_design_review_comment", return_value=False),
     ):
-        mocks.backend.return_value.run.return_value = MagicMock(returncode=0)
+        mocks.get_requested.return_value = False
+        mocks.backend.return_value.run.side_effect = [
+            MagicMock(returncode=0),
+            MagicMock(returncode=0),
+            MagicMock(returncode=1),
+        ]
         review_requested._run_locked(cfg, pr_url=None)
-    mock_remove.assert_not_called()
+    mocks.add_reviewer.assert_not_called()
 
 
-def test_remove_reviewer_proceeds_when_traceability_review_noops(tmp_xdg, tmp_path):
-    """An already-posted traceability comment still counts as success for the
-    remove_reviewer gate — the pass being a noop must not block clearing the review
-    request."""
+def test_re_requests_review_even_when_fully_done(tmp_xdg, tmp_path):
+    """This runner never concludes the review on the human's behalf — even when every
+    pass succeeds, the user must still be re-added as a requested reviewer if they held
+    that status going in. Regression test for the old behavior, where a fully successful
+    run would instead call remove_reviewer and skip the re-add."""
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
-    with (
-        _full_run_mocks(),
-        patch("harness.runners.review_requested.has_traceability_review_comment", return_value=True),
-        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
-    ):
+    with _full_run_mocks() as mocks:
+        mocks.get_requested.return_value = True
         review_requested._run_locked(cfg, pr_url=None)
-    mock_remove.assert_called_once()
+    mocks.add_reviewer.assert_called_once_with(1, "acme/frontend", "bot", ANY)

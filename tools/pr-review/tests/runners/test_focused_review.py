@@ -1,5 +1,5 @@
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from harness.config import FocusedReviewConfig, HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
 from harness.runners import focused_review
@@ -188,11 +188,13 @@ def test_matching_comment_invokes_backend(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.focused_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.focused_review.get_current_user", return_value="bot"),
         patch(
             "harness.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}],
         ),
         patch("harness.runners.focused_review.fetch_pr_comments", return_value=[_MATCHING_COMMENT]),
+        patch("harness.runners.common.was_review_requested", return_value=False),
         patch("harness.runners.focused_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.focused_review.git_fetch_and_checkout"),
         patch("harness.runners.focused_review.git_restore"),
@@ -201,6 +203,59 @@ def test_matching_comment_invokes_backend(tmp_xdg, tmp_path):
     ):
         focused_review._run_locked(cfg)
     mock_be.return_value.run.assert_called_once()
+
+
+def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
+    """Replying to a comment can submit a review via the GitHub API as a side effect,
+    which clears the submitter from the PR's requested-reviewers list — hiding it from
+    review_requested's "user-review-requested:@me" search. If the user was already a
+    requested reviewer before this cycle, they must be re-added afterward — mirrors
+    review_prs.py's add_reviewer guard."""
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.focused_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.focused_review.get_current_user", return_value="bot"),
+        patch(
+            "harness.runners.focused_review.list_open_prs_for_current_user",
+            return_value=[{"number": 1, "headRefName": "b"}],
+        ),
+        patch("harness.runners.focused_review.fetch_pr_comments", return_value=[_MATCHING_COMMENT]),
+        patch("harness.runners.common.was_review_requested", return_value=True) as mock_was_requested,
+        patch("harness.runners.common.add_reviewer") as mock_add_reviewer,
+        patch("harness.runners.focused_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.focused_review.git_fetch_and_checkout"),
+        patch("harness.runners.focused_review.git_restore"),
+        patch("harness.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
+        patch("harness.runners.focused_review.Backend") as mock_be,
+    ):
+        focused_review._run_locked(cfg)
+    mock_be.return_value.run.assert_called_once()
+    mock_was_requested.assert_called_once_with(1, "acme/frontend", "bot", ANY)
+    mock_add_reviewer.assert_called_once_with(1, "acme/frontend", "bot", mock_add_reviewer.call_args.args[3])
+
+
+def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.focused_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.focused_review.get_current_user", return_value="bot"),
+        patch(
+            "harness.runners.focused_review.list_open_prs_for_current_user",
+            return_value=[{"number": 1, "headRefName": "b"}],
+        ),
+        patch("harness.runners.focused_review.fetch_pr_comments", return_value=[_MATCHING_COMMENT]),
+        patch("harness.runners.common.was_review_requested", return_value=False),
+        patch("harness.runners.common.add_reviewer") as mock_add_reviewer,
+        patch("harness.runners.focused_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.focused_review.git_fetch_and_checkout"),
+        patch("harness.runners.focused_review.git_restore"),
+        patch("harness.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
+        patch("harness.runners.focused_review.Backend"),
+    ):
+        focused_review._run_locked(cfg)
+    mock_add_reviewer.assert_not_called()
 
 
 def test_already_marked_comment_skips_backend(tmp_xdg, tmp_path):
@@ -212,6 +267,7 @@ def test_already_marked_comment_skips_backend(tmp_xdg, tmp_path):
     }
     with (
         patch("harness.runners.focused_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.focused_review.get_current_user", return_value="bot"),
         patch(
             "harness.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -233,6 +289,7 @@ def test_non_matching_comment_skips_backend(tmp_xdg, tmp_path):
     plain = {**_MATCHING_COMMENT, "body": "just SonarQube noise, no knowledge url"}
     with (
         patch("harness.runners.focused_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.focused_review.get_current_user", return_value="bot"),
         patch(
             "harness.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -253,6 +310,7 @@ def test_non_matching_pr_skips_restore(tmp_xdg, tmp_path):
     plain = {**_MATCHING_COMMENT, "body": "just SonarQube noise, no knowledge url"}
     with (
         patch("harness.runners.focused_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.focused_review.get_current_user", return_value="bot"),
         patch(
             "harness.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -273,11 +331,13 @@ def test_unresolvable_knowledge_file_skips_comment_but_continues(tmp_xdg, tmp_pa
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.focused_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.focused_review.get_current_user", return_value="bot"),
         patch(
             "harness.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}],
         ),
         patch("harness.runners.focused_review.fetch_pr_comments", return_value=[_MATCHING_COMMENT]),
+        patch("harness.runners.common.was_review_requested", return_value=False),
         patch("harness.runners.focused_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.focused_review.git_fetch_and_checkout"),
         patch("harness.runners.focused_review.git_restore") as mock_restore,
@@ -294,11 +354,13 @@ def test_restores_working_dir_even_on_backend_failure(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.focused_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.focused_review.get_current_user", return_value="bot"),
         patch(
             "harness.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}],
         ),
         patch("harness.runners.focused_review.fetch_pr_comments", return_value=[_MATCHING_COMMENT]),
+        patch("harness.runners.common.was_review_requested", return_value=False),
         patch("harness.runners.focused_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.focused_review.git_fetch_and_checkout"),
         patch("harness.runners.focused_review.git_restore") as mock_restore,
@@ -317,11 +379,13 @@ def test_fatal_git_error_continues_to_remaining_prs(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.focused_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.focused_review.get_current_user", return_value="bot"),
         patch(
             "harness.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}, {"number": 2, "headRefName": "c"}],
         ),
         patch("harness.runners.focused_review.fetch_pr_comments", return_value=[_MATCHING_COMMENT]),
+        patch("harness.runners.common.was_review_requested", return_value=False),
         patch("harness.runners.focused_review.git_detach_and_record", return_value="sha"),
         patch(
             "harness.runners.focused_review.git_fetch_and_checkout",
@@ -342,6 +406,7 @@ def test_non_fatal_error_continues_to_next_pr(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     with (
         patch("harness.runners.focused_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.focused_review.get_current_user", return_value="bot"),
         patch(
             "harness.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}, {"number": 2, "headRefName": "c"}],
@@ -350,6 +415,7 @@ def test_non_fatal_error_continues_to_next_pr(tmp_xdg, tmp_path):
             "harness.runners.focused_review.fetch_pr_comments",
             side_effect=[RuntimeError("boom"), [_MATCHING_COMMENT]],
         ),
+        patch("harness.runners.common.was_review_requested", return_value=False),
         patch("harness.runners.focused_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.focused_review.git_fetch_and_checkout"),
         patch("harness.runners.focused_review.git_restore"),

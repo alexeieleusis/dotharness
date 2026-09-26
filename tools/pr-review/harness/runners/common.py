@@ -4,7 +4,8 @@ import os
 import re
 import signal
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -210,8 +211,24 @@ def build_subprocess_env(path_prepend: list[str], env_vars: dict[str, str], gh_t
 
 
 def get_gh_token(gh_token_cmd: str) -> str:
+    """Resolve the GitHub token `gh_token_cmd` (e.g. `gh auth token --user <login>`)
+    prints, so the caller can pin every subsequent `gh`/backend call to that specific
+    account via GITHUB_TOKEN (see build_subprocess_env) regardless of which account
+    `gh auth switch` last left active.
+
+    Raises on a failed command or blank stdout rather than returning "" the way a
+    quieter helper might: build_subprocess_env only sets GITHUB_TOKEN when this
+    returns something truthy, so silently returning "" here would silently drop back
+    to whatever account `gh auth status` currently has active — precisely the
+    cross-loop account drift `gh_token_cmd` exists to avoid (see .harness.toml)."""
     result = subprocess.run(gh_token_cmd, shell=True, capture_output=True, text=True, timeout=TIMEOUT_GH)  # noqa: S602
-    return result.stdout.strip()
+    token = result.stdout.strip()
+    if result.returncode != 0 or not token:
+        raise RuntimeError(  # noqa: TRY003
+            f"gh_token_cmd ({gh_token_cmd!r}) did not produce a token "
+            f"(exit {result.returncode}): {result.stderr.strip()}"
+        )
+    return token
 
 
 def is_draft_pr(pr: dict) -> bool:
@@ -237,8 +254,22 @@ def is_pr_open(pr_number: int, repo: str, env: dict) -> bool:
 
 
 def get_current_user(env: dict) -> str:
+    """Unlike get_gh_token, deliberately fails *open* (returns "" rather than raising)
+    on a failed lookup: every caller either treats a blank current_user as "nothing
+    matches me" for its idempotency/comment checks (safe no-op, at worst a wasted or
+    duplicate pass this cycle that self-corrects once the lookup succeeds again) or, in
+    preserve_reviewer_request, skips its reviewer check entirely on a falsy login rather
+    than querying GitHub for one that could never match. Logged so a persistently blank
+    current_user (e.g. GITHUB_TOKEN pointing at a revoked token) is still visible."""
     result = run_cmd(["gh", "api", "user", "--jq", ".login"], cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
-    return result.stdout.decode("utf-8", errors="replace").strip()
+    login = result.stdout.decode("utf-8", errors="replace").strip()
+    if result.returncode != 0 or not login:
+        logger.error(
+            "get_current_user: 'gh api user' failed to resolve a login (exit %d): %s",
+            result.returncode,
+            result.stderr.decode("utf-8", errors="replace").strip(),
+        )
+    return login
 
 
 def pr_from_url(url: str, repo: str, env: dict, fields: str) -> dict:
@@ -270,24 +301,61 @@ def get_requested_reviewers(pr_number: int, repo: str, env: dict) -> list[str]:
     return [r["login"] for r in data.get("reviewRequests", []) if "login" in r]
 
 
+def was_review_requested(pr_number: int, repo: str, login: str, env: dict) -> bool:
+    """Whether `login` was already a requested reviewer before processing started.
+
+    Submitting a review via the GitHub API clears the submitter from a PR's
+    requested-reviewers list, which would hide the PR from any runner's
+    "user-review-requested:@me" search. Callers check this up front and re-add
+    the reviewer with add_reviewer() afterward so the PR stays visible — none of
+    these runners ever remove the reviewer themselves; only the human's own
+    submitted review (or GitHub's own bookkeeping around it) does that."""
+    return login in get_requested_reviewers(pr_number, repo, env)
+
+
 def add_reviewer(pr_number: int, repo: str, login: str, env: dict) -> None:
-    run_cmd(
+    result = run_cmd(
         ["gh", "pr", "edit", str(pr_number), "--repo", repo, "--add-reviewer", login],
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
         check=False,
     )
+    if result.returncode != 0:
+        # preserve_reviewer_request calls this from a `finally`, so a failure here has
+        # nowhere else to surface — without this log line, the reviewer silently stays
+        # dropped from the PR with no trace it was ever supposed to be restored.
+        logger.error(
+            "add_reviewer: failed to re-add %s as a reviewer on PR #%d (%s): %s",
+            login,
+            pr_number,
+            repo,
+            result.stderr.decode("utf-8", errors="replace").strip(),
+        )
 
 
-def remove_reviewer(pr_number: int, repo: str, login: str, env: dict) -> None:
-    run_cmd(
-        ["gh", "pr", "edit", str(pr_number), "--repo", repo, "--remove-reviewer", login],
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
+@contextmanager
+def preserve_reviewer_request(pr_number: int, repo: str, login: str, env: dict) -> Iterator[None]:
+    """Wrap a PR-processing block that might submit a GitHub review as a side effect
+    (e.g. replying to comments via the backend, or vibe_heal posting a static-analysis
+    review), re-adding `login` as a requested reviewer afterward if it held that status
+    beforehand — regardless of whether the wrapped block succeeds, fails, or raises,
+    since none of these runners decide on their own that a human's review is "done".
+    None of them ever remove the reviewer themselves: the human is expected to review
+    and approve (or GitHub itself clears the request once they submit that review), so
+    the runners' only job here is to undo their own side effects, not to conclude
+    anything. review_prs, focused_review, address_comments, and review_requested all
+    wrap their per-PR work in this.
+
+    A falsy `login` (e.g. address_comments's get_current_user lookup failing) skips the
+    check entirely rather than querying GitHub with an empty login, which could never match
+    a real requested reviewer anyway."""
+    was_requested = bool(login) and was_review_requested(pr_number, repo, login, env)
+    try:
+        yield
+    finally:
+        if was_requested:
+            add_reviewer(pr_number, repo, login, env)
 
 
 def is_review_summary_comment(body: str) -> bool:

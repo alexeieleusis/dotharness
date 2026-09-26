@@ -8,7 +8,9 @@ import pytest
 
 from harness.runners.common import (
     FatalGitError,
+    add_reviewer,
     build_subprocess_env,
+    get_current_user,
     get_gh_token,
     git_detach_and_record,
     git_fetch_and_checkout,
@@ -108,23 +110,26 @@ def test_build_env_sets_github_token():
 
 def test_get_gh_token_strips_whitespace():
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout="  tok123\n  ")
+        mock_run.return_value = MagicMock(returncode=0, stdout="  tok123\n  ")
         tok = get_gh_token("echo tok123")
     assert tok == "tok123"
 
 
-def test_get_gh_token_nonzero_exit_returns_stdout():
+def test_get_gh_token_nonzero_exit_raises_even_with_partial_stdout():
+    # A nonzero exit means gh_token_cmd itself failed — trusting stray stdout here
+    # (e.g. a warning banner some wrapper printed before failing) would silently hand
+    # back a bogus "token" instead of surfacing the failure.
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout="partial-token", stderr="auth error")
-        tok = get_gh_token("fail_cmd")
-    assert tok == "partial-token"
+        with pytest.raises(RuntimeError, match="auth error"):
+            get_gh_token("fail_cmd")
 
 
-def test_get_gh_token_nonzero_exit_empty_stdout():
+def test_get_gh_token_nonzero_exit_empty_stdout_raises():
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="auth failed")
-        tok = get_gh_token("fail_cmd")
-    assert tok == ""
+        with pytest.raises(RuntimeError, match="auth failed"):
+            get_gh_token("fail_cmd")
 
 
 def test_get_gh_token_timeout_raises():
@@ -134,11 +139,57 @@ def test_get_gh_token_timeout_raises():
             get_gh_token("gh_token_cmd")
 
 
-def test_get_gh_token_stderr_only_returns_empty():
+def test_get_gh_token_stderr_only_raises():
+    # Exit 0 but blank stdout: build_subprocess_env would treat this token as falsy
+    # and silently skip setting GITHUB_TOKEN, so this must raise rather than return ""
+    # — an unset GITHUB_TOKEN makes every subsequent `gh` call fall back to whichever
+    # account `gh auth status` currently has active, not the one gh_token_cmd names.
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="token not configured")
-        tok = get_gh_token("echo")
-    assert tok == ""
+        with pytest.raises(RuntimeError, match="token not configured"):
+            get_gh_token("echo")
+
+
+def test_add_reviewer_logs_error_on_failure(caplog):
+    # preserve_reviewer_request calls add_reviewer from a `finally` with nothing else
+    # watching the outcome — a failed re-add must be logged, or it's invisible.
+    with (
+        patch(
+            "harness.runners.common.run_cmd",
+            return_value=MagicMock(returncode=1, stderr=b"could not add reviewer: not found"),
+        ),
+        caplog.at_level("ERROR"),
+    ):
+        add_reviewer(9, "acme/frontend", "alice", {})
+    assert any("could not add reviewer" in r.message for r in caplog.records)
+
+
+def test_add_reviewer_silent_on_success(caplog):
+    with (
+        patch("harness.runners.common.run_cmd", return_value=MagicMock(returncode=0, stderr=b"")),
+        caplog.at_level("ERROR"),
+    ):
+        add_reviewer(9, "acme/frontend", "alice", {})
+    assert not caplog.records
+
+
+def test_get_current_user_returns_login_on_success():
+    with patch("harness.runners.common.run_cmd", return_value=MagicMock(returncode=0, stdout=b"alice\n", stderr=b"")):
+        assert get_current_user({}) == "alice"
+
+
+def test_get_current_user_logs_and_returns_blank_on_failure(caplog):
+    # Fails open (returns "" rather than raising) since every caller already treats a
+    # blank current_user as a safe no-op — but the failure must still be logged.
+    with (
+        patch(
+            "harness.runners.common.run_cmd",
+            return_value=MagicMock(returncode=1, stdout=b"", stderr=b"gh: token revoked"),
+        ),
+        caplog.at_level("ERROR"),
+    ):
+        assert get_current_user({}) == ""
+    assert any("token revoked" in r.message for r in caplog.records)
 
 
 def _git_restore_side_effect(is_ancestor_returncode):
