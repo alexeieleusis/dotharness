@@ -31,6 +31,9 @@ harness validate      # confirm config is correct
 - `tools/` — Installable, uv-managed Python packages
 - `knowledge/` — Markdown knowledge files consumed by AI runners; model- and
   tool-agnostic (no assumptions about which LLM or coding-agent CLI reads them)
+- `skills/` — Claude Code Agent Skills (`skills/<name>/SKILL.md`); use the
+  Skill frontmatter schema (`name`/`description`/`version`) and are specific
+  to that format, unlike the tool-agnostic files in `knowledge/`
 
 ## License
 
