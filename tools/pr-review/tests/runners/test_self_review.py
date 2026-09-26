@@ -1,9 +1,24 @@
 import json
 import subprocess
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
+
+import pytest
 
 from harness import state
 from harness.runners import self_review
+
+
+@pytest.fixture(autouse=True)
+def _default_not_previously_requested():
+    """self_review.py now wraps every PR it processes in common.preserve_reviewer_request
+    (assigned-but-not-authored PRs can have the user as a requested reviewer, even
+    though GitHub disallows that for a PR's own author), which calls
+    was_review_requested — a real `gh pr view` call — on every _run_locked/
+    _process_single_pr invocation. Default it to False so tests that don't care about
+    reviewer preservation don't hit the network; the tests that do care override this
+    within their own `with patch(...)` block."""
+    with patch("harness.runners.common.was_review_requested", return_value=False):
+        yield
 
 
 def _cfg(tmp_path):
@@ -1007,3 +1022,68 @@ def test_traceability_review_already_done_is_skipped_without_any_backend_call(tm
         self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     mock_checkout.assert_not_called()
+
+
+def test_re_requests_review_when_previously_requested_on_assigned_pr(tmp_xdg, tmp_path):
+    """A PR assigned to (but not authored by) the user can have them as a requested
+    reviewer too — GitHub only forbids that for the PR's own author. Even on a fully
+    successful run, _process_single_pr must re-add the user as a requested reviewer if
+    they held that status going in, mirroring every other runner's
+    preserve_reviewer_request guard."""
+    state.write_self_review_state("acme-frontend", [])
+    _setup_knowledge(tmp_path)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),
+        patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 7, "url": "u", "headRefName": "b"}]),
+        patch("harness.runners.self_review.check_review_summary_comment_status", side_effect=[False, True]),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
+        patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
+        patch("harness.runners.self_review.Backend") as mock_be,
+        patch("harness.runners.common.was_review_requested", return_value=True),
+        patch("harness.runners.common.add_reviewer") as mock_add_reviewer,
+    ):
+        mock_be.return_value.run.return_value = MagicMock(returncode=0)
+        self_review._run_locked(cfg)
+    mock_add_reviewer.assert_called_once_with(7, "acme/frontend", "alice", ANY)
+
+
+def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
+    """The re-add must not fire for a PR where the user was never a requested reviewer
+    to begin with (e.g. an authored PR, where GitHub disallows that in the first
+    place) — the autouse fixture above already defaults was_review_requested to False."""
+    state.write_self_review_state("acme-frontend", [])
+    _setup_knowledge(tmp_path)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),
+        patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 7, "url": "u", "headRefName": "b"}]),
+        patch("harness.runners.self_review.check_review_summary_comment_status", side_effect=[False, True]),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
+        patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
+        patch("harness.runners.self_review.Backend") as mock_be,
+        patch("harness.runners.common.add_reviewer") as mock_add_reviewer,
+    ):
+        mock_be.return_value.run.return_value = MagicMock(returncode=0)
+        self_review._run_locked(cfg)
+    mock_add_reviewer.assert_not_called()

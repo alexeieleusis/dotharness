@@ -34,6 +34,7 @@ from harness.runners.common import (
     has_design_review_comment,
     has_traceability_review_comment,
     post_no_linked_ticket_comment,
+    preserve_reviewer_request,
     resolve_linked_tickets,
     run_cmd,
     run_pr_level_pass,
@@ -431,50 +432,67 @@ def _process_single_pr(
     run_traceability: bool,
 ) -> None:
     try:
-        ctx = _gather_pr_context(pr, number, config, wdir, env)
-        if run_files_summary:
-            file_failure, partial_files = _review_files(
-                ctx,
-                wdir,
-                env,
-                backend,
-                file_instructions,
-                extra_knowledge,
-                pr,
-                number,
-                config,
-                partial_files,
-                config.repo_slug,
-            )
-            summary_failure = _run_summary(
-                summary_instructions,
-                extra_knowledge,
-                pr,
-                number,
-                config,
-                ctx["files"],
-                ctx["pr_description"],
-                ctx["vibe_heal_context"],
-                backend,
-                wdir,
-                current_user,
-                env,
-            )
-            if not file_failure and not summary_failure:
-                reviewed.add(number)
-                sr_state = state.read_self_review_state(config.repo_slug)
-                sr_state["partial_reviews"].pop(str(number), None)
-                state.write_self_review_state(config.repo_slug, list(reviewed), sr_state["partial_reviews"])
-            elif not file_failure:
-                state.set_partial_reviewed_files(config.repo_slug, number, list(partial_files))
-        if run_design:
-            _run_design_review(
-                design_instructions, extra_knowledge, pr, number, config, ctx, backend, wdir, current_user, env
-            )
-        if run_traceability:
-            _run_traceability_review(
-                traceability_instructions, extra_knowledge, pr, number, config, ctx, backend, wdir, current_user, env
-            )
+        # A PR can be assigned to the user (not just authored by them — see
+        # _list_my_prs), in which case GitHub *does* allow the assignor to also
+        # request their review, unlike the author-can't-review-own-PR case this
+        # runner otherwise relies on. Guard the same way as every other
+        # "non-concluding" runner: a review submitted here as a side effect (or by a
+        # concurrent runner racing this PR) shouldn't silently drop the user from the
+        # requested-reviewers list.
+        with preserve_reviewer_request(number, config.repo.name, current_user, env):
+            ctx = _gather_pr_context(pr, number, config, wdir, env)
+            if run_files_summary:
+                file_failure, partial_files = _review_files(
+                    ctx,
+                    wdir,
+                    env,
+                    backend,
+                    file_instructions,
+                    extra_knowledge,
+                    pr,
+                    number,
+                    config,
+                    partial_files,
+                    config.repo_slug,
+                )
+                summary_failure = _run_summary(
+                    summary_instructions,
+                    extra_knowledge,
+                    pr,
+                    number,
+                    config,
+                    ctx["files"],
+                    ctx["pr_description"],
+                    ctx["vibe_heal_context"],
+                    backend,
+                    wdir,
+                    current_user,
+                    env,
+                )
+                if not file_failure and not summary_failure:
+                    reviewed.add(number)
+                    sr_state = state.read_self_review_state(config.repo_slug)
+                    sr_state["partial_reviews"].pop(str(number), None)
+                    state.write_self_review_state(config.repo_slug, list(reviewed), sr_state["partial_reviews"])
+                elif not file_failure:
+                    state.set_partial_reviewed_files(config.repo_slug, number, list(partial_files))
+            if run_design:
+                _run_design_review(
+                    design_instructions, extra_knowledge, pr, number, config, ctx, backend, wdir, current_user, env
+                )
+            if run_traceability:
+                _run_traceability_review(
+                    traceability_instructions,
+                    extra_knowledge,
+                    pr,
+                    number,
+                    config,
+                    ctx,
+                    backend,
+                    wdir,
+                    current_user,
+                    env,
+                )
     except Exception:
         logger.exception("PR #%d: error", number)
     finally:

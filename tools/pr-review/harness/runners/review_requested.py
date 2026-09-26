@@ -10,7 +10,6 @@ from harness.lock import acquire_lock
 from harness.runners.common import (
     TIMEOUT_GH,
     FatalGitError,
-    add_reviewer,
     build_design_review_prompt,
     build_early_comment_context,
     build_file_review_section,
@@ -35,11 +34,10 @@ from harness.runners.common import (
     has_traceability_review_comment,
     post_no_linked_ticket_comment,
     pr_from_url,
-    remove_reviewer,
+    preserve_reviewer_request,
     resolve_linked_tickets,
     run_cmd,
     run_pr_level_pass,
-    was_review_requested,
 )
 
 logger = logging.getLogger(__name__)
@@ -195,54 +193,37 @@ def _process_pr(
 ) -> None:
     pr_number = pr["number"]
     logger.info("PR #%d: starting", pr_number)
-    # Checked once up front, before all passes below have actually completed, so the
-    # end-of-iteration re-add fires only when the user was already a requested reviewer.
-    was_requested = was_review_requested(pr_number, config.repo.name, current_user, env)
     original_sha = git_detach_and_record(wdir, env)
-    # Initialized to False (not True) so that a pass left un-run by an exception raised
-    # from an earlier pass in this same iteration is treated as failed, not vacuously
-    # succeeded, when the reviewer-state reconciliation below runs from `finally`.
-    files_ok = summary_ok = design_ok = traceability_ok = False
     try:
-        git_fetch_and_checkout(pr["headRefName"], wdir, env)
-        # Gathered once and shared by all four passes below (mirrors self_review.py's
-        # _gather_pr_context/_cached_file_diff) so a PR needing both the correctness
-        # pipeline and a PR-level pass in the same cycle doesn't refetch PR metadata or
-        # re-diff every changed file for each pass.
-        ctx = _gather_pr_context(pr, config, wdir, env)
-        if run_files_summary:
-            files_ok = _run_file_reviews(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, ctx)
-            summary_ok = _run_summary_review(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, ctx)
-        else:
-            files_ok = True
-            summary_ok = True
-        # Independent of files_ok/summary_ok by design: this pass's own fate (and its
-        # own noop-if-already-posted check inside _run_design_review) is decoupled from
-        # the correctness pipeline's, so neither one's retry forces the other's. This is
-        # the same AND-gate the code comment here used to name as a future reuse point
-        # (issue #4) — traceability_ok below extends it the same way, with its own `_ok`
-        # boolean rather than a parallel gating mechanism.
-        design_ok = _run_design_review(
-            pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, design_done, ctx
-        )
-        traceability_ok = _run_traceability_review(
-            pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, traceability_done, ctx
-        )
+        # The user still reviews and approves the PR themselves — this runner's job is
+        # only to post automated findings, not to conclude the review on their behalf.
+        # A pass here can still submit a formal review as a side effect (or race a
+        # concurrent runner, e.g. review_prs's vibe_heal post, that does), which would
+        # clear the current user from the PR's requested-reviewers list and hide it from
+        # this and every other runner's "user-review-requested:@me" search — restore it
+        # regardless of outcome, mirroring every other "non-concluding" runner.
+        with preserve_reviewer_request(pr_number, config.repo.name, current_user, env):
+            git_fetch_and_checkout(pr["headRefName"], wdir, env)
+            # Gathered once and shared by all four passes below (mirrors self_review.py's
+            # _gather_pr_context/_cached_file_diff) so a PR needing both the correctness
+            # pipeline and a PR-level pass in the same cycle doesn't refetch PR metadata or
+            # re-diff every changed file for each pass.
+            ctx = _gather_pr_context(pr, config, wdir, env)
+            if run_files_summary:
+                _run_file_reviews(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, ctx)
+                _run_summary_review(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, ctx)
+            # Independent of the correctness pipeline by design: this pass's own fate
+            # (and its own noop-if-already-posted check inside _run_design_review) is
+            # decoupled from files/summary's, so neither one's retry forces the other's.
+            _run_design_review(
+                pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, design_done, ctx
+            )
+            _run_traceability_review(
+                pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, traceability_done, ctx
+            )
     except Exception:
         logger.exception("PR #%d: error", pr_number)
     finally:
-        # Runs even if a pass above raised (e.g. a bare exception from a backend call or
-        # from resolve_linked_tickets) instead of returning False the normal way — otherwise
-        # the reviewer dropped by an earlier pass's own side effect stays dropped for the
-        # rest of the cycle, invisible to future runs of this runner. Guarded so a failure
-        # in the reconciliation calls themselves can't also skip git_restore below.
-        try:
-            if files_ok and summary_ok and design_ok and traceability_ok:
-                remove_reviewer(pr_number, config.repo.name, current_user, env)
-            elif was_requested:
-                add_reviewer(pr_number, config.repo.name, current_user, env)
-        except Exception:
-            logger.exception("PR #%d: error reconciling reviewer state", pr_number)
         git_restore(original_sha, pr["headRefName"], wdir, env)
 
 
@@ -354,10 +335,9 @@ def _run_design_review(
     of its own persisted design_reviewed_prs state). If a marked comment from a previous
     attempt is already present, this is a noop: the backend isn't invoked again, and the
     pass counts as already succeeded — this is what lets the design pass's own retry
-    stay decoupled from files_ok/summary_ok. A backend exit of 0 is not itself proof the
-    marker comment was posted, so success is re-verified against the same check before
-    returning True; a false positive here would make remove_reviewer fire and the design
-    pass never retry.
+    stay decoupled from the file/summary pipeline's. A backend exit of 0 is not itself
+    proof the marker comment was posted, so success is re-verified against the same check
+    before returning True; a false positive here would make the design pass never retry.
 
     design_done only tells us the pass never fully completed; it can't tell a from-scratch
     retry apart from a retry after a crash that already posted some inline findings. That's

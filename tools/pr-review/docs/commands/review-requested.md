@@ -109,13 +109,17 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
      (gap findings, having no line to anchor to, are PR-level-only) plus
      exactly one PR-level `# Requirement Traceability` comment. A timeout here
      is likewise caught and logged.
-   - Removes the current user as a requested reviewer on the PR
-     (`gh pr edit --remove-reviewer <login>`), which is what clears it from
-     future `user-review-requested:@me` searches — but only if the
-     file+summary pipeline, the design pass, *and* the traceability pass all
-     succeeded (or were already done). A failing or timed-out pass in any one
-     of the four is enough to keep the PR on the reviewer's queue for a retry
-     next run, even if the other parts succeeded.
+   - Never removes the current user as a requested reviewer, even once every
+     pass has succeeded — this runner only posts automated findings; the human
+     still reviews and approves the PR themselves (which is what actually
+     clears the review request on GitHub). If any pass submits a formal review
+     as a side effect, or races a concurrent runner that does (e.g.
+     `review-prs`'s vibe_heal post), the PR would otherwise silently vanish
+     from `user-review-requested:@me` before that submission was intentional —
+     so the whole per-PR block re-adds the reviewer afterward if they held
+     that status going in, the same `preserve_reviewer_request` guard
+     `review-prs`, `focused-review`, and `address-comments` use (see
+     [Shared behavior](index.md#shared-behavior)).
    - Any other exception while processing a PR is caught and logged; the
      command moves on to the next PR rather than aborting the whole run.
    - Regardless of outcome, restores the repo to the commit recorded in step 5
@@ -162,17 +166,22 @@ duplicate work using live signals read from GitHub on every run:
    since both post that same marker. Like the design pass, this is the
    traceability pass's *only* idempotency signal in this runner, and its
    fate is decoupled from (1)-(3).
-5. After reviewing, it removes itself as a requested reviewer — but only once
-   the file+summary part, the design pass, *and* the traceability pass have
-   all succeeded (or were already done) — which is what drops the PR out of
-   the `user-review-requested:@me` search used to build the batch list next
-   run.
+5. It never removes itself as a requested reviewer, even once every part above
+   has succeeded — the human still reviews and approves the PR themselves,
+   and that (or GitHub's own bookkeeping around a submitted review) is what
+   actually clears the request. If a pass submits a formal review as a side
+   effect, or races a concurrent runner that does (e.g. `review-prs`'s
+   vibe_heal post), the whole per-PR block re-adds the reviewer afterward if
+   they held that status going in — the same `preserve_reviewer_request`
+   guard `review-prs`, `focused-review`, and `address-comments` use.
 
-Because of (5), re-requesting review from the bot/user account (or pushing
-new commits, which GitHub re-requests review for automatically depending on
-branch protection settings) is what triggers reprocessing — there's no SHA
-comparison, so if the reviewer is manually re-requested without new commits
-and no matching comment/approval exists, the PR will be reviewed again.
+Because the PR only drops out of the `user-review-requested:@me` search once
+the human submits their own review, this runner keeps reprocessing a PR every
+run until (1)-(4) are all satisfied — there's no SHA comparison, so pushing
+new commits (which GitHub re-requests review for automatically depending on
+branch protection settings) or manually re-requesting review resets nothing
+extra; it's (1)-(4) reading live GitHub state on every run that keeps this
+idempotent either way.
 
 ## Notes
 - Uses the shared locking and working-directory-mutation behavior described in
@@ -185,11 +194,12 @@ and no matching comment/approval exists, the PR will be reviewed again.
   run.
 - Backend timeouts are non-fatal at the per-file, summary, design, and
   traceability steps: they're logged and the run proceeds to the next step, so
-  a slow/hung backend on one file doesn't block review of the rest. Reviewer
-  removal requires `files_ok and summary_ok and design_ok and traceability_ok`,
-  so a timeout at any of the four keeps the PR on the queue for a retry next
-  run — there's no special-casing of the design or traceability pass relative
-  to the other two (see [State and idempotency](#state-and-idempotency)).
+  a slow/hung backend on one file doesn't block review of the rest. Since a
+  marker/approval check (not an in-memory success flag) is each part's only
+  idempotency signal, a timeout at any of the four simply leaves that part's
+  marker unposted, so it's retried next run — there's no special-casing of the
+  design or traceability pass relative to the other two (see
+  [State and idempotency](#state-and-idempotency)).
 - Building the batch list makes one `gh pr list --search` call (no per-PR
   hydration needed — `headRefName`, `createdAt`, and `closingIssuesReferences`
   all come back from that one call).
