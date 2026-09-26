@@ -81,7 +81,9 @@ The text arrives one of two ways: a **file name** (read that file before doing a
 
 **Default: the rewritten text, and nothing else.** Most callers want a result they can paste straight back into the document. No preamble, mode announcement, violation count, summary, or closing offer.
 
-The one permitted addition: if a step kept a longer phrasing on purpose, add one line after the text. Start it with `Kept as-is:` and name the phrase and the precision that would have been lost. Omit the line when there is nothing to report.
+Two permitted additions, both appended after the text, never in place of it:
+- If a step kept a longer phrasing on purpose, add one line starting with `Kept as-is:` that names the phrase and the precision that would have been lost. Omit the line when there is nothing to report.
+- If the input already complied, output it unchanged followed by one line: `No changes needed.`
 
 **On request: the rule table.** When the user asks to see the reasoning — "show the diff", "which rules did it break", "explain the changes", "before/after" — output this table instead:
 
