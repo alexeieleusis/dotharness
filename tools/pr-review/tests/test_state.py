@@ -23,6 +23,7 @@ def test_read_self_review_defaults(tmp_xdg):
         "partial_reviews": {},
         "design_reviewed_prs": [],
         "traceability_reviewed_prs": [],
+        "regret_reviewed_prs": [],
     }
 
 
@@ -210,6 +211,7 @@ def test_read_self_review_corrupted_json_fallback(tmp_xdg, caplog):
         "partial_reviews": {},
         "design_reviewed_prs": [],
         "traceability_reviewed_prs": [],
+        "regret_reviewed_prs": [],
     }
     assert "Corrupted state file" in caplog.text
 
@@ -237,3 +239,32 @@ def test_prune_self_review_state_drops_traceability_reviewed_prs_too(tmp_xdg):
     state.add_traceability_reviewed_pr("acme-frontend", 9)
     state.prune_self_review_state("acme-frontend", {9})
     assert state.get_traceability_reviewed_prs("acme-frontend") == {9}
+
+
+def test_add_regret_reviewed_pr_is_independent_of_other_state(tmp_xdg):
+    # regret_reviewed_prs is untouched by — and does not touch — the other three lists:
+    # a regret-pass retry never forces (or is forced by) any other pass's retry.
+    state.write_self_review_state("acme-frontend", [7])
+    state.add_design_reviewed_pr("acme-frontend", 8)
+    state.add_traceability_reviewed_pr("acme-frontend", 85)
+    state.add_regret_reviewed_pr("acme-frontend", 9)
+    assert state.get_regret_reviewed_prs("acme-frontend") == {9}
+    assert state.get_design_reviewed_prs("acme-frontend") == {8}
+    assert state.get_traceability_reviewed_prs("acme-frontend") == {85}
+    assert state.read_self_review_state("acme-frontend")["reviewed_prs"] == [7]
+
+
+def test_add_regret_reviewed_pr_is_idempotent(tmp_xdg, monkeypatch):
+    state.add_regret_reviewed_pr("acme-frontend", 9)
+    calls = []
+    monkeypatch.setattr(state, "_atomic_write", lambda *a: calls.append(a))
+    state.add_regret_reviewed_pr("acme-frontend", 9)
+    assert calls == []
+    assert state.get_regret_reviewed_prs("acme-frontend") == {9}
+
+
+def test_prune_self_review_state_drops_regret_reviewed_prs_too(tmp_xdg):
+    state.add_regret_reviewed_pr("acme-frontend", 7)
+    state.add_regret_reviewed_pr("acme-frontend", 9)
+    state.prune_self_review_state("acme-frontend", {9})
+    assert state.get_regret_reviewed_prs("acme-frontend") == {9}
