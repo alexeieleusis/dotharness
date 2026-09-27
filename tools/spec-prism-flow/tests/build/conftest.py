@@ -22,6 +22,7 @@ from spec_prism_flow.config import (
     BuildConfig,
     HarnessSection,
     PlanConfig,
+    ProseReviewConfig,
     ReviewConfig,
     SpecPrismFlowConfig,
     VibeHealConfig,
@@ -63,6 +64,7 @@ def make_config(tmp_path, **overrides) -> SpecPrismFlowConfig:
         "vibe_heal": VibeHealConfig(enabled=False, tool_dir=tmp_path / "vibe-heal"),
         "build": BuildConfig(state_dir=tmp_path / "state", max_retry_cycles=3, commands=["true"]),
         "harness": HarnessSection(knowledge_dir=tmp_path / "knowledge"),
+        "prose_review": ProseReviewConfig(),
     }
     fields.update(overrides)
     return SpecPrismFlowConfig(**fields)
