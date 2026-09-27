@@ -27,13 +27,15 @@ Excerpt, chunk A-3-3-1's mini-requirements doc §7 (Detailed functional requirem
 
 ## Acceptance criteria
 - `pr_create` returns a `PRHandle` with the correct number/URL parsed from `gh pr create`'s output.
-- `pr_create` invokes `gh` via an argv list (`shell=False`); a title/body containing shell metacharacters (backticks, `$(...)`, quotes, newlines) is passed through as literal text and never executed.
+- `pr_create` invokes `gh` via an argv list (`shell=False`). A title or body containing shell metacharacters (backticks, `$(...)`, quotes, newlines) is passed through as literal text and never executed.
 - `unresolved_thread_count` correctly paginates a multi-page GraphQL response (verified with a mocked multi-page fixture) and returns the exact count of `isResolved: false` threads.
 - `pr_merge` raises a named `CommandError`-family exception with a `next_command` hint on a non-zero `gh pr merge` exit, and never retries internally.
-- `load_resume_state` returns `None` (not an exception) when no resume file exists at the given path; `save_resume_state`/`load_resume_state` round-trip a `ResumeState`, including `cycle_index`, correctly.
-- `clear_resume_state` removes an existing resume-state file and is a no-op when the file is already absent; after clearing, `load_resume_state` on that path returns `None`.
+- `load_resume_state` returns `None` (not an exception) when no resume-state file exists at the given path.
+- `save_resume_state`/`load_resume_state` round-trip a `ResumeState`, including `cycle_index`, correctly.
+- `clear_resume_state` removes an existing resume-state file and is a no-op when the file is already absent. After clearing, `load_resume_state` on that path returns `None`.
 - `resume_state_path` is keyed by repo slug + branch, so two different phases' resume records never collide.
-- `uv run pytest` passes for both test files (subprocess/`gh` calls mocked); `ruff check`/`ty` pass with no new violations.
+- `uv run pytest` passes for both test files (subprocess/`gh` calls mocked).
+- `ruff check`/`ty` pass with no new violations.
 
 ## Manual test checklist
 - Run `uv run pytest tests/build/test_gh_ops.py tests/build/test_resume_state.py -v` and confirm all cases above pass.

@@ -1,9 +1,9 @@
 # Lifecycle cheat sheet: idea → merged code
 
-One page, two halves: `plan` turns a rough idea into an agent-sized phase corpus;
+One page, two halves. `plan` turns a rough idea into an agent-sized phase corpus.
 `build` drives that corpus to merged PRs. Everything below assumes a
-`.spec-prism-flow.toml` already exists for the target project (`plan.workspace_dir`,
-`plan.phase_dir` are required — see [requirements.md §10](requirements.md#10-tool-shape)).
+`.spec-prism-flow.toml` already exists for the target project. `plan.workspace_dir`
+and `plan.phase_dir` are required. See [requirements.md §10](requirements.md#10-tool-shape).
 
 ## At a glance
 
@@ -12,15 +12,15 @@ One page, two halves: `plan` turns a rough idea into an agent-sized phase corpus
 | 1 | `spec-prism-flow plan init BRIEF.md [--code ...] [--conventions ...]` | `init_manifest.json` | — |
 | 2 | `spec-prism-flow plan draft-overview` | `00-overview.md`, `OPEN_QUESTIONS.md` | **Yes** — answer open questions / edit overview |
 | 3 | `spec-prism-flow plan draft-requirements` | `requirements.md` | **Yes** — review/edit |
-| 4 | `spec-prism-flow plan decompose [--depth-cap N]` | decomposition tree + `graph.json` | **Yes** — review the whole tree before phase files are drafted (each leaf's mini-requirements doc is already written by this point) |
+| 4 | `spec-prism-flow plan decompose [--depth-cap N]` | decomposition tree + `graph.json` | **Yes** — review the whole tree before phase files are drafted. Each leaf's mini-requirements doc is already written by this point |
 | 5 | `spec-prism-flow plan draft-phases` | `{config.plan.phase_dir}/NN-name-leaf.md` per leaf | **Yes** — review phase files |
 | 6 | `spec-prism-flow plan review` | pass/fail report (4 consistency checks) | Fix and re-run until it passes |
 | 7 | `spec-prism-flow build run [--dry-run] [--resume] [--strict]` | merged PRs, one per phase, plus a completion log | Manual-test prompt per phase (advisory unless `--strict`) |
 | 8 | `spec-prism-flow build status` | one row per phase: `pending`/`in progress`/`escalated`/`merged` | — |
 
-Each `plan` stage is a single agent run against durable files on disk — nothing
-auto-advances past a stage without an explicit go-ahead. Every `build`/`plan` command
-takes `--config PATH` (defaults to `./.spec-prism-flow.toml`).
+Each `plan` stage is a single agent run against durable files on disk. Nothing
+auto-advances past a stage without an explicit go-ahead. Every `plan` and `build`
+command takes `--config PATH` (defaults to `./.spec-prism-flow.toml`).
 
 ## 1. Plan — brief → phase corpus
 
@@ -38,14 +38,18 @@ spec-prism-flow plan draft-phases
 spec-prism-flow plan review
 ```
 
-`decompose` recursively splits `requirements.md` into a tree of chunks (an `unfoldr`
-corecursion — each branch bottoms out independently once it's small enough to be one
-agent-sized leaf, or a depth cap forces human review instead). `draft-phases` then
-turns each **leaf only** into a five-section phase file (`Scope`, `Requirements`,
-`Acceptance criteria`, `Manual test checklist`, `Depends on`) and flags — never
-silently ships — any leaf outside the sizing bands (~5–10 files, ~150k–200k token
-session budget). `plan review` is the exit gate: dependency chain valid, `graph.json`
-agrees with it, every requirements section maps to a phase, no stale open questions.
+`decompose` recursively splits `requirements.md` into a tree of chunks. It is an
+`unfoldr` corecursion: each branch stops independently once it is small enough to be
+one agent-sized leaf, or when a depth cap forces human review instead. `draft-phases`
+then turns each **leaf only** into a five-section phase file (`Scope`, `Requirements`,
+`Acceptance criteria`, `Manual test checklist`, `Depends on`). It flags any leaf
+outside the sizing bands (~5–10 files, ~150k–200k token session budget) and never
+silently ships it. `plan review` is the exit gate. It checks:
+
+- the dependency chain is valid
+- `graph.json` agrees with the dependency chain
+- every section of `requirements.md` maps to a phase
+- no open question is stale
 
 ## 2. Build — phase corpus → merged code
 
@@ -55,11 +59,11 @@ spec-prism-flow build run --dry-run  # exercise the whole control flow, zero liv
 spec-prism-flow build status         # where does every phase currently stand?
 ```
 
-Setting `config.build.workers > 1` switches `build run` to **parallel mode**: it reads
-`graph.json` instead of the linear `Depends on` chain and runs up to `workers`
-eligible leaves concurrently (a leaf is eligible once everything it depends on has
-merged). An escalation on one leaf blocks only its dependents, not the whole run.
-Branch/stack organization across concurrently-running leaves is left to you.
+Setting `config.build.workers > 1` switches `build run` to **parallel mode**. It reads
+`graph.json` instead of the linear `Depends on` chain. It runs up to `workers`
+eligible leaves concurrently. A leaf is eligible once everything it depends on has
+merged. An escalation on one leaf blocks only its dependents, not the whole run.
+You decide how to organize branches and stacks across concurrently-running leaves.
 
 ### Per-phase loop (`run_phase`, either mode)
 
@@ -89,31 +93,30 @@ merge gates (config.build.commands: build/lint/test) → gh pr merge --squash
 append completion log record (phase, PR, cycles, escalations, diff stats)
 ```
 
-A crash mid-loop is safe to resume (`--resume`): the resume-state file tracks the open
-PR and the iterate cycle count, so a restart picks the retry budget back up instead of
+A crash mid-loop is safe to resume with `--resume`. The resume-state file tracks the
+open PR and the iterate cycle count. A restart continues the retry budget instead of
 resetting it.
 
-The `vibe_heal.enabled`/`review.enabled` config flags are what gate the two
-external-tool steps above — both are no-ops when off, which is the default for any
-project without those tools configured.
+`vibe_heal.enabled` and `review.enabled` gate the two external-tool steps above. Both
+are no-ops when off. Off is the default for any project without those tools configured.
 
 ## 3. At work: the always-on review cycle
 
-Where this project has `review.enabled = true` (backed by `pr-review`, i.e. `harness`),
-that's not the only thing reviewing a PR `build run` opens. In this user's actual
-working setup, `harness run all` is already running on a repeating cycle against
-**every** open PR in the repo — independent of `spec-prism-flow` and unaware that a
-particular PR came from `build run` rather than a human. Practically, this means a PR
-`spec-prism-flow build run` opens gets swept by this cycle the same way any
-hand-opened PR would.
+If this project has `review.enabled = true` (backed by `pr-review`, i.e. `harness`),
+that review is not the only one reviewing a PR `build run` opens. In this user's
+actual working setup, `harness run all` is already running on a repeating cycle
+against **every** open PR in the repo. It is independent of `spec-prism-flow` and
+unaware that a particular PR came from `build run` rather than a human. In practice,
+this cycle sweeps a PR `spec-prism-flow build run` opens the same way it would sweep
+any hand-opened PR.
 
-See `pr-review`'s own command docs for what each `harness run all` step does and the
+See `pr-review`'s command docs for what each `harness run all` step does and the
 known vibe-heal/`review-requested` requested-reviewer race:
 `tools/pr-review/docs/commands/index.md` and
 `tools/pr-review/docs/commands/review-prs.md`.
 
-Turning on `review.enabled`/`vibe_heal.enabled` in `.spec-prism-flow.toml` on top of
-this is redundant for a repo already covered by the always-on cycle: you'd get two
+Turning on `review.enabled`/`vibe_heal.enabled` in `.spec-prism-flow.toml` is
+redundant for a repo already covered by the always-on cycle. You'd get two
 independent review passes racing each other on the same PR. Leave them off unless
 you're driving `build run` against a repo that **isn't** already swept by `harness run
 all`.
@@ -129,5 +132,5 @@ all`.
 | `PRNotMergeableError` | `gh pr merge` non-zero exit | `build run` output, with a `next_command` hint (e.g. `gh pr view N`) |
 
 `build status` classifies every phase as `pending` / `in progress` / `escalated` /
-`merged` from the completion log plus resume-state-file presence — run it any time to
-see where a `build run` left off without re-reading logs.
+`merged` from the completion log and the presence of the resume-state file. Run it
+any time to see where a `build run` stopped without re-reading logs.
