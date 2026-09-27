@@ -9,6 +9,7 @@ from harness.config import HarnessConfig
 from harness.runners.common import (
     PR_COMMENTS_SCRIPT_PATH,
     REGRET_REVIEW_MARKER,
+    _build_pr_metadata_trailer,
     author_matches,
     count_diff_lines,
     fetch_pr_comments,
@@ -693,3 +694,131 @@ def _match_candidates(
                 )
             )
     return candidates
+
+
+# A verdict line of the backend's structured response to build_regret_judgment_prompt
+# (regret-review-requirements.md §7.2 step 3, G2): `CANDIDATE <n>: YES|NO — <one-sentence
+# reason>`, where n is the 1-based index the candidate carries in the prompt's
+# `## Regret Candidates` section. The reason after the separator is deliberately not
+# captured: RegretFinding (requirements.md §7.6) carries no reason, and the verdict
+# alone determines what the poster does.
+_JUDGMENT_LINE_RE = re.compile(r"^CANDIDATE\s+(\d+):\s*(YES|NO)\b")
+
+
+def _render_candidate(index: int, candidate: RegretCandidate) -> str:
+    """One numbered block of build_regret_judgment_prompt's `## Regret Candidates`
+    section: the blamed file/region from the current PR's diff, the original
+    comment's author and full body, and the diff of the change the comment was
+    left on — everything the judgment question (requirements.md G3) needs to be
+    answered for this candidate. The 1-based index is the same number the
+    output contract's verdict lines refer back to."""
+    hunk = candidate.hunk
+    if hunk.new_end >= hunk.new_start:
+        region = (
+            f"{hunk.path} lines {hunk.old_start}-{hunk.old_end} (pre-fix), "
+            f"replaced by lines {hunk.new_start}-{hunk.new_end} (post-fix)"
+        )
+    else:
+        region = f"{hunk.path} lines {hunk.old_start}-{hunk.old_end} (pre-fix); deleted by this fix"
+    body = candidate.comment_body.strip()
+    body_block = ("> " + "\n> ".join(body.splitlines())) if body else "(the comment has no body)"
+    diff_hunk = candidate.comment_diff_hunk or "(none — a review-level comment with no diff anchor)"
+    return (
+        f"### Candidate {index}\n"
+        f"Blamed file/region in this PR's diff: {region}\n"
+        f"Original comment (from PR #{hunk.introducing_pr_number}, by {candidate.comment_author}):\n"
+        f"{body_block}\n"
+        f"Diff of the change the comment was left on:\n{diff_hunk}"
+    )
+
+
+def build_regret_judgment_prompt(
+    instructions: str,
+    candidates: list[RegretCandidate],
+    diff_sections: str,
+    pr: dict,
+    pr_number: int,
+    repo_name: str,
+    commit_sha: str,
+    pr_description: str | None,
+    vibe_heal_context: str | None,
+) -> str:
+    """The prompt for the regret-review pass's single backend invocation
+    (regret-review-requirements.md §7.2 step 3): the review-regret.md instructions,
+    a `## Regret Candidates` section with one numbered block per candidate from
+    find_regret_candidates, the current PR's fix diff, and the shared PR-metadata
+    trailer — the same `_build_pr_metadata_trailer` the design-review and
+    requirement-traceability prompt builders use. The whole candidate list is
+    batched into this one prompt: the wiring leaves make exactly one backend call
+    per current-PR run, never one per candidate. `diff_sections` is pre-built by
+    the caller with build_file_review_section (common.py), exactly as every other
+    pass's prompt is, which keeps this function pure like the other prompt
+    builders."""
+    candidates_section = "\n\n## Regret Candidates\n" + "\n\n".join(
+        _render_candidate(index, candidate) for index, candidate in enumerate(candidates, start=1)
+    )
+    return (
+        instructions
+        + candidates_section
+        + diff_sections
+        + _build_pr_metadata_trailer(pr, pr_number, repo_name, commit_sha, pr_description, vibe_heal_context)
+    )
+
+
+def parse_regret_judgment(response: str, candidates: list[RegretCandidate]) -> list[RegretFinding]:
+    """The response parser next to build_regret_judgment_prompt
+    (regret-review-requirements.md §7.2 step 4): one RegretFinding per
+    `CANDIDATE <n>: YES` line of the backend's structured response, where n is
+    the 1-based index the candidate carries in the prompt and maps to
+    candidates[n-1]. Each finding carries the candidate's current-PR file/region
+    — hunk.path plus one line: hunk.new_start when the fix leaves a post-image
+    line, hunk.old_start for a pure deletion that has no post-image line — and
+    the candidate's introducing-PR number and the original comment's
+    id/body/author/url. NO lines are discarded, as is anything unparseable: a
+    line that does not match the verdict format, an index outside
+    1..len(candidates), a repeated verdict for one candidate (the first line
+    stands), and a YES on a candidate whose comment_id is not an int (only
+    inline comments carry the integer id RegretFinding requires). Findings are
+    returned in candidate order. A malformed or unparseable response therefore
+    yields [] — this pass fails toward silence: no retry, no escalation, and
+    nothing here changes common.run_pr_level_pass's own retry semantics."""
+    findings_by_index: dict[int, RegretFinding] = {}
+    judged: set[int] = set()
+    for raw_line in response.splitlines():
+        match = _JUDGMENT_LINE_RE.match(raw_line.strip())
+        if match is None:
+            continue
+        index = int(match.group(1))
+        if not 1 <= index <= len(candidates):
+            logger.debug(
+                "regret-review: verdict line for candidate %d falls outside the judged set (1-%d) — ignoring it",
+                index,
+                len(candidates),
+            )
+            continue
+        if index in judged:
+            continue
+        judged.add(index)
+        if match.group(2) != "YES":
+            continue
+        candidate = candidates[index - 1]
+        if not isinstance(candidate.comment_id, int):
+            logger.debug(
+                "regret-review: candidate %d's comment id %r is not an int — RegretFinding requires the integer "
+                "only inline comments carry; ignoring its verdict",
+                index,
+                candidate.comment_id,
+            )
+            continue
+        hunk = candidate.hunk
+        finding_line = hunk.new_start if hunk.new_end >= hunk.new_start else hunk.old_start
+        findings_by_index[index] = RegretFinding(
+            path=hunk.path,
+            line=finding_line,
+            introducing_pr_number=hunk.introducing_pr_number,
+            comment_id=candidate.comment_id,
+            comment_body=candidate.comment_body,
+            comment_author=candidate.comment_author,
+            comment_url=candidate.comment_url,
+        )
+    return [findings_by_index[index] for index in sorted(findings_by_index)]

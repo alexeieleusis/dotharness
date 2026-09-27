@@ -15,8 +15,10 @@ from harness.runners.regret_review import (
     _line_within_hunk_ranges,
     _removed_modified_ranges,
     build_regret_comment_body,
+    build_regret_judgment_prompt,
     find_introducing_prs,
     find_regret_candidates,
+    parse_regret_judgment,
 )
 
 
@@ -1013,3 +1015,230 @@ def test_find_regret_candidates_passes_remaining_budget_as_call_timeout(tmp_path
     # time), never a fresh per-call constant.
     assert seen_timeouts and all(0 < t <= 300 for t in seen_timeouts)
     assert seen_timeouts == sorted(seen_timeouts, reverse=True)
+
+
+# --- phase 05: backend judgment prompt and response parsing ---
+
+
+def _candidate(**overrides) -> RegretCandidate:
+    base = {
+        "comment_id": 456,
+        "comment_body": "This edge case isn't handled.",
+        "comment_author": "alice",
+        "comment_diff_hunk": "@@ -5,3 +5,3 @@\n-old a\n+new a\n old b",
+        "comment_url": "https://github.com/acme/repo/pull/7#discussion_r456",
+        "hunk": _hunk(),
+    }
+    base.update(overrides)
+    return RegretCandidate(**base)
+
+
+def _candidates(count: int) -> list[RegretCandidate]:
+    return [
+        _candidate(
+            comment_id=456 + i,
+            comment_body=f"comment {i}",
+            comment_author=f"author{i}",
+            comment_url=f"https://github.com/acme/repo/pull/{7 + i}#discussion_r{456 + i}",
+            hunk=_hunk(
+                path=f"src/f{i}.py",
+                old_start=5 + i,
+                old_end=5 + i,
+                new_start=6 + i,
+                new_end=6 + i,
+                introducing_pr_number=7 + i,
+            ),
+        )
+        for i in range(count)
+    ]
+
+
+def test_build_regret_judgment_prompt_orders_instructions_candidates_diff_and_trailer():
+    prompt = build_regret_judgment_prompt(
+        "INSTRUCTIONS",
+        [_candidate(), _candidate(comment_id=789)],
+        "DIFF-SECTIONS",
+        _pr(),
+        42,
+        "acme/repo",
+        "deadbeef",
+        None,
+        None,
+    )
+    assert prompt.index("INSTRUCTIONS") == 0
+    assert prompt.index("## Regret Candidates") < prompt.index("### Candidate 1")
+    assert prompt.index("### Candidate 1") < prompt.index("### Candidate 2")
+    assert prompt.index("### Candidate 2") < prompt.index("DIFF-SECTIONS")
+    assert prompt.index("DIFF-SECTIONS") < prompt.index("PR URL: https://github.com/acme/repo/pull/42")
+    assert "PR number: 42" in prompt
+    assert "Repo: acme/repo" in prompt
+    assert "Commit: deadbeef" in prompt
+
+
+def test_build_regret_judgment_prompt_carries_blamed_region_comment_and_old_diff_per_candidate():
+    c1 = _candidate()
+    c2 = _candidate(
+        comment_id=789,
+        comment_body="Off by one in the retry counter.",
+        comment_author="bob",
+        comment_diff_hunk="@@ -9,1 +9,1 @@\n-old retry\n+new retry",
+        comment_url="https://github.com/acme/repo/pull/8#discussion_r789",
+        hunk=_hunk(
+            path="src/bar.py",
+            old_start=9,
+            old_end=9,
+            new_start=9,
+            new_end=9,
+            introducing_sha="bbb222bbb222",
+            introducing_pr_number=8,
+        ),
+    )
+    prompt = build_regret_judgment_prompt(
+        "INSTRUCTIONS", [c1, c2], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
+    )
+    block1 = prompt[prompt.index("### Candidate 1") : prompt.index("### Candidate 2")]
+    block2 = prompt[prompt.index("### Candidate 2") :]
+    assert "src/foo.py lines 5-5 (pre-fix), replaced by lines 5-5 (post-fix)" in block1
+    assert "from PR #7, by alice" in block1
+    assert "> This edge case isn't handled." in block1
+    assert "@@ -5,3 +5,3 @@\n-old a\n+new a\n old b" in block1
+    assert "src/bar.py lines 9-9 (pre-fix), replaced by lines 9-9 (post-fix)" in block2
+    assert "from PR #8, by bob" in block2
+    assert "> Off by one in the retry counter." in block2
+    assert "@@ -9,1 +9,1 @@\n-old retry\n+new retry" in block2
+    # Candidate 1's content does not leak into candidate 2's block.
+    assert "This edge case isn't handled." not in block2
+
+
+def test_build_regret_judgment_prompt_notes_pure_deletion_region():
+    candidate = _candidate(hunk=_hunk(old_start=12, old_end=12, new_start=14, new_end=13))
+    prompt = build_regret_judgment_prompt(
+        "INSTRUCTIONS", [candidate], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
+    )
+    assert "src/foo.py lines 12-12 (pre-fix); deleted by this fix" in prompt
+
+
+def test_build_regret_judgment_prompt_review_level_comment_has_no_diff_anchor():
+    candidate = _candidate(comment_id="review-777", comment_diff_hunk="")
+    prompt = build_regret_judgment_prompt(
+        "INSTRUCTIONS", [candidate], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
+    )
+    assert "(none — a review-level comment with no diff anchor)" in prompt
+
+
+def test_build_regret_judgment_prompt_trailer_carries_description_and_vibe_heal_when_present():
+    prompt = build_regret_judgment_prompt(
+        "INSTRUCTIONS",
+        [_candidate()],
+        "DIFFS",
+        _pr(),
+        42,
+        "acme/repo",
+        "deadbeef",
+        "## PR Description\n**Title:** fix bug",
+        "sonar context",
+    )
+    assert "## PR Description\n**Title:** fix bug" in prompt
+    assert "## Static Analysis\nsonar context" in prompt
+    bare = build_regret_judgment_prompt(
+        "INSTRUCTIONS", [_candidate()], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
+    )
+    assert "## Static Analysis" not in bare
+    assert "**Title:**" not in bare
+
+
+def test_build_regret_judgment_prompt_multiline_body_stays_one_blockquote():
+    candidate = _candidate(comment_body="line one\nline two")
+    prompt = build_regret_judgment_prompt(
+        "INSTRUCTIONS", [candidate], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
+    )
+    assert "> line one\n> line two" in prompt
+
+
+def test_parse_regret_judgment_all_yes_one_finding_per_candidate_in_candidate_order():
+    candidates = _candidates(3)
+    response = "CANDIDATE 1: YES — first\nCANDIDATE 2: YES — second\nCANDIDATE 3: YES — third\n"
+    findings = parse_regret_judgment(response, candidates)
+    assert [f.path for f in findings] == ["src/f0.py", "src/f1.py", "src/f2.py"]
+    assert [f.line for f in findings] == [6, 7, 8]  # the post-image's first line (new_start)
+    assert [f.introducing_pr_number for f in findings] == [7, 8, 9]
+    assert [f.comment_id for f in findings] == [456, 457, 458]
+    assert [f.comment_body for f in findings] == ["comment 0", "comment 1", "comment 2"]
+    assert [f.comment_author for f in findings] == ["author0", "author1", "author2"]
+    assert [f.comment_url for f in findings] == [c.comment_url for c in candidates]
+
+
+def test_parse_regret_judgment_all_no_yields_no_findings():
+    response = "CANDIDATE 1: NO — unrelated\nCANDIDATE 2: NO — different root cause\n"
+    assert parse_regret_judgment(response, _candidates(2)) == []
+
+
+def test_parse_regret_judgment_mixed_verdicts_keep_only_yes():
+    response = (
+        "CANDIDATE 1: NO — unrelated\nCANDIDATE 2: YES — predicted exactly this bug\nCANDIDATE 3: NO — style point\n"
+    )
+    findings = parse_regret_judgment(response, _candidates(3))
+    assert [f.comment_id for f in findings] == [457]
+
+
+def test_parse_regret_judgment_out_of_range_indices_ignored():
+    response = "CANDIDATE 0: YES — below the range\nCANDIDATE 1: YES — in range\nCANDIDATE 4: YES — above the range\n"
+    findings = parse_regret_judgment(response, _candidates(3))
+    assert [f.comment_id for f in findings] == [456]
+
+
+def test_parse_regret_judgment_no_candidates_never_a_finding():
+    assert parse_regret_judgment("CANDIDATE 1: YES — nobody to map to", []) == []
+
+
+def test_parse_regret_judgment_malformed_lines_discarded_valid_lines_kept():
+    response = (
+        "CANDIDATE 1: MAYBE — not a verdict\n"
+        "candidate 2: yes — lowercase does not match the contract\n"
+        "CANDIDATE 2 YES — missing the colon\n"
+        "CANDIDATE 3: NO — discarded\n"
+        "CANDIDATE 2: YES — the valid verdict line\n"
+        "I confirmed one candidate in total.\n"
+    )
+    findings = parse_regret_judgment(response, _candidates(3))
+    assert [f.comment_id for f in findings] == [457]
+
+
+def test_parse_regret_judgment_garbage_response_yields_no_findings():
+    response = "I cannot tell from this diff whether the old comment predicted this bug. Let me reconsider..."
+    assert parse_regret_judgment(response, _candidates(3)) == []
+
+
+def test_parse_regret_judgment_ignores_prose_around_verdict_lines():
+    response = (
+        "After reviewing the diff against each candidate:\n"
+        "CANDIDATE 1: YES — the comment predicted exactly this failure.\n"
+        "I hope this is useful.\n"
+    )
+    assert [f.comment_id for f in parse_regret_judgment(response, _candidates(1))] == [456]
+
+
+def test_parse_regret_judgment_pure_deletion_falls_back_to_old_start():
+    candidate = _candidate(hunk=_hunk(old_start=12, old_end=12, new_start=14, new_end=13))
+    findings = parse_regret_judgment("CANDIDATE 1: YES — the deleted line", [candidate])
+    assert (findings[0].path, findings[0].line) == ("src/foo.py", 12)
+
+
+def test_parse_regret_judgment_repeated_verdict_for_one_candidate_first_line_stands():
+    response = "CANDIDATE 1: NO — first line\nCANDIDATE 1: YES — later, contradictory line\n"
+    assert parse_regret_judgment(response, _candidates(1)) == []
+
+
+def test_parse_regret_judgment_yes_on_review_typed_candidate_discarded():
+    candidates = [
+        _candidate(comment_id="review-777"),
+        _candidate(comment_id=456),
+    ]
+    response = "CANDIDATE 1: YES — review-level comment\nCANDIDATE 2: YES — inline comment\n"
+    findings = parse_regret_judgment(response, candidates)
+    assert [f.comment_id for f in findings] == [456]
+
+
+def test_parse_regret_judgment_tolerates_indented_verdict_lines():
+    response = "    CANDIDATE 1: YES — indented verdict line\n"
+    assert [f.comment_id for f in parse_regret_judgment(response, _candidates(1))] == [456]
