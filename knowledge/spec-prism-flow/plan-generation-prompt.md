@@ -14,7 +14,11 @@ Whoever invokes you will point you at a project: a directory, a name, or a path 
 `.spec-prism-flow.toml`. They will not hand you a filled-in list. Work these out
 yourself, in this order. Ask the user only when a step genuinely cannot resolve:
 
-- **Tool repo** is fixed: `~/development/dotharness/tools/spec-prism-flow`.
+- **Tool repo**: more than one copy can exist on disk. Check
+  `~/.harness/tools/spec-prism-flow` first — that is the working install used to run
+  this tool day to day. Fall back to `~/development/dotharness/tools/spec-prism-flow`
+  (the dev checkout) only if the first path does not exist. If both exist and it is
+  unclear which one the invoker means, ask.
 - **Config file**: the `.spec-prism-flow.toml` you were pointed at, or pointed near (for
   example, under `.spec-prism-flow_projects/<project>/`). If more than one plausible
   match exists, or none does, ask which project or config to use. Do not guess.

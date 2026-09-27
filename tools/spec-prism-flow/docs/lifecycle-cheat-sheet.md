@@ -91,16 +91,22 @@ tool's own repo as the clone. That is wrong, and it is the likely cause if `buil
 complains about running from the wrong root. Use `--directory` for `plan` commands. For
 `build` commands, `cd` into the actual target clone yourself, then use `--project`
 instead — it points `uv` at spec-prism-flow's venv and dependencies without changing your
-cwd:
+cwd.
+
+`<spec-prism-flow-repo>` is not one fixed path — more than one checkout can exist on
+disk. Check `~/.harness/tools/spec-prism-flow` first: that is the working install used
+to run this tool day to day. Fall back to the dev checkout (wherever this repo's clone
+lives, e.g. `~/development/dotharness/tools/spec-prism-flow`) only if the first path
+does not exist.
 
 ```
 # plan stage: cwd doesn't matter
-uv --directory ~/development/dotharness/tools/spec-prism-flow run spec-prism-flow \
+uv --directory <spec-prism-flow-repo> run spec-prism-flow \
   plan draft-overview --config /abs/path/to/.spec-prism-flow.toml
 
 # build stage: cwd must be the target project's own git checkout
 cd /path/to/actual/project/checkout
-uv run --project ~/development/dotharness/tools/spec-prism-flow spec-prism-flow \
+uv run --project <spec-prism-flow-repo> spec-prism-flow \
   build run --config /abs/path/to/.spec-prism-flow.toml
 ```
 
