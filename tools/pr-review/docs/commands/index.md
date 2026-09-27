@@ -1,6 +1,6 @@
 # Commands
 
-Every command below is a subcommand of `harness run`, and every one of them loads a
+Each command below is a subcommand of `harness run`. Each command loads a
 [`.harness.toml`](../configuration.md) config file (`./.harness.toml` by default, or
 the path passed to `--config`) before doing anything else.
 
@@ -11,8 +11,8 @@ harness run [--config PATH] [--verbose] <command> [command options]
 | Command | Scope | Purpose |
 |---|---|---|
 | [`review-prs`](review-prs.md) | Every open, non-draft PR in the repo | Sweep all open PRs and post `vibe_heal`/SonarQube-style static-analysis feedback, tracking progress with a persisted watermark. |
-| [`focused-review`](focused-review.md) | Open, non-draft PRs where the current `gh` user is author, assignee, or requested reviewer | Elaborate SonarQube comments citing a `jpablo/vibe-types` knowledge file into a detailed refactor description, posted as a reply. |
-| [`review-requested`](review-requested.md) | PRs where review was explicitly requested from the `gh` account | Have the configured AI backend produce inline + summary code review comments, reacting to GitHub review-request state rather than a schedule. |
+| [`focused-review`](focused-review.md) | Open, non-draft PRs where the current `gh` user is author, assignee, or requested reviewer | Expand SonarQube comments into a detailed refactor description, citing a `jpablo/vibe-types` knowledge file. Post the description as a reply. |
+| [`review-requested`](review-requested.md) | PRs where review was explicitly requested from the `gh` account | Have the configured AI backend produce inline + summary code review comments. The command reacts to GitHub review-request state, not a schedule. |
 | [`self-review`](self-review.md) | Your own open PRs (`--author @me`) | Get an automated first-pass AI review of your own PRs before asking a human. |
 | [`address-comments`](address-comments.md) | Open PRs you authored or are assigned to, with pending reviewer feedback | Have the AI backend read unresolved review comments, make the smallest fix (or reply), commit, and push. |
 
@@ -22,29 +22,25 @@ There's also a convenience command that runs all five in sequence:
 harness run [--config PATH] [--verbose] all
 ```
 
-`all` runs `review-prs`, `focused-review`, `self-review`, `review-requested`, then
-`address-comments`, continuing to the next runner even if one fails, and exits non-zero
-if any of them failed.
+`all` runs the five commands in this order: `review-prs`, `focused-review`,
+`self-review`, `review-requested`, `address-comments`. If one command fails, `all`
+continues to the next. If any command fails, `all` exits non-zero.
 
 ## Shared behavior
 
-- **Locking.** Every command acquires a non-blocking file lock before doing any work, keyed
-  on the resolved `repo.working_dir` path — not `repo.name`/`repo_slug`. The lock is shared
-  across all five commands, not just same-command invocations — since they all mutate the
-  same `repo.working_dir` checkout, a second concurrent invocation against that same working
-  directory, running any of the five commands, exits immediately instead of queuing or racing
-  the first. Because the key is the resolved path rather than `repo.name`, two configs that
-  point at the same checkout share a lock even if their `repo.name` differs, while two configs
-  with the same `repo.name` but separate `working_dir` clones (e.g. a second clone dedicated to
-  a cheaper backend) get independent locks and can run concurrently.
+- **Locking.**
+  - Every command acquires a non-blocking file lock before doing any work.
+  - The lock key is the resolved `repo.working_dir` path, not `repo.name` or `repo_slug`.
+  - All five commands share the lock, not just same-command invocations. Since all five commands mutate the same `repo.working_dir` checkout, a second concurrent invocation against the same working directory exits immediately. It does not queue or race the first invocation.
+  - Two configs that point at the same checkout share a lock even if their `repo.name` differs. Two configs with the same `repo.name` but separate `working_dir` clones (e.g. a second clone dedicated to a cheaper backend) get independent locks and can run concurrently.
 - **Logging.** Logs always go to `~/.local/share/dotharness/logs/<command>/<date>.log`.
   `--verbose` additionally enables DEBUG-level logging and mirrors it to stdout.
 - **Working directory mutation.** Commands that talk to an AI backend or `vibe_heal`
-  check out PR branches directly inside `repo.working_dir`: each checkout runs
+  check out PR branches directly inside `repo.working_dir`. Each checkout runs
   `git checkout -B <branch> origin/<branch>`, which unconditionally repoints the local
-  branch to its remote tracking branch, discarding any local-only commits. The original
-  detached HEAD commit is restored afterward. Don't point `working_dir` at a checkout you
-  have uncommitted work in.
+  branch to its remote tracking branch and discards any local-only commits. The
+  command restores the original detached HEAD commit afterward. Don't point
+  `working_dir` at a checkout with uncommitted work.
 - **`gh` account state.** Several commands rely on `gh`'s currently active authenticated
   account (for `--author @me`, `--assignee @me`, `user-review-requested:@me`, and posting as "you"). If you
   juggle multiple `gh` accounts, the active one is global machine state, not scoped to
