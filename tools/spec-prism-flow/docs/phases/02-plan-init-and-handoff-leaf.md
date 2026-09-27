@@ -12,7 +12,7 @@
 
 ## Requirements
 
-The following is an excerpt, quoted verbatim, from chunk A-2-1's mini-requirements doc, section 7 (Detailed functional requirements).
+The following is an excerpt, restructured for clarity, from chunk A-2-1's mini-requirements doc, section 7 (Detailed functional requirements).
 
 ### 7.1 `plan init` (`spec_prism_flow/cli.py` addition, `spec_prism_flow/workspace.py`)
 - CLI command: `spec-prism-flow plan init BRIEF_PATH [--code PATH] [--conventions PATH] [--links TEXT] [--config PATH] [--yes]`
