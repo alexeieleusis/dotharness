@@ -3,6 +3,7 @@ import logging
 import os
 import subprocess
 from pathlib import Path
+from typing import cast
 
 from harness.backend import Backend
 from harness.config import HarnessConfig
@@ -30,6 +31,7 @@ from harness.runners.common import (
     git_restore,
     has_design_review_comment,
     has_inline_review_comments,
+    has_regret_review_comment,
     has_review_summary_comment,
     has_traceability_review_comment,
     post_no_linked_ticket_comment,
@@ -38,6 +40,16 @@ from harness.runners.common import (
     resolve_linked_tickets,
     run_cmd,
     run_pr_level_pass,
+)
+from harness.runners.regret_review import (
+    RecordingBackend,
+    RegretCandidate,
+    build_regret_comment_body,
+    build_regret_judgment_prompt,
+    find_introducing_prs,
+    find_regret_candidates,
+    parse_regret_judgment,
+    post_regret_comment,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,7 +66,11 @@ def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
     current_user = get_current_user(env)
 
     if pr_url:
-        prs = [pr_from_url(pr_url, config.repo.name, env, "number,url,headRefName,createdAt,closingIssuesReferences")]
+        prs = [
+            pr_from_url(
+                pr_url, config.repo.name, env, "number,url,headRefName,createdAt,closingIssuesReferences,author"
+            )
+        ]
     else:
         prs = [p for p in _get_prs(config.repo.name, env) if p.get("headRefName")]
 
@@ -78,8 +94,16 @@ def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
         files_summary_done = _should_skip_pr(pr, config.repo.name, current_user, env)
         design_done = has_design_review_comment(pr_number, config.repo.name, current_user, env)
         traceability_done = has_traceability_review_comment(pr_number, config.repo.name, current_user, env)
-        if files_summary_done and design_done and traceability_done:
-            # The correctness pipeline and both (independently tracked) PR-level passes
+        # The regret pass is the only config-gated PR-level pass here (off by default);
+        # when disabled, regret_done is True so the gate below and the call in
+        # _process_pr are both unchanged, and no extra gh marker check runs.
+        regret_done = (
+            has_regret_review_comment(pr_number, config.repo.name, current_user, env)
+            if config.regret_review.enabled
+            else True
+        )
+        if files_summary_done and design_done and traceability_done and regret_done:
+            # The correctness pipeline and all (independently tracked) PR-level passes
             # already succeeded for this PR revision — nothing left to do.
             continue
         try:
@@ -95,6 +119,7 @@ def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
                 not files_summary_done,
                 design_done,
                 traceability_done,
+                regret_done,
             )
         except FatalGitError:
             logger.exception("PR #%d: fatal git error", pr_number)
@@ -106,6 +131,9 @@ def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
 def _get_prs(repo: str, env: dict) -> list[dict]:
     # Use gh pr list with search predicates to get all fields in a single call,
     # avoiding the N+1 pattern of gh search prs + individual gh pr view calls.
+    # author is unused by the other passes; the regret pass's config.regret_review
+    # .authors gate (regret_review.find_introducing_prs) reads it from the PR dict and
+    # treats an authorless PR as non-matching (fail-closed), so the field must be here.
     result = run_cmd(
         [
             "gh",
@@ -118,7 +146,7 @@ def _get_prs(repo: str, env: dict) -> list[dict]:
             "--search",
             "user-review-requested:@me",
             "--json",
-            "number,url,headRefName,createdAt,closingIssuesReferences",
+            "number,url,headRefName,createdAt,closingIssuesReferences,author",
             "--limit",
             "500",
         ],
@@ -190,6 +218,7 @@ def _process_pr(
     run_files_summary: bool,
     design_done: bool,
     traceability_done: bool,
+    regret_done: bool,
 ) -> None:
     pr_number = pr["number"]
     logger.info("PR #%d: starting", pr_number)
@@ -212,14 +241,23 @@ def _process_pr(
         # the correctness pipeline's, so neither one's retry forces the other's. This is
         # the same AND-gate the code comment here used to name as a future reuse point
         # (issue #4) — traceability_ok below extends it the same way, with its own `_ok`
-        # boolean rather than a parallel gating mechanism.
+        # boolean rather than a parallel gating mechanism. regret_ok extends it a third
+        # time when config.regret_review.enabled is true — the only config-gated pass
+        # here; when disabled it is simply True and the gate is unchanged.
         design_ok = _run_design_review(
             pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, design_done, ctx
         )
         traceability_ok = _run_traceability_review(
             pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, traceability_done, ctx
         )
-        if files_ok and summary_ok and design_ok and traceability_ok:
+        regret_ok = (
+            _run_regret_review(
+                pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, regret_done, ctx
+            )
+            if config.regret_review.enabled
+            else True
+        )
+        if files_ok and summary_ok and design_ok and traceability_ok and regret_ok:
             remove_reviewer(pr_number, config.repo.name, current_user, env)
     except Exception:
         logger.exception("PR #%d: error", pr_number)
@@ -462,6 +500,104 @@ def _run_traceability_review(
             build_prompt=build_prompt,
             has_comment_fn=lambda: has_traceability_review_comment(pr_number, repo_name, current_user, env),
             label="traceability review",
+            short_circuit=short_circuit,
+        )
+    )
+
+
+def _run_regret_review(
+    pr: dict,
+    config: HarnessConfig,
+    knowledge_dir: Path,
+    extra_knowledge: str | None,
+    backend: Backend,
+    wdir: str,
+    env: dict,
+    current_user: str,
+    regret_done: bool,
+    ctx: dict,
+) -> bool:
+    """No persisted state exists for this runner, so has_regret_review_comment (checked
+    once by the caller and passed in as regret_done) is the *only* idempotency signal
+    (unlike self_review.py, which treats the equivalent check as defense-in-depth on top
+    of its own persisted regret_reviewed_prs state). If a marked comment from a previous
+    attempt is already present, this is a noop: the candidate pipeline and the backend
+    aren't invoked again, and the pass counts as already succeeded — this is what lets
+    the regret pass's own retry stay decoupled from the others.
+
+    Unlike the other passes in this runner, the backend posts nothing here (review-
+    regret.md): it replies with one verdict line per candidate, and this wrapper parses
+    those lines (regret_review.parse_regret_judgment) and posts the regret comment
+    itself when any verdict is YES (regret_review.build_regret_comment_body). The
+    backend object is therefore wrapped in regret_review.RecordingBackend, since
+    common.run_pr_level_pass — whose orchestration (noop check → build prompt → run
+    backend → re-verify) is reused unchanged — keeps no copy of the reply. The
+    re-verification after a post uses the plain-bool has_regret_review_comment rather
+    than self_review.py's tri-state check_regret_review_comment_status: with no
+    persisted state there is nothing to protect from an inconclusive check.
+
+    The candidate-finding pipeline (find_introducing_prs → find_regret_candidates) runs as
+    run_pr_level_pass's short_circuit hook. When it comes up empty, the pass makes no
+    backend call and posts nothing (regret-review-requirements.md §7.2 step 4). In this
+    stateless runner that outcome counts as complete for the remove_reviewer gate (the
+    hook returns True, unlike self_review.py's equivalent, which returns False and leaves
+    the pass unmarked in its persisted state): nothing is persisted here, so a later PR
+    update that changes the blamed lines still gets a fresh candidate search when the PR
+    is next processed, while blocking the gate on the structurally empty case — the
+    common one — would leave the PR on the review-requested queue, re-running this pass's
+    bounded git/gh sequence, every cycle. A backend or post failure, by contrast, still
+    returns False, so the PR stays queued for a retry."""
+    pr_number = pr["number"]
+    repo_name = config.repo.name
+    candidates: list[RegretCandidate] = []
+    reply: dict[str, str] = {}
+
+    def short_circuit() -> bool | None:
+        introducing_hunks = find_introducing_prs(pr, config, wdir, env)
+        found = find_regret_candidates(introducing_hunks, config, wdir, env)
+        if not found:
+            logger.debug("PR #%d: no regret candidates — nothing to judge this run", pr_number)
+            return True
+        candidates.extend(found)
+        return None
+
+    def build_prompt() -> str:
+        regret_instructions = (knowledge_dir / "review-regret.md").read_text(encoding="utf-8")
+        diff_sections = "".join(
+            build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
+            for file in ctx["files"]
+        )
+        return build_regret_judgment_prompt(
+            regret_instructions,
+            candidates,
+            diff_sections,
+            pr,
+            pr_number,
+            repo_name,
+            ctx["commit_sha"],
+            ctx["pr_description"],
+            ctx["vibe_heal_context"],
+        )
+
+    def has_comment_fn() -> bool:
+        findings = parse_regret_judgment(reply["reply"], candidates)
+        if not findings:
+            logger.info("PR #%d: regret review found no confirmed regret — nothing to post", pr_number)
+            return True
+        if not post_regret_comment(pr_number, repo_name, build_regret_comment_body(findings), env):
+            logger.error("PR #%d: failed to post the regret comment — will retry next run", pr_number)
+            return False
+        return has_regret_review_comment(pr_number, repo_name, current_user, env)
+
+    return bool(
+        run_pr_level_pass(
+            pr_number,
+            cast(Backend, RecordingBackend(backend, reply)),
+            wdir,
+            is_done=regret_done,
+            build_prompt=build_prompt,
+            has_comment_fn=has_comment_fn,
+            label="regret review",
             short_circuit=short_circuit,
         )
     )

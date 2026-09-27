@@ -1105,7 +1105,7 @@ def test_regret_review_posts_comment_and_marks_done_on_findings(tmp_xdg, tmp_pat
         patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
         patch("harness.runners.self_review.get_changed_files", return_value=[]),
         patch("harness.runners.self_review.Backend") as mock_be,
-        patch("harness.runners.self_review._post_regret_comment", return_value=True) as mock_post,
+        patch("harness.runners.self_review.post_regret_comment", return_value=True) as mock_post,
     ):
         mock_be.return_value.run.return_value = MagicMock(
             returncode=0, stdout=b"CANDIDATE 1: YES - it predicted the empty-input failure\n"
@@ -1152,7 +1152,7 @@ def test_regret_review_no_candidates_no_backend_call_and_unmarked(tmp_xdg, tmp_p
         patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
         patch("harness.runners.self_review.get_changed_files", return_value=[]),
         patch("harness.runners.self_review.Backend") as mock_be,
-        patch("harness.runners.self_review._post_regret_comment") as mock_post,
+        patch("harness.runners.self_review.post_regret_comment") as mock_post,
     ):
         self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
@@ -1188,7 +1188,7 @@ def test_regret_review_no_findings_marks_done_without_posting(tmp_xdg, tmp_path)
         patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
         patch("harness.runners.self_review.get_changed_files", return_value=[]),
         patch("harness.runners.self_review.Backend") as mock_be,
-        patch("harness.runners.self_review._post_regret_comment") as mock_post,
+        patch("harness.runners.self_review.post_regret_comment") as mock_post,
     ):
         mock_be.return_value.run.return_value = MagicMock(
             returncode=0, stdout=b"CANDIDATE 1: NO - it was about a different edge case\n"
@@ -1227,7 +1227,7 @@ def test_regret_review_post_failure_leaves_unmarked(tmp_xdg, tmp_path):
         patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
         patch("harness.runners.self_review.get_changed_files", return_value=[]),
         patch("harness.runners.self_review.Backend") as mock_be,
-        patch("harness.runners.self_review._post_regret_comment", return_value=False),
+        patch("harness.runners.self_review.post_regret_comment", return_value=False),
     ):
         mock_be.return_value.run.return_value = MagicMock(
             returncode=0, stdout=b"CANDIDATE 1: YES - it predicted the empty-input failure\n"

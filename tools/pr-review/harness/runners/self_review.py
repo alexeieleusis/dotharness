@@ -42,12 +42,14 @@ from harness.runners.common import (
     run_pr_level_pass,
 )
 from harness.runners.regret_review import (
+    RecordingBackend,
     RegretCandidate,
     build_regret_comment_body,
     build_regret_judgment_prompt,
     find_introducing_prs,
     find_regret_candidates,
     parse_regret_judgment,
+    post_regret_comment,
 )
 
 logger = logging.getLogger(__name__)
@@ -372,54 +374,6 @@ def _run_traceability_review(
         state.add_traceability_reviewed_pr(config.repo_slug, number)
 
 
-def _post_regret_comment(number: int, repo: str, body: str, env: dict) -> bool:
-    """Posts the regret-review PR-level comment — the harness posts it, not the
-    backend: review-regret.md's output contract is verdict lines only, and the body is
-    built here from regret_review.parse_regret_judgment's findings. True if gh accepted
-    it, mirroring post_no_linked_ticket_comment's shape."""
-    result = run_cmd(
-        ["gh", "pr", "comment", str(number), "--repo", repo, "--body", body],
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        logger.error(
-            "PR #%d: failed to post regret comment: %s",
-            number,
-            result.stderr.decode("utf-8", errors="replace"),
-        )
-        return False
-    return True
-
-
-class _RecordingBackend:
-    """A delegating stand-in for Backend, used only by _run_regret_review: it records
-    each run's stdout so the backend's verdict lines survive common.run_pr_level_pass,
-    which keeps no copy of the reply. It deliberately does not subclass Backend: the
-    runner tests replace Backend with a MagicMock, and subclassing a MagicMock returns
-    another MagicMock rather than a class, which would shadow this wrapper's own
-    run() override. run_pr_level_pass's backend: Backend parameter is satisfied at the
-    call site with typing.cast — the wrapper delegates every call to the real backend
-    and exposes exactly the same run() signature."""
-
-    def __init__(self, wrapped: Backend, holder: dict[str, str]) -> None:
-        self._wrapped = wrapped
-        self._holder = holder
-
-    def run(
-        self,
-        instructions: str,
-        cwd: str,
-        opencode_dir: str | None = None,
-        context: str | None = None,
-    ) -> subprocess.CompletedProcess:
-        result = self._wrapped.run(instructions, cwd=cwd, opencode_dir=opencode_dir, context=context)
-        self._holder["reply"] = result.stdout.decode("utf-8", errors="replace")
-        return result
-
-
 def _run_regret_review(
     regret_instructions: str,
     pr: dict,
@@ -489,14 +443,14 @@ def _run_regret_review(
         if not findings:
             logger.info("PR #%d: regret review found no confirmed regret — nothing to post", number)
             return True
-        if not _post_regret_comment(number, config.repo.name, build_regret_comment_body(findings), env):
+        if not post_regret_comment(number, config.repo.name, build_regret_comment_body(findings), env):
             logger.error("PR #%d: failed to post the regret comment — will retry next run", number)
             return False
         return check_regret_review_comment_status(number, config.repo.name, current_user, env)
 
     result = run_pr_level_pass(
         number,
-        cast(Backend, _RecordingBackend(backend, reply)),
+        cast(Backend, RecordingBackend(backend, reply)),
         wdir,
         is_done=is_done,
         build_prompt=build_prompt,

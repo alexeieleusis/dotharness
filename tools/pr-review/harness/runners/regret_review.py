@@ -5,10 +5,12 @@ import subprocess
 import time
 from dataclasses import dataclass
 
+from harness.backend import Backend
 from harness.config import HarnessConfig
 from harness.runners.common import (
     PR_COMMENTS_SCRIPT_PATH,
     REGRET_REVIEW_MARKER,
+    TIMEOUT_GH,
     _build_pr_metadata_trailer,
     author_matches,
     count_diff_lines,
@@ -822,3 +824,59 @@ def parse_regret_judgment(response: str, candidates: list[RegretCandidate]) -> l
             comment_url=candidate.comment_url,
         )
     return [findings_by_index[index] for index in sorted(findings_by_index)]
+
+
+# Runner-agnostic plumbing shared by the two wiring leaves (self_review.py and
+# review_requested.py), kept in this module — not in common.py — because only this
+# pass uses it (requirements.md §10: the pass's plumbing lives in its own module,
+# with a single owner).
+
+
+def post_regret_comment(number: int, repo: str, body: str, env: dict) -> bool:
+    """Posts the regret-review PR-level comment — the harness posts it, not the backend:
+    review-regret.md's output contract is verdict lines only, and the body is built by
+    the caller from parse_regret_judgment's findings (regret-review-requirements.md
+    §7.6). True if gh accepted it, mirroring common.post_no_linked_ticket_comment's
+    shape."""
+    result = run_cmd(
+        ["gh", "pr", "comment", str(number), "--repo", repo, "--body", body],
+        cwd="/",
+        env=env,
+        timeout=TIMEOUT_GH,
+        check=False,
+    )
+    if result.returncode != 0:
+        logger.error(
+            "PR #%d: failed to post regret comment: %s",
+            number,
+            result.stderr.decode("utf-8", errors="replace"),
+        )
+        return False
+    return True
+
+
+class RecordingBackend:
+    """A delegating stand-in for Backend, used by both wiring leaves' _run_regret_review
+    (self_review.py and review_requested.py): it records each run's stdout so the
+    backend's verdict lines survive common.run_pr_level_pass, which keeps no copy of the
+    reply. It deliberately does not subclass Backend: the runner tests replace Backend
+    with a MagicMock, and subclassing a MagicMock returns another MagicMock rather than
+    a class, which would shadow this wrapper's own run() override. run_pr_level_pass's
+    backend: Backend parameter is satisfied at the call site with typing.cast — the
+    wrapper delegates every call to the real backend and exposes exactly the same
+    run() signature."""
+
+    def __init__(self, wrapped: Backend, holder: dict[str, str]) -> None:
+        self._wrapped = wrapped
+        self._holder = holder
+
+    def run(
+        self,
+        instructions: str,
+        cwd: str,
+        opencode_dir: str | None = None,
+        context: str | None = None,
+    ) -> subprocess.CompletedProcess:
+        result = self._wrapped.run(instructions, cwd=cwd, opencode_dir=opencode_dir, context=context)
+        self._holder["reply"] = result.stdout.decode("utf-8", errors="replace")
+        return result
