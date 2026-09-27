@@ -52,6 +52,12 @@ class VibeHealConfig:
 
 
 @dataclass
+class ProseReviewConfig:
+    enabled: bool = False
+    backend: str = DEFAULT_AGENT_BACKEND
+
+
+@dataclass
 class BuildConfig:
     commands: list[str] = field(default_factory=list)
     workers: int = DEFAULT_BUILD_WORKERS
@@ -72,6 +78,7 @@ class SpecPrismFlowConfig:
     vibe_heal: VibeHealConfig
     build: BuildConfig
     harness: HarnessSection
+    prose_review: ProseReviewConfig = field(default_factory=ProseReviewConfig)
 
 
 def load_config(path: Path) -> SpecPrismFlowConfig:
@@ -137,6 +144,17 @@ def load_config(path: Path) -> SpecPrismFlowConfig:
         knowledge_dir=Path(h.get("knowledge_dir", DEFAULT_HARNESS_KNOWLEDGE_DIR)).expanduser(),
     )
 
+    pr = data.get("prose_review", {})
+    prose_review_backend = pr.get("backend", DEFAULT_AGENT_BACKEND)
+    if prose_review_backend not in ("claude", "opencode"):
+        raise ConfigError(  # noqa: TRY003
+            f"Invalid prose_review.backend '{prose_review_backend}': must be 'claude' or 'opencode'"
+        )
+    prose_review = ProseReviewConfig(
+        enabled=pr.get("enabled", False),
+        backend=prose_review_backend,
+    )
+
     return SpecPrismFlowConfig(
         agent=agent,
         plan=plan,
@@ -144,4 +162,5 @@ def load_config(path: Path) -> SpecPrismFlowConfig:
         vibe_heal=vibe_heal,
         build=build,
         harness=harness,
+        prose_review=prose_review,
     )

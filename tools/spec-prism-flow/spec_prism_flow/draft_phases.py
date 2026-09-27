@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from spec_prism_flow import linearize, sizing
+from spec_prism_flow import linearize, prose_review, sizing
 from spec_prism_flow.chunk import ChunkNode, load_tree
 from spec_prism_flow.config import SpecPrismFlowConfig
 from spec_prism_flow.decompose import TREE_FILENAME
@@ -170,6 +170,7 @@ def run_draft_phases(cfg: SpecPrismFlowConfig) -> DraftPhasesResult:
 
         out_path = cfg.plan.phase_dir / label
         out_path.write_text(render_phase_file(phase))
+        prose_review.review_document(cfg.prose_review, out_path)
         written.append(out_path)
 
     return DraftPhasesResult(

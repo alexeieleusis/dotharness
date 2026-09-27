@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from spec_prism_flow import handoff
+from spec_prism_flow import handoff, prose_review
 from spec_prism_flow.config import SpecPrismFlowConfig
 from spec_prism_flow.overview_stage import OPEN_QUESTIONS_FILENAME, OVERVIEW_FILENAME
 from spec_prism_flow.workspace import ManifestError, load_manifest
@@ -70,5 +70,7 @@ def run_draft_requirements(cfg: SpecPrismFlowConfig) -> Path:
         )
     except handoff.HandoffError as e:
         raise RequirementsError(str(e)) from e
+
+    prose_review.review_document(cfg.prose_review, cfg.plan.workspace_dir / REQUIREMENTS_FILENAME)
 
     return cfg.plan.workspace_dir / REQUIREMENTS_FILENAME
