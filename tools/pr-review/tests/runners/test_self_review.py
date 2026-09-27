@@ -1,3 +1,4 @@
+import json
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -462,6 +463,32 @@ def test_list_my_prs_returns_none_on_gh_failure():
 def test_list_my_prs_returns_none_on_malformed_json():
     with patch("harness.runners.self_review.run_cmd", return_value=MagicMock(returncode=0, stdout=b"not json")):
         assert self_review._list_my_prs("acme/frontend", {}) is None
+
+
+def test_list_my_prs_requests_author_and_returns_prs_from_single_call():
+    # gh pr list --json can return everything in a single call; author must be among
+    # the requested fields, because the regret pass's author gate
+    # (regret_review.find_introducing_prs -> _pr_gate_setup) reads
+    # pr["author"]["login"] from the PR dict and fails closed on an authorless PR —
+    # without the field no PR could ever pass the gate in this runner (the same fix
+    # review_requested._get_prs received). The returned PR dicts must carry it through.
+    pr = {
+        "number": 42,
+        "url": "https://github.com/acme/frontend/pull/42",
+        "headRefName": "feat/my-branch",
+        "author": {"login": "alice"},
+    }
+    with patch(
+        "harness.runners.self_review.run_cmd",
+        return_value=MagicMock(returncode=0, stdout=json.dumps([pr]).encode()),
+    ) as mock_run:
+        prs = self_review._list_my_prs("acme/frontend", {})
+
+    assert prs == [pr]
+    mock_run.assert_called_once()
+    args = mock_run.call_args[0][0]
+    fields = args[args.index("--json") + 1].split(",")
+    assert "author" in fields
 
 
 def test_design_review_runs_independently_of_already_reviewed_files(tmp_xdg, tmp_path):
@@ -1002,7 +1029,8 @@ def test_regret_review_not_run_when_disabled(tmp_xdg, tmp_path):
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch(
-            "harness.runners.self_review._list_my_prs", return_value=[{"number": 50, "url": "u", "headRefName": "b"}]
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 50, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
         ),
         patch("harness.runners.self_review.check_review_summary_comment_status", return_value=True),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -1029,7 +1057,8 @@ def test_regret_review_not_run_when_already_regret_reviewed(tmp_xdg, tmp_path):
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch(
-            "harness.runners.self_review._list_my_prs", return_value=[{"number": 51, "url": "u", "headRefName": "b"}]
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 51, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
         ),
         patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("harness.runners.self_review.git_fetch_and_checkout") as mock_checkout,
@@ -1052,7 +1081,8 @@ def test_regret_review_marker_found_marks_done_without_invoking_backend(tmp_xdg,
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch(
-            "harness.runners.self_review._list_my_prs", return_value=[{"number": 52, "url": "u", "headRefName": "b"}]
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 52, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
         ),
         patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),
@@ -1088,7 +1118,8 @@ def test_regret_review_posts_comment_and_marks_done_on_findings(tmp_xdg, tmp_pat
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch(
-            "harness.runners.self_review._list_my_prs", return_value=[{"number": 53, "url": "u", "headRefName": "b"}]
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 53, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
         ),
         patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),
@@ -1136,7 +1167,8 @@ def test_regret_review_no_candidates_no_backend_call_and_unmarked(tmp_xdg, tmp_p
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch(
-            "harness.runners.self_review._list_my_prs", return_value=[{"number": 54, "url": "u", "headRefName": "b"}]
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 54, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
         ),
         patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),
@@ -1172,7 +1204,8 @@ def test_regret_review_no_findings_marks_done_without_posting(tmp_xdg, tmp_path)
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch(
-            "harness.runners.self_review._list_my_prs", return_value=[{"number": 55, "url": "u", "headRefName": "b"}]
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 55, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
         ),
         patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),
@@ -1210,7 +1243,8 @@ def test_regret_review_post_failure_leaves_unmarked(tmp_xdg, tmp_path):
         patch("harness.runners.self_review.get_gh_token", return_value="tok"),
         patch("harness.runners.self_review.get_current_user", return_value="alice"),
         patch(
-            "harness.runners.self_review._list_my_prs", return_value=[{"number": 56, "url": "u", "headRefName": "b"}]
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 56, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
         ),
         patch("harness.runners.self_review.has_design_review_comment", return_value=True),
         patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),

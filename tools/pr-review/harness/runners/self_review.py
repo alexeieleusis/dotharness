@@ -678,7 +678,7 @@ def _list_my_prs(repo: str, env: dict) -> list[dict] | None:
             "--state",
             "open",
             "--json",
-            "number,url,headRefName,createdAt,closingIssuesReferences",
+            "number,url,headRefName,createdAt,closingIssuesReferences,author",
             "--limit",
             "500",
         ],
