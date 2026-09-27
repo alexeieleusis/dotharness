@@ -374,7 +374,7 @@ specific to the Neighboku two-track experiment.
 3. Static analysis (optional).
 4. AI review (optional).
 5. Address comments (bounded retries).
-6. Manual test checklist (human-executed. The tool displays the phase file's checklist and records
+6. Manual test checklist (human-executed, the tool displays the phase file's checklist and records
    pass/fail. **Advisory by default — logged but non-blocking — with a `--strict` flag making it a
    hard merge gate, §11 #2**).
 7. Merge.
