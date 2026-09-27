@@ -8,7 +8,7 @@
 ## Requirements
 # Requirements: Backend Judgment Prompt and `review-regret.md`
 
-## 1. Purpose / origin
+### 1. Purpose / origin
 
 This leaf belongs to `regret-review`'s decomposition tree (`requirements.md`
 §7.2 steps 3–4, §10). It covers the pass's one backend invocation per PR and
@@ -17,7 +17,7 @@ the existing `review-design.md`
 (`~/.harness/knowledge/pr-review/review-design.md`), the closest existing
 PR-level-pass instructions file in tone and output-contract shape.
 
-## 2. Problem statement
+### 2. Problem statement
 
 The previous leaf produces a set of candidate `(comment, blamed_change)`
 pairs. None of them are judged yet. This leaf must convert "an old comment
@@ -27,7 +27,7 @@ cannot make it. Doing so requires reading the fix's intent against the old
 comment's content. That is why `requirements.md` G3 requires the AI backend
 invocation.
 
-## 3. Goals
+### 3. Goals
 
 - **G1.** This leaf makes one backend invocation per current-PR run, never
   one per candidate. It receives the current PR's fix diff (via
@@ -51,7 +51,7 @@ invocation.
   parsed backend response. The marker/poster leaf already defined that
   shape. This leaf sends them to the wiring leaves for posting.
 
-## 4. Non-goals
+### 4. Non-goals
 
 - This leaf does not define `RegretFinding`'s shape. The marker/poster leaf
   already fixed it (§7.6). This leaf only populates instances of it.
@@ -67,12 +67,12 @@ invocation.
   judgment question and output contract. It borrows only the section
   *structure*.
 
-## 5. Glossary
+### 5. Glossary
 
 See `requirements.md` §5 for `Regret finding`. This leaf produces the first
 real instances of it.
 
-## 6. Feature/component breakdown
+### 6. Feature/component breakdown
 
 | Component | Question it answers | Input | Output |
 |---|---|---|---|
@@ -80,7 +80,7 @@ real instances of it.
 | `review-regret.md` | What is the backend told to do with it? | — | Instructions text |
 | Response parser | Which candidates were confirmed? | Backend's structured response | `list[RegretFinding]` |
 
-## 7. Detailed functional requirements
+### 7. Detailed functional requirements
 
 - Add `build_regret_judgment_prompt(instructions, candidates, pr, ...)` to
   `harness/runners/regret_review.py`. Follow the same trailer-building
@@ -105,7 +105,7 @@ real instances of it.
   carries that candidate's file/region/introducing-PR/comment-id/rationale.
   It discards `NO` lines and anything unparseable.
 
-## 8. Non-functional requirements
+### 8. Non-functional requirements
 
 - This leaf makes one backend invocation per PR run.
   `harness.backend_timeout_seconds` bounds that call. It is the existing
@@ -116,14 +116,14 @@ real instances of it.
   default 50). The candidate count is small by construction, not by anything
   this leaf enforces.
 
-## 9. Out-of-scope / explicit exclusions
+### 9. Out-of-scope / explicit exclusions
 
 This leaf implements no UI or formatting beyond the plain structured-line
 contract in G2. No JSON. No markdown table. The implementer may deviate if
 they judge a structured line format insufficient. They must then flag the
 deviation explicitly in the phase's own PR description.
 
-## 10. System/tool shape
+### 10. System/tool shape
 
 - **Files touched:** `harness/runners/regret_review.py` (edit — prompt
   builder + response parser). `knowledge/pr-review/review-regret.md` (new).
@@ -135,14 +135,14 @@ deviation explicitly in the phase's own PR description.
   is in-tree. `tests/runners/test_regret_review.py` (edit — prompt-building
   and response-parsing tests, including malformed-response handling).
 
-## 11. Open decisions log
+### 11. Open decisions log
 
 This log carries none from `requirements.md`. The exact prose of
 `review-regret.md` is a drafting task for this leaf's implementation. It is
 not a decision that needs further human sign-off, beyond matching G3's
 structural requirements.
 
-## 12. Next step
+### 12. Next step
 
 Once merged, both runner-wiring leaves (§7.3, §7.4) can call this leaf's
 prompt builder + response parser as part of their `common.run_pr_level_pass`

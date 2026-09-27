@@ -8,7 +8,7 @@
 ## Requirements
 # Requirements: `review-requested` Wiring
 
-## 1. Purpose / origin
+### 1. Purpose / origin
 
 This is the final leaf of `regret-review`'s decomposition tree (`requirements.md` §7.4, §10).
 It covers the second of two runner integrations. Its reference implementation is
@@ -17,7 +17,7 @@ which this leaf copies exactly. It is a direct sibling of chunk A-3-1, the
 just-merged `self-review` wiring leaf (§7.3). It shares the core mechanics of
 that leaf, wires a different runner, and adds no persisted state.
 
-## 2. Problem statement
+### 2. Problem statement
 
 `self-review` wiring (previous leaf) only covers PRs the current user authored.
 `review-requested` covers PRs where GitHub review was explicitly requested from the
@@ -25,7 +25,7 @@ harness's own account. That is a distinct population of PRs. `requirements.md` �
 item 1 already resolved that both runners are in scope. Without this leaf, the
 `review-requested` runner never gives a PR a regret-review pass.
 
-## 3. Goals
+### 3. Goals
 
 - **G1.** `review_requested.py` gains a new `_run_regret_review(...)` function. It
   runs alongside the existing `design_ok`/`traceability_ok` calls
@@ -42,7 +42,7 @@ item 1 already resolved that both runners are in scope. Without this leaf, the
   them. It adds only a second call site.
 - **G4.** This leaf reuses `common.run_pr_level_pass` unchanged.
 
-## 4. Non-goals
+### 4. Non-goals
 
 - This leaf does not duplicate any of the core-mechanics functions for this runner.
   They are runner-agnostic by construction. They take `pr`/`config`/`wdir`/`env`,
@@ -52,16 +52,16 @@ item 1 already resolved that both runners are in scope. Without this leaf, the
   already explains why (`review_requested.py:332-335`). This leaf does not change
   that.
 
-## 5. Glossary
+### 5. Glossary
 
 See `requirements.md` §5. This leaf is integration. It adds no new domain
 vocabulary.
 
-## 6. Feature/component breakdown
+### 6. Feature/component breakdown
 
 This leaf covers a single feature (the second runner's wiring). No table is needed.
 
-## 7. Detailed functional requirements
+### 7. Detailed functional requirements
 
 - `run(config, pr_url=None)` (`review_requested.py:46-...`) gains a
   `regret_done = has_regret_review_comment(pr_number, config.repo.name, current_user,
@@ -86,29 +86,29 @@ This leaf covers a single feature (the second runner's wiring). No table is need
   persisted state. So the simpler bool form is correct here, per
   `run_pr_level_pass`'s own docstring (`common.py:770-777`).
 
-## 8. Non-functional requirements
+### 8. Non-functional requirements
 
 None beyond what `run_pr_level_pass` and the composed core-mechanics leaves already
 provide.
 
-## 9. Out-of-scope / explicit exclusions
+### 9. Out-of-scope / explicit exclusions
 
 This leaf adds no new CLI flag or command. The rationale is the same as the
 `self-review` leaf's §9.
 
-## 10. System/tool shape
+### 10. System/tool shape
 
 - **Files touched:** `harness/runners/review_requested.py` (edit), `tests/runners/
   test_review_requested.py` (edit). The new tests mirror the existing design-review
   wiring tests in this file: the enabled/disabled gate, idempotency via the marker
   check, and the no-state-mutation assertion.
 
-## 11. Open decisions log
+### 11. Open decisions log
 
 None. `requirements.md` §7.4/§11 item 1 already resolves that this pass is part of
 `review-requested`.
 
-## 12. Next step
+### 12. Next step
 
 Once merged, every leaf of this project's decomposition is complete. `plan review`
 becomes the exit gate before `build run` starts opening PRs for each phase in

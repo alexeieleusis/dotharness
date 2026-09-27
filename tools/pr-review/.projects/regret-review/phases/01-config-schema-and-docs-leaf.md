@@ -8,7 +8,7 @@
 ## Requirements
 # Requirements: `[regret_review]` Config Schema and Docs
 
-## 1. Purpose / origin
+### 1. Purpose / origin
 
 This leaf covers only the config surface: the `RegretReviewConfig` dataclass, its
 `.harness.toml` parsing, and the matching `docs/configuration.md` schema entry. It is
@@ -16,7 +16,18 @@ a leaf of the `regret-review` decomposition tree (`requirements.md` §7.5, §10)
 shape comes only from the three existing sibling config sections in `harness/config.py`
 (`VibehealConfig`, `FocusedReviewConfig`, and `AddressCommentsConfig`).
 
-## 2. Problem statement
+This whole seven-leaf decomposition traces back to `requirements.md`'s full document,
+not only its detailed sections: §1 (Purpose / origin) and §2 (Problem statement) set
+the motivation this leaf and its six siblings all serve; §3 (Goals) and §4 (Non-goals)
+bound what all seven leaves together are, and are not, building; §6 (Feature/component
+breakdown) is the at-a-glance table this same tree's seven leaves realize one row/area
+at a time; §7 (Detailed functional requirements) is the section these seven leaves
+collectively implement, subsection by subsection (§7.1–§7.6, cited individually
+throughout each leaf below); and §12 (Next step) names exactly the `decompose` →
+`draft-phases` → `plan review` → `build run` pipeline this phase file is itself a
+product of.
+
+### 2. Problem statement
 
 Every other leaf of this project (blame/PR resolution, comment matching, runner
 wiring) needs to read whether the pass is enabled and its three tunables
@@ -24,7 +35,7 @@ wiring) needs to read whether the pass is enabled and its three tunables
 else can read `config.regret_review`. `docs/configuration.md` would also silently
 drift out of sync with the actual schema once any other leaf starts consuming it.
 
-## 3. Goals
+### 3. Goals
 
 - **G1.** `harness/config.py` gains a `RegretReviewConfig` dataclass with fields
   `enabled: bool = False`, `max_diff_lines: int = 50`, `authors: str | list[str] = "*"`,
@@ -41,7 +52,7 @@ drift out of sync with the actual schema once any other leaf starts consuming it
   table in the same format as the existing `### \`[vibe_heal]\`` section. It also gains
   an entry in the "Full example" TOML block at the bottom of the file.
 
-## 4. Non-goals
+### 4. Non-goals
 
 - This leaf does not implement anything that *reads* `config.regret_review` at
   runtime. That is every downstream leaf's job. It only makes the field exist and
@@ -54,18 +65,18 @@ drift out of sync with the actual schema once any other leaf starts consuming it
 - This leaf does not choose different defaults. `requirements.md` §7.5 already
   settled them. This leaf only implements that decision.
 
-## 5. Glossary
+### 5. Glossary
 
 See `requirements.md` §5 for the full definitions of `bugfix-shaped PR` and the
 pass's own vocabulary. This leaf only needs `RegretReviewConfig`, the dataclass it
 introduces, which matches the code block already given in `requirements.md` §7.5.
 
-## 6. Feature/component breakdown
+### 6. Feature/component breakdown
 
 This leaf is a single feature: a dataclass, its parser branch, and a docs section.
 No table is needed.
 
-## 7. Detailed functional requirements
+### 7. Detailed functional requirements
 
 - Add to `harness/config.py`, directly below `AddressCommentsConfig`:
 
@@ -105,20 +116,20 @@ No table is needed.
   matching how `[vibe_heal]`/`[focused_review]`/`[address_comments]` are already
   shown there.
 
-## 8. Non-functional requirements
+### 8. Non-functional requirements
 
 This leaf adds no new non-functional requirements beyond what every other config
 section already has. Parsing must not raise for a `.harness.toml` that omits
 `[regret_review]` entirely. Every field must have a working default, per G1.
 
-## 9. Out-of-scope / explicit exclusions
+### 9. Out-of-scope / explicit exclusions
 
 No changes to `harness/cli.py`'s `validate` or `init` commands are in scope. No such
 changes result from `RegretReviewConfig` existing. The `harness init` template and
 the `harness validate` checks are both driven by the docs/example block and the
 generic per-field defaults, not a per-section special case.
 
-## 10. System/tool shape
+### 10. System/tool shape
 
 - **Files touched:** `harness/config.py` (edit), `tests/test_config.py` (edit: new
   tests in the style of the existing `test_vibe_heal_defaults`/`test_build_parsed`
@@ -130,12 +141,12 @@ generic per-field defaults, not a per-section special case.
 - **Tests:** unit tests only. No fixtures beyond what `tests/test_config.py` already
   uses (in-memory TOML strings via `tmp_path`).
 
-## 11. Open decisions log
+### 11. Open decisions log
 
 None. This leaf implements `requirements.md` §7.5/§11.3 verbatim. Those sections are
 already fully resolved.
 
-## 12. Next step
+### 12. Next step
 
 Once this leaf's phase merges, every other leaf in this project can read
 `config.regret_review`. In particular, the blame/PR-resolver leaf reads
