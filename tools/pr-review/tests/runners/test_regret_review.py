@@ -8,11 +8,15 @@ from harness.config import HarnessConfig, HarnessSection, RegretReviewConfig, Re
 from harness.runners.common import REGRET_REVIEW_MARKER, count_diff_lines
 from harness.runners.regret_review import (
     IntroducingHunk,
+    RegretCandidate,
     RegretFinding,
     _blamed_shas,
+    _hunk_line_ranges,
+    _line_within_hunk_ranges,
     _removed_modified_ranges,
     build_regret_comment_body,
     find_introducing_prs,
+    find_regret_candidates,
 )
 
 
@@ -633,5 +637,379 @@ def test_find_introducing_prs_passes_remaining_budget_as_call_timeout(tmp_path):
         find_introducing_prs(_pr(), _config(timeout=300), str(tmp_path), {})
     # Every call's timeout is the remaining budget (≤ 300, strictly decreasing in
     # elapsed time), never a fresh per-call constant.
+    assert seen_timeouts and all(0 < t <= 300 for t in seen_timeouts)
+    assert seen_timeouts == sorted(seen_timeouts, reverse=True)
+
+
+# --- phase 04: comment fetch + diff-hunk matching ---
+
+
+def _hunk(**overrides) -> IntroducingHunk:
+    base = {
+        "path": "src/foo.py",
+        "old_start": 5,
+        "old_end": 5,
+        "new_start": 5,
+        "new_end": 5,
+        "introducing_sha": "abc123def456",
+        "introducing_pr_number": 7,
+    }
+    base.update(overrides)
+    return IntroducingHunk(**base)
+
+
+def _inline_comment(**overrides) -> dict:
+    base = {
+        "type": "inline",
+        "id": 456,
+        "author": "alice",
+        "path": "src/foo.py",
+        "line": 6,
+        "side": "RIGHT",
+        "body": "This edge case isn't handled.",
+        "diff_hunk": "@@ -5,3 +5,3 @@\n-old a\n+new a\n old b",
+        "url": "https://github.com/acme/repo/pull/7#discussion_r456",
+        "replies": [],
+    }
+    base.update(overrides)
+    return base
+
+
+def _introducing_commit_diff(header: str, body: str = "-old\n+new\n") -> str:
+    return f"diff --git a/src/foo.py b/src/foo.py\n--- a/src/foo.py\n+++ b/src/foo.py\n{header}\n{body}"
+
+
+def test_hunk_line_ranges_inclusive_ranges_and_empty_sides():
+    diff = "@@ -5,3 +5,3 @@\n@@ -8,0 +9,2 @@\n@@ -12,1 +14,0 @@\n@@ -5 +5 @@\n"
+    assert _hunk_line_ranges(diff) == [
+        (5, 7, 5, 7),
+        (8, 7, 9, 10),  # pure addition: empty old side
+        (12, 12, 14, 13),  # pure deletion: empty new side
+        (5, 5, 5, 5),
+    ]
+
+
+def test_line_within_hunk_ranges_either_side_only():
+    ranges = [(5, 7, 5, 7), (8, 7, 9, 10), (12, 12, 14, 13)]
+    assert _line_within_hunk_ranges(5, ranges)
+    assert _line_within_hunk_ranges(7, ranges)
+    assert _line_within_hunk_ranges(9, ranges)  # new side of the pure addition
+    assert _line_within_hunk_ranges(12, ranges)  # old side of the pure deletion
+    assert not _line_within_hunk_ranges(4, ranges)
+    assert not _line_within_hunk_ranges(8, ranges)  # inside no range: the addition's old side is empty
+    assert not _line_within_hunk_ranges(14, ranges)  # inside no range: the deletion's new side is empty
+
+
+def test_find_regret_candidates_happy_path_hunk_tolerant_not_exact_line(tmp_path):
+    # The blamed change is line 5 only, but the introducing commit's hunk spans 5-7:
+    # a comment at line 6 is in the same hunk and therefore a candidate.
+    hunk = _hunk()
+    diff = _introducing_commit_diff("@@ -5,3 +5,3 @@", "-old a\n+new a\n old b\n")
+
+    def side_effect(cmd, cwd, env, timeout, check=False):
+        if cmd[0] == "git" and cmd[1] == "diff":
+            return _run(0, diff.encode())
+        msg = f"unexpected command: {cmd}"
+        raise AssertionError(msg)
+
+    with (
+        patch("harness.runners.regret_review.run_cmd", side_effect=side_effect) as mock_run,
+        patch("harness.runners.regret_review.fetch_pr_comments", return_value=[_inline_comment()]) as mock_fetch,
+    ):
+        candidates = find_regret_candidates([hunk], _config(), str(tmp_path), {})
+    assert mock_fetch.call_count == 1
+    assert mock_fetch.call_args.args[0] == 7  # the introducing PR, not the current one
+    assert _cmd_calls(mock_run, "git") == [
+        ["git", "diff", "abc123def456^", "abc123def456", "--unified=0", "--", "src/foo.py"]
+    ]
+    assert candidates == [
+        RegretCandidate(
+            comment_id=456,
+            comment_body="This edge case isn't handled.",
+            comment_author="alice",
+            comment_diff_hunk="@@ -5,3 +5,3 @@\n-old a\n+new a\n old b",
+            comment_url="https://github.com/acme/repo/pull/7#discussion_r456",
+            hunk=hunk,
+        )
+    ]
+
+
+def test_find_regret_candidates_comment_outside_hunk_window_not_a_candidate(tmp_path):
+    diff = _introducing_commit_diff("@@ -5,3 +5,3 @@", "-old a\n+new a\n old b\n")
+    comments = [
+        _inline_comment(id=1, line=30),  # right file, far outside the 5-7 window
+        _inline_comment(id=2, path="src/bar.py"),  # right line, wrong file
+    ]
+
+    def side_effect(cmd, cwd, env, timeout, check=False):
+        if cmd[0] == "git" and cmd[1] == "diff":
+            return _run(0, diff.encode())
+        msg = f"unexpected command: {cmd}"
+        raise AssertionError(msg)
+
+    with (
+        patch("harness.runners.regret_review.run_cmd", side_effect=side_effect),
+        patch("harness.runners.regret_review.fetch_pr_comments", return_value=comments),
+    ):
+        assert find_regret_candidates([_hunk()], _config(), str(tmp_path), {}) == []
+
+
+def test_find_regret_candidates_issue_and_review_types_never_candidates(tmp_path):
+    diff = _introducing_commit_diff("@@ -5,3 +5,3 @@", "-old a\n+new a\n old b\n")
+    comments = [
+        _inline_comment(type="issue"),  # location-shaped, but the wrong type
+        {
+            "type": "review",
+            "id": "review-777",
+            "author": "bob",
+            "state": "CHANGES_REQUESTED",
+            "body": "whole-PR nits",
+            "url": "https://github.com/acme/repo/pull/7#pullrequestreview-777",
+        },
+    ]
+
+    def side_effect(cmd, cwd, env, timeout, check=False):
+        if cmd[0] == "git" and cmd[1] == "diff":
+            return _run(0, diff.encode())
+        msg = f"unexpected command: {cmd}"
+        raise AssertionError(msg)
+
+    with (
+        patch("harness.runners.regret_review.run_cmd", side_effect=side_effect),
+        patch("harness.runners.regret_review.fetch_pr_comments", return_value=comments),
+    ):
+        assert find_regret_candidates([_hunk()], _config(), str(tmp_path), {}) == []
+
+
+def test_find_regret_candidates_dedupes_fetch_and_diff_and_yields_a_pair_per_range(tmp_path):
+    # Two blamed ranges in one file, both attributed to the same commit/PR, both inside
+    # that commit's single 5-9 hunk: one fetch, one hunk-diff, one candidate per range.
+    hunk_a = _hunk(old_start=5, old_end=5, new_start=5, new_end=5)
+    hunk_b = _hunk(old_start=9, old_end=9, new_start=9, new_end=9)
+    diff = _introducing_commit_diff(
+        "@@ -5,5 +5,5 @@",
+        "-old a\n+new a\n-old b\n+new b\n-old c\n+new c\n-old d\n+new d\n-old e\n+new e\n",
+    )
+
+    def side_effect(cmd, cwd, env, timeout, check=False):
+        if cmd[0] == "git" and cmd[1] == "diff":
+            return _run(0, diff.encode())
+        msg = f"unexpected command: {cmd}"
+        raise AssertionError(msg)
+
+    with (
+        patch("harness.runners.regret_review.run_cmd", side_effect=side_effect) as mock_run,
+        patch("harness.runners.regret_review.fetch_pr_comments", return_value=[_inline_comment()]) as mock_fetch,
+    ):
+        candidates = find_regret_candidates([hunk_a, hunk_b], _config(), str(tmp_path), {})
+    assert mock_fetch.call_count == 1  # one fetch for the one unique introducing PR
+    assert len(_cmd_calls(mock_run, "git")) == 1  # one hunk-diff for the one unique (commit, file)
+    assert [c.hunk for c in candidates] == [hunk_a, hunk_b]
+    assert all(c.comment_id == 456 for c in candidates)
+
+
+def test_find_regret_candidates_same_commit_in_two_prs_fetches_each_once(tmp_path):
+    hunk_a = _hunk(introducing_pr_number=7)
+    hunk_b = _hunk(old_start=9, old_end=9, new_start=9, new_end=9, introducing_pr_number=8)
+    diff = _introducing_commit_diff(
+        "@@ -5,5 +5,5 @@",
+        "-old a\n+new a\n-old b\n+new b\n-old c\n+new c\n-old d\n+new d\n-old e\n+new e\n",
+    )
+
+    def side_effect(cmd, cwd, env, timeout, check=False):
+        if cmd[0] == "git" and cmd[1] == "diff":
+            return _run(0, diff.encode())
+        msg = f"unexpected command: {cmd}"
+        raise AssertionError(msg)
+
+    def fetch_side_effect(pr_number, script_path, wdir, env):
+        if pr_number == 7:
+            return [_inline_comment(line=5)]
+        if pr_number == 8:
+            return [_inline_comment(id=789, line=7, url="https://github.com/acme/repo/pull/8#discussion_r789")]
+        msg = f"unexpected PR: {pr_number}"
+        raise AssertionError(msg)
+
+    with (
+        patch("harness.runners.regret_review.run_cmd", side_effect=side_effect) as mock_run,
+        patch("harness.runners.regret_review.fetch_pr_comments", side_effect=fetch_side_effect) as mock_fetch,
+    ):
+        candidates = find_regret_candidates([hunk_a, hunk_b], _config(), str(tmp_path), {})
+    assert [c.args[0] for c in mock_fetch.call_args_list] == [7, 8]
+    assert len(_cmd_calls(mock_run, "git")) == 1  # the shared (commit, file) is diffed once
+    assert [(c.hunk, c.comment_id) for c in candidates] == [(hunk_a, 456), (hunk_b, 789)]
+
+
+def test_find_regret_candidates_fetch_failure_drops_only_that_pr(tmp_path, caplog):
+    hunk_a = _hunk(introducing_pr_number=7)
+    hunk_b = _hunk(old_start=9, old_end=9, new_start=9, new_end=9, introducing_pr_number=8)
+    diff = _introducing_commit_diff(
+        "@@ -5,5 +5,5 @@",
+        "-old a\n+new a\n-old b\n+new b\n-old c\n+new c\n-old d\n+new d\n-old e\n+new e\n",
+    )
+
+    def side_effect(cmd, cwd, env, timeout, check=False):
+        if cmd[0] == "git" and cmd[1] == "diff":
+            return _run(0, diff.encode())
+        msg = f"unexpected command: {cmd}"
+        raise AssertionError(msg)
+
+    def fetch_side_effect(pr_number, script_path, wdir, env):
+        if pr_number == 7:
+            return []  # models fetch_pr_comments' failure/empty outcome
+        return [_inline_comment(id=789, line=7)]
+
+    with (
+        patch("harness.runners.regret_review.run_cmd", side_effect=side_effect),
+        patch("harness.runners.regret_review.fetch_pr_comments", side_effect=fetch_side_effect),
+        caplog.at_level(logging.DEBUG, logger="harness.runners.regret_review"),
+    ):
+        candidates = find_regret_candidates([hunk_a, hunk_b], _config(), str(tmp_path), {})
+    assert [c.hunk for c in candidates] == [hunk_b]
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_find_regret_candidates_hunk_diff_failure_drops_only_that_commit(tmp_path, caplog):
+    hunk_a = _hunk(introducing_sha="aaa111aaa111", introducing_pr_number=7)
+    hunk_b = _hunk(
+        introducing_sha="bbb222bbb222",
+        old_start=9,
+        old_end=9,
+        new_start=9,
+        new_end=9,
+        introducing_pr_number=8,
+    )
+    diff = _introducing_commit_diff("@@ -9,1 +9,1 @@", "-old b\n+new b\n")
+
+    def side_effect(cmd, cwd, env, timeout, check=False):
+        if cmd[0] == "git" and cmd[1] == "diff":
+            if "aaa111aaa111" in cmd[2]:
+                return _run(1, stderr=b"fatal: unknown revision 'aaa111aaa111^'")  # e.g. a root commit
+            return _run(0, diff.encode())
+        msg = f"unexpected command: {cmd}"
+        raise AssertionError(msg)
+
+    with (
+        patch("harness.runners.regret_review.run_cmd", side_effect=side_effect),
+        patch("harness.runners.regret_review.fetch_pr_comments", return_value=[_inline_comment(line=9, id=789)]),
+        caplog.at_level(logging.DEBUG, logger="harness.runners.regret_review"),
+    ):
+        candidates = find_regret_candidates([hunk_a, hunk_b], _config(), str(tmp_path), {})
+    assert [c.hunk for c in candidates] == [hunk_b]
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_find_regret_candidates_comment_on_old_side_of_introducing_hunk(tmp_path):
+    # The introducing commit replaced lines 5-6 with lines 5-8; a comment anchored to
+    # old line 5 (LEFT side, a line the change deleted) is still in the same hunk.
+    hunk = _hunk(old_start=5, old_end=6, new_start=5, new_end=4)  # the current PR deletes them
+    diff = _introducing_commit_diff("@@ -5,2 +5,4 @@", "-old a\n-old b\n+new a\n+new b\n+new c\n")
+
+    def side_effect(cmd, cwd, env, timeout, check=False):
+        if cmd[0] == "git" and cmd[1] == "diff":
+            return _run(0, diff.encode())
+        msg = f"unexpected command: {cmd}"
+        raise AssertionError(msg)
+
+    with (
+        patch("harness.runners.regret_review.run_cmd", side_effect=side_effect),
+        patch("harness.runners.regret_review.fetch_pr_comments", return_value=[_inline_comment(line=5, side="LEFT")]),
+    ):
+        candidates = find_regret_candidates([hunk], _config(), str(tmp_path), {})
+    assert [c.hunk for c in candidates] == [hunk]
+
+
+def test_find_regret_candidates_pure_addition_introducing_commit_matches_new_side_only(tmp_path):
+    # The introducing commit added lines 5-7 (its old side is empty): a comment at
+    # new line 7 matches; one at line 4 — outside the hunk on both sides — does not.
+    hunk = _hunk(old_start=5, old_end=7, new_start=5, new_end=5)
+    diff = _introducing_commit_diff("@@ -4,0 +5,3 @@", "+new a\n+new b\n+new c\n")
+    comments = [_inline_comment(id=1, line=4), _inline_comment(id=2, line=7)]
+
+    def side_effect(cmd, cwd, env, timeout, check=False):
+        if cmd[0] == "git" and cmd[1] == "diff":
+            return _run(0, diff.encode())
+        msg = f"unexpected command: {cmd}"
+        raise AssertionError(msg)
+
+    with (
+        patch("harness.runners.regret_review.run_cmd", side_effect=side_effect),
+        patch("harness.runners.regret_review.fetch_pr_comments", return_value=comments),
+    ):
+        candidates = find_regret_candidates([hunk], _config(), str(tmp_path), {})
+    assert [c.comment_id for c in candidates] == [2]
+
+
+def test_find_regret_candidates_comment_with_no_line_never_a_candidate(tmp_path):
+    # A stale inline comment whose line and original_line are both missing has no
+    # locatable position: it can never match.
+    diff = _introducing_commit_diff("@@ -5,3 +5,3 @@", "-old a\n+new a\n old b\n")
+
+    def side_effect(cmd, cwd, env, timeout, check=False):
+        if cmd[0] == "git" and cmd[1] == "diff":
+            return _run(0, diff.encode())
+        msg = f"unexpected command: {cmd}"
+        raise AssertionError(msg)
+
+    with (
+        patch("harness.runners.regret_review.run_cmd", side_effect=side_effect),
+        patch("harness.runners.regret_review.fetch_pr_comments", return_value=[_inline_comment(line=None)]),
+    ):
+        assert find_regret_candidates([_hunk()], _config(), str(tmp_path), {}) == []
+
+
+def test_find_regret_candidates_empty_input_does_nothing(tmp_path):
+    with (
+        patch("harness.runners.regret_review.run_cmd") as mock_run,
+        patch("harness.runners.regret_review.fetch_pr_comments") as mock_fetch,
+    ):
+        assert find_regret_candidates([], _config(), str(tmp_path), {}) == []
+    mock_run.assert_not_called()
+    mock_fetch.assert_not_called()
+
+
+def test_find_regret_candidates_expired_budget_does_nothing(tmp_path):
+    with (
+        patch("harness.runners.regret_review.run_cmd") as mock_run,
+        patch("harness.runners.regret_review.fetch_pr_comments") as mock_fetch,
+    ):
+        assert find_regret_candidates([_hunk()], _config(timeout=0), str(tmp_path), {}) == []
+    mock_run.assert_not_called()
+    mock_fetch.assert_not_called()
+
+
+def test_find_regret_candidates_timed_out_diff_stops_sequence_fail_open(tmp_path):
+    # The fetch succeeds, then the hunk-diff times out: the sequence stops and no
+    # partial candidate set is produced.
+
+    def side_effect(cmd, cwd, env, timeout, check=False):
+        raise subprocess.TimeoutExpired(cmd, 1)
+
+    with (
+        patch("harness.runners.regret_review.run_cmd", side_effect=side_effect),
+        patch("harness.runners.regret_review.fetch_pr_comments", return_value=[_inline_comment()]),
+    ):
+        assert find_regret_candidates([_hunk()], _config(), str(tmp_path), {}) == []
+
+
+def test_find_regret_candidates_passes_remaining_budget_as_call_timeout(tmp_path):
+    hunk = _hunk()
+    diff = _introducing_commit_diff("@@ -5,3 +5,3 @@", "-old a\n+new a\n old b\n")
+    seen_timeouts: list[int] = []
+
+    def side_effect(cmd, cwd, env, timeout, check=False):
+        seen_timeouts.append(timeout)
+        if cmd[0] == "git" and cmd[1] == "diff":
+            return _run(0, diff.encode())
+        msg = f"unexpected command: {cmd}"
+        raise AssertionError(msg)
+
+    with (
+        patch("harness.runners.regret_review.run_cmd", side_effect=side_effect),
+        patch("harness.runners.regret_review.fetch_pr_comments", return_value=[_inline_comment()]),
+    ):
+        find_regret_candidates([hunk, hunk], _config(timeout=300), str(tmp_path), {})
+    # Every git call's timeout is the remaining budget (≤ 300, decreasing in elapsed
+    # time), never a fresh per-call constant.
     assert seen_timeouts and all(0 < t <= 300 for t in seen_timeouts)
     assert seen_timeouts == sorted(seen_timeouts, reverse=True)

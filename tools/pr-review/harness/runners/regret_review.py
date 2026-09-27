@@ -7,9 +7,11 @@ from dataclasses import dataclass
 
 from harness.config import HarnessConfig
 from harness.runners.common import (
+    PR_COMMENTS_SCRIPT_PATH,
     REGRET_REVIEW_MARKER,
     author_matches,
     count_diff_lines,
+    fetch_pr_comments,
     get_changed_files,
     get_pr_base_branch,
     run_cmd,
@@ -109,6 +111,37 @@ class IntroducingHunk:
     introducing_pr_number: int
 
 
+@dataclass
+class RegretCandidate:
+    """One surviving (comment, blamed_change) pair from find_regret_candidates
+    (regret-review-requirements.md §7.2 steps 1-2, G4): a comment fetched from an
+    introducing PR that is of a location-carrying type, sits on the blamed file, and
+    falls within a diff hunk the introducing commit's own change occupied in that
+    file, paired with the exact IntroducingHunk (the blamed change) it matched. This
+    is the intermediate shape the two later leaves build from:
+
+    - The backend-judgment leaf (§7.2 steps 3-4) batches the whole candidate list
+      into one prompt, which per candidate gives the original comment's body
+      (comment_body), its author (comment_author), and the diff of the change the
+      comment was left on (comment_diff_hunk — the unified-diff snippet from the
+      introducing PR's own diff that GitHub anchors the comment to; review-typed
+      comments carry no anchor, so it is "" for them).
+    - The poster leaf (§7.6) builds one RegretFinding per confirmed candidate:
+      comment_id and hunk.introducing_pr_number name the original comment,
+      comment_url is the direct URL to it, and hunk.path plus the blamed range
+      (hunk.old_start/hunk.old_end pre-fix, hunk.new_start/hunk.new_end post-image)
+      is the current PR's file/region — RegretFinding.line collapses it to one line:
+      hunk.new_start when the post-image is non-empty, hunk.old_start for a pure
+      deletion that has no post-image line."""
+
+    comment_id: int | str
+    comment_body: str
+    comment_author: str
+    comment_diff_hunk: str
+    comment_url: str
+    hunk: IntroducingHunk
+
+
 def _remaining_budget(budget_start: float, budget_seconds: int) -> int | None:
     """Whole seconds left in the pass's shared wall-clock budget, or None once it is
     exhausted. The budget is config.regret_review.regret_review_timeout: one overall cap
@@ -188,6 +221,39 @@ def _blamed_shas(blame_output: str) -> list[str]:
         if match is not None:
             shas.append(match.group(2))
     return shas
+
+
+def _hunk_line_ranges(diff: str) -> list[tuple[int, int, int, int]]:
+    """Each hunk of a --unified=0 diff as (old_start, old_end, new_start, new_end)
+    inclusive line ranges read from its `@@ -a,b +c,d @@` header — the same header
+    parse as _removed_modified_ranges, which keeps the counts, shaped here into the
+    ranges find_regret_candidates' hunk-tolerant match (requirements.md §7.2 step 2,
+    glossary "Diff hunk") compares a fetched comment's line against. An empty side —
+    count 0, a pure addition's old side or a pure deletion's new side — ends one line
+    before it starts (end < start), so no line can fall within it."""
+    ranges: list[tuple[int, int, int, int]] = []
+    for line in diff.splitlines():
+        match = _HUNK_HEADER_RE.match(line)
+        if match is None:
+            continue
+        old_start = int(match.group(1))
+        old_count = int(match.group(2) or 1)
+        new_start = int(match.group(3))
+        new_count = int(match.group(4) or 1)
+        ranges.append((old_start, old_start + old_count - 1, new_start, new_start + new_count - 1))
+    return ranges
+
+
+def _line_within_hunk_ranges(line: int, ranges: list[tuple[int, int, int, int]]) -> bool:
+    """Whether a comment's line falls within any hunk window (requirements.md §7.2
+    step 2): the line may sit on either side of the hunk — the new side, for a
+    comment on the code as the introducing commit wrote it, or the old side, for a
+    comment on a line that change deleted. An empty side cannot match: its end is
+    below its start, so the comparison is simply false there."""
+    for old_start, old_end, new_start, new_end in ranges:
+        if old_start <= line <= old_end or new_start <= line <= new_end:
+            return True
+    return False
 
 
 def _pr_gate_setup(pr: dict, config: HarnessConfig, wdir: str, env: dict) -> tuple[int, str, list[str]] | None:
@@ -461,3 +527,169 @@ def find_introducing_prs(pr: dict, config: HarnessConfig, wdir: str, env: dict) 
             )
     logger.debug("PR #%d: regret review found %d introducing hunk(s)", number, len(hunks))
     return hunks
+
+
+def find_regret_candidates(
+    introducing_hunks: list[IntroducingHunk],
+    config: HarnessConfig,
+    wdir: str,
+    env: dict,
+) -> list[RegretCandidate]:
+    """The comment-fetch + hunk-match leaf (regret-review-requirements.md §7.2 steps 1-2):
+    given find_introducing_prs' output, the candidate (comment, blamed_change) pairs
+    whose original comments the backend-judgment leaf (§7.2 steps 3-4) should judge —
+    or [] whenever there is nothing to judge, which is a valid, expected outcome, not
+    an error (§7.2 step 4): empty input, no surviving location-carrying comment, no
+    hunk match, or a budget exhaustion. This module logs nothing above debug level and
+    produces no partial candidate set: a budget exhaustion stops the sequence and
+    fails open at [], the same way find_introducing_prs does.
+
+    G1: one fetch_pr_comments call per unique introducing PR number across the whole
+    run (the numbers are deduplicated before the fetch; each PR's comments are then
+    matched locally against every hunk that resolved to it), pointed at the
+    introducing PR's number through the existing shared helper — the pass adds no new
+    fetch mechanism. A fetch that fails or comes back empty simply leaves that PR
+    without candidates: its hunks match against nothing, and the other PRs proceed.
+    The fetch itself keeps fetch_pr_comments' own fixed cap; the shared budget gates
+    whether the fetch starts and caps every hunk-diff call that follows.
+
+    G2: only "inline"/"review"-typed comments survive the type filter — the only
+    types that can carry a path/line; "issue"-typed comments are never candidates.
+
+    G3: the hunk window of a (commit, file) pair is computed by diffing the
+    introducing commit against its own parent, restricted to the blamed file —
+    `git diff {sha}^ {sha} --unified=0 -- {path}`, one small run_cmd call per unique
+    (commit, file) pair, shared by every hunk that blames to that commit in that
+    file. Each hunk's @@ line ranges (both sides) are the window: a comment is a
+    candidate when its path equals the blamed file and its line falls within any of
+    that commit's hunk windows for the file — the same localized region of change,
+    not only the exact blamed line and not the whole file (requirements.md §7.2
+    step 2, glossary "Diff hunk", §11 item 2). A commit whose diff fails (e.g. a
+    root commit whose parent does not exist) drops its candidates, fail open.
+
+    G4: the returned list holds one RegretCandidate per surviving (comment,
+    IntroducingHunk) combination: a comment that falls within the window of two
+    distinct blamed ranges yields one candidate per range, the full pair set the
+    next leaf batches into one prompt.
+
+    The whole per-PR sequence of git/gh calls (the comment fetches and the hunk-diff
+    calls) shares one wall-clock budget — config.regret_review.regret_review_timeout,
+    checked and decremented via _run_within_budget / _remaining_budget the same way
+    find_introducing_prs does; an exhausted budget stops the sequence and fails open
+    at []."""
+    if not introducing_hunks:
+        return []
+    budget_start = time.monotonic()
+    budget_seconds = config.regret_review.regret_review_timeout
+
+    comments_by_pr = _fetch_comments_by_pr(introducing_hunks, wdir, env, budget_start, budget_seconds)
+    if comments_by_pr is None:
+        return []
+
+    windows_by_commit_file = _introducing_hunk_windows(introducing_hunks, wdir, env, budget_start, budget_seconds)
+    if windows_by_commit_file is None:
+        return []
+
+    candidates = _match_candidates(introducing_hunks, comments_by_pr, windows_by_commit_file)
+    logger.debug("regret-review: %d candidate(s) from %d introducing hunk(s)", len(candidates), len(introducing_hunks))
+    return candidates
+
+
+def _fetch_comments_by_pr(
+    introducing_hunks: list[IntroducingHunk],
+    wdir: str,
+    env: dict,
+    budget_start: float,
+    budget_seconds: int,
+) -> dict[int, list[dict]] | None:
+    """G1: one fetch_pr_comments call per unique introducing PR number across the whole
+    run, pointed at the introducing PR's number through the existing shared helper. A
+    fetch that fails or comes back empty simply leaves that PR without candidates: its
+    hunks match against nothing, and the other PRs proceed. The fetch itself keeps
+    fetch_pr_comments' own fixed cap; the shared budget only gates whether the fetch
+    starts. None means the budget was exhausted mid-sequence."""
+    comments_by_pr: dict[int, list[dict]] = {}
+    for pr_number in sorted({h.introducing_pr_number for h in introducing_hunks}):
+        if _remaining_budget(budget_start, budget_seconds) is None:
+            logger.debug(
+                "PR #%d: regret-review budget (%ds) exhausted before fetching comments — stopping the sequence",
+                pr_number,
+                budget_seconds,
+            )
+            return None
+        comments_by_pr[pr_number] = fetch_pr_comments(pr_number, PR_COMMENTS_SCRIPT_PATH, wdir, env)
+    return comments_by_pr
+
+
+def _introducing_hunk_windows(
+    introducing_hunks: list[IntroducingHunk],
+    wdir: str,
+    env: dict,
+    budget_start: float,
+    budget_seconds: int,
+) -> dict[tuple[str, str], list[tuple[int, int, int, int]]] | None:
+    """G3: one hunk-window diff per unique (commit, file) pair —
+    `git diff {sha}^ {sha} --unified=0 -- {path}` — shared by every hunk that blames
+    to that commit in that file; each diff's hunk line ranges are the windows a
+    fetched comment must fall within. A diff that fails (e.g. a root commit whose
+    parent does not exist) drops that commit's candidates, fail open; None means the
+    budget was exhausted mid-sequence."""
+    prs_by_sha: dict[str, set[int]] = {}
+    for hunk in introducing_hunks:
+        prs_by_sha.setdefault(hunk.introducing_sha, set()).add(hunk.introducing_pr_number)
+    windows: dict[tuple[str, str], list[tuple[int, int, int, int]]] = {}
+    for sha, path in sorted({(h.introducing_sha, h.path) for h in introducing_hunks}):
+        result = _run_within_budget(
+            ["git", "diff", f"{sha}^", sha, "--unified=0", "--", path],
+            wdir,
+            env,
+            min(prs_by_sha[sha]),
+            f"git diff {sha}^ {sha} -- {path}",
+            budget_start,
+            budget_seconds,
+        )
+        if result is None:
+            return None
+        if result.returncode != 0:
+            logger.debug(
+                "regret-review: hunk-window diff failed for %s -- %s (exit %d) — dropping that commit's candidates",
+                sha,
+                path,
+                result.returncode,
+            )
+            continue
+        windows[(sha, path)] = _hunk_line_ranges(result.stdout.decode("utf-8"))
+    return windows
+
+
+def _match_candidates(
+    introducing_hunks: list[IntroducingHunk],
+    comments_by_pr: dict[int, list[dict]],
+    windows_by_commit_file: dict[tuple[str, str], list[tuple[int, int, int, int]]],
+) -> list[RegretCandidate]:
+    """G2 + G4: one candidate per surviving (comment, IntroducingHunk) combination —
+    a comment of a location-carrying type, on the blamed file, within the introducing
+    commit's hunk window for that file. Pure — no I/O; every fetch and diff has
+    already happened."""
+    candidates: list[RegretCandidate] = []
+    for hunk in introducing_hunks:
+        windows = windows_by_commit_file.get((hunk.introducing_sha, hunk.path), [])
+        for comment in comments_by_pr.get(hunk.introducing_pr_number, []):
+            if comment.get("type") not in ("inline", "review"):
+                continue
+            if comment.get("path") != hunk.path:
+                continue
+            line = comment.get("line")
+            if line is None or not _line_within_hunk_ranges(line, windows):
+                continue
+            candidates.append(
+                RegretCandidate(
+                    comment_id=comment["id"],
+                    comment_body=comment.get("body", ""),
+                    comment_author=comment.get("author", ""),
+                    comment_diff_hunk=comment.get("diff_hunk", ""),
+                    comment_url=comment.get("url", ""),
+                    hunk=hunk,
+                )
+            )
+    return candidates
