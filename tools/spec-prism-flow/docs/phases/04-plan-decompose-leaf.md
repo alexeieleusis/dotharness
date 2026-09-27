@@ -15,7 +15,7 @@
 
 ## Requirements
 
-Excerpted from chunk A-2-3's mini-requirements doc, §4 (Glossary, verbatim from requirements.md §4) and §7 (Detailed functional requirements):
+Excerpted from chunk A-2-3's mini-requirements doc, §4 (Glossary, restructured from requirements.md §4 for clarity) and §7 (Detailed functional requirements):
 
 ### Glossary (Chunk / Leaf / Generator)
 - **Chunk / seed.** A named sub-scope of `requirements.md`. It carries a rough file-scope estimate and a parent path (`A`, then `A-1`, `A-1-1`, ...). The root seed is the whole document. When passed as input to the generator, the same chunk is called a **seed**.
