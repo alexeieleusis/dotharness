@@ -18,7 +18,7 @@ The following is an excerpt from `requirements.md` §9 (Non-functional requireme
 
 > **Bounded retries (G4, §8).** `address-comments`-style cycles per phase are capped; on exhaustion, escalate to a human rather than loop indefinitely.
 
-The following is an excerpt from chunk A-3-1's mini-requirements doc §7 (Detailed functional requirements), quoted verbatim:
+The following is an excerpt from chunk A-3-1's mini-requirements doc §7 (Detailed functional requirements), restructured for clarity:
 
 ### 7.1 `spec_prism_flow/build/scope_guard.py`
 
