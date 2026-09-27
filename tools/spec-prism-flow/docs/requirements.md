@@ -155,7 +155,7 @@ Every one of them follows it exactly, with zero structural deviation:
 - **`Requirements`** quotes the relevant excerpt(s) of the master `requirements.md` **verbatim**,
   not by reference — the agent should never need to open a second document to know what to build.
   Where a phase's boundary cuts across a requirements section (some of it belongs to an earlier or
-  later phase), that carve-out is stated explicitly ("this phase's scope is limited to X. Y belongs
+  later phase), that carve-out is stated explicitly ("this phase's scope is limited to X; Y belongs
   to Phase N").
 - Known ambiguities, discrepancies, or "don't fix this" traps relevant to the phase are quoted
   directly, with an explicit instruction not to resolve them unilaterally.
@@ -264,8 +264,8 @@ the stage is done. This protocol is expected to iterate if it proves too manual 
    - **Trivial-breakdown deadlock:** the generator can judge a chunk "one feature" — nothing to
      split into — while that chunk still fails the sizing bands (§9). This is an accepted risk,
      not a solved problem (§9). When it happens, `decompose` re-runs the generator on that same
-     chunk with an amended prompt. That prompt appends an explicit instruction: "you already
-     judged this trivial once; force a split anyway." Re-running the unaltered prompt against
+     chunk with an amended prompt. That prompt appends an explicit "you already judged this
+     trivial once; force a split anyway" instruction. Re-running the unaltered prompt against
      unchanged input would likely reproduce the same verdict. The goal is to force a new leaf:
      `decompose` splices it into the DFS order immediately before whatever chunk would otherwise
      follow, rather than halting the run. This forced-split retry is capped at one attempt per
