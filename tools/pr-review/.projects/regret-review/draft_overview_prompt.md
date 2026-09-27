@@ -1,6 +1,6 @@
 # Draft 00-overview.md
 
-You are drafting `00-overview.md` for this project's phase corpus, modeled on Neighboku's `00-overview.md`. Read the brief below (and any code/conventions/links also listed) and produce a single markdown document with these sections, in order:
+Draft `00-overview.md` for this project's phase corpus. Model it on Neighboku's `00-overview.md`. Read the brief and the other inputs listed below. Create a single markdown document with these sections, in order:
 
 1. Problem statement
 2. Goals
@@ -8,7 +8,7 @@ You are drafting `00-overview.md` for this project's phase corpus, modeled on Ne
 4. Glossary
 5. Key decisions already implied by the brief
 
-Every ambiguity you cannot resolve from the brief must become a concrete, answerable question written to `OPEN_QUESTIONS.md` — never left implicit or silently assumed. Omit `OPEN_QUESTIONS.md` entirely if the brief leaves nothing unresolved.
+Write every ambiguity you cannot resolve from the brief to `OPEN_QUESTIONS.md` as a concrete, answerable question. Do not leave an ambiguity implicit or silently assume it. Omit `OPEN_QUESTIONS.md` entirely if the brief leaves nothing unresolved.
 
 ## Inputs
 

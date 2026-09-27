@@ -29,10 +29,11 @@ Part of #21.
 > `.harness.toml`, which points at vibe-heal's venv and shells out to it).
 
 This applies to `code-health`/`vibe-heal`, which are *separate* tools/repos integrated
-by shelling out. `regret-review` is different: issue #33 says it **lives inside**
-`tools/pr-review` itself (`harness/runners/`), only *mirroring* `[vibe_heal]`'s
-config-block *style* (a `[regret_review]` table in `.harness.toml` with an `enabled`
-flag and its own settings) — not a subprocess/JSON integration with an external tool.
+by shelling out. `regret-review` is different. Issue #33 says it **lives inside**
+`tools/pr-review` itself (`harness/runners/`). It only *mirrors* `[vibe_heal]`'s
+config-block *style*: a `[regret_review]` table in `.harness.toml` with an `enabled`
+flag and its own settings. It is not a subprocess/JSON integration with an external
+tool.
 
 > **Two opportunistic shared-library extractions** [...] Git blame/diff/log-parsing
 > plumbing is a second, smaller case (vibe-heal's `git/`, code-health's churn loader,
@@ -70,16 +71,16 @@ library.
   `common.py`) and its own instructions file (see `design-review-requirements.md` /
   `requirement-traceability-requirements.md` at the repo root for the existing
   spec-per-pass convention).
-- `harness/runners/review_prs.py` — the existing `[vibe_heal]`-gated runner; useful as
-  a second reference for how a config-gated, `enabled`-flag-checked feature is wired
-  into a runner and into `harness/cli.py`'s command dispatch.
-- `docs/configuration.md` — the `.harness.toml` schema doc; a `[regret_review]` section
+- `harness/runners/review_prs.py` — the existing `[vibe_heal]`-gated runner. It is
+  useful as a second reference for how a config-gated, `enabled`-flag-checked feature
+  is wired into a runner and into `harness/cli.py`'s command dispatch.
+- `docs/configuration.md` — the `.harness.toml` schema doc. A `[regret_review]` section
   needs to be added here (mirroring the existing `[vibe_heal]`/`[focused_review]`
   section entries) once the config shape is settled.
-- `scripts/pr-comments.py` — the script `fetch_pr_comments` shells out to; check
+- `scripts/pr-comments.py` — the script `fetch_pr_comments` shells out to. Check
   whether it can fetch an *arbitrary* PR's comments (not just the "current" one being
-  reviewed) as-is, since regret-review needs the *original introducing* PR's comments,
-  not the PR currently under review.
+  reviewed) as-is. Regret-review needs the *original introducing* PR's comments, not
+  the PR currently under review.
 
 ## Open design questions for the `plan` stage to resolve
 
