@@ -522,7 +522,10 @@ def test_has_regret_review_comment_true_when_marker_and_user_match():
     # only inline, so has_regret_review_comment only needs to check that endpoint.
     comments = [
         {"user": {"login": "someone-else"}, "body": "unrelated<!-- osc-review-regret -->"},
-        {"user": {"login": "alice"}, "body": "# Regret Review\nfindings...<!-- osc-review-regret -->"},
+        {
+            "user": {"login": "alice"},
+            "body": "# Previously flagged review comments\nfindings...<!-- osc-review-regret -->",
+        },
     ]
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
@@ -539,7 +542,12 @@ def test_has_regret_review_comment_false_when_same_user_but_no_marker():
 
 
 def test_has_regret_review_comment_false_when_other_user_posted_with_marker():
-    comments = [{"user": {"login": "someone-else"}, "body": "# Regret Review\n...<!-- osc-review-regret -->"}]
+    comments = [
+        {
+            "user": {"login": "someone-else"},
+            "body": "# Previously flagged review comments\n...<!-- osc-review-regret -->",
+        }
+    ]
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
         assert has_regret_review_comment(1, "acme/repo", "alice", {}) is False

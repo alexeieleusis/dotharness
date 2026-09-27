@@ -574,7 +574,7 @@ def test_regret_review_posts_comment_and_confirms_marker_on_findings(tmp_xdg, tm
     assert mocks.backend.return_value.run.call_args_list[-1].kwargs["context"] == "PR #1 regret review"
     assert mock_post.call_count == 1
     body = mock_post.call_args.args[2]
-    assert "# Regret Review" in body
+    assert "# Previously flagged review comments" in body
     assert "src/foo.py:3" in body
     assert "#42" in body
     assert "https://github.com/acme/frontend/pull/42#discussion_r123" in body

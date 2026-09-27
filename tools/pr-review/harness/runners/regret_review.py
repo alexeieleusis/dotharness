@@ -62,7 +62,7 @@ def _excerpt(body: str) -> str:
 
 def build_regret_comment_body(findings: list[RegretFinding]) -> str:
     """The full body of the regret comment (regret-review-requirements.md §7.6): a single
-    `# Regret Review` heading, one section per finding under it (a `###` heading naming
+    `# Previously flagged review comments` heading, one section per finding under it (a `###` heading naming
     the file/region, one line linking to the introducing PR (#<number>) and the direct
     URL to the original comment, and a blockquoted short excerpt of the original
     comment's body), ending with REGRET_REVIEW_MARKER. Pure — no I/O, since every fetch
@@ -77,7 +77,7 @@ def build_regret_comment_body(findings: list[RegretFinding]) -> str:
         f"{_excerpt(finding.comment_body)}"
         for finding in findings
     ]
-    return "# Regret Review\n\n" + "\n\n".join(sections) + f"\n\n{REGRET_REVIEW_MARKER}"
+    return "# Previously flagged review comments\n\n" + "\n\n".join(sections) + f"\n\n{REGRET_REVIEW_MARKER}"
 
 
 # A unified-diff hunk header. git omits a side's line count when it is 1, so each count

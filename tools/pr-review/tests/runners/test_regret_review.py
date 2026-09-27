@@ -39,7 +39,7 @@ def _finding(**overrides) -> RegretFinding:
 def test_build_regret_comment_body_single_finding():
     body = build_regret_comment_body([_finding()])
     assert body == (
-        "# Regret Review\n"
+        "# Previously flagged review comments\n"
         "\n"
         "### src/foo.py:42\n"
         "Introduced in #123 — https://github.com/acme/repo/pull/123#discussion_r456\n"
@@ -61,7 +61,7 @@ def test_build_regret_comment_body_one_section_per_finding_in_order():
         _finding(path="src/b.py", line=2),
     ])
     assert body.count("\n### ") == 2
-    assert body.count("# Regret Review") == 1
+    assert body.count("# Previously flagged review comments") == 1
     assert body.index("### src/a.py:1") < body.index("### src/b.py:2")
 
 
