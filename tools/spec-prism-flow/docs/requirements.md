@@ -443,7 +443,7 @@ In parallel mode this pipeline runs once per concurrently-eligible leaf.
     `OPEN_QUESTIONS.md`, distinct from the phase directory location below)
   - the phase directory location
   - the build/lint/test command list `merge_gates` should run
-  - `build`'s worker count (default 1, which is sequential. A count above 1 switches `track_runner`
+  - `build`'s worker count (default 1, which is sequential; a count above 1 switches `track_runner`
     into parallel mode, §8)
 
 ## 11. Decisions log
