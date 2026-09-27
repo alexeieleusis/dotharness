@@ -24,13 +24,19 @@ FOCUSED_REVIEW_MARKER = "[focused-review-bot]"
 INLINE_REVIEW_MARKER = "<!-- osc-review-inline -->"
 DESIGN_REVIEW_MARKER = "<!-- osc-review-design -->"
 TRACEABILITY_REVIEW_MARKER = "<!-- osc-review-traceability -->"
+REGRET_REVIEW_MARKER = "<!-- osc-review-regret -->"
 
 # Every PR-level pass marker shares the `osc-review` prefix that
 # is_review_summary_comment's substring check looks for, so a comment carrying one of
 # these (e.g. the traceability pass's terminal "no linked ticket" comment) must be
 # excluded there — otherwise it gets mistaken for the file/summary pass's own
 # completion marker and short-circuits correctness review.
-_PR_LEVEL_PASS_MARKERS = (INLINE_REVIEW_MARKER, DESIGN_REVIEW_MARKER, TRACEABILITY_REVIEW_MARKER)
+_PR_LEVEL_PASS_MARKERS = (
+    INLINE_REVIEW_MARKER,
+    DESIGN_REVIEW_MARKER,
+    TRACEABILITY_REVIEW_MARKER,
+    REGRET_REVIEW_MARKER,
+)
 
 # requirement-traceability-requirements.md §7.2/§11.2: the early-comment window is a
 # hardcoded constant this iteration, not a harness.toml field.
@@ -421,6 +427,20 @@ def check_traceability_review_comment_status(pr_number: int, repo: str, current_
     """Tri-state version of has_traceability_review_comment: None means the check itself
     was inconclusive (API failure), as opposed to a confirmed absence of the comment."""
     return check_pr_level_pass_comment_status(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
+
+
+def has_regret_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+    """Mirrors has_design_review_comment / has_traceability_review_comment exactly
+    (regret-review-requirements.md §7.4/§7.6): review-requested's only idempotency signal
+    for this pass (no persisted state there); self-review's defense-in-depth check
+    alongside its own persisted regret_reviewed_prs state (§7.3)."""
+    return has_pr_level_pass_comment(REGRET_REVIEW_MARKER, pr_number, repo, current_user, env)
+
+
+def check_regret_review_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
+    """Tri-state version of has_regret_review_comment: None means the check itself was
+    inconclusive (API failure), as opposed to a confirmed absence of the comment."""
+    return check_pr_level_pass_comment_status(REGRET_REVIEW_MARKER, pr_number, repo, current_user, env)
 
 
 def get_pr_level_flagged_locations(
