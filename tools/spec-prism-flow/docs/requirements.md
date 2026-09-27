@@ -440,7 +440,7 @@ In parallel mode this pipeline runs once per concurrently-eligible leaf.
   - whether `harness`/`vibe-heal` integration is active, and how to reach it
   - the path to the project's conventions document
   - the planning workspace location (where `plan init` writes `00-overview.md`/`requirements.md`/
-    `OPEN_QUESTIONS.md`. Distinct from the phase directory location below)
+    `OPEN_QUESTIONS.md`, distinct from the phase directory location below)
   - the phase directory location
   - the build/lint/test command list `merge_gates` should run
   - `build`'s worker count (default 1, which is sequential. A count above 1 switches `track_runner`
