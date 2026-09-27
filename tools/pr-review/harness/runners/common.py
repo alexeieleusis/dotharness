@@ -1118,6 +1118,15 @@ def get_file_diff(file_path: str, base_branch: str, wdir: str, env: dict) -> str
     return result.stdout.decode("utf-8")
 
 
+def count_diff_lines(diff: str) -> int:
+    """The number of added + removed lines in a unified diff: every line starting with
+    + or -, excluding the +++/--- file headers. The same count build_file_review_section
+    uses to decide whether a diff covers most of a file, extracted so consumers that gate
+    on changed-line size (regret-review's bugfix-shaped gate) share the rule instead of
+    re-implementing it."""
+    return sum(1 for line in diff.splitlines() if line.startswith(("+", "-")) and not line.startswith(("+++", "---")))
+
+
 def build_file_review_section(file: str, diff: str, abs_path: str) -> str:
     """Return the file section for the review prompt.
 
@@ -1134,9 +1143,7 @@ def build_file_review_section(file: str, diff: str, abs_path: str) -> str:
             omit = True
             reason = "This is a new file — the diff is the entire file."
         else:
-            diff_lines = sum(
-                1 for line in diff.splitlines() if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
-            )
+            diff_lines = count_diff_lines(diff)
             try:
                 with open(abs_path, encoding="utf-8", errors="replace") as fh:
                     total_lines = sum(1 for _ in fh)
