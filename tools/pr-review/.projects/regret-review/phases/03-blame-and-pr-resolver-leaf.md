@@ -10,7 +10,7 @@
 
 ### 1. Purpose / origin
 
-This leaf is part of `regret-review`'s decomposition tree (`requirements.md` §7.1, §10). It covers the first mechanical stage of the pass. Given the current PR's diff, it produces the set of unique introducing PRs whose review comments are worth checking. It reads the config leaf (`config.regret_review.max_diff_lines`/`authors`) and reuses the existing diff plumbing (`get_changed_files`/`get_file_diff`, `harness/runners/common.py: 1066-1098`).
+This leaf is part of `regret-review`'s decomposition tree (`requirements.md` §7.1, §10). It covers the first mechanical stage of the pass. Given the current PR's diff, it produces the set of unique introducing PRs whose review comments are worth checking. It reads the config leaf (`config.regret_review.max_diff_lines`/`authors`) and reuses the existing diff plumbing (`get_changed_files`/`get_file_diff` in `harness/runners/common.py`).
 
 ### 2. Problem statement
 
@@ -18,8 +18,8 @@ Nothing in this codebase today turns a PR's diff into the commit(s) that introdu
 
 ### 3. Goals
 
-- **G1.** Gate the pass on bugfix shape. Sum the added and removed lines across every changed file in the current PR. Use the same counting rule as `build_file_review_section`'s diff-line count (`common.py:1117-1119`). If the total exceeds `config.regret_review.max_diff_lines`, return immediately. Make no blame or API calls.
-- **G2.** Also gate on `config.regret_review.authors`. Skip the PR entirely if its author does not match. Reuse `author_matches` (`common.py:895-898`).
+- **G1.** Gate the pass on bugfix shape. Sum the added and removed lines across every changed file in the current PR. Use the same counting rule as `build_file_review_section`'s diff-line count (`common.py`). If the total exceeds `config.regret_review.max_diff_lines`, return immediately. Make no blame or API calls.
+- **G2.** Also gate on `config.regret_review.authors`. Skip the PR entirely if its author does not match. Reuse `author_matches` (`common.py`).
 - **G3.** For each changed file, find each contiguous removed or modified line range in the current PR's diff. Added-only lines produce no range, because there is nothing to blame. For each such range, run `git blame -L <start>,<end> <base_ref> -- <path>` against the PR's base branch. Use the base branch, or its merge-base with the current PR's head. The choice is the implementer's, but it must be the *pre-fix* state, never the fix's own commit. Collect the introducing commit SHA for each range.
 - **G4.** Deduplicate the collected SHAs within one run. A commit blamed from multiple ranges or files is processed once.
 - **G5.** For each unique SHA, call `gh api repos/{owner}/{repo}/commits/{sha}/pulls` to resolve the introducing PR number(s). Zero results — from an API failure or a confirmed no-PR answer — mean silently skipping that SHA's lines. Log no error above debug level. More than one PR result means evaluating every one of them downstream.
@@ -47,12 +47,12 @@ See `requirements.md` §5 for `Introducing commit`, `Introducing PR`, and `Bugfi
 
 - Implement the leaf as private functions in `harness/runners/regret_review.py`. Per `requirements.md` §10, this pass's plumbing lives in its own module, not `common.py`. Example private functions are `_is_bugfix_shaped`, `_blame_introducing_commits`, and `_resolve_introducing_prs`. One public entry point composes them. This leaf also defines that entry point, for example `find_introducing_prs(pr, config, wdir, env) -> list[IntroducingHunk]`. The naming is the implementer's choice. The shape must satisfy §7.2's needs.
 - To find which line ranges are removed or modified versus purely added, parse the diff hunks. Reuse the `git diff --unified=0` output for the current PR against its base. Read the `@@ -a,b +c,d @@` headers. When `b` (the pre-image line count) is zero, the hunk is a pure addition with nothing to blame.
-- All `git blame` and `gh api` calls use the existing `run_cmd` subprocess wrapper (`common.py:75-107`). This gives consistent timeout and SIGTERM handling. Use `config.regret_review.regret_review_timeout` as one overall budget. The caller enforces that budget across the whole per-PR sequence of calls. Do not add a new per-call timeout constant. One shared budget, checked and decremented by the caller, is sufficient. The exact mechanics are the implementer's choice.
+- All `git blame` and `gh api` calls use the existing `run_cmd` subprocess wrapper (`common.py`). This gives consistent timeout and SIGTERM handling. Use `config.regret_review.regret_review_timeout` as one overall budget. The caller enforces that budget across the whole per-PR sequence of calls. Do not add a new per-call timeout constant. One shared budget, checked and decremented by the caller, is sufficient. The exact mechanics are the implementer's choice.
 
 ### 8. Non-functional requirements
 
 - Bounded cost is structural. G1's gate keeps this leaf's own git/`gh` call count proportional to `max_diff_lines` (default 50). It is never proportional to whole-PR or whole-repo size.
-- Every `gh api` call here is subject to the same rate limits as every existing `gh`-based helper (`TIMEOUT_GH = 30`, `common.py:16`). Add no new rate-limit handling beyond the fail-open behavior in G5.
+- Every `gh api` call here is subject to the same rate limits as every existing `gh`-based helper (`TIMEOUT_GH = 30`, `common.py`). Add no new rate-limit handling beyond the fail-open behavior in G5.
 
 ### 9. Out-of-scope / explicit exclusions
 
@@ -71,16 +71,16 @@ None carried from `requirements.md`. Its §11 already resolves the fail-open, si
 Once merged, the leaf that fetches comments and matches hunks (§7.2 steps 1–2) consumes this leaf's `IntroducingHunk`-shaped output directly.
 
 ## Acceptance criteria
-- Gate the pass on bugfix shape. Sum the added and removed lines across every changed file in the current PR. Use the same counting rule as `build_file_review_section`'s diff-line count (`common.py:1117-1119`). If the total exceeds `config.regret_review.max_diff_lines`, return immediately. Make no blame or API calls.
-- Also gate on `config.regret_review.authors`. Skip the PR entirely if its author does not match. Reuse `author_matches` (`common.py:895-898`).
+- Gate the pass on bugfix shape. Sum the added and removed lines across every changed file in the current PR. Use the same counting rule as `build_file_review_section`'s diff-line count (`common.py`). If the total exceeds `config.regret_review.max_diff_lines`, return immediately. Make no blame or API calls.
+- Also gate on `config.regret_review.authors`. Skip the PR entirely if its author does not match. Reuse `author_matches` (`common.py`).
 - For each changed file, find each contiguous removed or modified line range in the current PR's diff. Added-only lines produce no range, because there is nothing to blame. For each such range, run `git blame -L <start>,<end> <base_ref> -- <path>` against the PR's base branch. Use the base branch, or its merge-base with the current PR's head. The choice is the implementer's, but it must be the *pre-fix* state, never the fix's own commit. Collect the introducing commit SHA for each range.
 - Deduplicate the collected SHAs within one run. A commit blamed from multiple ranges or files is processed once.
 - For each unique SHA, call `gh api repos/{owner}/{repo}/commits/{sha}/pulls` to resolve the introducing PR number(s). Zero results — from an API failure or a confirmed no-PR answer — mean silently skipping that SHA's lines. Log no error above debug level. More than one PR result means evaluating every one of them downstream.
 - Return a structure. For each surviving `(file, line_range, introducing_sha, introducing_pr_number)` tuple, it carries everything the comment-matching leaf (§7.2) needs to fetch that PR's comments and to locate its own diff hunk for the blamed change.
 
 ## Manual test checklist
-- Manually verify: the pass gates on bugfix shape. Sum the added and removed lines across every changed file in the current PR. Use the same counting rule as `build_file_review_section`'s diff-line count (`common.py:1117-1119`). If the total exceeds `config.regret_review.max_diff_lines`, return immediately. Make no blame or API calls.
-- Manually verify: also gate on `config.regret_review.authors`. Skip the PR entirely if its author does not match. Reuse `author_matches` (`common.py:895-898`).
+- Manually verify: the pass gates on bugfix shape. Sum the added and removed lines across every changed file in the current PR. Use the same counting rule as `build_file_review_section`'s diff-line count (`common.py`). If the total exceeds `config.regret_review.max_diff_lines`, return immediately. Make no blame or API calls.
+- Manually verify: also gate on `config.regret_review.authors`. Skip the PR entirely if its author does not match. Reuse `author_matches` (`common.py`).
 - Manually verify: for each changed file, find each contiguous removed or modified line range in the current PR's diff. Added-only lines produce no range, because there is nothing to blame. For each such range, run `git blame -L <start>,<end> <base_ref> -- <path>` against the PR's base branch. Use the base branch, or its merge-base with the current PR's head. The choice is the implementer's, but it must be the *pre-fix* state, never the fix's own commit. Collect the introducing commit SHA for each range.
 - Manually verify: deduplicate the collected SHAs within one run. A commit blamed from multiple ranges or files is processed once.
 - Manually verify: for each unique SHA, call `gh api repos/{owner}/{repo}/commits/{sha}/pulls` to resolve the introducing PR number(s). Zero results — from an API failure or a confirmed no-PR answer — mean silently skipping that SHA's lines. Log no error above debug level. More than one PR result means evaluating every one of them downstream.
