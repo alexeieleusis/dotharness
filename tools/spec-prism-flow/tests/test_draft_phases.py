@@ -1,6 +1,9 @@
+import logging
+
 import pytest
 from click.testing import CliRunner
 
+from spec_prism_flow import prose_review
 from spec_prism_flow.chunk import Chunk, ChunkNode, write_tree
 from spec_prism_flow.cli import cli
 from spec_prism_flow.config import (
@@ -232,6 +235,55 @@ def test_acceptance_criteria_placeholder_when_nothing_recognizable(tmp_path):
     assert len(phase.acceptance_criteria) == 1
     assert "No structured, testable requirements" in phase.acceptance_criteria[0]
     assert phase.manual_test_checklist == phase.acceptance_criteria
+
+
+# --- prose review post-validation -----------------------------------------------------------------
+
+
+def test_malformed_post_review_file_is_reverted_to_pre_review_content(tmp_path, monkeypatch, caplog):
+    cfg = _make_cfg(tmp_path)
+    cfg.prose_review.enabled = True
+    leaf = ChunkNode(chunk=_chunk("A-1", "only", ["a.py"], 1), leaf_doc=_goals_doc("Only goal."))
+    root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
+    _write_tree(cfg, root)
+
+    def corrupting_review(review_cfg, target_path, **kwargs):
+        # Simulate the LLM rewriting the file so a header no longer matches the fixed
+        # five-header set (it "improved" '## Scope' to '## Scopes').
+        target_path.write_text(target_path.read_text().replace("## Scope", "## Scopes"))
+
+    monkeypatch.setattr(prose_review, "review_document", corrupting_review)
+
+    with caplog.at_level(logging.WARNING):
+        result = run_draft_phases(cfg)
+
+    phase_path = cfg.plan.phase_dir / "01-only-leaf.md"
+    # The corrupted file must have been reverted: it parses again and still carries the
+    # exact pre-review '## Scope' header (not the '## Scopes' the review introduced).
+    parse_phase_file(phase_path)
+    assert "## Scope" in phase_path.read_text().splitlines()
+    assert "reverting to pre-review content" in caplog.text
+    assert result.written == [phase_path]
+
+
+def test_valid_post_review_file_is_kept(tmp_path, monkeypatch):
+    cfg = _make_cfg(tmp_path)
+    cfg.prose_review.enabled = True
+    leaf = ChunkNode(chunk=_chunk("A-1", "only", ["a.py"], 1), leaf_doc=_goals_doc("Only goal."))
+    root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
+    _write_tree(cfg, root)
+
+    def preserving_review(review_cfg, target_path, **kwargs):
+        # Simulate a review that polishes a sentence while keeping the structure
+        # intact (the result still round-trips through parse_phase_file).
+        target_path.write_text(target_path.read_text().replace("Only goal.", "Only goal, done well."))
+
+    monkeypatch.setattr(prose_review, "review_document", preserving_review)
+
+    run_draft_phases(cfg)
+
+    text = (cfg.plan.phase_dir / "01-only-leaf.md").read_text()
+    assert "Only goal, done well." in text  # reviewed content kept, not reverted
 
 
 # --- CLI overwrite guard ---------------------------------------------------------------------------
