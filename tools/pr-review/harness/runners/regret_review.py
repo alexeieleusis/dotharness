@@ -761,6 +761,7 @@ def _render_candidate(index: int, candidate: RegretCandidate) -> str:
 
 def build_regret_judgment_prompt(
     instructions: str,
+    extra_knowledge: str | None,
     candidates: list[RegretCandidate],
     diff_sections: str,
     pr: dict,
@@ -772,10 +773,13 @@ def build_regret_judgment_prompt(
 ) -> str:
     """The prompt for the regret-review pass's single backend invocation
     (regret-review-requirements.md §7.2 step 3): the review-regret.md instructions,
-    the current PR's fix diff, a `## Regret Candidates` section with one numbered
-    block per candidate from find_regret_candidates, and the shared PR-metadata
-    trailer — the same `_build_pr_metadata_trailer` the design-review and
-    requirement-traceability prompt builders use. The whole candidate list is
+    the optional `## Additional Review Guide` section (the operator's
+    review_knowledge_file, spliced in exactly as build_design_review_prompt and
+    build_traceability_review_prompt do, so the regret pass honors the same extra
+    guidance as the other passes), the current PR's fix diff, a `## Regret Candidates`
+    section with one numbered block per candidate from find_regret_candidates, and the
+    shared PR-metadata trailer — the same `_build_pr_metadata_trailer` the design-review
+    and requirement-traceability prompt builders use. The whole candidate list is
     batched into this one prompt: the wiring leaves make exactly one backend call
     per current-PR run, never one per candidate. `diff_sections` is pre-built by
     the caller with build_file_review_section (common.py), exactly as every other
@@ -786,6 +790,7 @@ def build_regret_judgment_prompt(
     )
     return (
         instructions
+        + (f"\n\n## Additional Review Guide\n{extra_knowledge}" if extra_knowledge else "")
         + diff_sections
         + candidates_section
         + _build_pr_metadata_trailer(pr, pr_number, repo_name, commit_sha, pr_description, vibe_heal_context)

@@ -1056,6 +1056,7 @@ def _candidates(count: int) -> list[RegretCandidate]:
 def test_build_regret_judgment_prompt_orders_instructions_diff_candidates_and_trailer():
     prompt = build_regret_judgment_prompt(
         "INSTRUCTIONS",
+        None,
         [_candidate(), _candidate(comment_id=789)],
         "DIFF-SECTIONS",
         _pr(),
@@ -1073,6 +1074,42 @@ def test_build_regret_judgment_prompt_orders_instructions_diff_candidates_and_tr
     assert "PR number: 42" in prompt
     assert "Repo: acme/repo" in prompt
     assert "Commit: deadbeef" in prompt
+
+
+def test_build_regret_judgment_prompt_includes_additional_review_guide_when_provided():
+    prompt = build_regret_judgment_prompt(
+        "INSTRUCTIONS",
+        "Ignore stylistic-only regressions in vendor/.",
+        [_candidate()],
+        "DIFF-SECTIONS",
+        _pr(),
+        42,
+        "acme/repo",
+        "deadbeef",
+        None,
+        None,
+    )
+    assert "## Additional Review Guide\nIgnore stylistic-only regressions in vendor/." in prompt
+    # Spliced in right after the instructions, ahead of the diff — the same position
+    # every other pass's prompt builder uses for the section.
+    assert prompt.index("INSTRUCTIONS") < prompt.index("## Additional Review Guide")
+    assert prompt.index("## Additional Review Guide") < prompt.index("DIFF-SECTIONS")
+
+
+def test_build_regret_judgment_prompt_omits_additional_review_guide_when_absent():
+    prompt = build_regret_judgment_prompt(
+        "INSTRUCTIONS",
+        None,
+        [_candidate()],
+        "DIFF-SECTIONS",
+        _pr(),
+        42,
+        "acme/repo",
+        "deadbeef",
+        None,
+        None,
+    )
+    assert "## Additional Review Guide" not in prompt
 
 
 def test_build_regret_judgment_prompt_carries_blamed_region_comment_and_old_diff_per_candidate():
@@ -1094,7 +1131,7 @@ def test_build_regret_judgment_prompt_carries_blamed_region_comment_and_old_diff
         ),
     )
     prompt = build_regret_judgment_prompt(
-        "INSTRUCTIONS", [c1, c2], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
+        "INSTRUCTIONS", None, [c1, c2], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
     )
     block1 = prompt[prompt.index("### Candidate 1") : prompt.index("### Candidate 2")]
     block2 = prompt[prompt.index("### Candidate 2") :]
@@ -1113,7 +1150,7 @@ def test_build_regret_judgment_prompt_carries_blamed_region_comment_and_old_diff
 def test_build_regret_judgment_prompt_notes_pure_deletion_region():
     candidate = _candidate(hunk=_hunk(old_start=12, old_end=12, new_start=14, new_end=13))
     prompt = build_regret_judgment_prompt(
-        "INSTRUCTIONS", [candidate], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
+        "INSTRUCTIONS", None, [candidate], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
     )
     assert "src/foo.py lines 12-12 (pre-fix); deleted by this fix" in prompt
 
@@ -1121,7 +1158,7 @@ def test_build_regret_judgment_prompt_notes_pure_deletion_region():
 def test_build_regret_judgment_prompt_empty_diff_hunk_renders_fallback():
     candidate = _candidate(comment_diff_hunk="")
     prompt = build_regret_judgment_prompt(
-        "INSTRUCTIONS", [candidate], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
+        "INSTRUCTIONS", None, [candidate], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
     )
     assert "(no diff anchor)" in prompt
 
@@ -1129,6 +1166,7 @@ def test_build_regret_judgment_prompt_empty_diff_hunk_renders_fallback():
 def test_build_regret_judgment_prompt_trailer_carries_description_and_vibe_heal_when_present():
     prompt = build_regret_judgment_prompt(
         "INSTRUCTIONS",
+        None,
         [_candidate()],
         "DIFFS",
         _pr(),
@@ -1141,7 +1179,7 @@ def test_build_regret_judgment_prompt_trailer_carries_description_and_vibe_heal_
     assert "## PR Description\n**Title:** fix bug" in prompt
     assert "## Static Analysis\nsonar context" in prompt
     bare = build_regret_judgment_prompt(
-        "INSTRUCTIONS", [_candidate()], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
+        "INSTRUCTIONS", None, [_candidate()], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
     )
     assert "## Static Analysis" not in bare
     assert "**Title:**" not in bare
@@ -1150,7 +1188,7 @@ def test_build_regret_judgment_prompt_trailer_carries_description_and_vibe_heal_
 def test_build_regret_judgment_prompt_multiline_body_stays_one_blockquote():
     candidate = _candidate(comment_body="line one\nline two")
     prompt = build_regret_judgment_prompt(
-        "INSTRUCTIONS", [candidate], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
+        "INSTRUCTIONS", None, [candidate], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
     )
     assert "> line one\n> line two" in prompt
 

@@ -175,7 +175,7 @@ Only these `.harness.toml` fields affect this runner (full schema in
 | `harness.knowledge_dir` | Where `pr-review/review-file.md`, `pr-review/review-summary.md`, `pr-review/review-design.md`, `pr-review/review-traceability.md`, and — only when `[regret_review].enabled` is `true` — `pr-review/review-regret.md` prompt templates live |
 | `harness.path_prepend` | Extra `PATH` entries for subprocesses (git/gh/backend) |
 | `harness.env` | Extra environment variables merged into the subprocess/backend env |
-| `harness.review_knowledge_file` | Optional extra instructions appended to the file, summary, design, and traceability prompts |
+| `harness.review_knowledge_file` | Optional extra instructions appended to the file, summary, design, and traceability prompts, and — only when `[regret_review].enabled` is `true` — to the regret-judgment prompt |
 | `repo.name` | GitHub repo slug used for all `gh` calls |
 | `repo.working_dir` | Local git checkout where the runner detaches, fetches, and checks out branches. Its resolved path is also the basis of the lock key (see [Shared behavior](index.md#shared-behavior)) |
 | `repo.subdir[].path` | Used to locate each subdir's `sonar-project.properties` project key, to find cached vibe-heal review output for the PR branch |

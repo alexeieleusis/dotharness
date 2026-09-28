@@ -377,6 +377,7 @@ def _run_traceability_review(
 
 def _run_regret_review(
     regret_instructions: str,
+    extra_knowledge: str | None,
     pr: dict,
     number: int,
     config,
@@ -430,6 +431,7 @@ def _run_regret_review(
         )
         return build_regret_judgment_prompt(
             regret_instructions,
+            extra_knowledge,
             candidates,
             diff_sections,
             pr,
@@ -581,7 +583,9 @@ def _process_single_pr(
                 traceability_instructions, extra_knowledge, pr, number, config, ctx, backend, wdir, current_user, env
             )
         if run_regret:
-            _run_regret_review(regret_instructions, pr, number, config, ctx, backend, wdir, current_user, env)
+            _run_regret_review(
+                regret_instructions, extra_knowledge, pr, number, config, ctx, backend, wdir, current_user, env
+            )
     except Exception:
         logger.exception("PR #%d: error", number)
     finally:
