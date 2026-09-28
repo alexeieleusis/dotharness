@@ -1269,3 +1269,47 @@ def test_regret_review_post_failure_leaves_unmarked(tmp_xdg, tmp_path):
         self_review._run_locked(cfg)
     mock_check.assert_not_called()
     assert 56 not in state.get_regret_reviewed_prs("acme-frontend")
+
+
+def test_regret_review_incomplete_reply_leaves_unmarked(tmp_xdg, tmp_path):
+    """A backend reply that is not a complete judgment — here, prose with no
+    CANDIDATE verdict lines at all — is inconclusive, not a confirmed miss. Before the
+    fix this parsed to [] and was treated as a confirmed "no regret", so the PR was
+    persisted as regret-reviewed and never re-judged. Now has_comment_fn returns None,
+    run_pr_level_pass treats that as inconclusive, nothing is posted, and the PR stays
+    unmarked so the next cycle re-judges it."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [57])
+    cfg = _cfg(tmp_path)
+    cfg.regret_review.enabled = True
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch(
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 57, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+        ),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_regret_review_comment", return_value=False),
+        patch("harness.runners.self_review.find_introducing_prs", return_value=[_regret_hunk()]),
+        patch("harness.runners.self_review.find_regret_candidates", return_value=[_regret_candidate(_regret_hunk())]),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_vibe_heal_context", return_value=None),
+        patch("harness.runners.self_review.get_pr_description", return_value=None),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=[]),
+        patch("harness.runners.self_review.Backend") as mock_be,
+        patch("harness.runners.self_review.post_regret_comment") as mock_post,
+    ):
+        mock_be.return_value.run.return_value = MagicMock(
+            returncode=0,
+            stdout=b"I looked over the diff and I don't see any regressions here.",
+        )
+        self_review._run_locked(cfg)
+    assert mock_be.return_value.run.call_count == 1
+    mock_post.assert_not_called()
+    assert 57 not in state.get_regret_reviewed_prs("acme-frontend")

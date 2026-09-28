@@ -797,6 +797,38 @@ def build_regret_judgment_prompt(
     )
 
 
+def _collect_verdicts(response: str, candidates: list[RegretCandidate]) -> dict[int, str] | None:
+    """Shared verdict-line scanner for parse_regret_judgment and
+    is_complete_judgment_response (regret-review-requirements.md §7.2 step 4): walks the
+    backend's response, collecting each verdict line (`CANDIDATE <n>: YES|NO — rationale`)
+    keyed by its 1-based candidate index, and returns the mapping. Lines that don't match
+    the verdict shape, or that fall outside 1..len(candidates), are ignored here — they
+    count against completeness, which the caller decides on. Returns None when the response
+    is malformed at the line level — the same candidate index carrying more than one
+    verdict line — since a double verdict means the response can't be trusted as a whole."""
+    verdicts: dict[int, str] = {}
+    for raw_line in response.splitlines():
+        match = _JUDGMENT_LINE_RE.match(raw_line.strip())
+        if match is None:
+            continue
+        index = int(match.group(1))
+        if not 1 <= index <= len(candidates):
+            logger.debug(
+                "regret-review: verdict line for candidate %d falls outside the judged set (1-%d) — ignoring it",
+                index,
+                len(candidates),
+            )
+            continue
+        if index in verdicts:
+            logger.debug(
+                "regret-review: candidate %d has more than one verdict line — the whole response is malformed",
+                index,
+            )
+            return None
+        verdicts[index] = match.group(2)
+    return verdicts
+
+
 def parse_regret_judgment(response: str, candidates: list[RegretCandidate]) -> list[RegretFinding]:
     """The response parser next to build_regret_judgment_prompt
     (regret-review-requirements.md §7.2 step 4): one RegretFinding per
@@ -821,29 +853,17 @@ def parse_regret_judgment(response: str, candidates: list[RegretCandidate]) -> l
     integer id RegretFinding requires). An incomplete or otherwise malformed
     response therefore yields [] — this pass fails toward silence: no retry,
     no escalation, and nothing here changes common.run_pr_level_pass's own
-    retry semantics."""
+    retry semantics. Callers that must tell this function's two [] outcomes
+    apart — "all verdicts present, none said YES" (a confirmed pass) versus
+    "the response is unparseable/truncated" (an inconclusive one) — check
+    is_complete_judgment_response first; self_review._run_regret_review's
+    has_comment_fn does exactly that so it can keep from persisting a
+    done-state on an inconclusive check."""
     if not candidates:
         return []
-    verdicts: dict[int, str] = {}
-    for raw_line in response.splitlines():
-        match = _JUDGMENT_LINE_RE.match(raw_line.strip())
-        if match is None:
-            continue
-        index = int(match.group(1))
-        if not 1 <= index <= len(candidates):
-            logger.debug(
-                "regret-review: verdict line for candidate %d falls outside the judged set (1-%d) — ignoring it",
-                index,
-                len(candidates),
-            )
-            continue
-        if index in verdicts:
-            logger.debug(
-                "regret-review: candidate %d has more than one verdict line — the whole response is malformed",
-                index,
-            )
-            return []
-        verdicts[index] = match.group(2)
+    verdicts = _collect_verdicts(response, candidates)
+    if verdicts is None:
+        return []
     if len(verdicts) != len(candidates):
         logger.debug(
             "regret-review: response covers %d of %d candidates — the whole response is malformed",
@@ -879,6 +899,22 @@ def parse_regret_judgment(response: str, candidates: list[RegretCandidate]) -> l
             )
         )
     return findings
+
+
+def is_complete_judgment_response(response: str, candidates: list[RegretCandidate]) -> bool:
+    """True when the backend's response is a complete, well-formed judgment: every
+    candidate from 1..len(candidates) carries exactly one verdict line, and no candidate is
+    double-verified (regret-review-requirements.md §7.2 step 4). This is the predicate that
+    breaks parse_regret_judgment's [] ambiguity apart: that function collapses both "all
+    verdicts present, none said YES" and "response unparseable/truncated" into the same [],
+    so a caller that must tell the two apart (self_review._run_regret_review's
+    has_comment_fn, which must not persist a done-state on an inconclusive check, only on a
+    confirmed one) checks this first. Vacuously False when candidates is empty, mirroring
+    parse_regret_judgment's no-candidates short-circuit."""
+    if not candidates:
+        return False
+    verdicts = _collect_verdicts(response, candidates)
+    return verdicts is not None and len(verdicts) == len(candidates)
 
 
 # Runner-agnostic plumbing shared by the two wiring leaves (self_review.py and

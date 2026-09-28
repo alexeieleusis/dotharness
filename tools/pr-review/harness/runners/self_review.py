@@ -49,6 +49,7 @@ from harness.runners.regret_review import (
     build_regret_judgment_prompt,
     find_introducing_prs,
     find_regret_candidates,
+    is_complete_judgment_response,
     parse_regret_judgment,
     post_regret_comment,
 )
@@ -402,7 +403,11 @@ def _run_regret_review(
     orchestration (noop check → build prompt → run backend → re-verify) is reused
     unchanged — keeps no copy of the reply. A run whose verdict lines confirm no regret
     at all still counts as complete: there is nothing to post, and the PR is marked
-    done like any other success.
+    done like any other success. A reply that does not carry a complete set of verdict
+    lines (garbage, truncated, or prose with no CANDIDATE lines) is not a confirmed
+    outcome: has_comment_fn returns None for it, run_pr_level_pass treats that as
+    inconclusive, and the PR is left unmarked so the next cycle re-judges it instead of
+    persisting a permanent "no regret" from an unconfirmed reply.
 
     When the candidate-finding pipeline (find_introducing_prs →
     find_regret_candidates) comes up empty, the pass makes no backend call and posts
@@ -443,6 +448,14 @@ def _run_regret_review(
         )
 
     def has_comment_fn() -> bool | None:
+        if not is_complete_judgment_response(reply["reply"], candidates):
+            logger.warning(
+                "PR #%d: regret review reply was not a complete judgment — no parseable verdict "
+                "line for every candidate, so nothing was actually confirmed. Treating as "
+                "inconclusive (will retry next cycle) rather than a confirmed miss.",
+                number,
+            )
+            return None
         findings = parse_regret_judgment(reply["reply"], candidates)
         if not findings:
             logger.info("PR #%d: regret review found no confirmed regret — nothing to post", number)

@@ -18,6 +18,7 @@ from harness.runners.regret_review import (
     build_regret_judgment_prompt,
     find_introducing_prs,
     find_regret_candidates,
+    is_complete_judgment_response,
     parse_regret_judgment,
 )
 
@@ -1296,3 +1297,44 @@ def test_parse_regret_judgment_yes_on_review_typed_candidate_discarded():
 def test_parse_regret_judgment_tolerates_indented_verdict_lines():
     response = "    CANDIDATE 1: YES — indented verdict line\n"
     assert [f.comment_id for f in parse_regret_judgment(response, _candidates(1))] == [456]
+
+
+# is_complete_judgment_response breaks parse_regret_judgment's two [] outcomes apart:
+# "all verdicts present, none said YES" (confirmed) versus "unparseable/truncated"
+# (inconclusive). The confirmed case must read True, the inconclusive case False.
+
+
+def test_is_complete_judgment_response_all_no_is_confirmed():
+    response = "CANDIDATE 1: NO — unrelated\nCANDIDATE 2: NO — different root cause\n"
+    assert is_complete_judgment_response(response, _candidates(2)) is True
+
+
+def test_is_complete_judgment_response_with_yes_is_confirmed():
+    response = "CANDIDATE 1: YES — predicted this bug\nCANDIDATE 2: NO — style point\n"
+    assert is_complete_judgment_response(response, _candidates(2)) is True
+
+
+def test_is_complete_judgment_response_prose_with_no_verdict_lines_is_inconclusive():
+    response = "I looked at the diff and don't see any regressions here."
+    assert is_complete_judgment_response(response, _candidates(2)) is False
+
+
+def test_is_complete_judgment_response_truncated_is_inconclusive():
+    response = "CANDIDATE 1: NO — unrelated\n"
+    assert is_complete_judgment_response(response, _candidates(2)) is False
+
+
+def test_is_complete_judgment_response_repeated_verdict_is_inconclusive():
+    response = "CANDIDATE 1: YES — first line\nCANDIDATE 1: NO — contradictory line\n"
+    assert is_complete_judgment_response(response, _candidates(1)) is False
+
+
+def test_is_complete_judgment_response_missing_rationale_is_inconclusive():
+    # A bare "CANDIDATE 1: YES" with no rationale is not a valid verdict line, so the
+    # response covers 0 of 1 candidates — inconclusive, not a confirmed pass.
+    response = "CANDIDATE 1: YES\n"
+    assert is_complete_judgment_response(response, _candidates(1)) is False
+
+
+def test_is_complete_judgment_response_no_candidates_is_inconclusive():
+    assert is_complete_judgment_response("CANDIDATE 1: YES — nobody to map to", []) is False
