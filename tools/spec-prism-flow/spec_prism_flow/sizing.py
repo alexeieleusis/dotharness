@@ -36,6 +36,7 @@ def check_file_scope(paths: list[str]) -> SizingResult:
 def check_word_count(text: str) -> SizingResult:
     count = len(text.split())
     in_band = count in _WORD_COUNT_IN_BAND
+    over_ceiling = count >= _WORD_COUNT_IN_BAND.stop
     note = None
     if not in_band:
         if count < _WORD_COUNT_OBSERVED_MIN or count > _WORD_COUNT_OBSERVED_MAX:
@@ -46,4 +47,4 @@ def check_word_count(text: str) -> SizingResult:
                 f"{_WORD_COUNT_IN_BAND.start}-{_WORD_COUNT_IN_BAND.stop - 1}"
             )
 
-    return SizingResult(count=count, in_band=in_band, note=note)
+    return SizingResult(count=count, in_band=in_band, over_ceiling=over_ceiling, note=note)

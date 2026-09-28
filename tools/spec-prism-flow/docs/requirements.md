@@ -273,6 +273,8 @@ the stage is done. This protocol is expected to iterate if it proves too manual 
      back trivial, the chunk is flagged for human review rather than retried indefinitely. Each
      occurrence (retry or escalation) is logged (§9, §11 #6). v1 does no automatic tuning of the
      generator prompt or sizing bands.
+     Only *oversize* (over the file-scope ceiling or above the word-count band) triggers this
+     retry. A leaf below the bands is accepted as-is, so a small project can end as one phase.
    - **Depth-first, asymmetric by design:** each branch terminates independently — `A-2` can end
      as a single leaf while `A-1` recurses three levels deep (`A-1-1-1`, `A-1-1-2`, ...) and
      `A-3` ends with two. The stopping condition is "does this chunk satisfy the sizing bands,"

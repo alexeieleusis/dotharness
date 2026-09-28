@@ -45,6 +45,12 @@ def test_check_word_count_in_band():
     assert result.note is None
 
 
+def test_check_word_count_over_ceiling_only_above_band():
+    assert check_word_count(" ".join(["word"] * 1500)).over_ceiling is False
+    assert check_word_count(" ".join(["word"] * 1501)).over_ceiling is True
+    assert check_word_count("tiny").over_ceiling is False
+
+
 def test_check_word_count_in_band_but_below_observed_min():
     result = check_word_count(" ".join(["word"] * 510))
 
