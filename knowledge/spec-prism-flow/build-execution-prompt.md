@@ -25,6 +25,10 @@ own:
   run. If either is missing, stop and say so. Do not try to build without them.
 - **Target repo** (where the actual code changes and commits happen): Check
   `init_manifest.json` in the project's workspace dir for a `"code"` field.
+  - The workspace dir is `plan.workspace_dir` in the same `.spec-prism-flow.toml`.
+    It is not generally derivable from the phase dir. If you only have a phase dir
+    and the `.toml` is not reachable, **ask the user** for the project's workspace
+    dir before looking for the manifest.
   - If `plan init` ran with `--code`, that path is the target repo.
   - If the `"code"` field is null or missing, **ask the user** for the git checkout to
     build in. Never guess this value.
