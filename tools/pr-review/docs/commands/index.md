@@ -16,6 +16,8 @@ harness run [--config PATH] [--verbose] <command> [command options]
 | [`self-review`](self-review.md) | Your own open PRs (`--author @me`) | Get an automated first-pass AI review of your own PRs before asking a human. |
 | [`address-comments`](address-comments.md) | Open PRs you authored or are assigned to, with pending reviewer feedback | Have the AI backend read unresolved review comments, make the smallest fix (or reply), commit, and push. |
 
+There is also an optional `regret-review` pass — enabled via the [`[regret_review]`](../configuration.md#regret_review) config section — that re-checks old, ignored review comments on the PRs `self-review` and `review-requested` already cover.
+
 There's also a convenience command that runs all five in sequence:
 
 ```

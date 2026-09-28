@@ -6,10 +6,12 @@ import pytest
 from harness.runners.common import (
     DESIGN_REVIEW_MARKER,
     INLINE_REVIEW_MARKER,
+    REGRET_REVIEW_MARKER,
     TRACEABILITY_REVIEW_MARKER,
     add_reviewer,
     author_matches,
     check_pr_level_pass_comment_status,
+    check_regret_review_comment_status,
     check_review_summary_comment_status,
     check_traceability_review_comment_status,
     get_current_user,
@@ -17,6 +19,7 @@ from harness.runners.common import (
     has_design_review_comment,
     has_inline_review_comments,
     has_pr_level_pass_comment,
+    has_regret_review_comment,
     has_review_summary_comment,
     has_traceability_review_comment,
     is_design_review_comment,
@@ -241,7 +244,9 @@ def test_is_review_summary_comment(body, expected):
     assert is_review_summary_comment(body) is expected
 
 
-@pytest.mark.parametrize("marker", [INLINE_REVIEW_MARKER, DESIGN_REVIEW_MARKER, TRACEABILITY_REVIEW_MARKER])
+@pytest.mark.parametrize(
+    "marker", [INLINE_REVIEW_MARKER, DESIGN_REVIEW_MARKER, TRACEABILITY_REVIEW_MARKER, REGRET_REVIEW_MARKER]
+)
 def test_is_review_summary_comment_excludes_pr_level_pass_markers(marker):
     # Every PR-level pass marker embeds the `osc-review` substring the summary
     # predicate looks for. A bare marker-only body must not be mistaken for the
@@ -510,3 +515,57 @@ def test_check_traceability_review_comment_status_returns_false_on_confirmed_abs
     with patch("harness.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps([]).encode())
         assert check_traceability_review_comment_status(1, "acme/repo", "alice", {}) is False
+
+
+def test_has_regret_review_comment_true_when_marker_and_user_match():
+    # The regret pass always posts its marked comment at the PR (issue) level, never
+    # only inline, so has_regret_review_comment only needs to check that endpoint.
+    comments = [
+        {"user": {"login": "someone-else"}, "body": "unrelated<!-- osc-review-regret -->"},
+        {
+            "user": {"login": "alice"},
+            "body": "# Previously flagged review comments\nfindings...<!-- osc-review-regret -->",
+        },
+    ]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_regret_review_comment(1, "acme/repo", "alice", {}) is True
+
+
+def test_has_regret_review_comment_false_when_same_user_but_no_marker():
+    # A regular self-review summary comment from the same account must not be mistaken
+    # for a completed regret review.
+    comments = [{"user": {"login": "alice"}, "body": "# Review Summary\nNo blocking issues found."}]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_regret_review_comment(1, "acme/repo", "alice", {}) is False
+
+
+def test_has_regret_review_comment_false_when_other_user_posted_with_marker():
+    comments = [
+        {
+            "user": {"login": "someone-else"},
+            "body": "# Previously flagged review comments\n...<!-- osc-review-regret -->",
+        }
+    ]
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
+        assert has_regret_review_comment(1, "acme/repo", "alice", {}) is False
+
+
+def test_has_regret_review_comment_returns_false_on_gh_failure():
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
+        assert has_regret_review_comment(1, "acme/repo", "alice", {}) is False
+
+
+def test_check_regret_review_comment_status_returns_none_on_gh_failure():
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
+        assert check_regret_review_comment_status(1, "acme/repo", "alice", {}) is None
+
+
+def test_check_regret_review_comment_status_returns_false_on_confirmed_absence():
+    with patch("harness.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps([]).encode())
+        assert check_regret_review_comment_status(1, "acme/repo", "alice", {}) is False

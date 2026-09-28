@@ -1,0 +1,31 @@
+# spec-prism-flow config for the "regret-review" project (github.com/alexeieleusis/dotharness#33),
+# tracked under tools/pr-review/.projects/regret-review/ — see .projects/README.md.
+#
+# Run every `spec-prism-flow plan|build` command from tools/pr-review/ with:
+#   --config .projects/regret-review/.spec-prism-flow.toml
+
+[agent]
+backend = "claude"
+
+[plan]
+workspace_dir = ".projects/regret-review"
+phase_dir = ".projects/regret-review/phases"
+# conventions_path = ".projects/regret-review/CONVENTIONS.md"
+
+[review]
+enabled = true
+command = "harness"
+tool_dir = "~/.harness/tools/pr-review"
+harness_config = "~/.harness/.harness-pr-review.toml"
+
+[vibe_heal]
+enabled = false
+
+[build]
+commands = ["make check", "make test"]
+workers = 1
+max_retry_cycles = 3
+state_dir = "~/.local/share/dotharness/spec-prism-flow/state"
+
+[harness]
+knowledge_dir = "~/.harness/knowledge"

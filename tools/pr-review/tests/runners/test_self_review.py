@@ -1,8 +1,11 @@
+import json
 import subprocess
 from unittest.mock import MagicMock, patch
 
 from harness import state
 from harness.runners import self_review
+from harness.runners.common import REGRET_REVIEW_MARKER
+from harness.runners.regret_review import IntroducingHunk, RegretCandidate
 
 
 def _cfg(tmp_path):
@@ -24,6 +27,7 @@ def _setup_knowledge(tmp_path, content="instructions"):
     (kdir / "review-summary.md").write_text(content)
     (kdir / "review-design.md").write_text(content)
     (kdir / "review-traceability.md").write_text(content)
+    (kdir / "review-regret.md").write_text(content)
 
 
 def test_skips_already_reviewed_pr(tmp_xdg, tmp_path):
@@ -459,6 +463,32 @@ def test_list_my_prs_returns_none_on_gh_failure():
 def test_list_my_prs_returns_none_on_malformed_json():
     with patch("harness.runners.self_review.run_cmd", return_value=MagicMock(returncode=0, stdout=b"not json")):
         assert self_review._list_my_prs("acme/frontend", {}) is None
+
+
+def test_list_my_prs_requests_author_and_returns_prs_from_single_call():
+    # gh pr list --json can return everything in a single call; author must be among
+    # the requested fields, because the regret pass's author gate
+    # (regret_review.find_introducing_prs -> _pr_gate_setup) reads
+    # pr["author"]["login"] from the PR dict and fails closed on an authorless PR —
+    # without the field no PR could ever pass the gate in this runner (the same fix
+    # review_requested._get_prs received). The returned PR dicts must carry it through.
+    pr = {
+        "number": 42,
+        "url": "https://github.com/acme/frontend/pull/42",
+        "headRefName": "feat/my-branch",
+        "author": {"login": "alice"},
+    }
+    with patch(
+        "harness.runners.self_review.run_cmd",
+        return_value=MagicMock(returncode=0, stdout=json.dumps([pr]).encode()),
+    ) as mock_run:
+        prs = self_review._list_my_prs("acme/frontend", {})
+
+    assert prs == [pr]
+    mock_run.assert_called_once()
+    args = mock_run.call_args[0][0]
+    fields = args[args.index("--json") + 1].split(",")
+    assert "author" in fields
 
 
 def test_design_review_runs_independently_of_already_reviewed_files(tmp_xdg, tmp_path):
@@ -961,3 +991,325 @@ def test_traceability_review_already_done_is_skipped_without_any_backend_call(tm
         self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     mock_checkout.assert_not_called()
+
+
+def _regret_hunk():
+    return IntroducingHunk(
+        path="src/foo.py",
+        old_start=3,
+        old_end=5,
+        new_start=3,
+        new_end=4,
+        introducing_sha="cafe0001",
+        introducing_pr_number=42,
+    )
+
+
+def _regret_candidate(hunk):
+    return RegretCandidate(
+        comment_id=123,
+        comment_body="This will break when the input is empty",
+        comment_author="bob",
+        comment_diff_hunk="",
+        comment_url="https://github.com/acme/frontend/pull/42#discussion_r123",
+        hunk=hunk,
+    )
+
+
+def test_regret_review_not_run_when_disabled(tmp_xdg, tmp_path):
+    """[regret_review].enabled is false by default — the pass is never entered at all,
+    even for a PR that is in none of the state lists yet (the enabled gate is unique to
+    this pass; design/traceability have none)."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [])
+    state.add_design_reviewed_pr("acme-frontend", 50)
+    state.add_traceability_reviewed_pr("acme-frontend", 50)
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch(
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 50, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+        ),
+        patch("harness.runners.self_review.check_review_summary_comment_status", return_value=True),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout") as mock_checkout,
+        patch("harness.runners.self_review._run_regret_review") as mock_regret,
+    ):
+        self_review._run_locked(cfg)
+    mock_regret.assert_not_called()
+    mock_checkout.assert_not_called()
+
+
+def test_regret_review_not_run_when_already_regret_reviewed(tmp_xdg, tmp_path):
+    """Once regret_reviewed_prs has the PR (pass enabled), and files/summary/design/
+    traceability are also already done, nothing runs at all this cycle — not even a
+    checkout."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [51])
+    state.add_design_reviewed_pr("acme-frontend", 51)
+    state.add_traceability_reviewed_pr("acme-frontend", 51)
+    state.add_regret_reviewed_pr("acme-frontend", 51)
+    cfg = _cfg(tmp_path)
+    cfg.regret_review.enabled = True
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch(
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 51, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+        ),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout") as mock_checkout,
+        patch("harness.runners.self_review.Backend") as mock_be,
+    ):
+        self_review._run_locked(cfg)
+    mock_be.return_value.run.assert_not_called()
+    mock_checkout.assert_not_called()
+
+
+def test_regret_review_marker_found_marks_done_without_invoking_backend(tmp_xdg, tmp_path):
+    """Idempotency: if a regret comment is already on GitHub (e.g. a prior state write
+    didn't persist), the pass is recorded as done without re-invoking — zero calls to
+    the candidate pipeline and no backend call."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [52])
+    cfg = _cfg(tmp_path)
+    cfg.regret_review.enabled = True
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch(
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 52, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+        ),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_regret_review_comment", return_value=True),
+        patch("harness.runners.self_review.find_introducing_prs") as mock_find_prs,
+        patch("harness.runners.self_review.find_regret_candidates") as mock_find_candidates,
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_vibe_heal_context", return_value=None),
+        patch("harness.runners.self_review.get_pr_description", return_value=None),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=[]),
+        patch("harness.runners.self_review.Backend") as mock_be,
+    ):
+        self_review._run_locked(cfg)
+    mock_find_prs.assert_not_called()
+    mock_find_candidates.assert_not_called()
+    mock_be.return_value.run.assert_not_called()
+    assert 52 in state.get_regret_reviewed_prs("acme-frontend")
+
+
+def test_regret_review_posts_comment_and_marks_done_on_findings(tmp_xdg, tmp_path):
+    """The full pipeline: candidate search → backend verdict lines → findings parsed
+    from the reply → regret comment posted by the harness (the backend posts nothing) →
+    marker confirmed → marked done."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [53])
+    cfg = _cfg(tmp_path)
+    cfg.regret_review.enabled = True
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch(
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 53, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+        ),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_regret_review_comment", return_value=False),
+        patch("harness.runners.self_review.find_introducing_prs", return_value=[_regret_hunk()]),
+        patch("harness.runners.self_review.find_regret_candidates", return_value=[_regret_candidate(_regret_hunk())]),
+        patch("harness.runners.self_review.check_regret_review_comment_status", return_value=True),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_vibe_heal_context", return_value=None),
+        patch("harness.runners.self_review.get_pr_description", return_value=None),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=[]),
+        patch("harness.runners.self_review.Backend") as mock_be,
+        patch("harness.runners.self_review.post_regret_comment", return_value=True) as mock_post,
+    ):
+        mock_be.return_value.run.return_value = MagicMock(
+            returncode=0, stdout=b"CANDIDATE 1: YES - it predicted the empty-input failure\n"
+        )
+        self_review._run_locked(cfg)
+    assert mock_be.return_value.run.call_count == 1
+    assert mock_be.return_value.run.call_args.kwargs["context"] == "PR #53 regret review"
+    assert 53 in state.get_regret_reviewed_prs("acme-frontend")
+    assert mock_post.call_count == 1
+    body = mock_post.call_args.args[2]
+    assert "# Previously flagged review comments" in body
+    assert "src/foo.py:3" in body
+    assert "#42" in body
+    assert "https://github.com/acme/frontend/pull/42#discussion_r123" in body
+    assert "This will break when the input is empty" in body
+    assert REGRET_REVIEW_MARKER in body
+
+
+def test_regret_review_no_candidates_no_backend_call_and_unmarked(tmp_xdg, tmp_path):
+    """Blame resolved an introducing PR but no comment matched the blamed hunk — there
+    is structurally nothing to judge: no backend call, no comment posted, and the PR is
+    NOT marked regret-reviewed, so a later PR update gets a fresh candidate search."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [54])
+    cfg = _cfg(tmp_path)
+    cfg.regret_review.enabled = True
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch(
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 54, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+        ),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_regret_review_comment", return_value=False),
+        patch("harness.runners.self_review.find_introducing_prs", return_value=[_regret_hunk()]),
+        patch("harness.runners.self_review.find_regret_candidates", return_value=[]),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_vibe_heal_context", return_value=None),
+        patch("harness.runners.self_review.get_pr_description", return_value=None),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=[]),
+        patch("harness.runners.self_review.Backend") as mock_be,
+        patch("harness.runners.self_review.post_regret_comment") as mock_post,
+    ):
+        self_review._run_locked(cfg)
+    mock_be.return_value.run.assert_not_called()
+    mock_post.assert_not_called()
+    assert 54 not in state.get_regret_reviewed_prs("acme-frontend")
+
+
+def test_regret_review_no_findings_marks_done_without_posting(tmp_xdg, tmp_path):
+    """The backend judged every candidate NO — nothing is posted, but the run still
+    counts as complete: there is nothing to post, and the PR is marked done like any
+    other success, so the same candidates aren't re-judged on every future run."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [55])
+    cfg = _cfg(tmp_path)
+    cfg.regret_review.enabled = True
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch(
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 55, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+        ),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_regret_review_comment", return_value=False),
+        patch("harness.runners.self_review.find_introducing_prs", return_value=[_regret_hunk()]),
+        patch("harness.runners.self_review.find_regret_candidates", return_value=[_regret_candidate(_regret_hunk())]),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_vibe_heal_context", return_value=None),
+        patch("harness.runners.self_review.get_pr_description", return_value=None),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=[]),
+        patch("harness.runners.self_review.Backend") as mock_be,
+        patch("harness.runners.self_review.post_regret_comment") as mock_post,
+    ):
+        mock_be.return_value.run.return_value = MagicMock(
+            returncode=0, stdout=b"CANDIDATE 1: NO - it was about a different edge case\n"
+        )
+        self_review._run_locked(cfg)
+    assert mock_be.return_value.run.call_count == 1
+    mock_post.assert_not_called()
+    assert 55 in state.get_regret_reviewed_prs("acme-frontend")
+
+
+def test_regret_review_post_failure_leaves_unmarked(tmp_xdg, tmp_path):
+    """A backend verdict that parses into findings is not enough: if posting the regret
+    comment fails, the PR must not be marked regret-reviewed, so the next run retries."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [56])
+    cfg = _cfg(tmp_path)
+    cfg.regret_review.enabled = True
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch(
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 56, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+        ),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_regret_review_comment", return_value=False),
+        patch("harness.runners.self_review.find_introducing_prs", return_value=[_regret_hunk()]),
+        patch("harness.runners.self_review.find_regret_candidates", return_value=[_regret_candidate(_regret_hunk())]),
+        patch("harness.runners.self_review.check_regret_review_comment_status") as mock_check,
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_vibe_heal_context", return_value=None),
+        patch("harness.runners.self_review.get_pr_description", return_value=None),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=[]),
+        patch("harness.runners.self_review.Backend") as mock_be,
+        patch("harness.runners.self_review.post_regret_comment", return_value=False),
+    ):
+        mock_be.return_value.run.return_value = MagicMock(
+            returncode=0, stdout=b"CANDIDATE 1: YES - it predicted the empty-input failure\n"
+        )
+        self_review._run_locked(cfg)
+    mock_check.assert_not_called()
+    assert 56 not in state.get_regret_reviewed_prs("acme-frontend")
+
+
+def test_regret_review_incomplete_reply_leaves_unmarked(tmp_xdg, tmp_path):
+    """A backend reply that is not a complete judgment — here, prose with no
+    CANDIDATE verdict lines at all — is inconclusive, not a confirmed miss. Before the
+    fix this parsed to [] and was treated as a confirmed "no regret", so the PR was
+    persisted as regret-reviewed and never re-judged. Now has_comment_fn returns None,
+    run_pr_level_pass treats that as inconclusive, nothing is posted, and the PR stays
+    unmarked so the next cycle re-judges it."""
+    _setup_knowledge(tmp_path)
+    state.write_self_review_state("acme-frontend", [57])
+    cfg = _cfg(tmp_path)
+    cfg.regret_review.enabled = True
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch(
+            "harness.runners.self_review._list_my_prs",
+            return_value=[{"number": 57, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+        ),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_regret_review_comment", return_value=False),
+        patch("harness.runners.self_review.find_introducing_prs", return_value=[_regret_hunk()]),
+        patch("harness.runners.self_review.find_regret_candidates", return_value=[_regret_candidate(_regret_hunk())]),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_vibe_heal_context", return_value=None),
+        patch("harness.runners.self_review.get_pr_description", return_value=None),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=[]),
+        patch("harness.runners.self_review.Backend") as mock_be,
+        patch("harness.runners.self_review.post_regret_comment") as mock_post,
+    ):
+        mock_be.return_value.run.return_value = MagicMock(
+            returncode=0,
+            stdout=b"I looked over the diff and I don't see any regressions here.",
+        )
+        self_review._run_locked(cfg)
+    assert mock_be.return_value.run.call_count == 1
+    mock_post.assert_not_called()
+    assert 57 not in state.get_regret_reviewed_prs("acme-frontend")

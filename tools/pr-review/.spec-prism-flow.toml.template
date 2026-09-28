@@ -1,0 +1,39 @@
+# Template .spec-prism-flow.toml for a spec-prism-flow project rooted in tools/pr-review.
+#
+# This file is NOT loaded directly (spec-prism-flow's default config path is
+# ./.spec-prism-flow.toml, and workspace_dir/phase_dir below are placeholders).
+# To start a new project:
+#
+#   1. Pick a slug, e.g. "self-review-timeout".
+#   2. Copy this file to .projects/<slug>/.spec-prism-flow.toml
+#   3. Replace every "<slug>" below with the real slug.
+#   4. Run every `spec-prism-flow plan|build` command from tools/pr-review/ with
+#      --config .projects/<slug>/.spec-prism-flow.toml
+#
+# See .projects/README.md for the full convention.
+
+[agent]
+backend = "claude"
+
+[plan]
+workspace_dir = ".projects/<slug>"
+phase_dir = ".projects/<slug>/phases"
+# conventions_path = ".projects/<slug>/CONVENTIONS.md"
+
+[review]
+enabled = true
+command = "harness"
+tool_dir = "~/.harness/tools/pr-review"
+harness_config = "~/.harness/.harness-pr-review.toml"
+
+[vibe_heal]
+enabled = false
+
+[build]
+commands = ["make check", "make test"]
+workers = 1
+max_retry_cycles = 3
+state_dir = "~/.local/share/dotharness/spec-prism-flow/state"
+
+[harness]
+knowledge_dir = "~/.harness/knowledge"

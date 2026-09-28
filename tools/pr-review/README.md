@@ -8,7 +8,9 @@ Generic PR automation with configurable AI backends (Claude Code or opencode).
 
 Sweeps every open PR in a repo to post SonarQube/vibe_heal-style static-analysis
 feedback, produces AI code reviews (on request or when review is requested from
-you), and can read unresolved review comments and push the smallest fix. Behavior
+you, including design-review, traceability-review, and an optional regret-review
+pass that re-checks old, ignored review comments), and can read unresolved review
+comments and push the smallest fix. Behavior
 per repo is driven entirely by a `.harness.toml` config file — see
 [docs/configuration.md](docs/configuration.md) for the full schema and
 [docs/commands/index.md](docs/commands/index.md) for what each command does.

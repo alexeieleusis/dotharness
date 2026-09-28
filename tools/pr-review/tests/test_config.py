@@ -311,6 +311,35 @@ trusted_commenters = ["alice", "bob"]
     assert cfg.address_comments.trusted_commenters == ["alice", "bob"]
 
 
+def test_regret_review_defaults(minimal_toml):
+    cfg = load_config(minimal_toml)
+    assert cfg.regret_review.enabled is False
+    assert cfg.regret_review.max_diff_lines == 50
+    assert cfg.regret_review.authors == "*"
+    assert cfg.regret_review.regret_review_timeout == 300
+
+
+def test_regret_review_parsed(tmp_path):
+    p = tmp_path / ".harness.toml"
+    p.write_text("""
+[harness]
+[repo]
+name = "a/b"
+working_dir = "/tmp"
+
+[regret_review]
+enabled = true
+max_diff_lines = 120
+authors = ["alice", "bob"]
+regret_review_timeout = 900
+""")
+    cfg = load_config(p)
+    assert cfg.regret_review.enabled is True
+    assert cfg.regret_review.max_diff_lines == 120
+    assert cfg.regret_review.authors == ["alice", "bob"]
+    assert cfg.regret_review.regret_review_timeout == 900
+
+
 def test_malformed_toml_raises_config_error(tmp_path):
     p = tmp_path / ".harness.toml"
     p.write_text("""

@@ -59,6 +59,14 @@ class AddressCommentsConfig:
 
 
 @dataclass
+class RegretReviewConfig:
+    enabled: bool = False
+    max_diff_lines: int = 50
+    authors: str | list[str] = "*"
+    regret_review_timeout: int = 300
+
+
+@dataclass
 class RepoConfig:
     name: str
     working_dir: Path
@@ -84,6 +92,7 @@ class HarnessConfig:
     vibe_heal: VibehealConfig = field(default_factory=VibehealConfig)
     focused_review: FocusedReviewConfig = field(default_factory=FocusedReviewConfig)
     address_comments: AddressCommentsConfig = field(default_factory=AddressCommentsConfig)
+    regret_review: RegretReviewConfig = field(default_factory=RegretReviewConfig)
 
     @property
     def repo_slug(self) -> str:
@@ -189,10 +198,20 @@ def load_config(path: Path) -> HarnessConfig:
         trusted_commenters=trusted_commenters,
     )
 
+    rr = data.get("regret_review", {})
+    raw_rr_authors = rr.get("authors", "*")
+    regret_review = RegretReviewConfig(
+        enabled=rr.get("enabled", False),
+        max_diff_lines=rr.get("max_diff_lines", 50),
+        authors=raw_rr_authors if isinstance(raw_rr_authors, str) else list(raw_rr_authors),
+        regret_review_timeout=rr.get("regret_review_timeout", 300),
+    )
+
     return HarnessConfig(
         harness=harness_section,
         repo=repo,
         vibe_heal=vibe_heal,
         focused_review=focused_review,
         address_comments=address_comments,
+        regret_review=regret_review,
     )
