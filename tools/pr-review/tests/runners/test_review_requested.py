@@ -666,6 +666,44 @@ def test_regret_review_post_failure_blocks_remove_reviewer(tmp_xdg, tmp_path):
     mock_remove.assert_not_called()
 
 
+def test_remove_reviewer_blocked_when_regret_marker_comment_never_lands(tmp_xdg, tmp_path):
+    """post_regret_comment can report success without the PR-level marker comment
+    actually landing (a transient API failure that still returned truthy, or a broken
+    re-check). The post-run re-verification is the guard: when the second
+    has_regret_review_comment call still returns False after the harness posted, the
+    pass must not count as complete — the reviewer stays on the PR so the regret pass
+    retries next cycle. This is regret's analog of the design/traceability
+    '..._marker_comment_never_lands' tests, and unlike those it exercises regret's own
+    has_comment_fn closure (parse → build body → post → re-verify) end-to-end."""
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    cfg.regret_review.enabled = True
+    with (
+        _full_run_mocks() as mocks,
+        # False when the loop checks regret_done; False again when the post-run
+        # confirmation re-checks the marker after the harness posts — the marker never
+        # landed, so the pass must not count as complete.
+        patch("harness.runners.review_requested.has_regret_review_comment", side_effect=[False, False]),
+        patch("harness.runners.review_requested.find_introducing_prs", return_value=[_regret_hunk()]),
+        patch(
+            "harness.runners.review_requested.find_regret_candidates",
+            return_value=[_regret_candidate(_regret_hunk())],
+        ),
+        patch("harness.runners.review_requested.post_regret_comment", return_value=True) as mock_post,
+        patch("harness.runners.review_requested.remove_reviewer") as mock_remove,
+    ):
+        # file review, then summary, then a regret-review call with verdict lines
+        mocks.backend.return_value.run.side_effect = [
+            MagicMock(returncode=0),
+            MagicMock(returncode=0),
+            MagicMock(returncode=0, stdout=b"CANDIDATE 1: YES - it predicted the empty-input failure\n"),
+        ]
+        review_requested._run_locked(cfg, pr_url=None)
+    assert mocks.backend.return_value.run.call_count == 3
+    assert mock_post.call_count == 1
+    mock_remove.assert_not_called()
+
+
 def test_regret_review_writes_no_persisted_state(tmp_xdg, tmp_path):
     """This runner is deliberately stateless (like its design/traceability passes): a
     regret run that posts a comment must not create self-review's state file or add
