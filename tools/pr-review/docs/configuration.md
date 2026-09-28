@@ -108,7 +108,7 @@ address" (not the terse original finding it responded to). See
 | `enabled` | boolean | `false` | Turns the `regret-review` pass on. Off by default — unlike the other commands, this is the one pass you must explicitly opt into. |
 | `max_diff_lines` | integer | `50` | The bugfix-shaped threshold: a PR is skipped entirely when its diff (added + removed lines across all files) exceeds this size. `50` is a round, conservative starting point for "small fix" — pending real usage data. |
 | `authors` | string or list of strings | `"*"` | Which PR authors the pass applies to. `"*"` means all authors. Otherwise it is a list of GitHub usernames. Applies to the **current** PR's author; the introducing PR's author is never filtered. The point is tracing *whoever's* old comment was ignored. |
-| `regret_review_timeout` | integer | `300` | Per-PR wall-clock budget (seconds). It covers the pass's own git/`gh` calls (blame, commit→PR lookups, comment fetches) plus the single backend invocation. Separate from `harness.backend_timeout_seconds`. |
+| `regret_review_timeout` | integer | `300` | Per-PR wall-clock budget (seconds) for the pass's own git/`gh` calls (blame, commit→PR lookups, comment fetches), checked and decremented before each call. Does not bound the backend invocation itself, which uses `harness.backend_timeout_seconds` independently. |
 
 ## Full example
 
