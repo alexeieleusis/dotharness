@@ -10,7 +10,7 @@ When a bug is fixed, the code being corrected had often been reviewed before. So
 
 - Detect, for a small bugfix PR, whether any changed line traces back (via `git blame`) to a commit whose originating PR received a review comment on that same line or region.
 - Use the AI backend to judge whether addressing that comment back then would have prevented the bug being fixed now. Base the judgment on the current PR's diff (the fix) and the original PR's review comment. Exclude comments that are unrelated, stylistic, or already addressed.
-- Post exactly one comment on the current PR per genuine "regret" finding. Link it to the original review comment, its PR, and ideally the specific comment or URL. Gate it with a completion marker so a rerun does not repost.
+- Post a single comment on the current PR covering every genuine "regret" finding from that run. Link each finding to its original review comment, its PR, and ideally the specific comment or URL. Gate it with a completion marker so a rerun does not repost.
 - Gate the whole pass behind a `[regret_review]` block in `.harness.toml`. Mirror the shape of the existing `[vibe_heal]` block: an `enabled` flag plus its own settings, off by default.
 - Only run against PRs that look bugfix-shaped. Use a configurable threshold for the maximum number of changed lines (the issue's "≤N lines, configurable"). This keeps the pass cheap and its signal precise: large PRs would blame far more lines than a human could usefully read.
 
