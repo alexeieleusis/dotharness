@@ -321,7 +321,7 @@ lands once this shape is implemented.
 
 - The pass adds a **new marker constant** in `harness/runners/common.py`, alongside
   `INLINE_REVIEW_MARKER`/`DESIGN_REVIEW_MARKER`/`TRACEABILITY_REVIEW_MARKER`
-  (`common.py:24-26`): e.g. `REGRET_REVIEW_MARKER = "<!-- osc-review-regret -->"`.
+  (`common.py:24-26`): e.g. `REGRET_REVIEW_MARKER = "<!-- dotharness-review-regret -->"`.
 - **Idempotency and flagged-locations helpers** reuse the existing generic
   `has_pr_level_pass_comment`/`check_pr_level_pass_comment_status`
   (`common.py:374-393`) and `get_pr_level_flagged_locations`

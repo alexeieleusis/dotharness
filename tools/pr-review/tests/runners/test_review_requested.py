@@ -114,7 +114,7 @@ def test_skips_already_approved_pr(tmp_xdg, tmp_path):
     mock_be.return_value.run.assert_not_called()
 
 
-def test_skips_pr_with_existing_osc_review(tmp_xdg, tmp_path):
+def test_skips_pr_with_existing_dotharness_review(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (

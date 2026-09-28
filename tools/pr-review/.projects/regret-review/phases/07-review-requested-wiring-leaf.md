@@ -102,7 +102,7 @@ This leaf covers a single feature (the second runner's wiring). No table is need
   - "What it does" step 6 extends the "all the outstanding parts are
     already done" skip check to include the regret pass's marker (when
     enabled), adds a **Regret pass (optional)** bullet — candidate search,
-    at most one backend invocation per PR, the `<!-- osc-review-regret -->`
+    at most one backend invocation per PR, the `<!-- dotharness-review-regret -->`
     marker as this pass's *only* idempotency signal in this stateless
     runner, the comment posted by the runner itself because the backend
     replies with verdict lines only, and a posting-nothing run re-running
