@@ -2,8 +2,6 @@
 - harness/runners/review_requested.py
 - tests/runners/test_review_requested.py
 - docs/commands/review-requested.md
-- docs/commands/index.md
-- README.md
 
 ## Requirements
 # Requirements: `review-requested` Wiring
@@ -41,6 +39,14 @@ item 1 already resolved that both runners are in scope. Without this leaf, the
   builder/parser, and `build_regret_comment_body`. It adds no new logic to any of
   them. It adds only a second call site.
 - **G4.** This leaf reuses `common.run_pr_level_pass` unchanged.
+- **G5.** `docs/commands/review-requested.md` is updated to document the regret
+  pass in every place this runner's behavior changes: the intro names it as an
+  optional fifth PR-level pass, the "What it does" steps cover the gated
+  `review-regret.md` prompt read, the extended skip gate, the pass itself, and
+  the extended reviewer-removal gate, and the Configuration, State and
+  idempotency, and Notes sections gain their regret-specific items.
+  `docs/commands/index.md` and `README.md` need no change: phase 01 already
+  gave them accurate regret-review mentions.
 
 ### 4. Non-goals
 
@@ -85,6 +91,37 @@ This leaf covers a single feature (the second runner's wiring). No table is need
   it has persisted state to protect from an inconclusive check. This runner has no
   persisted state. So the simpler bool form is correct here, per
   `run_pr_level_pass`'s own docstring (`common.py:770-777`).
+- `docs/commands/review-requested.md` documents the pass wherever this runner's
+  behavior changes:
+  - The intro paragraph names the regret review as an optional fifth PR-level
+    pass that runs on top of the existing four when `[regret_review].enabled`
+    is `true` (off by default).
+  - "What it does" step 4 states that `.../review-regret.md` is read
+    separately, only when `[regret_review].enabled` is `true` and the regret
+    pass actually runs for a PR.
+  - "What it does" step 6 extends the "all the outstanding parts are
+    already done" skip check to include the regret pass's marker (when
+    enabled), adds a **Regret pass (optional)** bullet — candidate search,
+    at most one backend invocation per PR, the `<!-- osc-review-regret -->`
+    marker as this pass's *only* idempotency signal in this stateless
+    runner, the comment posted by the runner itself because the backend
+    replies with verdict lines only, and a posting-nothing run re-running
+    with a fresh candidate search — and extends the reviewer-removal gate to
+    include the regret pass (when enabled), with a failed regret comment post
+    counting as a failure.
+  - The Configuration table's `harness.knowledge_dir` row lists
+    `pr-review/review-regret.md` (only when enabled), and a new paragraph
+    states that this runner consults the `[regret_review]` fields only when
+    `regret_review.enabled` is `true` and that the off pass costs nothing.
+  - "State and idempotency" gains a regret-marker item (independent of
+    (1)-(4), posted only when the backend confirms at least one finding) and
+    the reviewer-removal item is renumbered and extended to include the
+    regret pass (when enabled).
+  - The Notes add `regret_ok` to the reviewer-removal expression (when
+    enabled) and a cost bullet: gated, at most one backend invocation per PR,
+    no persisted state so a posting-nothing run re-runs the bounded candidate
+    search, bounded by `[regret_review].max_diff_lines` and
+    `[regret_review].regret_review_timeout`.
 
 ### 8. Non-functional requirements
 
@@ -96,12 +133,18 @@ provide.
 This leaf adds no new CLI flag or command. The rationale is the same as the
 `self-review` leaf's §9.
 
+`docs/commands/index.md` and `README.md` are not touched by this leaf. Both
+already carry accurate regret-review mentions from the phase-01 leaf, and
+nothing in this leaf changes what either of them states.
+
 ### 10. System/tool shape
 
 - **Files touched:** `harness/runners/review_requested.py` (edit), `tests/runners/
-  test_review_requested.py` (edit). The new tests mirror the existing design-review
-  wiring tests in this file: the enabled/disabled gate, idempotency via the marker
-  check, and the no-state-mutation assertion.
+  test_review_requested.py` (edit), `docs/commands/review-requested.md` (edit —
+  regret-pass documentation per G5 and the §7 docs requirement). The new tests
+  mirror the existing design-review wiring tests in this file: the enabled/
+  disabled gate, idempotency via the marker check, and the no-state-mutation
+  assertion.
 
 ### 11. Open decisions log
 
@@ -119,12 +162,14 @@ sequence.
 - This leaf adds no persisted state. That matches design/traceability review in this runner exactly (`review_requested.py:332-335`). Since `review_requested` has no state file at all, `has_regret_review_comment` is this pass's only "already done" signal. It checks live via `gh` on every invocation.
 - This leaf reuses the same `review-regret.md` instructions file as the `self-review` leaf. It also reuses the same core-mechanics functions: `find_introducing_prs`, `find_regret_candidates`, the backend-judgment prompt builder/parser, and `build_regret_comment_body`. It adds no new logic to any of them. It adds only a second call site.
 - This leaf reuses `common.run_pr_level_pass` unchanged.
+- `docs/commands/review-requested.md` documents the regret pass in every place this runner's behavior changes: the intro names it as an optional fifth PR-level pass gated on `[regret_review].enabled` (off by default); "What it does" covers the gated `review-regret.md` read, the extended skip gate, the pass's own bullet (marker-only idempotency, runner-posted comment, verdict-lines-only backend, re-run on posting nothing), and the extended reviewer-removal gate; the Configuration table and a new note cover `pr-review/review-regret.md` and the off-by-default cost; "State and idempotency" gains the regret-marker item and renumbers the reviewer-removal item; and the Notes add `regret_ok` and a cost bullet. `docs/commands/index.md` and `README.md` are unchanged.
 
 ## Manual test checklist
 - Manually verify: `review_requested.py` gains a new `_run_regret_review(...)` function. It runs alongside the existing `design_ok`/`traceability_ok` calls (`review_requested.py:216-221`), gated on `config.regret_review.enabled` the same way as the `self-review` leaf.
 - Manually verify: This leaf adds no persisted state. That matches design/traceability review in this runner exactly (`review_requested.py:332-335`). Since `review_requested` has no state file at all, `has_regret_review_comment` is this pass's only "already done" signal. It checks live via `gh` on every invocation.
 - Manually verify: This leaf reuses the same `review-regret.md` instructions file as the `self-review` leaf. It also reuses the same core-mechanics functions: `find_introducing_prs`, `find_regret_candidates`, the backend-judgment prompt builder/parser, and `build_regret_comment_body`. It adds no new logic to any of them. It adds only a second call site.
 - Manually verify: This leaf reuses `common.run_pr_level_pass` unchanged.
+- Manually verify: `docs/commands/review-requested.md` documents the regret pass in every place this runner's behavior changes: the intro names it as an optional fifth PR-level pass gated on `[regret_review].enabled` (off by default); "What it does" covers the gated `review-regret.md` read, the extended skip gate, the pass's own bullet (marker-only idempotency, runner-posted comment, verdict-lines-only backend, re-run on posting nothing), and the extended reviewer-removal gate; the Configuration table and a new note cover `pr-review/review-regret.md` and the off-by-default cost; "State and idempotency" gains the regret-marker item and renumbers the reviewer-removal item; and the Notes add `regret_ok` and a cost bullet. `docs/commands/index.md` and `README.md` are unchanged.
 
 ## Depends on
 - Phase 6 merged.
