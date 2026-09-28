@@ -274,11 +274,17 @@ def test_find_introducing_prs_at_exact_max_diff_lines_is_not_gated(tmp_path):
         raise AssertionError(msg)
 
     with (
-        patch("harness.runners.regret_review.run_cmd", side_effect=side_effect),
+        patch("harness.runners.regret_review.run_cmd", side_effect=side_effect) as mock_run,
         patch("harness.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("harness.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
         assert find_introducing_prs(_pr(), _config(), str(tmp_path), {}) == []
+    # The gate must NOT have tripped: diff and merge-base both ran before the blame failure.
+    # A regression from `>` to `>=` would short-circuit to [] before merge-base and fail here.
+    assert _cmd_calls(mock_run, "git")[:2] == [
+        ["git", "diff", "origin/main...HEAD", "--unified=0", "--", "src/foo.py"],
+        ["git", "merge-base", "origin/main", "HEAD"],
+    ]
 
 
 def test_find_introducing_prs_author_gate_skips_before_any_git_or_gh(tmp_path):
