@@ -58,16 +58,21 @@ def test_journal_skips_torn_final_line(tmp_path):
 
 def test_journal_append_after_torn_line_is_not_lost(tmp_path):
     path = tmp_path / JOURNAL_FILENAME
-    path.write_text('{"event":"result","chunk_pa')
     chunk = _chunk()
     DecomposeJournal(path).record(chunk, forced_split=False, result=generator.Leaf("x"))
+    with open(path, "a") as f:
+        f.write('{"event": "resu')
+    other = _chunk("B")
+    DecomposeJournal(path).record(other, forced_split=False, result=generator.Leaf("y"))
 
-    assert DecomposeJournal(path).lookup(chunk, forced_split=False) == generator.Leaf("x")
+    reloaded = DecomposeJournal(path)
+    assert reloaded.lookup(chunk, forced_split=False) == generator.Leaf("x")
+    assert reloaded.lookup(other, forced_split=False) == generator.Leaf("y")
 
 
 def test_journal_skips_valid_json_but_malformed_lines(tmp_path):
     path = tmp_path / JOURNAL_FILENAME
-    path.write_text('[1]\n{"event": "result"}\n')
+    path.write_text('[1]\n{"event": "result"}\n{"event": "result", "chunk_path": "A", "forced_split": false}\n')
 
     assert DecomposeJournal(path).result_count == 0
 

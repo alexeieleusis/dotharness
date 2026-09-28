@@ -67,7 +67,9 @@ class DecomposeJournal:
             if entry.get("event") == _EVENT_TREE_WRITTEN:
                 self.tree_written = True
                 self._tree_key = (entry.get("slice_sha256"), entry.get("depth_cap"))
-            elif entry.get("event") == _EVENT_RESULT and "chunk_path" in entry and "forced_split" in entry:
+            elif entry.get("event") == _EVENT_RESULT and all(
+                k in entry for k in ("chunk_path", "forced_split", "slice_sha256", "result")
+            ):
                 self._results[(entry["chunk_path"], entry["forced_split"])] = entry
 
     def lookup(self, chunk: Chunk, *, forced_split: bool) -> GeneratorResult | None:
