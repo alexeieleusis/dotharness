@@ -28,11 +28,13 @@ def _append_log(log_path: Path, chunk_path: str, event: str, reason: str) -> Non
         f.write(json.dumps(entry) + "\n")
 
 
-def _sizing_out_of_band(chunk: Chunk, doc: str) -> tuple[bool, str]:
+def _sizing_over_ceiling(chunk: Chunk, doc: str) -> tuple[bool, str]:
     file_result = sizing.check_file_scope(chunk.file_scope_estimate)
     word_result = sizing.check_word_count(doc)
     notes = [n for n in (file_result.note, word_result.note) if n]
-    return (not file_result.in_band or not word_result.in_band), "; ".join(notes)
+    # Only oversize forces a split. Undersize is advisory: a small chunk the generator judged a single
+    # feature (including the root, whose file scope is unknown) is a valid early stop.
+    return (file_result.over_ceiling or word_result.over_ceiling), "; ".join(notes)
 
 
 def _escalate(log_path: Path, chunk: Chunk, log_reason: str, escalation_reason: str) -> ChunkNode:
@@ -44,8 +46,8 @@ def resolve_chunk(chunk: Chunk, cfg: SpecPrismFlowConfig, depth_cap: int, log_pa
     result = generator.run_generator(chunk, cfg)
 
     if isinstance(result, generator.Leaf):
-        out_of_band, reason = _sizing_out_of_band(chunk, result.doc)
-        if not out_of_band:
+        force_split, reason = _sizing_over_ceiling(chunk, result.doc)
+        if not force_split:
             return ChunkNode(chunk=chunk, leaf_doc=result.doc)
 
         if chunk.depth >= depth_cap:

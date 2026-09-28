@@ -32,6 +32,10 @@ def _in_band_doc() -> str:
     return " ".join(["word"] * 600)
 
 
+def _oversized_doc() -> str:
+    return " ".join(["word"] * 1600)
+
+
 def _in_band_scope(prefix: str) -> list[str]:
     return [f"{prefix}{i}.py" for i in range(6)]
 
@@ -69,7 +73,7 @@ def test_resolve_chunk_returns_leaf_directly_when_in_band(tmp_path, monkeypatch)
     assert not log_path.exists()
 
 
-def test_resolve_chunk_retries_once_then_escalates_when_still_leaf_after_forced_split(tmp_path, monkeypatch):
+def test_resolve_chunk_accepts_undersized_leaf_without_retry(tmp_path, monkeypatch):
     cfg = _make_cfg(tmp_path)
     chunk_obj = _leaf_chunk()
     calls = []
@@ -77,6 +81,59 @@ def test_resolve_chunk_retries_once_then_escalates_when_still_leaf_after_forced_
     def _fake(c, cfg_arg, *, forced_split=False):
         calls.append(forced_split)
         return generator.Leaf("too short")
+
+    monkeypatch.setattr(decompose.generator, "run_generator", _fake)
+    log_path = tmp_path / "log.jsonl"
+
+    node = decompose.resolve_chunk(chunk_obj, cfg, depth_cap=4, log_path=log_path)
+
+    assert calls == [False]
+    assert node.is_leaf
+    assert not log_path.exists()
+
+
+def test_resolve_chunk_accepts_root_leaf_with_empty_file_scope(tmp_path, monkeypatch):
+    cfg = _make_cfg(tmp_path)
+    root = Chunk(path="A", name="root", file_scope_estimate=[], requirements_slice="req", depth=0)
+    calls = []
+
+    def _fake(c, cfg_arg, *, forced_split=False):
+        calls.append(forced_split)
+        return generator.Leaf(" ".join(["word"] * 300))
+
+    monkeypatch.setattr(decompose.generator, "run_generator", _fake)
+
+    node = decompose.resolve_chunk(root, cfg, depth_cap=4, log_path=tmp_path / "log.jsonl")
+
+    assert calls == [False]
+    assert node.is_leaf
+
+
+def test_resolve_chunk_forces_split_when_leaf_file_scope_over_ceiling(tmp_path, monkeypatch):
+    cfg = _make_cfg(tmp_path)
+    chunk_obj = _leaf_chunk(file_scope_estimate=[f"f{i}.py" for i in range(16)])
+    calls = []
+
+    def _fake(c, cfg_arg, *, forced_split=False):
+        calls.append(forced_split)
+        return generator.Leaf(_in_band_doc())
+
+    monkeypatch.setattr(decompose.generator, "run_generator", _fake)
+
+    node = decompose.resolve_chunk(chunk_obj, cfg, depth_cap=4, log_path=tmp_path / "log.jsonl")
+
+    assert calls == [False, True]
+    assert node.is_escalated
+
+
+def test_resolve_chunk_retries_once_then_escalates_when_still_leaf_after_forced_split(tmp_path, monkeypatch):
+    cfg = _make_cfg(tmp_path)
+    chunk_obj = _leaf_chunk()
+    calls = []
+
+    def _fake(c, cfg_arg, *, forced_split=False):
+        calls.append(forced_split)
+        return generator.Leaf(_oversized_doc())
 
     monkeypatch.setattr(decompose.generator, "run_generator", _fake)
     log_path = tmp_path / "log.jsonl"
@@ -105,7 +162,7 @@ def test_resolve_chunk_retries_then_recurses_into_forced_split_children(tmp_path
 
     def _fake(c, cfg_arg, *, forced_split=False):
         if c.path == "A-1" and not forced_split:
-            return generator.Leaf("too short")
+            return generator.Leaf(_oversized_doc())
         if c.path == "A-1" and forced_split:
             return generator.Split(children=[child_a, child_b])
         return generator.Leaf(_in_band_doc())
@@ -155,7 +212,7 @@ def test_resolve_chunk_escalates_without_forced_split_retry_when_depth_cap_alrea
 
     def _fake(c, cfg_arg, *, forced_split=False):
         calls.append(forced_split)
-        return generator.Leaf("too short")
+        return generator.Leaf(_oversized_doc())
 
     monkeypatch.setattr(decompose.generator, "run_generator", _fake)
     log_path = tmp_path / "log.jsonl"
