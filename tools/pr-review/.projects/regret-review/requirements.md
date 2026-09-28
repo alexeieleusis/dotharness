@@ -136,10 +136,10 @@ ticket. None of them looks at a file's history for a relevant, unaddressed comme
 - **Regret comment** — the PR-level comment that `regret-review` posts on the current
   PR. It carries every confirmed regret finding for that run. It is marked with its
   own completion marker, mirroring `INLINE_REVIEW_MARKER` / `DESIGN_REVIEW_MARKER` /
-  `TRACEABILITY_REVIEW_MARKER` in `harness/runners/common.py:23-26`.
+  `TRACEABILITY_REVIEW_MARKER` in `harness/runners/common.py:24-26`.
 - **Bugfix-shaped PR** — a PR whose total changed-line count is at or below
   `[regret_review].max_diff_lines`. The count sums added + removed lines across every
-  changed file. `build_file_review_section` (`harness/runners/common.py:1101-1133`)
+  changed file. `build_file_review_section` (`harness/runners/common.py:1130-1160`)
   already uses this same measure per-file.
 - **PR-level pass** — one backend invocation per PR, given the whole PR's diff and
   file set as context, as opposed to a per-file pass. The term is defined in
@@ -163,11 +163,12 @@ ticket. None of them looks at a file's history for a relevant, unaddressed comme
 
 The pass works on the current PR's diff against its base branch. It uses the same
 `origin/{base}...HEAD` comparison that `get_changed_files`/`get_file_diff` already
-use (`harness/runners/common.py:1066-1098`).
+use (`harness/runners/common.py:1086-1118`).
 
 1. **Bugfix-shaped gate, checked first.** The pass sums added + removed lines across
    every changed file. It uses the same counting rule as `build_file_review_section`'s
-   diff-line count (`harness/runners/common.py:1117-1119`). If the total exceeds
+   diff-line count (now the shared `count_diff_lines` helper,
+   `harness/runners/common.py:1121-1127`). If the total exceeds
    `config.regret_review.max_diff_lines`, the pass skips this PR entirely: no blame,
    no backend call, no comment. This is a cheap, early exit.
 2. **Per file, per removed/modified line range:** the pass runs `git blame` against
@@ -194,7 +195,7 @@ use (`harness/runners/common.py:1066-1098`).
 ### 7.2 Comment matching and backend judgment
 
 1. **Fetch the introducing PR's comments** with the existing `fetch_pr_comments`
-   shape (`harness/runners/common.py:1223-1267`). That function shells out to
+   shape (`harness/runners/common.py:1250-1294`). That function shells out to
    `scripts/pr-comments.py fetch --pr N`. It accepts an arbitrary PR number via
    `gh pr view N`. It is not restricted to the current branch's PR. This was verified
    directly against `scripts/pr-comments.py`'s `cmd_fetch`. The pass needs no new
@@ -215,12 +216,12 @@ use (`harness/runners/common.py:1066-1098`).
    entirely.
 3. **One backend invocation per current-PR run, not per candidate.** The pass mirrors
    `_run_design_review`/`_run_traceability_review`'s one-call-per-PR shape
-   (`harness/runners/self_review.py:221-259`). It batches every candidate
+   (`harness/runners/self_review.py:235-272`). It batches every candidate
    `(comment,
    blamed_change)` pair found across every file in the current PR into a
    single prompt. The prompt gives the backend the current PR's fix diff. It builds
    that diff via `build_file_review_section`
-   (`harness/runners/common.py:1101-1133`), the same shape every other pass already
+   (`harness/runners/common.py:1130-1160`), the same shape every other pass already
    uses. Per candidate, the prompt also gives the original comment's body, its
    author, and the diff of the change it was left on. The backend returns which
    candidates (if any) it judges as genuine regrets. This pass does not parse
@@ -230,7 +231,7 @@ use (`harness/runners/common.py:1066-1098`).
 4. **No candidates found (either no blame hits, or blame hits but no PR/comment
    match).** The pass performs no backend invocation and posts nothing. This mirrors
    traceability review's "no linked ticket" short-circuit
-   (`harness/runners/common.py:723-750`) in spirit: skip the backend call when there
+   (`harness/runners/common.py:743-769`) in spirit: skip the backend call when there
    is structurally nothing to judge. The two skips differ. Regret-review's silent
    skip ends only *this run*. It is not permanently marked done the way "no linked
    ticket" is. A later PR update could touch different lines with different blame
@@ -239,10 +240,10 @@ use (`harness/runners/common.py:1066-1098`).
 ### 7.3 Wiring into `self-review`
 
 This wiring follows `_run_design_review`'s exact shape
-(`harness/runners/self_review.py:221-259`):
+(`harness/runners/self_review.py:235-272`):
 
 - This runner adds a new `_run_regret_review` function. `_run_locked`'s per-PR loop
-  invokes it (`harness/runners/self_review.py:508-519`), alongside the existing
+  invokes it (`harness/runners/self_review.py:575-584`), alongside the existing
   `run_design`/`run_traceability` calls. The call is gated additionally on
   `config.regret_review.enabled` (§7.5). When that flag is `false`, the pass is never
   invoked at all. It is not merely skipped per-PR. Design and traceability review
@@ -254,11 +255,11 @@ This wiring follows `_run_design_review`'s exact shape
   per-file review's or design review's retry behavior. `_run_design_review`'s
   docstring gives the same rationale.
 - The orchestration itself (noop-if-done → build prompt → run backend → re-verify
-  marker) reuses `common.run_pr_level_pass` (`harness/runners/common.py:752-816`)
+  marker) reuses `common.run_pr_level_pass` (`harness/runners/common.py:772-836`)
   unchanged. The pass adds no new orchestration skeleton.
 - The pass has its own instructions file, `review-regret.md`. It is read from the
   same `knowledge_dir / "pr-review"` directory as the other three
-  (`harness/runners/self_review.py:498-502`). This effort authors it by hand (it is
+  (`harness/runners/self_review.py:606-613`). This effort authors it by hand (it is
   not scaffolded automatically). The instructions file's prose content is this
   project's own deliverable. It follows `review-design.md`'s existing structure and
   audience as a model.
@@ -266,14 +267,14 @@ This wiring follows `_run_design_review`'s exact shape
 ### 7.4 Wiring into `review-requested`
 
 This wiring follows `_run_design_review`'s exact shape in this runner
-(`harness/runners/review_requested.py:320-388`):
+(`harness/runners/review_requested.py:357-423`):
 
 - This runner adds a new `_run_regret_review` function. It sits alongside the
   file/summary/design/traceability calls in this runner's per-PR loop
-  (`harness/runners/review_requested.py:205-221`). It is gated the same way as §7.3,
+  (`harness/runners/review_requested.py:248-258`). It is gated the same way as §7.3,
   on `config.regret_review.enabled`.
 - **No persisted state**, exactly like design and traceability review in this runner
-  (`review_requested.py:332-335`). `has_comment_fn` (the regret-comment marker check)
+  (`review_requested.py:369-372`). `has_comment_fn` (the regret-comment marker check)
   is this pass's only "already done" signal here. `review_requested` has no state
   file at all.
 - The pass uses the same `review-regret.md` instructions file and the same
@@ -283,8 +284,8 @@ This wiring follows `_run_design_review`'s exact shape in this runner
 
 The pass adds a new `RegretReviewConfig` dataclass in `harness/config.py`. It is
 added to `HarnessConfig` the same way `VibehealConfig`/`FocusedReviewConfig`/
-`AddressCommentsConfig` already are (`harness/config.py:36-58, 80-86`). The config
-is parsed from a `[regret_review]` table, following `harness/config.py:100-198`'s
+`AddressCommentsConfig` already are (`harness/config.py:36-58, 89-95`). The config
+is parsed from a `[regret_review]` table, following `harness/config.py:109-217`'s
 `load_config` pattern:
 
 ```python
@@ -320,15 +321,15 @@ lands once this shape is implemented.
 
 - The pass adds a **new marker constant** in `harness/runners/common.py`, alongside
   `INLINE_REVIEW_MARKER`/`DESIGN_REVIEW_MARKER`/`TRACEABILITY_REVIEW_MARKER`
-  (`common.py:23-26`): e.g. `REGRET_REVIEW_MARKER = "<!-- osc-review-regret -->"`.
+  (`common.py:24-26`): e.g. `REGRET_REVIEW_MARKER = "<!-- osc-review-regret -->"`.
 - **Idempotency and flagged-locations helpers** reuse the existing generic
   `has_pr_level_pass_comment`/`check_pr_level_pass_comment_status`
-  (`common.py:368-387`) and `get_pr_level_flagged_locations`
-  (`common.py:426-451`). Those helpers are already parameterized by `marker`. The
+  (`common.py:374-393`) and `get_pr_level_flagged_locations`
+  (`common.py:446-471`). Those helpers are already parameterized by `marker`. The
   pass needs no per-pass duplicate of them. It adds only thin
   `has_regret_review_comment`/`check_regret_review_comment_status` wrappers,
   mirroring `has_design_review_comment`/`check_design_review_comment_status`
-  (`common.py:394-404`).
+  (`common.py:400-410`).
 - **Comment body**: one PR-level comment, never inline. A regret finding's
   "location" is in the *introducing* PR, not the current one. An inline comment on
   the current PR's diff would anchor it to the wrong place. The comment lists every
@@ -389,7 +390,7 @@ lands once this shape is implemented.
   follow, that line is simply not traced. No additional heuristic is layered on top
   in this effort.
 - **Not building the requirement-traceability pass's early-comment-window pattern**
-  (`TRACEABILITY_COMMENT_WINDOW_SECONDS`, `common.py:35-37`) into this pass. That
+  (`TRACEABILITY_COMMENT_WINDOW_SECONDS`, `common.py:41-43`) into this pass. That
   window is specific to catching clarifying comments posted right after a PR opens.
   It has no analog here. This pass looks at all of an old PR's review comments, not a
   time-boxed window of its issue comments.
@@ -405,7 +406,7 @@ lands once this shape is implemented.
   `review_requested.py` call the pass, but the *implementation* of the blame/lookup
   logic has one owner.
 - **Config:** `RegretReviewConfig` in `harness/config.py` (§7.5), parsed as part of
-  the existing `.harness.toml` `load_config` (`harness/config.py:100-198`).
+  the existing `.harness.toml` `load_config` (`harness/config.py:109-217`).
 - **Instructions file:** `review-regret.md`, added to the same knowledge directory
   where the other three prompt templates already live. The runner reads it via
   `config.harness.knowledge_dir
