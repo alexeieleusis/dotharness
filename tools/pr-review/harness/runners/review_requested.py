@@ -252,9 +252,7 @@ def _process_pr(
             pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, traceability_done, ctx
         )
         regret_ok = (
-            _run_regret_review(
-                pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, regret_done, ctx
-            )
+            _run_regret_review(pr, config, knowledge_dir, backend, wdir, env, current_user, regret_done, ctx)
             if config.regret_review.enabled
             else True
         )
@@ -510,7 +508,6 @@ def _run_regret_review(
     pr: dict,
     config: HarnessConfig,
     knowledge_dir: Path,
-    extra_knowledge: str | None,
     backend: Backend,
     wdir: str,
     env: dict,
