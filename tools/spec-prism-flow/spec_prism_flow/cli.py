@@ -150,7 +150,7 @@ def plan_decompose(config_path_str, depth_cap, resume, yes):
         )
 
     target_path = cfg.plan.workspace_dir / decompose.TREE_FILENAME
-    if target_path.exists() and not resume and not yes:
+    if target_path.exists() and not yes and not (resume and journal_path.exists()):
         click.confirm(f"Overwrite existing {target_path}?", abort=True)
 
     try:
