@@ -4,9 +4,7 @@ import logging
 from pathlib import Path
 
 from spec_prism_flow.build import git_ops
-from spec_prism_flow.build.agent_runner import AgentBackend
-from spec_prism_flow.build.claude_backend import ClaudeBackend
-from spec_prism_flow.build.opencode_backend import OpencodeBackend
+from spec_prism_flow.build.agent_runner import make_backend
 from spec_prism_flow.config import ProseReviewConfig
 
 # Not either backend's own 1800-second full-build-cycle default: a prose review is a
@@ -30,12 +28,6 @@ def _skill_base() -> Path:
     `prose_review.py` lives at `<root>/tools/spec-prism-flow/spec_prism_flow/`, so the
     monorepo root -- and with it the `skills/` dir -- is `parents[3]`."""
     return Path(__file__).resolve().parents[3]
-
-
-def _build_backend(backend: str, timeout: int) -> AgentBackend:
-    if backend == "opencode":
-        return OpencodeBackend(timeout=timeout)
-    return ClaudeBackend(timeout=timeout)
 
 
 def _build_prompt(skill_path: Path, relative_target: Path) -> str:
@@ -82,7 +74,7 @@ def review_document(
             return
 
         prompt = _build_prompt(skill_path, relative_target)
-        backend = _build_backend(cfg.backend, timeout)
+        backend = make_backend(cfg.backend, timeout)
         backend.invoke(prompt, cwd=target_toplevel)
     except Exception as exc:
         logger.warning("prose review of %s failed: %s", target_path, exc)

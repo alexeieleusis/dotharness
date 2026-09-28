@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from spec_prism_flow import prose_review
+from spec_prism_flow.build import agent_runner
 from spec_prism_flow.config import ProseReviewConfig
 
 
@@ -26,7 +27,7 @@ def test_review_document_skips_and_warns_when_skill_file_missing(tmp_path, monke
     monkeypatch.setattr(prose_review.git_ops, "toplevel", Mock(return_value=tmp_path))
     monkeypatch.setattr(prose_review, "_skill_base", lambda: tmp_path)
     backend_mock = Mock()
-    monkeypatch.setattr(prose_review, "ClaudeBackend", Mock(return_value=backend_mock))
+    monkeypatch.setattr(agent_runner, "ClaudeBackend", Mock(return_value=backend_mock))
     target = tmp_path / "requirements.md"
     target.write_text("some content")
 
@@ -49,7 +50,7 @@ def test_review_document_invokes_claude_backend_with_prompt_and_repo_toplevel_cw
     backend_mock = Mock()
     backend_mock.invoke.return_value = "harness stdout"
     claude_backend_cls = Mock(return_value=backend_mock)
-    monkeypatch.setattr(prose_review, "ClaudeBackend", claude_backend_cls)
+    monkeypatch.setattr(agent_runner, "ClaudeBackend", claude_backend_cls)
 
     prose_review.review_document(ProseReviewConfig(enabled=True, backend="claude"), target, timeout=42)
 
@@ -72,9 +73,9 @@ def test_review_document_selects_opencode_backend_when_configured(tmp_path, monk
 
     backend_mock = Mock()
     opencode_backend_cls = Mock(return_value=backend_mock)
-    monkeypatch.setattr(prose_review, "OpencodeBackend", opencode_backend_cls)
+    monkeypatch.setattr(agent_runner, "OpencodeBackend", opencode_backend_cls)
     claude_backend_cls = Mock()
-    monkeypatch.setattr(prose_review, "ClaudeBackend", claude_backend_cls)
+    monkeypatch.setattr(agent_runner, "ClaudeBackend", claude_backend_cls)
 
     prose_review.review_document(ProseReviewConfig(enabled=True, backend="opencode"), target)
 
@@ -106,7 +107,7 @@ def test_review_document_swallows_exception_when_target_outside_repo_toplevel(tm
     unrelated_toplevel.mkdir()
     monkeypatch.setattr(prose_review.git_ops, "toplevel", Mock(return_value=unrelated_toplevel))
     backend_mock = Mock()
-    monkeypatch.setattr(prose_review, "ClaudeBackend", Mock(return_value=backend_mock))
+    monkeypatch.setattr(agent_runner, "ClaudeBackend", Mock(return_value=backend_mock))
 
     with caplog.at_level(logging.WARNING):
         prose_review.review_document(ProseReviewConfig(enabled=True), target)
@@ -129,7 +130,7 @@ def test_review_document_resolves_toplevel_from_target_path_not_own_install(tmp_
     target.write_text("some content")
 
     backend_mock = Mock()
-    monkeypatch.setattr(prose_review, "ClaudeBackend", Mock(return_value=backend_mock))
+    monkeypatch.setattr(agent_runner, "ClaudeBackend", Mock(return_value=backend_mock))
 
     prose_review.review_document(ProseReviewConfig(enabled=True, backend="claude"), target)
 
@@ -146,7 +147,7 @@ def test_review_document_swallows_exception_from_backend_invoke(tmp_path, monkey
 
     backend_mock = Mock()
     backend_mock.invoke.side_effect = RuntimeError("backend blew up")
-    monkeypatch.setattr(prose_review, "ClaudeBackend", Mock(return_value=backend_mock))
+    monkeypatch.setattr(agent_runner, "ClaudeBackend", Mock(return_value=backend_mock))
 
     with caplog.at_level(logging.WARNING):
         prose_review.review_document(ProseReviewConfig(enabled=True), target)
