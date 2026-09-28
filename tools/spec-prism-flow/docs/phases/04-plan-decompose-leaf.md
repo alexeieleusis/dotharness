@@ -5,11 +5,13 @@
 ## Scope
 - spec_prism_flow/chunk.py
 - spec_prism_flow/decompose.py
+- spec_prism_flow/decompose_journal.py
 - spec_prism_flow/generator.py
 - spec_prism_flow/linearize.py
 - spec_prism_flow/cli.py (addition: `plan decompose` subcommand)
 - tests/test_chunk.py
 - tests/test_decompose.py
+- tests/test_decompose_journal.py
 - tests/test_generator.py
 - tests/test_linearize.py
 
@@ -70,7 +72,7 @@ Before any leaf's phase file is drafted, `decompose` serializes the full tree (n
 
 Edits made to this file during the checkpoint are trusted as-is. After the pause, `decompose` re-reads the tree file from disk (picking up any hand-edit) rather than trusting the in-memory tree it built. It then proceeds directly to graph derivation and phase-file drafting, without re-running any generator call. This satisfies requirements.md §7.2's explicit "edits made here are trusted as-is" within a single `plan decompose` invocation.
 
-**Deferred (not v1):** the root `requirements.md` never mandates a standalone `--resume` CLI mode — only that checkpoint edits are honored. The re-read-after-pause behavior above already covers that. A separate crash-recovery mode is out of scope for this phase. It would re-parse an already-written tree file from a *fresh* process invocation, with no generator calls at all, for the case where the process was killed after the checkpoint file was written. On interruption, re-run `plan decompose` from scratch. Revisit if this proves painful in practice.
+**Resume after interruption.** Every generator hand-off costs a human round-trip, so `decompose` appends each generator result to `decompose_journal.jsonl` as soon as it is parsed. Each entry is keyed by chunk path and `forced_split`, and carries a SHA-256 of the chunk's `requirements_slice`. `plan decompose --resume` replays the journal: the recursion runs as normal, but a chunk with a matching journal entry takes its result from the journal instead of a new hand-off. A journal entry whose slice digest no longer matches is ignored, so an edit to `requirements.md` never replays stale results. Retry and escalation decisions are re-derived on replay (so `--depth-cap` may change), and `decompose_log.jsonl` is rewritten from scratch on resume to avoid duplicate entries. Once the tree file is written, the journal records that fact. A later `--resume` then keeps the tree file on disk (with any hand-edits) and goes straight to the review pause, with no generator calls. Without `--resume`, `decompose` discards any existing journal (after a prompt, unless `--yes`). The journal is deleted when `decompose` completes.
 
 ## Acceptance criteria
 
@@ -82,6 +84,7 @@ Edits made to this file during the checkpoint are trusted as-is. After the pause
 - DFS linearization assigns 1-based phase numbers in left-to-right visit order. It produces the fixed `Depends on` chain.
 - Graph-edge derivation calls Phase 01's `validate_graph` and raises `DecomposeError` (not a silent drop) on a disjoint-scope violation.
 - The human-checkpoint tree file preserves full hierarchy (not a flattened list).
+- `plan decompose --resume` after an interruption makes no generator call for any chunk already in the journal, and never overwrites a tree file that was already written.
 - After the checkpoint pause, `decompose` re-reads the tree file from disk (picking up any hand-edit) before deriving the graph or drafting phase files, without re-invoking any generator call.
 - `uv run pytest` passes for all four test files.
 - `ruff check` and `ty` pass with no new violations.

@@ -10,6 +10,7 @@ from spec_prism_flow.build.errors import OrchestrationError
 from spec_prism_flow.build.phase_corpus import discover_phase_files
 from spec_prism_flow.build.resume_state import resume_state_path
 from spec_prism_flow.config import ConfigError, load_config, resolve_config_path
+from spec_prism_flow.decompose_journal import JOURNAL_FILENAME
 from spec_prism_flow.phase_file import parse_phase_file
 
 
@@ -130,17 +131,30 @@ def plan_draft_requirements(config_path_str, yes):
     show_default=True,
     help="Max recursion depth before escalating a would-be split for human review.",
 )
+@click.option(
+    "--resume",
+    is_flag=True,
+    default=False,
+    help="Continue an interrupted run, reusing every generator result already recorded in the journal.",
+)
 @click.option("--yes", is_flag=True, default=False, help="Skip the overwrite-confirmation prompt.")
-def plan_decompose(config_path_str, depth_cap, yes):
+def plan_decompose(config_path_str, depth_cap, resume, yes):
     """Recursively decompose requirements.md into a leaf tree and derive docs/phases/graph.json."""
     cfg = _load_cfg_or_raise(config_path_str)
 
+    journal_path = cfg.plan.workspace_dir / JOURNAL_FILENAME
+    if journal_path.exists() and not resume and not yes:
+        resume = click.confirm(
+            f"Found journal {journal_path.name} from an interrupted run. Resume it? (No discards it and starts over)",
+            default=True,
+        )
+
     target_path = cfg.plan.workspace_dir / decompose.TREE_FILENAME
-    if target_path.exists() and not yes:
+    if target_path.exists() and not resume and not yes:
         click.confirm(f"Overwrite existing {target_path}?", abort=True)
 
     try:
-        tree_path, graph_path = decompose.run_decompose(cfg, depth_cap=depth_cap)
+        tree_path, graph_path = decompose.run_decompose(cfg, depth_cap=depth_cap, resume=resume)
     except decompose.DecomposeError as e:
         raise click.ClickException(str(e)) from e
 
