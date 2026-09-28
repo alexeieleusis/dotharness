@@ -19,8 +19,9 @@ You run everything else in `plan` yourself: `draft-requirements`, `decompose`,
 at those three checkpoints.
 
 Delegate each step to its own sub-agent. Do not run the whole pipeline in one context.
-Spawn a sub-agent to draft `requirements.md`. Spawn a sub-agent — or one per leaf — to
-draft phase files. Spawn a sub-agent to run `plan review` and fix what it flags. Each
+Spawn a sub-agent to draft `requirements.md`. `draft-phases` just needs to be run and
+its output reviewed — it writes the phase files itself from the leaf docs, so there is
+nothing to draft. Spawn a sub-agent to run `plan review` and fix what it flags. Each
 sub-agent reasons over one file only. It does not carry the whole plan's context forward
 from stage to stage.
 
@@ -42,7 +43,7 @@ files and `graph.json`, one phase at a time, instead of using `spec-prism-flow b
 ### How the handoff actually works
 
 You can only delegate to a sub-agent once you know what each stage is actually waiting
-for. Every drafting step — `draft-overview`, `draft-requirements`, `draft-phases`, and
+for. Every drafting step — `draft-overview`, `draft-requirements`, and
 each tree node `decompose` visits — blocks on the same protocol
 (`spec_prism_flow/handoff.py`):
 
