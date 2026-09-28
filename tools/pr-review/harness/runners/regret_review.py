@@ -127,8 +127,8 @@ class RegretCandidate:
       into one prompt, which per candidate gives the original comment's body
       (comment_body), its author (comment_author), and the diff of the change the
       comment was left on (comment_diff_hunk — the unified-diff snippet from the
-      introducing PR's own diff that GitHub anchors the comment to; review-typed
-      comments carry no anchor, so it is "" for them).
+      introducing PR's own diff that GitHub anchors the comment to; "" when the
+      comment's diff_hunk is empty).
     - The poster leaf (§7.6) builds one RegretFinding per confirmed candidate:
       comment_id and hunk.introducing_pr_number name the original comment,
       comment_url is the direct URL to it, and hunk.path plus the blamed range
@@ -573,8 +573,9 @@ def find_regret_candidates(
     The fetch itself keeps fetch_pr_comments' own fixed cap; the shared budget gates
     whether the fetch starts and caps every hunk-diff call that follows.
 
-    G2: only "inline"/"review"-typed comments survive the type filter — the only
-    types that can carry a path/line; "issue"-typed comments are never candidates.
+    G2: only "inline"-typed comments survive the type filter — the only type that can
+    carry a path/line; "review"-typed comments (from the PR's /reviews endpoint, which
+    carry no path/line) and "issue"-typed comments are never candidates.
 
     G3: the hunk window of a (commit, file) pair is computed by diffing the
     introducing commit against its own parent, restricted to the blamed file —
@@ -701,7 +702,7 @@ def _match_candidates(
     for hunk in introducing_hunks:
         windows = windows_by_commit_file.get((hunk.introducing_sha, hunk.path), [])
         for comment in comments_by_pr.get(hunk.introducing_pr_number, []):
-            if comment.get("type") not in ("inline", "review"):
+            if comment.get("type") != "inline":
                 continue
             if comment.get("path") != hunk.path:
                 continue
@@ -748,7 +749,7 @@ def _render_candidate(index: int, candidate: RegretCandidate) -> str:
         region = f"{hunk.path} lines {hunk.old_start}-{hunk.old_end} (pre-fix); deleted by this fix"
     body = candidate.comment_body.strip()
     body_block = ("> " + "\n> ".join(body.splitlines())) if body else "(the comment has no body)"
-    diff_hunk = candidate.comment_diff_hunk or "(none — a review-level comment with no diff anchor)"
+    diff_hunk = candidate.comment_diff_hunk or "(no diff anchor)"
     return (
         f"### Candidate {index}\n"
         f"Blamed file/region in this PR's diff: {region}\n"

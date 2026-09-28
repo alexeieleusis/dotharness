@@ -1118,12 +1118,12 @@ def test_build_regret_judgment_prompt_notes_pure_deletion_region():
     assert "src/foo.py lines 12-12 (pre-fix); deleted by this fix" in prompt
 
 
-def test_build_regret_judgment_prompt_review_level_comment_has_no_diff_anchor():
-    candidate = _candidate(comment_id="review-777", comment_diff_hunk="")
+def test_build_regret_judgment_prompt_empty_diff_hunk_renders_fallback():
+    candidate = _candidate(comment_diff_hunk="")
     prompt = build_regret_judgment_prompt(
         "INSTRUCTIONS", [candidate], "DIFFS", _pr(), 42, "acme/repo", "deadbeef", None, None
     )
-    assert "(none — a review-level comment with no diff anchor)" in prompt
+    assert "(no diff anchor)" in prompt
 
 
 def test_build_regret_judgment_prompt_trailer_carries_description_and_vibe_heal_when_present():
