@@ -61,9 +61,11 @@ class DecomposeJournal:
             except json.JSONDecodeError:
                 # A kill mid-append leaves a torn final line; everything before it is intact.
                 continue
+            if not isinstance(entry, dict):
+                continue
             if entry.get("event") == _EVENT_TREE_WRITTEN:
                 self.tree_written = True
-            elif entry.get("event") == _EVENT_RESULT:
+            elif entry.get("event") == _EVENT_RESULT and "chunk_path" in entry and "forced_split" in entry:
                 self._results[(entry["chunk_path"], entry["forced_split"])] = entry
 
     def lookup(self, chunk: Chunk, *, forced_split: bool) -> GeneratorResult | None:
@@ -98,6 +100,17 @@ class DecomposeJournal:
     def _append(self, entry: dict) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with open(self._path, "a") as f:
+            if self._ends_mid_line():
+                # A torn final line has no newline; start a fresh line so this entry isn't glued to it.
+                f.write("\n")
             f.write(json.dumps(entry) + "\n")
             f.flush()
             os.fsync(f.fileno())
+
+    def _ends_mid_line(self) -> bool:
+        try:
+            with open(self._path, "rb") as f:
+                f.seek(-1, os.SEEK_END)
+                return f.read(1) != b"\n"
+        except OSError:
+            return False

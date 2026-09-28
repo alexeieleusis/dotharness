@@ -56,6 +56,22 @@ def test_journal_skips_torn_final_line(tmp_path):
     assert DecomposeJournal(path).lookup(chunk, forced_split=False) == generator.Leaf("x")
 
 
+def test_journal_append_after_torn_line_is_not_lost(tmp_path):
+    path = tmp_path / JOURNAL_FILENAME
+    path.write_text('{"event":"result","chunk_pa')
+    chunk = _chunk()
+    DecomposeJournal(path).record(chunk, forced_split=False, result=generator.Leaf("x"))
+
+    assert DecomposeJournal(path).lookup(chunk, forced_split=False) == generator.Leaf("x")
+
+
+def test_journal_skips_valid_json_but_malformed_lines(tmp_path):
+    path = tmp_path / JOURNAL_FILENAME
+    path.write_text('[1]\n{"event": "result"}\n')
+
+    assert DecomposeJournal(path).result_count == 0
+
+
 def test_journal_discard_removes_file(tmp_path):
     path = tmp_path / JOURNAL_FILENAME
     journal = DecomposeJournal(path)
