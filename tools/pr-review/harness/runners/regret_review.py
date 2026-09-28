@@ -145,6 +145,14 @@ class RegretCandidate:
     hunk: IntroducingHunk
 
 
+def _budget_clock(budget_start: float | None) -> float:
+    """The shared budget's start time: the caller-supplied one, so find_introducing_prs
+    and find_regret_candidates can be threaded onto the same clock instead of each
+    resetting it (regret-review-requirements.md §7.5/§8), or a fresh time.monotonic()
+    when a caller (e.g. a direct unit test) has none to share."""
+    return budget_start if budget_start is not None else time.monotonic()
+
+
 def _remaining_budget(budget_start: float, budget_seconds: int) -> int | None:
     """Whole seconds left in the pass's shared wall-clock budget, or None once it is
     exhausted. The budget is config.regret_review.regret_review_timeout: one overall cap
@@ -426,7 +434,9 @@ def _resolve_commit_prs(
     return prs_by_sha
 
 
-def find_introducing_prs(pr: dict, config: HarnessConfig, wdir: str, env: dict) -> list[IntroducingHunk]:
+def find_introducing_prs(
+    pr: dict, config: HarnessConfig, wdir: str, env: dict, budget_start: float | None = None
+) -> list[IntroducingHunk]:
     """The blame → introducing-commit → introducing-PR resolver
     (regret-review-requirements.md §7.1): given the current PR, the list of surviving
     (file, line_range, introducing_sha, introducing_pr_number) combinations whose
@@ -458,7 +468,13 @@ def find_introducing_prs(pr: dict, config: HarnessConfig, wdir: str, env: dict) 
     timeout being the remaining seconds. An exhausted budget stops the sequence and
     fails open at []. The two shared plumbing helpers used for the gate setup
     (get_pr_base_branch, get_changed_files) keep their own fixed timeouts, as they do
-    for every other pass; no per-call timeout constant is added for this pass."""
+    for every other pass; no per-call timeout constant is added for this pass.
+
+    budget_start defaults to a fresh clock (time.monotonic()) when omitted, but the
+    caller is expected to pass the same start time on to find_regret_candidates — the
+    two functions' calls are one bugfix-shaped sequence sharing a single
+    regret_review_timeout cap, not two independent ones (regret-review-requirements.md
+    §7.5/§8)."""
     setup = _pr_gate_setup(pr, config, wdir, env)
     if setup is None:
         return []
@@ -466,7 +482,7 @@ def find_introducing_prs(pr: dict, config: HarnessConfig, wdir: str, env: dict) 
     if not files:
         return []
 
-    budget_start = time.monotonic()
+    budget_start = _budget_clock(budget_start)
     budget_seconds = config.regret_review.regret_review_timeout
 
     diffs = _diff_files_within_gate(
@@ -537,6 +553,7 @@ def find_regret_candidates(
     config: HarnessConfig,
     wdir: str,
     env: dict,
+    budget_start: float | None = None,
 ) -> list[RegretCandidate]:
     """The comment-fetch + hunk-match leaf (regret-review-requirements.md §7.2 steps 1-2):
     given find_introducing_prs' output, the candidate (comment, blamed_change) pairs
@@ -579,10 +596,16 @@ def find_regret_candidates(
     calls) shares one wall-clock budget — config.regret_review.regret_review_timeout,
     checked and decremented via _run_within_budget / _remaining_budget the same way
     find_introducing_prs does; an exhausted budget stops the sequence and fails open
-    at []."""
+    at [].
+
+    budget_start defaults to a fresh clock when omitted, but the caller is expected to
+    pass find_introducing_prs' own budget_start through here instead: the two calls are
+    one bugfix-shaped sequence sharing a single regret_review_timeout cap, not two
+    independent ones (regret-review-requirements.md §7.5/§8) — otherwise a PR could
+    spend the full timeout in find_introducing_prs and another full timeout here."""
     if not introducing_hunks:
         return []
-    budget_start = time.monotonic()
+    budget_start = _budget_clock(budget_start)
     budget_seconds = config.regret_review.regret_review_timeout
 
     comments_by_pr = _fetch_comments_by_pr(introducing_hunks, wdir, env, budget_start, budget_seconds)

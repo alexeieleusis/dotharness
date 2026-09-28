@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import cast
 
@@ -413,8 +414,9 @@ def _run_regret_review(
     reply: dict[str, str] = {}
 
     def short_circuit() -> bool | None:
-        introducing_hunks = find_introducing_prs(pr, config, wdir, env)
-        found = find_regret_candidates(introducing_hunks, config, wdir, env)
+        budget_start = time.monotonic()
+        introducing_hunks = find_introducing_prs(pr, config, wdir, env, budget_start)
+        found = find_regret_candidates(introducing_hunks, config, wdir, env, budget_start)
         if not found:
             logger.debug("PR #%d: no regret candidates — nothing to judge this run", number)
             return False
