@@ -134,8 +134,9 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
       small, bugfix-shaped PRs: it traces this PR's changed lines back to the
       commit/PR that introduced them and, when that introducing PR carried a
       review comment on the same change that the backend judges would have
-      prevented this bug, posts one PR-level `# Regret Review` comment linking
-      back to those comments (one backend invocation per PR, only when
+      prevented this bug, posts one PR-level
+      `# Previously flagged review comments` comment linking back to those
+      comments (one backend invocation per PR, only when
       candidates exist; see
       [`../configuration.md`](../configuration.md#regret_review)). Before
       invoking the backend, the runner checks GitHub directly for an existing
