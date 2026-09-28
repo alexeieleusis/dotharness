@@ -2,8 +2,6 @@
 - harness/runners/regret_review.py
 - ../../knowledge/pr-review/review-regret.md
 - tests/runners/test_regret_review.py
-- harness/runners/common.py
-- docs/commands/self-review.md
 
 ## Requirements
 # Requirements: Backend Judgment Prompt and `review-regret.md`
