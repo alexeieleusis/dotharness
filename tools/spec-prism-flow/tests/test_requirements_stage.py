@@ -1,7 +1,9 @@
+import logging
+
 import pytest
 from click.testing import CliRunner
 
-from spec_prism_flow import handoff, requirements_stage
+from spec_prism_flow import handoff, prose_review, requirements_stage
 from spec_prism_flow.cli import cli
 from spec_prism_flow.config import (
     AgentConfig,
@@ -152,6 +154,61 @@ def test_run_draft_requirements_translates_real_handoff_error_cleanly(tmp_path, 
 
     with pytest.raises(RequirementsError):
         run_draft_requirements(cfg)
+
+
+# --- prose review post-validation -----------------------------------------------------------------
+
+
+def test_run_draft_requirements_warns_when_prose_review_blanks_the_document(tmp_path, monkeypatch, caplog):
+    brief = tmp_path / "brief.md"
+    brief.write_text("brief content")
+    cfg = _make_cfg(tmp_path)
+    init_workspace(cfg.plan.workspace_dir, brief, None, None, [])
+    (cfg.plan.workspace_dir / OVERVIEW_FILENAME).write_text("overview body")
+    _write_template(cfg)
+    cfg.prose_review.enabled = True
+
+    def _fake_run_handoff(prompt_text, workspace_dir, stage_name, output_filename=None):
+        (workspace_dir / REQUIREMENTS_FILENAME).write_text("requirements body")
+
+    def _blanking_review(review_cfg, target_path, **kwargs):
+        # Simulate the review backend returning normally while blanking the document.
+        target_path.write_text("")
+
+    monkeypatch.setattr(requirements_stage.handoff, "run_handoff", _fake_run_handoff)
+    monkeypatch.setattr(prose_review, "review_document", _blanking_review)
+
+    with caplog.at_level(logging.WARNING):
+        requirements_path = run_draft_requirements(cfg)
+
+    # The stage is not blocked: it still returns the path even though the doc is now corrupted.
+    assert requirements_path == cfg.plan.workspace_dir / REQUIREMENTS_FILENAME
+    assert "left the requirements document empty or missing" in caplog.text
+
+
+def test_run_draft_requirements_logs_no_warning_when_review_preserves_document(tmp_path, monkeypatch, caplog):
+    brief = tmp_path / "brief.md"
+    brief.write_text("brief content")
+    cfg = _make_cfg(tmp_path)
+    init_workspace(cfg.plan.workspace_dir, brief, None, None, [])
+    (cfg.plan.workspace_dir / OVERVIEW_FILENAME).write_text("overview body")
+    _write_template(cfg)
+    cfg.prose_review.enabled = True
+
+    def _fake_run_handoff(prompt_text, workspace_dir, stage_name, output_filename=None):
+        (workspace_dir / REQUIREMENTS_FILENAME).write_text("requirements body")
+
+    def _preserving_review(review_cfg, target_path, **kwargs):
+        # A healthy review polishes the prose while keeping the document intact.
+        target_path.write_text(target_path.read_text().replace("requirements body", "requirements body, polished"))
+
+    monkeypatch.setattr(requirements_stage.handoff, "run_handoff", _fake_run_handoff)
+    monkeypatch.setattr(prose_review, "review_document", _preserving_review)
+
+    with caplog.at_level(logging.WARNING):
+        run_draft_requirements(cfg)
+
+    assert "left the requirements document empty or missing" not in caplog.text
 
 
 MINIMAL_TOML = """

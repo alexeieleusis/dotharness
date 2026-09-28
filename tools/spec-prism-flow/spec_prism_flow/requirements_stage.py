@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from spec_prism_flow import handoff, prose_review
 from spec_prism_flow.config import SpecPrismFlowConfig
 from spec_prism_flow.overview_stage import OPEN_QUESTIONS_FILENAME, OVERVIEW_FILENAME
 from spec_prism_flow.workspace import ManifestError, load_manifest
+
+logger = logging.getLogger(__name__)
 
 REQUIREMENTS_FILENAME = "requirements.md"
 TEMPLATE_FILENAME = "requirements-doc-drafting-prompt.md"
@@ -71,6 +74,18 @@ def run_draft_requirements(cfg: SpecPrismFlowConfig) -> Path:
     except handoff.HandoffError as e:
         raise RequirementsError(str(e)) from e
 
-    prose_review.review_document(cfg.prose_review, cfg.plan.workspace_dir / REQUIREMENTS_FILENAME)
+    requirements_path = cfg.plan.workspace_dir / REQUIREMENTS_FILENAME
+    prose_review.review_document(cfg.prose_review, requirements_path)
 
-    return cfg.plan.workspace_dir / REQUIREMENTS_FILENAME
+    # review_document is best-effort and never raises (a failure is logged and swallowed so a
+    # prose review can't block the pipeline) — but a backend that *succeeds* can still blank or
+    # mangle the document. Surface that silent-corruption case in the logs without changing the
+    # never-block behavior: an empty/missing doc must not flow into the next stage unnoticed.
+    if not requirements_path.is_file() or not requirements_path.read_text().strip():
+        logger.warning(
+            "prose review of %s left the requirements document empty or missing; the pipeline "
+            "continues, but downstream stages may operate on a corrupted document",
+            requirements_path,
+        )
+
+    return requirements_path
