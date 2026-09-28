@@ -1053,7 +1053,7 @@ def _candidates(count: int) -> list[RegretCandidate]:
     ]
 
 
-def test_build_regret_judgment_prompt_orders_instructions_candidates_diff_and_trailer():
+def test_build_regret_judgment_prompt_orders_instructions_diff_candidates_and_trailer():
     prompt = build_regret_judgment_prompt(
         "INSTRUCTIONS",
         [_candidate(), _candidate(comment_id=789)],
@@ -1066,10 +1066,10 @@ def test_build_regret_judgment_prompt_orders_instructions_candidates_diff_and_tr
         None,
     )
     assert prompt.index("INSTRUCTIONS") == 0
+    assert prompt.index("DIFF-SECTIONS") < prompt.index("## Regret Candidates")
     assert prompt.index("## Regret Candidates") < prompt.index("### Candidate 1")
     assert prompt.index("### Candidate 1") < prompt.index("### Candidate 2")
-    assert prompt.index("### Candidate 2") < prompt.index("DIFF-SECTIONS")
-    assert prompt.index("DIFF-SECTIONS") < prompt.index("PR URL: https://github.com/acme/repo/pull/42")
+    assert prompt.index("### Candidate 2") < prompt.index("PR URL: https://github.com/acme/repo/pull/42")
     assert "PR number: 42" in prompt
     assert "Repo: acme/repo" in prompt
     assert "Commit: deadbeef" in prompt

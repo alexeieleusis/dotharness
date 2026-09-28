@@ -771,8 +771,8 @@ def build_regret_judgment_prompt(
 ) -> str:
     """The prompt for the regret-review pass's single backend invocation
     (regret-review-requirements.md §7.2 step 3): the review-regret.md instructions,
-    a `## Regret Candidates` section with one numbered block per candidate from
-    find_regret_candidates, the current PR's fix diff, and the shared PR-metadata
+    the current PR's fix diff, a `## Regret Candidates` section with one numbered
+    block per candidate from find_regret_candidates, and the shared PR-metadata
     trailer — the same `_build_pr_metadata_trailer` the design-review and
     requirement-traceability prompt builders use. The whole candidate list is
     batched into this one prompt: the wiring leaves make exactly one backend call
@@ -785,8 +785,8 @@ def build_regret_judgment_prompt(
     )
     return (
         instructions
-        + candidates_section
         + diff_sections
+        + candidates_section
         + _build_pr_metadata_trailer(pr, pr_number, repo_name, commit_sha, pr_description, vibe_heal_context)
     )
 
