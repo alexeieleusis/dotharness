@@ -35,8 +35,8 @@ Only these `.harness.toml` fields affect `self-review`. See [`../configuration.m
 
 | Field | Used for |
 |---|---|
-| `harness.backend` | Which AI backend (`opencode` or `claude`) runs the review, summary, design, and traceability prompts |
-| `harness.backend_timeout_seconds` | Timeout for each backend invocation (one per changed file, one for the summary, one for the design pass when it hasn't already succeeded, and one for the traceability pass when it hasn't already succeeded) |
+| `harness.backend` | Which AI backend (`opencode` or `claude`) runs the review, summary, design, and traceability prompts, and — only when `[regret_review].enabled` is `true` — the regret-judgment prompt |
+| `harness.backend_timeout_seconds` | Timeout for each backend invocation (one per changed file, one for the summary, one for the design pass when it hasn't already succeeded, one for the traceability pass when it hasn't already succeeded, and — only when `[regret_review].enabled` is `true` — one for the regret pass when it hasn't already succeeded) |
 | `harness.gh_token_cmd` | Command used to fetch the GitHub token exported as `GITHUB_TOKEN` |
 | `harness.knowledge_dir` | Must contain `pr-review/review-file.md`, `pr-review/review-summary.md`, `pr-review/review-design.md`, `pr-review/review-traceability.md`, and — only when `[regret_review].enabled` is `true` — `pr-review/review-regret.md` prompt templates |
 | `harness.review_knowledge_file` | Optional extra guidance appended to every prompt, if the path exists |
