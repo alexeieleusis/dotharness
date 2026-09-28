@@ -56,17 +56,11 @@ For each stage:
 
 1. Spawn a fresh sub-agent whose only job is that one stage.
 2. Run the CLI command for that stage. Watch its output for `Prompt written to: X` /
-   `Expected output at: Y` pairs. This is the handoff protocol. The cheat sheet's "How
-   the handoff actually works" section describes it. For each pair, do the following in
-   order:
-   1. Read `X`.
-   2. Do the actual drafting or reviewing work it describes.
-   3. Write the result to exactly `Y`.
-   4. Confirm the file exists on disk.
-   5. Only then, answer the `Agent finished writing output?` prompt with `y`.
-
-   Do not answer `y` before `Y` exists. Answering early crashes the whole command
-   (`HandoffError`).
+   `Expected output at: Y` pairs. This is the handoff protocol; the cheat sheet's "How
+   the handoff actually works" section defines it step by step — follow that section
+   for each pair. In this prompt the sub-agent does the drafting (see below); you
+   confirm `Y` exists on disk and only then answer the `Agent finished writing
+   output?` prompt with `y`.
 
    The text of `X` *is* the sub-agent's prompt. Do not paraphrase it or write your own
    task description instead. But do not hand it over blindly either: `X` is generated
