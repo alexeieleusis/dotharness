@@ -69,7 +69,7 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
       outstanding parts.
     - The runner skips the file+summary part if the current user already left
       an `APPROVED` review on the PR. It also skips it if the current user
-      already posted a comment whose body starts with `[bot]osc-review` or
+      already posted a comment whose body starts with `[bot]dotharness-review` or
       `Review Summary` (after stripping leading `#`/whitespace). These checks
       prevent re-reviewing the same PR revision.
     - Otherwise, the runner fetches and checks out the PR's head branch
@@ -96,7 +96,7 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
       single `gh pr comment` starting with `# Review Summary`. A timeout here
       is likewise caught and logged.
     - **Design pass:** Before invoking the backend, the runner checks GitHub
-      directly for an existing `<!-- osc-review-design -->`-marked comment on
+      directly for an existing `<!-- dotharness-review-design -->`-marked comment on
       the PR. This marker is the *only* idempotency signal for this pass,
       since this runner has no persisted state. If found, the pass is a noop:
       no backend call, and it counts as already succeeded. Otherwise, the
@@ -108,7 +108,7 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
       and logged.
     - **Traceability pass:** Before invoking the backend, the runner checks
       GitHub directly for an existing
-      `<!-- osc-review-traceability -->`-marked comment on the PR. This
+      `<!-- dotharness-review-traceability -->`-marked comment on the PR. This
       marker is this runner's only idempotency signal for this pass too. If
       found, the pass is a noop. Otherwise, the runner resolves the PR's
       linked ticket(s). It primarily uses `closingIssuesReferences`
@@ -140,7 +140,7 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
       candidates exist; see
       [`../configuration.md`](../configuration.md#regret_review)). Before
       invoking the backend, the runner checks GitHub directly for an existing
-      `<!-- osc-review-regret -->`-marked comment, which is this pass's *only*
+      `<!-- dotharness-review-regret -->`-marked comment, which is this pass's *only*
       idempotency signal in this stateless runner. Unlike the backend-posted
       design and traceability comments, this one is posted by the runner
       itself: the backend replies only with verdict lines, which the runner
@@ -198,22 +198,22 @@ duplicate work using live signals read from GitHub on every run:
 1. It skips the file+summary part if the current user already has an
    `APPROVED` review on the PR.
 2. It skips the file+summary part if the current user already posted a
-   comment starting with `[bot]osc-review` or `Review Summary`.
+   comment starting with `[bot]dotharness-review` or `Review Summary`.
 3. It skips the design pass, independently of (1) and (2), if the current
-   user already posted a comment containing `<!-- osc-review-design -->`.
+   user already posted a comment containing `<!-- dotharness-review-design -->`.
    This marker is the design pass's *only* idempotency signal. Its fate is
    deliberately decoupled from (1) and (2), so a retry of one does not force
    a retry of the other.
 4. It skips the traceability pass, independently of (1)-(3), if the current
    user already posted a comment containing
-   `<!-- osc-review-traceability -->`. This marker covers both a completed
+   `<!-- dotharness-review-traceability -->`. This marker covers both a completed
    scope/gap comparison *and* the terminal "no linked ticket found" outcome,
    since both post that same marker. Like the design pass, this marker is the
    traceability pass's *only* idempotency signal in this runner, and its
    fate is decoupled from (1)-(3).
 5. When `[regret_review].enabled` is `true` (off by default), it skips the
    regret pass, independently of (1)-(4), if the current user already posted
-   a comment containing `<!-- osc-review-regret -->`. This marker is the
+   a comment containing `<!-- dotharness-review-regret -->`. This marker is the
    regret pass's *only* idempotency signal in this stateless runner, and its
    fate is decoupled from (1)-(4). Unlike the design and traceability
    markers, it is posted only when the backend confirms at least one regret

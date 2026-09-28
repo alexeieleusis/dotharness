@@ -165,7 +165,7 @@ expensive point to discover a mismatch.
 - **Gap finding** — a P0/P1 judgment that the linked ticket asked for something the diff
   does not (fully) deliver.
 - **`TRACEABILITY_REVIEW_MARKER`** — the new marker this effort introduces:
-  `"<!-- osc-review-traceability -->"`, appended to every comment this pass posts,
+  `"<!-- dotharness-review-traceability -->"`, appended to every comment this pass posts,
   whether inline or PR-level, mirroring `DESIGN_REVIEW_MARKER`
   (`harness/runners/common.py:23`).
 
@@ -315,7 +315,7 @@ New functions in `harness/runners/common.py`:
 If `resolve_linked_tickets` returns an empty list (both mechanisms found nothing):
 
 ```
-gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Requirement Traceability\nNo linked ticket found (no closing-keyword link and no issue reference in the first 5 minutes of comments) — skipping scope/gap comparison.\n<!-- osc-review-traceability -->'
+gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Requirement Traceability\nNo linked ticket found (no closing-keyword link and no issue reference in the first 5 minutes of comments) — skipping scope/gap comparison.\n<!-- dotharness-review-traceability -->'
 ```
 
 posted directly by the runner (no backend invocation — see §7.1). **This outcome is
@@ -517,13 +517,15 @@ design-review wrappers (lowest risk, unblocks nothing else but should land first
   + `ty check` clean.
 - [x] (c) done — `knowledge/pr-review/review-traceability.md` written, mirroring
   `review-design.md`'s tone/perspective/role/output structure, with the P0/P1 severity
-  definitions from §7.1 drafted in verbatim and the `<!-- osc-review-traceability -->`
-  marker used directly. (Aside, unrelated to this file: commit `bb2c121` renamed the
-  code-side markers to `dotharness-review-*`, and a follow-up commit brought
-  `review-design.md`/`review-file.md`'s literal markers into line with that; commit
-  `8335883` then reverted the whole rename — it wasn't in scope and changed matching
-  behavior for previously-posted comments — so `review-design.md`, `review-file.md`, and
-  this new marker all stay on the `osc-review-*` naming.) Expects `## Linked Ticket(s)`,
+  definitions from §7.1 drafted in verbatim and the traceability marker (since renamed
+  to `<!-- dotharness-review-traceability -->`) used directly. (Aside, unrelated to this
+  file: commit `bb2c121` renamed the code-side markers to `dotharness-review-*`, and a
+  follow-up commit brought `review-design.md`/`review-file.md`'s literal markers into
+  line with that; commit `8335883` then reverted the whole rename — it wasn't in scope
+  and changed matching behavior for previously-posted comments — leaving everything on
+  the `osc-review-*` naming. This PR deliberately re-applies the rename, so
+  `review-design.md`, `review-file.md`, and this new marker are all now on the
+  `dotharness-review-*` naming.) Expects `## Linked Ticket(s)`,
   `## Early PR Comments`, and (when applicable) `## Already-flagged scope-creep findings`
   input sections; these header names are now a contract with
   `build_traceability_review_prompt`, to be added in (d).

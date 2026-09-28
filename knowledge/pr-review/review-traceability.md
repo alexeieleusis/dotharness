@@ -56,13 +56,13 @@ Only report **P0** or **P1** findings — nothing lower-severity is worth surfac
 
 ### Inline findings (scope creep only, file-specific, P0/P1 only)
 For each P0 or P1 **scope-creep** finding that anchors to a specific file/line, post an
-inline review comment. Append the literal marker `<!-- osc-review-traceability -->`
+inline review comment. Append the literal marker `<!-- dotharness-review-traceability -->`
 to the end of the body — it is invisible when rendered on GitHub and is how this tool
 recognizes its own traceability-review comments on a later run, so it must be present on
 every comment you post here:
 
     gh api repos/{REPO}/pulls/{PR_NUMBER}/comments \
-      -f body="...<!-- osc-review-traceability -->" -f commit_id="{COMMIT}" -f path="..." -F line=<N>
+      -f body="...<!-- dotharness-review-traceability -->" -f commit_id="{COMMIT}" -f path="..." -F line=<N>
 
 If the exact line is unavailable, fall back to line 1 of the file. Be specific: reference
 the exact code, explain what the ticket didn't ask for, and cite which ticket (and its
@@ -79,7 +79,7 @@ flagged it.
 Always post exactly one PR-level comment, regardless of whether there are any findings,
 appending the same marker:
 
-    gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Requirement Traceability\n...<!-- osc-review-traceability -->'
+    gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Requirement Traceability\n...<!-- dotharness-review-traceability -->'
 
 - Start by linking back to the ticket(s) checked against: `Linked ticket: #N` for a
   same-repo ticket, or `owner/repo#N` for a cross-repo one (one line per ticket if more
@@ -90,7 +90,7 @@ appending the same marker:
   detail.
 - If there are no findings at all, post:
 
-      gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Requirement Traceability\nLinked ticket: #N\nNo scope creep or requirement gaps found relative to the linked ticket.\n<!-- osc-review-traceability -->'
+      gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Requirement Traceability\nLinked ticket: #N\nNo scope creep or requirement gaps found relative to the linked ticket.\n<!-- dotharness-review-traceability -->'
 
 This PR-level comment must always be posted, whether or not there are inline findings —
 it is how future runs detect that this PR's traceability review already happened.

@@ -21,12 +21,12 @@ GRACE_PERIOD_SECONDS = 10
 PR_COMMENTS_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "pr-comments.py"
 
 FOCUSED_REVIEW_MARKER = "[focused-review-bot]"
-INLINE_REVIEW_MARKER = "<!-- osc-review-inline -->"
-DESIGN_REVIEW_MARKER = "<!-- osc-review-design -->"
-TRACEABILITY_REVIEW_MARKER = "<!-- osc-review-traceability -->"
-REGRET_REVIEW_MARKER = "<!-- osc-review-regret -->"
+INLINE_REVIEW_MARKER = "<!-- dotharness-review-inline -->"
+DESIGN_REVIEW_MARKER = "<!-- dotharness-review-design -->"
+TRACEABILITY_REVIEW_MARKER = "<!-- dotharness-review-traceability -->"
+REGRET_REVIEW_MARKER = "<!-- dotharness-review-regret -->"
 
-# Every PR-level pass marker shares the `osc-review` prefix that
+# Every PR-level pass marker shares the `dotharness-review` prefix that
 # is_review_summary_comment's substring check looks for, so a comment carrying one of
 # these (e.g. the traceability pass's terminal "no linked ticket" comment) must be
 # excluded there — otherwise it gets mistaken for the file/summary pass's own
@@ -300,7 +300,7 @@ def is_review_summary_comment(body: str) -> bool:
     if any(marker in body for marker in _PR_LEVEL_PASS_MARKERS):
         return False
     lower = body.lower()
-    return "review summary" in lower or "osc-review" in lower
+    return "review summary" in lower or "dotharness-review" in lower
 
 
 def _paginate_gh_comments(path: str, env: dict) -> list[dict] | None:
