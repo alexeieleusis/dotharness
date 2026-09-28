@@ -102,8 +102,13 @@ For each stage:
    Do not approve any of these on your own. Do not edit `OPEN_QUESTIONS.md`,
    `00-overview.md`, or `requirements.md` ahead of time without explaining what you
    changed and why.
-5. Run `plan review` last. If it fails, spawn a sub-agent to fix exactly what it flags.
-   Re-run `review` until it passes.
+5. Run `plan review` last. If it fails, spawn a sub-agent to fix exactly what it flags,
+   then re-run `review` and repeat. But unlike the `decompose` loop, `review` has no
+   built-in stop, so bound it: if the same finding has failed review 3 times in a row,
+   stop and report it to the human — name the finding and what each attempt tried to
+   change — instead of retrying again. A fixer that keeps missing the same spot, or two
+   findings that keep trading off against each other every round, will not converge on
+   its own; surface it rather than spinning up an unbounded chain of fixer sessions.
 
 ## Done when
 
