@@ -1181,8 +1181,14 @@ def test_parse_regret_judgment_mixed_verdicts_keep_only_yes():
     assert [f.comment_id for f in findings] == [457]
 
 
-def test_parse_regret_judgment_out_of_range_indices_ignored():
-    response = "CANDIDATE 0: YES — below the range\nCANDIDATE 1: YES — in range\nCANDIDATE 4: YES — above the range\n"
+def test_parse_regret_judgment_out_of_range_indices_ignored_but_all_real_candidates_still_required():
+    response = (
+        "CANDIDATE 0: YES — below the range\n"
+        "CANDIDATE 1: YES — in range\n"
+        "CANDIDATE 2: NO — in range\n"
+        "CANDIDATE 3: NO — in range\n"
+        "CANDIDATE 4: YES — above the range\n"
+    )
     findings = parse_regret_judgment(response, _candidates(3))
     assert [f.comment_id for f in findings] == [456]
 
@@ -1198,10 +1204,20 @@ def test_parse_regret_judgment_malformed_lines_discarded_valid_lines_kept():
         "CANDIDATE 2 YES — missing the colon\n"
         "CANDIDATE 3: NO — discarded\n"
         "CANDIDATE 2: YES — the valid verdict line\n"
+        "CANDIDATE 1: YES — the valid verdict line for candidate 1\n"
         "I confirmed one candidate in total.\n"
     )
     findings = parse_regret_judgment(response, _candidates(3))
-    assert [f.comment_id for f in findings] == [457]
+    assert [f.comment_id for f in findings] == [456, 457]
+
+
+def test_parse_regret_judgment_missing_rationale_is_not_a_valid_verdict_line():
+    assert parse_regret_judgment("CANDIDATE 1: YES\n", _candidates(1)) == []
+
+
+def test_parse_regret_judgment_response_omitting_a_candidate_yields_no_findings():
+    response = "CANDIDATE 1: YES — in range\n"
+    assert parse_regret_judgment(response, _candidates(3)) == []
 
 
 def test_parse_regret_judgment_garbage_response_yields_no_findings():
@@ -1224,8 +1240,8 @@ def test_parse_regret_judgment_pure_deletion_falls_back_to_old_start():
     assert (findings[0].path, findings[0].line) == ("src/foo.py", 12)
 
 
-def test_parse_regret_judgment_repeated_verdict_for_one_candidate_first_line_stands():
-    response = "CANDIDATE 1: NO — first line\nCANDIDATE 1: YES — later, contradictory line\n"
+def test_parse_regret_judgment_repeated_verdict_for_one_candidate_invalidates_response():
+    response = "CANDIDATE 1: YES — first line\nCANDIDATE 1: NO — later, contradictory line\n"
     assert parse_regret_judgment(response, _candidates(1)) == []
 
 

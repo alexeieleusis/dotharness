@@ -724,10 +724,11 @@ def _match_candidates(
 # A verdict line of the backend's structured response to build_regret_judgment_prompt
 # (regret-review-requirements.md §7.2 step 3, G2): `CANDIDATE <n>: YES|NO — <one-sentence
 # reason>`, where n is the 1-based index the candidate carries in the prompt's
-# `## Regret Candidates` section. The reason after the separator is deliberately not
-# captured: RegretFinding (requirements.md §7.6) carries no reason, and the verdict
-# alone determines what the poster does.
-_JUDGMENT_LINE_RE = re.compile(r"^CANDIDATE\s+(\d+):\s*(YES|NO)\b")
+# `## Regret Candidates` section. The trailing rationale must be present — a bare
+# `CANDIDATE <n>: YES` with nothing after it does not satisfy the contract — but its
+# text is deliberately not captured: RegretFinding (requirements.md §7.6) carries no
+# reason, and the verdict alone determines what the poster does.
+_JUDGMENT_LINE_RE = re.compile(r"^CANDIDATE\s+(\d+):\s*(YES|NO)\s*[—-]\s*\S.*$")
 
 
 def _render_candidate(index: int, candidate: RegretCandidate) -> str:
@@ -795,20 +796,29 @@ def parse_regret_judgment(response: str, candidates: list[RegretCandidate]) -> l
     (regret-review-requirements.md §7.2 step 4): one RegretFinding per
     `CANDIDATE <n>: YES` line of the backend's structured response, where n is
     the 1-based index the candidate carries in the prompt and maps to
-    candidates[n-1]. Each finding carries the candidate's current-PR file/region
-    — hunk.path plus one line: hunk.new_start when the fix leaves a post-image
-    line, hunk.old_start for a pure deletion that has no post-image line — and
-    the candidate's introducing-PR number and the original comment's
-    id/body/author/url. NO lines are discarded, as is anything unparseable: a
-    line that does not match the verdict format, an index outside
-    1..len(candidates), a repeated verdict for one candidate (the first line
-    stands), and a YES on a candidate whose comment_id is not an int (only
-    inline comments carry the integer id RegretFinding requires). Findings are
-    returned in candidate order. A malformed or unparseable response therefore
-    yields [] — this pass fails toward silence: no retry, no escalation, and
-    nothing here changes common.run_pr_level_pass's own retry semantics."""
-    findings_by_index: dict[int, RegretFinding] = {}
-    judged: set[int] = set()
+    candidates[n-1]. A verdict line must carry the full contract shape —
+    `CANDIDATE <n>: YES|NO` followed by a dash and a non-empty rationale — a
+    bare `CANDIDATE <n>: YES` with no rationale does not count. The response is
+    trusted only when every candidate from 1 to len(candidates) has exactly one
+    such verdict line: a candidate with no verdict line, or with more than one,
+    makes the *whole* response malformed, even if every other candidate parsed
+    cleanly — a response that silently omits some candidates must not be
+    allowed to post the ones it did cover. Lines outside 1..len(candidates),
+    and any line that does not match the verdict shape at all, are ignored
+    rather than counted against completeness. Each finding carries the
+    candidate's current-PR file/region — hunk.path plus one line:
+    hunk.new_start when the fix leaves a post-image line, hunk.old_start for a
+    pure deletion that has no post-image line — and the candidate's
+    introducing-PR number and the original comment's id/body/author/url.
+    Findings are returned in candidate order, one per YES verdict whose
+    candidate carries an integer comment_id (only inline comments carry the
+    integer id RegretFinding requires). An incomplete or otherwise malformed
+    response therefore yields [] — this pass fails toward silence: no retry,
+    no escalation, and nothing here changes common.run_pr_level_pass's own
+    retry semantics."""
+    if not candidates:
+        return []
+    verdicts: dict[int, str] = {}
     for raw_line in response.splitlines():
         match = _JUDGMENT_LINE_RE.match(raw_line.strip())
         if match is None:
@@ -821,10 +831,24 @@ def parse_regret_judgment(response: str, candidates: list[RegretCandidate]) -> l
                 len(candidates),
             )
             continue
-        if index in judged:
-            continue
-        judged.add(index)
-        if match.group(2) != "YES":
+        if index in verdicts:
+            logger.debug(
+                "regret-review: candidate %d has more than one verdict line — the whole response is malformed",
+                index,
+            )
+            return []
+        verdicts[index] = match.group(2)
+    if len(verdicts) != len(candidates):
+        logger.debug(
+            "regret-review: response covers %d of %d candidates — the whole response is malformed",
+            len(verdicts),
+            len(candidates),
+        )
+        return []
+
+    findings: list[RegretFinding] = []
+    for index in range(1, len(candidates) + 1):
+        if verdicts[index] != "YES":
             continue
         candidate = candidates[index - 1]
         if not isinstance(candidate.comment_id, int):
@@ -837,16 +861,18 @@ def parse_regret_judgment(response: str, candidates: list[RegretCandidate]) -> l
             continue
         hunk = candidate.hunk
         finding_line = hunk.new_start if hunk.new_end >= hunk.new_start else hunk.old_start
-        findings_by_index[index] = RegretFinding(
-            path=hunk.path,
-            line=finding_line,
-            introducing_pr_number=hunk.introducing_pr_number,
-            comment_id=candidate.comment_id,
-            comment_body=candidate.comment_body,
-            comment_author=candidate.comment_author,
-            comment_url=candidate.comment_url,
+        findings.append(
+            RegretFinding(
+                path=hunk.path,
+                line=finding_line,
+                introducing_pr_number=hunk.introducing_pr_number,
+                comment_id=candidate.comment_id,
+                comment_body=candidate.comment_body,
+                comment_author=candidate.comment_author,
+                comment_url=candidate.comment_url,
+            )
         )
-    return [findings_by_index[index] for index in sorted(findings_by_index)]
+    return findings
 
 
 # Runner-agnostic plumbing shared by the two wiring leaves (self_review.py and
