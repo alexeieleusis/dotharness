@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from spec_prism_flow import linearize, sizing
+from spec_prism_flow import linearize, prose_review, sizing
 from spec_prism_flow.chunk import ChunkNode, load_tree
 from spec_prism_flow.config import SpecPrismFlowConfig
 from spec_prism_flow.decompose import TREE_FILENAME
@@ -13,9 +14,13 @@ from spec_prism_flow.markdown_utils import extract_list_items
 from spec_prism_flow.phase_file import (
     PHASE_FILE_NAME_PATTERN,
     PhaseFile,
+    PhaseFileError,
+    parse_phase_file,
     phase_file_name,
     render_phase_file,
 )
+
+logger = logging.getLogger(__name__)
 
 _HEADING_PATTERN = re.compile(r"^#{1,6}\s")
 _GOALS_HEADING_PATTERN = re.compile(r"^#{1,6}\s+goals?\b", re.IGNORECASE)
@@ -169,7 +174,18 @@ def run_draft_phases(cfg: SpecPrismFlowConfig) -> DraftPhasesResult:
             outliers.append(f"{label}: {word_count_result.note}")
 
         out_path = cfg.plan.phase_dir / label
-        out_path.write_text(render_phase_file(phase))
+        rendered = render_phase_file(phase)
+        out_path.write_text(rendered)
+        prose_review.review_document(cfg.prose_review, out_path)
+        try:
+            parse_phase_file(out_path)
+        except PhaseFileError as exc:
+            logger.warning(
+                "prose review of %s produced a malformed phase file (%s); reverting to pre-review content",
+                out_path,
+                exc,
+            )
+            out_path.write_text(rendered)
         written.append(out_path)
 
     return DraftPhasesResult(

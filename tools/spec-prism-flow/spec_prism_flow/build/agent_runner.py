@@ -25,14 +25,23 @@ class AgentRunResult:
     empty: bool
 
 
+def make_backend(backend: str, timeout: int | None = None) -> AgentBackend:
+    """Shared backend factory. `backend` must already be validated at config-load
+    time ("claude"/"opencode"); an unrecognized value falls through to
+    ClaudeBackend rather than raising. `timeout`, when supplied, overrides the
+    backend's own default."""
+    kwargs = {"timeout": timeout} if timeout is not None else {}
+    if backend == "opencode":
+        return OpencodeBackend(**kwargs)
+    return ClaudeBackend(**kwargs)
+
+
 def build_backend(cfg: AgentConfig) -> AgentBackend:
     """Selects a backend by `cfg.backend`. `cfg.backend` is already validated to
     "claude"/"opencode" at config-load time (spec_prism_flow.config.load_config), so
     this does not re-validate it -- an unrecognized value falls through to
     ClaudeBackend rather than raising."""
-    if cfg.backend == "opencode":
-        return OpencodeBackend()
-    return ClaudeBackend()
+    return make_backend(cfg.backend)
 
 
 def build_prompt(phase: PhaseFile) -> str:

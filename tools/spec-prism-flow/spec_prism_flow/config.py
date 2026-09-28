@@ -20,6 +20,12 @@ class ConfigError(ValueError):
     pass
 
 
+def parse_backend(value: str, field_name: str) -> str:
+    if value not in ("claude", "opencode"):
+        raise ConfigError(f"Invalid {field_name} '{value}': must be 'claude' or 'opencode'")  # noqa: TRY003
+    return value
+
+
 def resolve_config_path(config_path_str: str | None) -> Path:
     return Path(config_path_str).expanduser() if config_path_str else Path(DEFAULT_CONFIG_FILE)
 
@@ -52,6 +58,12 @@ class VibeHealConfig:
 
 
 @dataclass
+class ProseReviewConfig:
+    enabled: bool = False
+    backend: str = DEFAULT_AGENT_BACKEND
+
+
+@dataclass
 class BuildConfig:
     commands: list[str] = field(default_factory=list)
     workers: int = DEFAULT_BUILD_WORKERS
@@ -72,6 +84,7 @@ class SpecPrismFlowConfig:
     vibe_heal: VibeHealConfig
     build: BuildConfig
     harness: HarnessSection
+    prose_review: ProseReviewConfig = field(default_factory=ProseReviewConfig)
 
 
 def load_config(path: Path) -> SpecPrismFlowConfig:
@@ -85,9 +98,7 @@ def load_config(path: Path) -> SpecPrismFlowConfig:
             raise ConfigError(f"Invalid TOML in config file: {e}") from None  # noqa: TRY003
 
     a = data.get("agent", {})
-    backend = a.get("backend", DEFAULT_AGENT_BACKEND)
-    if backend not in ("claude", "opencode"):
-        raise ConfigError(f"Invalid agent.backend '{backend}': must be 'claude' or 'opencode'")  # noqa: TRY003
+    backend = parse_backend(a.get("backend", DEFAULT_AGENT_BACKEND), "agent.backend")
     agent = AgentConfig(backend=backend)
 
     p = data.get("plan", {})
@@ -137,6 +148,13 @@ def load_config(path: Path) -> SpecPrismFlowConfig:
         knowledge_dir=Path(h.get("knowledge_dir", DEFAULT_HARNESS_KNOWLEDGE_DIR)).expanduser(),
     )
 
+    pr = data.get("prose_review", {})
+    prose_review_backend = parse_backend(pr.get("backend", DEFAULT_AGENT_BACKEND), "prose_review.backend")
+    prose_review = ProseReviewConfig(
+        enabled=pr.get("enabled", False),
+        backend=prose_review_backend,
+    )
+
     return SpecPrismFlowConfig(
         agent=agent,
         plan=plan,
@@ -144,4 +162,5 @@ def load_config(path: Path) -> SpecPrismFlowConfig:
         vibe_heal=vibe_heal,
         build=build,
         harness=harness,
+        prose_review=prose_review,
     )

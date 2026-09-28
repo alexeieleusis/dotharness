@@ -175,6 +175,29 @@ def test_vibe_heal_defaults(tmp_path):
     assert not str(cfg.vibe_heal.tool_dir).startswith("~")
 
 
+def test_prose_review_defaults(tmp_path):
+    cfg = load_config(_write(tmp_path, MINIMAL_TOML))
+
+    assert cfg.prose_review.enabled is False
+    assert cfg.prose_review.backend == "claude"
+
+
+def test_prose_review_parsed(tmp_path):
+    p = _write(tmp_path, MINIMAL_TOML + '\n[prose_review]\nenabled = true\nbackend = "opencode"\n')
+
+    cfg = load_config(p)
+
+    assert cfg.prose_review.enabled is True
+    assert cfg.prose_review.backend == "opencode"
+
+
+def test_invalid_prose_review_backend_raises(tmp_path):
+    p = _write(tmp_path, MINIMAL_TOML + '\n[prose_review]\nbackend = "bogus"\n')
+
+    with pytest.raises(ConfigError, match=r"prose_review\.backend"):
+        load_config(p)
+
+
 def test_harness_knowledge_dir_default(tmp_path):
     cfg = load_config(_write(tmp_path, MINIMAL_TOML))
 
