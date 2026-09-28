@@ -24,6 +24,7 @@ def test_review_document_is_noop_and_makes_no_calls_when_disabled(tmp_path, monk
 
 def test_review_document_skips_and_warns_when_skill_file_missing(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(prose_review.git_ops, "toplevel", Mock(return_value=tmp_path))
+    monkeypatch.setattr(prose_review, "_skill_base", lambda: tmp_path)
     backend_mock = Mock()
     monkeypatch.setattr(prose_review, "ClaudeBackend", Mock(return_value=backend_mock))
     target = tmp_path / "requirements.md"
@@ -39,6 +40,7 @@ def test_review_document_skips_and_warns_when_skill_file_missing(tmp_path, monke
 
 def test_review_document_invokes_claude_backend_with_prompt_and_repo_toplevel_cwd(tmp_path, monkeypatch):
     monkeypatch.setattr(prose_review.git_ops, "toplevel", Mock(return_value=tmp_path))
+    monkeypatch.setattr(prose_review, "_skill_base", lambda: tmp_path)
     skill_path = _write_skill(tmp_path)
     target = tmp_path / "workspace" / "requirements.md"
     target.parent.mkdir(parents=True)
@@ -63,6 +65,7 @@ def test_review_document_invokes_claude_backend_with_prompt_and_repo_toplevel_cw
 
 def test_review_document_selects_opencode_backend_when_configured(tmp_path, monkeypatch):
     monkeypatch.setattr(prose_review.git_ops, "toplevel", Mock(return_value=tmp_path))
+    monkeypatch.setattr(prose_review, "_skill_base", lambda: tmp_path)
     _write_skill(tmp_path)
     target = tmp_path / "requirements.md"
     target.write_text("some content")
@@ -91,8 +94,31 @@ def test_review_document_swallows_exception_from_repo_toplevel_resolution(tmp_pa
     assert "not a git repo" in caplog.text
 
 
+def test_review_document_resolves_toplevel_from_target_path_not_own_install(tmp_path, monkeypatch):
+    # Regression guard: the target repo's toplevel must be derived from the target
+    # document's own path, not from where spec-prism-flow itself is installed. The
+    # old code anchored on this package's own `__file__`, which silently no-op'd for
+    # any external target project and for every packaged (site-packages) install.
+    toplevel_mock = Mock(return_value=tmp_path)
+    monkeypatch.setattr(prose_review.git_ops, "toplevel", toplevel_mock)
+    monkeypatch.setattr(prose_review, "_skill_base", lambda: tmp_path)
+    _write_skill(tmp_path)
+    target = tmp_path / "docs" / "plan.md"
+    target.parent.mkdir()
+    target.write_text("some content")
+
+    backend_mock = Mock()
+    monkeypatch.setattr(prose_review, "ClaudeBackend", Mock(return_value=backend_mock))
+
+    prose_review.review_document(ProseReviewConfig(enabled=True, backend="claude"), target)
+
+    toplevel_mock.assert_called_once_with(target.resolve().parent)
+    assert backend_mock.invoke.call_args.kwargs["cwd"] == tmp_path
+
+
 def test_review_document_swallows_exception_from_backend_invoke(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(prose_review.git_ops, "toplevel", Mock(return_value=tmp_path))
+    monkeypatch.setattr(prose_review, "_skill_base", lambda: tmp_path)
     _write_skill(tmp_path)
     target = tmp_path / "requirements.md"
     target.write_text("some content")

@@ -18,6 +18,20 @@ _SKILL_RELATIVE_PATH = "skills/asd-ste100/SKILL.md"
 logger = logging.getLogger(__name__)
 
 
+def _skill_base() -> Path:
+    """spec-prism-flow's own install root, used to locate the asd-ste100 skill.
+
+    The skill ships in spec-prism-flow's own repo tree (the monorepo root's `skills/`
+    dir) -- a location entirely separate from whatever target project this tool is
+    pointed at. It's resolved against where this package itself is installed, so it
+    never depends on the target's repo toplevel (which is where the target document
+    actually lives). Plain path arithmetic, not git, so it can't raise the way
+    `git_ops.toplevel` does in a non-git packaged install (e.g. `site-packages`).
+    `prose_review.py` lives at `<root>/tools/spec-prism-flow/spec_prism_flow/`, so the
+    monorepo root -- and with it the `skills/` dir -- is `parents[3]`."""
+    return Path(__file__).resolve().parents[3]
+
+
 def _build_backend(backend: str, timeout: int) -> AgentBackend:
     if backend == "opencode":
         return OpencodeBackend(timeout=timeout)
@@ -54,15 +68,21 @@ def review_document(
         return
 
     try:
-        repo_toplevel = git_ops.toplevel(Path(__file__).resolve().parent)
-        skill_path = repo_toplevel / _SKILL_RELATIVE_PATH
+        # The target document lives in the target project's own repo -- usually a
+        # *different* repo from where spec-prism-flow itself is installed. Resolve the
+        # document's repo-relative path and the backend's working directory against
+        # that repo's toplevel, never against this tool's own tree.
+        resolved_target = target_path.resolve()
+        target_toplevel = git_ops.toplevel(resolved_target.parent)
+        relative_target = resolved_target.relative_to(target_toplevel)
+
+        skill_path = _skill_base() / _SKILL_RELATIVE_PATH
         if not skill_path.exists():
             logger.warning("prose review skipped for %s: skill file not found at %s", target_path, skill_path)
             return
 
-        relative_target = target_path.resolve().relative_to(repo_toplevel)
         prompt = _build_prompt(skill_path, relative_target)
         backend = _build_backend(cfg.backend, timeout)
-        backend.invoke(prompt, cwd=repo_toplevel)
+        backend.invoke(prompt, cwd=target_toplevel)
     except Exception as exc:
         logger.warning("prose review of %s failed: %s", target_path, exc)
