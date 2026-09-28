@@ -75,7 +75,7 @@ def test_journal_skips_valid_json_but_malformed_lines(tmp_path):
 def test_journal_discard_removes_file(tmp_path):
     path = tmp_path / JOURNAL_FILENAME
     journal = DecomposeJournal(path)
-    journal.mark_tree_written()
+    journal.mark_tree_written(_chunk(), 4)
     journal.discard()
 
     assert not path.exists()
@@ -206,3 +206,48 @@ def test_resume_after_tree_written_keeps_hand_edited_tree(tmp_path, monkeypatch)
 
     assert calls == []
     assert [c["chunk"]["path"] for c in json.loads(tree_path.read_text())["children"]] == ["A-2", "A-1"]
+
+
+def test_resume_rebuilds_tree_when_requirements_edited_after_tree_written(tmp_path, monkeypatch):
+    cfg = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(decompose.generator, "run_generator", _two_leaf_generator([]))
+
+    def _die_at_review(prompt):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(decompose.handoff, "wait_for_confirmation", _die_at_review)
+    with contextlib.suppress(KeyboardInterrupt):
+        decompose.run_decompose(cfg)
+
+    requirements_path = cfg.plan.workspace_dir / decompose.REQUIREMENTS_FILENAME
+    requirements_path.write_text(requirements_path.read_text() + "\nA new requirement.\n")
+
+    calls: list[str] = []
+    monkeypatch.setattr(decompose.generator, "run_generator", _two_leaf_generator(calls))
+    monkeypatch.setattr(decompose.handoff, "wait_for_confirmation", lambda prompt: None)
+    decompose.run_decompose(cfg, resume=True)
+
+    assert calls != []
+
+
+def test_resume_rebuilds_tree_when_depth_cap_changed(tmp_path, monkeypatch):
+    cfg = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(decompose.generator, "run_generator", _two_leaf_generator([]))
+
+    def _die_at_review(prompt):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(decompose.handoff, "wait_for_confirmation", _die_at_review)
+    with contextlib.suppress(KeyboardInterrupt):
+        decompose.run_decompose(cfg, depth_cap=4)
+
+    journal = DecomposeJournal(cfg.plan.workspace_dir / JOURNAL_FILENAME)
+    root = Chunk(
+        path="A",
+        name="root",
+        file_scope_estimate=[],
+        requirements_slice=(cfg.plan.workspace_dir / decompose.REQUIREMENTS_FILENAME).read_text(),
+        depth=0,
+    )
+    assert journal.tree_matches(root, 4)
+    assert not journal.tree_matches(root, 3)

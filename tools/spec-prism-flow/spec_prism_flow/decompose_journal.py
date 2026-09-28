@@ -46,6 +46,7 @@ class DecomposeJournal:
         self._path = path
         self._results: dict[tuple[str, bool], dict] = {}
         self.tree_written = False
+        self._tree_key: tuple[str | None, int | None] = (None, None)
         self._load()
 
     @property
@@ -65,6 +66,7 @@ class DecomposeJournal:
                 continue
             if entry.get("event") == _EVENT_TREE_WRITTEN:
                 self.tree_written = True
+                self._tree_key = (entry.get("slice_sha256"), entry.get("depth_cap"))
             elif entry.get("event") == _EVENT_RESULT and "chunk_path" in entry and "forced_split" in entry:
                 self._results[(entry["chunk_path"], entry["forced_split"])] = entry
 
@@ -88,14 +90,21 @@ class DecomposeJournal:
         self._append(entry)
         self._results[(chunk.path, forced_split)] = entry
 
-    def mark_tree_written(self) -> None:
-        self._append({"event": _EVENT_TREE_WRITTEN})
+    def mark_tree_written(self, root: Chunk, depth_cap: int) -> None:
+        digest = _slice_digest(root)
+        self._append({"event": _EVENT_TREE_WRITTEN, "slice_sha256": digest, "depth_cap": depth_cap})
         self.tree_written = True
+        self._tree_key = (digest, depth_cap)
+
+    def tree_matches(self, root: Chunk, depth_cap: int) -> bool:
+        """True when the written tree was built from this root slice and depth cap."""
+        return self.tree_written and self._tree_key == (_slice_digest(root), depth_cap)
 
     def discard(self) -> None:
         self._path.unlink(missing_ok=True)
         self._results.clear()
         self.tree_written = False
+        self._tree_key = (None, None)
 
     def _append(self, entry: dict) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

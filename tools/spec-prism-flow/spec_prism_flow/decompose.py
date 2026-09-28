@@ -138,7 +138,7 @@ def run_decompose(
     if not resume:
         journal.discard()
 
-    if resume and journal.tree_written and tree_path.exists():
+    if resume and journal.tree_matches(root_chunk, depth_cap) and tree_path.exists():
         # The tree is already on disk, possibly hand-edited during the review pause; rebuilding
         # it from the journal would overwrite those edits.
         click.echo(f"Resuming at tree review; keeping existing {tree_path}")
@@ -149,7 +149,7 @@ def run_decompose(
             log_path.unlink(missing_ok=True)
         tree = resolve_chunk(root_chunk, cfg, depth_cap, log_path, journal)
         write_tree(tree, tree_path)
-        journal.mark_tree_written()
+        journal.mark_tree_written(root_chunk, depth_cap)
 
     _pause_for_tree_review(tree_path)
 
