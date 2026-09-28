@@ -14,17 +14,9 @@ Whoever invokes you will point you at a project: a directory, a name, or a path 
 `.spec-prism-flow.toml`. They will not hand you a filled-in list. Work these out
 yourself, in this order. Ask the user only when a step genuinely cannot resolve:
 
-- **Tool repo**: more than one copy can exist on disk. Check
-  `~/.harness/tools/spec-prism-flow` first — that is the working install used to run
-  this tool day to day. Fall back to `~/development/dotharness/tools/spec-prism-flow`
-  (the dev checkout) only if the first path does not exist. When *both* exist, that
-  order does not disambiguate — it silently favors the install. Before settling, look
-  for divergence: is the dev checkout dirty or ahead of the install (`git status`,
-  commit, or mtime)? If so, it is unclear which one the invoker means — ask, because
-  the likely case is a contributor testing in-progress tool changes and getting the
-  stale install instead. Whichever copy you end up using, state out loud which repo
-  you picked and why, so a stale install can't be used by accident without the
-  invoker knowing.
+- **Tool repo**: resolve per lifecycle-cheat-sheet.md §0. If both copies exist, ask
+  the invoker which to use. Whichever you pick, state it out loud so a stale install
+  isn't silently used.
 - **Config file**: the `.spec-prism-flow.toml` you were pointed at, or pointed near (for
   example, under `.spec-prism-flow_projects/<project>/`). If more than one plausible
   match exists, or none does, ask which project or config to use. Do not guess.
