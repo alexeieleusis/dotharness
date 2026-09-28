@@ -42,7 +42,7 @@ class ChunkNode:
         return self.escalation_reason is not None
 
 
-def _chunk_to_dict(chunk: Chunk) -> dict:
+def chunk_to_dict(chunk: Chunk) -> dict:
     return {
         "path": chunk.path,
         "name": chunk.name,
@@ -55,7 +55,7 @@ def _chunk_to_dict(chunk: Chunk) -> dict:
 _CHUNK_REQUIRED_FIELDS = ("path", "name", "file_scope_estimate", "requirements_slice", "depth")
 
 
-def _chunk_from_dict(data: dict) -> Chunk:
+def chunk_from_dict(data: dict) -> Chunk:
     missing = [field for field in _CHUNK_REQUIRED_FIELDS if field not in data]
     if missing:
         raise ChunkError(  # noqa: TRY003
@@ -77,7 +77,7 @@ def _chunk_from_dict(data: dict) -> Chunk:
 
 
 def node_to_dict(node: ChunkNode) -> dict:
-    data: dict = {"chunk": _chunk_to_dict(node.chunk)}
+    data: dict = {"chunk": chunk_to_dict(node.chunk)}
     if node.leaf_doc is not None:
         data["leaf_doc"] = node.leaf_doc
     elif node.children is not None:
@@ -90,7 +90,7 @@ def node_to_dict(node: ChunkNode) -> dict:
 def node_from_dict(data: dict) -> ChunkNode:
     if "chunk" not in data:
         raise ChunkError("Tree node is missing required field: chunk")  # noqa: TRY003
-    chunk = _chunk_from_dict(data["chunk"])
+    chunk = chunk_from_dict(data["chunk"])
     variant_keys = [key for key in ("leaf_doc", "children", "escalation_reason") if key in data]
     if len(variant_keys) != 1:
         raise ChunkError(  # noqa: TRY003
