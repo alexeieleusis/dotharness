@@ -94,6 +94,27 @@ def test_review_document_swallows_exception_from_repo_toplevel_resolution(tmp_pa
     assert "not a git repo" in caplog.text
 
 
+def test_review_document_swallows_exception_when_target_outside_repo_toplevel(tmp_path, monkeypatch, caplog):
+    # relative_to raises ValueError when target_path is not under the repo toplevel.
+    # This is the middle of the three failure points inside review_document's
+    # try/except, distinct from toplevel resolution (above) and backend invoke (below).
+    target = tmp_path / "requirements.md"
+    target.write_text("some content")
+
+    # toplevel returns a directory that does NOT contain `target`
+    unrelated_toplevel = tmp_path / "unrelated-repo"
+    unrelated_toplevel.mkdir()
+    monkeypatch.setattr(prose_review.git_ops, "toplevel", Mock(return_value=unrelated_toplevel))
+    backend_mock = Mock()
+    monkeypatch.setattr(prose_review, "ClaudeBackend", Mock(return_value=backend_mock))
+
+    with caplog.at_level(logging.WARNING):
+        prose_review.review_document(ProseReviewConfig(enabled=True), target)
+
+    backend_mock.invoke.assert_not_called()
+    assert "prose review of" in caplog.text
+
+
 def test_review_document_resolves_toplevel_from_target_path_not_own_install(tmp_path, monkeypatch):
     # Regression guard: the target repo's toplevel must be derived from the target
     # document's own path, not from where spec-prism-flow itself is installed. The
