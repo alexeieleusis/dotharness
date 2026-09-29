@@ -1,11 +1,26 @@
 import json
 import subprocess
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
+
+import pytest
 
 from harness import state
 from harness.runners import self_review
 from harness.runners.common import REGRET_REVIEW_MARKER
 from harness.runners.regret_review import IntroducingHunk, RegretCandidate
+
+
+@pytest.fixture(autouse=True)
+def _default_not_previously_requested():
+    """self_review.py now wraps every PR it processes in common.preserve_reviewer_request
+    (assigned-but-not-authored PRs can have the user as a requested reviewer, even
+    though GitHub disallows that for a PR's own author), which calls
+    was_review_requested — a real `gh pr view` call — on every _run_locked/
+    _process_single_pr invocation. Default it to False so tests that don't care about
+    reviewer preservation don't hit the network; the tests that do care override this
+    within their own `with patch(...)` block."""
+    with patch("harness.runners.common.was_review_requested", return_value=False):
+        yield
 
 
 def _cfg(tmp_path):
@@ -465,13 +480,13 @@ def test_list_my_prs_returns_none_on_malformed_json():
         assert self_review._list_my_prs("acme/frontend", {}) is None
 
 
-def test_list_my_prs_requests_author_and_returns_prs_from_single_call():
-    # gh pr list --json can return everything in a single call; author must be among
-    # the requested fields, because the regret pass's author gate
-    # (regret_review.find_introducing_prs -> _pr_gate_setup) reads
-    # pr["author"]["login"] from the PR dict and fails closed on an authorless PR —
-    # without the field no PR could ever pass the gate in this runner (the same fix
-    # review_requested._get_prs received). The returned PR dicts must carry it through.
+def test_list_my_prs_requests_author_field_in_both_queries():
+    """gh pr list --json must request the "author" field on both the --author and
+    --assignee queries, because the regret pass's author gate
+    (regret_review.find_introducing_prs -> _pr_gate_setup) reads
+    pr["author"]["login"] from the PR dict and fails closed on an authorless PR —
+    without the field no PR could ever pass the gate in this runner (the same fix
+    review_requested._get_prs received). The returned PR dicts must carry it through."""
     pr = {
         "number": 42,
         "url": "https://github.com/acme/frontend/pull/42",
@@ -485,10 +500,56 @@ def test_list_my_prs_requests_author_and_returns_prs_from_single_call():
         prs = self_review._list_my_prs("acme/frontend", {})
 
     assert prs == [pr]
-    mock_run.assert_called_once()
-    args = mock_run.call_args[0][0]
-    fields = args[args.index("--json") + 1].split(",")
-    assert "author" in fields
+    assert mock_run.call_count == 2
+    for call in mock_run.call_args_list:
+        args = call[0][0]
+        fields = args[args.index("--json") + 1].split(",")
+        assert "author" in fields
+
+
+def test_list_my_prs_includes_assigned_prs_not_authored(tmp_xdg, tmp_path):
+    """A PR opened by a bot on the user's behalf (not authored by them) but assigned to
+    them must still show up — self_review is about PRs the user is responsible for, not
+    strictly ones they authored."""
+    authored = [{"number": 1, "url": "u1", "headRefName": "b1"}]
+    assigned = [{"number": 2, "url": "u2", "headRefName": "b2"}]
+
+    def side_effect(cmd, **_kwargs):
+        if "--author" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps(authored).encode())
+        if "--assignee" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps(assigned).encode())
+        raise AssertionError(f"unexpected command: {cmd}")  # noqa: TRY003
+
+    with patch("harness.runners.self_review.run_cmd", side_effect=side_effect):
+        prs = self_review._list_my_prs("acme/frontend", {})
+    assert prs is not None
+    assert [p["number"] for p in prs] == [1, 2]
+
+
+def test_list_my_prs_deduplicates_pr_authored_and_assigned(tmp_xdg, tmp_path):
+    both = [{"number": 1, "url": "u1", "headRefName": "b1"}]
+
+    with patch(
+        "harness.runners.self_review.run_cmd", return_value=MagicMock(returncode=0, stdout=json.dumps(both).encode())
+    ):
+        prs = self_review._list_my_prs("acme/frontend", {})
+    assert prs is not None
+    assert [p["number"] for p in prs] == [1]
+
+
+def test_list_my_prs_returns_none_when_assignee_query_fails(tmp_xdg, tmp_path):
+    """The author query can succeed while the assignee query fails (or vice versa) — that
+    partial result must not be treated as the authoritative open-PR set."""
+    authored = [{"number": 1, "url": "u1", "headRefName": "b1"}]
+
+    def side_effect(cmd, **_kwargs):
+        if "--author" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps(authored).encode())
+        return MagicMock(returncode=1, stdout=b"")
+
+    with patch("harness.runners.self_review.run_cmd", side_effect=side_effect):
+        assert self_review._list_my_prs("acme/frontend", {}) is None
 
 
 def test_design_review_runs_independently_of_already_reviewed_files(tmp_xdg, tmp_path):
@@ -1313,3 +1374,68 @@ def test_regret_review_incomplete_reply_leaves_unmarked(tmp_xdg, tmp_path):
     assert mock_be.return_value.run.call_count == 1
     mock_post.assert_not_called()
     assert 57 not in state.get_regret_reviewed_prs("acme-frontend")
+
+
+def test_re_requests_review_when_previously_requested_on_assigned_pr(tmp_xdg, tmp_path):
+    """A PR assigned to (but not authored by) the user can have them as a requested
+    reviewer too — GitHub only forbids that for the PR's own author. Even on a fully
+    successful run, _process_single_pr must re-add the user as a requested reviewer if
+    they held that status going in, mirroring every other runner's
+    preserve_reviewer_request guard."""
+    state.write_self_review_state("acme-frontend", [])
+    _setup_knowledge(tmp_path)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),
+        patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 7, "url": "u", "headRefName": "b"}]),
+        patch("harness.runners.self_review.check_review_summary_comment_status", side_effect=[False, True]),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
+        patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
+        patch("harness.runners.self_review.Backend") as mock_be,
+        patch("harness.runners.common.was_review_requested", return_value=True),
+        patch("harness.runners.common.add_reviewer") as mock_add_reviewer,
+    ):
+        mock_be.return_value.run.return_value = MagicMock(returncode=0)
+        self_review._run_locked(cfg)
+    mock_add_reviewer.assert_called_once_with(7, "acme/frontend", "alice", ANY)
+
+
+def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
+    """The re-add must not fire for a PR where the user was never a requested reviewer
+    to begin with (e.g. an authored PR, where GitHub disallows that in the first
+    place) — the autouse fixture above already defaults was_review_requested to False."""
+    state.write_self_review_state("acme-frontend", [])
+    _setup_knowledge(tmp_path)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.self_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.self_review.get_current_user", return_value="alice"),
+        patch("harness.runners.self_review.has_design_review_comment", return_value=True),
+        patch("harness.runners.self_review.has_traceability_review_comment", return_value=True),
+        patch("harness.runners.self_review._list_my_prs", return_value=[{"number": 7, "url": "u", "headRefName": "b"}]),
+        patch("harness.runners.self_review.check_review_summary_comment_status", side_effect=[False, True]),
+        patch("harness.runners.self_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.self_review.git_fetch_and_checkout"),
+        patch("harness.runners.self_review.git_restore"),
+        patch("harness.runners.self_review.get_pr_base_branch", return_value="main"),
+        patch("harness.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("harness.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
+        patch("harness.runners.self_review.get_file_diff", return_value="@@diff"),
+        patch("harness.runners.self_review.Backend") as mock_be,
+        patch("harness.runners.common.add_reviewer") as mock_add_reviewer,
+    ):
+        mock_be.return_value.run.return_value = MagicMock(returncode=0)
+        self_review._run_locked(cfg)
+    mock_add_reviewer.assert_not_called()

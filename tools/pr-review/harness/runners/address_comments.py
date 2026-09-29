@@ -22,6 +22,7 @@ from harness.runners.common import (
     git_fetch_and_checkout,
     git_restore,
     is_draft_pr,
+    preserve_reviewer_request,
     reply_has_reaction_from,
     run_cmd,
 )
@@ -157,64 +158,73 @@ class _ProcessPrContext:
 def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -> None:
     logger.info("PR #%d (branch=%s): has pending feedback, processing", number, branch)
     try:
-        git_fetch_and_checkout(branch, ctx.wdir, ctx.env)
-        comments = fetch_pr_comments(number, ctx.script_path, ctx.wdir, ctx.env)
-        if not comments:
-            logger.info("PR #%d: no actionable comments found", number)
-            return
-        comments = _filter_comments(
-            comments,
-            number,
-            ctx.repo,
-            ctx.our_login,
-            ctx.env,
-            ctx.trusted_commenters,
-            ctx.plugin_prefix,
-        )
-        if not comments:
-            logger.info("PR #%d: no unresolved comments remain after filtering", number)
-            return
-        logger.info("PR #%d: found %d comment(s) to address", number, len(comments))
-        head_sha = get_head_sha(ctx.wdir, ctx.env)
-        for comment in comments:
-            if comment.get("type") == "inline" and not _comment_still_unresolved(comment, number, ctx.repo, ctx.env):
-                logger.info(
-                    "PR #%d: comment %s's thread was resolved since this run started, skipping",
-                    number,
-                    comment.get("id", "?"),
-                )
-                continue
-            head_sha, rewritten = _address_single_comment(
-                comment,
-                number,
-                ctx.instructions_template,
-                ctx.backend,
-                ctx.wdir,
-                ctx.repo,
-                ctx.env,
-                head_sha,
-                ctx.opencode_dir,
-                ctx.our_login,
-            )
-            if rewritten:
-                logger.warning(
-                    "PR #%d: skipping remaining comments this run — comment %s's backend run rewrote "
-                    "branch history, so pushing it could silently discard or corrupt already-pushed commits",
-                    number,
-                    comment.get("id", "?"),
-                )
-                break
-            if not _push_branch(number, branch, ctx.wdir, ctx.env):
-                logger.warning(
-                    "PR #%d: skipping remaining comments this run after comment %s's push failed",
-                    number,
-                    comment.get("id", "?"),
-                )
-                break
+        # Addressing a comment (a reply, or a pushed fix) can submit a review via the
+        # GitHub API as a side effect, which would clear us from the requested-reviewers
+        # list — restore it regardless of outcome, since we cannot observe from here
+        # whether that happened.
+        with preserve_reviewer_request(number, ctx.repo, ctx.our_login or "", ctx.env):
+            _address_pending_comments(number, branch, ctx)
     except Exception:
         logger.exception("PR #%d: error", number)
     finally:
         git_restore(ctx.original_sha, branch, ctx.wdir, ctx.env)
+
+
+def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) -> None:
+    git_fetch_and_checkout(branch, ctx.wdir, ctx.env)
+    comments = fetch_pr_comments(number, ctx.script_path, ctx.wdir, ctx.env)
+    if not comments:
+        logger.info("PR #%d: no actionable comments found", number)
+        return
+    comments = _filter_comments(
+        comments,
+        number,
+        ctx.repo,
+        ctx.our_login,
+        ctx.env,
+        ctx.trusted_commenters,
+        ctx.plugin_prefix,
+    )
+    if not comments:
+        logger.info("PR #%d: no unresolved comments remain after filtering", number)
+        return
+    logger.info("PR #%d: found %d comment(s) to address", number, len(comments))
+    head_sha = get_head_sha(ctx.wdir, ctx.env)
+    for comment in comments:
+        if comment.get("type") == "inline" and not _comment_still_unresolved(comment, number, ctx.repo, ctx.env):
+            logger.info(
+                "PR #%d: comment %s's thread was resolved since this run started, skipping",
+                number,
+                comment.get("id", "?"),
+            )
+            continue
+        head_sha, rewritten = _address_single_comment(
+            comment,
+            number,
+            ctx.instructions_template,
+            ctx.backend,
+            ctx.wdir,
+            ctx.repo,
+            ctx.env,
+            head_sha,
+            ctx.opencode_dir,
+            ctx.our_login,
+        )
+        if rewritten:
+            logger.warning(
+                "PR #%d: skipping remaining comments this run — comment %s's backend run rewrote "
+                "branch history, so pushing it could silently discard or corrupt already-pushed commits",
+                number,
+                comment.get("id", "?"),
+            )
+            break
+        if not _push_branch(number, branch, ctx.wdir, ctx.env):
+            logger.warning(
+                "PR #%d: skipping remaining comments this run after comment %s's push failed",
+                number,
+                comment.get("id", "?"),
+            )
+            break
 
 
 def _focused_review_approved(comment: dict, repo: str, our_login: str | None, env: dict) -> bool:

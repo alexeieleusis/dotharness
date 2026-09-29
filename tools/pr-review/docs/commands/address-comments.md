@@ -23,6 +23,7 @@ harness run [--config PATH] [--verbose] address-comments
    - Skips it if it's a draft.
    - Calls a GraphQL query for unresolved review threads. If any thread is unresolved, the PR has "pending feedback." Otherwise, it falls back to checking for any issue/timeline comment not authored by `github-actions[bot]` or `dependabot[bot]`. If neither check finds anything, the PR is skipped entirely — no checkout, no backend calls.
    - Resolves the current `gh` user's login the first time it's needed (`gh api user --jq .login`), then reuses it for the rest of the run.
+   - Checks whether the current user is currently a requested reviewer on this PR, before doing anything else with it.
    - Fetches and checks out the PR's head branch (using `git checkout -B` to `origin/<branch>` — see [Shared behavior](index.md#shared-behavior)).
    - Fetches all comments via `scripts/pr-comments.py fetch --pr <N>` and reads the JSON it caches at `~/.harness/cache/pr-<N>-comments.json`. The actionable set is:
      - all inline (review-thread) comments,
@@ -43,6 +44,7 @@ harness run [--config PATH] [--verbose] address-comments
      - If the backend invocation raises (e.g. a timeout after its internal retry), the error is logged and the loop moves to the next comment for this PR. Nothing is pushed for that comment.
      - Otherwise, the runner itself runs `git push origin <branch>` right after the backend returns. If the push succeeds, it moves to the next comment. If it fails, a warning is logged and the **remaining comments for this PR are abandoned for this run**. The per-comment loop breaks, but processing continues with the next PR.
    - Any other exception while processing the PR is caught and logged. The run moves on to the next PR regardless.
+   - Re-adds the user as a requested reviewer if they were one before this PR was processed, no matter what happened above. Replying to (or fixing) a comment can submit a review via the GitHub API as a side effect. That clears the submitter from the PR's requested-reviewer list. It would otherwise hide the PR from `review-requested`'s search for the rest of a `run all` cycle. This step runs even if an exception was raised above.
    - Always restores the working tree to the SHA recorded in step 6 before moving to the next PR.
 8. After all PRs, it leaves the working directory checked out (detached) at `origin/main`.
 

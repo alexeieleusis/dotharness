@@ -10,12 +10,10 @@ from harness.runners import prune_projects
 from harness.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
-    add_reviewer,
     build_subprocess_env,
     get_changed_files,
     get_current_user,
     get_gh_token,
-    get_requested_reviewers,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
@@ -23,6 +21,7 @@ from harness.runners.common import (
     list_open_prs_matching_authors,
     log_called_process_output,
     pr_from_url,
+    preserve_reviewer_request,
     run_cmd,
 )
 
@@ -144,22 +143,24 @@ def _process_pr(pr: dict, config: HarnessConfig, env: dict, current_user: str, w
         return False
 
     git_fetch_and_checkout(pr["headRefName"], wdir, env)
-    was_requested = current_user in get_requested_reviewers(pr["number"], config.repo.name, env)
-    results: list[bool] = []
     changed_files = _get_changed_files_for_pr(pr, config, wdir, env)
+    subdirs_to_process = []
     for subdir in config.repo.subdirs:
         if not _subdir_has_changes(subdir.path, changed_files):
             logger.info("PR #%d: skipping subdir %s, no changes", pr["number"], subdir.path)
             continue
-        results.append(_process_subdir(pr["number"], subdir, config, env))
-    if results and was_requested:
-        # Submitting a review via the GitHub API clears the submitter from the PR's
-        # requested-reviewers list, which would hide this PR from review_requested's
-        # "user-review-requested:@me" search for the rest of this run_all cycle.
-        # We re-add whenever at least one subdir was processed, since we cannot
-        # observe from here whether the subprocess actually posted any comments.
-        add_reviewer(pr["number"], config.repo.name, current_user, env)
-    return all(results) if results else True
+        subdirs_to_process.append(subdir)
+    if not subdirs_to_process:
+        return True
+
+    # Submitting a review via the GitHub API clears the submitter from the PR's
+    # requested-reviewers list, which would hide this PR from review_requested's
+    # "user-review-requested:@me" search for the rest of this run_all cycle. We
+    # re-add regardless of outcome, since we cannot observe from here whether the
+    # subprocess actually posted any comments.
+    with preserve_reviewer_request(pr["number"], config.repo.name, current_user, env):
+        results = [_process_subdir(pr["number"], subdir, config, env) for subdir in subdirs_to_process]
+    return all(results)
 
 
 def _is_root_subdir(subdir_path: str) -> bool:
