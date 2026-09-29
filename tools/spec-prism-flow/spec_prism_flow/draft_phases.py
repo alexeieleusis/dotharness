@@ -16,8 +16,14 @@ from spec_prism_flow.phase_file import (
     PhaseFile,
     PhaseFileError,
     parse_phase_file,
+    parse_phase_file_text,
     phase_file_name,
     render_phase_file,
+)
+from spec_prism_flow.requirements_stage import (
+    REQUIREMENTS_FILENAME,
+    SECTION_TOKEN_PATTERN,
+    parse_numbered_headings,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,6 +92,37 @@ def _derive_manual_test_checklist(acceptance_criteria: list[str]) -> list[str]:
     return [f"Manually verify: {criterion}" for criterion in acceptance_criteria]
 
 
+_SOURCE_SECTIONS_HEADING = "### Source sections"
+
+
+def _source_section_numbers(headings: list[tuple[str, str, str]], leaves: list[linearize.LeafVisit]) -> list[list[str]]:
+    """Per leaf, the parent requirements.md section numbers its `requirements_slice` came from.
+
+    A section belongs to a leaf when the slice quotes its heading line or cites it as `§N`. Sections no
+    leaf claims (typically cross-cutting ones: purpose, goals, glossary, open decisions, next step) go
+    on phase 1, so every section is referenced by at least one phase file.
+    """
+    per_leaf: list[list[str]] = []
+    claimed: set[str] = set()
+    for leaf in leaves:
+        slice_lines = {line.strip() for line in leaf.chunk.requirements_slice.splitlines()}
+        cited = set(SECTION_TOKEN_PATTERN.findall(leaf.chunk.requirements_slice))
+        numbers = [number for number, _, line in headings if line in slice_lines or number in cited]
+        claimed.update(numbers)
+        per_leaf.append(numbers)
+    if per_leaf:
+        phase_one = set(per_leaf[0]) | {number for number, _, _ in headings if number not in claimed}
+        per_leaf[0] = [number for number, _, _ in headings if number in phase_one]
+    return per_leaf
+
+
+def _render_source_sections(numbers: list[str], titles: dict[str, str]) -> str:
+    if not numbers:
+        return ""
+    items = "\n".join(f"- §{number} ({titles[number]})" for number in numbers)
+    return f"\n\n{_SOURCE_SECTIONS_HEADING}\n{items}"
+
+
 def _depends_on_text(depends_on_number: int | None) -> str:
     return "None (first phase)." if depends_on_number is None else f"Phase {depends_on_number} merged."
 
@@ -140,13 +177,18 @@ def run_draft_phases(cfg: SpecPrismFlowConfig) -> DraftPhasesResult:
         if PHASE_FILE_NAME_PATTERN.match(stale_path.name):
             stale_path.unlink()
 
+    requirements_path = cfg.plan.workspace_dir / REQUIREMENTS_FILENAME
+    headings = parse_numbered_headings(requirements_path.read_text()) if requirements_path.exists() else []
+    titles = {number: title for number, title, _ in headings}
+    source_sections = _source_section_numbers(headings, result.leaves)
+
     written: list[Path] = []
     outliers: list[str] = []
     # result.graph.nodes is built by linearize() from the same `leaves` list, in the same
     # order (one stem per leaf) — see linearize.py's `stems` computation. Reusing that stem
     # (rather than re-deriving a slug independently here) guarantees the phase file this
     # writes always matches the graph.json node `plan decompose` already wrote for it.
-    for leaf, stem in zip(result.leaves, result.graph.nodes, strict=True):
+    for leaf, stem, section_numbers in zip(result.leaves, result.graph.nodes, source_sections, strict=True):
         name_match = PHASE_FILE_NAME_PATTERN.match(stem + ".md")
         if not name_match:
             raise DraftPhasesError(  # noqa: TRY003
@@ -159,7 +201,7 @@ def run_draft_phases(cfg: SpecPrismFlowConfig) -> DraftPhasesResult:
             number=leaf.number,
             name=name,
             scope=list(leaf.chunk.file_scope_estimate),
-            requirements=leaf.leaf_doc,
+            requirements=leaf.leaf_doc.rstrip() + _render_source_sections(section_numbers, titles),
             acceptance_criteria=acceptance_criteria,
             manual_test_checklist=_derive_manual_test_checklist(acceptance_criteria),
             depends_on=_depends_on_text(leaf.depends_on_number),
@@ -169,12 +211,16 @@ def run_draft_phases(cfg: SpecPrismFlowConfig) -> DraftPhasesResult:
         file_scope_result = sizing.check_file_scope(phase.scope)
         if not file_scope_result.in_band:
             outliers.append(f"{label}: {file_scope_result.note}")
-        word_count_result = sizing.check_word_count(phase.requirements)
+        word_count_result = sizing.check_word_count(leaf.leaf_doc)
         if not word_count_result.in_band:
             outliers.append(f"{label}: {word_count_result.note}")
 
         out_path = cfg.plan.phase_dir / label
         rendered = render_phase_file(phase)
+        try:
+            parse_phase_file_text(label, rendered)
+        except PhaseFileError as exc:
+            raise DraftPhasesError(f"Rendered phase file {label} failed validation: {exc}") from exc  # noqa: TRY003
         out_path.write_text(rendered)
         prose_review.review_document(cfg.prose_review, out_path)
         try:

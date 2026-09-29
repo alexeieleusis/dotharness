@@ -66,10 +66,13 @@ def _linked(a: LeafVisit, b: LeafVisit) -> bool:
 
 
 def _derive_edges(leaves: list[LeafVisit], stems: list[str]) -> list[tuple[str, str]]:
+    # The linear chain is always present: every phase file's 'Depends on' text names phase N-1
+    # (see `depends_on_number`), and `plan review` requires the graph to agree with it.
+    # Heuristic links to earlier, non-adjacent leaves are added on top.
     edges: list[tuple[str, str]] = []
     for i in range(len(leaves)):
         for j in range(i):
-            if _linked(leaves[i], leaves[j]):
+            if j == i - 1 or _linked(leaves[i], leaves[j]):
                 edges.append((stems[i], stems[j]))
     return edges
 

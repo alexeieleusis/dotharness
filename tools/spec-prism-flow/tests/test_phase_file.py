@@ -7,6 +7,7 @@ from spec_prism_flow.phase_file import (
     PhaseFile,
     PhaseFileError,
     parse_phase_file,
+    parse_phase_file_text,
     phase_file_name,
     render_phase_file,
 )
@@ -168,3 +169,34 @@ def test_real_phase_file_parses(tmp_path):
     assert phase.number == 1
     assert phase.name == "config-and-phase-file"
     assert phase.depends_on == "None (first phase)."
+
+
+def test_render_demotes_shallow_headings_so_output_parses():
+    phase = PhaseFile(
+        number=1,
+        name="demo",
+        scope=["a.py"],
+        requirements="# Leaf title\n## 1. Purpose / origin\ntext\n### Deep\n## 12. Next step\nmore",
+        acceptance_criteria=["ok"],
+        manual_test_checklist=["check"],
+        depends_on="None (first phase).",
+    )
+
+    parsed = parse_phase_file_text("01-demo-leaf.md", render_phase_file(phase))
+
+    assert parsed.requirements == "### Leaf title\n### 1. Purpose / origin\ntext\n### Deep\n### 12. Next step\nmore"
+    assert parsed.scope == phase.scope
+
+
+def test_render_leaves_headings_inside_code_fences_alone():
+    phase = PhaseFile(
+        number=1,
+        name="demo",
+        scope=["a.py"],
+        requirements="```\n## not a heading\n```",
+        acceptance_criteria=["ok"],
+        manual_test_checklist=["check"],
+        depends_on="None (first phase).",
+    )
+
+    assert "## not a heading" in render_phase_file(phase)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from spec_prism_flow import handoff, prose_review
@@ -13,12 +14,25 @@ logger = logging.getLogger(__name__)
 REQUIREMENTS_FILENAME = "requirements.md"
 TEMPLATE_FILENAME = "requirements-doc-drafting-prompt.md"
 
+_NUMBERED_HEADING_PATTERN = re.compile(r"^#{2,3}\s+(\d+(?:\.\d+)?)\.?\s+(.+)$")
+SECTION_TOKEN_PATTERN = re.compile(r"§(\d+(?:\.\d+)?)(?![.\d])")
+
 _STAGE_NAME = "draft_requirements"
 _KNOWLEDGE_SUBDIR = "spec-prism-flow"
 
 
 class RequirementsError(Exception):
     pass
+
+
+def parse_numbered_headings(requirements_text: str) -> list[tuple[str, str, str]]:
+    """(number, title, heading line) for each numbered `##`/`###` heading of requirements.md."""
+    found = []
+    for line in requirements_text.splitlines():
+        match = _NUMBERED_HEADING_PATTERN.match(line.rstrip())
+        if match:
+            found.append((match.group(1), match.group(2).strip(), line.strip()))
+    return found
 
 
 def build_requirements_prompt(

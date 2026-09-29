@@ -9,14 +9,17 @@ from spec_prism_flow.decompose import GRAPH_FILENAME
 from spec_prism_flow.markdown_utils import extract_list_items
 from spec_prism_flow.overview_stage import OPEN_QUESTIONS_FILENAME
 from spec_prism_flow.phase_file import PhaseFile, PhaseFileError, parse_phase_file
-from spec_prism_flow.requirements_stage import REQUIREMENTS_FILENAME
+from spec_prism_flow.requirements_stage import (
+    REQUIREMENTS_FILENAME,
+    SECTION_TOKEN_PATTERN,
+    parse_numbered_headings,
+)
 
 REVIEW_LOG_FILENAME = "review_log.md"
 
 _LIST_ITEM_PATTERN = re.compile(r"^(?:-|\*|\d+\.)\s+(.*)$")
 _RESOLVED_MARKER_PATTERN = re.compile(r"\*\*resolved", re.IGNORECASE)
 _DEFERRED_MARKER_PATTERN = re.compile(r"\*\*deferred", re.IGNORECASE)
-_REQUIREMENTS_HEADING_PATTERN = re.compile(r"^(#{2,3})\s+(\d+(?:\.\d+)?)\.?\s+(.+)$")
 
 
 class ReviewError(Exception):
@@ -64,20 +67,12 @@ def _check_dependency_order(phase_files: list[PhaseFile]) -> list[str]:
     return violations
 
 
-def _parse_requirements_sections(requirements_text: str) -> list[tuple[str, str]]:
-    sections = []
-    for line in requirements_text.splitlines():
-        match = _REQUIREMENTS_HEADING_PATTERN.match(line.rstrip())
-        if match:
-            sections.append((match.group(2), match.group(3).strip()))
-    return sections
-
-
 def _check_section_coverage(requirements_text: str, phase_files: list[PhaseFile]) -> list[str]:
     combined_requirements = "\n".join(pf.requirements for pf in phase_files)
     violations = []
-    for number, title in _parse_requirements_sections(requirements_text):
-        if not re.search(rf"§{re.escape(number)}(?![.\d])", combined_requirements):
+    cited = set(SECTION_TOKEN_PATTERN.findall(combined_requirements))
+    for number, title, _ in parse_numbered_headings(requirements_text):
+        if number not in cited:
             violations.append(f"requirements.md §{number} ({title}) is not referenced by any phase file")
     return violations
 

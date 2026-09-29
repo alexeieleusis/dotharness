@@ -58,7 +58,7 @@ def test_linearize_no_edge_added_for_unrelated_leaves_with_no_reference_or_share
 
     result = linearize(root)
 
-    assert result.graph.edges == []
+    assert result.graph.edges == [("02-second-leaf", "01-first-leaf")]
 
 
 def test_linearize_adds_edge_when_mini_doc_references_sibling_chunk_path():
@@ -72,7 +72,11 @@ def test_linearize_adds_edge_when_mini_doc_references_sibling_chunk_path():
 
     result = linearize(root)
 
-    assert result.graph.edges == [("03-third-leaf", "01-first-leaf")]
+    assert result.graph.edges == [
+        ("02-second-leaf", "01-first-leaf"),
+        ("03-third-leaf", "01-first-leaf"),
+        ("03-third-leaf", "02-second-leaf"),
+    ]
 
 
 def test_linearize_adds_edge_when_mini_doc_references_sibling_chunk_name():
@@ -97,7 +101,23 @@ def test_linearize_adds_edge_when_leaves_share_file_scope_with_no_textual_refere
     result = linearize(root)
 
     assert ("03-third-leaf", "01-first-leaf") in result.graph.edges
-    assert ("02-second-leaf", "01-first-leaf") not in result.graph.edges
+    assert ("03-third-leaf", "02-second-leaf") in result.graph.edges
+
+
+def test_linearize_always_includes_linear_chain_edges_for_disjoint_leaves():
+    leaves = [
+        ChunkNode(chunk=_chunk(f"A-{n}", f"leaf{n}", [f"src/{n}.py"], 1), leaf_doc=f"standalone doc {n}")
+        for n in range(1, 5)
+    ]
+    root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=leaves)
+
+    result = linearize(root)
+
+    assert set(result.graph.edges) == {
+        ("02-leaf2-leaf", "01-leaf1-leaf"),
+        ("03-leaf3-leaf", "02-leaf2-leaf"),
+        ("04-leaf4-leaf", "03-leaf3-leaf"),
+    }
 
 
 def test_linearize_does_not_raise_when_shared_scope_leaves_are_explicitly_linked():

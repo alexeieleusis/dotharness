@@ -67,15 +67,19 @@ def _parse_bullets(body: str) -> list[str]:
 
 
 def parse_phase_file(path: Path) -> PhaseFile:
-    name_match = PHASE_FILE_NAME_PATTERN.match(path.name)
+    return parse_phase_file_text(path.name, path.read_text())
+
+
+def parse_phase_file_text(file_name: str, text: str) -> PhaseFile:
+    name_match = PHASE_FILE_NAME_PATTERN.match(file_name)
     if not name_match:
         raise PhaseFileError(  # noqa: TRY003
-            f"Phase file name '{path.name}' does not match the '<NN>-<slug>-leaf.md' pattern"
+            f"Phase file name '{file_name}' does not match the '<NN>-<slug>-leaf.md' pattern"
         )
     number = int(name_match.group(1))
     name = name_match.group(2)
 
-    lines = path.read_text().splitlines()
+    lines = text.splitlines()
     header_indices = [i for i, line in enumerate(lines) if line.startswith("## ")]
     headers = [lines[i][3:].strip() for i in header_indices]
 
@@ -108,13 +112,31 @@ def parse_phase_file(path: Path) -> PhaseFile:
     )
 
 
+_FENCE_PATTERN = re.compile(r"^\s*(```|~~~)")
+_SHALLOW_HEADING_PATTERN = re.compile(r"^#{1,2}(?=\s)")
+
+
+def _demote_shallow_headings(markdown: str) -> str:
+    """Rewrite every `#`/`##` heading (outside fenced code) as `###`, so an embedded mini-doc
+    can't add `##` headers that break the phase file's five-header contract."""
+    out = []
+    in_fence = False
+    for line in markdown.splitlines():
+        if _FENCE_PATTERN.match(line):
+            in_fence = not in_fence
+        elif not in_fence:
+            line = _SHALLOW_HEADING_PATTERN.sub("###", line)
+        out.append(line)
+    return "\n".join(out)
+
+
 def render_phase_file(phase: PhaseFile) -> str:
     def render_bullets(items: list[str]) -> str:
         return "\n".join(f"- {item}" for item in items)
 
     sections = [
         ("Scope", render_bullets(phase.scope)),
-        ("Requirements", phase.requirements),
+        ("Requirements", _demote_shallow_headings(phase.requirements)),
         (_ACCEPTANCE_CRITERIA_HEADER, render_bullets(phase.acceptance_criteria)),
         (_MANUAL_TEST_CHECKLIST_HEADER, render_bullets(phase.manual_test_checklist)),
         (_DEPENDS_ON_HEADER, f"- {phase.depends_on}"),
