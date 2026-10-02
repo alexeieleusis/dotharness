@@ -2,11 +2,11 @@
 
 `local-review` reviews the branch you have checked out in `repo.working_dir`, before you push or open a pull request. It does not use GitHub. The configured AI backend reviews each changed file, then writes one summary and one design review. All results go to Markdown files on disk. Nothing is posted anywhere.
 
-This page documents the review phase. The address phase, which acts on the findings, is documented separately (see [Address phase and finding curation](#address-phase-and-finding-curation)).
+The command has two phases. The review phase writes findings. The optional address phase (`--address`) then asks the backend to fix each open finding and to commit the fix on your branch. See [Address phase and finding curation](#address-phase-and-finding-curation).
 
 ## Usage
 ```
-harness run [--config PATH] [--verbose] local-review [--base REF] [--output-dir DIR] [--force]
+harness run [--config PATH] [--verbose] local-review [--base REF] [--output-dir DIR] [--force] [--address [--skip-review [--review-dir DIR]]]
 ```
 
 - `--config PATH` — path to the `.harness.toml` config file. Defaults to `./.harness.toml`. This option belongs to the `run` group, so it must come before `local-review` on the command line.
@@ -14,6 +14,11 @@ harness run [--config PATH] [--verbose] local-review [--base REF] [--output-dir 
 - `--base REF` — the base ref to compare against. See [Base ref and diff](#base-ref-and-diff).
 - `--output-dir DIR` — the output root. See [Output layout](#output-layout).
 - `--force` — ignore earlier results for this head commit and run every pass again. See [Re-runs](#re-runs).
+- `--address` — after the review phase, address every open finding. See [Address phase and finding curation](#address-phase-and-finding-curation).
+- `--skip-review` — only valid with `--address`. Do not run the review phase. Address the findings of an earlier review instead.
+- `--review-dir DIR` — only valid with `--address --skip-review`. Address this review directory instead of choosing one.
+
+`--skip-review` without `--address`, `--review-dir` without `--address`, and `--review-dir` without `--skip-review` are usage errors. They exit with code 2 before anything runs.
 
 `repo.name` is optional for this command, because it does not need a GitHub repository. See [Configuration](../configuration.md).
 
@@ -33,7 +38,11 @@ harness run [--config PATH] [--verbose] local-review [--base REF] [--output-dir 
 8. After each pass, it rewrites `manifest.json`. After the last pass, it writes `index.md`.
 9. Checks, after every backend call, that the backend did not change the repository (see [Security](#security)).
 
-The command prints the base ref and merge base, the head commit, the review directory, and the status of each pass (`per-file: N/M done`, `summary`, `design`).
+10. With `--address`, runs the address phase after the review phase (or instead of it, with `--skip-review`). See [Address phase and finding curation](#address-phase-and-finding-curation).
+
+The command prints the base ref and merge base, the head commit, the review directory, and the status of each pass (`per-file: N/M done`, `summary`, `design`). With `--address` it also prints the review directory it addresses, how many findings are open, and a one-line summary of the outcomes.
+
+With `--skip-review`, the checks on the review prompt templates and the "nothing to review" check are skipped. Only the git checks, the output directory check, and the address template check apply.
 
 ## Base ref and diff
 
@@ -128,7 +137,7 @@ This deletes `<output root>/<repo_slug>/` after you confirm. `--yes` skips the c
 
 ## Configuration
 
-Only these `.harness.toml` fields affect the review phase. See [Configuration](../configuration.md) for the full schema.
+Only these `.harness.toml` fields affect this command. See [Configuration](../configuration.md) for the full schema.
 
 | Field | Used for |
 |---|---|
@@ -136,7 +145,7 @@ Only these `.harness.toml` fields affect the review phase. See [Configuration](.
 | `[local_review].output_dir` | Default output root |
 | `harness.backend` | Which AI backend (`opencode` or `claude`) runs the passes |
 | `harness.backend_timeout_seconds` | Timeout for each backend invocation |
-| `harness.knowledge_dir` | Must contain `pr-review/local-review-file.md`, `pr-review/local-review-summary.md` and `pr-review/local-review-design.md` |
+| `harness.knowledge_dir` | Must contain `pr-review/local-review-file.md`, `pr-review/local-review-summary.md` and `pr-review/local-review-design.md`. With `--address` it must also contain `pr-review/local-address-finding.md`. With `--skip-review` the three review templates are not needed |
 | `harness.review_knowledge_file` | Optional extra guidance added to every prompt, if the path exists |
 | `harness.path_prepend` / `harness.env` | Extra `PATH` entries and env vars for git and the backend |
 | `repo.working_dir` | The git checkout to review. Its resolved path is also the basis of the lock key |
@@ -153,13 +162,17 @@ Backend invocations per run:
 - One for the summary, if it is not `done`.
 - One for the design review, if it is not `done`.
 
-There are no other backend calls. A re-run for the same head commit only repeats failed passes. A file that keeps failing makes every re-run send that file again, plus the summary, which always re-runs after a file failure. With an expensive backend, a large change, and a file that keeps failing, this can approach twice the normal cost. Set `harness.backend_timeout_seconds` conservatively. Check `~/.local/share/dotharness/logs/local-review/` for timeout patterns.
+With `--address`, add one backend call for each `open` finding. There are no other backend calls. A re-run for the same head commit only repeats failed passes. A file that keeps failing makes every re-run send that file again, plus the summary, which always re-runs after a file failure. With an expensive backend, a large change, and a file that keeps failing, this can approach twice the normal cost. Set `harness.backend_timeout_seconds` conservatively. Check `~/.local/share/dotharness/logs/local-review/` for timeout patterns.
+
+The address phase retries nothing by itself. A finding that ends `failed` keeps `status: open`, so the next `--address` run sends it again and pays for it again. If a finding keeps failing, set its status to `wontfix` yourself (see [Address phase and finding curation](#address-phase-and-finding-curation)). `harness.backend_timeout_seconds` applies to each address call too.
 
 ## Security
 
 The backend runs with unrestricted shell access in `repo.working_dir`. For `claude`, the tool passes `--dangerously-skip-permissions`. The backend can run any command and read or write any file in the checkout, including `.git/`. See [Security in `self-review`](self-review.md#security) for the backend mitigations that also apply here.
 
 - **Mutation guard.** After every backend call, the tool checks that `HEAD` did not move and that no tracked file changed. Untracked files are ignored. If the check fails, that pass is marked `failed`, no further passes run, and the command exits non-zero. The message names what changed. The guard detects changes. It does not undo them. Inspect the repository and restore it yourself.
+- **The address phase edits your branch.** With `--address`, the backend can create commits on your checked-out branch. The tool never pushes, but the commits are real and stay in your history until you remove them. Review them (`git log`, `git show`) before you push.
+- **Address checks detect, they do not undo.** After every backend call in the address phase, the tool checks that the old `HEAD` is still an ancestor of the new `HEAD` (so history was not rewritten), that the branch did not change, and that no tracked file has uncommitted changes. If a check fails, the finding is marked `failed`, the phase stops, and the command exits non-zero. The tool resets and repairs nothing. Inspect the repository and restore it yourself.
 - **No `GITHUB_TOKEN`.** The tool does not export `GITHUB_TOKEN` to the backend. This is a smaller exposure than `self-review`. The backend can still reach the network if the host allows it.
 - **Output outside the repo.** The command refuses an output directory inside `repo.working_dir` (including the directory itself). This keeps review files out of your working tree and out of the guard check.
 
@@ -167,8 +180,9 @@ The backend runs with unrestricted shell access in `repo.working_dir`. For `clau
 
 | Code | Meaning |
 |---|---|
-| `0` | All passes are `done`, or there is nothing to review |
-| non-zero | A precondition failed, a pass ended `failed`, or the mutation guard tripped |
+| `0` | All passes are `done`, or there is nothing to review. With `--address`, no finding failed, was unparseable, or stopped the phase |
+| `1` | A precondition failed, a pass ended `failed`, the mutation guard tripped, no review directory could be chosen for `--address`, or the address phase had a failed or unparseable finding or stopped early |
+| `2` | A usage error, such as `--skip-review` without `--address` |
 
 ## Scheduling
 
@@ -180,4 +194,91 @@ harness schedule install local-review --every <duration> [--config PATH] [--sche
 
 ## Address phase and finding curation
 
-Acting on the findings (the address phase) is documented separately.
+`--address` asks the backend to deal with each `open` finding, one finding at a time. The tool does not trust what the backend says. It checks the result with git before it records anything.
+
+Examples:
+
+```
+# Review, then address the findings of this review
+harness run local-review --address
+
+# Edit the findings first, then address the latest earlier review without reviewing again
+harness run local-review --address --skip-review
+
+# Address one specific earlier review
+harness run local-review --address --skip-review --review-dir ~/.local/share/dotharness/reviews/<repo_slug>/<branch>/<head_sha>
+```
+
+### Which review is addressed
+
+- With `--address` alone, the review phase runs first (or is skipped for `done` passes, as usual). The address phase then uses the review directory for the current head commit.
+- With `--address --skip-review`, the review phase does not run. The tool picks the review directory of the same branch whose head commit is `HEAD` or an ancestor of `HEAD` and has the newest committer date. If two have the same date, the one with the newer `manifest.json` modification time wins. If there is none, the command exits with an error that tells you to run `local-review` first.
+- With `--review-dir DIR`, the tool uses that directory. It must contain a `manifest.json` for the same branch, and its head commit must be `HEAD` or an ancestor of `HEAD`. Otherwise the command exits with an error.
+
+Only passes marked `done` in the manifest are read. If some review passes failed, the address phase still runs on the passes that are `done`, and the command exits non-zero at the end.
+
+### Curating findings
+
+The address phase acts only on findings with `status: open`. Before you run it, you can open the review files and edit them:
+
+| Status | What the address phase does |
+|---|---|
+| `open` | Sends the finding to the backend. |
+| `wontfix` | Skips it. Use this for findings you reject. |
+| `fixed` | Skips it. The address phase sets this and adds a `- commit: <sha>` line. |
+| `declined` | Skips it. The address phase sets this when the backend decided that the finding does not need a change. |
+
+To drop a finding, set `status: wontfix` or delete the whole block. Do not change the `id` line. A block with a missing or invalid field, or with no `id`, cannot be used. The tool counts it as unparseable, ignores it, and exits non-zero at the end.
+
+Findings are addressed in this order: the per-file findings, by file path and then by line, and then the design findings in file order.
+
+### What happens for each finding
+
+1. The tool checks that you are still on the branch that was reviewed and that no tracked file has uncommitted changes. Untracked files are ignored. If not, the finding is marked `failed` and the phase stops.
+2. It records the current `HEAD` and runs the backend once. The prompt contains the instructions from `local-address-finding.md`, the finding, its file and line, the diff of that file against the merge base, any vibe-heal context, and the path where the backend must write its resolution.
+3. The backend writes a resolution file, `<review dir>/resolutions/<finding id>.md`. Its first line must be `decision: fixed` or `decision: declined`. The tool deletes any old resolution file for the finding before the call.
+4. The tool compares the decision with git:
+
+| Decision | What git must show | Result |
+|---|---|---|
+| `fixed` | Exactly one new commit on top of the recorded `HEAD` (not a merge commit) and no uncommitted changes to tracked files | The finding gets `status: fixed` and a `- commit: <sha>` line |
+| `declined` | `HEAD` did not move and no uncommitted changes to tracked files | The finding gets `status: declined` |
+| Anything else | A missing, empty or malformed resolution file, a backend error or timeout, no commit or two commits for `fixed`, or a commit for `declined` | The finding is `failed` and keeps `status: open` |
+
+A `failed` finding is not a status in the file. It is only reported in the summary line.
+
+### Stopping the phase
+
+After every backend call, the tool also checks that the recorded `HEAD` is still an ancestor of the new `HEAD`, that you are still on the same branch, and that no tracked file has uncommitted changes. If any check fails, the finding is marked `failed`, no further backend call is made, and the command exits non-zero. The remaining findings are not tried. They count as "skipped (not open)" in the summary line. The tool does not reset or repair anything. See [Security](#security).
+
+### Commit messages
+
+The backend writes the commit. The runner does not rewrite or check the message. The instructions in `local-address-finding.md` tell the backend to use this format:
+
+```
+fix: address review finding <id> [on <path/to/file.ext>]
+
+- <brief description of what was changed>
+
+Ref: local-review finding <id> (reviewed at <head sha of the review, 12 chars>)
+```
+
+The backend is told to create a new commit on top of `HEAD`, to stage only the files it changed, and never to amend, rebase, reset, push or use `--no-verify`. If pre-commit hooks in your repository fail, the commit does not happen and the finding is `failed`.
+
+### Output and exit code
+
+The last line of the phase is:
+
+```
+findings: 3 fixed, 1 declined, 1 failed, 2 skipped (not open), 0 unparseable
+```
+
+`skipped (not open)` counts findings with a status other than `open`, plus any open findings that were not tried because the phase stopped early. The exit code is `0` only if nothing failed, no block was unparseable and the phase did not stop early.
+
+### Re-runs
+
+Only `open` findings are addressed again. A `fixed` or `declined` finding stays as it is. A `failed` finding keeps `status: open`, so `--address` tries it again on the next run. Each retry costs one backend call (see [Cost](#cost)).
+
+`--force` re-runs the review passes and overwrites the review files. This replaces the statuses set by the address phase, and the tool logs a warning with the number of `fixed` and `declined` findings that are lost. The commits made by earlier address runs stay in your git history.
+
+`harness state reset local-review` deletes the whole review output, including the resolution files. It does not touch your commits.

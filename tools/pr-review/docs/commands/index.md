@@ -15,7 +15,7 @@ harness run [--config PATH] [--verbose] <command> [command options]
 | [`review-requested`](review-requested.md) | PRs where review was explicitly requested from the `gh` account | Have the configured AI backend produce inline + summary code review comments. The command reacts to GitHub review-request state, not a schedule. |
 | [`self-review`](self-review.md) | Your own open PRs (`--author @me`) | Get an automated first-pass AI review of your own PRs before asking a human. |
 | [`address-comments`](address-comments.md) | Open PRs you authored or are assigned to, with pending reviewer feedback | Have the AI backend read unresolved review comments, make the smallest fix (or reply), commit, and push. |
-| [`local-review`](local-review.md) | The branch checked out in `repo.working_dir`, compared with its base ref | Review a local branch before you push, and write findings to Markdown files. No GitHub access. `harness run all` does not include `local-review`. |
+| [`local-review`](local-review.md) | The branch checked out in `repo.working_dir`, compared with its base ref | Review a local branch before you push, and write findings to Markdown files. With `--address`, the backend also fixes the open findings and commits the fixes on your branch (never pushed). No GitHub access. `harness run all` does not include `local-review`. |
 
 There is also an optional `regret-review` pass — enabled via the [`[regret_review]`](../configuration.md#regret_review) config section — that re-checks old, ignored review comments on the PRs `self-review` and `review-requested` already cover.
 
