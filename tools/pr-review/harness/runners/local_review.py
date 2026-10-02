@@ -640,6 +640,24 @@ def _seed_manifest(target: LocalReviewTarget, previous: dict | None) -> dict:
     return manifest
 
 
+def _finish_file_output(out: Path) -> None:
+    """Default a missing per-file output to "no findings", then stamp ids."""
+    if not out.is_file():
+        out.write_text(NO_FINDINGS_TEXT, encoding="utf-8")
+    stamp_findings_file(out, "file")
+
+
+def _single_pass_output_ok(name: str, out: Path, files_all_done: bool) -> bool:
+    """Validate a finished summary/design pass: output present and non-empty; summary needs all files done."""
+    if not out.is_file() or not out.read_text(encoding="utf-8").strip():
+        logger.error("local-review %s: backend exited 0 but %s is missing or empty", name, out.name)
+        return False
+    if name == "summary" and not files_all_done:
+        logger.warning("local-review summary: some file passes failed; summary recorded as failed")
+        return False  # re-runs next time together with the failed files
+    return True
+
+
 def run(  # noqa: C901
     config: HarnessConfig,
     target: LocalReviewTarget,
@@ -734,9 +752,7 @@ def run(  # noqa: C901
         result.ran.append(f"file:{f}")
         ok = call_backend(prompt, f"local-review file {f}")
         if ok:
-            if not out.is_file():
-                out.write_text(NO_FINDINGS_TEXT, encoding="utf-8")
-            stamp_findings_file(out, "file")
+            _finish_file_output(out)
         record(f"file:{f}", ok, lambda st, f=f: manifest["files"].__setitem__(f, st))
 
     files_all_done = all(manifest["files"].get(f) == STATUS_DONE for f in files)
@@ -751,12 +767,7 @@ def run(  # noqa: C901
         out.unlink(missing_ok=True)
         result.ran.append(name)
         ok = call_backend(build(out), f"local-review {name}")
-        if ok and (not out.is_file() or not out.read_text(encoding="utf-8").strip()):
-            logger.error("local-review %s: backend exited 0 but %s is missing or empty", name, filename)
-            ok = False
-        if ok and name == "summary" and not files_all_done:
-            logger.warning("local-review summary: some file passes failed; summary recorded as failed")
-            ok = False  # re-runs next time together with the failed files
+        ok = ok and _single_pass_output_ok(name, out, files_all_done)
         if ok and stamp:
             stamp_findings_file(out, stamp)
         record(name, ok, lambda st: manifest.__setitem__(name, st))
