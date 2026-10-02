@@ -160,6 +160,32 @@ def _parse_opencode_dir(raw_odir: str | None, working_dir: Path) -> Path | None:
     return opencode_dir
 
 
+def _parse_repo(r: dict, *, require_repo_name: bool) -> RepoConfig:
+    if require_repo_name and not r.get("name"):
+        raise ConfigError("repo.name is required")  # noqa: TRY003
+    if r.get("name"):
+        slug = str(r["name"]).replace("/", "-")
+        if slug in (".", "..") or not re.fullmatch(r"[A-Za-z0-9._-]+", slug):
+            raise ConfigError(  # noqa: TRY003
+                f"Invalid repo.name '{r['name']}': must match [A-Za-z0-9._/-]+ and not be '.' or '..'"
+            )
+    if not r.get("working_dir"):
+        raise ConfigError("repo.working_dir is required")  # noqa: TRY003
+
+    subdirs = _parse_subdirs(r.get("subdir", []))
+
+    working_dir = Path(r["working_dir"]).expanduser()
+    opencode_dir = _parse_opencode_dir(r.get("opencode_dir"), working_dir)
+
+    return RepoConfig(
+        name=r.get("name") or "",
+        working_dir=working_dir,
+        subdirs=subdirs,
+        opencode_dir=opencode_dir,
+        name_provided=bool(r.get("name")),
+    )
+
+
 def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
     with open(path, "rb") as f:
         try:
@@ -184,30 +210,7 @@ def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
         review_knowledge_file=Path(rkf).expanduser() if rkf else None,
     )
 
-    r = data.get("repo", {})
-    if require_repo_name and not r.get("name"):
-        raise ConfigError("repo.name is required")  # noqa: TRY003
-    if r.get("name"):
-        slug = str(r["name"]).replace("/", "-")
-        if slug in (".", "..") or not re.fullmatch(r"[A-Za-z0-9._-]+", slug):
-            raise ConfigError(  # noqa: TRY003
-                f"Invalid repo.name '{r['name']}': must match [A-Za-z0-9._/-]+ and not be '.' or '..'"
-            )
-    if not r.get("working_dir"):
-        raise ConfigError("repo.working_dir is required")  # noqa: TRY003
-
-    subdirs = _parse_subdirs(r.get("subdir", []))
-
-    working_dir = Path(r["working_dir"]).expanduser()
-    opencode_dir = _parse_opencode_dir(r.get("opencode_dir"), working_dir)
-
-    repo = RepoConfig(
-        name=r.get("name") or "",
-        working_dir=working_dir,
-        subdirs=subdirs,
-        opencode_dir=opencode_dir,
-        name_provided=bool(r.get("name")),
-    )
+    repo = _parse_repo(data.get("repo", {}), require_repo_name=require_repo_name)
 
     vh = data.get("vibe_heal", {})
     vibe_heal = VibehealConfig(
