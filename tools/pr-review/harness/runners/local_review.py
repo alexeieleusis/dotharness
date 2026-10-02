@@ -36,6 +36,7 @@ from harness.runners.common import (
 logger = logging.getLogger(__name__)
 
 _GIT_TIMEOUT_SECONDS = 30
+_GIT_TIMEOUT_RETURNCODE = 124  # same convention as timeout(1)
 MAX_DIRTY_PATHS_SHOWN = 5
 DEFAULT_BASE_FALLBACK = "main"
 _NO_UNTRACKED_FLAG = "--untracked-files=no"
@@ -58,14 +59,21 @@ class LocalReviewTarget:
 
 
 def _git(working_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603
-        ["git", *args],  # noqa: S607
-        cwd=str(working_dir),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=_GIT_TIMEOUT_SECONDS,
-    )
+    cmd = ["git", *args]
+    try:
+        return subprocess.run(  # noqa: S603
+            cmd,
+            cwd=str(working_dir),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        # Surface a timeout as a failed command so callers' returncode handling covers it.
+        return subprocess.CompletedProcess(
+            cmd, _GIT_TIMEOUT_RETURNCODE, "", f"git {' '.join(args)} timed out after {_GIT_TIMEOUT_SECONDS}s"
+        )
 
 
 def _ref_exists(working_dir: Path, ref: str) -> bool:

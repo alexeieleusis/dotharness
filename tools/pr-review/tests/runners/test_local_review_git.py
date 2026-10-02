@@ -306,3 +306,14 @@ def test_is_ancestor(repo: Path) -> None:
     head = git(repo, "rev-parse", "HEAD")
     assert is_ancestor(base, head, str(repo), _env()) is True
     assert is_ancestor(head, base, str(repo), _env()) is False
+
+
+def test_git_timeout_becomes_failed_process(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(cmd: list[str], **_kw: object) -> None:
+        raise subprocess.TimeoutExpired(cmd, 30)
+
+    monkeypatch.setattr(local_review.subprocess, "run", boom)
+    proc = local_review._git(repo, "status")
+    assert proc.returncode == 124
+    assert "timed out" in proc.stderr
+    assert "git status failed" in (local_review._guard_violation(repo, "abc") or "")
