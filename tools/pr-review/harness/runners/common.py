@@ -305,9 +305,8 @@ def is_review_summary_comment(body: str) -> bool:
     return "review summary" in lower or "dotharness-review" in lower
 
 
-def _paginate_gh_comments(path: str, env: dict) -> list[dict] | None:
-    """GET-paginate a GitHub REST comments endpoint, returning every comment regardless
-    of author (mirrors address_comments.py's _fetch_all_pages pattern). Unlike
+def fetch_all_pages(path: str, env: dict) -> list[dict] | None:
+    """GET-paginate a GitHub REST list endpoint, returning every item. Unlike
     fetch_pr_comments (which goes through scripts/pr-comments.py's cache), this returns
     raw REST dicts that keep the snake_case `created_at` timestamp the cache drops.
     Returns None if any page fails."""
@@ -336,7 +335,7 @@ def _fetch_matching_comments(
     """Returns the current_user's comments matching predicate (possibly empty), or None
     if the GitHub API call itself failed (e.g. rate limit, transient 5xx) and the result
     is inconclusive."""
-    comments = _paginate_gh_comments(comments_path, env)
+    comments = fetch_all_pages(comments_path, env)
     if comments is None:
         return None
     return [c for c in comments if c.get("user", {}).get("login") == current_user and predicate(c.get("body", ""))]
@@ -512,7 +511,7 @@ def _fetch_early_window_comments(
     call failed" with "no comments in the window"."""
     if cache is not None and "early_window_comments" in cache:
         return cache["early_window_comments"]
-    comments = _paginate_gh_comments(f"repos/{repo}/issues/{pr_number}/comments", env)
+    comments = fetch_all_pages(f"repos/{repo}/issues/{pr_number}/comments", env)
     if comments is None:
         result = None
     else:
