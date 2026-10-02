@@ -618,6 +618,28 @@ def _count_resolved(review_dir: Path) -> dict[str, int]:
     return counts
 
 
+def _warn_discarded_statuses(review_dir: Path) -> None:
+    counts = _count_resolved(review_dir)
+    if counts["fixed"] or counts["declined"]:
+        logger.warning(
+            "--force discards address-phase statuses in %s: %d fixed, %d declined finding(s) will be overwritten",
+            review_dir,
+            counts["fixed"],
+            counts["declined"],
+        )
+
+
+def _seed_manifest(target: LocalReviewTarget, previous: dict | None) -> dict:
+    """A new manifest carrying over the string statuses of `previous` (when given)."""
+    manifest = _new_manifest(target)
+    if previous is not None:
+        manifest["files"] = {k: v for k, v in previous["files"].items() if isinstance(v, str)}
+        for key in ("summary", "design"):
+            if isinstance(previous.get(key), str):
+                manifest[key] = previous[key]
+    return manifest
+
+
 def run(  # noqa: C901
     config: HarnessConfig,
     target: LocalReviewTarget,
@@ -647,20 +669,8 @@ def run(  # noqa: C901
 
     previous = None if force else read_manifest(review_dir)
     if force:
-        counts = _count_resolved(review_dir)
-        if counts["fixed"] or counts["declined"]:
-            logger.warning(
-                "--force discards address-phase statuses in %s: %d fixed, %d declined finding(s) will be overwritten",
-                review_dir,
-                counts["fixed"],
-                counts["declined"],
-            )
-    manifest = _new_manifest(target)
-    if previous is not None:
-        manifest["files"] = {k: v for k, v in previous["files"].items() if isinstance(v, str)}
-        for key in ("summary", "design"):
-            if isinstance(previous.get(key), str):
-                manifest[key] = previous[key]
+        _warn_discarded_statuses(review_dir)
+    manifest = _seed_manifest(target, previous)
 
     files = get_changed_files(target.base_ref, wdir_s, env, rev_range=f"{target.base_sha}..HEAD")
     for f in files:
