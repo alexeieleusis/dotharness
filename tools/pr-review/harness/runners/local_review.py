@@ -642,13 +642,7 @@ def run(  # noqa: C901
     env.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "color.diff", "GIT_CONFIG_VALUE_0": "never"})
     wdir_s = str(wdir)
     if backend is None:
-        backend = Backend(
-            config.harness.backend,
-            config.harness.backend_timeout_seconds,
-            config.harness.path_prepend,
-            dict(config.harness.env),
-            expected_repo_name=config.repo.name if config.repo.name_provided else None,
-        )
+        backend = _make_backend(config)
 
     previous = None if force else read_manifest(review_dir)
     if force:
@@ -1080,8 +1074,6 @@ def write_finding_status(source_file: Path, finding_id: str, status: str, commit
 
 
 ADDRESS_HEADING = "**Finding to address**"
-DECISION_FIXED = "fixed"
-DECISION_DECLINED = "declined"
 MAX_DIFF_CHARS = 40_000
 OUTCOME_FIXED = "fixed"
 OUTCOME_DECLINED = "declined"
@@ -1149,7 +1141,7 @@ def _resolution_decision(path: Path) -> str | None:
         return None
     lines = text.strip().splitlines()
     first = lines[0].strip().lower() if lines else ""
-    for decision in (DECISION_FIXED, DECISION_DECLINED):
+    for decision in (OUTCOME_FIXED, OUTCOME_DECLINED):
         if first == f"decision: {decision}":
             return decision
     return None
@@ -1249,9 +1241,8 @@ def address_findings(  # noqa: C901
         result.outcomes[finding.id] = OUTCOME_FAILED
         logger.error("finding %s: failed (%s)", finding.id, reason)
 
+    res_dir.mkdir(parents=True, exist_ok=True)
     for index, finding in enumerate(pending):
-        if result.stopped:
-            break
         problem = _state_problem(wdir, target.branch)
         if problem:
             stop(finding, f"before finding {finding.id}: {problem}")
@@ -1264,7 +1255,6 @@ def address_findings(  # noqa: C901
             result.not_reached = len(pending) - index - 1
             break
         resolution = res_dir / f"{finding.id}.md"
-        res_dir.mkdir(parents=True, exist_ok=True)
         resolution.unlink(missing_ok=True)  # a stale file must not be mistaken for this run's answer
         diff = ""
         if finding.file:
@@ -1312,7 +1302,7 @@ def address_findings(  # noqa: C901
         if decision is None:
             fail(finding, f"resolution file {resolution} is missing, empty or its first line is not 'decision: ...'")
             continue
-        if decision == DECISION_FIXED:
+        if decision == OUTCOME_FIXED:
             parents = _commit_parents(wdir, new_head)
             if new_head == pre_sha or parents != [pre_sha]:
                 fail(finding, f"decision is fixed but HEAD is not exactly one new commit on {pre_sha[:12]}")
