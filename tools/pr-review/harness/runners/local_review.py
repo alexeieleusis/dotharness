@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -514,6 +515,20 @@ class ReviewResult:
     @property
     def ok(self) -> bool:
         return not self.failed
+
+
+def review_root_for_reset(config: HarnessConfig) -> Path:
+    """The per-repo review directory `state reset local-review` deletes; refuses anything
+    that is not a direct child of the output root."""
+    output_root = resolve_output_root(config)
+    review_root = output_root / config.repo_slug
+    if review_root.resolve().parent != output_root.resolve():
+        raise ValueError(f"Refusing to delete {review_root}: not a direct child of {output_root}")  # noqa: TRY003
+    return review_root
+
+
+def reset(review_root: Path) -> None:
+    shutil.rmtree(review_root)
 
 
 def resolve_output_root(config: HarnessConfig, output_dir: str | Path | None = None) -> Path:

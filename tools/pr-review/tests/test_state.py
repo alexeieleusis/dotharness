@@ -318,11 +318,6 @@ def _make_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def test_delete_state_local_review_has_no_state_file(tmp_xdg):
-    with pytest.raises(ValueError, match="No state file"):
-        state.delete_state("acme-frontend", "local-review")
-
-
 def test_state_reset_local_review_deletes_slug_dir_only(tmp_xdg, tmp_path):
     repo = _make_repo(tmp_path)
     cfg_path = _lr_config(tmp_path, repo)

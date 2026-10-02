@@ -12,14 +12,9 @@ XDG_DATA = Path.home() / ".local/share/dotharness"
 VIBE_HEAL_FILE = "vibe_heal.json"
 SELF_REVIEW_FILE = "self_review.json"
 
-# local-review keeps a directory tree (not a JSON file) under its output root; `state reset`
-# handles it in cli.state_reset. The None marker makes the command name known without a file.
-LOCAL_REVIEW_COMMAND = "local-review"
-
-_COMMAND_FILES: dict[str, str | None] = {
+_COMMAND_FILES = {
     "review-prs": VIBE_HEAL_FILE,
     "self-review": SELF_REVIEW_FILE,
-    LOCAL_REVIEW_COMMAND: None,
 }
 
 

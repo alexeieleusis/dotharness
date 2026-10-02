@@ -266,26 +266,32 @@ def cmd_state():
     pass  # Intentionally empty; Click group container for subcommands
 
 
+def _reset_local_review(config_path: Path, yes: bool) -> None:
+    cfg = load_config(config_path, require_repo_name=False)
+    try:
+        review_root = local_review.review_root_for_reset(cfg)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not review_root.exists():
+        click.echo(f"Nothing to reset: {review_root} does not exist")
+        return
+    if not yes:
+        click.confirm(f"Delete review directory {review_root} (all reviews for {cfg.repo_slug})?", abort=True)
+    local_review.reset(review_root)
+    click.echo(f"State reset for local-review/{cfg.repo_slug}: deleted {review_root}")
+
+
+# Commands whose state is not a JSON file under state/ and so can't go through state.delete_state.
+_CUSTOM_RESETS = {"local-review": _reset_local_review}
+
+
 @cmd_state.command("reset")
 @click.argument("command")
 @click.option("--config", "config_path", default=HARNESS_CONFIG, type=click.Path())
 @click.option("--yes", is_flag=True)
 def state_reset(command, config_path, yes):
-    if command == state_mod.LOCAL_REVIEW_COMMAND:
-        cfg = load_config(Path(config_path).resolve(), require_repo_name=False)
-        output_root = local_review.resolve_output_root(cfg)
-        review_root = output_root / cfg.repo_slug
-        if review_root.resolve().parent != output_root.resolve():
-            raise click.ClickException(  # noqa: TRY003
-                f"Refusing to delete {review_root}: not a direct child of {output_root}"
-            )
-        if not review_root.exists():
-            click.echo(f"Nothing to reset: {review_root} does not exist")
-            return
-        if not yes:
-            click.confirm(f"Delete review directory {review_root} (all reviews for {cfg.repo_slug})?", abort=True)
-        shutil.rmtree(review_root)
-        click.echo(f"State reset for {command}/{cfg.repo_slug}: deleted {review_root}")
+    if command in _CUSTOM_RESETS:
+        _CUSTOM_RESETS[command](Path(config_path).resolve(), yes)
         return
     cfg = load_config(Path(config_path).resolve())
     if not yes:
