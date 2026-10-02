@@ -901,6 +901,52 @@ def run_local_review(
         )
 
 
+def _run_review_phase(
+    config: HarnessConfig,
+    target: LocalReviewTarget,
+    output_root: Path,
+    force: bool,
+    backend: Backend | None,
+) -> ReviewResult | None:
+    """Run the review passes and print the summary; None when the backend mutated the repo (exit 1)."""
+    extra = None
+    kfile = config.harness.review_knowledge_file
+    if kfile and kfile.exists():
+        extra = kfile.read_text(encoding="utf-8")
+    try:
+        result = run(config, target, output_root=output_root, force=force, backend=backend, extra_knowledge=extra)
+    except RepoMutatedError as exc:
+        rdir = review_dir_for(output_root, config.repo_slug, target.branch, target.head_sha)
+        print(f"Review directory: {rdir}")
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return None
+    print(f"Review directory: {result.review_dir}")
+    for line in _pass_lines(result):
+        print(line)
+    return result
+
+
+def _select_and_address(
+    config: HarnessConfig,
+    target: LocalReviewTarget,
+    output_root: Path,
+    backend: Backend | None,
+    review_dir: str | Path | None,
+    skip_review: bool,
+    reviewed_dir: Path | None,
+) -> bool:
+    chosen = select_review_dir(
+        config, target, output_root, review_dir=review_dir, skip_review=skip_review, reviewed_dir=reviewed_dir
+    )
+    print(f"Addressing review: {chosen}")
+    collection = collect_findings(chosen)
+    print(
+        f"Findings to address: {len(collection.open)} open, "
+        f"{collection.skipped_not_open} skipped (not open), {collection.unparseable} unparseable"
+    )
+    return run_address_phase(config, target, chosen, collection, backend=backend)
+
+
 def _run_locked(
     config: HarnessConfig,
     base: str | None,
@@ -934,35 +980,15 @@ def _run_locked(
         print(f"Head: {target.head_sha}")
         reviewed_dir: Path | None = None
         if not skip_review:
-            extra = None
-            kfile = config.harness.review_knowledge_file
-            if kfile and kfile.exists():
-                extra = kfile.read_text(encoding="utf-8")
-            try:
-                result = run(
-                    config, target, output_root=output_root, force=force, backend=backend, extra_knowledge=extra
-                )
-            except RepoMutatedError as exc:
-                rdir = review_dir_for(output_root, config.repo_slug, target.branch, target.head_sha)
-                print(f"Review directory: {rdir}")
-                print(f"ERROR: {exc}", file=sys.stderr)
+            result = _run_review_phase(config, target, output_root, force, backend)
+            if result is None:
                 return 1
-            print(f"Review directory: {result.review_dir}")
-            for line in _pass_lines(result):
-                print(line)
             review_ok = result.ok
             reviewed_dir = result.review_dir
         if address:
-            chosen = select_review_dir(
-                config, target, output_root, review_dir=review_dir, skip_review=skip_review, reviewed_dir=reviewed_dir
+            address_ok = _select_and_address(
+                config, target, output_root, backend, review_dir, skip_review, reviewed_dir
             )
-            print(f"Addressing review: {chosen}")
-            collection = collect_findings(chosen)
-            print(
-                f"Findings to address: {len(collection.open)} open, "
-                f"{collection.skipped_not_open} skipped (not open), {collection.unparseable} unparseable"
-            )
-            address_ok = run_address_phase(config, target, chosen, collection, backend=backend)
             return 0 if (review_ok and address_ok) else 1
     except LocalReviewError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
