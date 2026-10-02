@@ -437,3 +437,13 @@ def test_build_subprocess_env_without_token_omits_github_token(monkeypatch):
     assert env["PATH"].startswith("/x/bin:")
     assert "GITHUB_TOKEN" not in build_subprocess_env([], {})
     assert os.environ.get("GITHUB_TOKEN") is None
+
+
+@pytest.mark.parametrize("bad", ["..", ".", "a b", "a;b"])
+def test_invalid_repo_name_rejected(tmp_path, bad):
+    p = tmp_path / ".harness.toml"
+    p.write_text(f'[harness]\n[repo]\nname = "{bad}"\nworking_dir = "{tmp_path}"\n')
+    with pytest.raises(ConfigError, match=r"Invalid repo\.name"):
+        load_config(p)
+    with pytest.raises(ConfigError, match=r"Invalid repo\.name"):
+        load_config(p, require_repo_name=False)

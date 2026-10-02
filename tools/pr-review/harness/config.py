@@ -187,6 +187,12 @@ def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
     r = data.get("repo", {})
     if require_repo_name and not r.get("name"):
         raise ConfigError("repo.name is required")  # noqa: TRY003
+    if r.get("name"):
+        slug = str(r["name"]).replace("/", "-")
+        if slug in (".", "..") or not re.fullmatch(r"[A-Za-z0-9._-]+", slug):
+            raise ConfigError(  # noqa: TRY003
+                f"Invalid repo.name '{r['name']}': must match [A-Za-z0-9._/-]+ and not be '.' or '..'"
+            )
     if not r.get("working_dir"):
         raise ConfigError("repo.working_dir is required")  # noqa: TRY003
 
