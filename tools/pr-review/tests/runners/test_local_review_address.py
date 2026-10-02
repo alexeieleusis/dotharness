@@ -344,6 +344,14 @@ def test_collect_counts_open_skipped_and_unparseable(env: Env) -> None:
     assert all(f.id.startswith("file-") for f in coll.open)
 
 
+def test_collect_rejects_path_traversal_ids(env: Env) -> None:
+    evil = block("evil").replace("- status: open", "- status: open\n- id: ../escape")
+    rdir = env.write_review(files={"a.py": evil})
+    coll = env.collection(rdir)
+    assert coll.open == []
+    assert coll.unparseable == 1
+
+
 def test_collect_reads_only_done_passes_and_orders_design_last(env: Env) -> None:
     f1 = stamped(block("zz", 1, file="b.py"), kind="file")
     f2 = stamped(block("aa", 9, file="a.py"), kind="file")

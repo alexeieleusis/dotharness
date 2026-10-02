@@ -317,6 +317,7 @@ VALID_SEVERITIES = ("P0", "P1")
 VALID_STATUSES = ("open", "wontfix", "fixed", "declined")
 VALID_PASSES = ("file", "design")
 _FIELD_RE = re.compile(r"^-\s*([A-Za-z_]+)\s*:\s*(.*?)\s*$")
+_ID_RE = re.compile(r"(file|design)-[0-9a-f]{8}")
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
 _H2_RE = re.compile(r"^## ")
 
@@ -403,7 +404,9 @@ def _parse_block(lines: list[str], start: int, end: int) -> FindingBlock:
     status = fields.get("status")
     line_raw = fields.get("line", "")
     line = int(line_raw) if re.fullmatch(r"\d+", line_raw) else None
-    valid = severity in VALID_SEVERITIES and bool(file) and line is not None and status in VALID_STATUSES
+    raw_id = fields.get("id")
+    id_ok = not raw_id or _ID_RE.fullmatch(raw_id) is not None  # ids become path components; reject others
+    valid = severity in VALID_SEVERITIES and bool(file) and line is not None and status in VALID_STATUSES and id_ok
     return FindingBlock(
         title=title,
         text=text,
@@ -1329,6 +1332,9 @@ def address_findings(  # noqa: C901
             result.not_reached = len(pending) - index - 1
             break
         resolution = res_dir / f"{finding.id}.md"
+        if resolution.resolve().parent != res_dir.resolve():
+            fail(finding, "finding id resolves outside the resolutions directory")
+            continue
         resolution.unlink(missing_ok=True)  # a stale file must not be mistaken for this run's answer
         diff = ""
         if finding.file:
