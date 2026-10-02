@@ -1052,6 +1052,26 @@ def _check_explicit_review_dir(chosen: Path, target: LocalReviewTarget, wdir: Pa
     return chosen
 
 
+def _matching_review_candidates(
+    branch_dir: Path, target: LocalReviewTarget, wdir: Path
+) -> list[tuple[int, float, str, Path]]:
+    """(commit time, manifest mtime, name, dir) for each review under `branch_dir` that matches `target`."""
+    candidates: list[tuple[int, float, str, Path]] = []
+    if not branch_dir.is_dir():
+        return candidates
+    for cand in sorted(branch_dir.iterdir()):
+        manifest = read_manifest(cand) if cand.is_dir() else None
+        if not _manifest_matches(manifest, target, wdir):
+            continue
+        sha = str((manifest or {}).get("head_sha"))
+        try:
+            mtime = (cand / MANIFEST_NAME).stat().st_mtime
+        except OSError:
+            continue
+        candidates.append((_commit_time(wdir, sha), mtime, cand.name, cand))
+    return candidates
+
+
 def select_review_dir(
     config: HarnessConfig,
     target: LocalReviewTarget,
@@ -1071,18 +1091,7 @@ def select_review_dir(
             raise LocalReviewError(f"no completed review found in {chosen}")  # noqa: TRY003
         return chosen
     branch_dir = review_dir_for(output_root, config.repo_slug, target.branch, target.head_sha).parent
-    candidates: list[tuple[int, float, str, Path]] = []
-    if branch_dir.is_dir():
-        for cand in sorted(branch_dir.iterdir()):
-            manifest = read_manifest(cand) if cand.is_dir() else None
-            if not _manifest_matches(manifest, target, wdir):
-                continue
-            sha = str((manifest or {}).get("head_sha"))
-            try:
-                mtime = (cand / MANIFEST_NAME).stat().st_mtime
-            except OSError:
-                continue
-            candidates.append((_commit_time(wdir, sha), mtime, cand.name, cand))
+    candidates = _matching_review_candidates(branch_dir, target, wdir)
     if not candidates:
         raise LocalReviewError(  # noqa: TRY003
             f"no earlier review found for branch {target.branch!r} under {branch_dir}; run `harness run local-review` first"
