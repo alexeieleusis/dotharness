@@ -131,6 +131,35 @@ class HarnessConfig:
         return working_dir_lock_key(self.repo_slug, self.repo.working_dir)
 
 
+def _parse_subdirs(raw_subdirs: list[dict]) -> list[SubDir]:
+    subdirs = []
+    for s in raw_subdirs:
+        if "path" not in s:
+            raise ConfigError("repo.subdir[].path is required")  # noqa: TRY003
+        subdirs.append(
+            SubDir(
+                path=s["path"],
+                pre_commands=[_parse_pre_command(pc) for pc in s.get("pre_commands", [])],
+                coverage=s.get("coverage", False),
+                timeout=s.get("timeout", 300),
+            )
+        )
+    return subdirs
+
+
+def _parse_opencode_dir(raw_odir: str | None, working_dir: Path) -> Path | None:
+    if not raw_odir:
+        return None
+    opencode_dir = Path(raw_odir).expanduser()
+    try:
+        opencode_dir.resolve().relative_to(working_dir.resolve())
+    except ValueError:
+        raise ConfigError(  # noqa: TRY003
+            f"repo.opencode_dir '{opencode_dir}' must be inside repo.working_dir '{working_dir}'"
+        ) from None
+    return opencode_dir
+
+
 def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
     with open(path, "rb") as f:
         try:
@@ -161,30 +190,10 @@ def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
     if not r.get("working_dir"):
         raise ConfigError("repo.working_dir is required")  # noqa: TRY003
 
-    subdirs = []
-    for s in r.get("subdir", []):
-        if "path" not in s:
-            raise ConfigError("repo.subdir[].path is required")  # noqa: TRY003
-        subdirs.append(
-            SubDir(
-                path=s["path"],
-                pre_commands=[_parse_pre_command(pc) for pc in s.get("pre_commands", [])],
-                coverage=s.get("coverage", False),
-                timeout=s.get("timeout", 300),
-            )
-        )
+    subdirs = _parse_subdirs(r.get("subdir", []))
 
     working_dir = Path(r["working_dir"]).expanduser()
-    raw_odir = r.get("opencode_dir")
-    opencode_dir: Path | None = None
-    if raw_odir:
-        opencode_dir = Path(raw_odir).expanduser()
-        try:
-            opencode_dir.resolve().relative_to(working_dir.resolve())
-        except ValueError:
-            raise ConfigError(  # noqa: TRY003
-                f"repo.opencode_dir '{opencode_dir}' must be inside repo.working_dir '{working_dir}'"
-            ) from None
+    opencode_dir = _parse_opencode_dir(r.get("opencode_dir"), working_dir)
 
     repo = RepoConfig(
         name=r.get("name") or "",
