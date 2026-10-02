@@ -1079,6 +1079,270 @@ def write_finding_status(source_file: Path, finding_id: str, status: str, commit
     _atomic_write_text(source_file, "\n".join(lines))
 
 
+ADDRESS_HEADING = "**Finding to address**"
+DECISION_FIXED = "fixed"
+DECISION_DECLINED = "declined"
+MAX_DIFF_CHARS = 40_000
+OUTCOME_FIXED = "fixed"
+OUTCOME_DECLINED = "declined"
+OUTCOME_FAILED = "failed"
+
+
+@dataclass
+class AddressResult:
+    """Per-finding outcomes of the address loop (finding id -> fixed|declined|failed)."""
+
+    outcomes: dict[str, str] = field(default_factory=dict)
+    not_reached: int = 0  # open findings never sent because the phase stopped early
+    stop_reason: str | None = None
+
+    def count(self, outcome: str) -> int:
+        return sum(1 for v in self.outcomes.values() if v == outcome)
+
+    @property
+    def stopped(self) -> bool:
+        return self.stop_reason is not None
+
+
+def _current_branch(wdir: Path) -> str:
+    proc = _git(wdir, "symbolic-ref", "--short", "HEAD")
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def _tracked_dirty(wdir: Path) -> list[str]:
+    """Tracked paths with uncommitted changes (untracked files ignored, 11.A-10). Raises on git failure."""
+    proc = _git(wdir, "status", "--porcelain", "--untracked-files=no")
+    if proc.returncode != 0:
+        raise LocalReviewError(f"git status failed: {proc.stderr.strip()}")  # noqa: TRY003
+    return [ln[3:] for ln in proc.stdout.splitlines() if ln.strip()]
+
+
+def _head(wdir: Path) -> str:
+    proc = _git(wdir, "rev-parse", "HEAD")
+    sha = proc.stdout.strip()
+    if proc.returncode != 0 or not sha:
+        raise LocalReviewError(f"cannot resolve HEAD: {proc.stderr.strip()}")  # noqa: TRY003
+    return sha
+
+
+def _state_problem(wdir: Path, branch: str) -> str | None:
+    """Description of a wrong branch or a dirty tracked tree, or None (FR-2 items 1-3 re-check)."""
+    try:
+        current = _current_branch(wdir)
+        if current != branch:
+            return f"current branch is {current or '(detached HEAD)'!r}, expected {branch!r}"
+        dirty = _tracked_dirty(wdir)
+    except LocalReviewError as exc:
+        return str(exc)
+    if dirty:
+        shown = ", ".join(dirty[:MAX_DIRTY_PATHS_SHOWN])
+        more = f" (and {len(dirty) - MAX_DIRTY_PATHS_SHOWN} more)" if len(dirty) > MAX_DIRTY_PATHS_SHOWN else ""
+        return f"uncommitted changes to tracked files: {shown}{more}"
+    return None
+
+
+def _resolution_decision(path: Path) -> str | None:
+    """`fixed` / `declined` from the first line of the resolution file, else None."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    lines = text.strip().splitlines()
+    first = lines[0].strip().lower() if lines else ""
+    for decision in (DECISION_FIXED, DECISION_DECLINED):
+        if first == f"decision: {decision}":
+            return decision
+    return None
+
+
+def _commit_parents(wdir: Path, rev: str) -> list[str]:
+    proc = _git(wdir, "rev-list", "--parents", "-n", "1", rev)
+    return proc.stdout.split()[1:] if proc.returncode == 0 else []
+
+
+def build_address_prompt(
+    instructions: str,
+    finding: AddressFinding,
+    resolution_path: Path,
+    review_head_sha: str,
+    diff: str,
+    vibe_heal_context: str | None = None,
+) -> str:
+    """Template text, then the finding under `**Finding to address**` (the template has no placeholders)."""
+    diff_text = diff if len(diff) <= MAX_DIFF_CHARS else diff[:MAX_DIFF_CHARS] + f"\n{TRUNCATED_MARKER}\n"
+    parts = [
+        instructions.rstrip(),
+        "",
+        "---",
+        "",
+        ADDRESS_HEADING,
+        "",
+        f"- finding id: {finding.id}",
+        f"- review head sha (12 chars): {review_head_sha[:12]}",
+        f"- file: {finding.file or '(none given)'}",
+        f"- line: {finding.line}",
+        f"- resolution file (absolute path, write it in Step 4): {resolution_path}",
+        "",
+        "Finding block:",
+        "",
+        finding.block.text.rstrip(),
+        "",
+        "Diff of the file against the merge base:",
+        "",
+        "```diff",
+        diff_text.rstrip(),
+        "```",
+    ]
+    if vibe_heal_context:
+        parts += ["", "Static-analysis (vibe-heal) context:", "", vibe_heal_context.strip()]
+    return "\n".join(parts) + "\n"
+
+
+def _make_backend(config: HarnessConfig) -> Backend:
+    return Backend(
+        config.harness.backend,
+        config.harness.backend_timeout_seconds,
+        config.harness.path_prepend,
+        dict(config.harness.env),
+        expected_repo_name=config.repo.name if config.repo.name_provided else None,
+    )
+
+
+def address_findings(  # noqa: C901
+    config: HarnessConfig,
+    target: LocalReviewTarget,
+    review_dir: Path,
+    collection: FindingCollection,
+    *,
+    backend: Backend | None = None,
+) -> AddressResult:
+    """FR-10 steps 3-4: one backend call and at most one commit per open finding, verified by git.
+
+    A finding becomes `fixed` / `declined` only when the resolution file and git agree (7.3);
+    otherwise it is `failed` and keeps `status: open`. Stops (no repair, no further backend calls)
+    when history was rewritten, tracked files are dirty, or the branch changed (7.4).
+    """
+    wdir = Path(config.repo.working_dir).expanduser().resolve()
+    wdir_s = str(wdir)
+    env = build_subprocess_env(config.harness.path_prepend, config.harness.env)
+    env.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "color.diff", "GIT_CONFIG_VALUE_0": "never"})
+    if backend is None:
+        backend = _make_backend(config)
+    instructions = (Path(config.harness.knowledge_dir) / "pr-review" / ADDRESS_TEMPLATE).read_text(encoding="utf-8")
+    vibe = get_vibe_heal_context(config.repo.subdirs, wdir_s, target.branch) or None
+    review_head = target.head_sha
+    manifest = read_manifest(review_dir)
+    if manifest and isinstance(manifest.get("head_sha"), str):
+        review_head = manifest["head_sha"]
+    res_dir = review_dir / RESOLUTIONS_DIR
+    result = AddressResult()
+    pending = list(collection.open)
+
+    def stop(finding: AddressFinding | None, reason: str) -> None:
+        result.stop_reason = reason
+        logger.error("address phase stopped: %s", reason)
+        if finding is not None:
+            result.outcomes[finding.id] = OUTCOME_FAILED
+            logger.error("finding %s: failed (%s)", finding.id, reason)
+
+    def fail(finding: AddressFinding, reason: str) -> None:
+        result.outcomes[finding.id] = OUTCOME_FAILED
+        logger.error("finding %s: failed (%s)", finding.id, reason)
+
+    for index, finding in enumerate(pending):
+        if result.stopped:
+            break
+        problem = _state_problem(wdir, target.branch)
+        if problem:
+            stop(finding, f"before finding {finding.id}: {problem}")
+            result.not_reached = len(pending) - index - 1
+            break
+        try:
+            pre_sha = _head(wdir)
+        except LocalReviewError as exc:
+            stop(finding, str(exc))
+            result.not_reached = len(pending) - index - 1
+            break
+        resolution = res_dir / f"{finding.id}.md"
+        res_dir.mkdir(parents=True, exist_ok=True)
+        resolution.unlink(missing_ok=True)  # a stale file must not be mistaken for this run's answer
+        diff = ""
+        if finding.file:
+            diff = get_file_diff(finding.file, target.base_ref, wdir_s, env, rev_range=f"{target.base_sha} HEAD")
+        prompt = build_address_prompt(instructions, finding, resolution.resolve(), review_head, diff, vibe)
+        backend_ok = False
+        backend_error = ""
+        try:
+            proc = backend.run(prompt, cwd=wdir_s, context=f"local-review address {finding.id}")
+            backend_ok = proc.returncode == 0
+            if not backend_ok:
+                backend_error = f"backend exited {proc.returncode}"
+        except subprocess.TimeoutExpired:
+            backend_error = "backend timed out"
+        except Exception as exc:
+            logger.exception("finding %s: backend call failed", finding.id)
+            backend_error = f"backend call failed ({exc})"
+
+        # 7.4: stop-the-phase checks, after every call, even a failed one. No repair (G3).
+        stop_reasons: list[str] = []
+        try:
+            new_head = _head(wdir)
+            if not is_ancestor(pre_sha, new_head, wdir_s, env):
+                stop_reasons.append(f"history rewritten: {pre_sha} is not an ancestor of HEAD {new_head}")
+            now_branch = _current_branch(wdir)
+            if now_branch != target.branch:
+                stop_reasons.append(f"branch changed from {target.branch!r} to {now_branch or '(detached HEAD)'!r}")
+            dirty = _tracked_dirty(wdir)
+            if dirty:
+                stop_reasons.append(
+                    f"tracked files have uncommitted changes: {', '.join(dirty[:MAX_DIRTY_PATHS_SHOWN])}"
+                )
+        except LocalReviewError as exc:
+            new_head = ""
+            stop_reasons.append(str(exc))
+        if stop_reasons:
+            stop(finding, f"after finding {finding.id}: " + "; ".join(stop_reasons))
+            result.not_reached = len(pending) - index - 1
+            break
+        if not backend_ok:
+            fail(finding, backend_error)
+            continue
+
+        decision = _resolution_decision(resolution)
+        if decision is None:
+            fail(finding, f"resolution file {resolution} is missing, empty or its first line is not 'decision: ...'")
+            continue
+        if decision == DECISION_FIXED:
+            parents = _commit_parents(wdir, new_head)
+            if new_head == pre_sha or parents != [pre_sha]:
+                fail(finding, f"decision is fixed but HEAD is not exactly one new commit on {pre_sha[:12]}")
+                continue
+            commit: str | None = new_head
+            outcome = OUTCOME_FIXED
+        else:
+            if new_head != pre_sha:
+                fail(finding, "decision is declined but HEAD moved")
+                continue
+            commit = None
+            outcome = OUTCOME_DECLINED
+        try:
+            write_finding_status(finding.source_file, finding.id, decision, commit)
+        except (LocalReviewError, OSError) as exc:
+            fail(finding, f"cannot record status: {exc}")
+            continue
+        result.outcomes[finding.id] = outcome
+        logger.info("finding %s: %s%s", finding.id, outcome, f" ({commit})" if commit else "")
+    return result
+
+
+def address_summary_line(collection: FindingCollection, result: AddressResult) -> str:
+    skipped = collection.skipped_not_open + result.not_reached
+    return (
+        f"findings: {result.count(OUTCOME_FIXED)} fixed, {result.count(OUTCOME_DECLINED)} declined, "
+        f"{result.count(OUTCOME_FAILED)} failed, {skipped} skipped (not open), {collection.unparseable} unparseable"
+    )
+
+
 def run_address_phase(
     config: HarnessConfig,
     target: LocalReviewTarget,
@@ -1087,12 +1351,13 @@ def run_address_phase(
     *,
     backend: Backend | None = None,
 ) -> bool:
-    """Per-finding backend loop (local-review phase 09 plugs in here). Returns True when all succeeded.
+    """Run the address loop, print the FR-9 summary line, return True when the exit code should be 0.
 
-    Phase 08 provides selection and collection only; this stub addresses nothing.
+    False when any finding failed, any block was unparseable, or the phase stopped early.
+    Not-reached findings after an early stop count as skipped, not failed.
     """
-    del config, target, review_dir, backend
-    logger.info(
-        "address phase: %d open finding(s) collected; per-finding loop not implemented yet", len(collection.open)
-    )
-    return True
+    result = address_findings(config, target, review_dir, collection, backend=backend)
+    print(address_summary_line(collection, result))
+    if result.stopped:
+        print(f"ERROR: address phase stopped early: {result.stop_reason}", file=sys.stderr)
+    return not (result.stopped or result.count(OUTCOME_FAILED) or collection.unparseable)
