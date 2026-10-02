@@ -272,8 +272,9 @@ def add_regret_reviewed_pr(repo_slug: str, pr_number: int) -> None:
 
 
 def delete_state(repo_slug: str, command: str) -> None:
-    if command not in _COMMAND_FILES:
+    filename = _COMMAND_FILES.get(command)
+    if filename is None:
         raise ValueError(f"No state file for command: {command}")  # noqa: TRY003
-    p = _state_path(repo_slug, _COMMAND_FILES[command])
+    p = _state_path(repo_slug, filename)
     if p.exists():
         p.unlink()

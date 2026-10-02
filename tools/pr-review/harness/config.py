@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,6 +11,19 @@ from harness.lock import working_dir_lock_key
 
 class ConfigError(ValueError):
     pass
+
+
+def _fallback_repo_slug(working_dir: Path) -> str:
+    """Directory-safe slug for a config without `repo.name`.
+
+    Sanitized basename (anything outside [a-zA-Z0-9._-] becomes "-") plus "-" and the
+    first 8 hex chars of the SHA-256 of the resolved path. Always matches
+    ``^[a-zA-Z0-9._-]+$``.
+    """
+    resolved = working_dir.expanduser().resolve()
+    base = re.sub(r"[^a-zA-Z0-9._-]", "-", resolved.name).strip(".-") or "repo"
+    digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
+    return f"{base}-{digest}"
 
 
 @dataclass
@@ -67,11 +82,18 @@ class RegretReviewConfig:
 
 
 @dataclass
+class LocalReviewConfig:
+    base: str | None = None
+    output_dir: str | None = None
+
+
+@dataclass
 class RepoConfig:
-    name: str
+    name: str  # "" when `repo.name` is absent (only possible with require_repo_name=False)
     working_dir: Path
     subdirs: list[SubDir] = field(default_factory=list)
     opencode_dir: Path | None = None
+    name_provided: bool = True
 
 
 @dataclass
@@ -93,10 +115,13 @@ class HarnessConfig:
     focused_review: FocusedReviewConfig = field(default_factory=FocusedReviewConfig)
     address_comments: AddressCommentsConfig = field(default_factory=AddressCommentsConfig)
     regret_review: RegretReviewConfig = field(default_factory=RegretReviewConfig)
+    local_review: LocalReviewConfig = field(default_factory=LocalReviewConfig)
 
     @property
     def repo_slug(self) -> str:
-        return self.repo.name.replace("/", "-")
+        if self.repo.name:
+            return self.repo.name.replace("/", "-")
+        return _fallback_repo_slug(self.repo.working_dir)
 
     @property
     def lock_key(self) -> str:
@@ -106,7 +131,62 @@ class HarnessConfig:
         return working_dir_lock_key(self.repo_slug, self.repo.working_dir)
 
 
-def load_config(path: Path) -> HarnessConfig:
+def _parse_subdirs(raw_subdirs: list[dict]) -> list[SubDir]:
+    subdirs = []
+    for s in raw_subdirs:
+        if "path" not in s:
+            raise ConfigError("repo.subdir[].path is required")  # noqa: TRY003
+        subdirs.append(
+            SubDir(
+                path=s["path"],
+                pre_commands=[_parse_pre_command(pc) for pc in s.get("pre_commands", [])],
+                coverage=s.get("coverage", False),
+                timeout=s.get("timeout", 300),
+            )
+        )
+    return subdirs
+
+
+def _parse_opencode_dir(raw_odir: str | None, working_dir: Path) -> Path | None:
+    if not raw_odir:
+        return None
+    opencode_dir = Path(raw_odir).expanduser()
+    try:
+        opencode_dir.resolve().relative_to(working_dir.resolve())
+    except ValueError:
+        raise ConfigError(  # noqa: TRY003
+            f"repo.opencode_dir '{opencode_dir}' must be inside repo.working_dir '{working_dir}'"
+        ) from None
+    return opencode_dir
+
+
+def _parse_repo(r: dict, *, require_repo_name: bool) -> RepoConfig:
+    if require_repo_name and not r.get("name"):
+        raise ConfigError("repo.name is required")  # noqa: TRY003
+    if r.get("name"):
+        slug = str(r["name"]).replace("/", "-")
+        if slug in (".", "..") or not re.fullmatch(r"[A-Za-z0-9._-]+", slug):
+            raise ConfigError(  # noqa: TRY003
+                f"Invalid repo.name '{r['name']}': must match [A-Za-z0-9._/-]+ and not be '.' or '..'"
+            )
+    if not r.get("working_dir"):
+        raise ConfigError("repo.working_dir is required")  # noqa: TRY003
+
+    subdirs = _parse_subdirs(r.get("subdir", []))
+
+    working_dir = Path(r["working_dir"]).expanduser()
+    opencode_dir = _parse_opencode_dir(r.get("opencode_dir"), working_dir)
+
+    return RepoConfig(
+        name=r.get("name") or "",
+        working_dir=working_dir,
+        subdirs=subdirs,
+        opencode_dir=opencode_dir,
+        name_provided=bool(r.get("name")),
+    )
+
+
+def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
     with open(path, "rb") as f:
         try:
             data = tomllib.load(f)
@@ -130,43 +210,7 @@ def load_config(path: Path) -> HarnessConfig:
         review_knowledge_file=Path(rkf).expanduser() if rkf else None,
     )
 
-    r = data.get("repo", {})
-    if not r.get("name"):
-        raise ConfigError("repo.name is required")  # noqa: TRY003
-    if not r.get("working_dir"):
-        raise ConfigError("repo.working_dir is required")  # noqa: TRY003
-
-    subdirs = []
-    for s in r.get("subdir", []):
-        if "path" not in s:
-            raise ConfigError("repo.subdir[].path is required")  # noqa: TRY003
-        subdirs.append(
-            SubDir(
-                path=s["path"],
-                pre_commands=[_parse_pre_command(pc) for pc in s.get("pre_commands", [])],
-                coverage=s.get("coverage", False),
-                timeout=s.get("timeout", 300),
-            )
-        )
-
-    working_dir = Path(r["working_dir"]).expanduser()
-    raw_odir = r.get("opencode_dir")
-    opencode_dir: Path | None = None
-    if raw_odir:
-        opencode_dir = Path(raw_odir).expanduser()
-        try:
-            opencode_dir.resolve().relative_to(working_dir.resolve())
-        except ValueError:
-            raise ConfigError(  # noqa: TRY003
-                f"repo.opencode_dir '{opencode_dir}' must be inside repo.working_dir '{working_dir}'"
-            ) from None
-
-    repo = RepoConfig(
-        name=r["name"],
-        working_dir=working_dir,
-        subdirs=subdirs,
-        opencode_dir=opencode_dir,
-    )
+    repo = _parse_repo(data.get("repo", {}), require_repo_name=require_repo_name)
 
     vh = data.get("vibe_heal", {})
     vibe_heal = VibehealConfig(
@@ -207,6 +251,12 @@ def load_config(path: Path) -> HarnessConfig:
         regret_review_timeout=rr.get("regret_review_timeout", 300),
     )
 
+    lr = data.get("local_review", {})
+    local_review = LocalReviewConfig(
+        base=lr.get("base") or None,
+        output_dir=lr.get("output_dir") or None,
+    )
+
     return HarnessConfig(
         harness=harness_section,
         repo=repo,
@@ -214,4 +264,5 @@ def load_config(path: Path) -> HarnessConfig:
         focused_review=focused_review,
         address_comments=address_comments,
         regret_review=regret_review,
+        local_review=local_review,
     )

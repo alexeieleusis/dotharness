@@ -50,7 +50,7 @@ harness run all          # run every command in sequence
 - [docs/configuration.md](docs/configuration.md) — `.harness.toml` schema
 - [docs/commands/](docs/commands/) — one page per command
   (`review-prs`, `focused-review`, `review-requested`, `self-review`,
-  `address-comments`)
+  `address-comments`, `local-review` with its optional `--address` phase)
 - [docs/modules.md](docs/modules.md) — generated API reference
 
 Build and browse them locally with `make docs`.

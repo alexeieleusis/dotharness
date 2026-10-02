@@ -206,7 +206,9 @@ def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:
         )
 
 
-def build_subprocess_env(path_prepend: list[str], env_vars: dict[str, str], gh_token: str) -> dict[str, str]:
+def build_subprocess_env(
+    path_prepend: list[str], env_vars: dict[str, str], gh_token: str | None = None
+) -> dict[str, str]:
     env = os.environ.copy()
     if path_prepend:
         env["PATH"] = ":".join(path_prepend) + ":" + env.get("PATH", "")
@@ -371,9 +373,8 @@ def is_review_summary_comment(body: str) -> bool:
     return "review summary" in lower or "dotharness-review" in lower
 
 
-def _paginate_gh_comments(path: str, env: dict) -> list[dict] | None:
-    """GET-paginate a GitHub REST comments endpoint, returning every comment regardless
-    of author (mirrors address_comments.py's _fetch_all_pages pattern). Unlike
+def fetch_all_pages(path: str, env: dict) -> list[dict] | None:
+    """GET-paginate a GitHub REST list endpoint, returning every item. Unlike
     fetch_pr_comments (which goes through scripts/pr-comments.py's cache), this returns
     raw REST dicts that keep the snake_case `created_at` timestamp the cache drops.
     Returns None if any page fails."""
@@ -402,7 +403,7 @@ def _fetch_matching_comments(
     """Returns the current_user's comments matching predicate (possibly empty), or None
     if the GitHub API call itself failed (e.g. rate limit, transient 5xx) and the result
     is inconclusive."""
-    comments = _paginate_gh_comments(comments_path, env)
+    comments = fetch_all_pages(comments_path, env)
     if comments is None:
         return None
     return [c for c in comments if c.get("user", {}).get("login") == current_user and predicate(c.get("body", ""))]
@@ -578,7 +579,7 @@ def _fetch_early_window_comments(
     call failed" with "no comments in the window"."""
     if cache is not None and "early_window_comments" in cache:
         return cache["early_window_comments"]
-    comments = _paginate_gh_comments(f"repos/{repo}/issues/{pr_number}/comments", env)
+    comments = fetch_all_pages(f"repos/{repo}/issues/{pr_number}/comments", env)
     if comments is None:
         result = None
     else:
@@ -1151,13 +1152,28 @@ def get_pr_description(pr_number: int, repo: str, env: dict) -> str:
     return result.stdout.decode("utf-8").strip()
 
 
-def get_changed_files(base_branch: str, wdir: str, env: dict, expected_sha: str = "") -> list[str]:
+def is_ancestor(candidate_sha: str, descendant_sha: str, wdir: str, env: dict) -> bool:
+    result = run_cmd(
+        ["git", "merge-base", "--is-ancestor", candidate_sha, descendant_sha],
+        cwd=wdir,
+        env=env,
+        timeout=TIMEOUT_GIT,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def get_changed_files(
+    base_branch: str, wdir: str, env: dict, expected_sha: str = "", *, rev_range: str | None = None
+) -> list[str]:
+    """Names of files changed in the review range. ``rev_range`` overrides the default
+    ``origin/{base_branch}...HEAD`` (local-review passes ``<merge_base>..HEAD``)."""
     if expected_sha:
         actual = get_head_sha(wdir, env)
         if actual and actual != expected_sha:
             logger.warning("get_changed_files: local HEAD %s differs from expected %s", actual, expected_sha)
     result = run_cmd(
-        ["git", "diff", "--name-only", f"origin/{base_branch}...HEAD"],
+        ["git", "diff", "--name-only", rev_range or f"origin/{base_branch}...HEAD"],
         cwd=wdir,
         env=env,
         timeout=TIMEOUT_GIT,
@@ -1173,9 +1189,13 @@ def get_changed_files(base_branch: str, wdir: str, env: dict, expected_sha: str 
     return [f for f in result.stdout.decode("utf-8").splitlines() if f.strip()]
 
 
-def get_file_diff(file_path: str, base_branch: str, wdir: str, env: dict) -> str:
+def get_file_diff(file_path: str, base_branch: str, wdir: str, env: dict, *, rev_range: str | None = None) -> str:
+    """Per-file diff. ``rev_range`` overrides the default ``origin/{base_branch}...HEAD``;
+    it is split on whitespace into separate git arguments (local-review passes
+    ``"<merge_base> HEAD"``)."""
+    range_args = rev_range.split() if rev_range else [f"origin/{base_branch}...HEAD"]
     result = run_cmd(
-        ["git", "diff", f"origin/{base_branch}...HEAD", "--", file_path],
+        ["git", "diff", *range_args, "--", file_path],
         cwd=wdir,
         env=env,
         timeout=TIMEOUT_GIT,

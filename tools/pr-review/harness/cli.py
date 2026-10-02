@@ -1,4 +1,5 @@
 import logging
+import shutil
 import sys
 from datetime import date
 from pathlib import Path
@@ -7,7 +8,14 @@ import click
 
 from harness import state as state_mod
 from harness.config import load_config
-from harness.runners import address_comments, focused_review, review_prs, review_requested, self_review
+from harness.runners import (
+    address_comments,
+    focused_review,
+    local_review,
+    review_prs,
+    review_requested,
+    self_review,
+)
 
 TEMPLATE = """\
 # dotharness configuration — DO NOT COMMIT this file
@@ -90,8 +98,6 @@ def cmd_init(directory):
 @click.option("--config", "config_path", default=None, type=click.Path())
 def cmd_validate(directory, config_path):
     """Validate .harness.toml in DIRECTORY (default: current directory)."""
-    import shutil
-
     if config_path is None:
         config_path = str(Path(directory) / HARNESS_CONFIG)
     errors = []
@@ -184,6 +190,41 @@ def run_self_review(ctx):
     self_review.run(cfg)
 
 
+@cmd_run.command("local-review")
+@click.option("--base", "base", default=None, help="Base ref to compare against (default: config, origin/HEAD, main).")
+@click.option("--output-dir", "output_dir", default=None, type=click.Path(), help="Output root override.")
+@click.option("--force", is_flag=True, default=False, help="Ignore the manifest and re-run every pass for this head.")
+@click.option("--address", is_flag=True, default=False, help="After the review phase, address open findings.")
+@click.option(
+    "--skip-review", is_flag=True, default=False, help="With --address: skip the review, address an earlier one."
+)
+@click.option(
+    "--review-dir",
+    "review_dir",
+    default=None,
+    type=click.Path(),
+    help="With --address --skip-review: review directory.",
+)
+@click.pass_context
+def run_local_review(ctx, base, output_dir, force, address, skip_review, review_dir):
+    """Review the current checkout against its base, offline; write findings under the output root."""
+    usage_error = local_review.address_usage_error(address, skip_review, review_dir)
+    if usage_error:
+        raise click.UsageError(usage_error)
+    _setup_logging("local-review", ctx.obj.get("verbose", False))
+    cfg = load_config(ctx.obj["config_path"], require_repo_name=False)
+    code = local_review.run_local_review(
+        cfg,
+        base=base,
+        output_dir=output_dir,
+        force=force,
+        address=address,
+        skip_review=skip_review,
+        review_dir=review_dir,
+    )
+    sys.exit(code)
+
+
 @cmd_run.command("address-comments")
 @click.pass_context
 def run_address_comments(ctx):
@@ -225,11 +266,33 @@ def cmd_state():
     pass  # Intentionally empty; Click group container for subcommands
 
 
+def _reset_local_review(config_path: Path, yes: bool) -> None:
+    cfg = load_config(config_path, require_repo_name=False)
+    try:
+        review_root = local_review.review_root_for_reset(cfg)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not review_root.exists():
+        click.echo(f"Nothing to reset: {review_root} does not exist")
+        return
+    if not yes:
+        click.confirm(f"Delete review directory {review_root} (all reviews for {cfg.repo_slug})?", abort=True)
+    local_review.reset(review_root)
+    click.echo(f"State reset for local-review/{cfg.repo_slug}: deleted {review_root}")
+
+
+# Commands whose state is not a JSON file under state/ and so can't go through state.delete_state.
+_CUSTOM_RESETS = {"local-review": _reset_local_review}
+
+
 @cmd_state.command("reset")
 @click.argument("command")
 @click.option("--config", "config_path", default=HARNESS_CONFIG, type=click.Path())
 @click.option("--yes", is_flag=True)
 def state_reset(command, config_path, yes):
+    if command in _CUSTOM_RESETS:
+        _CUSTOM_RESETS[command](Path(config_path).resolve(), yes)
+        return
     cfg = load_config(Path(config_path).resolve())
     if not yes:
         click.confirm(f"Delete state for {command}/{cfg.repo_slug}?", abort=True)
@@ -248,8 +311,6 @@ def cmd_schedule():
 @click.option("--every", required=True)
 @click.option("--scheduler", default="cron", type=click.Choice(["cron", "launchd"]))
 def schedule_install(command, config_path, every, scheduler):
-    import shutil
-
     from harness.scheduler import ScheduleEntry, install_cron, install_launchd, parse_duration
 
     cfg = load_config(Path(config_path).resolve())

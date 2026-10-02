@@ -1,7 +1,11 @@
+import os
+import re
+
 import pytest
 
 from harness.config import ConfigError, PreCommand, load_config
 from harness.lock import working_dir_lock_key
+from harness.runners.common import build_subprocess_env
 
 
 def test_load_minimal(minimal_toml):
@@ -350,3 +354,96 @@ name = "a/b"
 """)
     with pytest.raises(ConfigError, match="Invalid TOML"):
         load_config(p)
+
+
+_NO_NAME_TOML = """
+[harness]
+[repo]
+working_dir = "{wd}"
+{extra}
+"""
+
+
+def _write_no_name(tmp_path, wd=None, extra=""):
+    p = tmp_path / ".harness.toml"
+    p.write_text(_NO_NAME_TOML.format(wd=wd or tmp_path, extra=extra))
+    return p
+
+
+def test_missing_repo_name_still_raises_by_default(tmp_path):
+    with pytest.raises(ConfigError, match=r"repo\.name is required"):
+        load_config(_write_no_name(tmp_path))
+
+
+def test_require_repo_name_false_allows_missing_name(tmp_path):
+    cfg = load_config(_write_no_name(tmp_path), require_repo_name=False)
+    assert cfg.repo.name == ""
+    assert cfg.repo.name_provided is False
+
+
+def test_working_dir_still_required_when_name_optional(tmp_path):
+    p = tmp_path / ".harness.toml"
+    p.write_text('[harness]\n[repo]\nname = "a/b"\n')
+    with pytest.raises(ConfigError, match=r"repo\.working_dir is required"):
+        load_config(p, require_repo_name=False)
+
+
+def test_repo_slug_uses_name_when_present(minimal_toml):
+    cfg = load_config(minimal_toml)
+    assert cfg.repo.name_provided is True
+    assert cfg.repo_slug == "acme-frontend"
+
+
+def test_repo_slug_fallback_matches_state_regex_and_is_stable(tmp_path):
+    wd = tmp_path / "my weird repo!"
+    wd.mkdir()
+    cfg = load_config(_write_no_name(tmp_path, wd=wd), require_repo_name=False)
+    slug = cfg.repo_slug
+    assert re.fullmatch(r"[a-zA-Z0-9._-]+", slug)
+    assert re.fullmatch(r"my-weird-repo-[0-9a-f]{8}", slug)
+    assert slug == cfg.repo_slug
+    assert slug == load_config(_write_no_name(tmp_path, wd=wd), require_repo_name=False).repo_slug
+
+
+def test_repo_slug_fallback_differs_per_path(tmp_path):
+    a = tmp_path / "a" / "repo"
+    b = tmp_path / "b" / "repo"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+    slug_a = load_config(_write_no_name(tmp_path, wd=a), require_repo_name=False).repo_slug
+    slug_b = load_config(_write_no_name(tmp_path, wd=b), require_repo_name=False).repo_slug
+    assert slug_a != slug_b
+
+
+def test_local_review_section_parsed(tmp_path):
+    p = _write_no_name(tmp_path, extra="")
+    p.write_text(p.read_text() + '\n[local_review]\nbase = "main"\noutput_dir = "~/reviews"\n')
+    cfg = load_config(p, require_repo_name=False)
+    assert cfg.local_review.base == "main"
+    assert cfg.local_review.output_dir == "~/reviews"
+
+
+def test_local_review_absent_yields_empty_config(minimal_toml):
+    cfg = load_config(minimal_toml)
+    assert cfg.local_review.base is None
+    assert cfg.local_review.output_dir is None
+
+
+def test_build_subprocess_env_without_token_omits_github_token(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    env = build_subprocess_env(["/x/bin"], {"FOO": "bar"}, None)
+    assert "GITHUB_TOKEN" not in env
+    assert env["FOO"] == "bar"
+    assert env["PATH"].startswith("/x/bin:")
+    assert "GITHUB_TOKEN" not in build_subprocess_env([], {})
+    assert os.environ.get("GITHUB_TOKEN") is None
+
+
+@pytest.mark.parametrize("bad", ["..", ".", "a b", "a;b"])
+def test_invalid_repo_name_rejected(tmp_path, bad):
+    p = tmp_path / ".harness.toml"
+    p.write_text(f'[harness]\n[repo]\nname = "{bad}"\nworking_dir = "{tmp_path}"\n')
+    with pytest.raises(ConfigError, match=r"Invalid repo\.name"):
+        load_config(p)
+    with pytest.raises(ConfigError, match=r"Invalid repo\.name"):
+        load_config(p, require_repo_name=False)

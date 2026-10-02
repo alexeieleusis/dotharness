@@ -13,6 +13,7 @@ from harness.runners.common import (
     TIMEOUT_GH,
     TIMEOUT_GIT,
     build_subprocess_env,
+    fetch_all_pages,
     fetch_pr_comments,
     find_last_reply_if_marked,
     get_current_user,
@@ -21,6 +22,7 @@ from harness.runners.common import (
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
+    is_ancestor,
     is_draft_pr,
     preserve_reviewer_request,
     reply_has_reaction_from,
@@ -28,6 +30,9 @@ from harness.runners.common import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Kept under the old private name: existing tests patch address_comments._is_ancestor.
+_is_ancestor = is_ancestor
 
 GRAPHQL_QUERY = """
 query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
@@ -402,38 +407,6 @@ def _filter_comments(
     return comments
 
 
-def _is_ancestor(candidate_sha: str, descendant_sha: str, wdir: str, env: dict) -> bool:
-    result = run_cmd(
-        ["git", "merge-base", "--is-ancestor", candidate_sha, descendant_sha],
-        cwd=wdir,
-        env=env,
-        timeout=TIMEOUT_GIT,
-        check=False,
-    )
-    return result.returncode == 0
-
-
-def _fetch_all_pages(path: str, env: dict) -> list[dict] | None:
-    """GET-paginate a GitHub REST list endpoint. Returns None if any page fails."""
-    items: list[dict] = []
-    page = 1
-    while True:
-        result = run_cmd(
-            ["gh", "api", "--method", "GET", path, "-F", "per_page=100", "-F", f"page={page}"],
-            cwd="/",
-            env=env,
-            timeout=TIMEOUT_GH,
-            check=False,
-        )
-        if result.returncode != 0:
-            return None
-        batch = json.loads(result.stdout)
-        items.extend(batch)
-        if len(batch) < 100:
-            return items
-        page += 1
-
-
 def _reply_observed(comment: dict, pr_number: int, repo: str, our_login: str, since_iso: str, env: dict) -> bool:
     """Best-effort check that *some* reply attributable to this comment was posted by
     our_login. Returns True on an inconclusive API failure — this only exists to surface
@@ -442,7 +415,7 @@ def _reply_observed(comment: dict, pr_number: int, repo: str, our_login: str, si
     endpoint = (
         f"repos/{repo}/pulls/{pr_number}/comments" if ctype == "inline" else f"repos/{repo}/issues/{pr_number}/comments"
     )
-    items = _fetch_all_pages(endpoint, env)
+    items = fetch_all_pages(endpoint, env)
     if items is None:
         return True
     if ctype == "inline":
