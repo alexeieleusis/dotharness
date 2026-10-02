@@ -658,7 +658,140 @@ def _single_pass_output_ok(name: str, out: Path, files_all_done: bool) -> bool:
     return True
 
 
-def run(  # noqa: C901
+class _ReviewPasses:
+    """State and per-pass steps of one review-phase run (extracted from `run` to keep it flat)."""
+
+    def __init__(
+        self,
+        config: HarnessConfig,
+        target: LocalReviewTarget,
+        review_dir: Path,
+        manifest: dict,
+        backend: Backend,
+        env: dict[str, str],
+        files: list[str],
+        extra_knowledge: str | None,
+    ) -> None:
+        self.target = target
+        self.review_dir = review_dir
+        self.manifest = manifest
+        self.backend = backend
+        self.env = env
+        self.files = files
+        self.extra_knowledge = extra_knowledge
+        self.wdir = Path(config.repo.working_dir)
+        self.wdir_s = str(self.wdir)
+        knowledge = Path(config.harness.knowledge_dir) / "pr-review"
+        self.file_instr = (knowledge / FILE_TEMPLATE).read_text(encoding="utf-8")
+        self.summary_instr = (knowledge / SUMMARY_TEMPLATE).read_text(encoding="utf-8")
+        self.design_instr = (knowledge / DESIGN_TEMPLATE).read_text(encoding="utf-8")
+        description = build_change_description(self.wdir, target)
+        self.context = build_change_context(config.repo.name, self.wdir, target, description)
+        self.vibe = get_vibe_heal_context(config.repo.subdirs, self.wdir_s, target.branch) or None
+        self.result = ReviewResult(review_dir=review_dir, manifest=manifest)
+        self.guard_head = read_head_sha(self.wdir)
+        self.guard_errors: list[str] = []
+        self.diff_cache: dict[str, str] = {}
+
+    def section_for(self, f: str) -> str:
+        if f not in self.diff_cache:
+            self.diff_cache[f] = get_file_diff(
+                f, self.target.base_ref, self.wdir_s, self.env, rev_range=f"{self.target.base_sha} HEAD"
+            )
+        return build_file_review_section(f, self.diff_cache[f], os.path.join(self.wdir_s, f))
+
+    def call_backend(self, prompt: str, label: str) -> bool:
+        """True when the backend exited 0 without timing out and the repo is unchanged."""
+        ok = False
+        try:
+            proc = self.backend.run(prompt, cwd=self.wdir_s, context=label)
+            ok = proc.returncode == 0
+            if not ok:
+                logger.error("%s: backend exited %d", label, proc.returncode)
+        except subprocess.TimeoutExpired:
+            logger.exception("%s: backend timed out", label)
+        except Exception:
+            logger.exception("%s: backend call failed", label)
+        violation = _guard_violation(self.wdir, self.guard_head)
+        if violation:
+            msg = f"{label}: backend modified the repository: {violation}"
+            self.guard_errors.append(msg)
+            logger.error("%s", msg)
+            return False
+        return ok
+
+    def record(self, name: str, ok: bool, store: Callable[[str], None]) -> None:
+        store(STATUS_DONE if ok else STATUS_FAILED)
+        write_manifest(self.review_dir, self.manifest)
+        if not ok:
+            self.result.failed.append(name)
+
+    def file_pass(self, f: str) -> None:
+        if self.manifest["files"].get(f) == STATUS_DONE:
+            self.result.skipped.append(f"file:{f}")
+            return
+        out = _file_output_path(self.review_dir, f)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.unlink(missing_ok=True)
+        section = self.section_for(f)
+        prompt = build_file_prompt(self.file_instr, out, section, self.context, self.extra_knowledge, self.vibe)
+        self.result.ran.append(f"file:{f}")
+        ok = self.call_backend(prompt, f"local-review file {f}")
+        if ok:
+            _finish_file_output(out)
+        self.record(f"file:{f}", ok, lambda st: self.manifest["files"].__setitem__(f, st))
+
+    def run_file_passes(self) -> None:
+        for f in self.files:
+            if self.guard_errors:
+                break
+            self.file_pass(f)
+
+    def single_pass(
+        self, name: str, filename: str, build: Callable[[Path], str], stamp: str | None, files_all_done: bool
+    ) -> None:
+        if self.guard_errors:
+            return
+        if self.manifest.get(name) == STATUS_DONE and (name != "summary" or files_all_done):
+            self.result.skipped.append(name)
+            return
+        out = self.review_dir / filename
+        out.unlink(missing_ok=True)
+        self.result.ran.append(name)
+        ok = self.call_backend(build(out), f"local-review {name}")
+        ok = ok and _single_pass_output_ok(name, out, files_all_done)
+        if ok and stamp:
+            stamp_findings_file(out, stamp)
+        self.record(name, ok, lambda st: self.manifest.__setitem__(name, st))
+
+    def run_summary_and_design(self) -> None:
+        files_all_done = all(self.manifest["files"].get(f) == STATUS_DONE for f in self.files)
+        self.single_pass(
+            "summary",
+            SUMMARY_NAME,
+            lambda out: build_summary_prompt(
+                self.summary_instr, out, self.files, self.context, self.extra_knowledge, self.vibe
+            ),
+            None,
+            files_all_done,
+        )
+        self.single_pass(
+            "design",
+            DESIGN_NAME,
+            lambda out: build_design_prompt(
+                self.design_instr,
+                out,
+                "".join(self.section_for(f) for f in self.files),
+                self.context,
+                self.extra_knowledge,
+                self.vibe,
+            ),
+            "design",
+            files_all_done,
+        )
+
+
+def run(
     config: HarnessConfig,
     target: LocalReviewTarget,
     *,
@@ -681,7 +814,6 @@ def run(  # noqa: C901
     env = build_subprocess_env(config.harness.path_prepend, config.harness.env)
     # keep user git config (color.diff=always) out of the diff text sent to the model
     env.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "color.diff", "GIT_CONFIG_VALUE_0": "never"})
-    wdir_s = str(wdir)
     if backend is None:
         backend = _make_backend(config)
 
@@ -690,108 +822,21 @@ def run(  # noqa: C901
         _warn_discarded_statuses(review_dir)
     manifest = _seed_manifest(target, previous)
 
-    files = get_changed_files(target.base_ref, wdir_s, env, rev_range=f"{target.base_sha}..HEAD")
+    files = get_changed_files(target.base_ref, str(wdir), env, rev_range=f"{target.base_sha}..HEAD")
     for f in files:
         _file_output_path(review_dir, f)  # validate before any backend call
     review_dir.mkdir(parents=True, exist_ok=True)
     manifest["files"] = {f: manifest["files"][f] for f in files if f in manifest["files"]}
 
-    knowledge = Path(config.harness.knowledge_dir) / "pr-review"
-    file_instr = (knowledge / FILE_TEMPLATE).read_text(encoding="utf-8")
-    summary_instr = (knowledge / SUMMARY_TEMPLATE).read_text(encoding="utf-8")
-    design_instr = (knowledge / DESIGN_TEMPLATE).read_text(encoding="utf-8")
-    context = build_change_context(config.repo.name, wdir, target, build_change_description(wdir, target))
-    vibe = get_vibe_heal_context(config.repo.subdirs, wdir_s, target.branch) or None
-
-    result = ReviewResult(review_dir=review_dir, manifest=manifest)
-    guard_head = read_head_sha(wdir)
-    guard_errors: list[str] = []
-    diff_cache: dict[str, str] = {}
-
-    def section_for(f: str) -> str:
-        if f not in diff_cache:
-            diff_cache[f] = get_file_diff(f, target.base_ref, wdir_s, env, rev_range=f"{target.base_sha} HEAD")
-        return build_file_review_section(f, diff_cache[f], os.path.join(wdir_s, f))
-
-    def call_backend(prompt: str, label: str) -> bool:
-        """True when the backend exited 0 without timing out and the repo is unchanged."""
-        ok = False
-        try:
-            proc = backend.run(prompt, cwd=wdir_s, context=label)
-            ok = proc.returncode == 0
-            if not ok:
-                logger.error("%s: backend exited %d", label, proc.returncode)
-        except subprocess.TimeoutExpired:
-            logger.exception("%s: backend timed out", label)
-        except Exception:
-            logger.exception("%s: backend call failed", label)
-        violation = _guard_violation(wdir, guard_head)
-        if violation:
-            msg = f"{label}: backend modified the repository: {violation}"
-            guard_errors.append(msg)
-            logger.error("%s", msg)
-            return False
-        return ok
-
-    def record(name: str, ok: bool, store: Callable[[str], None]) -> None:
-        store(STATUS_DONE if ok else STATUS_FAILED)
-        write_manifest(review_dir, manifest)
-        if not ok:
-            result.failed.append(name)
-
-    for f in files:
-        if guard_errors:
-            break
-        if manifest["files"].get(f) == STATUS_DONE:
-            result.skipped.append(f"file:{f}")
-            continue
-        out = _file_output_path(review_dir, f)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.unlink(missing_ok=True)
-        prompt = build_file_prompt(file_instr, out, section_for(f), context, extra_knowledge, vibe)
-        result.ran.append(f"file:{f}")
-        ok = call_backend(prompt, f"local-review file {f}")
-        if ok:
-            _finish_file_output(out)
-        record(f"file:{f}", ok, lambda st, f=f: manifest["files"].__setitem__(f, st))
-
-    files_all_done = all(manifest["files"].get(f) == STATUS_DONE for f in files)
-
-    def single_pass(name: str, filename: str, build: Callable[[Path], str], stamp: str | None) -> None:
-        if guard_errors:
-            return
-        if manifest.get(name) == STATUS_DONE and (name != "summary" or files_all_done):
-            result.skipped.append(name)
-            return
-        out = review_dir / filename
-        out.unlink(missing_ok=True)
-        result.ran.append(name)
-        ok = call_backend(build(out), f"local-review {name}")
-        ok = ok and _single_pass_output_ok(name, out, files_all_done)
-        if ok and stamp:
-            stamp_findings_file(out, stamp)
-        record(name, ok, lambda st: manifest.__setitem__(name, st))
-
-    single_pass(
-        "summary",
-        SUMMARY_NAME,
-        lambda out: build_summary_prompt(summary_instr, out, files, context, extra_knowledge, vibe),
-        None,
-    )
-    single_pass(
-        "design",
-        DESIGN_NAME,
-        lambda out: build_design_prompt(
-            design_instr, out, "".join(section_for(f) for f in files), context, extra_knowledge, vibe
-        ),
-        "design",
-    )
+    passes = _ReviewPasses(config, target, review_dir, manifest, backend, env, files, extra_knowledge)
+    passes.run_file_passes()
+    passes.run_summary_and_design()
 
     write_manifest(review_dir, manifest)
     _write_index(review_dir, manifest, files)
-    if guard_errors:
-        raise RepoMutatedError("; ".join(guard_errors))
-    return result
+    if passes.guard_errors:
+        raise RepoMutatedError("; ".join(passes.guard_errors))
+    return passes.result
 
 
 def _pass_lines(result: ReviewResult) -> list[str]:
