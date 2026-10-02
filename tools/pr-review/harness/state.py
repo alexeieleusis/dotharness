@@ -12,9 +12,14 @@ XDG_DATA = Path.home() / ".local/share/dotharness"
 VIBE_HEAL_FILE = "vibe_heal.json"
 SELF_REVIEW_FILE = "self_review.json"
 
-_COMMAND_FILES = {
+# local-review keeps a directory tree (not a JSON file) under its output root; `state reset`
+# handles it in cli.state_reset. The None marker makes the command name known without a file.
+LOCAL_REVIEW_COMMAND = "local-review"
+
+_COMMAND_FILES: dict[str, str | None] = {
     "review-prs": VIBE_HEAL_FILE,
     "self-review": SELF_REVIEW_FILE,
+    LOCAL_REVIEW_COMMAND: None,
 }
 
 
@@ -272,8 +277,9 @@ def add_regret_reviewed_pr(repo_slug: str, pr_number: int) -> None:
 
 
 def delete_state(repo_slug: str, command: str) -> None:
-    if command not in _COMMAND_FILES:
+    filename = _COMMAND_FILES.get(command)
+    if filename is None:
         raise ValueError(f"No state file for command: {command}")  # noqa: TRY003
-    p = _state_path(repo_slug, _COMMAND_FILES[command])
+    p = _state_path(repo_slug, filename)
     if p.exists():
         p.unlink()

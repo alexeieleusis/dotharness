@@ -15,12 +15,14 @@ import logging
 import os
 import re
 import subprocess
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from harness.backend import Backend
 from harness.config import HarnessConfig
+from harness.lock import acquire_lock
 from harness.repo_guard import head_sha as read_head_sha
 from harness.runners.common import (
     build_file_review_section,
@@ -773,3 +775,70 @@ def run(  # noqa: C901
     if guard_errors:
         raise RepoMutatedError("; ".join(guard_errors))
     return result
+
+
+def _pass_lines(result: ReviewResult) -> list[str]:
+    manifest = result.manifest
+    statuses = list(manifest.get("files", {}).values())
+    lines = [f"per-file: {sum(1 for st in statuses if st == STATUS_DONE)}/{len(statuses)} done"]
+    for name in ("summary", "design"):
+        lines.append(f"{name}: {manifest.get(name, 'not run')}")
+    return lines
+
+
+def run_local_review(
+    config: HarnessConfig,
+    base: str | None = None,
+    output_dir: str | Path | None = None,
+    force: bool = False,
+    address: bool = False,
+    skip_review: bool = False,
+    review_dir: str | Path | None = None,
+    *,
+    backend: Backend | None = None,
+) -> int:
+    """CLI entry for `harness run local-review`; returns the process exit code.
+
+    Takes the shared checkout lock first (same shape as `self_review.run`), then runs the
+    locked body. The module-level `run` is the phase-05 review-phase runner and keeps its name,
+    so this entry is `run_local_review`. Address flags belong to a later phase: `address`,
+    `skip_review` and `review_dir` must be falsy here.
+    """
+    if address or skip_review or review_dir:
+        raise LocalReviewError("address phase is not implemented yet")  # noqa: TRY003
+    with acquire_lock(config.lock_key):
+        return _run_locked(config, base, output_dir, force, backend)
+
+
+def _run_locked(
+    config: HarnessConfig, base: str | None, output_dir: str | Path | None, force: bool, backend: Backend | None
+) -> int:
+    wdir = Path(config.repo.working_dir)
+    try:
+        output_root = resolve_output_root(config, output_dir)
+        try:
+            target = check_preconditions(wdir, base=base, config_base=config.local_review.base, output_root=output_root)
+        except NothingToReviewError as exc:
+            print(str(exc))
+            return 0
+        check_templates(Path(config.harness.knowledge_dir), REVIEW_TEMPLATES)
+        extra = None
+        kfile = config.harness.review_knowledge_file
+        if kfile and kfile.exists():
+            extra = kfile.read_text(encoding="utf-8")
+        print(f"Base: {target.base_ref} (merge base {target.base_sha})")
+        print(f"Head: {target.head_sha}")
+        try:
+            result = run(config, target, output_root=output_root, force=force, backend=backend, extra_knowledge=extra)
+        except RepoMutatedError as exc:
+            rdir = review_dir_for(output_root, config.repo_slug, target.branch, target.head_sha)
+            print(f"Review directory: {rdir}")
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+    except LocalReviewError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(f"Review directory: {result.review_dir}")
+    for line in _pass_lines(result):
+        print(line)
+    return 0 if result.ok else 1
