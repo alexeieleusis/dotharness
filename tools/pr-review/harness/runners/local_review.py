@@ -997,37 +997,44 @@ def select_review_dir(
     return max(candidates)[3]
 
 
+def _read_findings(path: Path, pass_name: str) -> tuple[list[AddressFinding], int, int]:
+    """(open findings, skipped-not-open count, unparseable count) for one review markdown file."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        logger.warning("cannot read %s; skipping", path)
+        return [], 0, 0
+    found: list[AddressFinding] = []
+    skipped = unparseable = 0
+    for blk in parse_findings(text):
+        if not blk.valid or not blk.id:
+            logger.warning("ignoring unparseable or unstamped finding %r in %s", blk.title, path)
+            unparseable += 1
+        elif blk.status != "open":
+            skipped += 1
+        else:
+            found.append(AddressFinding(blk.id, pass_name, path, blk))
+    return found, skipped, unparseable
+
+
 def collect_findings(review_dir: Path) -> FindingCollection:
     """FR-10 step 2 (7.3). Reads only `done` passes; returns open findings in deterministic order."""
     manifest = read_manifest(review_dir)
     if manifest is None:
         raise LocalReviewError(f"{review_dir} does not contain a usable {MANIFEST_NAME}")  # noqa: TRY003
+    sources = [
+        (_file_output_path(review_dir, changed), "file", True)
+        for changed in sorted(path for path, st in manifest["files"].items() if st == STATUS_DONE)
+    ]
+    if manifest.get("design") == STATUS_DONE:
+        sources.append((review_dir / DESIGN_NAME, "design", False))
     open_findings: list[AddressFinding] = []
     skipped = unparseable = 0
-
-    def _read(path: Path, pass_name: str) -> list[AddressFinding]:
-        nonlocal skipped, unparseable
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
-            logger.warning("cannot read %s; skipping", path)
-            return []
-        found: list[AddressFinding] = []
-        for blk in parse_findings(text):
-            if not blk.valid or not blk.id:
-                logger.warning("ignoring unparseable or unstamped finding %r in %s", blk.title, path)
-                unparseable += 1
-            elif blk.status != "open":
-                skipped += 1
-            else:
-                found.append(AddressFinding(blk.id, pass_name, path, blk))
-        return found
-
-    for changed in sorted(path for path, st in manifest["files"].items() if st == STATUS_DONE):
-        per_file = _read(_file_output_path(review_dir, changed), "file")
-        open_findings.extend(sorted(per_file, key=lambda f: f.line))  # stable: file order on ties
-    if manifest.get("design") == STATUS_DONE:
-        open_findings.extend(_read(review_dir / DESIGN_NAME, "design"))
+    for path, pass_name, by_line in sources:
+        found, n_skipped, n_unparseable = _read_findings(path, pass_name)
+        open_findings.extend(sorted(found, key=lambda f: f.line) if by_line else found)  # stable on ties
+        skipped += n_skipped
+        unparseable += n_unparseable
     return FindingCollection(open_findings, skipped, unparseable)
 
 
