@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from harness.runners import local_review
+from harness.runners import common, local_review
+from harness.runners.common import get_changed_files, get_file_diff, is_ancestor
 from harness.runners.local_review import (
     LocalReviewError,
     NothingToReviewError,
@@ -254,3 +256,53 @@ def test_no_network_git_commands(repo: Path, git_calls: list[list[str]]) -> None
     assert subcommands
     assert subcommands.isdisjoint({"fetch", "pull", "remote", "push", "clone", "ls-remote"})
     assert all(c[0] == "git" for c in git_calls)
+
+
+# ---- diff hooks and is_ancestor ----
+
+
+def _env() -> dict:
+    # Ignore the developer's global git config (e.g. color.diff=always).
+    return {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+
+
+def test_get_changed_files_rev_range_merge_base(repo: Path) -> None:
+    base = compute_merge_base(repo, "main")
+    git(repo, "checkout", "main")
+    commit(repo, "main-only.txt")
+    git(repo, "checkout", "feature")
+    commit(repo, "c.txt")
+    files = get_changed_files("main", str(repo), _env(), rev_range=f"{base}..HEAD")
+    assert sorted(files) == ["b.txt", "c.txt"]
+
+
+def test_get_file_diff_rev_range_two_args(repo: Path) -> None:
+    base = compute_merge_base(repo, "main")
+    diff = get_file_diff("b.txt", "main", str(repo), _env(), rev_range=f"{base} HEAD")
+    assert "+++ b/b.txt" in diff
+    assert "+x" in diff
+    assert get_file_diff("a.txt", "main", str(repo), _env(), rev_range=f"{base} HEAD") == ""
+
+
+def test_default_range_still_origin_triple_dot(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[list[str]] = []
+    real = subprocess.Popen
+
+    def spy(args, *a, **kw):
+        seen.append(list(args))
+        return real(args, *a, **kw)
+
+    monkeypatch.setattr(common.subprocess, "Popen", spy)
+    git(repo, "update-ref", "refs/remotes/origin/main", "main")
+    assert get_changed_files("main", str(repo), _env()) == ["b.txt"]
+    assert "+x" in get_file_diff("b.txt", "main", str(repo), _env())
+    diffs = [c for c in seen if c[:2] == ["git", "diff"]]
+    assert ["git", "diff", "--name-only", "origin/main...HEAD"] in diffs
+    assert ["git", "diff", "origin/main...HEAD", "--", "b.txt"] in diffs
+
+
+def test_is_ancestor(repo: Path) -> None:
+    base = compute_merge_base(repo, "main")
+    head = git(repo, "rev-parse", "HEAD")
+    assert is_ancestor(base, head, str(repo), _env()) is True
+    assert is_ancestor(head, base, str(repo), _env()) is False

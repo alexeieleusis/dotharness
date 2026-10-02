@@ -1085,13 +1085,28 @@ def get_pr_description(pr_number: int, repo: str, env: dict) -> str:
     return result.stdout.decode("utf-8").strip()
 
 
-def get_changed_files(base_branch: str, wdir: str, env: dict, expected_sha: str = "") -> list[str]:
+def is_ancestor(candidate_sha: str, descendant_sha: str, wdir: str, env: dict) -> bool:
+    result = run_cmd(
+        ["git", "merge-base", "--is-ancestor", candidate_sha, descendant_sha],
+        cwd=wdir,
+        env=env,
+        timeout=TIMEOUT_GIT,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def get_changed_files(
+    base_branch: str, wdir: str, env: dict, expected_sha: str = "", *, rev_range: str | None = None
+) -> list[str]:
+    """Names of files changed in the review range. ``rev_range`` overrides the default
+    ``origin/{base_branch}...HEAD`` (local-review passes ``<merge_base>..HEAD``)."""
     if expected_sha:
         actual = get_head_sha(wdir, env)
         if actual and actual != expected_sha:
             logger.warning("get_changed_files: local HEAD %s differs from expected %s", actual, expected_sha)
     result = run_cmd(
-        ["git", "diff", "--name-only", f"origin/{base_branch}...HEAD"],
+        ["git", "diff", "--name-only", rev_range or f"origin/{base_branch}...HEAD"],
         cwd=wdir,
         env=env,
         timeout=TIMEOUT_GIT,
@@ -1107,9 +1122,13 @@ def get_changed_files(base_branch: str, wdir: str, env: dict, expected_sha: str 
     return [f for f in result.stdout.decode("utf-8").splitlines() if f.strip()]
 
 
-def get_file_diff(file_path: str, base_branch: str, wdir: str, env: dict) -> str:
+def get_file_diff(file_path: str, base_branch: str, wdir: str, env: dict, *, rev_range: str | None = None) -> str:
+    """Per-file diff. ``rev_range`` overrides the default ``origin/{base_branch}...HEAD``;
+    it is split on whitespace into separate git arguments (local-review passes
+    ``"<merge_base> HEAD"``)."""
+    range_args = rev_range.split() if rev_range else [f"origin/{base_branch}...HEAD"]
     result = run_cmd(
-        ["git", "diff", f"origin/{base_branch}...HEAD", "--", file_path],
+        ["git", "diff", *range_args, "--", file_path],
         cwd=wdir,
         env=env,
         timeout=TIMEOUT_GIT,

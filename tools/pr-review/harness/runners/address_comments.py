@@ -21,12 +21,16 @@ from harness.runners.common import (
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
+    is_ancestor,
     is_draft_pr,
     reply_has_reaction_from,
     run_cmd,
 )
 
 logger = logging.getLogger(__name__)
+
+# Kept under the old private name: existing tests patch address_comments._is_ancestor.
+_is_ancestor = is_ancestor
 
 GRAPHQL_QUERY = """
 query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
@@ -390,17 +394,6 @@ def _filter_comments(
     comments = selected + comments
     comments = _filter_by_plugin_prefix(comments, pr_number, plugin_prefix)
     return comments
-
-
-def _is_ancestor(candidate_sha: str, descendant_sha: str, wdir: str, env: dict) -> bool:
-    result = run_cmd(
-        ["git", "merge-base", "--is-ancestor", candidate_sha, descendant_sha],
-        cwd=wdir,
-        env=env,
-        timeout=TIMEOUT_GIT,
-        check=False,
-    )
-    return result.returncode == 0
 
 
 def _fetch_all_pages(path: str, env: dict) -> list[dict] | None:
