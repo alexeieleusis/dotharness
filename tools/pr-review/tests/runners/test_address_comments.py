@@ -645,7 +645,7 @@ def test_has_pending_feedback_finds_unresolved_thread_on_second_page():
 def test_reply_observed_inline_matches_by_in_reply_to_id():
     replies = [{"in_reply_to_id": 42, "user": {"login": "harness-bot"}}]
     with patch(
-        "harness.runners.address_comments.run_cmd",
+        "harness.runners.common.run_cmd",
         return_value=MagicMock(returncode=0, stdout=json.dumps(replies).encode()),
     ):
         assert address_comments._reply_observed(_FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {})
@@ -654,7 +654,7 @@ def test_reply_observed_inline_matches_by_in_reply_to_id():
 def test_reply_observed_inline_false_when_reply_from_someone_else():
     replies = [{"in_reply_to_id": 42, "user": {"login": "alice"}}]
     with patch(
-        "harness.runners.address_comments.run_cmd",
+        "harness.runners.common.run_cmd",
         return_value=MagicMock(returncode=0, stdout=json.dumps(replies).encode()),
     ):
         assert not address_comments._reply_observed(_FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {})
@@ -667,7 +667,7 @@ def test_reply_observed_issue_falls_back_to_timestamp():
     # URL-substring check missed it and logged a false "no reply detected" warning).
     comments = [{"user": {"login": "harness-bot"}, "created_at": "2026-01-02T00:00:00Z", "body": "some reply"}]
     with patch(
-        "harness.runners.address_comments.run_cmd",
+        "harness.runners.common.run_cmd",
         return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
     ):
         assert address_comments._reply_observed(
@@ -679,7 +679,7 @@ def test_reply_observed_issue_false_when_reply_not_from_us():
     issue_comment = {**_FAKE_COMMENT, "type": "issue", "url": "http://x/issue/1"}
     comments = [{"user": {"login": "alice"}, "created_at": "2026-01-02T00:00:00Z", "body": "> http://x/issue/1"}]
     with patch(
-        "harness.runners.address_comments.run_cmd",
+        "harness.runners.common.run_cmd",
         return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
     ):
         assert not address_comments._reply_observed(
@@ -691,7 +691,7 @@ def test_reply_observed_review_falls_back_to_timestamp():
     review_comment = {**_FAKE_COMMENT, "type": "review"}
     comments = [{"user": {"login": "harness-bot"}, "created_at": "2026-01-02T00:00:00Z", "body": "reply"}]
     with patch(
-        "harness.runners.address_comments.run_cmd",
+        "harness.runners.common.run_cmd",
         return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
     ):
         assert address_comments._reply_observed(
@@ -703,7 +703,7 @@ def test_reply_observed_review_matches_reply_in_same_second_as_since_iso():
     review_comment = {**_FAKE_COMMENT, "type": "review"}
     comments = [{"user": {"login": "harness-bot"}, "created_at": "2026-01-01T00:00:00Z", "body": "reply"}]
     with patch(
-        "harness.runners.address_comments.run_cmd",
+        "harness.runners.common.run_cmd",
         return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
     ):
         assert address_comments._reply_observed(
@@ -712,7 +712,7 @@ def test_reply_observed_review_matches_reply_in_same_second_as_since_iso():
 
 
 def test_reply_observed_returns_true_when_api_fails_inconclusive():
-    with patch("harness.runners.address_comments.run_cmd", return_value=MagicMock(returncode=1, stdout=b"")):
+    with patch("harness.runners.common.run_cmd", return_value=MagicMock(returncode=1, stdout=b"")):
         assert address_comments._reply_observed(_FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {})
 
 
