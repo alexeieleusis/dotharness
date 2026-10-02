@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 _GIT_TIMEOUT_SECONDS = 30
 MAX_DIRTY_PATHS_SHOWN = 5
 DEFAULT_BASE_FALLBACK = "main"
+_NO_UNTRACKED_FLAG = "--untracked-files=no"
 
 
 class LocalReviewError(RuntimeError):
@@ -161,7 +162,7 @@ def check_preconditions(
     if head_ref.returncode != 0 or not branch:
         raise LocalReviewError("HEAD is detached; check out a branch to review")  # noqa: TRY003
 
-    status = _git(working_dir, "status", "--porcelain", "--untracked-files=no")
+    status = _git(working_dir, "status", "--porcelain", _NO_UNTRACKED_FLAG)
     if status.returncode != 0:
         raise LocalReviewError(f"git status failed: {status.stderr.strip()}")  # noqa: TRY003
     dirty = [line[3:] for line in status.stdout.splitlines() if line.strip()]
@@ -594,7 +595,7 @@ def _guard_violation(working_dir: Path, expected_head: str) -> str | None:
         problems.append(f"HEAD unreadable ({exc})")
     if now and now != expected_head:
         problems.append(f"HEAD moved from {expected_head} to {now}")
-    status = _git(working_dir, "status", "--porcelain", "--untracked-files=no")
+    status = _git(working_dir, "status", "--porcelain", _NO_UNTRACKED_FLAG)
     if status.returncode != 0:
         problems.append(f"git status failed: {status.stderr.strip()}")
     elif status.stdout.strip():
@@ -1110,7 +1111,7 @@ def _current_branch(wdir: Path) -> str:
 
 def _tracked_dirty(wdir: Path) -> list[str]:
     """Tracked paths with uncommitted changes (untracked files ignored, 11.A-10). Raises on git failure."""
-    proc = _git(wdir, "status", "--porcelain", "--untracked-files=no")
+    proc = _git(wdir, "status", "--porcelain", _NO_UNTRACKED_FLAG)
     if proc.returncode != 0:
         raise LocalReviewError(f"git status failed: {proc.stderr.strip()}")  # noqa: TRY003
     return [ln[3:] for ln in proc.stdout.splitlines() if ln.strip()]
