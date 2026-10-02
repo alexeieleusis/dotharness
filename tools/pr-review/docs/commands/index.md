@@ -15,6 +15,7 @@ harness run [--config PATH] [--verbose] <command> [command options]
 | [`review-requested`](review-requested.md) | PRs where review was explicitly requested from the `gh` account | Have the configured AI backend produce inline + summary code review comments. The command reacts to GitHub review-request state, not a schedule. |
 | [`self-review`](self-review.md) | Your own open PRs (`--author @me`) | Get an automated first-pass AI review of your own PRs before asking a human. |
 | [`address-comments`](address-comments.md) | Open PRs you authored or are assigned to, with pending reviewer feedback | Have the AI backend read unresolved review comments, make the smallest fix (or reply), commit, and push. |
+| [`local-review`](local-review.md) | The branch checked out in `repo.working_dir`, compared with its base ref | Review a local branch before you push, and write findings to Markdown files. No GitHub access. `harness run all` does not include `local-review`. |
 
 There is also an optional `regret-review` pass — enabled via the [`[regret_review]`](../configuration.md#regret_review) config section — that re-checks old, ignored review comments on the PRs `self-review` and `review-requested` already cover.
 
@@ -25,7 +26,7 @@ harness run [--config PATH] [--verbose] all
 ```
 
 `all` runs the five commands in this order: `review-prs`, `focused-review`,
-`self-review`, `review-requested`, `address-comments`. If one command fails, `all`
+`self-review`, `review-requested`, `address-comments`. `harness run all` does not include `local-review`. If one command fails, `all`
 continues to the next. If any command fails, `all` exits non-zero.
 
 ## Shared behavior
@@ -53,8 +54,8 @@ continues to the next. If any command fails, `all` exits non-zero.
 - `harness init [DIRECTORY]` — scaffold a starting `.harness.toml`.
 - `harness validate [DIRECTORY] [--config PATH]` — sanity-check a config file.
 - `harness state reset <command> [--config PATH] [--yes]` — clear persisted state for
-  `review-prs` or `self-review` (the only two commands with persisted state — see each
-  command's own "State and idempotency" section).
+  `review-prs` or `self-review` (see each command's own "State and idempotency" section),
+  or delete the review output of `local-review` (see [`local-review`](local-review.md#re-runs)).
 - `harness schedule install <command> --every <duration> [--config PATH] [--scheduler cron|launchd]` —
   install a recurring `cron`/`launchd` schedule for a command.
 - `harness schedule uninstall <command> [--config PATH] [--scheduler cron|launchd]` — remove one.
