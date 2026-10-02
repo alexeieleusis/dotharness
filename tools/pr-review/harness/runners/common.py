@@ -205,7 +205,9 @@ def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:
         )
 
 
-def build_subprocess_env(path_prepend: list[str], env_vars: dict[str, str], gh_token: str) -> dict[str, str]:
+def build_subprocess_env(
+    path_prepend: list[str], env_vars: dict[str, str], gh_token: str | None = None
+) -> dict[str, str]:
     env = os.environ.copy()
     if path_prepend:
         env["PATH"] = ":".join(path_prepend) + ":" + env.get("PATH", "")

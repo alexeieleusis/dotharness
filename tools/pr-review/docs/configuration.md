@@ -38,7 +38,7 @@ repo's.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `name` | string | **required** | Repo identifier, typically `"org/repo"`. Loading fails with `ConfigError: repo.name is required` if missing or empty. Also used to derive `repo_slug` (`name` with `/` replaced by `-`) for state files and schedule labels. |
+| `name` | string | **required** (optional for `local-review`) | Repo identifier, typically `"org/repo"`. Loading fails with `ConfigError: repo.name is required` if missing or empty, except for `harness run local-review`, which does not need a GitHub repo and loads the config with `repo.name` optional (the loaded `repo.name` is then `""` and `repo.name_provided` is `false`). Also used to derive `repo_slug` (`name` with `/` replaced by `-`) for state files and schedule labels. When `name` is absent (`local-review` only), `repo_slug` is the `working_dir` basename (characters outside `[a-zA-Z0-9._-]` replaced by `-`), then `-`, then the first 8 hex characters of the SHA-256 of the resolved `working_dir` path. |
 | `working_dir` | path | **required** | Local filesystem checkout of the repo. Loading fails with `ConfigError: repo.working_dir is required` if missing or empty. `~` is expanded. |
 | `opencode_dir` | path or unset | `None` | Optional directory passed to the `opencode` backend as `--dir` instead of the repo root. If set, it **must be inside `working_dir`**. The loader calls `opencode_dir.relative_to(working_dir)` and raises `ConfigError: repo.opencode_dir '<path>' must be inside repo.working_dir '<path>'` if `opencode_dir` is not a subpath. `~` is expanded before the check. |
 
@@ -100,6 +100,21 @@ this live on every run. No config flag can change this. Once approved, the
 thread is addressed using that reply's own content as the actual "comment to
 address" (not the terse original finding it responded to). See
 [`address-comments`](commands/address-comments.md#notes) for details.
+
+### `[local_review]`
+
+Optional. Used only by `harness run local-review`; all other commands ignore it. Both fields are optional, and an absent section behaves as if both were unset.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `base` | string | unset | Default base ref for the review. |
+| `output_dir` | path | unset | Default output root. The built-in default is `~/.local/share/dotharness/reviews`. The `--output-dir` flag overrides this. The value is stored as written (`~` is not expanded at load time). |
+
+```toml
+[local_review]
+# base = "main"
+# output_dir = "~/reviews"
+```
 
 ### `[regret_review]`
 
