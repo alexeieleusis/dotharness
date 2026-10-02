@@ -10,12 +10,25 @@ the message and exits 0), so the two cannot be confused.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import os
 import re
 import subprocess
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from harness.backend import Backend
+from harness.config import HarnessConfig
+from harness.repo_guard import head_sha as read_head_sha
+from harness.runners.common import (
+    build_file_review_section,
+    build_subprocess_env,
+    get_changed_files,
+    get_file_diff,
+    get_vibe_heal_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -448,4 +461,315 @@ def stamp_findings_file(path: Path, pass_name: str) -> StampResult:
     result = stamp_findings(original, pass_name)
     if result.text != original:
         path.write_text(result.text, encoding="utf-8")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Review runner: output layout, manifest, idempotency, mutation guard (FR-5/6/9)
+# ---------------------------------------------------------------------------
+
+DEFAULT_OUTPUT_ROOT = Path("~/.local/share/dotharness/reviews")
+MANIFEST_NAME = "manifest.json"
+MANIFEST_VERSION = 1
+INDEX_NAME = "index.md"
+SUMMARY_NAME = "summary.md"
+DESIGN_NAME = "design.md"
+FILES_DIR = "files"
+NO_FINDINGS_TEXT = "No P0/P1 findings.\n"
+STATUS_DONE = "done"
+STATUS_FAILED = "failed"
+
+
+class RepoMutatedError(LocalReviewError):
+    """The backend changed HEAD or tracked files during the review phase (FR-9).
+
+    Raised by `run` AFTER the manifest and index.md were written; the caller maps it
+    to a non-zero exit. Nothing is reset, cleaned or restored.
+    """
+
+
+@dataclass
+class ReviewResult:
+    review_dir: Path
+    manifest: dict
+    ran: list[str] = field(default_factory=list)  # pass names that made a backend call
+    skipped: list[str] = field(default_factory=list)  # pass names skipped as already done
+    failed: list[str] = field(default_factory=list)  # pass names that failed
+
+    @property
+    def ok(self) -> bool:
+        return not self.failed
+
+
+def resolve_output_root(config: HarnessConfig, output_dir: str | Path | None = None) -> Path:
+    """`--output-dir`, else `[local_review].output_dir`, else the default; `~` expanded."""
+    raw = output_dir or config.local_review.output_dir or DEFAULT_OUTPUT_ROOT
+    return Path(raw).expanduser()
+
+
+def review_dir_for(output_root: Path, repo_slug: str, branch: str, head_sha: str) -> Path:
+    """`<output_root>/<repo_slug>/<branch>/<head_sha>/`; `/` in branch stays a separator.
+
+    A branch component that is empty, `.`, `..` or starts with `-` is rejected (11.A-2).
+    """
+    for part in branch.split("/"):
+        if part in ("", ".", "..") or part.startswith("-"):
+            raise LocalReviewError(f"branch name {branch!r} cannot be used as an output directory")  # noqa: TRY003
+    return output_root.joinpath(repo_slug, *branch.split("/"), head_sha)
+
+
+def _file_output_path(review_dir: Path, changed_file: str) -> Path:
+    parts = changed_file.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        raise LocalReviewError(f"unsafe changed file path {changed_file!r}")  # noqa: TRY003
+    return review_dir / FILES_DIR / (changed_file + ".md")
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(f"{path.suffix}.tmp.{os.getpid()}")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
+def read_manifest(review_dir: Path) -> dict | None:
+    """The manifest, or None when absent, corrupt or of another `version` (all passes then run)."""
+    path = review_dir / MANIFEST_NAME
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("version") != MANIFEST_VERSION or not isinstance(data.get("files"), dict):
+        return None
+    return data
+
+
+def write_manifest(review_dir: Path, manifest: dict) -> None:
+    _atomic_write_text(review_dir / MANIFEST_NAME, json.dumps(manifest, indent=2) + "\n")
+
+
+def _new_manifest(target: LocalReviewTarget) -> dict:
+    return {
+        "version": MANIFEST_VERSION,
+        "branch": target.branch,
+        "base_ref": target.base_ref,
+        "base_sha": target.base_sha,
+        "head_sha": target.head_sha,
+        "files": {},
+    }
+
+
+def _write_index(review_dir: Path, manifest: dict, files: Sequence[str]) -> None:
+    def status(value: str | None) -> str:
+        return value or "not run"
+
+    lines = [
+        f"# Local review: {manifest['branch']}",
+        "",
+        f"- Base ref: {manifest['base_ref']} (merge base {manifest['base_sha']})",
+        f"- Head: {manifest['head_sha']}",
+        "",
+        "## Passes",
+        "",
+        f"- [Summary]({SUMMARY_NAME}): {status(manifest.get('summary'))}",
+        f"- [Design]({DESIGN_NAME}): {status(manifest.get('design'))}",
+        "",
+        "## Files",
+        "",
+    ]
+    lines.extend(f"- [{f}]({FILES_DIR}/{f}.md): {status(manifest['files'].get(f))}" for f in files)
+    _atomic_write_text(review_dir / INDEX_NAME, "\n".join(lines) + "\n")
+
+
+def _guard_violation(working_dir: Path, expected_head: str) -> str | None:
+    """Description of what the backend changed, or None. Untracked files are ignored (11.A-10)."""
+    problems: list[str] = []
+    try:
+        now = read_head_sha(working_dir)
+    except Exception as exc:
+        now = ""
+        problems.append(f"HEAD unreadable ({exc})")
+    if now and now != expected_head:
+        problems.append(f"HEAD moved from {expected_head} to {now}")
+    status = _git(working_dir, "status", "--porcelain", "--untracked-files=no")
+    if status.returncode != 0:
+        problems.append(f"git status failed: {status.stderr.strip()}")
+    elif status.stdout.strip():
+        changed = ", ".join(ln[3:] for ln in status.stdout.splitlines() if ln.strip())
+        problems.append(f"tracked files changed: {changed}")
+    return "; ".join(problems) or None
+
+
+def _count_resolved(review_dir: Path) -> dict[str, int]:
+    counts = {"fixed": 0, "declined": 0}
+    paths = [*sorted((review_dir / FILES_DIR).rglob("*.md")), review_dir / DESIGN_NAME]
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for blk in parse_findings(text):
+            if blk.status in counts:
+                counts[blk.status] += 1
+    return counts
+
+
+def run(  # noqa: C901
+    config: HarnessConfig,
+    target: LocalReviewTarget,
+    *,
+    output_root: Path,
+    force: bool = False,
+    backend: Backend | None = None,
+    extra_knowledge: str | None = None,
+) -> ReviewResult:
+    """Review phase after the lock is held and `check_preconditions` / `check_templates` passed.
+
+    Writes only under `<output_root>/<repo_slug>/<branch>/<head_sha>/`. Passes: one per changed
+    file not yet `done`, then summary, then design. The manifest is rewritten atomically after
+    every pass. Returns a ReviewResult (`ok` False when any pass failed; caller maps to exit code).
+    Raises RepoMutatedError (after writing manifest and index) when the backend moved HEAD or
+    changed tracked files; LocalReviewError for an unusable branch name / output root.
+    """
+    wdir = Path(config.repo.working_dir)
+    check_output_dir_outside_repo(wdir, output_root)
+    review_dir = review_dir_for(output_root.expanduser(), config.repo_slug, target.branch, target.head_sha)
+    env = build_subprocess_env(config.harness.path_prepend, config.harness.env)
+    # keep user git config (color.diff=always) out of the diff text sent to the model
+    env.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "color.diff", "GIT_CONFIG_VALUE_0": "never"})
+    wdir_s = str(wdir)
+    if backend is None:
+        backend = Backend(
+            config.harness.backend,
+            config.harness.backend_timeout_seconds,
+            config.harness.path_prepend,
+            dict(config.harness.env),
+            expected_repo_name=config.repo.name if config.repo.name_provided else None,
+        )
+
+    previous = None if force else read_manifest(review_dir)
+    if force:
+        counts = _count_resolved(review_dir)
+        if counts["fixed"] or counts["declined"]:
+            logger.warning(
+                "--force discards address-phase statuses in %s: %d fixed, %d declined finding(s) will be overwritten",
+                review_dir,
+                counts["fixed"],
+                counts["declined"],
+            )
+    manifest = _new_manifest(target)
+    if previous is not None:
+        manifest["files"] = {k: v for k, v in previous["files"].items() if isinstance(v, str)}
+        for key in ("summary", "design"):
+            if isinstance(previous.get(key), str):
+                manifest[key] = previous[key]
+
+    files = get_changed_files(target.base_ref, wdir_s, env, rev_range=f"{target.base_sha}..HEAD")
+    for f in files:
+        _file_output_path(review_dir, f)  # validate before any backend call
+    review_dir.mkdir(parents=True, exist_ok=True)
+    manifest["files"] = {f: manifest["files"][f] for f in files if f in manifest["files"]}
+
+    knowledge = Path(config.harness.knowledge_dir) / "pr-review"
+    file_instr = (knowledge / FILE_TEMPLATE).read_text(encoding="utf-8")
+    summary_instr = (knowledge / SUMMARY_TEMPLATE).read_text(encoding="utf-8")
+    design_instr = (knowledge / DESIGN_TEMPLATE).read_text(encoding="utf-8")
+    context = build_change_context(config.repo.name, wdir, target, build_change_description(wdir, target))
+    vibe = get_vibe_heal_context(config.repo.subdirs, wdir_s, target.branch) or None
+
+    result = ReviewResult(review_dir=review_dir, manifest=manifest)
+    guard_head = read_head_sha(wdir)
+    guard_errors: list[str] = []
+    diff_cache: dict[str, str] = {}
+
+    def section_for(f: str) -> str:
+        if f not in diff_cache:
+            diff_cache[f] = get_file_diff(f, target.base_ref, wdir_s, env, rev_range=f"{target.base_sha} HEAD")
+        return build_file_review_section(f, diff_cache[f], os.path.join(wdir_s, f))
+
+    def call_backend(prompt: str, label: str) -> bool:
+        """True when the backend exited 0 without timing out and the repo is unchanged."""
+        ok = False
+        try:
+            proc = backend.run(prompt, cwd=wdir_s, context=label)
+            ok = proc.returncode == 0
+            if not ok:
+                logger.error("%s: backend exited %d", label, proc.returncode)
+        except subprocess.TimeoutExpired:
+            logger.exception("%s: backend timed out", label)
+        except Exception:
+            logger.exception("%s: backend call failed", label)
+        violation = _guard_violation(wdir, guard_head)
+        if violation:
+            msg = f"{label}: backend modified the repository: {violation}"
+            guard_errors.append(msg)
+            logger.error("%s", msg)
+            return False
+        return ok
+
+    def record(name: str, ok: bool, store: Callable[[str], None]) -> None:
+        store(STATUS_DONE if ok else STATUS_FAILED)
+        write_manifest(review_dir, manifest)
+        if not ok:
+            result.failed.append(name)
+
+    for f in files:
+        if guard_errors:
+            break
+        if manifest["files"].get(f) == STATUS_DONE:
+            result.skipped.append(f"file:{f}")
+            continue
+        out = _file_output_path(review_dir, f)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.unlink(missing_ok=True)
+        prompt = build_file_prompt(file_instr, out, section_for(f), context, extra_knowledge, vibe)
+        result.ran.append(f"file:{f}")
+        ok = call_backend(prompt, f"local-review file {f}")
+        if ok:
+            if not out.is_file():
+                out.write_text(NO_FINDINGS_TEXT, encoding="utf-8")
+            stamp_findings_file(out, "file")
+        record(f"file:{f}", ok, lambda st, f=f: manifest["files"].__setitem__(f, st))
+
+    files_all_done = all(manifest["files"].get(f) == STATUS_DONE for f in files)
+
+    def single_pass(name: str, filename: str, build: Callable[[Path], str], stamp: str | None) -> None:
+        if guard_errors:
+            return
+        if manifest.get(name) == STATUS_DONE and (name != "summary" or files_all_done):
+            result.skipped.append(name)
+            return
+        out = review_dir / filename
+        out.unlink(missing_ok=True)
+        result.ran.append(name)
+        ok = call_backend(build(out), f"local-review {name}")
+        if ok and (not out.is_file() or not out.read_text(encoding="utf-8").strip()):
+            logger.error("local-review %s: backend exited 0 but %s is missing or empty", name, filename)
+            ok = False
+        if ok and name == "summary" and not files_all_done:
+            logger.warning("local-review summary: some file passes failed; summary recorded as failed")
+            ok = False  # re-runs next time together with the failed files
+        if ok and stamp:
+            stamp_findings_file(out, stamp)
+        record(name, ok, lambda st: manifest.__setitem__(name, st))
+
+    single_pass(
+        "summary",
+        SUMMARY_NAME,
+        lambda out: build_summary_prompt(summary_instr, out, files, context, extra_knowledge, vibe),
+        None,
+    )
+    single_pass(
+        "design",
+        DESIGN_NAME,
+        lambda out: build_design_prompt(
+            design_instr, out, "".join(section_for(f) for f in files), context, extra_knowledge, vibe
+        ),
+        "design",
+    )
+
+    write_manifest(review_dir, manifest)
+    _write_index(review_dir, manifest, files)
+    if guard_errors:
+        raise RepoMutatedError("; ".join(guard_errors))
     return result
