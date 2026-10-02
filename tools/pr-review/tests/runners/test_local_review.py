@@ -278,17 +278,6 @@ def test_prompts_assemble(tmp_path: Path) -> None:
 FINDING = "## Finding: Bug\n- severity: P1\n- file: a.py\n- line: 1\n- status: open\n\nBody."
 
 
-def _git(cwd: Path, *args: str) -> str:
-    r = subprocess.run(  # noqa: S603
-        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],  # noqa: S607
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return r.stdout.strip()
-
-
 class FakeBackend:
     """Stands in for harness.backend.Backend; `script(label, calls)` returns a CompletedProcess or raises."""
 
