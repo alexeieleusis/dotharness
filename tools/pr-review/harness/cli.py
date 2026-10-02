@@ -194,13 +194,33 @@ def run_self_review(ctx):
 @click.option("--base", "base", default=None, help="Base ref to compare against (default: config, origin/HEAD, main).")
 @click.option("--output-dir", "output_dir", default=None, type=click.Path(), help="Output root override.")
 @click.option("--force", is_flag=True, default=False, help="Ignore the manifest and re-run every pass for this head.")
+@click.option("--address", is_flag=True, default=False, help="After the review phase, address open findings.")
+@click.option(
+    "--skip-review", is_flag=True, default=False, help="With --address: skip the review, address an earlier one."
+)
+@click.option(
+    "--review-dir",
+    "review_dir",
+    default=None,
+    type=click.Path(),
+    help="With --address --skip-review: review directory.",
+)
 @click.pass_context
-def run_local_review(ctx, base, output_dir, force):
+def run_local_review(ctx, base, output_dir, force, address, skip_review, review_dir):
     """Review the current checkout against its base, offline; write findings under the output root."""
+    usage_error = local_review.address_usage_error(address, skip_review, review_dir)
+    if usage_error:
+        raise click.UsageError(usage_error)
     _setup_logging("local-review", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"], require_repo_name=False)
     code = local_review.run_local_review(
-        cfg, base=base, output_dir=output_dir, force=force, address=False, skip_review=False, review_dir=None
+        cfg,
+        base=base,
+        output_dir=output_dir,
+        force=force,
+        address=address,
+        skip_review=skip_review,
+        review_dir=review_dir,
     )
     sys.exit(code)
 

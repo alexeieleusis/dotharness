@@ -30,6 +30,7 @@ from harness.runners.common import (
     get_changed_files,
     get_file_diff,
     get_vibe_heal_context,
+    is_ancestor,
 )
 
 logger = logging.getLogger(__name__)
@@ -801,44 +802,297 @@ def run_local_review(
 
     Takes the shared checkout lock first (same shape as `self_review.run`), then runs the
     locked body. The module-level `run` is the phase-05 review-phase runner and keeps its name,
-    so this entry is `run_local_review`. Address flags belong to a later phase: `address`,
-    `skip_review` and `review_dir` must be falsy here.
+    so this entry is `run_local_review`. `skip_review` and `review_dir` are only valid with
+    `address` (and `review_dir` only with `skip_review`); violations are usage errors (11.A-19).
     """
-    if address or skip_review or review_dir:
-        raise LocalReviewError("address phase is not implemented yet")  # noqa: TRY003
+    usage_error = address_usage_error(address, skip_review, review_dir)
+    if usage_error:
+        raise LocalReviewError(usage_error)
     with acquire_lock(config.lock_key):
-        return _run_locked(config, base, output_dir, force, backend)
+        return _run_locked(
+            config, base, output_dir, force, backend, address=address, skip_review=skip_review, review_dir=review_dir
+        )
 
 
 def _run_locked(
-    config: HarnessConfig, base: str | None, output_dir: str | Path | None, force: bool, backend: Backend | None
+    config: HarnessConfig,
+    base: str | None,
+    output_dir: str | Path | None,
+    force: bool,
+    backend: Backend | None,
+    *,
+    address: bool = False,
+    skip_review: bool = False,
+    review_dir: str | Path | None = None,
 ) -> int:
     wdir = Path(config.repo.working_dir)
+    review_ok = True
     try:
         output_root = resolve_output_root(config, output_dir)
         try:
-            target = check_preconditions(wdir, base=base, config_base=config.local_review.base, output_root=output_root)
+            target = check_preconditions(
+                wdir,
+                base=base,
+                config_base=config.local_review.base,
+                output_root=output_root,
+                review_phase=not skip_review,
+            )
         except NothingToReviewError as exc:
             print(str(exc))
             return 0
-        check_templates(Path(config.harness.knowledge_dir), REVIEW_TEMPLATES)
-        extra = None
-        kfile = config.harness.review_knowledge_file
-        if kfile and kfile.exists():
-            extra = kfile.read_text(encoding="utf-8")
+        knowledge_dir = Path(config.harness.knowledge_dir)
+        templates = ([] if skip_review else list(REVIEW_TEMPLATES)) + ([ADDRESS_TEMPLATE] if address else [])
+        check_templates(knowledge_dir, templates)
         print(f"Base: {target.base_ref} (merge base {target.base_sha})")
         print(f"Head: {target.head_sha}")
-        try:
-            result = run(config, target, output_root=output_root, force=force, backend=backend, extra_knowledge=extra)
-        except RepoMutatedError as exc:
-            rdir = review_dir_for(output_root, config.repo_slug, target.branch, target.head_sha)
-            print(f"Review directory: {rdir}")
-            print(f"ERROR: {exc}", file=sys.stderr)
-            return 1
+        reviewed_dir: Path | None = None
+        if not skip_review:
+            extra = None
+            kfile = config.harness.review_knowledge_file
+            if kfile and kfile.exists():
+                extra = kfile.read_text(encoding="utf-8")
+            try:
+                result = run(
+                    config, target, output_root=output_root, force=force, backend=backend, extra_knowledge=extra
+                )
+            except RepoMutatedError as exc:
+                rdir = review_dir_for(output_root, config.repo_slug, target.branch, target.head_sha)
+                print(f"Review directory: {rdir}")
+                print(f"ERROR: {exc}", file=sys.stderr)
+                return 1
+            print(f"Review directory: {result.review_dir}")
+            for line in _pass_lines(result):
+                print(line)
+            review_ok = result.ok
+            reviewed_dir = result.review_dir
+        if address:
+            chosen = select_review_dir(
+                config, target, output_root, review_dir=review_dir, skip_review=skip_review, reviewed_dir=reviewed_dir
+            )
+            print(f"Addressing review: {chosen}")
+            collection = collect_findings(chosen)
+            print(
+                f"Findings to address: {len(collection.open)} open, "
+                f"{collection.skipped_not_open} skipped (not open), {collection.unparseable} unparseable"
+            )
+            address_ok = run_address_phase(config, target, chosen, collection, backend=backend)
+            return 0 if (review_ok and address_ok) else 1
     except LocalReviewError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    print(f"Review directory: {result.review_dir}")
-    for line in _pass_lines(result):
-        print(line)
-    return 0 if result.ok else 1
+    return 0 if review_ok else 1
+
+
+# ---------------------------------------------------------------------------
+# Address phase: selection (FR-10 step 1), collection (step 2), status helpers
+# ---------------------------------------------------------------------------
+ADDRESS_TEMPLATE = "local-address-finding.md"
+STATUS_FIELD_RE = re.compile(r"^-\s*status\s*:", re.IGNORECASE)
+COMMIT_FIELD_RE = re.compile(r"^-\s*commit\s*:", re.IGNORECASE)
+RESOLUTIONS_DIR = "resolutions"
+
+
+def address_usage_error(address: bool, skip_review: bool, review_dir: str | Path | None) -> str | None:
+    if skip_review and not address:
+        return "--skip-review requires --address"
+    if review_dir and not address:
+        return "--review-dir requires --address"
+    if review_dir and not skip_review:
+        return "--review-dir requires --skip-review"
+    return None
+
+
+@dataclass(frozen=True)
+class AddressFinding:
+    """A finding to address, with where it lives so statuses can be written back."""
+
+    id: str
+    pass_name: str  # "file" or "design"
+    source_file: Path  # the review markdown file holding the block
+    block: FindingBlock
+
+    @property
+    def file(self) -> str:
+        return self.block.file or ""
+
+    @property
+    def line(self) -> int:
+        return self.block.line or 1
+
+
+@dataclass(frozen=True)
+class FindingCollection:
+    open: list[AddressFinding]  # ordered: per-file by path then line, then design in file order
+    skipped_not_open: int
+    unparseable: int
+
+
+def _git_env() -> dict[str, str]:
+    return build_subprocess_env([], {})
+
+
+def _manifest_matches(manifest: dict | None, target: LocalReviewTarget, wdir: Path) -> bool:
+    if manifest is None or manifest.get("branch") != target.branch:
+        return False
+    sha = manifest.get("head_sha")
+    if not isinstance(sha, str) or not sha:
+        return False
+    if sha == target.head_sha:
+        return True
+    return is_ancestor(sha, target.head_sha, str(wdir), _git_env())
+
+
+def _commit_time(wdir: Path, sha: str) -> int:
+    proc = _git(wdir, "show", "-s", "--format=%ct", sha)
+    try:
+        return int(proc.stdout.strip()) if proc.returncode == 0 else -1
+    except ValueError:
+        return -1
+
+
+def _check_explicit_review_dir(chosen: Path, target: LocalReviewTarget, wdir: Path) -> Path:
+    manifest = read_manifest(chosen)
+    if manifest is None:
+        raise LocalReviewError(f"{chosen} does not contain a usable {MANIFEST_NAME}")  # noqa: TRY003
+    if manifest.get("branch") != target.branch:
+        raise LocalReviewError(  # noqa: TRY003
+            f"review in {chosen} is for branch {manifest.get('branch')!r}, not {target.branch!r}"
+        )
+    if not _manifest_matches(manifest, target, wdir):
+        raise LocalReviewError(  # noqa: TRY003
+            f"review in {chosen} was made at {manifest.get('head_sha')}, which is not HEAD or an ancestor of HEAD"
+        )
+    return chosen
+
+
+def select_review_dir(
+    config: HarnessConfig,
+    target: LocalReviewTarget,
+    output_root: Path,
+    *,
+    review_dir: str | Path | None = None,
+    skip_review: bool = False,
+    reviewed_dir: Path | None = None,
+) -> Path:
+    """FR-10 step 1 (7.2). Offline; raises LocalReviewError when no review directory qualifies."""
+    wdir = Path(config.repo.working_dir).expanduser().resolve()
+    if review_dir:
+        return _check_explicit_review_dir(Path(review_dir).expanduser(), target, wdir)
+    if not skip_review:
+        chosen = reviewed_dir or review_dir_for(output_root, config.repo_slug, target.branch, target.head_sha)
+        if read_manifest(chosen) is None:
+            raise LocalReviewError(f"no completed review found in {chosen}")  # noqa: TRY003
+        return chosen
+    branch_dir = review_dir_for(output_root, config.repo_slug, target.branch, target.head_sha).parent
+    candidates: list[tuple[int, float, str, Path]] = []
+    if branch_dir.is_dir():
+        for cand in sorted(branch_dir.iterdir()):
+            manifest = read_manifest(cand) if cand.is_dir() else None
+            if not _manifest_matches(manifest, target, wdir):
+                continue
+            sha = str((manifest or {}).get("head_sha"))
+            try:
+                mtime = (cand / MANIFEST_NAME).stat().st_mtime
+            except OSError:
+                continue
+            candidates.append((_commit_time(wdir, sha), mtime, cand.name, cand))
+    if not candidates:
+        raise LocalReviewError(  # noqa: TRY003
+            f"no earlier review found for branch {target.branch!r} under {branch_dir}; run `harness run local-review` first"
+        )
+    return max(candidates)[3]
+
+
+def collect_findings(review_dir: Path) -> FindingCollection:
+    """FR-10 step 2 (7.3). Reads only `done` passes; returns open findings in deterministic order."""
+    manifest = read_manifest(review_dir)
+    if manifest is None:
+        raise LocalReviewError(f"{review_dir} does not contain a usable {MANIFEST_NAME}")  # noqa: TRY003
+    open_findings: list[AddressFinding] = []
+    skipped = unparseable = 0
+
+    def _read(path: Path, pass_name: str) -> list[AddressFinding]:
+        nonlocal skipped, unparseable
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            logger.warning("cannot read %s; skipping", path)
+            return []
+        found: list[AddressFinding] = []
+        for blk in parse_findings(text):
+            if not blk.valid or not blk.id:
+                logger.warning("ignoring unparseable or unstamped finding %r in %s", blk.title, path)
+                unparseable += 1
+            elif blk.status != "open":
+                skipped += 1
+            else:
+                found.append(AddressFinding(blk.id, pass_name, path, blk))
+        return found
+
+    for changed in sorted(path for path, st in manifest["files"].items() if st == STATUS_DONE):
+        per_file = _read(_file_output_path(review_dir, changed), "file")
+        open_findings.extend(sorted(per_file, key=lambda f: f.line))  # stable: file order on ties
+    if manifest.get("design") == STATUS_DONE:
+        open_findings.extend(_read(review_dir / DESIGN_NAME, "design"))
+    return FindingCollection(open_findings, skipped, unparseable)
+
+
+def read_finding_status(source_file: Path, finding_id: str) -> str | None:
+    """Current `status` of the block with `finding_id` in `source_file`, or None if not found."""
+    for blk in parse_findings(source_file.read_text(encoding="utf-8")):
+        if blk.id == finding_id:
+            return blk.status
+    return None
+
+
+def write_finding_status(source_file: Path, finding_id: str, status: str, commit: str | None = None) -> None:
+    """Set the `status` line of one block; for `fixed` with `commit`, also add `- commit: <sha>`.
+
+    Nothing else in the file changes. A `failed` attempt is not a status: callers leave `open` alone.
+    """
+    if status not in VALID_STATUSES:
+        raise ValueError(f"status must be one of {VALID_STATUSES}, got {status!r}")  # noqa: TRY003
+    text = source_file.read_text(encoding="utf-8")
+    lines = text.split("\n")
+    blk = next((b for b in parse_findings(text) if b.id == finding_id), None)
+    if blk is None:
+        raise LocalReviewError(f"finding {finding_id} not found in {source_file}")  # noqa: TRY003
+    pos = blk.start_line + 1
+    status_idx = None
+    commit_idx = None
+    while pos < blk.end_line and not lines[pos].strip():
+        pos += 1
+    while pos < blk.end_line and _FIELD_RE.match(lines[pos]):
+        if STATUS_FIELD_RE.match(lines[pos]):
+            status_idx = pos
+        elif COMMIT_FIELD_RE.match(lines[pos]):
+            commit_idx = pos
+        pos += 1
+    if status_idx is None:
+        raise LocalReviewError(f"finding {finding_id} has no status line in {source_file}")  # noqa: TRY003
+    lines[status_idx] = f"- status: {status}"
+    if status == "fixed" and commit:
+        if commit_idx is not None:
+            lines[commit_idx] = f"- commit: {commit}"
+        else:
+            lines.insert(status_idx + 1, f"- commit: {commit}")
+    _atomic_write_text(source_file, "\n".join(lines))
+
+
+def run_address_phase(
+    config: HarnessConfig,
+    target: LocalReviewTarget,
+    review_dir: Path,
+    collection: FindingCollection,
+    *,
+    backend: Backend | None = None,
+) -> bool:
+    """Per-finding backend loop (local-review phase 09 plugs in here). Returns True when all succeeded.
+
+    Phase 08 provides selection and collection only; this stub addresses nothing.
+    """
+    del config, target, review_dir, backend
+    logger.info(
+        "address phase: %d open finding(s) collected; per-finding loop not implemented yet", len(collection.open)
+    )
+    return True
