@@ -37,7 +37,6 @@ harness run [--config PATH] [--verbose] local-review [--base REF] [--output-dir 
 7. Runs one summary pass, then one design pass, unless each is already `done`. The design pass gets the diffs of all changed files in one prompt. The summary pass runs even if some file passes failed, but it is then recorded as `failed`, so it runs again next time together with the failed files.
 8. After each pass, it rewrites `manifest.json`. After the last pass, it writes `index.md`.
 9. Checks, after every backend call, that the backend did not change the repository (see [Security](#security)).
-
 10. With `--address`, runs the address phase after the review phase (or instead of it, with `--skip-review`). See [Address phase and finding curation](#address-phase-and-finding-curation).
 
 The command prints the base ref and merge base, the head commit, the review directory, and the status of each pass (`per-file: N/M done`, `summary`, `design`). With `--address` it also prints the review directory it addresses, how many findings are open, and a one-line summary of the outcomes.
@@ -191,6 +190,8 @@ The backend runs with unrestricted shell access in `repo.working_dir`. For `clau
 ```
 harness schedule install local-review --every <duration> [--config PATH] [--scheduler cron|launchd]
 ```
+
+`harness schedule install` and `uninstall` still load the config with `repo.name` required. To schedule `local-review`, set `repo.name` in the config (any identifier works). The scheduled run does not use it for GitHub.
 
 ## Address phase and finding curation
 
