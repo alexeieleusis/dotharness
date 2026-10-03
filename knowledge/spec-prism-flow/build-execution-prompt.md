@@ -6,7 +6,7 @@
 > phase corpus one phase at a time, instead of using `spec-prism-flow build run`.
 >
 > This pairs with `tools/spec-prism-flow/docs/lifecycle-cheat-sheet.md`. That guide's
-> "Recommended workflow" section explains why: `build run`'s own orchestration is the
+> "Drive this yourself" section explains why: `build run`'s own orchestration is the
 > least mature part of the tool. This prompt is a deliberately thin, honest manual
 > stand-in for it. The steps are: implement, check against acceptance criteria, commit,
 > move on.
@@ -64,9 +64,11 @@ For each phase, in order:
 
 1. Read that phase's leaf file in full.
 2. Spawn a fresh sub-agent scoped to just that phase. Give it the leaf file's `Scope`,
-   `Requirements`, and `Acceptance criteria`, word for word. Tell it to check its own work
-   against the `Manual test checklist` before it reports that it is done. It must not
-   touch files outside the declared `Scope`.
+   `Requirements`, and `Acceptance criteria`, word for word. Also give it the paths of the
+   handoff summary files of the phases already done (see "Handoff summary" below). Tell it to check its
+   own work against the `Manual test checklist` before it reports that it is done. It must
+   not touch files outside the declared `Scope`. Tell it to end its report with its own
+   handoff summary.
 3. Once the sub-agent reports that the implementation is done, **commit the result** in
    the target repo. Use a message that names the phase, for example
    `Phase 04: <leaf name>`. Do this yourself — do not assume a commit happened on its own.
@@ -79,7 +81,37 @@ For each phase, in order:
    budget and no PR-lifecycle process here. This build method is a deliberately thin,
    honest stand-in for `build run`, which is not yet reliable.
 
+## Handoff summary
+
+Sub-agents run one after another. Each starts with a clean context. The summary is the only
+thing that carries context forward. Each sub-agent must end its report with one. Keep it
+short and concrete. Save each summary yourself as `handoffs/NN-<leaf name>.md` in the
+project's workspace directory, right after the phase's commit. Give the next sub-agent the
+paths of all earlier summary files, in phase order, and tell it to read them. If the session
+dies, or you stop on an open question, the saved files let a new session resume without
+losing context.
+
+```
+### Handoff: Phase NN — <leaf name>
+- Done: what now exists. Give file paths and the names of new functions, types, or commands.
+- Deviations from the plan: each difference from the leaf file (scope, names, shapes,
+  skipped work, added work), and why. Write "None" if there are none.
+- Context for later phases: facts the next phases must know, such as a helper to reuse, a
+  constraint found in the code, or a slow or flaky test.
+- Open questions: each question that needs a human decision. Write "None" if there are none.
+```
+
+You are the orchestrator. Read every summary before you start the next phase. Then apply
+these rules:
+
+- If a deviation changes the `Scope`, `Requirements`, or dependencies of a later phase, stop.
+  Tell the user. Do not pass the deviation on silently. If you cannot tell whether a
+  deviation affects a later phase, treat it as if it does, and ask the user.
+- If a summary lists an open question, stop. Ask the user. Continue after the user answers.
+  Do not guess an answer.
+
 ## Done when
 
 Every node in the topological order has a matching commit in the target repo, in the
-same order. Report the result: for each phase, name its commit hash.
+same order. Report the result. For each phase, name its commit hash. List every deviation
+and every question raised, and state how each was resolved.

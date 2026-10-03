@@ -100,6 +100,34 @@ everything downstream is.
 
 ## Process guidance
 
+- **Ground the draft in the repository before you ask anyone.** If a code repository,
+  documents, or conventions are available, search them before you log an open decision.
+  Search the code the request touches. Search its tests. Search decision and convention files
+  (`AGENTS.md`, `DECISIONS.md`, ADRs, READMEs). Then do three things:
+  - Resolve every question the repository answers. Cite the evidence as a file path plus the
+    matched text. Never cite a bare line number, because line numbers drift.
+  - Record what the code already implements, its shortcomings, and the constraints it imposes
+    (tests, wrappers, conventions). Put this in the document as context. Do not make the
+    reader find it again.
+  - Log only the questions the repository cannot answer. State what you searched. The human
+    then knows the question is real.
+- **Ask once for missing inputs, and only after you searched.** Search first. Ask the human
+  only if one of these is true:
+  - No repository or path is available to you.
+  - Your search found nothing for an area the brief or ticket names.
+  - The brief or ticket points at a document, ADR, or repository you cannot reach.
+
+  Ask one batched message, never one question per turn. Make each question concrete: "I
+  searched X and Y and found nothing for Z. Where does it live?" Do not ask "which files are
+  relevant?" in the abstract. If the human does not answer, do not block. Continue the draft,
+  mark the affected facts as inferred, and log the gap in the open-decisions log.
+- **Separate verified facts from inferred facts.** Mark each fact with one of three labels:
+  read from the code (give the commit), taken from the brief or ticket and not checked again,
+  or inferred. Never state an unverified fact as if you verified it.
+- **Keep decisions beside the requirements.** When the human answers a question, give the
+  answer an ID (`D-1`, `D-2`, …). Update every section the answer affects. Keep the decision
+  list in the same document. A downstream reader then sees each requirement and its reason
+  together.
 - Treat this as iterative, not one-shot. Draft from the brief, flag every gap in the open-decisions
   log, and expect a human checkpoint before the document is "approved" — approval means the log has
   been reviewed and answered or explicitly deferred, not that drafting stopped.
