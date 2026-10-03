@@ -64,8 +64,8 @@ For each phase, in order:
 
 1. Read that phase's leaf file in full.
 2. Spawn a fresh sub-agent scoped to just that phase. Give it the leaf file's `Scope`,
-   `Requirements`, and `Acceptance criteria`, word for word. Also give it the handoff
-   summaries of the phases already done (see "Handoff summary" below). Tell it to check its
+   `Requirements`, and `Acceptance criteria`, word for word. Also give it the paths of the
+   handoff summary files of the phases already done (see "Handoff summary" below). Tell it to check its
    own work against the `Manual test checklist` before it reports that it is done. It must
    not touch files outside the declared `Scope`. Tell it to end its report with its own
    handoff summary.
@@ -85,8 +85,11 @@ For each phase, in order:
 
 Sub-agents run one after another. Each starts with a clean context. The summary is the only
 thing that carries context forward. Each sub-agent must end its report with one. Keep it
-short and concrete. Paste the summaries of all earlier phases into the next sub-agent's
-prompt, in phase order.
+short and concrete. Save each summary yourself as `handoffs/NN-<leaf name>.md` in the
+project's workspace directory, right after the phase's commit. Give the next sub-agent the
+paths of all earlier summary files, in phase order, and tell it to read them. If the session
+dies, or you stop on an open question, the saved files let a new session resume without
+losing context.
 
 ```
 ### Handoff: Phase NN — <leaf name>
@@ -102,7 +105,8 @@ You are the orchestrator. Read every summary before you start the next phase. Th
 these rules:
 
 - If a deviation changes the `Scope`, `Requirements`, or dependencies of a later phase, stop.
-  Tell the user. Do not pass the deviation on silently.
+  Tell the user. Do not pass the deviation on silently. If you cannot tell whether a
+  deviation affects a later phase, treat it as if it does, and ask the user.
 - If a summary lists an open question, stop. Ask the user. Continue after the user answers.
   Do not guess an answer.
 

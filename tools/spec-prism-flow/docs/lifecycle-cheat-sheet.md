@@ -19,7 +19,9 @@ Ask a coding agent to do these steps:
 3. Save the brief as `BRIEF.md` in the project's workspace directory.
 
 You answer the remaining open questions. The agent adds each answer to the brief as a
-numbered decision. When no open question blocks the requirements document, run `plan init`.
+numbered decision. If the agent cannot find the code or a referenced document, it asks you
+once, in one message, and carries on with what it has if you do not answer. Run `plan init`
+when you confirm that no open question blocks the requirements document.
 
 ## Drive this yourself
 
@@ -62,23 +64,26 @@ You can run this with one sub-agent for the plan phase and one for the build pha
 sub-agent its prompt file and the project's config or `BRIEF.md`.
 
 - **Plan sub-agent.** It drives `plan` with `plan-generation-prompt.md`. It returns to you at
-  the three checkpoints above, and only there.
+  the three checkpoints, and only there: the brief, the review of `00-overview.md`, and
+  `OPEN_QUESTIONS.md`. (You normally finish the brief in step 0, before it starts.)
 - **Build sub-agent.** It drives `build` with `build-execution-prompt.md`. It launches its own
   sub-agents, one per phase. It runs them strictly in sequence, never in parallel.
 - **Context between phases.** Each phase sub-agent ends its report with a handoff summary.
   The summary states what the sub-agent did, its deviations from the plan, context for later
-  phases, and open questions. The build sub-agent gives all earlier summaries to the next
-  phase sub-agent. The template is in `build-execution-prompt.md`, under "Handoff summary".
-  Tell the build sub-agent to require it.
+  phases, and open questions. The build sub-agent saves each one to
+  `handoffs/NN-<leaf name>.md` in the workspace directory and gives the paths of all earlier
+  summaries to the next phase sub-agent. The template is in `build-execution-prompt.md`,
+  under "Handoff summary". Tell the build sub-agent to require it.
 - **Open questions.** A phase can raise an open question. A phase can also raise a deviation
   that changes a later phase. In both cases, the build sub-agent stops and returns to you. It
-  does not guess. When you answer, it continues.
+  does not guess. If it cannot tell whether a deviation affects a later phase, it asks. When
+  you answer, it continues.
 - **Done.** Each sub-agent reports when it finishes. The build report lists every commit,
   every deviation, and every question raised.
 
 Example instruction to the build sub-agent: "Follow `build-execution-prompt.md` for the
 project at `<path>`. Launch one sub-agent per phase, in order. Require each sub-agent to
-return a handoff summary. Give the earlier summaries to the next sub-agent. Report when you
+return a handoff summary, and save it under `handoffs/`. Give the earlier summary paths to the next sub-agent. Report when you
 finish. Return to me when an open question arises."
 
 ### How the handoff actually works

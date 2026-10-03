@@ -111,6 +111,16 @@ everything downstream is.
     reader find it again.
   - Log only the questions the repository cannot answer. State what you searched. The human
     then knows the question is real.
+- **Ask once for missing inputs, and only after you searched.** Search first. Ask the human
+  only if one of these is true:
+  - No repository or path is available to you.
+  - Your search found nothing for an area the brief or ticket names.
+  - The brief or ticket points at a document, ADR, or repository you cannot reach.
+
+  Ask one batched message, never one question per turn. Make each question concrete: "I
+  searched X and Y and found nothing for Z. Where does it live?" Do not ask "which files are
+  relevant?" in the abstract. If the human does not answer, do not block. Continue the draft,
+  mark the affected facts as inferred, and log the gap in the open-decisions log.
 - **Separate verified facts from inferred facts.** Mark each fact with one of three labels:
   read from the code (give the commit), taken from the brief or ticket and not checked again,
   or inferred. Never state an unverified fact as if you verified it.
