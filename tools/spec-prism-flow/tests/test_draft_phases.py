@@ -18,6 +18,7 @@ from spec_prism_flow.config import (
 from spec_prism_flow.decompose import TREE_FILENAME
 from spec_prism_flow.draft_phases import DraftPhasesError, run_draft_phases, target_phase_paths
 from spec_prism_flow.phase_file import parse_phase_file
+from spec_prism_flow.review import _check_section_coverage
 
 
 def _make_cfg(tmp_path) -> SpecPrismFlowConfig:
@@ -339,3 +340,72 @@ def test_cli_draft_phases_no_prompt_when_nothing_exists_yet(tmp_path, monkeypatc
 
     assert result.exit_code == 0, result.output
     assert (tmp_path / "phases" / "01-only-leaf.md").exists()
+
+
+# --- issue #77 -------------------------------------------------------------------------------------
+
+
+def test_numbered_mini_doc_headings_produce_phase_file_that_parses(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    doc = "# Leaf\n## 1. Purpose / origin\ntext\n## 2. Goals\n- **G1.** Do it.\n## 12. Next step\ngo\n"
+    leaf = ChunkNode(chunk=_chunk("A-1", "only", ["a.py"], 1), leaf_doc=doc)
+    _write_tree(cfg, ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf]))
+
+    result = run_draft_phases(cfg)
+
+    parsed = parse_phase_file(result.written[0])
+    assert "### 12. Next step" in parsed.requirements
+
+
+def test_no_prose_review_warning_when_disabled(tmp_path, caplog):
+    cfg = _make_cfg(tmp_path)
+    leaf = ChunkNode(chunk=_chunk("A-1", "only", ["a.py"], 1), leaf_doc=_goals_doc("Goal."))
+    _write_tree(cfg, ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf]))
+
+    with caplog.at_level(logging.WARNING):
+        run_draft_phases(cfg)
+
+    assert "prose review" not in caplog.text
+
+
+def test_invalid_rendered_output_raises_and_writes_nothing(tmp_path, monkeypatch):
+    cfg = _make_cfg(tmp_path)
+    leaf = ChunkNode(chunk=_chunk("A-1", "only", ["a.py"], 1), leaf_doc=_goals_doc("Goal."))
+    _write_tree(cfg, ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf]))
+    monkeypatch.setattr("spec_prism_flow.draft_phases.render_phase_file", lambda phase: "## Bogus\n")
+
+    with pytest.raises(DraftPhasesError, match=r"01-only-leaf\.md"):
+        run_draft_phases(cfg)
+
+    assert not (cfg.plan.phase_dir / "01-only-leaf.md").exists()
+
+
+def test_source_sections_cover_every_requirements_heading(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    cfg.plan.workspace_dir.mkdir(parents=True, exist_ok=True)
+    requirements = (
+        "# Req\n## 1. Purpose\nwhy\n## 2. Widgets\nw\n## 3. Gadgets\ng\n### 3.1. Gadget detail\nd\n## 4. Next step\nn\n"
+    )
+    (cfg.plan.workspace_dir / "requirements.md").write_text(requirements)
+    chunk_1 = Chunk("A-1", "widgets", ["a.py"], "## 2. Widgets\nw", 1)
+    chunk_2 = Chunk("A-2", "gadgets", ["b.py"], "## 3. Gadgets\ng\n### 3.1. Gadget detail\nd", 1)
+    _write_tree(
+        cfg,
+        ChunkNode(
+            chunk=_chunk("A", "root", [], 0),
+            children=[
+                ChunkNode(chunk=chunk_1, leaf_doc=_goals_doc("W.")),
+                ChunkNode(chunk=chunk_2, leaf_doc=_goals_doc("G.")),
+            ],
+        ),
+    )
+
+    result = run_draft_phases(cfg)
+
+    phases = [parse_phase_file(p) for p in result.written]
+    assert _check_section_coverage(requirements, phases) == []
+    # Cross-cutting sections nobody's slice claimed land on phase 1.
+    assert "§1 (Purpose)" in phases[0].requirements
+    assert "§4 (Next step)" in phases[0].requirements
+    assert "§3" not in phases[0].requirements
+    assert "§3.1 (Gadget detail)" in phases[1].requirements

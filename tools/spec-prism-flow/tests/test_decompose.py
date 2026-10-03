@@ -462,4 +462,4 @@ def test_run_decompose_links_leaves_that_share_file_scope_with_no_cross_referenc
 
     graph_data = json.loads(graph_path.read_text())
     assert ["03-third-leaf", "01-first-leaf"] in graph_data["edges"]
-    assert ["02-second-leaf", "01-first-leaf"] not in graph_data["edges"]
+    assert ["03-third-leaf", "02-second-leaf"] in graph_data["edges"]
