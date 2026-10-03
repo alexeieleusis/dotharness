@@ -5,6 +5,22 @@ One page, two halves. `plan` turns a rough idea into an agent-sized phase corpus
 `.spec-prism-flow.toml` already exists for the target project. `plan.workspace_dir`
 and `plan.phase_dir` are required. See [requirements.md §10](requirements.md#10-tool-shape).
 
+## Step 0: Get a brief (before `plan init`)
+
+`plan init` needs a `BRIEF.md`. Work usually starts from a ticket, so the brief comes first.
+Ask a coding agent to do these steps:
+
+1. Fetch the ticket (for example, from Linear).
+2. Draft the brief with
+   [`requirements-doc-drafting-prompt.md`](https://github.com/alexeieleusis/dotharness/blob/main/knowledge/spec-prism-flow/requirements-doc-drafting-prompt.md).
+   Tell the agent to check the code. The brief must record what the code already implements,
+   its shortcomings, and its constraints. The agent must resolve open questions from the
+   repository where it can. It must leave only the real questions for you.
+3. Save the brief as `BRIEF.md` in the project's workspace directory.
+
+You answer the remaining open questions. The agent adds each answer to the brief as a
+numbered decision. When no open question blocks the requirements document, run `plan init`.
+
 ## Drive this yourself
 
 You are the agent that drives `plan`, end to end. Do not read the commands below as a
@@ -39,6 +55,31 @@ Supervise `build` more closely than `plan`.
 Use [`build-execution-prompt.md`](https://github.com/alexeieleusis/dotharness/blob/main/knowledge/spec-prism-flow/build-execution-prompt.md)
 to run the build phase this way — implementing the phase corpus directly from the leaf
 files and `graph.json`, one phase at a time, instead of using `spec-prism-flow build run`.
+
+### Delegating plan and build to sub-agents
+
+You can run this with one sub-agent for the plan phase and one for the build phase. Give each
+sub-agent its prompt file and the project's config or `BRIEF.md`.
+
+- **Plan sub-agent.** It drives `plan` with `plan-generation-prompt.md`. It returns to you at
+  the three checkpoints above, and only there.
+- **Build sub-agent.** It drives `build` with `build-execution-prompt.md`. It launches its own
+  sub-agents, one per phase. It runs them strictly in sequence, never in parallel.
+- **Context between phases.** Each phase sub-agent ends its report with a handoff summary.
+  The summary states what the sub-agent did, its deviations from the plan, context for later
+  phases, and open questions. The build sub-agent gives all earlier summaries to the next
+  phase sub-agent. The template is in `build-execution-prompt.md`, under "Handoff summary".
+  Tell the build sub-agent to require it.
+- **Open questions.** A phase can raise an open question. A phase can also raise a deviation
+  that changes a later phase. In both cases, the build sub-agent stops and returns to you. It
+  does not guess. When you answer, it continues.
+- **Done.** Each sub-agent reports when it finishes. The build report lists every commit,
+  every deviation, and every question raised.
+
+Example instruction to the build sub-agent: "Follow `build-execution-prompt.md` for the
+project at `<path>`. Launch one sub-agent per phase, in order. Require each sub-agent to
+return a handoff summary. Give the earlier summaries to the next sub-agent. Report when you
+finish. Return to me when an open question arises."
 
 ### How the handoff actually works
 
