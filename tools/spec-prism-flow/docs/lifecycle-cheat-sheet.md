@@ -110,8 +110,8 @@ subprocess's stdin.
 
 `decompose` runs this protocol once per tree node, not once for the whole command. Each
 oversized node can cost two handoffs: the natural split/leaf attempt, plus a
-`{node}_forced` retry when a Leaf verdict comes back oversized (over 15 files or over 1500 words;
-undersized leaves are accepted, so a small project can end as a single phase) and depth has not hit
+`{node}_forced` retry when a Leaf verdict comes back oversized (over 15 files or over 1500 words.
+Undersized leaves are accepted, so a small project can end as a single phase) and depth has not hit
 `--depth-cap` yet (default 4 — `DEFAULT_DEPTH_CAP` in `decompose.py`). For any
 requirements doc that is not tiny, expect a couple dozen prompt/output round trips before
 the tree is done, not one. Budget for that. Consider passing `--depth-cap` on purpose

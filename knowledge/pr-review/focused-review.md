@@ -16,9 +16,9 @@ comment — it never changes code.
 ## Step 1 — Understand the finding
 
 Read the SonarQube comment body and diff context below. Then read the flagged file at
-the given path/line directly from the working directory (already checked out at the
-PR's head) to see the surrounding code in full — the diff hunk alone is usually too
-narrow.
+the given path/line directly from the working directory to see the surrounding code in
+full. The working directory is already checked out at the PR's head. The diff hunk
+alone is usually too narrow.
 
 ## Step 2 — Read the knowledge file
 

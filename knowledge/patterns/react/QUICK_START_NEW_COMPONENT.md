@@ -478,7 +478,7 @@ export function FeatureName(props: FeatureNameProps): ReactElement {
      .toMatchScreenshot('default');
    ```
 
-   Must run in the pinned Docker image (`pnpm run test:screenshot:docker`) - Chromium rasterizes differently per CPU architecture, so baselines captured natively on Apple Silicon won't match CI. Screenshot tests gate every PR in CI; a maintainer comments `/approve-screenshots` to accept new baselines.
+   Must run in the pinned Docker image (`pnpm run test:screenshot:docker`) - Chromium rasterizes differently per CPU architecture, so baselines captured natively on Apple Silicon won't match CI. Screenshot tests gate every PR in CI. A maintainer comments `/approve-screenshots` to accept new baselines.
 
 See [COMPONENT_ORGANIZATION_CONVENTION.md § Testing Strategy](./COMPONENT_ORGANIZATION_CONVENTION.md#testing-strategy) for the full writeup, including a "which test type do I reach for" decision guide.
 
@@ -488,7 +488,7 @@ See [COMPONENT_ORGANIZATION_CONVENTION.md § Testing Strategy](./COMPONENT_ORGAN
 
 **Only if mocking is straightforward. If complex, skip and focus on domain tests.**
 
-These stories are a manual verification catalog - don't add `play` functions or assertions; just cover the states below and click through them by hand.
+These stories are a manual verification catalog - don't add `play` functions or assertions. Just cover the states below and click through them by hand.
 
 ```typescript
 import { FeatureNamePresentation } from './feature-name';

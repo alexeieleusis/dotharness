@@ -93,8 +93,8 @@ everything downstream is.
   from them directly ("returns X given Y") over ones that only a human can judge subjectively
   ("works well").
 - **Sized to reality, not invented.** When you have empirical data (an existing corpus, prior
-  examples) to derive sizing bands or structural rules from, derive them and cite the source range;
-  don't invent round numbers.
+  examples) to derive sizing bands or structural rules from, derive them and cite the source range.
+  Don't invent round numbers.
 - **Self-contained per section.** A reader should be able to jump straight to the section they need
   without having read the ones before it — cross-reference by number rather than assuming context.
 

@@ -50,7 +50,7 @@ finding, add one block in exactly this format:
 ```
 
 The block starts at column 0 with `## Finding: `. Always write `status: open` and do
-not write an `id` line; the tool adds one afterwards. Use only P0 or P1 severities.
+not write an `id` line. The tool adds one afterwards. Use only P0 or P1 severities.
 
 If the exact line is unavailable, use line 1. Be specific: reference the exact code,
 explain why it is a problem, and suggest a concrete fix.

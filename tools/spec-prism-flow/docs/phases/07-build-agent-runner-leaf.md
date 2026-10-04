@@ -54,7 +54,7 @@ It then handles the commit result:
 
 The guard reuses pr-review's `repo_guard.py` pattern where it is importable as a shared dependency. Otherwise, it uses a narrowed reimplementation scoped to what this phase needs: an existence check plus a name match. It excludes the harness-repo-snapshot machinery, which is pr-review-specific.
 
-A `SIGKILL`ed attempt can leave `cwd` mid-write (partially written/staged files) since the killed process gets no chance to clean up. Before the retried `invoke` call, `ClaudeBackend` must reset `cwd` back to the branch tip left by `checkout_fresh_branch`. It runs `git checkout -- .` and then `git clean -fd` in `cwd`, so the retry reasons about a clean tree instead of the first attempt's wreckage.
+A `SIGKILL`ed attempt can leave `cwd` mid-write (partially written/staged files) since the killed process gets no chance to clean up. Before the retried `invoke` call, `ClaudeBackend` must reset `cwd` back to the branch tip left by `checkout_fresh_branch`. It runs `git checkout -- .` and then `git clean -fd` in `cwd`, so the retry reasons about a clean tree instead of the first attempt's leftovers.
 
 ### 7.3 opencode backend (`spec_prism_flow/build/opencode_backend.py`)
 
@@ -81,7 +81,7 @@ Known limitation: `--standalone` isolates this invocation's session from opencod
 ## Acceptance criteria
 
 - `build_backend` selects `ClaudeBackend` for `cfg.backend == "claude"` and `OpencodeBackend` for `"opencode"`.
-- `build_backend` performs no re-validation of `cfg.backend`'s value.
+- `build_backend` does not re-validate `cfg.backend`'s value.
 - `run_phase` (agent-runner level) checks out a fresh branch and invokes the backend.
 - When `commit_all` reports no changes, `run_phase` returns `empty=True` without pushing.
 - When `commit_all` reports changes, `run_phase` pushes and returns the commit SHA.

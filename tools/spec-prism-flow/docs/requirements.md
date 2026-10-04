@@ -10,7 +10,7 @@ end to end, from a high-level idea to merged code. It has two halves. `plan` (Fe
 single high-level system prompt or product goal into exhaustive, validated, deterministic
 technical requirements. It then recursively splits those requirements into chunks (§4). Formally,
 this is an `unfoldr`-style corecursion: a generate-and-split process that keeps recursing until each
-piece is small enough to stop on, or a depth cap is hit and the oversized chunk is flagged for human
+piece is small enough to stop on, or a depth cap is hit and the tool flags the oversized chunk for human
 review instead (§7.2 step 6 gives it a precise definition). The goal is to explore a feature space
 and map edge cases *before* a single line of application code is generated. `build` (Feature B, §8)
 then executes the resulting phase corpus. It is the same tool, carried through to the code it
@@ -228,7 +228,7 @@ the stage is done. This protocol is expected to iterate if it proves too manual 
    questions into a full `requirements.md`. The sections:
    - functional behavior, section by section
    - the glossary
-   - any architecture/convention constraints pulled in from the supplied conventions doc
+   - any architecture/convention constraints taken from the supplied conventions doc
    - non-functional requirements
    - an explicit out-of-scope section
 
@@ -445,7 +445,7 @@ In parallel mode this pipeline runs once per concurrently-eligible leaf.
     `OPEN_QUESTIONS.md`, distinct from the phase directory location below)
   - the phase directory location
   - the build/lint/test command list `merge_gates` should run
-  - `build`'s worker count (default 1, which is sequential; a count above 1 switches `track_runner`
+  - `build`'s worker count (default 1, which is sequential. A count above 1 switches `track_runner`
     into parallel mode, §8)
 
 ## 11. Decisions log

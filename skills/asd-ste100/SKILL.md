@@ -6,7 +6,7 @@ version: 2.1.0
 
 # Plain-English Editing: A Quick Guide
 
-This guide has one set of rules and one workflow for editing English text so it reads clearly. It works for any text a person reads. It also works for text a machine must parse alone: an error message, a tool description, or an inter-agent instruction. In that text, a wrong reading has a real cost. If a reader can misread "close the valve" as "the valve that is near" instead of a command, a language model can too.
+This guide has one set of rules and one workflow for editing English text so it reads clearly. It works for any text a person reads. It also works for text a machine must parse alone: an error message, a tool description, or an inter-agent instruction. In that kind of text, a wrong reading has a real cost. If a reader can misread "close the valve" as "the valve that is near" instead of a command, a language model can too.
 
 The two main sources of misreading are words with more than one meaning and sentences with more than one possible structure. The rules below fix both. This guide is complete enough to edit most documents well. It adds nothing it does not need.
 
@@ -14,7 +14,7 @@ The two main sources of misreading are words with more than one meaning and sent
 
 **Strict** — use it where a wrong reading has a cost: procedures, error messages, tool and function descriptions, inter-agent instructions, and safety text. Apply every rule below.
 
-**Everyday** — ordinary prose: READMEs, PR descriptions, changelogs, documentation, emails, posts, and marketing or persuasive copy. Apply the structure rules in full. Treat the word-choice rules as a preference. Prose needs some word range. Rewriting prose in Strict mode reads as a personality transplant, not as a clarification. For marketing or persuasive copy, let sentence length and parallelism vary where the persuasive effect depends on it — the structure rules exist to prevent misreading, not to flatten a deliberate rhetorical build-up.
+**Everyday** — ordinary prose: READMEs, PR descriptions, changelogs, documentation, emails, posts, and marketing or persuasive copy. Apply the structure rules in full. Treat the word-choice rules as a preference. Prose needs some word range. Rewriting prose in Strict mode reads as a personality transplant, not as a clarification. For marketing or persuasive copy, let sentence length and parallelism vary where the persuasive effect depends on it. The structure rules exist to prevent misreading, not to flatten a deliberate rhetorical build-up.
 
 Pick one before rewriting. If the user does not say which, infer from the text type.
 
@@ -101,7 +101,7 @@ Follow the table with a one-line note on anything you deliberately did **not** s
 - Fabricate facts, measurements, quotations, or consensus. Flag claims that require verification.
 - Convert "may have failed" into "failed", or "could be caused by X" into "X is the cause" — losing a hedge changes the claim.
 - Make weak content sound true. These rules fix the *form* of a text, not its substance. A hollow paragraph rewritten under them becomes a clean, short, well-punctuated hollow paragraph. If the text has nothing to say, say so instead of polishing it.
-- Shorten past the point of clarity, or confuse terseness with clarity. Cutting words is not the goal. Removing ambiguity is. Stop when the sentence is unambiguous, not when it is shortest. Necessary explanation is not clutter. Cutting it out is a defect, not a win.
+- Shorten past the point of clarity, or confuse terseness with clarity. Cutting words is not the goal. Removing ambiguity is the goal. Stop when the sentence is unambiguous, not when it is shortest. Necessary explanation is not clutter. Cutting it out is a defect, not a win.
 - Force one dialect on text that is already internally consistent — make usage consistent first, and use American English spelling only for new or mixed text.
 
 ## Done When

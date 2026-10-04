@@ -19,7 +19,7 @@ duplicated across files that should have been unified)?
 ## Role
 You are an expert Senior Software Architect. Review the diffs for every changed file,
 included below, together as one PR — not in isolation. Do not repeat correctness,
-security, or performance findings; those are covered by a separate per-file review
+security, or performance findings. Those are covered by a separate per-file review
 pass and are out of scope here. Stay focused on:
 
 1. **Abstraction fit** — is the chosen abstraction (or the choice not to introduce one)

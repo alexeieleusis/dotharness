@@ -7,7 +7,7 @@
 > generalizing anything for — see §4 there). This is the single source of truth a later,
 > smaller work order (a phase file / ticket) will quote from — not the work order itself.
 > Four architectural forks, plus the two items originally logged open in §11, were raised
-> directly to the user during drafting and answered (2026-09-17); all six answers are
+> directly to the user during drafting and answered (2026-09-17). All six answers are
 > folded into §7 below and are not re-litigated. §11 records the resolutions with
 > pointers rather than leaving them to silently disappear.
 
@@ -51,7 +51,7 @@ so later sections don't need to re-justify them:
    (`knowledge/pr-review/review-summary.md:8-13`) — comparing against it risked hiding
    exactly the scope creep/gaps this pass exists to catch. This also means the
    traceability pass has **no ordering dependency** on `review-summary.md` completing
-   first; it is fully independent, like `review-design.md`.
+   first. It is fully independent, like `review-design.md`.
 3. **No linked ticket found:** post a PR-level comment saying so, rather than silently
    skipping — keeps the "exactly one PR-level comment marks a pass as done" idempotency
    convention uniform across all PR-level passes.
@@ -111,7 +111,7 @@ expensive point to discover a mismatch.
   directly out of its body (§7.2) — still no tracker-specific API client, since the bot
   already mirrors that content into the GitHub comment `gh` fetches anyway.
 - **G6.** Findings are traceable to the specific file(s) they concern when they can be
-  (scope-creep findings anchor to the file introducing unauthorized scope); gap findings,
+  (scope-creep findings anchor to the file introducing unauthorized scope). Gap findings,
   which by definition point at something *absent* from the diff, are PR-level only, since
   there is no line to anchor an absence to (§7.1, §7.3).
 
@@ -120,7 +120,7 @@ expensive point to discover a mismatch.
 - **Not adding Linear/Jira (or any other tracker) integration.** GitHub Issues only, this
   iteration — resolved directly per the user's refined brief (§1). The originating
   issue's "configurable convention" language is satisfied entirely by GitHub's own
-  closing-keyword linking plus the comment-scan fallback; no tracker-specific API client
+  closing-keyword linking plus the comment-scan fallback. No tracker-specific API client
   is introduced. Still holds after the §4/G5 update: recognizing the `linear[bot]`
   linkback comment's already-mirrored content is not a Linear API integration — no
   Linear-specific request is ever made, and a Linear ticket with no linkback comment on
@@ -149,7 +149,7 @@ expensive point to discover a mismatch.
 ## 5. Glossary
 
 - **PR-level pass**, **Backend**, **invocation**, **Knowledge dir**, **Marker** — defined
-  identically to `design-review-requirements.md` §5; not redefined here.
+  identically to `design-review-requirements.md` §5. Not redefined here.
 - **Linked ticket** — a GitHub Issue resolved as "what this PR was asked to do," via
   either of two mechanisms (§7.2): **native linking** (GitHub's own closing-keyword
   parsing, exposed as `closingIssuesReferences`) or, only as a **fallback** when native
@@ -158,7 +158,7 @@ expensive point to discover a mismatch.
 - **Early-comment window** — the fixed period starting at the PR's `createdAt` timestamp
   and lasting `TRACEABILITY_COMMENT_WINDOW_SECONDS` (300, i.e. 5 minutes — §7.2, §11.2).
   Because it's anchored to PR creation time rather than "now," it's the same fixed window
-  no matter when the pass actually runs; a fallback comment scan doesn't need to run
+  no matter when the pass actually runs. A fallback comment scan doesn't need to run
   within 5 minutes of PR creation to work correctly.
 - **Scope creep finding** — a P0/P1 judgment that some part of the diff does something
   the linked ticket did not ask for.
@@ -241,7 +241,7 @@ expensive point to discover a mismatch.
      `gh api repos/{REPO}/pulls/{PR_NUMBER}/comments` exactly as `review-design.md` does,
      with `TRACEABILITY_REVIEW_MARKER` appended.
      **Gap findings are never posted inline** — a gap is an absence, and has no file/line
-     to anchor to; gaps only ever appear in the PR-level comment.
+     to anchor to. Gaps only ever appear in the PR-level comment.
   2. **One PR-level comment, always posted exactly once per successful run**, via
      `gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Requirement Traceability\n...'`:
      - If a ticket was resolved: link back to it (`Linked ticket: #N` or the cross-repo
@@ -274,7 +274,7 @@ New functions in `harness/runners/common.py`:
      (`https://github.com/{owner}/{repo}/issues/{N}`), a same-repo shorthand (`#N`), or a
      cross-repo shorthand (`{owner}/{repo}#N`). For each match, resolve via `gh issue
      view {N} --repo {owner}/{repo}` (using the PR's own repo when the match didn't
-     specify one); a match that 404s, or that resolves to a pull request rather than an
+     specify one). A match that 404s, or that resolves to a pull request rather than an
      issue (GitHub shares one number sequence between issues and PRs per repo), is
      dropped rather than treated as a ticket. Successfully resolved tickets are tagged
      `source: "comment"`, deduplicated by `(repo, number)`.
@@ -307,7 +307,7 @@ New functions in `harness/runners/common.py`:
 
 - **`TRACEABILITY_COMMENT_WINDOW_SECONDS = 300`** — a new constant in `common.py`, not a
   config field this iteration (resolved, §11.2): 300 seconds (5 minutes) is confirmed as
-  the right window, hardcoded now with no `harness.toml` surface; a future config field
+  the right window, hardcoded now with no `harness.toml` surface. A future config field
   can be added later without changing this design if real usage shows it needs tuning.
 
 ### 7.3 No linked ticket found
@@ -339,15 +339,15 @@ design:
   `self_review.json` (`harness/state.py`), read/written/pruned the same way
   `design_reviewed_prs` already is (`harness/state.py:138-214`) — including its own entry
   in `prune_self_review_state`. A PR's membership in `traceability_reviewed_prs` is
-  independent of `reviewed_prs` and `design_reviewed_prs`; no list's membership gates
+  independent of `reviewed_prs` and `design_reviewed_prs`. No list's membership gates
   another's retry.
 - Skip invoking the backend for a PR number already in `traceability_reviewed_prs`.
-  Otherwise: resolve the ticket (§7.2); if none found, post the §7.3 comment directly and
-  mark done — terminal, per §7.3/§11.1; if found, build and run the traceability prompt; on
+  Otherwise: resolve the ticket (§7.2). If none found, post the §7.3 comment directly and
+  mark done — terminal, per §7.3/§11.1. If found, build and run the traceability prompt. On
   success (backend exit 0 **and** a confirmed `TRACEABILITY_REVIEW_MARKER` PR-level
   comment — mirroring `_run_design_review`'s post-hoc GitHub check,
   `harness/runners/self_review.py:213-260`, itself added to close the missing-summary bug
-  class this codebase has hit before), add the PR to `traceability_reviewed_prs`; on
+  class this codebase has hit before), add the PR to `traceability_reviewed_prs`. On
   failure/timeout, log and leave it off the list for retry next run.
 - Defense-in-depth: also check `has_traceability_review_comment` before invoking, mirror
   of `design-review-requirements.md` §7.2's equivalent check.
@@ -359,7 +359,7 @@ Mirrors `design-review-requirements.md` §7.3 exactly:
 - Add a traceability-review step to `_process_pr`
   (`harness/runners/review_requested.py`), alongside the existing design-review step
   (`review_requested.py:205-207`).
-- No persisted state exists in this runner; idempotency is entirely
+- No persisted state exists in this runner. Idempotency is entirely
   `has_traceability_review_comment` (checking `repos/{repo}/issues/{pr_number}/comments`
   for `TRACEABILITY_REVIEW_MARKER`), exactly mirroring `has_design_review_comment`'s role
   here.
@@ -415,7 +415,7 @@ framework":
 - **Prompt size.** Same band as `review-design.md`
   (`design-review-requirements.md` §8): the full per-file diff concatenation dominates
   prompt size, plus a typically-small addition for the ticket body and early-comment
-  text. No new size limit is introduced; watch during implementation, same as the design
+  text. No new size limit is introduced. Watch during implementation, same as the design
   pass.
 - **No new destructive operations.** Reads the working tree and GitHub API, posts
   comments — never commits, pushes, or requests/removes reviewers itself.
@@ -435,7 +435,7 @@ framework":
   as `design-review-requirements.md` §9 left it duplicated a first time.
 - Treating a bare `#N` mention *inside the PR body* (as opposed to a recognized closing
   keyword) as a ticket link — GitHub's own `closingIssuesReferences` only reflects
-  recognized closing keywords; a non-closing-keyword body mention (e.g. "Related: #42")
+  recognized closing keywords. A non-closing-keyword body mention (e.g. "Related: #42")
   is not picked up by either mechanism in this design and is explicitly excluded, not
   silently handled.
 - Fetching or considering the linked issue's *own* comments (as opposed to its
@@ -456,7 +456,7 @@ framework":
     `check_traceability_review_comment_status`, and refactoring the design-review
     equivalents into thin wrappers over the generalized helper.
   - Changed: `harness/runners/self_review.py`, `harness/runners/review_requested.py` —
-    new wiring per §7.4/§7.5; both runners' PR-listing `--json` field lists extended per
+    new wiring per §7.4/§7.5. Both runners' PR-listing `--json` field lists extended per
     §7.2.
   - Changed: `harness/state.py` — new, independent `traceability_reviewed_prs` field,
     including its own pruning in `prune_self_review_state`.
@@ -464,8 +464,8 @@ framework":
     config field.
   - New/changed tests: `tests/runners/test_self_review.py`,
     `tests/runners/test_review_requested.py`, `tests/runners/test_common_comments.py` /
-    a new `tests/runners/test_common_traceability.py`, `tests/test_state.py` additions;
-    plus regression coverage for the §7.6 refactor of the design-review marker helpers.
+    a new `tests/runners/test_common_traceability.py`, `tests/test_state.py` additions.
+    Plus regression coverage for the §7.6 refactor of the design-review marker helpers.
   - Docs: `docs/commands/self-review.md` and `docs/commands/review-requested.md` updated
     to describe the fourth pass, matching their current level of detail.
 - **No new services, schedulers, or CLI subcommands** — rides entirely inside the
@@ -473,7 +473,7 @@ framework":
 
 ## 11. Decisions log (resolved 2026-09-17)
 
-Both items originally logged here were answered directly by the user; each resolution is
+Both items originally logged here were answered directly by the user. Each resolution is
 folded into the section(s) noted below, per the drafting prompt's rule that a resolved
 decision must never silently disappear back into ambiguity.
 
@@ -481,7 +481,7 @@ decision must never silently disappear back into ambiguity.
    a permanent outcome, same as every other pass's completion marker — this pass is a
    courtesy check, not an obligation the harness enforces, so there's no expectation it
    should keep retrying a PR whose author never linked a ticket. No distinguishable
-   marker body or re-resolution logic is needed; the existing "any
+   marker body or re-resolution logic is needed. The existing "any
    `TRACEABILITY_REVIEW_MARKER` comment means done" check is already correct as
    designed — see §7.3, §7.4.
 2. **300 seconds confirmed, stays a hardcoded constant.** The 5-minute early-comment
@@ -505,15 +505,15 @@ design-review wrappers (lowest risk, unblocks nothing else but should land first
 - [x] (a) done — commit `365d380` (`common.py`: `has_pr_level_pass_comment` /
   `check_pr_level_pass_comment_status` extracted, `has_design_review_comment` /
   `check_design_review_comment_status` are now thin wrappers with no behavior change,
-  `TRACEABILITY_REVIEW_MARKER` + `is_/has_/check_traceability_review_comment*` added;
-  19 new tests in `tests/runners/test_common_prs.py`; full suite 444 passed, ruff +
+  `TRACEABILITY_REVIEW_MARKER` + `is_/has_/check_traceability_review_comment*` added.
+  19 new tests in `tests/runners/test_common_prs.py`. Full suite 444 passed, ruff +
   `ty check` clean). Requirements doc itself landed in commit `6e584d3`.
 - [x] (b) done — `resolve_linked_tickets` / `build_early_comment_context` / the new
   `_fetch_all_comment_pages` paginated-all-authors comment fetch added to `common.py`
   (§7.2), plus `TRACEABILITY_COMMENT_WINDOW_SECONDS`. Both runners' PR-listing `--json`
   field lists (and `review_requested.py`'s single-PR `pr_from_url` call) extended with
   `createdAt,closingIssuesReferences`. 20 new tests in
-  `tests/runners/test_common_traceability.py`; full suite 464 passed, ruff + `ruff format`
+  `tests/runners/test_common_traceability.py`. Full suite 464 passed, ruff + `ruff format`
   + `ty check` clean.
 - [x] (c) done — `knowledge/pr-review/review-traceability.md` written, mirroring
   `review-design.md`'s tone/perspective/role/output structure, with the P0/P1 severity
@@ -521,13 +521,13 @@ design-review wrappers (lowest risk, unblocks nothing else but should land first
   to `<!-- dotharness-review-traceability -->`) used directly. (Aside, unrelated to this
   file: commit `bb2c121` renamed the code-side markers to `dotharness-review-*`, and a
   follow-up commit brought `review-design.md`/`review-file.md`'s literal markers into
-  line with that; commit `8335883` then reverted the whole rename — it wasn't in scope
+  line with that. Commit `8335883` then reverted the whole rename — it wasn't in scope
   and changed matching behavior for previously-posted comments — leaving everything on
   the `osc-review-*` naming. This PR deliberately re-applies the rename, so
   `review-design.md`, `review-file.md`, and this new marker are all now on the
   `dotharness-review-*` naming.) Expects `## Linked Ticket(s)`,
   `## Early PR Comments`, and (when applicable) `## Already-flagged scope-creep findings`
-  input sections; these header names are now a contract with
+  input sections. These header names are now a contract with
   `build_traceability_review_prompt`, to be added in (d).
 - [x] (d) done — `state.py` gained `traceability_reviewed_prs` (defaults, pruning,
   `get_traceability_reviewed_prs`/`add_traceability_reviewed_pr`, independent of
@@ -538,16 +538,16 @@ design-review wrappers (lowest risk, unblocks nothing else but should land first
   `_run_traceability_review`/`_build_traceability_prompt`, mirroring `_run_design_review`
   exactly, plus the defense-in-depth `has_traceability_review_comment` check. Existing
   tests updated to short-circuit the new pass (`has_traceability_review_comment=True`)
-  where it's not the thing under test, since it now always runs by default; 12 new
+  where it's not the thing under test, since it now always runs by default. 12 new
   dedicated traceability tests added. Full suite 475 passed, ruff + `ruff format` +
   `ty check` clean.
 - [x] (e) done — `_run_traceability_review` added to `review_requested.py`, mirroring
-  `_run_design_review` exactly (no persisted state; `has_traceability_review_comment` is
+  `_run_design_review` exactly (no persisted state. `has_traceability_review_comment` is
   the sole idempotency signal), with the §7.3 "no ticket found" branch posting directly
   and skipping the backend. `remove_reviewer` now gates on
   `files_ok and summary_ok and design_ok and traceability_ok`, closing the reuse pointer
   the existing code comment named. `_full_run_mocks` test helper updated to short-circuit
-  the new pass by default (mirroring the design-pass precedent); 8 new dedicated
+  the new pass by default (mirroring the design-pass precedent). 8 new dedicated
   traceability tests added, including one that would otherwise have made real,
   unauthenticated `gh` network calls before the fix (caught via a real "HTTP 401: Bad
   credentials" failure during the first test run — now eliminated by the short-circuit).
@@ -560,7 +560,7 @@ design-review wrappers (lowest risk, unblocks nothing else but should land first
   tracking, terminal "no ticket" outcome). Also corrected a pre-existing stale claim in
   `review-requested.md` (§3/Notes) that PR listing used `gh search prs` + per-PR
   `gh pr view` hydration — the code (`_get_prs`) has used a single `gh pr list --search`
-  call since before this branch; noticed while touching that exact section.
+  call since before this branch. Noticed while touching that exact section.
 
 All of §12's steps (a)-(e) plus docs are now complete. Every step landed with `uv run
 pytest` (482 passing, up from the 444 baseline), `uv run ruff check`/`ruff format

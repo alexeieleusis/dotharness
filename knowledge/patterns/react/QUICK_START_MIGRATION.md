@@ -510,7 +510,7 @@ See [COMPONENT_ORGANIZATION_CONVENTION.md § Testing Strategy](./COMPONENT_ORGAN
 
 **Evaluate:** Is mocking straightforward? If yes, create stories. If no, skip.
 
-These stories are a manual verification catalog - don't add `play` functions or assertions; just cover the states below and click through them by hand.
+These stories are a manual verification catalog - don't add `play` functions or assertions. Just cover the states below and click through them by hand.
 
 ```typescript
 // feature-name.stories.tsx
