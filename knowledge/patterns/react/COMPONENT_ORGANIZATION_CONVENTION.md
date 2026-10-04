@@ -1232,7 +1232,7 @@ export const CompleteWorkflow: Story = {
 - **Type safety** - Mock props must match `UseFeatureNameHook` type exactly
 - **Use judgment on effort** - If complex pre-existing components make mocking difficult, focus on domain logic tests instead
 - **Comprehensive domain tests are the priority** - Storybook stories are nice-to-have for manual verification, but automated domain logic tests are essential
-- **No automated testing here** - `play` functions and interaction/screenshot assertions are not part of Storybook in this convention; see [Interaction Tests](#5-interaction-tests-componentspectsx-real-browser) and [Screenshot Tests](#6-screenshot-tests-screenshotspectsx-visual-regression) for that coverage
+- **No automated testing here** - `play` functions and interaction/screenshot assertions are not part of Storybook in this convention. See [Interaction Tests](#5-interaction-tests-componentspectsx-real-browser) and [Screenshot Tests](#6-screenshot-tests-screenshotspectsx-visual-regression) for that coverage
 
 ### Benefits
 
@@ -1535,7 +1535,7 @@ describe('useFeatureName integration', () => {
 
 ### 4. Component Tests (Optional)
 
-Test the presentational component with React Testing Library when it has non-trivial rendering logic not already covered by hook tests. This runs in `happy-dom` (no real browser) - it can't verify hover, real layout, or focus order; use an [Interaction Test](#5-interaction-tests-componentspectsx-real-browser) for that.
+Test the presentational component with React Testing Library when it has non-trivial rendering logic not already covered by hook tests. This runs in `happy-dom` (no real browser) - it can't verify hover, real layout, or focus order. Use an [Interaction Test](#5-interaction-tests-componentspectsx-real-browser) for that.
 
 ```typescript
 // feature-name.test.tsx
@@ -1860,8 +1860,8 @@ This convention makes components:
 - **Date**: 2026-08-01
 - **Status**: Draft - Open for iteration and feedback
 - **Changelog**:
-  - v1.5: Added Interaction Tests (`.component.spec.tsx`) and Screenshot Tests (`.screenshot.spec.tsx`) to Testing Strategy, including the `renderComponent()` helper, the Docker/CI pipeline, and the `/approve-screenshots` baseline-update flow; added a "Choosing the Right Test Type" decision guide; rewrote Component Tests with a real `vi.mock`-based example
-  - v1.4: Clarified Storybook's role as a manual verification/QA catalog, not an automated test suite; removed `play` function / interaction-testing examples pending a future document on automated screenshot and unit/integration testing
+  - v1.5: Added Interaction Tests (`.component.spec.tsx`) and Screenshot Tests (`.screenshot.spec.tsx`) to Testing Strategy, including the `renderComponent()` helper, the Docker/CI pipeline, and the `/approve-screenshots` baseline-update flow. Added a "Choosing the Right Test Type" decision guide. Rewrote Component Tests with a real `vi.mock`-based example
+  - v1.4: Clarified Storybook's role as a manual verification/QA catalog, not an automated test suite. Removed `play` function / interaction-testing examples pending a future document on automated screenshot and unit/integration testing
   - v1.3: Added "Creating New Component" section, clarified Storybook is optional when mocking is complex, emphasized domain tests as priority
   - v1.2: Added container/presentation component split for easier Storybook testing
   - v1.1: Added domain logic pattern, comprehensive testing strategy

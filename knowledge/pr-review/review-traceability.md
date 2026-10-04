@@ -86,7 +86,7 @@ appending the same marker:
   than one was resolved).
 - If there are scope-creep and/or gap findings, summarize them under `## Scope creep` /
   `## Gaps` headings — include only the heading(s) that actually have findings. A
-  sentence or two per finding is enough; the inline comments (for scope creep) carry the
+  sentence or two per finding is enough. The inline comments (for scope creep) carry the
   detail.
 - If there are no findings at all, post:
 

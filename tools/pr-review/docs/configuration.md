@@ -103,7 +103,7 @@ address" (not the terse original finding it responded to). See
 
 ### `[local_review]`
 
-Optional. Used only by `harness run local-review`; all other commands ignore it. Both fields are optional, and an absent section behaves as if both were unset.
+Optional. Used only by `harness run local-review`. All other commands ignore it. Both fields are optional, and an absent section behaves as if both were unset.
 
 | Field | Type | Default | Description |
 |---|---|---|---|

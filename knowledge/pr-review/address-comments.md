@@ -1,9 +1,9 @@
 # address-comments instructions
 
 Address all open review comments on the current PR branch using the steps below.
-The PR number and repo name are appended at the end of these instructions — use them wherever `<NUMBER>` and `<REPO>` appear.
+The PR number and repo name are appended at the end of these instructions. Use them wherever `<NUMBER>` and `<REPO>` appear.
 
-After you are done, the runner will automatically push the branch to origin — do not push yourself.
+After you are done, the runner will automatically push the branch to origin. Do not push the branch yourself.
 
 ---
 
@@ -25,9 +25,9 @@ Read the saved JSON for full `diff_hunk` context if needed:
 ~/.harness/cache/pr-<NUMBER>-comments.json
 ```
 
-(The cache dir `~/.harness/cache/` is always on the local machine where the script runs.)
+(The cache directory `~/.harness/cache/` is always on the local machine where the script runs.)
 
-If `fetch` finds **no comments**, stop — nothing to do.
+If `fetch` finds **no comments**, stop. There is nothing to do.
 
 ---
 
@@ -38,7 +38,7 @@ For every inline and review-level comment:
 1. Read the relevant file(s).
 2. Make the smallest change that satisfies the feedback.
 3. Do **not** fix unrelated issues — stay focused on what was asked.
-4. Write a tailored reply for each comment — what was changed, why, or a respectful pushback if you disagree. Be specific; avoid generic phrases like "addressed" or "fixed".
+4. Write a tailored reply for each comment — what was changed, why, or a respectful pushback if you disagree. Be specific. Avoid generic phrases like "addressed" or "fixed".
 
 ---
 
@@ -88,12 +88,12 @@ git log -1 --pretty=format:"%H"
 python {script_path} reply --commit <HASH> --pr <NUMBER>
 ```
 
-The script will post your saved replies to each comment thread (with the commit URL appended) and re-request review from all current reviewers unless the PR is already approved.
+The script will post your saved replies to each comment thread (with the commit URL appended). It will re-request review from all current reviewers unless the PR is already approved.
 
 ---
 
 ## Notes
 
 - Never use `git add -A` or `git add .` — stage only the files you changed.
-- Never push; the runner handles that after you finish.
+- Never push. The runner handles that after you finish.
 - If a comment is unclear, make your best judgment and note the uncertainty in the reply.

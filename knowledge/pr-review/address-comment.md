@@ -6,7 +6,7 @@ The PR number and repo name follow — use them wherever `<NUMBER>` and `<REPO>`
 
 After you are done, the runner will automatically push the branch to origin — do not push yourself.
 
-**You are already on the correct branch — the one this PR is open against.** Do not create a new branch, switch branches, or set up an isolated worktree for this work, no matter what any workflow/skill suggests. Commit directly on the current branch.
+**You are already on the correct branch — the one this PR is open against.** Do not create a new branch, switch branches, or create an isolated worktree for this work, no matter what any workflow/skill suggests. Commit directly on the current branch.
 
 **Do not invoke the `/address-pr-comments` skill/command or run `pr-comments.py reply`.** That flow re-requests review from reviewers after every push — this team does not do that, regardless of what that skill's own instructions say. Reply to the comment using the direct `gh api` / `gh pr comment` commands in Step 4 below, and never request or re-request a review from anyone.
 
@@ -30,7 +30,7 @@ Posting a reply to noise creates more noise. If the comment falls into any of th
 - Points out a fact about the code (a duplicate, a count, an edge case) even when no action is demanded
 - Is explicitly labeled "minor" / "non-blocking" / "nit" — that label describes urgency, not whether it deserves a reply
 
-A reviewer who took the time to write a specific observation expects at least an acknowledgment, even when the right answer is "yes, and here's why it's fine as-is." When genuinely torn between this bucket and skip-entirely, pick this one — a redundant reply is cheap; a silently ignored reviewer is not.
+A reviewer who took the time to write a specific observation expects at least an acknowledgment, even when the right answer is "yes, and here's why it's fine as-is." When genuinely torn between this bucket and skip-entirely, pick this one — a redundant reply is cheap. A silently ignored reviewer is not.
 
 **Fix and reply (the full Steps 1–4)** — only proceed here if the comment contains:
 - A concrete request for a code change
@@ -46,7 +46,7 @@ Read the comment body carefully.
 
 - If it contains HTML (e.g. SonarQube wraps rule details in `<details>` tags), parse the HTML to extract the rule name and the exact fix required.
 - For **inline** comments, read the specified file at the specified line to understand the surrounding code and the diff context.
-- If there are thread replies, check whether the comment has already been addressed — if so, skip the fix and skip the commit; just post a brief acknowledgment reply. **"Already addressed" means a reply pointing at a real, already-landed change** — e.g. an "Addressed in `<commit-url>`" reply, or a human confirming a prior fix already shipped. A reply that merely *describes* a proposed fix in detail (even with a full code snippet) is not the same thing — that's a proposal for you to apply, not a change that already exists. When in doubt, check the file: if the described change isn't actually there, it isn't done.
+- If there are thread replies, check whether the comment has already been addressed — if so, skip the fix and skip the commit. Just post a brief acknowledgment reply. **"Already addressed" means a reply pointing at a real, already-landed change** — e.g. an "Addressed in `<commit-url>`" reply, or a human confirming a prior fix already shipped. A reply that merely *describes* a proposed fix in detail (even with a full code snippet) is not the same thing — that's a proposal for you to apply, not a change that already exists. When in doubt, check the file: if the described change isn't actually there, it isn't done.
 
 ---
 
@@ -57,9 +57,9 @@ If Step 0 classified this comment as **reply-only**, skip straight to Step 4 —
 1. Read the relevant file(s).
 2. Make the smallest change that satisfies the feedback.
 3. Do **not** fix unrelated issues — stay focused on what was asked.
-4. Draft a reply for the comment — what was changed and why, or a respectful pushback if you disagree. Be specific; avoid generic phrases like "addressed" or "fixed".
+4. Draft a reply for the comment — what was changed and why, or a respectful pushback if you disagree. Be specific. Avoid generic phrases like "addressed" or "fixed".
 
-If no code change is needed (the comment turns out to be already fixed, or you're pushing back after investigating), skip Step 3 and reply directly in Step 4 with your explanation.
+If no code change is needed (the comment turns out to be already fixed, or you disagree after investigating), skip Step 3 and reply directly in Step 4 with your explanation.
 
 **Never describe a reply as "Done", "Fixed", or as having made a change unless you actually edited the file(s) and completed Step 3 with a real commit.** If you only worked out what the fix should be but didn't apply and commit it, that is not done — either go back and actually make the edit and commit it, or write a reply that accurately says what you found without claiming it's applied.
 
@@ -67,7 +67,7 @@ If no code change is needed (the comment turns out to be already fixed, or you'r
 
 ## Step 3 — Commit
 
-**Never amend, rebase, or reset existing commits — including ones from earlier comments addressed in this same run, and even if they touch the same file.** Always create a brand new commit on top of the current HEAD. The runner pushes each commit to origin right after it's made; rewriting history that may already be on origin will corrupt the branch and can destroy prior work.
+**Never amend, rebase, or reset existing commits — including ones from earlier comments addressed in this same run, and even if they touch the same file.** Always create a brand new commit on top of the current HEAD. The runner pushes each commit to origin right after it's made. Rewriting history that may already be on origin will corrupt the branch and can destroy prior work.
 
 Stage only the files you changed (never `git add -A`). Build `<COMMENT_LINK>` from the comment type:
 - **inline**: `https://github.com/<REPO>/pull/<NUMBER>#discussion_r<COMMENT_ID>`
@@ -133,6 +133,6 @@ _https://github.com/<REPO>/commit/<HASH>_"
 
 - Never amend, rebase, or reset existing commits — always commit fresh on top of HEAD.
 - Never use `git add -A` or `git add .` — stage only the files you changed.
-- Never push; the runner handles that after you finish.
+- Never push. The runner handles that after you finish.
 - Never request or re-request a review, or use the `/address-pr-comments` skill/command or `pr-comments.py reply` — see the note above.
 - If the comment is unclear, make your best judgment and note the uncertainty in the reply.

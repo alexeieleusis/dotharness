@@ -56,9 +56,9 @@ For each stage:
 
 1. Spawn a fresh sub-agent whose only job is that one stage.
 2. Run the CLI command for that stage. Watch its output for `Prompt written to: X` /
-   `Expected output at: Y` pairs. This is the handoff protocol; the cheat sheet's "How
+   `Expected output at: Y` pairs. This is the handoff protocol. The cheat sheet's "How
    the handoff actually works" section defines it step by step — follow that section
-   for each pair. In this prompt the sub-agent does the drafting (see below); you
+   for each pair. In this prompt the sub-agent does the drafting (see below). You
    confirm `Y` exists on disk and only then answer the `Agent finished writing
    output?` prompt with `y`.
 
@@ -103,7 +103,7 @@ For each stage:
    stop and report it to the human — name the finding and what each attempt tried to
    change — instead of retrying again. A fixer that keeps missing the same spot, or two
    findings that keep trading off against each other every round, will not converge on
-   its own; surface it rather than spinning up an unbounded chain of fixer sessions.
+   its own. Surface it rather than spinning up an unbounded chain of fixer sessions.
 
 ## Done when
 

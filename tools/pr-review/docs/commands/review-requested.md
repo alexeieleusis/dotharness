@@ -137,8 +137,8 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
       prevented this bug, posts one PR-level
       `# Previously flagged review comments` comment linking back to those
       comments (one backend invocation per PR, only when
-      candidates exist; see
-      [`../configuration.md`](../configuration.md#regret_review)). Before
+      candidates exist). See
+      [`../configuration.md`](../configuration.md#regret_review). Before
       invoking the backend, the runner checks GitHub directly for an existing
       `<!-- dotharness-review-regret -->`-marked comment, which is this pass's *only*
       idempotency signal in this stateless runner. Unlike the backend-posted
@@ -150,7 +150,7 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
       whenever this PR is next processed.
     - The runner never removes the current user as a requested reviewer, even
       once every pass — file+summary, design, traceability, and regret when
-      enabled — has succeeded. This runner only posts automated findings; the
+      enabled — has succeeded. This runner only posts automated findings. The
       human still reviews and approves the PR themselves, which is what
       actually clears the review request on GitHub. If any pass submits a
       formal review as a side effect, or races a concurrent runner that does
@@ -188,7 +188,7 @@ pre-existing vibe-heal review output on disk
 the branch. It finds that output via `repo.subdirs`.
 
 This runner reads the `[regret_review]` fields only when
-`regret_review.enabled` is `true` (off by default); when the pass is off, no
+`regret_review.enabled` is `true` (off by default). When the pass is off, no
 other field of that section is consulted and the pass costs nothing. See
 [`../configuration.md`](../configuration.md#regret_review) for the full
 schema.

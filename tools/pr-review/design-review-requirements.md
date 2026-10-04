@@ -17,13 +17,13 @@ asks for a third, PR-level pass that looks at design/architecture concerns — w
 abstraction, wrong module boundaries, over- or under-engineering — which the
 correctness pass is not meant to carry. This document generalizes that one-line issue
 into a precise enough spec to hand to a phase file. It is not derived from a reference
-implementation; it is invented from the issue text plus the conventions already
+implementation. It is invented from the issue text plus the conventions already
 established by `review-file.md`/`review-summary.md` and their two call sites.
 
 Issue #4 (requirement-traceability pass) is explicitly called out by #3 as needing
 *joint* design, because both are "PR-level, single-invocation passes" that must not
 multiply `self-review`'s existing per-file retry-on-failure cost. This document is
-scoped to #3 only; §7.4 records what was decided about anticipating #4 without building
+scoped to #3 only. §7.4 records what was decided about anticipating #4 without building
 it now.
 
 ## 2. Problem statement
@@ -35,7 +35,7 @@ dimensions: Logic & Correctness, Performance & Bottlenecks, Maintainability, Sec
 follow from that shape:
 
 - **Design flaws are structurally invisible to it.** A per-file prompt is shown one
-  file's diff in isolation; it cannot see that a PR introduced a second implementation
+  file's diff in isolation. It cannot see that a PR introduced a second implementation
   of an existing abstraction in another file, or put a concern in the wrong module,
   because that judgment requires seeing the PR's file set as a whole.
 - **The one dimension that gestures at design ("Maintainability — code smells,
@@ -90,7 +90,7 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
 - **Not wiring into `review-prs`.** `review-prs` reviews *other* people's PRs via the
   separate `vibe_heal` pipeline and does not use `review-file.md`/`review-summary.md` at
   all (`docs/commands/review-requested.md:97-99` and the `[vibe_heal]` config section).
-  Issue #3 only names `self-review` and `review-requested`; `review-prs` is out of
+  Issue #3 only names `self-review` and `review-requested`. `review-prs` is out of
   scope, considered and rejected because it's a structurally different pipeline with no
   existing per-file/summary pass to sit alongside.
 - **Not implementing issue #4 (requirement-traceability pass).** #4 is explicitly a
@@ -124,7 +124,7 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
   (`pr-review/review-file.md`, `pr-review/review-summary.md`, etc.). In this repo the
   default path resolves to this very checkout's own `knowledge/` directory (this repo
   is cloned to `~/.harness`), so — for this repo — these templates are git-tracked,
-  versioned, reviewed content, not personal scratch files; `knowledge_dir` is still a
+  versioned, reviewed content, not personal scratch files. `knowledge_dir` is still a
   configurable path, so a *different* installation could point it elsewhere, but that's
   a deployment concern, not a property of the templates themselves. This is distinct
   from `docs/commands/*.md` in this repo, which document runner *behavior*, not prompt
@@ -157,7 +157,7 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
   a new git-tracked file, added and reviewed the same way `review-file.md` and
   `review-summary.md` already are, in the same PR as the runner code changes below.
   `harness validate` only checks that `knowledge_dir` itself exists
-  (`harness/cli.py:105-106`), never that specific template files inside it exist; that
+  (`harness/cli.py:105-106`), never that specific template files inside it exist. That
   stays true after this addition, and is only a concern for an installation whose
   `harness.knowledge_dir` points somewhere other than a checkout of this repo (e.g. a
   fork or a hand-picked directory) — such an installation would need to copy this file
@@ -178,7 +178,7 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
   to design judgment instead of correctness bugs — e.g. P0 for an abstraction/placement
   choice that will actively cause defects or major near-term rework, P1 for
   over-/under-engineering that meaningfully hurts maintainability. This is not an
-  open-ended "post every stylistic opinion" pass; the exact P0/P1 line for design
+  open-ended "post every stylistic opinion" pass. The exact P0/P1 line for design
   findings is drafted into `review-design.md` itself, not left implicit.
 - **Required inputs to the prompt** (built by the runner, appended after the template
   body — mirroring `_build_file_review_prompt`/`_build_file_prompt`'s existing
@@ -190,14 +190,14 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
     §11.3) — i.e. `build_file_review_section` output for each file, joined into one
     PR-wide prompt, the same way each per-file `review-file.md` invocation already
     builds its single-file section. This is required because inline findings need
-    enough line-level detail for the model to anchor a comment to a specific line;
-    unlike `review-summary.md` (which only lists file names), this prompt cannot rely on
+    enough line-level detail for the model to anchor a comment to a specific line.
+    Unlike `review-summary.md` (which only lists file names), this prompt cannot rely on
     the backend re-deriving diffs itself.
   - Optional `harness.review_knowledge_file` extra-guidance section and vibe-heal static
     analysis context, exactly as already appended to every other prompt in both
     runners, for consistency.
   - **Prior `DESIGN_REVIEW_MARKER` inline comments already posted on this PR** (added in
-    review; see the partial-failure note under Output contract below) — fetched via
+    review. See the partial-failure note under Output contract below) — fetched via
     `repos/{REPO}/pulls/{PR_NUMBER}/comments`, filtered to those whose body contains
     `DESIGN_REVIEW_MARKER`, and passed to the prompt as a list of `(file, line)` pairs
     already flagged, with an instruction not to re-post a finding for any pair already in
@@ -265,8 +265,8 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
   `design_reviewed_prs`, or vice versa, and neither list's membership check gates the
   other's retry.
 - On each run: skip invoking the design backend call for a PR number already present in
-  `design_reviewed_prs`. Otherwise, run it; on success (`returncode == 0`, no timeout),
-  add the PR number to `design_reviewed_prs`; on failure/timeout, log it and leave the
+  `design_reviewed_prs`. Otherwise, run it. On success (`returncode == 0`, no timeout),
+  add the PR number to `design_reviewed_prs`. On failure/timeout, log it and leave the
   PR off the list so it's retried independently next run — this never touches
   `reviewed_prs`/`partial_reviews`, and a file/summary failure never blocks or resets
   this step either.
@@ -276,7 +276,7 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
   state write that didn't persist (the same class of edge case the existing
   comment-marker check at the top of `_run_locked` already guards against for the whole
   PR). Like §7.3, this check alone cannot detect a partial failure that posted some
-  inline comments without ever reaching the PR-level comment; the prior-inline-comments
+  inline comments without ever reaching the PR-level comment. The prior-inline-comments
   prompt input (§7.1) closes that gap here too, since it runs on every invocation
   regardless of which idempotency check gated the decision to invoke.
 
@@ -285,7 +285,7 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
 - Add a design-review step to `_process_pr` (`harness/runners/review_requested.py`),
   alongside `_run_file_reviews`/`_run_summary_review`.
 - `review-requested` has **no persisted state**
-  (`docs/commands/review-requested.md:101-116`); the design step's idempotency signal is
+  (`docs/commands/review-requested.md:101-116`). The design step's idempotency signal is
   therefore entirely the new marker: **before invoking**, check
   `has_design_review_comment(pr_number, repo, current_user, env)` (checking
   `repos/{repo}/issues/{pr_number}/comments` for `DESIGN_REVIEW_MARKER`, mirroring
@@ -340,10 +340,10 @@ doesn't have to rediscover them from scratch:
   PRs could produce a prompt an order of magnitude larger than any single
   `review-file.md` invocation. No existing prompt in this codebase does this today
   (`review-summary.md` deliberately lists files without diffs), so there's no empirical
-  size band to derive a limit from; this must be watched during implementation rather
+  size band to derive a limit from. This must be watched during implementation rather
   than bounded up front.
 - **No new destructive operations.** Like the existing passes, this one only reads the
-  checked-out working tree and posts GitHub comments; it must not commit, push, or
+  checked-out working tree and posts GitHub comments. It must not commit, push, or
   request/remove reviewers itself (that stays the runner's job, as today).
 - **No new configuration surface.** Unconditional wiring (§4, §11.8) means no new
   `harness.toml` field or section for this pass.
@@ -383,7 +383,7 @@ specific behaviors considered and excluded.)
     config field (§8, §11.8).
   - New tests: `tests/runners/test_self_review.py`, `tests/runners/test_review_requested.py`
     additions, following those files' existing patterns (mocking `Backend.run`, `gh`
-    calls via `run_cmd`); `tests/test_state.py` additions for `design_reviewed_prs`.
+    calls via `run_cmd`). `tests/test_state.py` additions for `design_reviewed_prs`.
   - Docs: `docs/commands/self-review.md` and `docs/commands/review-requested.md` need
     their "What it does" / "State and idempotency" / "Notes" sections updated to
     describe the third pass, matching their current level of detail.
@@ -392,7 +392,7 @@ specific behaviors considered and excluded.)
 
 ## 11. Decisions log (resolved 2026-09-16)
 
-All eight items originally logged here were answered directly by the user; each
+All eight items originally logged here were answered directly by the user. Each
 resolution is folded into the section(s) noted below, per the drafting prompt's rule
 that a resolved decision must never silently disappear back into ambiguity.
 
@@ -405,9 +405,9 @@ that a resolved decision must never silently disappear back into ambiguity.
    question (per-file diffs are required) that this choice implied.
 4. **A new, design-specific marker** (`DESIGN_REVIEW_MARKER`), not a reuse of an
    existing one — see §5, §7.1.
-5. **Deferred**: no shared "PR-level pass" framework is built now; instead, every reuse
+5. **Deferred**: no shared "PR-level pass" framework is built now. Instead, every reuse
    point relevant to issue #4 gets an explicit code comment — see §4, §7.4, §9.
-6. **No scope change to `review-file.md`** — it is left entirely as-is; the two passes'
+6. **No scope change to `review-file.md`** — it is left entirely as-is. The two passes'
    potential overlap is an accepted tradeoff, not something fixed here — see §2 (closing
    note), §4, §9.
 7. **P0/P1 only**, matching `review-file.md`'s existing severity bar exactly — see §7.1

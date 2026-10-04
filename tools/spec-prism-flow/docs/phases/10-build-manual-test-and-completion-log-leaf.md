@@ -18,9 +18,9 @@ Excerpted from §7 (Detailed functional requirements) of chunk A-3-3-3's mini-re
 - Otherwise prints the checklist (plain `click.echo`-formatted list — house style, no `rich` dependency) and prompts `click.confirm("Did every item pass?", default=False)`.
 - Pass → `ManualTestOutcome(passed=True, retry=False, notes=None)`.
 - Fail → prompts for notes (`click.prompt`, default `""`), then `click.confirm("Spend one more review cycle and retry, instead of escalating now?", default=False)`.
-  - Retry chosen → `ManualTestOutcome(passed=False, retry=True, notes=notes or None)`; caller decrements the retry budget (Phase 06's `RetryBudget`) and loops.
+  - Retry chosen → `ManualTestOutcome(passed=False, retry=True, notes=notes or None)`. Caller decrements the retry budget (Phase 06's `RetryBudget`) and loops.
   - Retry declined, `strict=True` → `raise ManualTestFailed(notes or None)` (Phase 06's error type, unchanged signature).
-  - Retry declined, `strict=False` (default) → `ManualTestOutcome(passed=False, retry=False, notes=notes or None)`; caller records this as the terminal, non-blocking result and proceeds toward merge.
+  - Retry declined, `strict=False` (default) → `ManualTestOutcome(passed=False, retry=False, notes=notes or None)`. Caller records this as the terminal, non-blocking result and proceeds toward merge.
 
 ### 7.2 `spec_prism_flow/build/completion_log.py`
 `class CompletionRecord` (frozen dataclass, single-track): `phase_number: int`, `phase_name: str`, `pr_number: int | None`, `pr_url: str | None`, `pr_opened_at: datetime | None`, `pr_merged_at: datetime | None`, `manual_test_first_try_pass: bool | None`, `escalation_reason: str | None`, `address_comments_cycles: int = 0`, `pr_diff_files: int = 0`, `pr_diff_lines_added: int = 0`, `pr_diff_lines_removed: int = 0`, `human_escalations: int = 0`.

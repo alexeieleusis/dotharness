@@ -91,8 +91,8 @@ You must not write `decision: fixed` unless you made a commit for this finding.
 
 ## Notes
 
-- Never amend, rebase, or reset existing commits; always commit fresh on top of HEAD.
-- Never use `git add -A` or `git add .`; stage only the files you changed.
+- Never amend, rebase, or reset existing commits. Always commit fresh on top of HEAD.
+- Never use `git add -A` or `git add .`. Stage only the files you changed.
 - Never use `--no-verify`.
 - Never push, and never use `gh` or any GitHub API.
 - If the finding is unclear, make your best judgment and note the uncertainty in the resolution.

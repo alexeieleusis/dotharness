@@ -1,6 +1,6 @@
 # focused-review
 
-`focused-review` turns the review comments that SonarQube posts into detailed, actionable refactor descriptions. It handles only the comments that cite a knowledge file from the `jpablo/vibe-types` catalog, through a `knowledgeUrl()`-generated link embedded in the ESLint rule message that fed the SonarQube finding. Each description is posted as a reply on the same comment thread.
+`focused-review` turns the review comments that SonarQube posts into detailed, actionable refactor descriptions. It handles only the comments that cite a knowledge file from the `jpablo/vibe-types` catalog. Those comments cite it through a `knowledgeUrl()`-generated link embedded in the ESLint rule message that fed the SonarQube finding. Each description is posted as a reply on the same comment thread.
 
 It sits between `review-prs` (which posts the terse SonarQube findings in the first place) and the AI-authored reviews (`self-review`, `review-requested`) in the `all` sequence. It does not produce a review or fix code. It only enriches an existing automated comment with grounded, specific guidance.
 

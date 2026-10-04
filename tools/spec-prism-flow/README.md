@@ -6,7 +6,7 @@
 
 Specification-driven planning and execution engine: turns a rough idea into agent-sized phase files, then executes them safely against a coding-agent backend
 
-This tool lives in the [alexeieleusis/dotharness](https://github.com/alexeieleusis/dotharness) monorepo under `tools/spec-prism-flow/`; it is not (yet) published as a standalone repository or package.
+This tool lives in the [alexeieleusis/dotharness](https://github.com/alexeieleusis/dotharness) monorepo under `tools/spec-prism-flow/`. It is not (yet) published as a standalone repository or package.
 
 See [docs/lifecycle-cheat-sheet.md](docs/lifecycle-cheat-sheet.md) for the full idea-to-merged-code flow (`plan` → `build`), including how the automatic PR review cycle fits in.
 

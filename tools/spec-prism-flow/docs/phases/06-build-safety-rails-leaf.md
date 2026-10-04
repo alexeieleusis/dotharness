@@ -16,7 +16,7 @@
 
 The following is an excerpt from `requirements.md` §9 (Non-functional requirements), item 8, quoted verbatim. The `RetryBudget` policy (§7.3 below) is its mechanical enforcement point:
 
-> **Bounded retries (G4, §8).** `address-comments`-style cycles per phase are capped; on exhaustion, escalate to a human rather than loop indefinitely.
+> **Bounded retries (G4, §8).** `address-comments`-style cycles per phase are capped. On exhaustion, escalate to a human rather than loop indefinitely.
 
 The following is an excerpt from chunk A-3-1's mini-requirements doc §7 (Detailed functional requirements), restructured for clarity:
 
