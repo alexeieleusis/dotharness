@@ -23,7 +23,6 @@ from harness.runners.common import (
     git_fetch_and_checkout,
     git_restore,
     is_ancestor,
-    is_draft_pr,
     preserve_reviewer_request,
     reply_has_reaction_from,
     run_cmd,
@@ -134,9 +133,6 @@ def _run_locked(config: HarnessConfig) -> None:
         number = pr["number"]
         branch = pr["headRefName"]
         logger.debug("PR #%d (branch=%s): checking for pending feedback", number, branch)
-        if is_draft_pr(pr):
-            logger.info("PR #%d: draft PR, skipping", number)
-            continue
         if not _has_pending_feedback(number, config.repo.name, env):
             logger.info("PR #%d: no pending feedback, skipping", number)
             continue

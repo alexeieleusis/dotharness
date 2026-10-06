@@ -86,6 +86,37 @@ def test_runs_backend_when_unresolved_threads(tmp_xdg, tmp_path):
     mock_be.return_value.run.assert_called_once()
 
 
+def test_processes_draft_pr_with_pending_feedback(tmp_xdg, tmp_path):
+    cfg = _cfg(tmp_path)
+    (tmp_path / "k" / "pr-review").mkdir(parents=True)
+    (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
+    with (
+        patch("harness.runners.address_comments.get_gh_token", return_value="tok"),
+        patch("harness.runners.address_comments._has_pending_feedback", return_value=True),
+        patch("harness.runners.address_comments.fetch_pr_comments", return_value=[_FAKE_COMMENT]),
+        patch("harness.runners.address_comments.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.address_comments.git_fetch_and_checkout"),
+        patch("harness.runners.address_comments.git_restore"),
+        patch("harness.runners.address_comments.run_cmd") as mock_run,
+        patch("harness.runners.common.run_cmd", mock_run),
+        patch("harness.runners.address_comments.Backend") as mock_be,
+    ):
+        mock_be.return_value.run.return_value = MagicMock(returncode=0)
+        # `_list_prs_to_check` runs for real; the only draft PR comes back from the `gh pr list` call
+        # for --author and nothing for --assignee, so a re-added isDraft filter would drop it.
+        draft_listing = json.dumps([{"number": 1, "headRefName": "b", "isDraft": True}]).encode()
+
+        def fake_run_cmd(cmd, *args, **kwargs):
+            if cmd[:3] == ["gh", "pr", "list"]:
+                stdout = draft_listing if "--author" in cmd else b"[]"
+                return MagicMock(returncode=0, stdout=stdout, stderr=b"")
+            return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+        mock_run.side_effect = fake_run_cmd
+        address_comments._run_locked(cfg)
+    mock_be.return_value.run.assert_called_once()
+
+
 def test_pushes_branch_after_backend(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
