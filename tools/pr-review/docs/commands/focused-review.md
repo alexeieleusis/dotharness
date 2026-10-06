@@ -17,7 +17,7 @@ harness run [--config PATH] [--verbose] focused-review
 2. If `focused_review.enabled` is `false`, the command logs and exits. The whole command is a no-op. The two toggles are not linked: `focused_review.enabled` is independent of `vibe_heal.enabled`.
 3. The command resolves a GitHub token via `harness.gh_token_cmd`. It then builds a subprocess environment from `harness.path_prepend` / `harness.env` plus `GITHUB_TOKEN`.
 4. The command loads the prompt template `pr-review/focused-review.md` from `harness.knowledge_dir`. It also constructs a `Backend` for `harness.backend` (`opencode` or `claude`). It merges `GITHUB_TOKEN` into the backend's environment.
-5. The command lists the open, non-draft PRs. It keeps a PR when the currently active `gh` account (`@me`) is the author, assignee, or has a review requested (the union of the three). It deduplicates by PR number and sorts the result ascending. The listing uses `list_open_prs_for_current_user`, which does **not** read `vibe_heal.authors`. `review-prs` uses `list_open_prs_matching_authors` against the configured author list instead. If no PR is eligible, the command exits.
+5. The command lists the open PRs, drafts included. It keeps a PR when the currently active `gh` account (`@me`) is the author, assignee, or has a review requested (the union of the three). It deduplicates by PR number and sorts the result ascending. The listing uses `list_open_prs_for_current_user`, which does **not** read `vibe_heal.authors`. `review-prs` uses `list_open_prs_matching_authors` against the configured author list instead. If no PR is eligible, the command exits.
 6. The command detaches HEAD and records the current commit so it can restore the working tree after each PR.
 7. For each eligible PR, in ascending order:
    - It fetches all comments via `scripts/pr-comments.py fetch --pr <N>` (the same mechanism `address-comments` uses), without checking out the branch yet.
@@ -61,6 +61,6 @@ This check is deliberately not author-based. The original SonarQube comment, a f
 
 - The command scans only **inline** review comments. It does not handle the rare top-level fallback comment that `vibe_heal` posts when GitHub rejects an inline review (too many findings, lines outside the diff).
 - The recognized knowledge-source repo slug (`jpablo/vibe-types`) is currently hardcoded, not configurable.
-- The command always skips draft PRs.
+- Draft PRs are listed like any other PR. There's no draft-specific behavior and no config flag.
 - If a backend exception occurs for one comment, the command logs it and skips only that comment. It does not stop the rest of the PR's matching comments or the rest of the batch.
 - This command is subject to the shared locking, `gh` account, and working-directory-mutation caveats in [Shared behavior](index.md#shared-behavior).

@@ -20,7 +20,6 @@ harness run [--config PATH] [--verbose] address-comments
 5. If `repo.opencode_dir` is set, it computes that path relative to `repo.working_dir` (`plugin_prefix`). That path is used later to restrict which inline comments are considered.
 6. Detaches HEAD and records the current commit so it can restore the working tree after each PR.
 7. For each PR, in ascending order:
-   - Skips it if it's a draft.
    - Calls a GraphQL query for unresolved review threads. If any thread is unresolved, the PR has "pending feedback." Otherwise, it falls back to checking for any issue/timeline comment not authored by `github-actions[bot]` or `dependabot[bot]`. If neither check finds anything, the PR is skipped entirely — no checkout, no backend calls.
    - Resolves the current `gh` user's login the first time it's needed (`gh api user --jq .login`), then reuses it for the rest of the run.
    - Checks whether the current user is currently a requested reviewer on this PR, before doing anything else with it.
@@ -90,7 +89,7 @@ Because none of this is state-file-based, resolving a thread on GitHub (or havin
 
   Inline and review-level comments are never bot-filtered by the runner itself. That judgment is left entirely to the backend via the template's Step 0.
 - PRs you authored (`gh pr list --author @me`) and PRs assigned to you (`gh pr list --assignee @me`) are both considered — the two lists are merged and deduplicated by PR number. A PR you're merely a *requested reviewer* on (not assigned) is still never touched by this command. That's `review-requested`'s job.
-- Draft PRs are always skipped. There's no config flag to include them.
+- Draft PRs are processed exactly like non-draft PRs. There's no draft-specific behavior and no config flag.
 - A backend exception for one comment (e.g. a timeout) is logged and only skips that comment. It doesn't stop the rest of the PR's comment list or the rest of the batch.
 - Subject to the shared locking, `gh` account, and working-directory-mutation caveats in [Shared behavior](index.md#shared-behavior).
 - **Focused-review-bot replies are always gated behind a `+1` reaction, and are addressed as themselves, not as a proxy for the original comment.** Normally, any inline thread whose last reply was posted by this account is skipped as "already answered." That's exactly backwards for a `[focused-review-bot]` marker reply, which is a *proposed* fix, not a completed one. Instead, an inline thread whose last reply carries the marker is only added to the actionable list once the current user has left a `+1` on that specific reply. This is checked live via the GitHub reactions API on every run, with no additional state file. If the reactions lookup itself fails, the thread is treated as not-yet-approved (fails closed). Once approved, the thread is addressed using the *marker reply's own* body/author/comment-ID, not the terse original finding (SonarQube, vibe-heal, etc.) that triggered `focused-review` in the first place. The original finding is still passed to the backend, but only as labeled background context. The backend is also told to skip its own act/reply-only/skip triage for these — the `+1` already made that call.
