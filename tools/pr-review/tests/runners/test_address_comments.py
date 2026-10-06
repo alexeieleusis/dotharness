@@ -92,10 +92,6 @@ def test_processes_draft_pr_with_pending_feedback(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     with (
         patch("harness.runners.address_comments.get_gh_token", return_value="tok"),
-        patch(
-            "harness.runners.address_comments._list_prs_to_check",
-            return_value=[{"number": 1, "headRefName": "b", "isDraft": True}],
-        ),
         patch("harness.runners.address_comments._has_pending_feedback", return_value=True),
         patch("harness.runners.address_comments.fetch_pr_comments", return_value=[_FAKE_COMMENT]),
         patch("harness.runners.address_comments.git_detach_and_record", return_value="sha"),
@@ -106,7 +102,17 @@ def test_processes_draft_pr_with_pending_feedback(tmp_xdg, tmp_path):
         patch("harness.runners.address_comments.Backend") as mock_be,
     ):
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        # `_list_prs_to_check` runs for real; the only draft PR comes back from the `gh pr list` call
+        # for --author and nothing for --assignee, so a re-added isDraft filter would drop it.
+        draft_listing = json.dumps([{"number": 1, "headRefName": "b", "isDraft": True}]).encode()
+
+        def fake_run_cmd(cmd, *args, **kwargs):
+            if cmd[:3] == ["gh", "pr", "list"]:
+                stdout = draft_listing if "--author" in cmd else b"[]"
+                return MagicMock(returncode=0, stdout=stdout, stderr=b"")
+            return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+        mock_run.side_effect = fake_run_cmd
         address_comments._run_locked(cfg)
     mock_be.return_value.run.assert_called_once()
 
