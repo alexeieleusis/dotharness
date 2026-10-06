@@ -142,7 +142,7 @@ def test_list_open_prs_for_current_user_dedupes_overlapping_sources():
     assert [p["number"] for p in result] == [1]
 
 
-def test_list_open_prs_for_current_user_filters_drafts():
+def test_list_open_prs_for_current_user_includes_drafts():
     author_payload = [
         {"number": 1, "headRefName": "a", "isDraft": True},
         {"number": 2, "headRefName": "b", "isDraft": False},
@@ -155,7 +155,7 @@ def test_list_open_prs_for_current_user_filters_drafts():
     }
     with patch("harness.runners.common.run_cmd", side_effect=_run_cmd_router(responses)):
         result = list_open_prs_for_current_user("acme/repo", "/", {})
-    assert [p["number"] for p in result] == [2]
+    assert [p["number"] for p in result] == [1, 2]
 
 
 def test_list_open_prs_for_current_user_handles_gh_failures():

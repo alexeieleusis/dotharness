@@ -1089,7 +1089,7 @@ def _list_review_requested_prs(repo: str, cwd: str, env: dict) -> list[dict]:
 
 
 def list_open_prs_for_current_user(repo: str, cwd: str, env: dict) -> list[dict]:
-    """List open, non-draft PRs where the running user is the author, is assigned, or has a review
+    """List open PRs (drafts included) where the running user is the author, is assigned, or has a review
     requested from them (union of the three), deduplicated by PR number, sorted ascending."""
     by_number: dict[int, dict] = {}
     for pr in (
@@ -1098,8 +1098,7 @@ def list_open_prs_for_current_user(repo: str, cwd: str, env: dict) -> list[dict]
         + _list_review_requested_prs(repo, cwd, env)
     ):
         by_number.setdefault(pr["number"], pr)
-    eligible = [p for p in by_number.values() if not is_draft_pr(p)]
-    return sorted(eligible, key=lambda p: p["number"])
+    return sorted(by_number.values(), key=lambda p: p["number"])
 
 
 def get_pr_base_branch(pr_number: int, repo: str, env: dict) -> str:
