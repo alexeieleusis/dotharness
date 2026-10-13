@@ -595,7 +595,7 @@ def _read_approval_state(repo: str, pr_number: int, acting: str, env: dict) -> b
 
 
 def _approval_precheck(
-    pr_number: int, total_lines: int, approve_max_lines: int, gate_passed: bool, safety_passed: bool, head_sha: str
+    total_lines: int, approve_max_lines: int, gate_passed: bool, safety_passed: bool, head_sha: str
 ) -> ApprovalResult | None:
     if not gate_passed:
         return ApprovalResult(ApprovalStatus.SKIPPED, REASON_GATE_NOT_PASSED)
@@ -671,7 +671,7 @@ def approve_pr(
     and the current head; any failed read or moved head means no write. The review body is empty
     and ``commit_id`` is ``head_sha``.
     """
-    skipped = _approval_precheck(pr_number, total_lines, approve_max_lines, gate_passed, safety_passed, head_sha)
+    skipped = _approval_precheck(total_lines, approve_max_lines, gate_passed, safety_passed, head_sha)
     if skipped is None:
         try:
             skipped = _approve(repo, pr_number, head_sha, current_user, env, dry_run)
