@@ -208,23 +208,20 @@ def test_run_auto_approve_runner_error_exits_nonzero(minimal_toml, tmp_xdg):
 
 def test_run_auto_approve_disabled_is_noop(minimal_toml, tmp_xdg):
     with (
-        patch("harness.runners.auto_approve.run") as mock_run,
-        patch("harness.cli.acquire_lock") as mock_lock,
+        patch("harness.runners.auto_approve.acquire_lock"),
+        patch("harness.runners.auto_approve.get_gh_token") as mock_token,
     ):
         result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "auto-approve"])
     assert result.exit_code == 0, result.output
-    mock_run.assert_not_called()
-    mock_lock.assert_not_called()
+    mock_token.assert_not_called()
 
 
-def test_run_auto_approve_takes_lock_when_enabled(minimal_toml, tmp_xdg):
-    _enable_auto_approve(minimal_toml)
-    with (
-        patch("harness.runners.auto_approve.run"),
-        patch("harness.cli.acquire_lock") as mock_lock,
-    ):
-        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "auto-approve"])
-    assert result.exit_code == 0, result.output
+def test_auto_approve_run_takes_lock(minimal_toml, tmp_xdg):
+    from harness.config import load_config
+    from harness.runners import auto_approve
+
+    with patch("harness.runners.auto_approve.acquire_lock") as mock_lock:
+        auto_approve.run(load_config(minimal_toml))
     mock_lock.assert_called_once()
 
 

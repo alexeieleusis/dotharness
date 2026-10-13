@@ -1,6 +1,6 @@
 """Auto-approve runner: marks small files viewed and approves small PRs (issue #95).
 
-Public entry point (contract with the CLI layer, which takes the working-directory lock)::
+Public entry point (takes the shared working-directory lock itself, like the sibling runners)::
 
     run(config: HarnessConfig, *, dry_run: bool = False) -> None
 
@@ -36,6 +36,7 @@ import logging
 import subprocess
 
 from harness.config import HarnessConfig
+from harness.lock import acquire_lock
 from harness.runners.auto_approve_github import (
     ApprovalStatus,
     GateStatus,
@@ -68,6 +69,11 @@ class AutoApproveError(RuntimeError):
 
 
 def run(config: HarnessConfig, *, dry_run: bool = False) -> None:
+    with acquire_lock(config.lock_key):
+        _run_locked(config, dry_run)
+
+
+def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
     if not config.auto_approve.enabled:
         logger.info("auto-approve is disabled, nothing to do")
         return
