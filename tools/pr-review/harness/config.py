@@ -82,6 +82,13 @@ class RegretReviewConfig:
 
 
 @dataclass
+class AutoApproveConfig:
+    enabled: bool = False
+    viewed_max_lines: int = 75
+    approve_max_lines: int = 500
+
+
+@dataclass
 class LocalReviewConfig:
     base: str | None = None
     output_dir: str | None = None
@@ -116,6 +123,7 @@ class HarnessConfig:
     address_comments: AddressCommentsConfig = field(default_factory=AddressCommentsConfig)
     regret_review: RegretReviewConfig = field(default_factory=RegretReviewConfig)
     local_review: LocalReviewConfig = field(default_factory=LocalReviewConfig)
+    auto_approve: AutoApproveConfig = field(default_factory=AutoApproveConfig)
 
     @property
     def repo_slug(self) -> str:
@@ -186,6 +194,23 @@ def _parse_repo(r: dict, *, require_repo_name: bool) -> RepoConfig:
     )
 
 
+def _parse_auto_approve(section: dict) -> AutoApproveConfig:
+    defaults = AutoApproveConfig()
+    enabled = section.get("enabled", defaults.enabled)
+    if not isinstance(enabled, bool):
+        raise ConfigError(f"auto_approve.enabled must be a boolean, got {enabled!r}")  # noqa: TRY003
+    values: dict[str, int] = {}
+    for key in ("viewed_max_lines", "approve_max_lines"):
+        value = section.get(key, getattr(defaults, key))
+        # bool is an int subclass; reject it explicitly.
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ConfigError(f"auto_approve.{key} must be a non-negative integer, got {value!r}")  # noqa: TRY003
+        if value < 0:
+            raise ConfigError(f"auto_approve.{key} must be a non-negative integer, got {value!r}")  # noqa: TRY003
+        values[key] = value
+    return AutoApproveConfig(enabled=enabled, **values)
+
+
 def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
     with open(path, "rb") as f:
         try:
@@ -251,6 +276,8 @@ def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
         regret_review_timeout=rr.get("regret_review_timeout", 300),
     )
 
+    auto_approve = _parse_auto_approve(data.get("auto_approve", {}))
+
     lr = data.get("local_review", {})
     local_review = LocalReviewConfig(
         base=lr.get("base") or None,
@@ -265,4 +292,5 @@ def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
         address_comments=address_comments,
         regret_review=regret_review,
         local_review=local_review,
+        auto_approve=auto_approve,
     )

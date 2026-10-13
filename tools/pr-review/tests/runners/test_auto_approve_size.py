@@ -1,0 +1,125 @@
+import os
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from harness.config import AutoApproveConfig
+from harness.runners.auto_approve_size import SizeEvaluation, evaluate_size
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, env=_ENV)  # noqa: S603, S607
+
+
+_ENV = {
+    **os.environ,
+    "GIT_AUTHOR_NAME": "t",
+    "GIT_AUTHOR_EMAIL": "t@t",
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@t",
+}
+
+
+def _lines(n: int, prefix: str = "x") -> str:
+    return "".join(f"{prefix}{i}\n" for i in range(n))
+
+
+@pytest.fixture
+def repo(tmp_path):
+    """Repo with branch ``main`` mirrored as ``origin/main`` and a checked-out feature branch."""
+    _git(tmp_path, "init", "-b", "main")
+    (tmp_path / "old.txt").write_text(_lines(30, "keep"))
+    (tmp_path / "gone.txt").write_text(_lines(5, "gone"))
+    (tmp_path / "edit.txt").write_text(_lines(5, "e"))
+    (tmp_path / "bin.dat").write_bytes(b"\x00\x01\x02")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-m", "base")
+    _git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(tmp_path, "checkout", "-b", "feature")
+    return tmp_path
+
+
+def _commit(repo: Path) -> None:
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "change")
+
+
+def _eval(repo: Path, viewed: int = 75, approve: int = 500) -> SizeEvaluation:
+    cfg = AutoApproveConfig(enabled=True, viewed_max_lines=viewed, approve_max_lines=approve)
+    return evaluate_size("main", str(repo), _ENV, cfg)
+
+
+def test_text_file_counted(repo):
+    (repo / "new.txt").write_text(_lines(10))
+    _commit(repo)
+    ev = _eval(repo)
+    assert ev.file_counts == {"new.txt": 10}
+    assert ev.total_lines == 10
+    assert ev.small_files == ["new.txt"]
+    assert ev.pr_is_small is True
+
+
+def test_binary_deleted_renamed_excluded(repo):
+    (repo / "bin.dat").write_bytes(b"\x00\x09\x08\x07")
+    (repo / "gone.txt").unlink()
+    _git(repo, "mv", "old.txt", "moved.txt")
+    (repo / "edit.txt").write_text(_lines(5, "e") + "added\n")
+    _commit(repo)
+    ev = _eval(repo)
+    assert ev.file_counts == {"edit.txt": 1}
+    assert ev.small_files == ["edit.txt"]
+    assert ev.total_lines == 1
+
+
+def test_renamed_with_edits_excluded(repo):
+    _git(repo, "mv", "old.txt", "moved.txt")
+    (repo / "moved.txt").write_text(_lines(30, "keep").replace("keep3\n", "changed\n"))
+    _commit(repo)
+    ev = _eval(repo)
+    assert ev.file_counts == {}
+    assert ev.small_files == []
+    assert ev.total_lines == 0
+
+
+@pytest.mark.parametrize(("n", "small"), [(74, True), (75, False), (76, False)])
+def test_file_boundary(repo, n, small):
+    (repo / "f.txt").write_text(_lines(n))
+    _commit(repo)
+    ev = _eval(repo)
+    assert ev.file_counts["f.txt"] == n
+    assert (ev.small_files == ["f.txt"]) is small
+
+
+@pytest.mark.parametrize(("n", "small"), [(499, True), (500, False), (501, False)])
+def test_pr_boundary(repo, n, small):
+    (repo / "f.txt").write_text(_lines(n))
+    _commit(repo)
+    ev = _eval(repo)
+    assert ev.total_lines == n
+    assert ev.pr_is_small is small
+
+
+def test_zero_thresholds_disable(repo):
+    (repo / "f.txt").write_text(_lines(1))
+    _commit(repo)
+    ev = _eval(repo, viewed=0, approve=0)
+    assert ev.small_files == []
+    assert ev.pr_is_small is False
+
+
+def test_lockfile_counted(repo):
+    (repo / "package-lock.json").write_text(_lines(40, "dep"))
+    _commit(repo)
+    ev = _eval(repo)
+    assert ev.file_counts == {"package-lock.json": 40}
+    assert ev.small_files == ["package-lock.json"]
+
+
+def test_total_sums_across_files(repo):
+    (repo / "a.txt").write_text(_lines(60))
+    (repo / "b.txt").write_text(_lines(80))
+    _commit(repo)
+    ev = _eval(repo)
+    assert ev.total_lines == 140
+    assert ev.small_files == ["a.txt"]
