@@ -1,0 +1,219 @@
+"""Auto-approve runner: marks small files viewed and approves small PRs (issue #95).
+
+Public entry point (contract with the CLI layer, which takes the working-directory lock)::
+
+    run(config: HarnessConfig, *, dry_run: bool = False) -> None
+
+* ``config.auto_approve.enabled`` false: returns immediately, no gh/git call at all.
+* Otherwise processes every open, non-draft PR in ``user-review-requested:@me``; each PR is
+  isolated (a failure is logged and the loop continues).
+* ``dry_run=True`` performs every read and check but no write: the sibling write functions
+  in ``auto_approve_github`` (the only write points: ``markFileAsViewed`` and the review POST)
+  receive ``dry_run`` and log what they would do.
+* Raises :class:`AutoApproveError` after the loop if any PR failed (read failure, write failure,
+  or an exception), so the CLI exits non-zero. Returns None when every PR succeeded.
+
+Per PR: size evaluation, timing gate, approval-safety reads (all reads before any write; any
+read failure means no write on that PR), then mark small files viewed (gate open), then approve
+(small PR, safe, not already approved, bound to the head SHA).
+
+A PR with no counted files (only renames, deletes, or binary files) is never approved and
+nothing is marked: zero counted lines would otherwise satisfy "strictly below" trivially, and
+nothing was actually reviewed by size. The brief gives no basis to approve it, so the safe
+direction is taken and the skip is logged.
+"""
+
+import json
+import logging
+
+from harness.config import HarnessConfig
+from harness.runners.auto_approve_github import (
+    ApprovalStatus,
+    GateStatus,
+    SafetyStatus,
+    ViewedStatus,
+    approve_pr,
+    check_approval_safety,
+    check_timing_gate,
+    mark_files_viewed,
+)
+from harness.runners.auto_approve_size import SizeEvaluation, evaluate_size
+from harness.runners.common import (
+    TIMEOUT_GH,
+    FatalGitError,
+    build_subprocess_env,
+    get_current_user,
+    get_gh_token,
+    git_detach_and_record,
+    git_fetch_and_checkout,
+    git_restore,
+    run_cmd,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class AutoApproveError(RuntimeError):
+    """Raised by run() after the loop when one or more PRs failed."""
+
+
+def run(config: HarnessConfig, *, dry_run: bool = False) -> None:
+    if not config.auto_approve.enabled:
+        logger.info("auto-approve is disabled, nothing to do")
+        return
+    gh_token = get_gh_token(config.harness.gh_token_cmd)
+    env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
+    current_user = get_current_user(env)
+    prs = _list_prs(config.repo.name, env)
+    wdir = str(config.repo.working_dir)
+
+    failures: list[str] = []
+    for pr in prs:
+        if not _is_candidate(pr):
+            continue
+        pr_number = pr["number"]
+        try:
+            problems = _process_pr(pr, config, wdir, env, current_user, dry_run)
+        except FatalGitError as e:
+            logger.exception("PR #%d: fatal git error", pr_number)
+            failures.append(f"#{pr_number}: {e}")
+            break
+        except Exception as e:
+            logger.exception("PR #%d: error", pr_number)
+            failures.append(f"#{pr_number}: {e}")
+            continue
+        failures.extend(f"#{pr_number}: {p}" for p in problems)
+    if failures:
+        raise AutoApproveError("auto-approve failed for: " + "; ".join(failures))
+
+
+def _list_prs(repo: str, env: dict) -> list[dict]:
+    result = run_cmd(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--search",
+            "user-review-requested:@me",
+            "--json",
+            "number,headRefName,baseRefName,isDraft,state,author",
+            "--limit",
+            "500",
+        ],
+        cwd="/",
+        env=env,
+        timeout=TIMEOUT_GH,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AutoApproveError(f"gh pr list failed (exit {result.returncode})")  # noqa: TRY003
+    return sorted(json.loads(result.stdout), key=lambda p: p["number"])
+
+
+def _is_candidate(pr: dict) -> bool:
+    if pr.get("isDraft"):
+        logger.info("PR #%d: draft, skipping", pr["number"])
+        return False
+    if pr.get("state", "OPEN") != "OPEN":
+        logger.info("PR #%d: not open (%s), skipping", pr["number"], pr.get("state"))
+        return False
+    if not pr.get("headRefName") or not pr.get("baseRefName"):
+        logger.info("PR #%d: missing head/base branch, skipping", pr["number"])
+        return False
+    return True
+
+
+def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, current_user: str, dry_run: bool) -> list[str]:
+    """Process one PR; return a list of problems (empty when it succeeded)."""
+    pr_number = pr["number"]
+    logger.info("PR #%d: starting%s", pr_number, " (dry-run)" if dry_run else "")
+    original_sha = git_detach_and_record(wdir, env)
+    try:
+        git_fetch_and_checkout(pr["headRefName"], wdir, env)
+        size = evaluate_size(pr["baseRefName"], wdir, env, config.auto_approve)
+        return _decide_and_act(pr, size, config, env, current_user, dry_run)
+    finally:
+        git_restore(original_sha, pr["headRefName"], wdir, env)
+
+
+def _log_size(pr_number: int, size: SizeEvaluation, config: HarnessConfig) -> None:
+    logger.info(
+        "PR #%d: counted_files=%d total_lines=%d small_files=%d pr_is_small=%s viewed_max_lines=%d approve_max_lines=%d",
+        pr_number,
+        len(size.file_counts),
+        size.total_lines,
+        len(size.small_files),
+        size.pr_is_small,
+        config.auto_approve.viewed_max_lines,
+        config.auto_approve.approve_max_lines,
+    )
+
+
+def _decide_and_act(
+    pr: dict, size: SizeEvaluation, config: HarnessConfig, env: dict, current_user: str, dry_run: bool
+) -> list[str]:
+    pr_number = pr["number"]
+    repo = config.repo.name
+    _log_size(pr_number, size, config)
+    if not size.file_counts:
+        logger.info("PR #%d: no counted files (only renames/deletes/binary), not approving", pr_number)
+        return []
+
+    # All reads first (NFR-1): any read failure means no write on this PR this run.
+    author = (pr.get("author") or {}).get("login", "")
+    gate = check_timing_gate(repo, pr_number, author, current_user, env)
+    logger.info("PR #%d: timing gate %s (%s)", pr_number, gate.status.value, gate.reason)
+    safety = check_approval_safety(repo, pr_number, current_user, env)
+    logger.info("PR #%d: safety %s (%s) head=%s", pr_number, safety.status.value, safety.reason, safety.head_sha)
+    if gate.status is GateStatus.READ_FAILED or safety.status is SafetyStatus.READ_FAILED:
+        logger.error("PR #%d: a read failed, no writes this run", pr_number)
+        return ["read failed (timing gate or safety checks), no writes"]
+
+    gate_passed = gate.status is GateStatus.PASSED
+    problems = _mark_viewed(pr_number, size, config, gate_passed, env, dry_run)
+    if problems is None:
+        return ["viewed-state read failed, no writes"]
+    approval = approve_pr(
+        repo,
+        pr_number,
+        size.total_lines,
+        config.auto_approve.approve_max_lines,
+        gate_passed,
+        safety.status is SafetyStatus.SAFE,
+        safety.head_sha,
+        current_user,
+        env,
+        dry_run,
+    )
+    logger.info("PR #%d: approval %s (%s)", pr_number, approval.status.value, approval.reason)
+    if approval.status in (ApprovalStatus.READ_FAILED, ApprovalStatus.WRITE_FAILED):
+        problems.append(f"approval {approval.status.value}: {approval.reason}")
+    return problems
+
+
+def _mark_viewed(
+    pr_number: int, size: SizeEvaluation, config: HarnessConfig, gate_passed: bool, env: dict, dry_run: bool
+) -> list[str] | None:
+    """Mark small files viewed. Returns problems, or None when the read failed (skip all writes)."""
+    max_lines = config.auto_approve.viewed_max_lines
+    if max_lines <= 0 or not size.small_files:
+        logger.info("PR #%d: no files eligible to mark viewed", pr_number)
+        return []
+    viewed = mark_files_viewed(
+        config.repo.name, pr_number, size.file_counts, max_lines, gate_passed, env, dry_run=dry_run
+    )
+    logger.info(
+        "PR #%d: viewed %s marked=%s already-viewed=%s failed=%s",
+        pr_number,
+        viewed.status.value,
+        viewed.marked,
+        viewed.skipped,
+        viewed.failed,
+    )
+    if viewed.status is ViewedStatus.READ_FAILED:
+        return None
+    return [f"failed to mark viewed: {p}" for p in viewed.failed]
