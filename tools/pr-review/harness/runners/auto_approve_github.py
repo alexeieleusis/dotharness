@@ -310,6 +310,8 @@ def _check_ci(repo: str, pr_number: int, env: dict) -> SafetyResult | None:
         buckets = _read_buckets(repo, pr_number, env, required=False)
     if buckets is None:
         return SafetyResult(SafetyStatus.READ_FAILED, "checks read failed")
+    if not buckets:
+        return SafetyResult(SafetyStatus.READ_FAILED, "no checks reported")
     blocking = sorted({b for b in buckets if b not in _PASSING_BUCKETS})
     logger.info("PR #%d: %d checks, blocking buckets: %s", pr_number, len(buckets), blocking or "none")
     if blocking:

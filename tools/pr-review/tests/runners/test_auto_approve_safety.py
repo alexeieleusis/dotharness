@@ -36,7 +36,7 @@ def proc(code=0, out=b"", err=b""):
 def run(view=None, required=None, allc=None, reviews=(), user=ME):
     """view/required/allc: CompletedProcess mocks. reviews: list or None (read failed)."""
     view = view or proc(out=pr_json())
-    required = required or proc(out=buckets())
+    required = required or proc(out=buckets("pass"))
     allc = allc or proc(out=buckets())
     calls = []
 
@@ -99,9 +99,9 @@ def test_exit_1_without_required_flag_is_read_failed():
     assert res.status is SafetyStatus.READ_FAILED
 
 
-def test_no_checks_at_all_safe():
+def test_no_checks_at_all_is_read_failed():
     res, _ = run(required=proc(1, b"", NO_REQ), allc=proc(out=buckets()))
-    assert res.status is SafetyStatus.SAFE
+    assert res.status is SafetyStatus.READ_FAILED
 
 
 def test_unparseable_checks_read_failed():
