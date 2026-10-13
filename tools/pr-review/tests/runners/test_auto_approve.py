@@ -160,31 +160,16 @@ def test_empty_pr_not_approved_and_logged(tmp_path, caplog):
     m.restore.assert_called_once()
 
 
-def test_second_run_on_unchanged_pr_makes_no_writes(tmp_path):
-    viewed: set[str] = set()
-    state = {"approved": False, "writes": 0}
-
-    def mark(repo, n, counts, mx, gate_ok, env, dry_run=False):
-        new = [p for p, c in counts.items() if c < mx and p not in viewed]
-        viewed.update(new)
-        state["writes"] += len(new)
-        return ViewedResult(ViewedStatus.DONE, marked=new)
-
-    def approve(*a, **k):
-        if state["approved"]:
-            return ApprovalResult(ApprovalStatus.SKIPPED, "already-approved")
-        state["approved"] = True
-        state["writes"] += 1
-        return ApprovalResult(ApprovalStatus.APPROVED, "approved")
-
+def test_runner_passes_identical_writer_args_on_each_run(tmp_path):
+    # Idempotency itself lives in auto_approve_github (see test_already_viewed_skipped_and_rerun_no_write
+    # and test_already_approved_on_head_skips); here we only pin that the runner feeds the writers the
+    # same inputs on every run, so those guards can do their job.
     with _mocks() as m:
-        m.mark.side_effect = mark
-        m.approve.side_effect = approve
         auto_approve.run(_cfg(tmp_path))
-        first = state["writes"]
         auto_approve.run(_cfg(tmp_path))
-    assert first == 2
-    assert state["writes"] == first
+    assert m.mark.call_count == 2 and m.approve.call_count == 2
+    assert m.mark.call_args_list[0] == m.mark.call_args_list[1]
+    assert m.approve.call_args_list[0] == m.approve.call_args_list[1]
 
 
 @pytest.mark.parametrize("which", ["gate", "safety"])
