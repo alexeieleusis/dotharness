@@ -19,6 +19,7 @@ from harness.runners.auto_approve_github import (
     ViewedStatus,
 )
 from harness.runners.auto_approve_size import SizeEvaluation
+from harness.runners.common import FatalGitError
 
 PR = {
     "number": 1,
@@ -210,6 +211,43 @@ def test_one_pr_failing_does_not_stop_others_and_raises(tmp_path):
     assert "git exploded" in str(exc.value)
     assert [c.args[1] for c in m.approve.call_args_list] == [2, 3]
     assert m.restore.call_count == 3
+
+
+def test_fatal_git_error_stops_loop_and_skips_remaining_prs(tmp_path):
+    prs = [{**PR, "number": 1}, {**PR, "number": 2}, {**PR, "number": 3}]
+    with _mocks(prs=prs) as m:
+        m.ev.side_effect = [FatalGitError("tree dirty"), _size(), _size()]
+        with pytest.raises(auto_approve.AutoApproveError) as exc:
+            auto_approve.run(_cfg(tmp_path))
+    assert "#1" in str(exc.value)
+    assert "tree dirty" in str(exc.value)
+    assert "#2" not in str(exc.value)
+    m.approve.assert_not_called()
+    assert m.checkout.call_count == 1
+    assert m.restore.call_count == 1
+
+
+def test_fatal_restore_failure_keeps_approval_logged_and_stops_loop(tmp_path, caplog):
+    prs = [{**PR, "number": 1}, {**PR, "number": 2}]
+    with _mocks(prs=prs) as m, caplog.at_level(logging.INFO):
+        m.restore.side_effect = FatalGitError("restore failed")
+        with pytest.raises(auto_approve.AutoApproveError, match="#1: restore failed"):
+            auto_approve.run(_cfg(tmp_path))
+    assert [c.args[1] for c in m.approve.call_args_list] == [1]
+    assert "PR #1: approval approved" in caplog.text
+    assert m.checkout.call_count == 1  # PR 2 never checked out onto an unknown tree
+
+
+@pytest.mark.parametrize("author", [None, {}, {"login": ""}])
+def test_missing_author_reaches_gate_as_empty_and_blocks_writes(tmp_path, author):
+    # Deleted accounts come back from gh as null; the real gate treats an empty author as READ_FAILED.
+    with _mocks(prs=[{**PR, "author": author}]) as m:
+        m.gate.return_value = GateResult(GateStatus.READ_FAILED, "acting account or PR author unknown")
+        with pytest.raises(auto_approve.AutoApproveError, match="#1"):
+            auto_approve.run(_cfg(tmp_path))
+    assert m.gate.call_args.args[2] == ""
+    m.mark.assert_not_called()
+    m.approve.assert_not_called()
 
 
 def test_pr_list_failure_raises(tmp_path):
