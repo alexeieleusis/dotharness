@@ -89,6 +89,22 @@ def test_required_pending_exit_8_with_json_blocks():
     assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
 
 
+def test_required_pending_exit_8_without_json_is_read_failed():
+    res, _ = run(required=proc(8, b""))
+    assert res.status is SafetyStatus.READ_FAILED
+
+
+def test_required_empty_list_exit_zero_falls_back_to_all():
+    res, calls = run(required=proc(out=buckets()), allc=proc(out=buckets("pass", "fail")))
+    assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
+    assert sum("checks" in c for c in calls) == 2
+
+
+def test_unrecognised_bucket_blocks():
+    res, _ = run(required=proc(out=buckets("pass", "unknown")))
+    assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
+
+
 def test_other_exit_1_is_read_failed():
     res, _ = run(required=proc(1, b"", b"HTTP 502"))
     assert res.status is SafetyStatus.READ_FAILED
