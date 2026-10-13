@@ -175,3 +175,20 @@ def test_removed_dash_comment_lines_are_counted(repo):
     ev = _eval(repo)
     assert ev.file_counts == {"mig.sql": 600}
     assert ev.pr_is_small is False
+
+
+def test_color_always_config_does_not_change_counts(repo):
+    (repo / "new.txt").write_text(_lines(10))
+    _commit(repo)
+    env = {
+        **_ENV,
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": "color.ui",
+        "GIT_CONFIG_VALUE_0": "always",
+        "GIT_CONFIG_KEY_1": "color.diff",
+        "GIT_CONFIG_VALUE_1": "always",
+    }
+    cfg = AutoApproveConfig(enabled=True, viewed_max_lines=75, approve_max_lines=500)
+    ev = evaluate_size("main", str(repo), env, cfg)
+    assert ev.file_counts == {"new.txt": 10}
+    assert ev.total_lines == 10
