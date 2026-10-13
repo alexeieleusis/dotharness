@@ -150,7 +150,8 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
       whenever this PR is next processed.
     - The runner never removes the current user as a requested reviewer, even
       once every pass — file+summary, design, traceability, and regret when
-      enabled — has succeeded. This runner only posts automated findings. The
+      enabled — has succeeded. This runner only posts automated findings; concluding a review is the job of
+      the separate, opt-in [`auto-approve`](auto-approve.md) command. The
       human still reviews and approves the PR themselves, which is what
       actually clears the review request on GitHub. If any pass submits a
       formal review as a side effect, or races a concurrent runner that does

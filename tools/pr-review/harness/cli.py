@@ -7,9 +7,11 @@ from pathlib import Path
 import click
 
 from harness import state as state_mod
-from harness.config import load_config
+from harness.config import HarnessConfig, load_config
+from harness.lock import acquire_lock
 from harness.runners import (
     address_comments,
+    auto_approve,
     focused_review,
     local_review,
     review_prs,
@@ -54,6 +56,11 @@ enabled = false
 [address_comments]
 # enabled = true
 # trusted_commenters = "*"
+
+# [auto_approve]
+# enabled = false
+# viewed_max_lines = 75
+# approve_max_lines = 500
 
 # [[repo.subdir]]
 # path = "."
@@ -233,10 +240,34 @@ def run_address_comments(ctx):
     address_comments.run(cfg)
 
 
+def _run_auto_approve(cfg: HarnessConfig, dry_run: bool = False) -> None:
+    """Run the auto-approve runner under the shared working-directory lock (skipped when disabled)."""
+    if not cfg.auto_approve.enabled:
+        logging.getLogger(__name__).info("auto-approve is disabled, nothing to do")
+        return
+    with acquire_lock(cfg.lock_key):
+        auto_approve.run(cfg, dry_run=dry_run)
+
+
+@cmd_run.command("auto-approve")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Evaluate and log what would be marked viewed or approved, without any GitHub write.",
+)
+@click.pass_context
+def run_auto_approve(ctx, dry_run):
+    """Mark small files viewed and approve small PRs once the author has followed up on review comments."""
+    _setup_logging("auto-approve", ctx.obj.get("verbose", False))
+    cfg = load_config(ctx.obj["config_path"])
+    _run_auto_approve(cfg, dry_run=dry_run)
+
+
 @cmd_run.command("all")
 @click.pass_context
 def run_all(ctx):
-    """Run all runners in sequence: review-prs, focused-review, self-review, review-requested, address-comments."""
+    """Run all runners in sequence: review-prs, focused-review, self-review, review-requested, address-comments, auto-approve."""
     _setup_logging("all", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
     log = logging.getLogger(__name__)
@@ -247,6 +278,7 @@ def run_all(ctx):
         ("self_review", lambda: self_review.run(cfg)),
         ("review_requested", lambda: review_requested.run(cfg)),
         ("address_comments", lambda: address_comments.run(cfg)),
+        ("auto_approve", lambda: _run_auto_approve(cfg)),
     ]
 
     failed = []

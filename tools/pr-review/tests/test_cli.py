@@ -1,8 +1,9 @@
+import tomllib
 from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from harness.cli import cli
+from harness.cli import TEMPLATE, cli
 
 
 def test_run_review_prs_dispatches(minimal_toml, tmp_xdg):
@@ -97,6 +98,7 @@ def test_validate_exits_1_on_invalid(tmp_path):
 
 
 def test_run_all_calls_runners_in_order(minimal_toml, tmp_xdg):
+    _enable_auto_approve(minimal_toml)
     runner = CliRunner()
     call_order = []
 
@@ -112,14 +114,23 @@ def test_run_all_calls_runners_in_order(minimal_toml, tmp_xdg):
         patch("harness.runners.self_review.run", side_effect=make_side_effect("self_review")),
         patch("harness.runners.review_requested.run", side_effect=make_side_effect("review_requested")),
         patch("harness.runners.address_comments.run", side_effect=make_side_effect("address_comments")),
+        patch("harness.runners.auto_approve.run", side_effect=make_side_effect("auto_approve")),
     ):
         result = runner.invoke(cli, ["run", "--config", str(minimal_toml), "all"])
 
     assert result.exit_code == 0, result.output
-    assert call_order == ["review_prs", "focused_review", "self_review", "review_requested", "address_comments"]
+    assert call_order == [
+        "review_prs",
+        "focused_review",
+        "self_review",
+        "review_requested",
+        "address_comments",
+        "auto_approve",
+    ]
 
 
 def test_run_all_continues_after_failure_and_exits_nonzero(minimal_toml, tmp_xdg):
+    _enable_auto_approve(minimal_toml)
     runner = CliRunner()
     call_order = []
 
@@ -137,11 +148,19 @@ def test_run_all_continues_after_failure_and_exits_nonzero(minimal_toml, tmp_xdg
         patch("harness.runners.self_review.run", side_effect=make_side_effect("self_review")),
         patch("harness.runners.review_requested.run", side_effect=make_side_effect("review_requested")),
         patch("harness.runners.address_comments.run", side_effect=make_side_effect("address_comments")),
+        patch("harness.runners.auto_approve.run", side_effect=make_side_effect("auto_approve")),
     ):
         result = runner.invoke(cli, ["run", "--config", str(minimal_toml), "all"])
 
     assert result.exit_code != 0
-    assert call_order == ["review_prs", "focused_review", "self_review", "review_requested", "address_comments"]
+    assert call_order == [
+        "review_prs",
+        "focused_review",
+        "self_review",
+        "review_requested",
+        "address_comments",
+        "auto_approve",
+    ]
 
 
 def test_state_reset_yes_deletes_state(minimal_toml, tmp_xdg):
@@ -151,3 +170,68 @@ def test_state_reset_yes_deletes_state(minimal_toml, tmp_xdg):
     runner = CliRunner()
     _ = runner.invoke(cli, ["state", "reset", "review-prs", "--config", str(minimal_toml), "--yes"])
     assert state.read_vibe_heal_state("acme-frontend")["reviewed_shas"] == {}
+
+
+def _enable_auto_approve(minimal_toml, enabled=True):
+    minimal_toml.write_text(minimal_toml.read_text() + f"\n[auto_approve]\nenabled = {str(enabled).lower()}\n")
+
+
+def test_auto_approve_registered_under_run():
+    result = CliRunner().invoke(cli, ["run", "--help"])
+    assert result.exit_code == 0
+    assert "auto-approve" in result.output
+
+
+def test_run_auto_approve_forwards_dry_run(minimal_toml, tmp_xdg):
+    _enable_auto_approve(minimal_toml)
+    with patch("harness.runners.auto_approve.run") as mock_run:
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "auto-approve", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs == {"dry_run": True}
+
+
+def test_run_auto_approve_default_not_dry_run(minimal_toml, tmp_xdg):
+    _enable_auto_approve(minimal_toml)
+    with patch("harness.runners.auto_approve.run") as mock_run:
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "auto-approve"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs == {"dry_run": False}
+
+
+def test_run_auto_approve_runner_error_exits_nonzero(minimal_toml, tmp_xdg):
+    _enable_auto_approve(minimal_toml)
+    with patch("harness.runners.auto_approve.run", side_effect=RuntimeError("boom")):
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "auto-approve"])
+    assert result.exit_code != 0
+
+
+def test_run_auto_approve_disabled_is_noop(minimal_toml, tmp_xdg):
+    with (
+        patch("harness.runners.auto_approve.run") as mock_run,
+        patch("harness.cli.acquire_lock") as mock_lock,
+    ):
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "auto-approve"])
+    assert result.exit_code == 0, result.output
+    mock_run.assert_not_called()
+    mock_lock.assert_not_called()
+
+
+def test_run_auto_approve_takes_lock_when_enabled(minimal_toml, tmp_xdg):
+    _enable_auto_approve(minimal_toml)
+    with (
+        patch("harness.runners.auto_approve.run"),
+        patch("harness.cli.acquire_lock") as mock_lock,
+    ):
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "auto-approve"])
+    assert result.exit_code == 0, result.output
+    mock_lock.assert_called_once()
+
+
+def test_init_template_has_commented_auto_approve_block():
+    assert "# [auto_approve]" in TEMPLATE
+    block = TEMPLATE.split("# [auto_approve]")[1].split("# [[repo.subdir]]")[0]
+    assert "# enabled = false" in block
+    assert "# viewed_max_lines = 75" in block
+    assert "# approve_max_lines = 500" in block
+    assert "auto_approve" not in tomllib.loads(TEMPLATE)
