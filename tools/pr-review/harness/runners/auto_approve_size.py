@@ -8,7 +8,7 @@ Read-only: no network and no AI/backend call.
 from dataclasses import dataclass, field
 
 from harness.config import AutoApproveConfig
-from harness.runners.common import TIMEOUT_GIT, count_diff_lines, get_file_diff, run_cmd
+from harness.runners.common import TIMEOUT_GIT, count_diff_lines, run_cmd
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,18 @@ def _git_diff_z(args: list[str], base_branch: str, wdir: str, env: dict) -> list
         timeout=TIMEOUT_GIT,
     )
     return [t for t in result.stdout.decode("utf-8", errors="replace").split("\0") if t]
+
+
+def _file_diff_lines(path: str, base_branch: str, wdir: str, env: dict) -> int:
+    """Added+removed line count for one file. Raises on git failure (check=True) rather than
+    counting a failed diff as 0 lines, which would make the PR look small and approve it."""
+    result = run_cmd(
+        ["git", "diff", f"origin/{base_branch}...HEAD", "--", f":(literal){path}"],
+        cwd=wdir,
+        env=env,
+        timeout=TIMEOUT_GIT,
+    )
+    return count_diff_lines(result.stdout.decode("utf-8", errors="replace"))
 
 
 def _excluded_files(base_branch: str, wdir: str, env: dict) -> set[str]:
@@ -95,8 +107,7 @@ def evaluate_size(base_branch: str, wdir: str, env: dict, config: AutoApproveCon
     for path in name_tokens:
         if path in excluded:
             continue
-        diff = get_file_diff(path, base_branch, wdir, env)
-        file_counts[path] = count_diff_lines(diff)
+        file_counts[path] = _file_diff_lines(path, base_branch, wdir, env)
 
     total = sum(file_counts.values())
     small_files = [p for p, n in file_counts.items() if n < config.viewed_max_lines]

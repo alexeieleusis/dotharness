@@ -123,3 +123,28 @@ def test_total_sums_across_files(repo):
     ev = _eval(repo)
     assert ev.total_lines == 140
     assert ev.small_files == ["a.txt"]
+
+
+def test_glob_like_filename_counted_literally(repo):
+    (repo / "[draft].md").write_text(_lines(600))
+    _commit(repo)
+    ev = _eval(repo)
+    assert ev.file_counts == {"[draft].md": 600}
+    assert ev.pr_is_small is False
+
+
+def test_per_file_git_failure_aborts(repo, monkeypatch):
+    from harness.runners import auto_approve_size as mod
+
+    (repo / "big.txt").write_text(_lines(600))
+    _commit(repo)
+    real = mod.run_cmd
+
+    def flaky(cmd, *a, **kw):
+        if "--" in cmd:
+            raise subprocess.CalledProcessError(1, cmd)
+        return real(cmd, *a, **kw)
+
+    monkeypatch.setattr(mod, "run_cmd", flaky)
+    with pytest.raises(subprocess.CalledProcessError):
+        _eval(repo)
