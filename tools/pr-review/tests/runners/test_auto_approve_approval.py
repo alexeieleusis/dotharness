@@ -1,7 +1,15 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from harness.runners.auto_approve_github import ApprovalStatus, approve_pr
+from harness.runners.auto_approve_github import (
+    ApprovalStatus,
+    GateResult,
+    GateStatus,
+    SafetyResult,
+    SafetyStatus,
+    approve_pr,
+)
+from harness.runners.auto_approve_size import SizeEvaluation
 
 ME = "reviewer"
 HEAD = "abc123"
@@ -34,7 +42,10 @@ def run(reviews=(), view=None, post=None, total=100, gate=True, safe=True, sha=H
         patch("harness.runners.auto_approve_github.run_cmd", side_effect=fake),
         patch("harness.runners.auto_approve_github.fetch_all_pages", return_value=pages),
     ):
-        result = approve_pr("o/r", 5, total, 500, gate, safe, sha, user, {}, dry_run)
+        gate_result = GateResult(GateStatus.PASSED if gate else GateStatus.NOT_PASSED, "")
+        safety = SafetyResult(SafetyStatus.SAFE if safe else SafetyStatus.SKIP, "", sha)
+        size = SizeEvaluation(file_counts={"a.py": total}, total_lines=total, small_files=[], pr_is_small=False)
+        result = approve_pr("o/r", 5, gate_result, safety, size, 500, user, {}, dry_run)
     posts = [c for c in calls if "POST" in c]
     return result, calls, posts
 

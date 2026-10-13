@@ -116,7 +116,7 @@ def test_gate_closed_means_no_writes(tmp_path):
         m.approve.return_value = ApprovalResult(ApprovalStatus.SKIPPED, "gate-not-passed")
         auto_approve.run(_cfg(tmp_path))
     assert m.mark.call_args.args[4] is False  # gate_passed
-    assert m.approve.call_args.args[4] is False  # gate_passed to approve_pr
+    assert m.approve.call_args.args[2].status is GateStatus.NOT_PASSED  # gate to approve_pr
 
 
 def test_gate_open_marks_only_small_files_via_size_counts(tmp_path):
@@ -133,7 +133,11 @@ def test_approval_bound_to_head_sha_and_inputs(tmp_path):
     with _mocks() as m:
         auto_approve.run(_cfg(tmp_path))
     args = m.approve.call_args.args
-    assert args[:10] == ("acme/frontend", 1, 110, 500, True, True, "sha1", "me", {}, False)
+    assert args[:2] == ("acme/frontend", 1)
+    assert args[2].status is GateStatus.PASSED
+    assert args[3] == SafetyResult(SafetyStatus.SAFE, "ok", "sha1")
+    assert args[4].total_lines == 110
+    assert args[5:] == (500, "me", {}, False)
 
 
 def test_safety_skip_still_marks_but_does_not_pass_safety(tmp_path):
@@ -141,14 +145,14 @@ def test_safety_skip_still_marks_but_does_not_pass_safety(tmp_path):
         m.safety.return_value = SafetyResult(SafetyStatus.SKIP, "ci-blocked", "sha1")
         auto_approve.run(_cfg(tmp_path))
     m.mark.assert_called_once()
-    assert m.approve.call_args.args[5] is False
+    assert m.approve.call_args.args[3].status is SafetyStatus.SKIP
 
 
 def test_threshold_zero_never_matches(tmp_path):
     with _mocks(size=_size(viewed=0, approve=0)) as m:
         auto_approve.run(_cfg(tmp_path, viewed=0, approve=0))
     m.mark.assert_not_called()
-    assert m.approve.call_args.args[3] == 0
+    assert m.approve.call_args.args[5] == 0
 
 
 def test_empty_pr_not_approved_and_logged(tmp_path, caplog):
@@ -263,7 +267,7 @@ def test_dry_run_passes_flag_to_writers_and_logs(tmp_path, caplog):
         m.approve.return_value = ApprovalResult(ApprovalStatus.DRY_RUN, "dry-run")
         auto_approve.run(_cfg(tmp_path), dry_run=True)
     assert m.mark.call_args.kwargs["dry_run"] is True
-    assert m.approve.call_args.args[9] is True
+    assert m.approve.call_args.args[8] is True
     assert "approval dry_run" in caplog.text
 
 

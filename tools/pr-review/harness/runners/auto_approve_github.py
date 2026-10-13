@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
+from harness.runners.auto_approve_size import SizeEvaluation
 from harness.runners.common import (
     TIMEOUT_GH,
     fetch_all_pages,
@@ -611,13 +612,13 @@ def _read_approval_state(repo: str, pr_number: int, acting: str, env: dict) -> b
 
 
 def _approval_precheck(
-    total_lines: int, approve_max_lines: int, gate_passed: bool, safety_passed: bool, head_sha: str
+    gate: GateResult, safety: SafetyResult, total_lines: int, approve_max_lines: int
 ) -> ApprovalResult | None:
-    if not gate_passed:
+    if gate.status is not GateStatus.PASSED:
         return ApprovalResult(ApprovalStatus.SKIPPED, REASON_GATE_NOT_PASSED)
-    if not safety_passed:
+    if safety.status is not SafetyStatus.SAFE:
         return ApprovalResult(ApprovalStatus.SKIPPED, REASON_SAFETY_NOT_PASSED)
-    if not head_sha:
+    if not safety.head_sha:
         return ApprovalResult(ApprovalStatus.SKIPPED, REASON_NO_HEAD_SHA)
     if total_lines >= approve_max_lines:
         return ApprovalResult(ApprovalStatus.SKIPPED, REASON_TOO_LARGE)
@@ -672,27 +673,25 @@ def _approve(repo: str, pr_number: int, head_sha: str, current_user: str, env: d
 def approve_pr(
     repo: str,
     pr_number: int,
-    total_lines: int,
+    gate: GateResult,
+    safety: SafetyResult,
+    size: SizeEvaluation,
     approve_max_lines: int,
-    gate_passed: bool,
-    safety_passed: bool,
-    head_sha: str,
     current_user: str,
     env: dict,
     dry_run: bool = False,
 ) -> ApprovalResult:
     """Approve a PR strictly below ``approve_max_lines`` (FR-6). Never raises for read problems.
 
-    Requires the gate and safety checks to have passed on ``head_sha``. Re-reads reviews (tri-state)
-    and the current head; any failed read or moved head means no write. The review body is empty
-    and ``commit_id`` is ``head_sha``.
+    Owns the whole decision: requires ``gate`` PASSED and ``safety`` SAFE, binding the approval to
+    ``safety.head_sha``. Re-reads reviews (tri-state) and the current head; any failed read or
+    moved head means no write. The review body is empty and ``commit_id`` is the head SHA.
     """
-    skipped = _approval_precheck(total_lines, approve_max_lines, gate_passed, safety_passed, head_sha)
-    if skipped is None:
+    result = _approval_precheck(gate, safety, size.total_lines, approve_max_lines)
+    if result is None:
         try:
-            skipped = _approve(repo, pr_number, head_sha, current_user, env, dry_run)
+            result = _approve(repo, pr_number, safety.head_sha, current_user, env, dry_run)
         except (subprocess.SubprocessError, OSError, ValueError):
             logger.exception("PR #%d: approval raised", pr_number)
-            skipped = ApprovalResult(ApprovalStatus.READ_FAILED, "approval raised an exception")
-    logger.info("PR #%d: approval %s (%s)", pr_number, skipped.status.value, skipped.reason)
-    return skipped
+            result = ApprovalResult(ApprovalStatus.READ_FAILED, "approval raised an exception")
+    return result
