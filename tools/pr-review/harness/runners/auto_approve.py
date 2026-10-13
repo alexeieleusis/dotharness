@@ -21,6 +21,14 @@ A PR with no counted files (only renames, deletes, or binary files) is never app
 nothing is marked: zero counted lines would otherwise satisfy "strictly below" trivially, and
 nothing was actually reviewed by size. The brief gives no basis to approve it, so the safe
 direction is taken and the skip is logged.
+
+Size comes from ``git diff`` on a checkout of ``refs/pull/<n>/head`` rather than from the
+``additions``/``deletions`` already returned by the files GraphQL query, because git gives an
+explicit binary marker (numstat ``-``) whereas GraphQL reports 0/0 for binary files, which is
+indistinguishable from a text file with no line changes and would be marked viewed. The checkout
+also pins the measured commit to a SHA that is compared with the head SHA read for the approval
+safety checks. Moving size to GraphQL (dropping the checkout, the lock dependency and the git
+colour workaround) is a possible follow-up if the binary and head-binding cases are handled.
 """
 
 import json
