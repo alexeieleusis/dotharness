@@ -2,14 +2,21 @@
 
 Holds the timing gate (FR-5): neither marking files viewed nor approving may
 happen until the PR author has acted after the review comments the tool left; and the
-approval safety check (FR-8). Nothing here makes a GitHub write call.
+approval safety check (FR-8), both read-only; and the two GitHub writes (FR-4 viewed marking,
+FR-6 approval), which take ``dry_run`` and make no write call when it is set.
 
 FR-8 decisions: OD-1 ``mergeable == UNKNOWN`` (GitHub still computing) is a SKIP, retried on
 the next run, because approving on partial information is the unsafe direction; only
 CONFLICTING is named by D-16 but UNKNOWN is not a positive "no conflicts" signal. OD-2 an
-APPROVED review by the acting account counts only on the current head SHA; an approval on
-an older commit is not "already approved", so the PR may be re-approved on the new head.
+APPROVED review by the acting account on ANY commit counts as "already approved" (FR-6.4,
+D-14): re-approval after a later push is manual.
 OD-3 any bucket other than pass/skipping blocks with the single reason "CI blocked".
+
+FR-6.4: approval idempotency uses a new tri-state read (``_read_approval_state``) instead of
+``review_requested._has_user_approved`` (which returns False on a read error); a read failure
+never leads to a write. As in the safety check (shared ``_already_approved``), any APPROVED
+review by the acting account, regardless of commit_id, counts as "already approved". The
+head-moved guard and the ``commit_id`` binding on the POST are kept.
 
 OD-1 (commit clock): the gate uses ``committedDate`` from ``gh pr view --json commits``,
 counting only commits whose ``authors`` include the PR author. ``committedDate`` is the
@@ -27,7 +34,7 @@ traceability comments exist.
 import json
 import logging
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
@@ -334,12 +341,9 @@ def _state_skip_reason(pr: dict) -> str | None:
     return None
 
 
-def _already_approved(reviews: list[dict], acting: str, head_sha: str) -> bool:
-    return any(
-        r.get("state") == "APPROVED" and _login(r) == acting and r.get("commit_id") == head_sha
-        for r in reviews
-        if isinstance(r, dict)
-    )
+def _already_approved(reviews: list[dict], acting: str) -> bool:
+    """Any APPROVED review by the acting account, on any commit (FR-6.4, D-14)."""
+    return any(r.get("state") == "APPROVED" and _login(r) == acting for r in reviews if isinstance(r, dict))
 
 
 def check_approval_safety(repo: str, pr_number: int, current_user: str, env: dict) -> SafetyResult:
@@ -378,10 +382,301 @@ def _check_approval_safety(repo: str, pr_number: int, current_user: str, env: di
     reviews = fetch_all_pages(f"repos/{repo}/pulls/{pr_number}/reviews", env)
     if reviews is None:
         return SafetyResult(SafetyStatus.READ_FAILED, "reviews read failed", head)
-    if _already_approved(reviews, acting, head):
+    if _already_approved(reviews, acting):
         return SafetyResult(SafetyStatus.SKIP, REASON_ALREADY_APPROVED, head)
 
     blocked = _check_ci(repo, pr_number, env)
     if blocked is not None:
         return SafetyResult(blocked.status, blocked.reason, head)
     return SafetyResult(SafetyStatus.SAFE, "all safety checks passed", head)
+
+
+# ---------------------------------------------------------------------------
+# Writes (FR-4 viewed marking, FR-6 approval). Every write honours dry_run.
+# ---------------------------------------------------------------------------
+
+_FILES_QUERY = """
+query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      id
+      files(first: 100, after: $cursor) {
+        nodes { path viewerViewedState additions deletions changeType }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+_MARK_VIEWED_MUTATION = """
+mutation($pullRequestId: ID!, $path: String!) {
+  markFileAsViewed(input: {pullRequestId: $pullRequestId, path: $path}) {
+    clientMutationId
+  }
+}
+"""
+
+VIEWED_STATE = "VIEWED"
+_MAX_FILE_PAGES = 100
+
+
+class ViewedStatus(Enum):
+    DONE = "done"  # reads succeeded; see marked / failed
+    GATE_NOT_PASSED = "gate_not_passed"
+    READ_FAILED = "read_failed"
+
+
+@dataclass(frozen=True)
+class ViewedResult:
+    status: ViewedStatus
+    marked: list[str] = field(default_factory=list)  # marked, or would be marked in dry-run
+    skipped: list[str] = field(default_factory=list)  # already VIEWED
+    failed: list[str] = field(default_factory=list)  # a markFileAsViewed call failed
+
+
+class ApprovalStatus(Enum):
+    APPROVED = "approved"
+    DRY_RUN = "dry_run"
+    SKIPPED = "skipped"
+    READ_FAILED = "read_failed"
+    WRITE_FAILED = "write_failed"
+
+
+@dataclass(frozen=True)
+class ApprovalResult:
+    status: ApprovalStatus
+    reason: str
+
+
+REASON_GATE_NOT_PASSED = "gate-not-passed"
+REASON_SAFETY_NOT_PASSED = "safety-not-passed"
+REASON_TOO_LARGE = "too-large"
+REASON_NO_HEAD_SHA = "no-head-sha"
+REASON_HEAD_MOVED = "head-moved"
+REASON_DRY_RUN = "dry-run"
+
+
+def _split_repo(repo: str) -> tuple[str, str] | None:
+    owner, _, name = repo.partition("/")
+    return (owner, name) if owner and name else None
+
+
+def _read_files_page(owner: str, name: str, pr_number: int, cursor: str | None, env: dict) -> dict | None:
+    args = ["api", "graphql", "-f", f"query={_FILES_QUERY}", "-F", f"owner={owner}", "-F", f"repo={name}"]
+    args += ["-F", f"number={pr_number}"]
+    if cursor:
+        args += ["-f", f"cursor={cursor}"]
+    result = _gh(args, env)
+    if result.returncode != 0:
+        logger.error("PR #%d: files GraphQL read failed (exit %d)", pr_number, result.returncode)
+        return None
+    try:
+        data = json.loads(_text(result.stdout))
+        pr = data["data"]["repository"]["pullRequest"]
+        files = pr["files"]
+        if not pr.get("id") or not isinstance(files["nodes"], list) or "hasNextPage" not in files["pageInfo"]:
+            return None
+    except (ValueError, KeyError, TypeError):
+        return None
+    return pr
+
+
+def read_viewed_states(repo: str, pr_number: int, env: dict) -> tuple[str, dict[str, str]] | None:
+    """Return (PR node ID, {path: viewerViewedState}) across all pages, or None on any read failure."""
+    parts = _split_repo(repo)
+    if parts is None:
+        return None
+    node_id = ""
+    states: dict[str, str] = {}
+    cursor: str | None = None
+    for _ in range(_MAX_FILE_PAGES):
+        pr = _read_files_page(parts[0], parts[1], pr_number, cursor, env)
+        if pr is None:
+            return None
+        node_id = pr["id"]
+        for node in pr["files"]["nodes"]:
+            if not isinstance(node, dict) or not isinstance(node.get("path"), str):
+                return None
+            states[node["path"]] = node.get("viewerViewedState") or ""
+        info = pr["files"]["pageInfo"]
+        if not info["hasNextPage"]:
+            return node_id, states
+        cursor = info.get("endCursor")
+        if not cursor:
+            return None
+    return None  # page cap reached: incomplete read
+
+
+def _mark_one(node_id: str, path: str, pr_number: int, env: dict) -> bool:
+    result = _gh(
+        [
+            "api",
+            "graphql",
+            "-f",
+            f"query={_MARK_VIEWED_MUTATION}",
+            "-f",
+            f"pullRequestId={node_id}",
+            "-f",
+            f"path={path}",
+        ],
+        env,
+    )
+    if result.returncode != 0:
+        logger.error("PR #%d: markFileAsViewed failed for %s (exit %d)", pr_number, path, result.returncode)
+        return False
+    try:
+        return not json.loads(_text(result.stdout)).get("errors")
+    except (ValueError, AttributeError):
+        return False
+
+
+def _mark_candidates(file_counts: dict[str, int], viewed_max_lines: int, states: dict[str, str]) -> tuple[list, list]:
+    """Split counted files strictly below the threshold into (to mark, already viewed).
+
+    Files the PR file list does not contain are left alone."""
+    to_mark: list[str] = []
+    already: list[str] = []
+    for path, lines in file_counts.items():
+        if lines >= viewed_max_lines or path not in states:
+            continue
+        (already if states[path] == VIEWED_STATE else to_mark).append(path)
+    return to_mark, already
+
+
+def mark_files_viewed(
+    repo: str,
+    pr_number: int,
+    file_counts: dict[str, int],
+    viewed_max_lines: int,
+    gate_passed: bool,
+    env: dict,
+    dry_run: bool = False,
+) -> ViewedResult:
+    """Mark counted files strictly below ``viewed_max_lines`` as viewed (FR-4). Never raises for read problems.
+
+    No write unless ``gate_passed``; no write if the file/state read failed; a failed individual
+    mark is logged and does not stop the rest. Marking does not depend on CI or PR size.
+    """
+    if not gate_passed:
+        logger.info("PR #%d: timing gate not passed, not marking files viewed", pr_number)
+        return ViewedResult(ViewedStatus.GATE_NOT_PASSED)
+    try:
+        read = read_viewed_states(repo, pr_number, env)
+    except (subprocess.SubprocessError, OSError, ValueError):
+        logger.exception("PR #%d: viewed state read raised", pr_number)
+        read = None
+    if read is None:
+        return ViewedResult(ViewedStatus.READ_FAILED)
+    node_id, states = read
+    to_mark, already = _mark_candidates(file_counts, viewed_max_lines, states)
+    marked: list[str] = []
+    failed: list[str] = []
+    for path in to_mark:
+        if dry_run:
+            logger.info("PR #%d: [dry-run] would mark %s viewed", pr_number, path)
+            marked.append(path)
+        elif _mark_one(node_id, path, pr_number, env):
+            logger.info("PR #%d: marked %s viewed", pr_number, path)
+            marked.append(path)
+        else:
+            failed.append(path)
+    for path in already:
+        logger.info("PR #%d: %s already viewed, skipping", pr_number, path)
+    return ViewedResult(ViewedStatus.DONE, marked=marked, skipped=already, failed=failed)
+
+
+def _read_approval_state(repo: str, pr_number: int, acting: str, env: dict) -> bool | None:
+    """Tri-state: True = acting account already approved (any commit), False = not, None = read failed."""
+    reviews = fetch_all_pages(f"repos/{repo}/pulls/{pr_number}/reviews", env)
+    if reviews is None:
+        return None
+    return _already_approved(reviews, acting)
+
+
+def _approval_precheck(
+    pr_number: int, total_lines: int, approve_max_lines: int, gate_passed: bool, safety_passed: bool, head_sha: str
+) -> ApprovalResult | None:
+    if not gate_passed:
+        return ApprovalResult(ApprovalStatus.SKIPPED, REASON_GATE_NOT_PASSED)
+    if not safety_passed:
+        return ApprovalResult(ApprovalStatus.SKIPPED, REASON_SAFETY_NOT_PASSED)
+    if not head_sha:
+        return ApprovalResult(ApprovalStatus.SKIPPED, REASON_NO_HEAD_SHA)
+    if total_lines >= approve_max_lines:
+        return ApprovalResult(ApprovalStatus.SKIPPED, REASON_TOO_LARGE)
+    return None
+
+
+def _post_approval(repo: str, pr_number: int, head_sha: str, env: dict) -> bool:
+    result = _gh(
+        [
+            "api",
+            "--method",
+            "POST",
+            f"repos/{repo}/pulls/{pr_number}/reviews",
+            "-f",
+            "event=APPROVE",
+            "-f",
+            f"commit_id={head_sha}",
+            "-f",
+            "body=",
+        ],
+        env,
+    )
+    if result.returncode != 0:
+        logger.error("PR #%d: approval POST failed (exit %d)", pr_number, result.returncode)
+        return False
+    return True
+
+
+def _approve(repo: str, pr_number: int, head_sha: str, current_user: str, env: dict, dry_run: bool) -> ApprovalResult:
+    acting = current_user.lower()
+    if not acting:
+        return ApprovalResult(ApprovalStatus.READ_FAILED, "acting account unknown")
+    approved = _read_approval_state(repo, pr_number, acting, env)
+    if approved is None:
+        return ApprovalResult(ApprovalStatus.READ_FAILED, "reviews read failed")
+    if approved:
+        return ApprovalResult(ApprovalStatus.SKIPPED, REASON_ALREADY_APPROVED)
+    pr = _read_pr_state(repo, pr_number, env)
+    if pr is None:
+        return ApprovalResult(ApprovalStatus.READ_FAILED, "PR state read failed")
+    if pr["headRefOid"] != head_sha:
+        return ApprovalResult(ApprovalStatus.SKIPPED, REASON_HEAD_MOVED)
+    if dry_run:
+        logger.info("PR #%d: [dry-run] would approve at %s", pr_number, head_sha)
+        return ApprovalResult(ApprovalStatus.DRY_RUN, REASON_DRY_RUN)
+    if not _post_approval(repo, pr_number, head_sha, env):
+        return ApprovalResult(ApprovalStatus.WRITE_FAILED, "approval POST failed")
+    logger.info("PR #%d: approved at %s", pr_number, head_sha)
+    return ApprovalResult(ApprovalStatus.APPROVED, "approved")
+
+
+def approve_pr(
+    repo: str,
+    pr_number: int,
+    total_lines: int,
+    approve_max_lines: int,
+    gate_passed: bool,
+    safety_passed: bool,
+    head_sha: str,
+    current_user: str,
+    env: dict,
+    dry_run: bool = False,
+) -> ApprovalResult:
+    """Approve a PR strictly below ``approve_max_lines`` (FR-6). Never raises for read problems.
+
+    Requires the gate and safety checks to have passed on ``head_sha``. Re-reads reviews (tri-state)
+    and the current head; any failed read or moved head means no write. The review body is empty
+    and ``commit_id`` is ``head_sha``.
+    """
+    skipped = _approval_precheck(pr_number, total_lines, approve_max_lines, gate_passed, safety_passed, head_sha)
+    if skipped is None:
+        try:
+            skipped = _approve(repo, pr_number, head_sha, current_user, env, dry_run)
+        except (subprocess.SubprocessError, OSError, ValueError):
+            logger.exception("PR #%d: approval raised", pr_number)
+            skipped = ApprovalResult(ApprovalStatus.READ_FAILED, "approval raised an exception")
+    logger.info("PR #%d: approval %s (%s)", pr_number, skipped.status.value, skipped.reason)
+    return skipped

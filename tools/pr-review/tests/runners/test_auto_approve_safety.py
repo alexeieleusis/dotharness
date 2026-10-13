@@ -142,8 +142,13 @@ def test_already_approved_on_head_skips_without_checks():
     assert not any("checks" in c for c in calls)
 
 
-def test_approval_on_old_commit_or_other_user_or_dismissed_does_not_skip():
-    for review in (approval(sha=OLD), approval(login="other"), approval(state="DISMISSED")):
+def test_approval_on_old_commit_skips():
+    res, _ = run(reviews=[approval(sha=OLD)])
+    assert (res.status, res.reason, res.head_sha) == (SafetyStatus.SKIP, REASON_ALREADY_APPROVED, HEAD)
+
+
+def test_other_user_or_dismissed_approval_does_not_skip():
+    for review in (approval(login="other"), approval(state="DISMISSED")):
         assert run(reviews=[review])[0].status is SafetyStatus.SAFE
 
 
