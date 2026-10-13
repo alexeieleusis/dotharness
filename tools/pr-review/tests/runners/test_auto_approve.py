@@ -96,6 +96,13 @@ def test_disabled_is_noop_with_zero_gh_calls(tmp_path):
     m.approve.assert_not_called()
 
 
+def test_no_requested_prs_logs_a_summary(tmp_path, caplog):
+    with _mocks(prs=[]) as m, caplog.at_level(logging.INFO):
+        auto_approve.run(_cfg(tmp_path))
+    m.approve.assert_not_called()
+    assert "no open PRs with a pending review request" in caplog.text
+
+
 def test_draft_closed_merged_skipped(tmp_path):
     prs = [
         {**PR, "number": 1, "isDraft": True},

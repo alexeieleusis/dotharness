@@ -82,6 +82,12 @@ def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
     current_user = get_current_user(env)
     prs = _list_prs(config.repo.name, env)
     wdir = str(config.repo.working_dir)
+    if not prs:
+        logger.info(
+            "auto-approve: no open PRs with a pending review request for %s on %s, nothing to do",
+            current_user,
+            config.repo.name,
+        )
 
     failures: list[str] = []
     for pr in prs:
