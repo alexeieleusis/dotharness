@@ -60,7 +60,7 @@ def test_text_file_counted(repo):
     assert ev.pr_is_small is True
 
 
-def test_binary_deleted_renamed_excluded(repo):
+def test_binary_deleted_renamed_not_viewed(repo):
     (repo / "bin.dat").write_bytes(b"\x00\x09\x08\x07")
     (repo / "gone.txt").unlink()
     _git(repo, "mv", "old.txt", "moved.txt")
@@ -69,17 +69,34 @@ def test_binary_deleted_renamed_excluded(repo):
     ev = _eval(repo)
     assert ev.file_counts == {"edit.txt": 1}
     assert ev.small_files == ["edit.txt"]
-    assert ev.total_lines == 1
+    # deleted gone.txt (5 lines) counts toward the total; binary contributes 0; pure rename 0
+    assert ev.total_lines == 6
 
 
-def test_renamed_with_edits_excluded(repo):
+def test_renamed_with_edits_not_viewed_but_counted(repo):
     _git(repo, "mv", "old.txt", "moved.txt")
     (repo / "moved.txt").write_text(_lines(30, "keep").replace("keep3\n", "changed\n"))
     _commit(repo)
     ev = _eval(repo)
     assert ev.file_counts == {}
     assert ev.small_files == []
-    assert ev.total_lines == 0
+    assert ev.total_lines == 2
+
+
+def test_large_deletion_and_rename_edits_block_approval(repo):
+    (repo / "big.txt").write_text(_lines(600, "big"))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "big")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "mv", "big.txt", "moved.txt")
+    (repo / "moved.txt").write_text(_lines(300, "new") + _lines(600, "big")[len(_lines(300, "big")) :])
+    (repo / "edit.txt").write_text(_lines(5, "e") + "added\n")
+    _commit(repo)
+    ev = _eval(repo)
+    assert ev.file_counts == {"edit.txt": 1}
+    assert ev.small_files == ["edit.txt"]
+    assert ev.total_lines > 500  # ~600 changed lines in the rename, plus 1 counted line
+    assert ev.pr_is_small is False
 
 
 @pytest.mark.parametrize(("n", "small"), [(74, True), (75, False), (76, False)])
