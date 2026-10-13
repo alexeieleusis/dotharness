@@ -25,6 +25,7 @@ direction is taken and the skip is logged.
 
 import json
 import logging
+import subprocess
 
 from harness.config import HarnessConfig
 from harness.runners.auto_approve_github import (
@@ -40,12 +41,13 @@ from harness.runners.auto_approve_github import (
 from harness.runners.auto_approve_size import SizeEvaluation, evaluate_size
 from harness.runners.common import (
     TIMEOUT_GH,
+    TIMEOUT_GIT,
     FatalGitError,
     build_subprocess_env,
     get_current_user,
     get_gh_token,
+    get_head_sha,
     git_detach_and_record,
-    git_fetch_and_checkout,
     git_restore,
     run_cmd,
 )
@@ -100,7 +102,7 @@ def _list_prs(repo: str, env: dict) -> list[dict]:
             "--search",
             "user-review-requested:@me",
             "--json",
-            "number,headRefName,baseRefName,isDraft,state,author",
+            "number,headRefName,baseRefName,isDraft,isCrossRepository,state,author",
             "--limit",
             "500",
         ],
@@ -121,6 +123,9 @@ def _is_candidate(pr: dict) -> bool:
     if pr.get("state", "OPEN") != "OPEN":
         logger.info("PR #%d: not open (%s), skipping", pr["number"], pr.get("state"))
         return False
+    if pr.get("isCrossRepository"):
+        logger.info("PR #%d: from a fork, skipping", pr["number"])
+        return False
     if not pr.get("headRefName") or not pr.get("baseRefName"):
         logger.info("PR #%d: missing head/base branch, skipping", pr["number"])
         return False
@@ -133,11 +138,31 @@ def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, current_u
     logger.info("PR #%d: starting%s", pr_number, " (dry-run)" if dry_run else "")
     original_sha = git_detach_and_record(wdir, env)
     try:
-        git_fetch_and_checkout(pr["headRefName"], wdir, env)
+        checked_out_sha = _checkout_pr_head(pr_number, wdir, env)
         size = evaluate_size(pr["baseRefName"], wdir, env, config.auto_approve)
-        return _decide_and_act(pr, size, config, env, current_user, dry_run)
+        return _decide_and_act(pr, size, checked_out_sha, config, env, current_user, dry_run)
     finally:
-        git_restore(original_sha, pr["headRefName"], wdir, env)
+        # Detached checkout: no local branch was created, so there is none to delete.
+        git_restore(original_sha, "", wdir, env)
+
+
+def _checkout_pr_head(pr_number: int, wdir: str, env: dict) -> str:
+    """Detach at the PR's real head (``refs/pull/<n>/head``) and return its SHA.
+
+    Unlike ``origin/<headRefName>``, this is the commit GitHub reviews, also for fork PRs, so the
+    size measured here is the size of the commit that gets approved.
+    """
+    try:
+        run_cmd(["git", "fetch", "origin", f"refs/pull/{pr_number}/head"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
+        run_cmd(
+            ["git", "checkout", "--recurse-submodules", "--detach", "FETCH_HEAD"],
+            cwd=wdir,
+            env=env,
+            timeout=TIMEOUT_GIT,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        raise FatalGitError(f"git checkout of PR #{pr_number} head failed: {e}") from e  # noqa: TRY003
+    return get_head_sha(wdir, env)
 
 
 def _log_size(pr_number: int, size: SizeEvaluation, config: HarnessConfig) -> None:
@@ -154,7 +179,13 @@ def _log_size(pr_number: int, size: SizeEvaluation, config: HarnessConfig) -> No
 
 
 def _decide_and_act(
-    pr: dict, size: SizeEvaluation, config: HarnessConfig, env: dict, current_user: str, dry_run: bool
+    pr: dict,
+    size: SizeEvaluation,
+    checked_out_sha: str,
+    config: HarnessConfig,
+    env: dict,
+    current_user: str,
+    dry_run: bool,
 ) -> list[str]:
     pr_number = pr["number"]
     repo = config.repo.name
@@ -172,6 +203,15 @@ def _decide_and_act(
     if gate.status is GateStatus.READ_FAILED or safety.status is SafetyStatus.READ_FAILED:
         logger.error("PR #%d: a read failed, no writes this run", pr_number)
         return ["read failed (timing gate or safety checks), no writes"]
+
+    if safety.head_sha != checked_out_sha:
+        logger.warning(
+            "PR #%d: head moved since size was measured (measured %s, now %s), no writes this run",
+            pr_number,
+            checked_out_sha,
+            safety.head_sha,
+        )
+        return []
 
     gate_passed = gate.status is GateStatus.PASSED
     problems = _mark_viewed(pr_number, size, config, gate_passed, env, dry_run)

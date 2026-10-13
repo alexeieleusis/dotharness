@@ -62,7 +62,7 @@ def _mocks(prs=None, size=None):
         patch(p + "get_current_user", return_value="me") as cur,
         patch(p + "run_cmd", return_value=list_result) as run_cmd,
         patch(p + "git_detach_and_record", return_value="orig"),
-        patch(p + "git_fetch_and_checkout") as checkout,
+        patch(p + "_checkout_pr_head", return_value="sha1") as checkout,
         patch(p + "git_restore") as restore,
         patch(p + "evaluate_size", return_value=size or _size()) as ev,
         patch(p + "check_timing_gate", return_value=GateResult(GateStatus.PASSED, "zero-findings")) as gate,
@@ -262,3 +262,20 @@ def test_each_decision_is_logged(tmp_path, caplog):
 
 def test_module_docstring_documents_signature():
     assert "run(config: HarnessConfig, *, dry_run: bool = False) -> None" in (auto_approve.__doc__ or "")
+
+
+def test_head_moved_since_size_measured_means_no_writes(tmp_path, caplog):
+    with _mocks() as m:
+        m.checkout.return_value = "old-sha"  # safety reports "sha1"
+        with caplog.at_level(logging.WARNING):
+            auto_approve.run(_cfg(tmp_path))
+    m.mark.assert_not_called()
+    m.approve.assert_not_called()
+    assert "head moved" in caplog.text
+
+
+def test_fork_pr_skipped(tmp_path):
+    with _mocks(prs=[{**PR, "isCrossRepository": True}]) as m:
+        auto_approve.run(_cfg(tmp_path))
+    m.checkout.assert_not_called()
+    m.approve.assert_not_called()
