@@ -8,7 +8,7 @@ Read-only: no network and no AI/backend call.
 from dataclasses import dataclass, field
 
 from harness.config import AutoApproveConfig
-from harness.runners.common import TIMEOUT_GIT, count_diff_lines, run_cmd
+from harness.runners.common import TIMEOUT_GIT, run_cmd
 
 
 @dataclass(frozen=True)
@@ -24,19 +24,6 @@ class SizeEvaluation:
     pr_is_small: bool = False
 
 
-def _no_color_env(env: dict) -> dict:
-    """Force uncolored git output so a user's ``color.ui = always`` cannot hide +/- markers
-    behind ANSI escapes and make a diff under-count (which would wrongly approve)."""
-    return {
-        **env,
-        "GIT_CONFIG_COUNT": "2",
-        "GIT_CONFIG_KEY_0": "color.ui",
-        "GIT_CONFIG_VALUE_0": "never",
-        "GIT_CONFIG_KEY_1": "color.diff",
-        "GIT_CONFIG_VALUE_1": "never",
-    }
-
-
 def _git_diff_z(args: list[str], base_branch: str, wdir: str, env: dict) -> list[str]:
     result = run_cmd(
         ["git", "diff", *args, "-z", f"origin/{base_branch}...HEAD"],
@@ -47,20 +34,8 @@ def _git_diff_z(args: list[str], base_branch: str, wdir: str, env: dict) -> list
     return [t for t in result.stdout.decode("utf-8", errors="replace").split("\0") if t]
 
 
-def _file_diff_lines(path: str, base_branch: str, wdir: str, env: dict) -> int:
-    """Added+removed line count for one file. Raises on git failure (check=True) rather than
-    counting a failed diff as 0 lines, which would make the PR look small and approve it."""
-    result = run_cmd(
-        ["git", "diff", f"origin/{base_branch}...HEAD", "--", f":(literal){path}"],
-        cwd=wdir,
-        env=env,
-        timeout=TIMEOUT_GIT,
-    )
-    return count_diff_lines(result.stdout.decode("utf-8", errors="replace"))
-
-
 def _excluded_files(base_branch: str, wdir: str, env: dict) -> set[str]:
-    """Paths that are not counted files: binary, deleted, renamed or copied."""
+    """Paths that are not counted files: deleted, renamed or copied."""
     excluded: set[str] = set()
 
     # --name-status -z: "<status>\0<path>\0" or "<R|C score>\0<old>\0<new>\0"
@@ -75,7 +50,16 @@ def _excluded_files(base_branch: str, wdir: str, env: dict) -> set[str]:
             if status[0] == "D":
                 excluded.add(tokens[i + 1])
             i += 2
+    return excluded
 
+
+def _numstat_counts(base_branch: str, wdir: str, env: dict) -> dict[str, int | None]:
+    """Exact added+removed lines per path from ``git diff --numstat`` (None for binary files).
+
+    Unlike counting ``+``/``-`` lines of a patch, this cannot mistake content such as a removed
+    ``-- comment`` (``--- comment``) for a file header, so it never under-counts.
+    """
+    counts: dict[str, int | None] = {}
     # --numstat -z: "<add>\t<del>\t<path>\0", or for renames "<add>\t<del>\t\0<old>\0<new>\0".
     # Binary files print "-" for both counts.
     tokens = _git_diff_z(["--numstat", "-M"], base_branch, wdir, env)
@@ -83,12 +67,11 @@ def _excluded_files(base_branch: str, wdir: str, env: dict) -> set[str]:
     while i < len(tokens):
         added, deleted, path = tokens[i].split("\t", 2)
         if path == "":
-            i += 3  # rename/copy entry; already excluded above
+            i += 3  # rename/copy entry; excluded via --name-status
             continue
-        if added == "-" and deleted == "-":
-            excluded.add(path)
+        counts[path] = None if added == "-" and deleted == "-" else int(added) + int(deleted)
         i += 1
-    return excluded
+    return counts
 
 
 def evaluate_size(base_branch: str, wdir: str, env: dict, config: AutoApproveConfig) -> SizeEvaluation:
@@ -99,15 +82,10 @@ def evaluate_size(base_branch: str, wdir: str, env: dict, config: AutoApproveCon
     Binary, deleted and renamed files (even renamed with edits) contribute 0 and are never
     small. Lockfiles and generated text files are counted.
     """
-    env = _no_color_env(env)
-    name_tokens = _git_diff_z(["--name-only"], base_branch, wdir, env)
+    numstat = _numstat_counts(base_branch, wdir, env)
     excluded = _excluded_files(base_branch, wdir, env)
 
-    file_counts: dict[str, int] = {}
-    for path in name_tokens:
-        if path in excluded:
-            continue
-        file_counts[path] = _file_diff_lines(path, base_branch, wdir, env)
+    file_counts = {p: n for p, n in numstat.items() if n is not None and p not in excluded}
 
     total = sum(file_counts.values())
     small_files = [p for p, n in file_counts.items() if n < config.viewed_max_lines]

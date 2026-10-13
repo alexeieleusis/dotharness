@@ -133,18 +133,28 @@ def test_glob_like_filename_counted_literally(repo):
     assert ev.pr_is_small is False
 
 
-def test_per_file_git_failure_aborts(repo, monkeypatch):
+def test_git_failure_aborts(repo, monkeypatch):
     from harness.runners import auto_approve_size as mod
 
     (repo / "big.txt").write_text(_lines(600))
     _commit(repo)
-    real = mod.run_cmd
 
-    def flaky(cmd, *a, **kw):
-        if "--" in cmd:
-            raise subprocess.CalledProcessError(1, cmd)
-        return real(cmd, *a, **kw)
+    def failing(cmd, *a, **kw):
+        raise subprocess.CalledProcessError(1, cmd)
 
-    monkeypatch.setattr(mod, "run_cmd", flaky)
+    monkeypatch.setattr(mod, "run_cmd", failing)
     with pytest.raises(subprocess.CalledProcessError):
         _eval(repo)
+
+
+def test_removed_dash_comment_lines_are_counted(repo):
+    """Removed ``-- comment`` lines diff as ``--- comment`` and must not be mistaken for headers."""
+    (repo / "mig.sql").write_text(_lines(600, "-- c"))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "sql")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    (repo / "mig.sql").write_text("")
+    _commit(repo)
+    ev = _eval(repo)
+    assert ev.file_counts == {"mig.sql": 600}
+    assert ev.pr_is_small is False
