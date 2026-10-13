@@ -126,16 +126,8 @@ def check_timing_gate(repo: str, pr_number: int, pr_author: str, current_user: s
     return result
 
 
-def _scan_own_comments(
-    issue_comments: list[dict], review_comments: list[dict], acting: str
-) -> tuple[bool, bool, bool, int, list[datetime]] | str:
-    """Scan the acting account's review comments.
-
-    Returns (has_summary, has_design, has_traceability, inline_count, qualifying timestamps),
-    or a failure reason string when a qualifying comment has no valid created_at.
-    """
+def _scan_issue_comments(issue_comments: list[dict], acting: str) -> tuple[bool, bool, bool, list[datetime]] | str:
     has_summary = has_design = has_traceability = False
-    inline_count = 0
     qualifying: list[datetime] = []
     for comment in issue_comments:
         if _login(comment) != acting:
@@ -153,14 +145,36 @@ def _scan_own_comments(
         has_summary |= is_summary
         has_design |= is_design
         has_traceability |= is_trace
+    return has_summary, has_design, has_traceability, qualifying
+
+
+def _scan_inline_comments(review_comments: list[dict], acting: str) -> list[datetime] | str:
+    qualifying: list[datetime] = []
     for comment in review_comments:
         if _login(comment) == acting and is_inline_review_comment(comment.get("body") or ""):
             ts = _parse_ts(comment.get("created_at"))
             if ts is None:
                 return "inline comment has no valid created_at"
             qualifying.append(ts)
-            inline_count += 1
-    return has_summary, has_design, has_traceability, inline_count, qualifying
+    return qualifying
+
+
+def _scan_own_comments(
+    issue_comments: list[dict], review_comments: list[dict], acting: str
+) -> tuple[bool, bool, bool, int, list[datetime]] | str:
+    """Scan the acting account's review comments.
+
+    Returns (has_summary, has_design, has_traceability, inline_count, qualifying timestamps),
+    or a failure reason string when a qualifying comment has no valid created_at.
+    """
+    issues = _scan_issue_comments(issue_comments, acting)
+    if isinstance(issues, str):
+        return issues
+    inline = _scan_inline_comments(review_comments, acting)
+    if isinstance(inline, str):
+        return inline
+    has_summary, has_design, has_traceability, qualifying = issues
+    return has_summary, has_design, has_traceability, len(inline), qualifying + inline
 
 
 def _has_activity_after(
