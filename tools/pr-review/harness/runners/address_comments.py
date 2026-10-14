@@ -117,7 +117,11 @@ def _run_locked(config: HarnessConfig) -> None:
         plugin_prefix=plugin_prefix,
         repo_slug=config.repo_slug,
     )
-    state.prune_address_comments_state(config.repo_slug, {pr["number"] for pr in prs})
+    # Prune against *all* open PRs (not the author/assignee-filtered list), and skip on fetch failure,
+    # so a PR that temporarily drops out of `prs` doesn't lose its replied keys.
+    open_numbers = _list_all_open_pr_numbers(config.repo.name, env)
+    if open_numbers is not None:
+        state.prune_address_comments_state(config.repo_slug, open_numbers)
 
     logger.info("Found %d open PR(s) to check", len(prs))
     for pr in prs:
@@ -626,6 +630,23 @@ def _list_prs_to_check(repo: str, env: dict) -> list[dict]:
     on someone else's PR) — deduplicated by PR number."""
     by_number = {pr["number"]: pr for pr in _list_prs(repo, env, "--author") + _list_prs(repo, env, "--assignee")}
     return sorted(by_number.values(), key=lambda p: p["number"])
+
+
+def _list_all_open_pr_numbers(repo: str, env: dict) -> set[int] | None:
+    """Numbers of every open PR in the repo, or None if the fetch failed (caller must not prune)."""
+    result = run_cmd(
+        ["gh", "pr", "list", "--repo", repo, "--state", "open", "--json", "number", "--limit", "1000"],
+        cwd="/",
+        env=env,
+        timeout=TIMEOUT_GH,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        return {pr["number"] for pr in json.loads(result.stdout)}
+    except (ValueError, KeyError, TypeError):
+        return None
 
 
 def _list_prs(repo: str, env: dict, filter_flag: str) -> list[dict]:

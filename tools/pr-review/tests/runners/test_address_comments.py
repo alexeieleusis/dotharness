@@ -992,3 +992,14 @@ def test_address_single_comment_records_when_reply_observed_without_commit(monke
         _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, "bot", "acme-frontend"
     )
     assert recorded == [("acme-frontend", 7, "issue:6161750034")]
+
+
+def test_list_all_open_pr_numbers_returns_none_on_failure():
+    from types import SimpleNamespace
+
+    from harness.runners import address_comments as ac
+
+    with patch.object(ac, "run_cmd", return_value=SimpleNamespace(returncode=1, stdout="")):
+        assert ac._list_all_open_pr_numbers("o/r", {}) is None
+    with patch.object(ac, "run_cmd", return_value=SimpleNamespace(returncode=0, stdout='[{"number": 7}]')):
+        assert ac._list_all_open_pr_numbers("o/r", {}) == {7}
