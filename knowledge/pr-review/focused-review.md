@@ -57,8 +57,27 @@ exact marker string given below, on its own line at the end of the body.
 
 ## Notes
 
-- If, after reading the full file, the flagged code has already been refactored or the
-  finding no longer applies, post a brief reply saying so instead of a refactor
-  description — still include the marker.
+- **False positive.** If, after reading the full file, the finding should not be acted
+  on, do not write a refactor description. This single outcome covers every cause:
+  (a) the finding was never valid, (b) the rule misfired, or (c) the code has already
+  been refactored or the finding no longer applies. The cause does not matter. Instead,
+  run these two `gh api graphql` mutations, in this order, using the **Thread node ID**
+  and **Comment node ID** given below. Replace `<THREAD_ID>` with the Thread node ID and
+  `<COMMENT_NODE_ID>` with the Comment node ID (if either is `?`, skip that mutation):
+
+  1. Resolve the thread:
+
+     ```bash
+     gh api graphql -f query='mutation($threadId:ID!){ resolveReviewThread(input:{threadId:$threadId}){ thread{ id isResolved } } }' -f threadId=<THREAD_ID>
+     ```
+
+  2. Then minimise the comment:
+
+     ```bash
+     gh api graphql -f query='mutation($subjectId:ID!){ minimizeComment(input:{subjectId:$subjectId, classifier:RESOLVED}){ minimizedComment{ isMinimized minimizedReason } } }' -f subjectId=<COMMENT_NODE_ID>
+     ```
+
+  Post no reply and no other text for a false positive. Apply both mutations to the
+  root comment even if the thread has human replies.
 - Never request or re-request a review.
 - Never push or commit — the runner does not expect any git changes from this step.

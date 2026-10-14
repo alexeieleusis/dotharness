@@ -713,3 +713,68 @@ def test_runner_passes_node_ids_to_backend_prompt(tmp_xdg, tmp_path):
     prompt = mock_be.return_value.run.call_args.args[0]
     assert "Thread node ID: PRRT_T1" in prompt
     assert "Comment node ID: PRRC_C1" in prompt
+
+
+# --- Template string assertions (read the real template at the repo root) ---
+
+_TEMPLATE_PATH = Path(__file__).resolve().parents[4] / "knowledge" / "pr-review" / "focused-review.md"
+
+_RESOLVE_MUTATION = (
+    "gh api graphql -f query='mutation($threadId:ID!){ resolveReviewThread(input:{threadId:$threadId})"
+    "{ thread{ id isResolved } } }' -f threadId=<THREAD_ID>"
+)
+_MINIMIZE_MUTATION = (
+    "gh api graphql -f query='mutation($subjectId:ID!){ minimizeComment(input:{subjectId:$subjectId, "
+    "classifier:RESOLVED}){ minimizedComment{ isMinimized minimizedReason } } }' -f subjectId=<COMMENT_NODE_ID>"
+)
+
+
+def _template() -> str:
+    return _TEMPLATE_PATH.read_text()
+
+
+def test_template_path_is_real_file():
+    assert _TEMPLATE_PATH.is_file()
+
+
+def test_template_defines_false_positive_outcome_for_all_causes():
+    text = " ".join(_template().split())
+    assert "False positive" in text
+    assert "never valid" in text
+    assert "misfired" in text
+    assert "already been refactored or the finding no longer applies" in text
+    assert "The cause does not matter" in text
+    assert "post a brief reply saying so" not in text
+
+
+def test_template_has_both_mutations_verbatim_in_order():
+    text = _template()
+    assert _RESOLVE_MUTATION in text
+    assert _MINIMIZE_MUTATION in text
+    assert text.index("resolveReviewThread") < text.index("minimizeComment")
+    assert "classifier:RESOLVED" in text
+    assert text.index(_RESOLVE_MUTATION) < text.index(_MINIMIZE_MUTATION)
+
+
+def test_template_false_positive_posts_nothing_and_refactor_path_unchanged():
+    text = " ".join(_template().split())
+    assert "Post no reply and no other text" in text
+    assert "## Step 3 — Write the refactor description" in text
+    assert "## Step 4 — Post the reply" in text
+    assert '-X POST -f body="<your refactor description>' in text
+    assert "<Marker>" in text
+    assert "MUST include it verbatim" in text
+    assert "Never request or re-request a review." in text
+
+
+def test_template_applies_to_root_comment_and_never_deletes():
+    text = " ".join(_template().split())
+    assert "root comment even if the thread has human replies" in text
+    for forbidden in ("DELETE", "-X DELETE", "deleteComment"):
+        assert forbidden not in text
+
+
+def test_template_has_no_confidence_gate_or_record_keeping_wording():
+    lowered = _template().lower()
+    for word in ("confidence", "threshold", "audit", "log file", "record of"):
+        assert word not in lowered
