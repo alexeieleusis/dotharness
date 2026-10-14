@@ -457,3 +457,21 @@ def test_address_comments_state_round_trip_and_prune(tmp_path, monkeypatch):
     state.prune_address_comments_state("acme-frontend", {2})
     assert state.get_replied_comment_keys("acme-frontend", 1) == set()
     assert state.get_replied_comment_keys("acme-frontend", 2) == {"review:20"}
+
+
+def test_prune_address_comments_state_with_empty_set_drops_everything(tmp_path, monkeypatch):
+    # The state function itself prunes literally; callers (address_comments.run) must skip it when the
+    # open-PR fetch fails, and prune against *all* open PRs rather than the author/assignee-filtered list.
+    monkeypatch.setattr(state, "XDG_DATA", tmp_path)
+    state.record_replied_comment("acme-frontend", 1, "issue:10")
+    state.record_replied_comment("acme-frontend", 2, "review:20")
+    state.prune_address_comments_state("acme-frontend", set())
+    assert state.get_replied_comment_keys("acme-frontend", 1) == set()
+    assert state.get_replied_comment_keys("acme-frontend", 2) == set()
+
+
+def test_get_replied_comment_keys_returns_empty_for_corrupted_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "XDG_DATA", tmp_path)
+    state.record_replied_comment("acme-frontend", 1, "issue:10")
+    state._state_path("acme-frontend", state.ADDRESS_COMMENTS_FILE).write_text("{not json", encoding="utf-8")
+    assert state.get_replied_comment_keys("acme-frontend", 1) == set()
