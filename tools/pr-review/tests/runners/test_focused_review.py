@@ -178,6 +178,50 @@ def test_build_prompt_renders_question_mark_when_line_is_none():
     assert "File: a.ts:?" in prompt
 
 
+def _id_comment(**extra):
+    return {"path": "a.ts", "line": 1, "id": 1, "url": "", "body": "b", "diff_hunk": "", **extra}
+
+
+def test_build_prompt_includes_node_ids_outside_external_data():
+    prompt = _build_prompt("T", _id_comment(thread_id="PRRT_1", node_id="PRRC_1"), "K", 1, "r")
+    assert "Thread node ID: PRRT_1" in prompt
+    assert "Comment node ID: PRRC_1" in prompt
+    first_tag = prompt.index("<!-- EXTERNAL DATA BEGIN")
+    body_tag = prompt.index("<pr-comment-body>")
+    for line in ("Thread node ID: PRRT_1", "Comment node ID: PRRC_1"):
+        assert prompt.index(line) < first_tag
+        assert prompt.index(line) < body_tag
+
+
+@pytest.mark.parametrize("extra", [{"thread_id": "", "node_id": None}, {}])
+def test_build_prompt_renders_question_mark_for_empty_or_absent_node_ids(extra):
+    prompt = _build_prompt("T", _id_comment(**extra), "K", 1, "r")
+    assert "Thread node ID: ?\n" in prompt
+    assert "Comment node ID: ?\n" in prompt
+
+
+def test_build_prompt_with_only_one_node_id_key_does_not_raise():
+    prompt = _build_prompt("T", _id_comment(node_id="PRRC_9"), "K", 1, "r")
+    assert "Thread node ID: ?" in prompt
+    assert "Comment node ID: PRRC_9" in prompt
+
+
+def test_build_prompt_includes_only_processed_comment_ids():
+    other = _id_comment(id=2, thread_id="PRRT_OTHER", node_id="PRRC_OTHER")
+    mine = _id_comment(thread_id="PRRT_MINE", node_id="PRRC_MINE")
+    prompt = _build_prompt("T", mine, "K", 1, "r")
+    assert other["thread_id"] not in prompt
+    assert other["node_id"] not in prompt
+    assert "PRRT_MINE" in prompt
+    assert "PRRC_MINE" in prompt
+
+
+def test_focused_review_source_has_no_graphql_mutation_names():
+    source = Path(focused_review.__file__).read_text()
+    assert "resolveReviewThread" not in source
+    assert "minimizeComment" not in source
+
+
 def _cfg(tmp_path, enabled=True):
     return HarnessConfig(
         harness=HarnessSection(
@@ -659,3 +703,13 @@ def test_minimised_target_skips_backend_end_to_end(tmp_xdg, tmp_path):
     _t, mock_checkout, mock_be = _run_with_threads(tmp_path, [comment], threads)
     mock_be.return_value.run.assert_not_called()
     mock_checkout.assert_not_called()
+
+
+def test_runner_passes_node_ids_to_backend_prompt(tmp_xdg, tmp_path):
+    comment = dict(_MATCHING_COMMENT)
+    threads = [_thread("PRRT_T1", False, [("PRRC_C1", 1, False)])]
+    _t, _c, mock_be = _run_with_threads(tmp_path, [comment], threads)
+    mock_be.return_value.run.assert_called_once()
+    prompt = mock_be.return_value.run.call_args.args[0]
+    assert "Thread node ID: PRRT_T1" in prompt
+    assert "Comment node ID: PRRC_C1" in prompt
