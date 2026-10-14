@@ -100,7 +100,7 @@ Risks of `focused_review.enabled`:
 - R2: the root comment is hidden even when humans have replied in the thread, so a human conversation may be hidden.
 - R3: the comment body, the diff and the knowledge file are untrusted input. A crafted one could persuade the backend to judge a finding a false positive and hide a comment. This is accepted because the scope is limited to target comments (SonarQube inline comments citing a vibe-types knowledge file) and the action is reversible: unresolve the thread and unminimise the comment in the GitHub UI. Nothing is deleted.
 - R4: if a hidden comment is recreated, the harness hides it again each time.
-- V1: if the harness token lacks the permission to resolve or minimise, the feature has no effect. The check on a real PR is still pending and has not yet been verified. Its result is recorded in the PR description of the change that introduced this behaviour.
+- V1: if the harness token lacks the permission to resolve or minimise, the feature has no effect. The two mutations were run directly with the `alexei-oscilar` token on a real PR comment and both succeeded, so the permission is available. The backend's end-to-end behaviour (judging a finding and issuing the mutations itself) has not yet been observed. The result is recorded in the PR description of the change that introduced this behaviour.
 
 ### `[address_comments]`
 
