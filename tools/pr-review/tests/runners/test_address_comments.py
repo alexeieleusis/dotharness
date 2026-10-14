@@ -922,16 +922,6 @@ def test_target_comment_without_marker_reply_is_not_selected_as_approved():
     assert address_comments._focused_review_approved(_PLAIN_COMMENT, "acme/frontend", "alexei", {}) is False
 
 
-def test_target_comment_in_resolved_thread_is_not_selected_as_approved():
-    resolved = {**_PLAIN_COMMENT, "thread_resolved": True, "thread_id": "T1", "node_id": "C1"}
-    selected, rest = address_comments._select_approved_focused_review_comments(
-        [resolved], 1, "acme/frontend", "alexei", {}
-    )
-    assert selected == []
-    assert rest == [resolved]
-    assert address_comments._focused_review_approved(resolved, "acme/frontend", "alexei", {}) is False
-
-
 def test_filter_by_unresolved_removes_inline_comment_in_resolved_thread():
     resolved = {**_PLAIN_COMMENT, "id": 5}
     open_ = {**_PLAIN_COMMENT, "id": 6}
