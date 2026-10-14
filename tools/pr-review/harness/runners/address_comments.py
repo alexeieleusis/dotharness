@@ -465,15 +465,13 @@ def _address_single_comment(
     # of this comment's processing window — _reply_observed's review-comment fallback
     # relies on it to exclude replies posted for earlier comments in this same PR run.
     since_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    clean_run = False
     try:
         backend.run(comment_instructions, cwd=wdir, opencode_dir=opencode_dir, context=f"PR #{pr_number} comment {cid}")
         logger.info("PR #%d: comment %s — backend finished", pr_number, cid)
+        clean_run = True
     except Exception:
         logger.exception("PR #%d comment %s: error", pr_number, cid)
-    else:
-        # Recorded only on a clean run so a crashed attempt is retried next pass.
-        if repo_slug and ctype in _NON_THREADED_TYPES:
-            state.record_replied_comment(repo_slug, pr_number, _reply_key(comment))
     finally:
         post_sha = get_head_sha(wdir, env) or pre_sha
         if pre_sha and post_sha != pre_sha and not _is_ancestor(pre_sha, post_sha, wdir, env):
@@ -487,6 +485,7 @@ def _address_single_comment(
                 post_sha,
             )
     made_commit = post_sha != pre_sha
+    observed = True  # no check possible/needed — don't treat as a confirmed silent skip
     if our_login and not made_commit:
         try:
             observed = _reply_observed(comment, pr_number, repo, our_login, since_iso, env)
@@ -500,6 +499,10 @@ def _address_single_comment(
                 pr_number,
                 cid,
             )
+    # Recorded only when the run was clean AND a commit or reply was seen, so a crashed
+    # attempt or a silent skip is retried next pass instead of being suppressed forever.
+    if clean_run and (made_commit or observed) and repo_slug and ctype in _NON_THREADED_TYPES:
+        state.record_replied_comment(repo_slug, pr_number, _reply_key(comment))
     return post_sha, rewritten
 
 
