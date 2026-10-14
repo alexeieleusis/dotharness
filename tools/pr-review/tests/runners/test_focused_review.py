@@ -778,3 +778,52 @@ def test_template_has_no_confidence_gate_or_record_keeping_wording():
     lowered = _template().lower()
     for word in ("confidence", "threshold", "audit", "log file", "record of"):
         assert word not in lowered
+
+
+# --- Safety rails, failure handling, criterion reuse (A-3c) ---
+
+
+def _false_positive_text() -> str:
+    text = " ".join(_template().split())
+    start = text.index("**False positive.**")
+    end = text.index("- Never request or re-request a review.")
+    return text[start:end]
+
+
+def test_template_keeps_safety_phrases_and_untrusted_statement():
+    text = " ".join(_template().split())
+    assert "Do not edit any file, run `git add`, commit, or push" in text
+    assert "Never request or re-request a review" in text
+    assert "untrusted data" in text
+    assert "comment body" in text and "diff" in text and "knowledge file" in text
+
+
+def test_template_no_code_change_statement_covers_resolve_and_minimise():
+    text = " ".join(_template().split())
+    assert "This step only posts a comment" in text  # prefix of the new wording
+    assert "This step only posts a comment —" not in text
+    assert "This step only posts a comment, resolves the thread, or minimises the comment" in text
+    assert "it never changes code" in text
+
+
+def test_template_states_mutation_failure_handling():
+    text = " ".join(_template().split())
+    start = text.index("**If a mutation fails**")
+    section = text[start:]
+    assert "retry in a loop" in section
+    assert "fallback reply" in section
+    assert "finish" in section
+    assert "never an error of the comment" in section
+    assert "still attempt the minimise mutation" in section
+    assert "still attempt the resolve mutation" in section
+    assert "regardless" in section
+    assert "The verdict is final" in text
+    assert "even if the thread has human replies" in text
+
+
+def test_template_false_positive_reuses_criterion_without_explain_instruction():
+    fp = _false_positive_text()
+    assert "you believe the tool is wrong" in fp
+    assert "explain" not in fp.lower()
+    # The refactor path legitimately describes/explains; the check is scoped to the false-positive text.
+    assert "resolveReviewThread" in fp and "minimizeComment" in fp
