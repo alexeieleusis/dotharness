@@ -3,6 +3,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
+from harness.backend import Backend
 from harness.runners import address_comments
 from harness.runners.address_comments import (
     _address_single_comment,
@@ -948,7 +949,8 @@ def test_address_single_comment_records_issue_comment_after_clean_run(monkeypatc
     recorded = []
     monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
     monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha")
-    backend = type("B", (), {"run": lambda self, *a, **k: None})()
+    backend = MagicMock(spec=Backend)
+    backend.run.return_value = None
     address_comments._address_single_comment(
         _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, None, "acme-frontend"
     )
@@ -960,12 +962,11 @@ def test_address_single_comment_does_not_record_when_backend_raises(monkeypatch)
     monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
     monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha")
 
-    class Boom:
-        def run(self, *a, **k):
-            raise RuntimeError("boom")
+    boom = MagicMock(spec=Backend)
+    boom.run.side_effect = RuntimeError("boom")
 
     address_comments._address_single_comment(
-        _ISSUE_COMMENT, 7, "tmpl", Boom(), "/w", "acme/frontend", {}, "sha", None, None, "acme-frontend"
+        _ISSUE_COMMENT, 7, "tmpl", boom, "/w", "acme/frontend", {}, "sha", None, None, "acme-frontend"
     )
     assert recorded == []
 
@@ -975,7 +976,8 @@ def test_address_single_comment_does_not_record_when_no_commit_and_no_reply_obse
     monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
     monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha")
     monkeypatch.setattr(address_comments, "_reply_observed", lambda *a, **k: False)
-    backend = type("B", (), {"run": lambda self, *a, **k: None})()
+    backend = MagicMock(spec=Backend)
+    backend.run.return_value = None
     address_comments._address_single_comment(
         _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, "bot", "acme-frontend"
     )
@@ -987,7 +989,8 @@ def test_address_single_comment_records_when_reply_observed_without_commit(monke
     monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
     monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha")
     monkeypatch.setattr(address_comments, "_reply_observed", lambda *a, **k: True)
-    backend = type("B", (), {"run": lambda self, *a, **k: None})()
+    backend = MagicMock(spec=Backend)
+    backend.run.return_value = None
     address_comments._address_single_comment(
         _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, "bot", "acme-frontend"
     )
