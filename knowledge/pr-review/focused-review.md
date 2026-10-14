@@ -5,8 +5,9 @@ file from the `jpablo/vibe-types` catalog. The flagged comment and its full know
 file content are appended below (under **Flagged comment** and **Knowledge file**).
 The PR number and repo name follow at the end — use them wherever `<NUMBER>` and
 `<REPO>` appear. A literal marker string is also given at the end (**Marker**) — your
-posted reply MUST include it verbatim, or future runs will treat this comment as
-unhandled and repost.
+refactor-description reply (if you post one) MUST include the marker verbatim, or
+future runs will treat this comment as unhandled and repost. (A false positive posts
+no reply; see Notes.)
 
 **Do not edit any file, run `git add`, commit, or push.** This step only posts a
 comment, resolves the thread, or minimises the comment — it never changes code.

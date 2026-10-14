@@ -763,7 +763,8 @@ def test_template_false_positive_posts_nothing_and_refactor_path_unchanged():
     assert "## Step 4 — Post the reply" in text
     assert '-X POST -f body="<your refactor description>' in text
     assert "<Marker>" in text
-    assert "MUST include it verbatim" in text
+    assert "MUST include the marker verbatim" in text
+    assert "A false positive posts no reply" in text
     assert "Never request or re-request a review." in text
 
 
