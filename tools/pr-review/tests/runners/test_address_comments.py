@@ -740,7 +740,7 @@ def test_get_unresolved_comment_ids_paginates_across_multiple_pages():
         MagicMock(returncode=0, stdout=json.dumps(page1).encode()),
         MagicMock(returncode=0, stdout=json.dumps(page2).encode()),
     ])
-    with patch("harness.runners.address_comments.run_cmd", side_effect=lambda *a, **k: next(responses)):
+    with patch("harness.runners.common.run_cmd", side_effect=lambda *a, **k: next(responses)):
         ids = address_comments._get_unresolved_comment_ids(1, "acme/frontend", {})
     assert ids == {1, 2}
 
