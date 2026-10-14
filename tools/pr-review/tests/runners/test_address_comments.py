@@ -911,3 +911,30 @@ def test_address_single_comment_skips_reply_check_when_our_login_not_provided(ca
             _FAKE_COMMENT, 1, "instructions", mock_backend, "/repo", "acme/frontend", {}, "sha-before"
         )
     mock_reply_observed.assert_not_called()
+
+
+def test_target_comment_without_marker_reply_is_not_selected_as_approved():
+    selected, rest = address_comments._select_approved_focused_review_comments(
+        [_PLAIN_COMMENT], 1, "acme/frontend", "alexei", {}
+    )
+    assert selected == []
+    assert rest == [_PLAIN_COMMENT]
+    assert address_comments._focused_review_approved(_PLAIN_COMMENT, "acme/frontend", "alexei", {}) is False
+
+
+def test_target_comment_in_resolved_thread_is_not_selected_as_approved():
+    resolved = {**_PLAIN_COMMENT, "thread_resolved": True, "thread_id": "T1", "node_id": "C1"}
+    selected, rest = address_comments._select_approved_focused_review_comments(
+        [resolved], 1, "acme/frontend", "alexei", {}
+    )
+    assert selected == []
+    assert rest == [resolved]
+    assert address_comments._focused_review_approved(resolved, "acme/frontend", "alexei", {}) is False
+
+
+def test_filter_by_unresolved_removes_inline_comment_in_resolved_thread():
+    resolved = {**_PLAIN_COMMENT, "id": 5}
+    open_ = {**_PLAIN_COMMENT, "id": 6}
+    with patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value={6}):
+        result = address_comments._filter_by_unresolved([resolved, open_], 1, "acme/frontend", {})
+    assert result == [open_]

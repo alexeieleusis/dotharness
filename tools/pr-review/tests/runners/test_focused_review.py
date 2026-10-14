@@ -69,6 +69,34 @@ def test_does_not_skip_when_replies_lack_marker():
     assert len(_matching_comments(comments)) == 1
 
 
+def _target(**extra):
+    return {"type": "inline", "id": 1, "body": _URL, "replies": [], **extra}
+
+
+def test_skips_comment_in_resolved_thread():
+    assert _matching_comments([_target(thread_resolved=True)]) == []
+
+
+def test_skips_minimised_comment_in_unresolved_thread():
+    assert _matching_comments([_target(thread_resolved=False, is_minimized=True)]) == []
+
+
+def test_skips_resolved_thread_that_also_has_marker_reply():
+    replies = [{"author": "bot", "body": f"x\n\n{FOCUSED_REVIEW_MARKER}"}]
+    assert _matching_comments([_target(thread_resolved=True, replies=replies)]) == []
+
+
+def test_comment_without_thread_state_keys_still_matches():
+    assert len(_matching_comments([_target()])) == 1
+
+
+def test_recreated_comment_matched_next_to_old_resolved_comment():
+    old = _target(id=1, thread_resolved=True, is_minimized=False)
+    new = _target(id=2, thread_resolved=False, is_minimized=False)
+    result = _matching_comments([old, new])
+    assert [c["id"] for c, _commit, _path in result] == [2]
+
+
 def test_resolve_knowledge_file_commit_hit_first_try():
     with patch("harness.runners.focused_review.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=b"content")
@@ -612,3 +640,22 @@ def test_target_without_matching_thread_is_still_processed(tmp_xdg, tmp_path):
     _t, _c, mock_be = _run_with_threads(tmp_path, [comment], [])
     assert "thread_id" not in comment
     mock_be.return_value.run.assert_called_once()
+
+
+def test_resolved_thread_target_skips_backend_end_to_end(tmp_xdg, tmp_path):
+    # Real flow: thread state comes from the (patched) GraphQL fetch and is merged in
+    # _run_locked, so the skip must act on the merged keys, not pre-set ones.
+    comment = dict(_MATCHING_COMMENT)
+    threads = [_thread("T1", True, [("C1", 1, False)])]
+    mock_threads, mock_checkout, mock_be = _run_with_threads(tmp_path, [comment], threads)
+    mock_threads.assert_called_once()
+    mock_be.return_value.run.assert_not_called()
+    mock_checkout.assert_not_called()
+
+
+def test_minimised_target_skips_backend_end_to_end(tmp_xdg, tmp_path):
+    comment = dict(_MATCHING_COMMENT)
+    threads = [_thread("T1", False, [("C1", 1, True)])]
+    _t, mock_checkout, mock_be = _run_with_threads(tmp_path, [comment], threads)
+    mock_be.return_value.run.assert_not_called()
+    mock_checkout.assert_not_called()

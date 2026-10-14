@@ -81,6 +81,11 @@ def _run_locked(config: HarnessConfig) -> None:
                 logger.warning("PR #%d: could not fetch review thread state, skipping focused review", number)
                 continue
             merge_thread_state([c for c, _commit, _path in matches], threads)
+            # The first pass ran before thread state was known; re-apply the filters now
+            # that resolved/minimised flags are merged so those comments are skipped.
+            matches = _matching_comments([c for c, _commit, _path in matches])
+            if not matches:
+                continue
             logger.info("PR #%d: starting", number)
             checkout_attempted = True
             # Replying to these comments can submit a review via the GitHub API as a side
@@ -132,13 +137,16 @@ def _process_matches(
 
 def _matching_comments(comments: list[dict]) -> list[tuple[dict, str, str]]:
     """Return (comment, commit, path) triples for inline comments citing a vibe-types
-    knowledge URL that don't already carry a focused-review reply."""
+    knowledge URL that don't already carry a focused-review reply and are neither in a
+    resolved thread nor minimised (per merged thread-state keys, absent means neither)."""
     matches: list[tuple[dict, str, str]] = []
     for c in comments:
         if c.get("type") != "inline":
             continue
         m = KNOWLEDGE_URL_RE.search(c.get("body", ""))
         if not m:
+            continue
+        if c.get("thread_resolved") or c.get("is_minimized"):
             continue
         if find_reply_with_marker(c) is not None:
             continue
