@@ -12,6 +12,7 @@ from harness.runners.common import (
     FatalGitError,
     build_subprocess_env,
     fetch_pr_comments,
+    fetch_review_threads,
     find_reply_with_marker,
     get_current_user,
     get_gh_token,
@@ -19,6 +20,7 @@ from harness.runners.common import (
     git_fetch_and_checkout,
     git_restore,
     list_open_prs_for_current_user,
+    merge_thread_state,
     preserve_reviewer_request,
     run_cmd,
 )
@@ -74,6 +76,11 @@ def _run_locked(config: HarnessConfig) -> None:
             matches = _matching_comments(comments)
             if not matches:
                 continue
+            threads = fetch_review_threads(number, config.repo.name, env)
+            if threads is None:
+                logger.warning("PR #%d: could not fetch review thread state, skipping focused review", number)
+                continue
+            merge_thread_state([c for c, _commit, _path in matches], threads)
             logger.info("PR #%d: starting", number)
             checkout_attempted = True
             # Replying to these comments can submit a review via the GitHub API as a side

@@ -1,8 +1,11 @@
+import json
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
+import pytest
+
 from harness.config import FocusedReviewConfig, HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
-from harness.runners import focused_review
+from harness.runners import common, focused_review
 from harness.runners.focused_review import (
     FOCUSED_REVIEW_MARKER,
     _build_prompt,
@@ -423,4 +426,189 @@ def test_non_fatal_error_continues_to_next_pr(tmp_xdg, tmp_path):
         patch("harness.runners.focused_review.Backend") as mock_be,
     ):
         focused_review._run_locked(cfg)
+    mock_be.return_value.run.assert_called_once()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_thread_fetch():
+    """Shared patch so _run_locked tests never shell out to `gh api graphql`."""
+    with patch("harness.runners.focused_review.fetch_review_threads", return_value=[]) as m:
+        yield m
+
+
+def _thread(thread_id, resolved, comments):
+    return {
+        "id": thread_id,
+        "isResolved": resolved,
+        "comments": {"nodes": [{"id": n, "databaseId": d, "isMinimized": m} for n, d, m in comments]},
+    }
+
+
+def _page(nodes, has_next=False, cursor=None):
+    payload = {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {"pageInfo": {"hasNextPage": has_next, "endCursor": cursor}, "nodes": nodes}
+                }
+            }
+        }
+    }
+    return MagicMock(returncode=0, stdout=json.dumps(payload).encode())
+
+
+def test_merge_single_page():
+    comments = [{"type": "inline", "id": 10}]
+    common.merge_thread_state(comments, [_thread("T1", True, [("C10", 10, True), ("C11", 11, False)])])
+    assert comments[0] == {
+        "type": "inline",
+        "id": 10,
+        "thread_id": "T1",
+        "thread_resolved": True,
+        "node_id": "C10",
+        "is_minimized": True,
+    }
+
+
+def test_merge_unresolved_thread_sets_false_values():
+    comments = [{"type": "inline", "id": 10}]
+    common.merge_thread_state(comments, [_thread("T1", False, [("C10", 10, False)])])
+    assert comments[0]["thread_resolved"] is False
+    assert comments[0]["is_minimized"] is False
+
+
+def test_merge_matches_only_root_comment():
+    comments = [{"type": "inline", "id": 11}]
+    common.merge_thread_state(comments, [_thread("T1", False, [("C10", 10, False), ("C11", 11, False)])])
+    assert "thread_id" not in comments[0]
+
+
+def test_merge_thread_root_not_in_comments_is_ignored():
+    comments = [{"type": "inline", "id": 10}]
+    common.merge_thread_state(comments, [_thread("T9", False, [("C99", 99, False)])])
+    assert comments == [{"type": "inline", "id": 10}]
+
+
+def test_merge_comment_not_in_any_thread_gets_no_keys():
+    comments = [{"type": "inline", "id": 10}]
+    common.merge_thread_state(comments, [])
+    assert comments == [{"type": "inline", "id": 10}]
+
+
+def test_merge_non_inline_untouched():
+    comments = [{"type": "review", "id": 10}, {"type": "issue", "id": 10}]
+    common.merge_thread_state(comments, [_thread("T1", True, [("C10", 10, False)])])
+    assert comments == [{"type": "review", "id": 10}, {"type": "issue", "id": 10}]
+
+
+def test_fetch_review_threads_follows_pagination():
+    pages = [
+        _page([_thread("T1", False, [("C1", 1, False)])], has_next=True, cursor="CUR1"),
+        _page([_thread("T2", True, [("C2", 2, False)])]),
+    ]
+    with patch("harness.runners.common.run_cmd", side_effect=pages) as mock_run:
+        nodes = common.fetch_review_threads(7, "acme/frontend", {})
+    assert nodes is not None
+    assert [n["id"] for n in nodes] == ["T1", "T2"]
+    first, second = (c.args[0] for c in mock_run.call_args_list)
+    assert "cursor=CUR1" not in " ".join(first)
+    assert second[-2:] == ["-f", "cursor=CUR1"]
+    assert "owner=acme" in first
+    assert "repo=frontend" in first
+    assert "number=7" in first
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        MagicMock(returncode=1, stdout=b""),
+        MagicMock(returncode=0, stdout=b"not json"),
+        MagicMock(returncode=0, stdout=b"{}"),
+        MagicMock(returncode=0, stdout=b'{"data": {"repository": {"pullRequest": null}}}'),
+    ],
+)
+def test_fetch_review_threads_failure_returns_none(result):
+    with patch("harness.runners.common.run_cmd", return_value=result):
+        assert common.fetch_review_threads(7, "acme/frontend", {}) is None
+
+
+def test_fetch_review_threads_failure_on_later_page_returns_none():
+    pages = [_page([], has_next=True, cursor="C"), MagicMock(returncode=1, stdout=b"")]
+    with patch("harness.runners.common.run_cmd", side_effect=pages):
+        assert common.fetch_review_threads(7, "acme/frontend", {}) is None
+
+
+def _run_with_threads(tmp_path, comments, threads):
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.focused_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.focused_review.get_current_user", return_value="bot"),
+        patch(
+            "harness.runners.focused_review.list_open_prs_for_current_user",
+            return_value=[{"number": 1, "headRefName": "b"}],
+        ),
+        patch("harness.runners.focused_review.fetch_pr_comments", return_value=comments),
+        patch("harness.runners.focused_review.fetch_review_threads", return_value=threads) as mock_threads,
+        patch("harness.runners.common.was_review_requested", return_value=False),
+        patch("harness.runners.focused_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.focused_review.git_fetch_and_checkout") as mock_checkout,
+        patch("harness.runners.focused_review.git_restore"),
+        patch("harness.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
+        patch("harness.runners.focused_review.Backend") as mock_be,
+    ):
+        focused_review._run_locked(cfg)
+    return mock_threads, mock_checkout, mock_be
+
+
+def test_thread_fetch_failure_skips_pr(tmp_xdg, tmp_path, caplog):
+    mock_threads, mock_checkout, mock_be = _run_with_threads(tmp_path, [dict(_MATCHING_COMMENT)], None)
+    mock_threads.assert_called_once()
+    mock_checkout.assert_not_called()
+    mock_be.return_value.run.assert_not_called()
+    assert "PR #1" in caplog.text
+
+
+def test_thread_fetch_failure_does_not_stop_other_prs(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        patch("harness.runners.focused_review.get_gh_token", return_value="tok"),
+        patch("harness.runners.focused_review.get_current_user", return_value="bot"),
+        patch(
+            "harness.runners.focused_review.list_open_prs_for_current_user",
+            return_value=[{"number": 1, "headRefName": "b"}, {"number": 2, "headRefName": "c"}],
+        ),
+        patch("harness.runners.focused_review.fetch_pr_comments", return_value=[dict(_MATCHING_COMMENT)]),
+        patch("harness.runners.focused_review.fetch_review_threads", side_effect=[None, []]),
+        patch("harness.runners.common.was_review_requested", return_value=False),
+        patch("harness.runners.focused_review.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.focused_review.git_fetch_and_checkout"),
+        patch("harness.runners.focused_review.git_restore"),
+        patch("harness.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
+        patch("harness.runners.focused_review.Backend") as mock_be,
+    ):
+        focused_review._run_locked(cfg)
+    mock_be.return_value.run.assert_called_once()
+
+
+def test_no_target_comment_makes_no_thread_fetch(tmp_xdg, tmp_path):
+    plain = {**_MATCHING_COMMENT, "body": "no knowledge url"}
+    mock_threads, _checkout, _be = _run_with_threads(tmp_path, [plain], [])
+    mock_threads.assert_not_called()
+
+
+def test_run_merges_thread_state_into_target_comment(tmp_xdg, tmp_path):
+    comment = dict(_MATCHING_COMMENT)
+    threads = [_thread("T1", False, [("C1", 1, False)])]
+    _t, _c, mock_be = _run_with_threads(tmp_path, [comment], threads)
+    assert comment["thread_id"] == "T1"
+    assert comment["node_id"] == "C1"
+    mock_be.return_value.run.assert_called_once()
+
+
+def test_target_without_matching_thread_is_still_processed(tmp_xdg, tmp_path):
+    comment = dict(_MATCHING_COMMENT)
+    _t, _c, mock_be = _run_with_threads(tmp_path, [comment], [])
+    assert "thread_id" not in comment
     mock_be.return_value.run.assert_called_once()
