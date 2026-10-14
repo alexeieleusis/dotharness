@@ -11,6 +11,7 @@ XDG_DATA = Path.home() / ".local/share/dotharness"
 
 VIBE_HEAL_FILE = "vibe_heal.json"
 SELF_REVIEW_FILE = "self_review.json"
+ADDRESS_COMMENTS_FILE = "address_comments.json"
 
 _COMMAND_FILES = {
     "review-prs": VIBE_HEAL_FILE,
@@ -269,6 +270,52 @@ def add_regret_reviewed_pr(repo_slug: str, pr_number: int) -> None:
         return True
 
     _update_state(repo_slug, SELF_REVIEW_FILE, read_self_review_state, mutate)
+
+
+def read_address_comments_state(repo_slug: str) -> dict:
+    defaults = {"version": 1, "replied": {}}
+    p = _state_path(repo_slug, ADDRESS_COMMENTS_FILE)
+    if not p.exists():
+        return defaults
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        logger.warning("Corrupted state file %s: %s — returning defaults", p, exc)
+        return defaults
+    data.setdefault("replied", {})
+    return data
+
+
+def get_replied_comment_keys(repo_slug: str, pr_number: int) -> set[str]:
+    """Keys ("issue:123", "review:456") of non-inline comments already addressed on this PR.
+    Needed because issue/review comments have no reply linkage in the GitHub API, so there
+    is no way to tell from GitHub alone that we already answered one."""
+    return set(read_address_comments_state(repo_slug)["replied"].get(str(pr_number), []))
+
+
+def record_replied_comment(repo_slug: str, pr_number: int, key: str) -> None:
+    def mutate(current: dict) -> bool:
+        keys = set(current["replied"].get(str(pr_number), []))
+        if key in keys:
+            return False
+        keys.add(key)
+        current["replied"][str(pr_number)] = sorted(keys)
+        return True
+
+    _update_state(repo_slug, ADDRESS_COMMENTS_FILE, read_address_comments_state, mutate)
+
+
+def prune_address_comments_state(repo_slug: str, open_pr_numbers: set[int]) -> None:
+    """Drop entries for PRs that are no longer open, so the map doesn't grow unboundedly."""
+    keep = {str(n) for n in open_pr_numbers}
+
+    def mutate(current: dict) -> bool:
+        to_drop = current["replied"].keys() - keep
+        for pr in to_drop:
+            del current["replied"][pr]
+        return bool(to_drop)
+
+    _update_state(repo_slug, ADDRESS_COMMENTS_FILE, read_address_comments_state, mutate)
 
 
 def delete_state(repo_slug: str, command: str) -> None:

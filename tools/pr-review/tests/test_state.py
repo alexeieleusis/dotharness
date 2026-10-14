@@ -446,3 +446,14 @@ def test_schedule_accepts_local_review(tmp_xdg, minimal_toml):
         r = CliRunner().invoke(cli, ["schedule", "uninstall", "local-review", "--config", str(minimal_toml)])
     assert r.exit_code == 0
     uninstall.assert_called_once()
+
+
+def test_address_comments_state_round_trip_and_prune(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "XDG_DATA", tmp_path)
+    state.record_replied_comment("acme-frontend", 1, "issue:10")
+    state.record_replied_comment("acme-frontend", 1, "issue:10")
+    state.record_replied_comment("acme-frontend", 2, "review:20")
+    assert state.get_replied_comment_keys("acme-frontend", 1) == {"issue:10"}
+    state.prune_address_comments_state("acme-frontend", {2})
+    assert state.get_replied_comment_keys("acme-frontend", 1) == set()
+    assert state.get_replied_comment_keys("acme-frontend", 2) == {"review:20"}

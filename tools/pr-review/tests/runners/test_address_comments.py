@@ -928,3 +928,43 @@ def test_filter_by_unresolved_removes_inline_comment_in_resolved_thread():
     with patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value={6}):
         result = address_comments._filter_by_unresolved([resolved, open_], 1, "acme/frontend", {})
     assert result == [open_]
+
+
+_ISSUE_COMMENT = {"type": "issue", "id": 6161750034, "author": "eva-oscilar", "body": "notes"}
+
+
+def test_filter_already_replied_skips_issue_comment_we_recorded_replying_to():
+    # Issue comments have no reply linkage, so our own reply is invisible on GitHub's side.
+    result = address_comments._filter_already_replied([_ISSUE_COMMENT], 1, "alexei", {"issue:6161750034"})
+    assert result == []
+
+
+def test_filter_already_replied_keeps_issue_comment_not_recorded():
+    result = address_comments._filter_already_replied([_ISSUE_COMMENT], 1, "alexei", {"issue:1"})
+    assert result == [_ISSUE_COMMENT]
+
+
+def test_address_single_comment_records_issue_comment_after_clean_run(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
+    monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha")
+    backend = type("B", (), {"run": lambda self, *a, **k: None})()
+    address_comments._address_single_comment(
+        _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, None, "acme-frontend"
+    )
+    assert recorded == [("acme-frontend", 7, "issue:6161750034")]
+
+
+def test_address_single_comment_does_not_record_when_backend_raises(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
+    monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha")
+
+    class Boom:
+        def run(self, *a, **k):
+            raise RuntimeError("boom")
+
+    address_comments._address_single_comment(
+        _ISSUE_COMMENT, 7, "tmpl", Boom(), "/w", "acme/frontend", {}, "sha", None, None, "acme-frontend"
+    )
+    assert recorded == []

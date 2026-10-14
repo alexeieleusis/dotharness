@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from harness import state
 from harness.backend import Backend
 from harness.config import HarnessConfig
 from harness.lock import acquire_lock
@@ -46,6 +47,10 @@ query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
   }
 }
 """.strip()
+
+# Comment types with no reply linkage in the GitHub API: a reply is just a new issue comment,
+# so "already answered" can only be known from our own persisted record (see harness.state).
+_NON_THREADED_TYPES = ("issue", "review")
 
 COMMENT_BODY_LABEL = "Comment body:"
 COMMENT_BODY_GUARDRAIL = (
@@ -110,7 +115,9 @@ def _run_locked(config: HarnessConfig) -> None:
         trusted_commenters=config.address_comments.trusted_commenters,
         opencode_dir=opencode_dir,
         plugin_prefix=plugin_prefix,
+        repo_slug=config.repo_slug,
     )
+    state.prune_address_comments_state(config.repo_slug, {pr["number"] for pr in prs})
 
     logger.info("Found %d open PR(s) to check", len(prs))
     for pr in prs:
@@ -138,6 +145,7 @@ class _ProcessPrContext:
     trusted_commenters: str | list[str]
     opencode_dir: str | None = None
     plugin_prefix: str | None = None
+    repo_slug: str | None = None
 
 
 def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -> None:
@@ -169,6 +177,7 @@ def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) 
         ctx.env,
         ctx.trusted_commenters,
         ctx.plugin_prefix,
+        state.get_replied_comment_keys(ctx.repo_slug, number) if ctx.repo_slug else None,
     )
     if not comments:
         logger.info("PR #%d: no unresolved comments remain after filtering", number)
@@ -194,6 +203,7 @@ def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) 
             head_sha,
             ctx.opencode_dir,
             ctx.our_login,
+            ctx.repo_slug,
         )
         if rewritten:
             logger.warning(
@@ -277,12 +287,18 @@ def _select_approved_focused_review_comments(
     return selected, rest
 
 
-def _is_comment_already_replied(comment: dict, our_login: str) -> bool:
+def _reply_key(comment: dict) -> str:
+    return f"{comment.get('type')}:{comment.get('id')}"
+
+
+def _is_comment_already_replied(comment: dict, our_login: str, replied_keys: set[str] | None = None) -> bool:
     """Return True if `our_login` has already replied to this comment."""
     if comment["type"] == "inline":
         replies = comment.get("replies")
         if replies and replies[-1].get("author") == our_login:
             return True
+    if comment["type"] in _NON_THREADED_TYPES and replied_keys and _reply_key(comment) in replied_keys:
+        return True
     return comment["type"] == "issue" and comment.get("author") == our_login
 
 
@@ -339,11 +355,13 @@ def _comment_still_unresolved(comment: dict, pr_number: int, repo: str, env: dic
     return comment_id in unresolved_ids
 
 
-def _filter_already_replied(comments: list[dict], pr_number: int, our_login: str | None) -> list[dict]:
+def _filter_already_replied(
+    comments: list[dict], pr_number: int, our_login: str | None, replied_keys: set[str] | None = None
+) -> list[dict]:
     if not our_login:
         return comments
     before = len(comments)
-    comments = [c for c in comments if not _is_comment_already_replied(c, our_login)]
+    comments = [c for c in comments if not _is_comment_already_replied(c, our_login, replied_keys)]
     if len(comments) < before:
         logger.info(
             "PR #%d: skipped %d already-replied comment(s)",
@@ -377,11 +395,12 @@ def _filter_comments(
     env: dict,
     trusted_commenters: str | list[str] = "*",
     plugin_prefix: str | None = None,
+    replied_keys: set[str] | None = None,
 ) -> list[dict]:
     comments = _filter_by_trusted_commenters(comments, pr_number, trusted_commenters)
     comments = _filter_by_unresolved(comments, pr_number, repo, env)
     selected, comments = _select_approved_focused_review_comments(comments, pr_number, repo, our_login, env)
-    comments = _filter_already_replied(comments, pr_number, our_login)
+    comments = _filter_already_replied(comments, pr_number, our_login, replied_keys)
     comments = selected + comments
     comments = _filter_by_plugin_prefix(comments, pr_number, plugin_prefix)
     return comments
@@ -421,6 +440,7 @@ def _address_single_comment(
     pre_sha: str,
     opencode_dir: str | None = None,
     our_login: str | None = None,
+    repo_slug: str | None = None,
 ) -> tuple[str, bool]:
     """Run the backend for `comment`, then return the resulting HEAD sha (or `pre_sha`
     unchanged if HEAD didn't move / couldn't be read) so the caller can pass it as the
@@ -450,6 +470,10 @@ def _address_single_comment(
         logger.info("PR #%d: comment %s — backend finished", pr_number, cid)
     except Exception:
         logger.exception("PR #%d comment %s: error", pr_number, cid)
+    else:
+        # Recorded only on a clean run so a crashed attempt is retried next pass.
+        if repo_slug and ctype in _NON_THREADED_TYPES:
+            state.record_replied_comment(repo_slug, pr_number, _reply_key(comment))
     finally:
         post_sha = get_head_sha(wdir, env) or pre_sha
         if pre_sha and post_sha != pre_sha and not _is_ancestor(pre_sha, post_sha, wdir, env):
