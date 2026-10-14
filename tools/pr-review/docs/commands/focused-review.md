@@ -74,3 +74,13 @@ This check is deliberately not author-based. The original SonarQube comment, a f
 - Resolve and minimise are best effort. If either fails, the command logs it and ignores it. It does not stop the remaining comments or PRs.
 - The real `resolveReviewThread` and `minimizeComment` calls with the harness token have not yet been verified against GitHub. That manual check is pending.
 - This command is subject to the shared locking, `gh` account, and working-directory-mutation caveats in [Shared behavior](index.md#shared-behavior).
+
+## Risks
+
+Enabling `focused_review.enabled` also enables the resolve (`resolveReviewThread`) and minimise (`minimizeComment`, classifier `RESOLVED`) behaviour for false-positive comments, with no `[focused-review-bot]` marker reply. The harness never deletes a comment.
+
+- R1: enabling `focused_review.enabled` also enables resolve and minimise. There is no separate opt-in or opt-out, and no config field for it.
+- R2: the root comment is hidden even when humans have replied in the thread, so a human conversation may be hidden.
+- R3: the comment body, the diff and the knowledge file are untrusted input. A crafted one could persuade the backend to judge a finding a false positive and hide a comment. This is accepted because the scope is limited to target comments (SonarQube inline comments citing a vibe-types knowledge file) and the action is reversible: unresolve the thread and unminimise the comment in the GitHub UI. Nothing is deleted.
+- R4: if a hidden comment is recreated, the harness hides it again each time.
+- V1: if the harness token lacks the permission to resolve or minimise, the feature has no effect. The check on a real PR is still pending and has not yet been verified. Its result is recorded in the PR description of the change that introduced this behaviour.
