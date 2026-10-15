@@ -158,18 +158,41 @@ def test_safety_skip_still_marks_but_does_not_pass_safety(tmp_path):
 def test_threshold_zero_never_matches(tmp_path):
     with _mocks(size=_size(viewed=0, approve=0)) as m:
         auto_approve.run(_cfg(tmp_path, viewed=0, approve=0))
-    m.mark.assert_not_called()
+    assert m.mark.call_args.args[3] == 0  # nothing is below 0, so mark_files_viewed marks nothing
     assert m.approve.call_args.args[5] == 0
+    assert m.approve.call_args.kwargs["all_viewed"] is False
 
 
 def test_empty_pr_not_approved_and_logged(tmp_path, caplog):
     with _mocks(size=_size(counts={})) as m, caplog.at_level(logging.INFO):
         auto_approve.run(_cfg(tmp_path))
-    m.mark.assert_not_called()
     m.approve.assert_not_called()
-    m.gate.assert_not_called()
     assert "no counted files" in caplog.text
     m.restore.assert_called_once()
+
+
+def test_all_files_viewed_passes_flag_to_approve(tmp_path, caplog):
+    with _mocks() as m, caplog.at_level(logging.INFO):
+        m.mark.return_value = ViewedResult(ViewedStatus.DONE, all_viewed=True)
+        auto_approve.run(_cfg(tmp_path))
+    assert m.approve.call_args.kwargs["all_viewed"] is True
+    assert "size limit waived" in caplog.text
+
+
+def test_all_viewed_large_pr_still_goes_through_gate_and_safety(tmp_path):
+    with _mocks(size=_size(counts={"a.py": 900})) as m:
+        m.mark.return_value = ViewedResult(ViewedStatus.DONE, all_viewed=True)
+        auto_approve.run(_cfg(tmp_path))
+    args = m.approve.call_args.args
+    assert args[2].status is GateStatus.PASSED and args[3].status is SafetyStatus.SAFE
+    assert args[4].total_lines == 900
+
+
+def test_all_viewed_empty_pr_is_approved(tmp_path):
+    with _mocks(size=_size(counts={})) as m:
+        m.mark.return_value = ViewedResult(ViewedStatus.DONE, all_viewed=True)
+        auto_approve.run(_cfg(tmp_path))
+    m.approve.assert_called_once()
 
 
 def test_runner_passes_identical_writer_args_on_each_run(tmp_path):

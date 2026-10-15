@@ -117,3 +117,26 @@ def test_dry_run_reads_but_never_writes():
     result, calls, writes = run([page([node("a.py"), node("b.py")])], dry_run=True, counts={"a.py": 1, "b.py": 1})
     assert result.marked == ["a.py", "b.py"]
     assert writes == [] and len(calls) == 1
+
+
+def test_all_viewed_when_every_file_viewed_or_marked():
+    reads = [page([node("a.py"), node("big.py", "VIEWED")])]
+    result, _, _ = run(reads, counts={"a.py": 10, "big.py": 80})
+    assert result.all_viewed is True
+
+
+def test_not_all_viewed_when_a_large_file_is_unviewed():
+    reads = [page([node("a.py"), node("big.py")])]
+    result, _, _ = run(reads, counts={"a.py": 10, "big.py": 80})
+    assert result.all_viewed is False
+
+
+def test_not_all_viewed_when_a_mark_fails():
+    reads = [page([node("a.py")])]
+    result, _, _ = run(reads, mark=proc(code=1), counts={"a.py": 10})
+    assert result.all_viewed is False
+
+
+def test_all_viewed_in_dry_run_counts_would_be_marked():
+    result, _, writes = run([page([node("a.py")])], dry_run=True, counts={"a.py": 10})
+    assert result.all_viewed is True and writes == []

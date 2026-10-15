@@ -15,7 +15,9 @@ Public entry point (takes the shared working-directory lock itself, like the sib
 
 Per PR: size evaluation, timing gate, approval-safety reads (all reads before any write; any
 read failure means no write on that PR), then mark small files viewed (gate open), then approve
-(small PR, safe, not already approved, bound to the head SHA).
+(small PR, or any size once every file of the PR is viewed; safe, not already approved, bound to
+the head SHA). The timing gate is what requires the author's comment (or push) after the review:
+it applies to both paths, so a fully viewed PR is not approved before the author has responded.
 
 A PR with no counted files (only renames, deletes, or binary files) is never approved and
 nothing is marked: zero counted lines would otherwise satisfy "strictly below" trivially, and
@@ -210,9 +212,6 @@ def _decide_and_act(
     pr_number = pr["number"]
     repo = config.repo.name
     _log_size(pr_number, size, config)
-    if not size.file_counts:
-        logger.info("PR #%d: no counted files (only renames/deletes/binary), not approving", pr_number)
-        return []
 
     # All reads first (NFR-1): any read failure means no write on this PR this run.
     author = (pr.get("author") or {}).get("login", "")
@@ -234,9 +233,15 @@ def _decide_and_act(
         return []
 
     gate_passed = gate.status is GateStatus.PASSED
-    problems = _mark_viewed(pr_number, size, config, gate_passed, env, dry_run)
-    if problems is None:
+    viewed = _mark_viewed(pr_number, size, config, gate_passed, env, dry_run)
+    if viewed is None:
         return ["viewed-state read failed, no writes"]
+    problems, all_viewed = viewed
+    if not size.file_counts and not all_viewed:
+        logger.info("PR #%d: no counted files (only renames/deletes/binary), not approving", pr_number)
+        return problems
+    if all_viewed:
+        logger.info("PR #%d: every file is viewed, size limit waived for approval", pr_number)
     approval = approve_pr(
         repo,
         pr_number,
@@ -247,6 +252,7 @@ def _decide_and_act(
         current_user,
         env,
         dry_run,
+        all_viewed=all_viewed,
     )
     logger.info("PR #%d: approval %s (%s)", pr_number, approval.status.value, approval.reason)
     if approval.status in (ApprovalStatus.READ_FAILED, ApprovalStatus.WRITE_FAILED):
@@ -256,12 +262,13 @@ def _decide_and_act(
 
 def _mark_viewed(
     pr_number: int, size: SizeEvaluation, config: HarnessConfig, gate_passed: bool, env: dict, dry_run: bool
-) -> list[str] | None:
-    """Mark small files viewed. Returns problems, or None when the read failed (skip all writes)."""
+) -> tuple[list[str], bool] | None:
+    """Mark small files viewed. Returns (problems, all files viewed), or None when the read failed.
+
+    Runs even when no file is small: the viewed states are also how a PR the reviewer viewed by
+    hand is recognised.
+    """
     max_lines = config.auto_approve.viewed_max_lines
-    if max_lines <= 0 or not size.small_files:
-        logger.info("PR #%d: no files eligible to mark viewed", pr_number)
-        return []
     viewed = mark_files_viewed(
         config.repo.name, pr_number, size.file_counts, max_lines, gate_passed, env, dry_run=dry_run
     )
@@ -275,4 +282,4 @@ def _mark_viewed(
     )
     if viewed.status is ViewedStatus.READ_FAILED:
         return None
-    return [f"failed to mark viewed: {p}" for p in viewed.failed]
+    return [f"failed to mark viewed: {p}" for p in viewed.failed], viewed.all_viewed

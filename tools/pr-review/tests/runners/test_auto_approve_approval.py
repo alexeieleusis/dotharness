@@ -28,7 +28,18 @@ def review(sha=HEAD, login=ME, state="APPROVED"):
     return {"state": state, "commit_id": sha, "user": {"login": login}}
 
 
-def run(reviews=(), view=None, post=None, total=100, gate=True, safe=True, sha=HEAD, user=ME, dry_run=False):
+def run(
+    reviews=(),
+    view=None,
+    post=None,
+    total=100,
+    gate=True,
+    safe=True,
+    sha=HEAD,
+    user=ME,
+    dry_run=False,
+    all_viewed=False,
+):
     calls = []
 
     def fake(cmd, **kwargs):
@@ -45,7 +56,7 @@ def run(reviews=(), view=None, post=None, total=100, gate=True, safe=True, sha=H
         gate_result = GateResult(GateStatus.PASSED if gate else GateStatus.NOT_PASSED, "")
         safety = SafetyResult(SafetyStatus.SAFE if safe else SafetyStatus.SKIP, "", sha)
         size = SizeEvaluation(file_counts={"a.py": total}, total_lines=total, small_files=[], pr_is_small=False)
-        result = approve_pr("o/r", 5, gate_result, safety, size, 500, user, {}, dry_run)
+        result = approve_pr("o/r", 5, gate_result, safety, size, 500, user, {}, dry_run, all_viewed=all_viewed)
     posts = [c for c in calls if "POST" in c]
     return result, calls, posts
 
@@ -126,3 +137,15 @@ def test_dry_run_reads_but_never_posts():
     result, calls, posts = run(dry_run=True)
     assert result.status is ApprovalStatus.DRY_RUN
     assert posts == [] and len(calls) == 1  # only the head re-read
+
+
+def test_too_large_skipped_unless_all_viewed():
+    result, calls, _ = run(total=900)
+    assert result.status is ApprovalStatus.SKIPPED and calls == []
+    result, _, posts = run(total=900, all_viewed=True)
+    assert result.status is ApprovalStatus.APPROVED and len(posts) == 1
+
+
+def test_all_viewed_does_not_waive_gate_or_safety():
+    assert run(all_viewed=True, gate=False)[0].status is ApprovalStatus.SKIPPED
+    assert run(all_viewed=True, safe=False)[0].status is ApprovalStatus.SKIPPED

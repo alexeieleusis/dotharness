@@ -450,6 +450,7 @@ class ViewedResult:
     marked: list[str] = field(default_factory=list)  # marked, or would be marked in dry-run
     skipped: list[str] = field(default_factory=list)  # already VIEWED
     failed: list[str] = field(default_factory=list)  # a markFileAsViewed call failed
+    all_viewed: bool = False  # every file of the PR is VIEWED (or was just marked, or would be in dry-run)
 
 
 class ApprovalStatus(Enum):
@@ -600,7 +601,9 @@ def mark_files_viewed(
             failed.append(path)
     for path in already:
         logger.info("PR #%d: %s already viewed, skipping", pr_number, path)
-    return ViewedResult(ViewedStatus.DONE, marked=marked, skipped=already, failed=failed)
+    viewed_now = {*marked, *(p for p, state in states.items() if state == VIEWED_STATE)}
+    all_viewed = bool(states) and all(path in viewed_now for path in states)
+    return ViewedResult(ViewedStatus.DONE, marked=marked, skipped=already, failed=failed, all_viewed=all_viewed)
 
 
 def _read_approval_state(repo: str, pr_number: int, acting: str, env: dict) -> bool | None:
@@ -612,7 +615,7 @@ def _read_approval_state(repo: str, pr_number: int, acting: str, env: dict) -> b
 
 
 def _approval_precheck(
-    gate: GateResult, safety: SafetyResult, total_lines: int, approve_max_lines: int
+    gate: GateResult, safety: SafetyResult, total_lines: int, approve_max_lines: int, all_viewed: bool
 ) -> ApprovalResult | None:
     if gate.status is not GateStatus.PASSED:
         return ApprovalResult(ApprovalStatus.SKIPPED, REASON_GATE_NOT_PASSED)
@@ -620,7 +623,7 @@ def _approval_precheck(
         return ApprovalResult(ApprovalStatus.SKIPPED, REASON_SAFETY_NOT_PASSED)
     if not safety.head_sha:
         return ApprovalResult(ApprovalStatus.SKIPPED, REASON_NO_HEAD_SHA)
-    if total_lines >= approve_max_lines:
+    if not all_viewed and total_lines >= approve_max_lines:
         return ApprovalResult(ApprovalStatus.SKIPPED, REASON_TOO_LARGE)
     return None
 
@@ -680,14 +683,19 @@ def approve_pr(
     current_user: str,
     env: dict,
     dry_run: bool = False,
+    all_viewed: bool = False,
 ) -> ApprovalResult:
-    """Approve a PR strictly below ``approve_max_lines`` (FR-6). Never raises for read problems.
+    """Approve a PR strictly below ``approve_max_lines``, or any size once every file is viewed (FR-6).
+
+    ``all_viewed`` (every file of the PR marked viewed, by the reviewer or by this tool) waives only
+    the size limit; the gate, safety, idempotency and head-binding rules still apply. Never raises
+    for read problems.
 
     Owns the whole decision: requires ``gate`` PASSED and ``safety`` SAFE, binding the approval to
     ``safety.head_sha``. Re-reads reviews (tri-state) and the current head; any failed read or
     moved head means no write. The review body is empty and ``commit_id`` is the head SHA.
     """
-    result = _approval_precheck(gate, safety, size.total_lines, approve_max_lines)
+    result = _approval_precheck(gate, safety, size.total_lines, approve_max_lines, all_viewed)
     if result is None:
         try:
             result = _approve(repo, pr_number, safety.head_sha, current_user, env, dry_run)

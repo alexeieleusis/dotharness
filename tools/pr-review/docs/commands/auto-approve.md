@@ -39,6 +39,11 @@ nothing and exits 0. It does not even take the lock.
    any write.
 5. Marks each file with fewer than `viewed_max_lines` modified lines as
    viewed, and approves the PR if its total is fewer than `approve_max_lines`.
+   A PR of any size is also approved once every one of its files is viewed
+   (marked by you in the GitHub UI, or by this command). That waives only the
+   size limit: the timing rule, the safety conditions, the already-approved
+   check and the head-SHA binding still apply, so the PR author must have
+   commented or pushed after the review first.
 
 Comparisons are strictly "less than". A threshold of `0` never matches, so it
 turns that half of the feature off.
