@@ -89,8 +89,8 @@ review or pre-commit step.
 Enabling `focused_review.enabled` now also enables the resolve and minimise
 behaviour. When the backend judges a target comment a false positive, the
 harness resolves the review thread (`resolveReviewThread`), minimises the root
-comment (`minimizeComment`, classifier `RESOLVED`), and posts no text and no
-`[focused-review-bot]` marker. No new config field exists for this behaviour,
+comment (`minimizeComment`, classifier `RESOLVED`), after first posting a reply, ending with the
+`[focused-review-bot]` marker, that states the finding is a false positive. No new config field exists for this behaviour,
 so there is no separate opt-in or opt-out. The refactor-description reply path
 is unchanged.
 

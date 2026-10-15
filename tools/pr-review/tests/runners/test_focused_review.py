@@ -756,15 +756,24 @@ def test_template_has_both_mutations_verbatim_in_order():
     assert text.index(_RESOLVE_MUTATION) < text.index(_MINIMIZE_MUTATION)
 
 
-def test_template_false_positive_posts_nothing_and_refactor_path_unchanged():
+def test_template_false_positive_posts_marked_reply_before_mutations():
+    text = _template()
+    fp = " ".join(_false_positive_text().split())
+    assert "First post a short reply" in fp
+    assert "False positive: <one sentence reason>" in text
+    assert "Post only that one reply" in fp
+    assert fp.index("False positive: <one sentence reason>") < fp.index("resolveReviewThread")
+    assert text.index("False positive: <one sentence reason>") < text.index(_RESOLVE_MUTATION)
+    assert text.count("<Marker>") >= 2
+
+
+def test_template_refactor_path_unchanged():
     text = " ".join(_template().split())
-    assert "Post no reply and no other text" in text
     assert "## Step 3 — Write the refactor description" in text
     assert "## Step 4 — Post the reply" in text
     assert '-X POST -f body="<your refactor description>' in text
     assert "<Marker>" in text
     assert "MUST include the marker verbatim" in text
-    assert "A false positive posts no reply" in text
     assert "Never request or re-request a review." in text
 
 
@@ -812,7 +821,7 @@ def test_template_states_mutation_failure_handling():
     start = text.index("**If a mutation fails**")
     section = text[start:]
     assert "retry in a loop" in section
-    assert "fallback reply" in section
+    assert "second reply" in section
     assert "finish" in section
     assert "never an error of the comment" in section
     assert "still attempt the minimise mutation" in section
