@@ -1,0 +1,103 @@
+"""Resume support: list stopped items, detect that a stop is cleared, locate the answer file.
+
+Cheap and deterministic: no agent call, no network. A stop clears when (see ``stoprecord.CLEARS_BY``)
+the brief no longer has blocking open decisions (C1), the user wrote a non-empty answer file (C2..C4),
+or a bounded retry delay has passed (C8). Everything else (C5..C7, errors, anything unknown) needs an
+explicit ``sisyphus resume``. Imports only Package A modules.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+from sisyphus.config import SisyphusConfig
+from sisyphus.intake import IntakeError, parse_open_decisions, resolve_brief_path
+from sisyphus.runrecord import RunRecord, record_path
+from sisyphus.stoprecord import (
+    AUTO_RETRY_DELAY_MINUTES,
+    AUTO_RETRY_MAX,
+    CLEARS_BY,
+    StopRecord,
+    read_stop_record,
+)
+
+SIDECAR_SUFFIXES = (".stop.json", ".intake.json", ".stopped.json")
+ANSWER_SUFFIX = ".answer.md"
+USED_SUFFIX = ".used"
+AUTO_RETRY_KEY = "auto-retry"
+
+
+def answer_path(rec_path: Path) -> Path:
+    """``<item-encoded>.answer.md`` next to the run record; the user writes the answer here."""
+    return rec_path.with_suffix(ANSWER_SUFFIX)
+
+
+def read_answer(rec_path: Path) -> str:
+    try:
+        return answer_path(rec_path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def consume_answer(rec_path: Path) -> None:
+    """Rename the answer file to ``*.answer.md.used`` so a stale answer does not clear a later stop."""
+    path = answer_path(rec_path)
+    if path.is_file():
+        path.replace(path.with_name(path.name + USED_SUFFIX))
+
+
+def iter_records(workspace: Path) -> Iterator[RunRecord]:
+    """Valid run records in ``workspace`` (sorted by file name); sidecars and foreign files are ignored."""
+    if not workspace.is_dir():
+        return
+    for path in sorted(workspace.glob("*.json")):
+        if path.name.endswith(SIDECAR_SUFFIXES):
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        item = data.get("item") if isinstance(data, dict) else None
+        if not isinstance(item, str) or record_path(workspace, item) != path:
+            continue
+        yield RunRecord.open(workspace, item)
+
+
+def is_stopped(rec: RunRecord, stop: StopRecord | None) -> bool:
+    return rec.checkpoint is not None or stop is not None
+
+
+def _stopped_at(rec: RunRecord, stop: StopRecord | None) -> datetime:
+    for text in (stop.stopped_at if stop else "", rec.updated_at):
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError:
+            continue
+    return datetime.min.replace(tzinfo=UTC)
+
+
+def list_waiting(workspace: Path) -> list[tuple[RunRecord, StopRecord | None]]:
+    """Items stopped at a checkpoint (record checkpoint set), oldest stop first."""
+    found = [(r, read_stop_record(r.path)) for r in iter_records(workspace) if r.checkpoint is not None]
+    return sorted(found, key=lambda pair: _stopped_at(*pair))
+
+
+def cleared(rec: RunRecord, stop: StopRecord | None, config: SisyphusConfig, now: datetime) -> bool:
+    """True when the blocker of the stop at ``rec.checkpoint`` is cleared and an automatic resume may start."""
+    how = CLEARS_BY.get(rec.checkpoint, "explicit")
+    if how == "brief":
+        try:
+            brief = resolve_brief_path(config, rec.item)
+            return brief.is_file() and not parse_open_decisions(brief.read_text(encoding="utf-8"))
+        except (IntakeError, OSError):
+            return False
+    if how == "answer":
+        return bool(read_answer(rec.path))
+    if how == "retry":
+        if rec.retries.get(AUTO_RETRY_KEY, 0) >= AUTO_RETRY_MAX:
+            return False
+        return now - _stopped_at(rec, stop) >= timedelta(minutes=AUTO_RETRY_DELAY_MINUTES)
+    return False

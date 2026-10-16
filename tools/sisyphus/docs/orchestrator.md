@@ -98,3 +98,14 @@ stage produces a digest listing only run-record information.
 
 The orchestration prompt is `knowledge/sisyphus/orchestration-prompt.md`; its parameters are filled by
 `build_orchestration_prompt` with paths from `paths.py`.
+
+## Stop record, resume and the clone
+
+When a stage raises a checkpoint, or an unexpected error escapes, `run_item` writes the stop record
+(`stoprecord.py`, a sidecar next to the run record; the run record schema is unchanged) and deletes it when a
+run completes. `OrchestratorOptions.resume_command` is the command text stored in it (`{item}` is replaced).
+A complete stage is always skipped on a rerun, except intake stopped at C1, which only re-parses the brief
+(`run_intake(reparse_only=True)`) so a human-edited brief is never redrafted. An answer file
+(`resume.answer_path`) is appended to the next agent prompt and then renamed `*.used`. Before the first stage a
+new item requires a clean clone, and a resume after the build stage checks out the item's branch; a dirty clone
+is a C8 stop and is never stashed or reset. `resume.py` holds the cleared-detection rules used by `sisyphus run`.

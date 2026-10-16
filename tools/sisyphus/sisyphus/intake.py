@@ -195,11 +195,14 @@ def run_intake(
     record: RunRecord | None = None,
     home: Path | None = None,
     checkout_root: Path | None = None,
+    reparse_only: bool = False,
 ) -> IntakeResult:
     """Run the intake stage for ``item`` and report open decisions.
 
     Skips ``runner`` when the brief exists and the item reference plus the SHA-256 of the final
     prompt text match the sidecar written next to the brief on the last successful run. The
+    ``reparse_only`` never calls the runner when the brief exists (a resume after C1 must not redraft a
+    human-edited brief); it only re-parses the open decisions. The
     stage is marked in progress before and complete after in the run record; a runner exception or
     boundary violation leaves it in progress. A blocking brief sets checkpoint C1 on the record.
     """
@@ -214,7 +217,7 @@ def run_intake(
     digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     rec = record or RunRecord.open(Path(config.project.workspace_dir).expanduser(), item)
 
-    skipped = _unchanged(brief, item, digest)
+    skipped = (reparse_only and brief.is_file()) or _unchanged(brief, item, digest)
     with rec.stage_scope(INTAKE_STAGE):
         if not skipped:
             brief.parent.mkdir(parents=True, exist_ok=True)

@@ -6,6 +6,8 @@ There is no daemon, no loop and no scheduler installer; run it from cron or laun
 ```
 sisyphus run --config <file> [--base <branch>]
 sisyphus intake <work-item-ref> --config <file>
+sisyphus status [<work-item-ref>] --config <file>
+sisyphus resume <work-item-ref> --config <file> [--base <branch>]
 ```
 
 ## `sisyphus run`
@@ -14,10 +16,12 @@ sisyphus intake <work-item-ref> --config <file>
 2. Takes the per-clone lock for `[project].repo_dir` without blocking, and holds it for the whole
    invocation (awaiting-review check, pick, every item, digest write). If another run holds it, exits 0
    quietly before doing anything else.
-3. If an earlier Sisyphus PR (a run record that reached the PR stage whose branch still has an open PR)
-   awaits review, skips picking and reports it under "Needs you" in the digest.
-4. Otherwise picks up to `[limits].max_tickets_per_run` items (default 1) the tracker offers and Sisyphus has
-   not started (no run record):
+3. Auto-resumes stopped items whose blocker is cleared (see "Stopped items and resume"), oldest stop first.
+   Items still waiting for you never stop the loop; they are listed under "Needs you" as "Awaiting you".
+4. If an earlier Sisyphus PR (a run record that reached the PR stage, not stopped at a checkpoint, whose branch
+   still has an open PR) awaits review, skips picking and reports it under "Needs you" in the digest.
+   Otherwise picks as many new items as are left of `[limits].max_tickets_per_run` (default 1; resumed and new
+   items share it) that the tracker offers and Sisyphus has not started (no run record):
    - Linear: assigned to `assignee`, in `pick_state`, in Linear's priority order (urgent first, no priority
      last).
    - GitHub: open, assigned to `assignee`, labelled `pick_label` (default `sisyphus`), oldest first; an issue
@@ -63,12 +67,57 @@ Runs only the intake stage for one work item reference: the agent drafts the bri
 `brief_path_template`. Prints `brief: <path>` and any open decisions (checkpoint C1). Needs
 `[project].repo_dir`, `workspace_dir` and `brief_path_template`. Takes the same lock; exits 0 quietly if held.
 
+## Stopped items and resume
+
+When a run stops (a checkpoint C1..C8, or an unexpected error) Sisyphus writes a stop record next to the run
+record, `<workspace_dir>/<item>.json.stopped.json`, with the stage, the checkpoint, the questions or blocker, the
+exact action you must take and the exact resume command. The digest's "Needs you" section shows it (question,
+`Action:`, `Resume:`), and `sisyphus status` prints it. The run record's retry counters are never reset by a stop
+or a resume.
+
+**Single dedicated clone.** You never edit code in the clone and never move anything between repositories. You
+answer in files under `workspace_dir` (outside the repo): the brief, or an answer file. Each item has its own
+branch `sisyphus/<slug>-<8 hex>`, so partial work stays on its branch while another item runs. The clone must
+be clean between items: a new item, and a build checkout, refuse to start on a dirty clone (checkpoint C8 plus a
+digest entry); Sisyphus never stashes, resets or discards anything. A resume at push, PR, ci-fix or merge checks
+out the item's own branch first; committed work is never redone.
+
+**Answering.** C1: edit the brief and mark each open decision resolved. C2, C3, C4: write your answer to
+`<workspace_dir>/<item-encoded>.answer.md` (the path is in the action text; any non-empty text counts). The
+agent gets the answer text with its next prompt and the file is renamed `*.answer.md.used`.
+
+**Automatic or explicit.** Each `run` first resumes the stopped items that are cleared, with no agent call
+needed to decide: C1 when the brief no longer has blocking open decisions, C2..C4 when the answer file is
+non-empty, C8 after 30 minutes since the stop, at most 3 automatic retries. Everything else (C5, C6, C7, errors)
+needs `sisyphus resume`. `sisyphus resume REF --config F [--base B]` also works for any stopped item at any time
+(for a not yet answered one it simply stops again with the same question). It errors (exit 1) when there is no
+run record or the item is not stopped, and exits 0 quietly if another invocation holds the lock.
+
+| stop | what stopped | what you do | clears | what resume does |
+|---|---|---|---|---|
+| C1 | brief has open decisions | edit the brief, mark them resolved | automatic (brief re-parsed) | re-parses the brief (never redrafts it), then plan init, plan, build, push, PR |
+| C2 | OPEN_QUESTIONS.md unresolved after draft-overview | write the answer file | automatic (answer file) | re-runs the plan stage with your answer, then build |
+| C3 | a leaf has an open question | write the answer file | automatic (answer file) | re-runs build with your answer; the build prompt continues from the stopped leaf |
+| C4 | a leaf deviation may change later leaves | write the answer file (accept or redirect) | automatic (answer file) | same as C3 |
+| C5 | retries exhausted, scope violation or a failed gate | decide: change the leaf or config, or fix the cause | explicit | re-runs the stage; the build retry budget (3) is kept, so an exhausted budget stops again at C5 without a new agent run |
+| C6 | a limit was hit | raise the limit in `.sisyphus.toml` (`max_run_minutes` needs nothing: the clock is per invocation) | explicit | leaf limit: re-counts the leaves, no re-plan; fix attempts: counter kept; time limit: continues at the next stage |
+| C7 | branch cannot be updated without rebase | rebase the branch yourself | explicit | re-runs the push or ci-fix stage on the same branch and PR |
+| C8 | gh, Linear, git network call failed, or a dirty clone | fix access; for a dirty clone clean it yourself | automatic retry after 30 minutes, 3 times, then explicit | retries the failed call in the same stage |
+| error | unexpected exception | fix the cause shown | explicit | re-runs the in-progress stage |
+
+## `sisyphus status`
+
+`sisyphus status [REF] --config F` is read-only (no lock, no agent). For each item (all items without REF) it
+prints stage, stage_status, checkpoint, `awaiting` (`you` for a checkpoint, `error`, `review` for an open PR,
+`none`), and for a stopped item the question, action, resume command and auto-resume rule (with whether it is
+cleared now). No items prints `no items`; an unknown REF exits 1.
+
 ## Exit codes
 
 | code | meaning |
 |---|---|
 | 0 | success, nothing to do, lock held, or a run stopped at a checkpoint (C1..C8) after its digest was written (the checkpoint is in the digest's "Needs you" section) |
-| 1 | an unhandled error, a config error, or a digest that cannot be written (message on stderr) |
+| 1 | an unhandled error, a config error, `resume`/`status` of an item that has no record (or `resume` of one that is not stopped), or a digest that cannot be written (message on stderr) |
 
 The digest is always attempted when anything ran, even if the run failed early; the failure is recorded in
 its Deviations section.

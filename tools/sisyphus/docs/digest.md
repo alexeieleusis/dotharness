@@ -14,7 +14,10 @@ Always all six, always in this order. An empty section says `None`.
 
 1. **Needs you**: a numbered list of every checkpoint C1..C8 reached, each phrased as an answerable question
    in the drafting prompt's open-decisions-log style. Questions come from `DigestReport.needs_you` and, for any
-   run record whose `checkpoint` is set and not already covered, from a built-in question per checkpoint.
+   run record whose `checkpoint` is set and not already covered, from its stop record
+   (`stoprecord.py`) or a built-in question per checkpoint. Entries can carry `Action:` (what you must do) and
+   ``Resume: `cmd` `` (`NeedsYou.action`, `NeedsYou.resume`). Items still waiting for you are listed as
+   "Awaiting you"; an unexpected error is listed as `[error]`.
 2. **Done**: PRs opened or updated and commits, each with the evidence strings the caller supplies
    (`DoneEntry.evidence`, rendered verbatim; no gate-record format is defined here), plus run records whose
    stage is `ci-fix` or `merge` and complete.

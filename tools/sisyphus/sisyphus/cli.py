@@ -24,7 +24,7 @@ import subprocess
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +32,7 @@ import click
 
 from sisyphus import gaterecord
 from sisyphus.config import ConfigError, SisyphusConfig, load_config
-from sisyphus.digest import DigestReport, DigestWriteError, NeedsYou, write_digest
+from sisyphus.digest import DigestReport, DigestWriteError, NeedsYou, needs_from_record, write_digest
 from sisyphus.intake import AgentRunner, run_intake
 from sisyphus.lock import LockHeld, clone_lock
 from sisyphus.orchestrator import (
@@ -58,7 +58,9 @@ from sisyphus.pick import (
     pick_items,
 )
 from sisyphus.rails import PERMISSION_FLAG, LimitTracker
+from sisyphus.resume import AUTO_RETRY_KEY, cleared, is_stopped, iter_records, list_waiting
 from sisyphus.runrecord import RunRecord, record_path
+from sisyphus.stoprecord import CLEARS_BY, build_stop_record, clear_stop_record, read_stop_record, write_stop_record
 
 AGENT_COMMANDS = {
     "claude": lambda prompt: ["claude", "-p", prompt, PERMISSION_FLAG],
@@ -155,6 +157,7 @@ class Services:
     lock_dir: Path | None = None
     state_dir: Path | None = None
     today: datetime | None = None
+    now: Callable[[], datetime] = lambda: datetime.now(UTC)
     repo_info: Callable[[], tuple[str, str | None]] | None = field(default=None)
 
 
@@ -243,7 +246,14 @@ def _summarise(result: RunResult) -> str:
     return f"{result.item}: done"
 
 
-def _resolve_options(config: SisyphusConfig, services: Services, base: str | None) -> OrchestratorOptions:
+def _resume_template(config_path: str, base: str | None) -> str:
+    cmd = f"sisyphus resume {{item}} --config {shlex.quote(str(Path(config_path).resolve()))}"
+    return f"{cmd} --base {shlex.quote(base)}" if base else cmd
+
+
+def _resolve_options(
+    config: SisyphusConfig, services: Services, base: str | None, config_path: str = ""
+) -> OrchestratorOptions:
     base = base or config.project.base_branch or DEFAULT_BASE_BRANCH
     slug, default_branch = (
         services.repo_info()
@@ -257,6 +267,7 @@ def _resolve_options(config: SisyphusConfig, services: Services, base: str | Non
         ci_fix=config.source.ci is not None,
         state_dir=services.state_dir,
         lock_dir=services.lock_dir,
+        resume_command=_resume_template(config_path, base) if config_path else None,
     )
 
 
@@ -288,10 +299,42 @@ class _RunState:
         return bool(self.results or self.records or self.needs or self.notes or self.limits_hit)
 
 
-def _pick_phase(config: SisyphusConfig, services: Services, state: _RunState) -> list[Candidate]:
-    """Report an earlier PR awaiting review, else pick items. The caller holds the clone lock."""
+def _waiting_need(rec: RunRecord) -> NeedsYou | None:
+    need = needs_from_record(rec)
+    if need is None:
+        return None
+    return NeedsYou(need.item, need.checkpoint, f"Awaiting you. {need.question}", need.action, need.resume)
+
+
+def _resume_phase(config: SisyphusConfig, services: Services, state: _RunState, limit: int) -> list[Candidate]:
+    """Stopped items whose blocker is cleared, oldest first, up to ``limit``; the rest are listed as awaiting you."""
     assert config.project.workspace_dir  # noqa: S101
     workspace = Path(config.project.workspace_dir).expanduser()
+    now = services.now()
+    ready: list[Candidate] = []
+    for rec, stop in list_waiting(workspace):
+        if not cleared(rec, stop, config, now):
+            need = _waiting_need(rec)
+            if need:
+                state.needs.append(need)
+        elif len(ready) >= limit:
+            state.notes.append(f"{rec.item}: blocker cleared; resumes on a later run (max_tickets_per_run reached)")
+        else:
+            if CLEARS_BY.get(rec.checkpoint) == "retry":
+                rec.increment_retry(AUTO_RETRY_KEY)
+            ready.append(Candidate(rec.item))
+    return ready
+
+
+def _pick_phase(config: SisyphusConfig, services: Services, state: _RunState) -> list[Candidate]:
+    """Auto-resume cleared items, then (unless a PR awaits review) pick new ones. The caller holds the clone lock.
+
+    Items waiting at a checkpoint never stop picking. Resumed and new items share ``max_tickets_per_run``.
+    """
+    assert config.project.workspace_dir  # noqa: S101
+    workspace = Path(config.project.workspace_dir).expanduser()
+    limit = config.limits.max_tickets_per_run
+    resumed = _resume_phase(config, services, state, limit)
     awaiting = find_awaiting_review(workspace, services.pr_client.find_pr)
     for a in awaiting:
         state.needs.append(
@@ -303,14 +346,15 @@ def _pick_phase(config: SisyphusConfig, services: Services, state: _RunState) ->
             )
         )
     if awaiting:
-        return []
-    return pick_items(
+        return resumed
+    new = pick_items(
         config.source.work_item,
         services.tracker,
         services.lookup,
         workspace_dir=workspace,
-        limit=config.limits.max_tickets_per_run,
+        limit=limit - len(resumed),
     )
+    return [*resumed, *new]
 
 
 def _run_one(
@@ -342,14 +386,19 @@ def _run_one(
 
 
 def _run_phase(
-    picked: Sequence[Candidate], config: SisyphusConfig, services: Services, base: str | None, state: _RunState
+    picked: Sequence[Candidate],
+    config: SisyphusConfig,
+    services: Services,
+    base: str | None,
+    state: _RunState,
+    config_path: str = "",
 ) -> None:
     """Run each picked item (the caller holds the clone lock, so ``run_item`` is told not to), honouring max_run_minutes."""
     if not picked:
         return
     if not config.agent.backend:
         raise _fail("config error: [agent] backend is not set")
-    options = _resolve_options(config, services, base)
+    options = _resolve_options(config, services, base, config_path)
     tracker = LimitTracker(config.limits, services.clock)
     for cand in picked:
         if "max_run_minutes" in tracker.status().reached:
@@ -383,7 +432,7 @@ def _write_digest(config: SisyphusConfig, services: Services, state: _RunState) 
 )
 @click.pass_obj
 def run_command(factory: ServicesFactory | None, config_path: str, base: str | None) -> None:
-    """Pick up to max_tickets_per_run items, run each through the orchestrator, write one digest."""
+    """Resume cleared stopped items, pick new ones (together at most max_tickets_per_run), run, write one digest."""
     config = _load(config_path)
     _require(config, "repo_dir", "workspace_dir")
     assert config.project.repo_dir  # noqa: S101
@@ -396,7 +445,7 @@ def run_command(factory: ServicesFactory | None, config_path: str, base: str | N
         with clone_lock(config.project.repo_dir, services.lock_dir):
             try:
                 picked = _pick_phase(config, services, state)
-                _run_phase(picked, config, services, base, state)
+                _run_phase(picked, config, services, base, state, config_path)
             except Exception as exc:
                 error = exc
                 if not state.notes:
@@ -430,9 +479,130 @@ def intake_command(factory: ServicesFactory | None, work_item_ref: str, config_p
         return
     except Exception as exc:
         raise _fail(str(exc)) from exc
+    rec_path = record_path(Path(config.project.workspace_dir).expanduser(), work_item_ref)
+    if result.blocked:
+        texts = tuple(f"{d.number}. {d.text}" for d in result.open_decisions)
+        write_stop_record(
+            rec_path,
+            build_stop_record(
+                work_item_ref,
+                checkpoint="C1",
+                stage="intake",
+                stage_status="complete",
+                detail=f"open decisions in {result.brief_path}: " + "; ".join(texts),
+                resume_command=_resume_template(config_path, None).replace("{item}", shlex.quote(work_item_ref)),
+                questions=texts,
+                brief_path=str(result.brief_path),
+            ),
+        )
+    else:
+        clear_stop_record(rec_path)
     click.echo(f"brief: {result.brief_path}")
     for decision in result.open_decisions:
         click.echo(f"open decision (C1): {decision}")
+
+
+@main.command("resume")
+@click.argument("work_item_ref")
+@config_option
+@click.option("--base", default=None, help="PR base branch (default: [project].base_branch, else 'main').")
+@click.pass_obj
+def resume_item_command(
+    factory: ServicesFactory | None, work_item_ref: str, config_path: str, base: str | None
+) -> None:
+    """Resume a stopped WORK_ITEM_REF from its recorded stage (explicit; no need to wait for the blocker check)."""
+    config = _load(config_path)
+    _require(config, "repo_dir", "workspace_dir")
+    assert config.project.repo_dir and config.project.workspace_dir  # noqa: S101
+    services = _services(factory, config)
+    state = _RunState()
+    error: Exception | None = None
+    digest_error: DigestWriteError | None = None
+    try:
+        with clone_lock(config.project.repo_dir, services.lock_dir):
+            workspace = Path(config.project.workspace_dir).expanduser()
+            if not record_path(workspace, work_item_ref).exists():
+                raise _fail(f"no run record for {work_item_ref}; nothing to resume")
+            rec = RunRecord.open(workspace, work_item_ref)
+            if not is_stopped(rec, read_stop_record(rec.path)):
+                raise _fail(
+                    f"{work_item_ref} is not stopped (stage {rec.stage}, {rec.stage_status}); nothing to resume"
+                )
+            try:
+                _run_phase([Candidate(work_item_ref)], config, services, base, state, config_path)
+            except Exception as exc:
+                error = exc
+                if not state.notes:
+                    state.notes.append(f"run failed: {exc}")
+            digest_error = _write_digest(config, services, state) if state.has_content else None
+    except LockHeld:
+        return
+    if error is not None:
+        raise _fail(str(error)) from error
+    if digest_error is not None:
+        raise click.exceptions.Exit(1)
+
+
+def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_path: str) -> list[str]:
+    stop = read_stop_record(rec.path)
+    need = needs_from_record(rec)
+    lines = [
+        rec.item,
+        f"  stage: {rec.stage or 'none'}",
+        f"  stage_status: {rec.stage_status or 'none'}",
+        f"  checkpoint: {rec.checkpoint or 'none'}",
+        f"  awaiting: {awaiting}",
+    ]
+    if need is not None:
+        lines.append(f"  question: {need.question}")
+        if need.action:
+            lines.append(f"  action: {need.action}")
+        resume = need.resume or _resume_template(config_path, None).replace("{item}", shlex.quote(rec.item))
+        lines.append(f"  resume: {resume}")
+        how = stop.clears_by if stop else CLEARS_BY.get(rec.checkpoint, "explicit")
+        if rec.checkpoint is None:
+            how = "explicit"
+        done = (
+            f" (cleared now: {'yes' if cleared(rec, stop, config, datetime.now(UTC)) else 'no'})"
+            if how != "explicit"
+            else ""
+        )
+        lines.append(f"  auto-resume: {how}{done}")
+    return lines
+
+
+@main.command("status")
+@click.argument("work_item_ref", required=False)
+@config_option
+@click.pass_obj
+def status_command(factory: ServicesFactory | None, work_item_ref: str | None, config_path: str) -> None:
+    """Show stage, checkpoint, question, action and resume command per item (read-only; no lock, no agent)."""
+    config = _load(config_path)
+    _require(config, "workspace_dir")
+    assert config.project.workspace_dir  # noqa: S101
+    workspace = Path(config.project.workspace_dir).expanduser()
+    if work_item_ref is not None and not record_path(workspace, work_item_ref).exists():
+        raise _fail(f"no run record for {work_item_ref}")
+    records = [r for r in iter_records(workspace) if work_item_ref in (None, r.item)]
+    if not records:
+        click.echo("no items")
+        return
+    try:
+        reviews: set[str] | None = {
+            a.item for a in find_awaiting_review(workspace, _services(factory, config).pr_client.find_pr)
+        }
+    except Exception:
+        reviews = None
+    for rec in records:
+        if rec.checkpoint is not None:
+            awaiting = "you"
+        elif read_stop_record(rec.path) is not None:
+            awaiting = "error"
+        elif reviews is None:
+            awaiting = "unknown (PR lookup failed)"
+        else:
+            awaiting = "review" if rec.item in reviews else "none"
+        click.echo("\n".join(_status_block(rec, awaiting, config, config_path)))
 
 
 __all__ = ["Services", "default_services", "main", "make_agent_runner"]

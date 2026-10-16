@@ -20,7 +20,7 @@ import subprocess
 import time
 import tomllib
 from collections.abc import Callable, Sequence
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -29,13 +29,13 @@ from typing import Any, Protocol
 from sisyphus import gaterecord
 from sisyphus.config import SisyphusConfig
 from sisyphus.digest import (
-    CHECKPOINT_QUESTIONS,
     CI_FIX_STAGE,
     MERGE_STAGE,
     DigestReport,
     DoneEntry,
     NeedsYou,
     StageTiming,
+    needs_from_stop,
     write_digest,
 )
 from sisyphus.intake import INTAKE_STAGE, AgentRunner, BoundaryViolation, resolve_brief_path, run_intake
@@ -49,7 +49,9 @@ from sisyphus.rails import (
     parse_push_argv,
     push_guard,
 )
+from sisyphus.resume import answer_path, consume_answer, read_answer
 from sisyphus.runrecord import STAGE_COMPLETE, RunRecord
+from sisyphus.stoprecord import StopRecord, build_stop_record, clear_stop_record, write_stop_record
 
 PLAN_STAGE = "plan"
 BUILD_STAGE = "build"
@@ -131,6 +133,8 @@ class OrchestratorOptions:
     repository default branch when it differs from ``base_branch``; both are never pushed to.
     ``spf_config_path`` defaults to ``<repo_dir>/.spec-prism-flow.toml`` (``build.commands`` and
     ``plan.phase_dir`` are read from it). ``phase_dir`` overrides ``plan.phase_dir``.
+    ``resume_command`` is the exact command stored in the stop record (the CLI supplies it with the config
+    path and base); the library default has a placeholder for the config path.
     """
 
     base_branch: str
@@ -143,6 +147,7 @@ class OrchestratorOptions:
     lock_dir: Path | None = None
     home: Path | None = None
     checkout_root: Path | None = None
+    resume_command: str | None = None
 
 
 @dataclass(frozen=True)
@@ -166,10 +171,11 @@ class RunResult:
 
 
 class _Stop(Exception):
-    def __init__(self, checkpoint: Checkpoint, detail: str) -> None:
+    def __init__(self, checkpoint: Checkpoint, detail: str, questions: tuple[str, ...] = ()) -> None:
         super().__init__(detail)
         self.checkpoint = checkpoint
         self.detail = detail
+        self.questions = questions
 
 
 # ------------------------------------------------------------------ helpers
@@ -280,6 +286,7 @@ class _Run:
         self.skipped: list[str] = []
         self.timings: list[StageTiming] = []
         self.stop: _Stop | None = None
+        self.stop_rec: StopRecord | None = None
 
     # -- git / process helpers
 
@@ -314,9 +321,13 @@ class _Run:
         if stage not in STAGE_ORDER:
             return 0
         idx = STAGE_ORDER.index(stage)
-        if self.rec.stage_status == STAGE_COMPLETE and self.prior_cp is None:
-            return idx + 1
-        return idx
+        if self.rec.stage_status != STAGE_COMPLETE:
+            return idx
+        # A complete stage is finished, whether the run stopped after it (limit checked between stages)
+        # or cleanly. The one exception is intake stopped at C1: it is re-entered to re-parse the brief.
+        if self.prior_cp == Checkpoint.C1.value and stage == INTAKE_STAGE:
+            return idx
+        return idx + 1
 
     def execute(self) -> Checkpoint | None:
         start = self.start_index()
@@ -332,6 +343,7 @@ class _Run:
             MERGE_STAGE: self.stage_merge,
         }
         try:
+            self.prepare_clone(start)
             for stage in self.stages():
                 if STAGE_ORDER.index(stage) < start:
                     self.skipped.append(stage)
@@ -344,8 +356,59 @@ class _Run:
         except _Stop as stop:
             self.rec.set_checkpoint(stop.checkpoint.value)
             self.stop = stop
+            self.stop_rec = self.write_stop(stop.checkpoint.value, stop.detail, stop.questions)
             return stop.checkpoint
+        clear_stop_record(self.rec.path)
         return None
+
+    def resume_command(self) -> str:
+        template = self.opt.resume_command or "sisyphus resume {item} --config <your .sisyphus.toml>"
+        return template.replace("{item}", shlex.quote(self.item))
+
+    def write_stop(self, checkpoint: str | None, detail: str, questions: tuple[str, ...] = ()) -> StopRecord:
+        stop = build_stop_record(
+            self.item,
+            checkpoint=checkpoint,
+            stage=self.rec.stage,
+            stage_status=self.rec.stage_status,
+            detail=detail,
+            resume_command=self.resume_command(),
+            questions=questions,
+            brief_path=str(resolve_brief_path(self.config, self.item)),
+            answer_path=str(answer_path(self.rec.path)),
+        )
+        write_stop_record(self.rec.path, stop)
+        return stop
+
+    def record_error(self, exc: BaseException) -> None:
+        """Write the stop record for an unexpected error; never masks the error itself."""
+        with suppress(Exception):
+            self.stop_rec = self.write_stop(None, f"{type(exc).__name__}: {exc}")
+
+    # -- single dedicated clone: clean between items, each item on its own branch
+
+    def ensure_clean(self) -> None:
+        """Refuse (C8-style stop) when the clone has uncommitted changes. Never stashes or resets."""
+        dirty = self.git("status", "--porcelain", "--untracked-files=all").stdout.strip()
+        if dirty:
+            raise _Stop(
+                Checkpoint.C8,
+                f"the dedicated clone {self.repo} has uncommitted changes (for example after a crash); "
+                "Sisyphus will not stash, reset or discard them. Commit or discard them yourself. "
+                f"First lines: {_tail(dirty, 200)}",
+            )
+
+    def prepare_clone(self, start: int) -> None:
+        """Before the first stage: a new item needs a clean clone; a later-stage resume goes back to its branch."""
+        if self.rec.stage is None:
+            self.ensure_clean()
+            return
+        if start > STAGE_ORDER.index(BUILD_STAGE) and any(STAGE_ORDER.index(st) >= start for st in self.stages()):
+            self.ensure_clean()
+            if self.git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip() != self.branch:
+                if self.git("rev-parse", "--verify", "--quiet", f"refs/heads/{self.branch}", ok=False).returncode != 0:
+                    raise OrchestratorError(f"cannot resume: branch {self.branch} does not exist in {self.repo}")
+                self.git("checkout", self.branch)
 
     def check_time(self) -> None:
         if self.tracker.elapsed_minutes() >= self.config.limits.max_run_minutes:
@@ -354,13 +417,30 @@ class _Run:
     # -- intake
 
     def stage_intake(self) -> None:
+        reparse = (
+            self.prior_cp == Checkpoint.C1.value
+            and self.rec.stage == INTAKE_STAGE
+            and self.rec.stage_status == STAGE_COMPLETE
+        )
         try:
-            result = run_intake(self.item, self.config, self.agent, self.rec, self.opt.home, self.opt.checkout_root)
+            result = run_intake(
+                self.item,
+                self.config,
+                self.agent,
+                self.rec,
+                self.opt.home,
+                self.opt.checkout_root,
+                reparse_only=reparse,
+            )
         except BoundaryViolation as exc:
             raise _Stop(Checkpoint.C5, str(exc)) from exc
         if result.blocked:
             texts = "; ".join(f"{d.number}. {d.text}" for d in result.open_decisions)
-            raise _Stop(Checkpoint.C1, f"open decisions in {result.brief_path}: {texts}")
+            raise _Stop(
+                Checkpoint.C1,
+                f"open decisions in {result.brief_path}: {texts}",
+                tuple(f"{d.number}. {d.text}" for d in result.open_decisions),
+            )
 
     # -- agent stages (plan, build)
 
@@ -386,7 +466,12 @@ class _Run:
         prompt = build_orchestration_prompt(template, self.prompt_values(stage))
         stop_file = stop_report_path(self.rec)
         stop_file.unlink(missing_ok=True)
+        answer = read_answer(self.rec.path)
+        if answer:
+            prompt += f"\n\nThe user answered your earlier stop. Their answer:\n\n{answer}\n"
         self.agent(prompt)
+        if answer:
+            consume_answer(self.rec.path)
         if stop_file.is_file():
             self.raise_stop_report(stage, stop_file)
 
@@ -435,6 +520,7 @@ class _Run:
 
     def prepare_branch(self) -> None:
         base = self.opt.base_branch
+        self.ensure_clean()
         self.git("fetch", "origin", base, network=True)
         exists = self.git("rev-parse", "--verify", "--quiet", f"refs/heads/{self.branch}", ok=False).returncode == 0
         if exists:
@@ -612,6 +698,7 @@ def run_item(
             checkpoint = run.execute()
         except Exception as exc:
             error = exc
+            run.record_error(exc)
         report = _report(run)
         digest_path: Path | None = None
         if write_digest_file:
@@ -640,12 +727,10 @@ def run_item(
 def _report(run: _Run) -> DigestReport:
     needs: tuple[NeedsYou, ...] = ()
     limits: tuple[str, ...] = ()
-    if run.stop is not None:
-        cp = run.stop.checkpoint.value
-        question = f"{CHECKPOINT_QUESTIONS[cp]} Detail: {run.stop.detail}"
-        needs = (NeedsYou(run.item, cp, question),)
-        if run.stop.checkpoint is Checkpoint.C6:
-            limits = (f"{run.item}: {run.stop.detail}",)
+    if run.stop_rec is not None:
+        needs = (needs_from_stop(run.stop_rec),)
+    if run.stop is not None and run.stop.checkpoint is Checkpoint.C6:
+        limits = (f"{run.item}: {run.stop.detail}",)
     done: tuple[DoneEntry, ...] = ()
     if run.pr is not None:
         evidence = [run.pr.url or f"PR #{run.pr.number}", f"branch {run.branch}"]

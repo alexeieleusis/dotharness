@@ -105,6 +105,8 @@ class World:
         self.current_branch: str | None = None
         self.changed = "tools/pkg/x.py\n"
         self.gate_rc = 0
+        self.dirty = ""
+        self.checkouts: list[str] = []
         self.ci_fix_pushes: list[str] = []  # new head per ci-fix call; exhausted -> no push
         self.ci_fix_rc = 0
         self.merge_rc = 0
@@ -192,7 +194,10 @@ class World:
             return CommandResult(self.fetch_rc, "", "network down" if self.fetch_rc else "")
         if sub == "rev-parse" and a[1] == "--verify":
             return CommandResult(0 if self.branch_exists else 1)
+        if sub == "status":
+            return CommandResult(0, self.dirty)
         if sub == "checkout":
+            self.checkouts.append(a[-1])
             if a[1] == "-b":
                 self.current_branch = a[2]
             else:
@@ -995,3 +1000,267 @@ def test_prompt_states_the_required_behaviours() -> None:
     text = " ".join(PROMPT.read_text().split())
     for needle in ("handoffs/NN-<leaf name>.md", "one after the other", "never in parallel", "C3", "C4", "C5", "C2"):
         assert needle in text
+
+
+# ------------------------------------------------- follow-up 18: stop record and resume
+
+
+def _stop(world: World):
+    from sisyphus.stoprecord import read_stop_record
+
+    return read_stop_record(RunRecord.open(world.tmp / "ws", ITEM).path)
+
+
+def _stop_c1(world: World) -> None:
+    world.brief_text = BRIEF_OPEN
+
+
+def _stop_c2(world: World) -> None:
+    world.plan_stop = {"checkpoint": "C2", "leaf": "", "detail": "Which API version?"}
+
+
+def _stop_c3(world: World) -> None:
+    world.build_stops = [{"checkpoint": "C3", "leaf": "13-foo", "detail": "Use A or B?"}]
+
+
+def _stop_c4(world: World) -> None:
+    world.build_stops = [{"checkpoint": "C4", "leaf": "13-foo", "detail": "deviation"}]
+
+
+def _stop_c5(world: World) -> None:
+    world.gate_rc = 2
+
+
+def _stop_c6(world: World) -> None:
+    world.leaves = 5
+
+
+def _stop_c7(world: World) -> None:
+    world.remote_exists = True
+    world.ancestor_rc = 1
+
+
+def _stop_c8(world: World) -> None:
+    world.fetch_rc = 1
+
+
+@pytest.mark.parametrize(
+    ("setup", "cp", "clears_by"),
+    [
+        (_stop_c1, "C1", "brief"),
+        (_stop_c2, "C2", "answer"),
+        (_stop_c3, "C3", "answer"),
+        (_stop_c4, "C4", "answer"),
+        (_stop_c5, "C5", "explicit"),
+        (_stop_c6, "C6", "explicit"),
+        (_stop_c7, "C7", "explicit"),
+        (_stop_c8, "C8", "retry"),
+    ],
+)
+def test_stop_record_written_for_each_checkpoint(world: World, setup, cp: str, clears_by: str) -> None:
+    setup(world)
+    world.run()
+    stop = _stop(world)
+    assert stop is not None
+    assert (stop.kind, stop.checkpoint, stop.item, stop.clears_by) == ("checkpoint", cp, ITEM, clears_by)
+    assert stop.stage is not None
+    assert stop.questions
+    assert stop.action
+    assert stop.resume_command == f"sisyphus resume {ITEM} --config <your .sisyphus.toml>"
+    line = _needs_you_lines(world.digest_text(), cp)[0]
+    assert "Action:" in line
+    assert f"Resume: `{stop.resume_command}`" in line
+
+
+def test_c1_stop_record_lists_each_open_decision(world: World) -> None:
+    world.brief_text = "# B\n\n## Open decisions log\n\n1. Which tracker?\n2. Which base?\n"
+    world.run()
+    stop = _stop(world)
+    assert stop is not None
+    assert stop.questions == ("1. Which tracker?", "2. Which base?")
+    assert str(_brief(world)) in stop.action
+
+
+def test_stop_record_written_for_an_unexpected_error(world: World) -> None:
+    world.ahead = "0"
+    with pytest.raises(OrchestratorError):
+        world.run()
+    stop = _stop(world)
+    assert stop is not None
+    assert (stop.kind, stop.checkpoint, stop.stage, stop.stage_status) == ("error", None, "build", "in_progress")
+    assert "no commits" in stop.detail
+    assert stop.clears_by == "explicit"
+    line = _needs_you_lines(world.digest_text(), "error")[0]
+    assert "no commits" in line
+    assert "Resume:" in line
+
+
+def test_stop_record_removed_when_the_run_completes(world: World) -> None:
+    world.brief_text = BRIEF_OPEN
+    world.run()
+    assert _stop(world) is not None
+    _brief(world).write_text(BRIEF_NONE)
+    assert world.run().completed
+    assert _stop(world) is None
+
+
+def test_options_resume_command_is_stored(world: World) -> None:
+    world.brief_text = BRIEF_OPEN
+    world.run(resume_command="sisyphus resume {item} --config /c.toml --base b")
+    stop = _stop(world)
+    assert stop is not None
+    assert stop.resume_command == "sisyphus resume ENG-1 --config /c.toml --base b"
+
+
+def _brief(world: World) -> Path:
+    from sisyphus.intake import resolve_brief_path
+
+    return resolve_brief_path(world.config(), ITEM)
+
+
+def test_c1_resume_with_edited_brief_proceeds_to_plan(world: World) -> None:
+    world.brief_text = BRIEF_OPEN
+    world.run()
+    _brief(world).write_text(BRIEF_NONE)
+    result = world.run()
+    assert result.completed
+    assert world.events.count("agent:intake") == 1  # not redrafted
+    assert world.events.count("agent:plan") == 1
+    assert RunRecord.open(world.tmp / "ws", ITEM).checkpoint is None
+    assert _stop(world) is None
+
+
+def test_c1_resume_never_redrafts_a_human_edited_brief_even_if_the_prompt_changed(world: World) -> None:
+    world.brief_text = BRIEF_OPEN
+    world.run()
+    _brief(world).write_text(BRIEF_OPEN + "\n2. Resolved: ok\n")
+    _brief(world).with_name("brief.md.intake.json").write_text(
+        "{}"
+    )  # prompt hash mismatch: a plain re-run would call the intake agent again
+    result = world.run()
+    assert result.checkpoint is Checkpoint.C1
+    assert world.events == ["agent:intake"]
+
+
+def test_c1_resume_without_edit_stops_again_with_same_question_and_repeats_nothing(world: World) -> None:
+    world.brief_text = BRIEF_OPEN
+    world.run()
+    first = _stop(world)
+    counts = world.counts()
+    result = world.run()
+    second = _stop(world)
+    assert result.checkpoint is Checkpoint.C1
+    assert first is not None
+    assert second is not None
+    assert second.questions == first.questions
+    assert world.events == ["agent:intake"]
+    assert world.counts()[0] == counts[0]  # no new agent call
+    assert not any(c[0][:2] == ("git", "fetch") for c in world.shell_calls)
+
+
+def test_resume_skips_a_stage_completed_before_a_between_stage_limit_stop(world: World) -> None:
+    original = world.agent
+
+    def slow(prompt: str) -> None:
+        original(prompt)
+        world.clock.now += 3 * 3600
+
+    kw = {
+        "agent_runner": slow,
+        "subprocess_runner": world.shell,
+        "pr_client": world,
+        "clock": world.clock,
+        "today": TODAY,
+    }
+    first = run_item(ITEM, world.config(), world.options(), **kw)  # ty: ignore[invalid-argument-type]
+    assert first.checkpoint is Checkpoint.C6
+    result = world.run()  # fresh clock budget (Clock keeps now, so reset)
+    assert result.stages_skipped == ("intake",)
+    assert world.events.count("agent:intake") == 1
+
+
+def test_resume_keeps_retry_budgets_and_branch(world: World) -> None:
+    world.build_stops = [{"checkpoint": "C5", "detail": "x"}]
+    world.run()
+    world.branch_exists = True
+    world.run()
+    rec = RunRecord.open(world.tmp / "ws", ITEM)
+    assert rec.retries["build:retry-cycles"] == 1
+    assert rec.retries["branch-created"] == 1
+    assert not any(c[0][:3] == ("git", "checkout", "-b") for c in world.shell_calls[-6:])
+
+
+def test_answer_file_is_given_to_the_agent_once_then_consumed(world: World) -> None:
+    from sisyphus.resume import answer_path
+
+    world.build_stops = [{"checkpoint": "C3", "leaf": "13-foo", "detail": "A or B?"}]
+    world.run()
+    rec_path = RunRecord.open(world.tmp / "ws", ITEM).path
+    answer_path(rec_path).write_text("Use B.\n")
+    world.branch_exists = True
+    assert world.run().completed
+    build_prompts = [p for p in world.agent_prompts if "Stage to run now: `build`" in p]
+    assert "Use B." in build_prompts[-1]
+    assert "Use B." not in build_prompts[0]
+    assert not answer_path(rec_path).exists()
+    assert answer_path(rec_path).with_name(answer_path(rec_path).name + ".used").exists()
+
+
+# ------------------------------------------------------ single dedicated clone
+
+
+def test_dirty_clone_refuses_a_new_item_without_touching_it(world: World) -> None:
+    world.dirty = " M tracked.txt\n"
+    result = world.run()
+    _assert_stop(world, result, Checkpoint.C8)
+    assert "uncommitted" in result.detail
+    assert world.events == []  # no agent run
+    verbs = {c[0][1] for c in world.shell_calls if c[0][0] == "git"}
+    assert verbs == {"status"}
+    assert not verbs & {"stash", "reset", "clean", "checkout"}
+    assert "uncommitted" in world.digest_text()
+
+
+def test_dirty_clone_refuses_before_the_build_checkout(world: World) -> None:
+    original = world.shell
+
+    def dirty_after_plan(argv: Sequence[str], cwd: Path | None) -> CommandResult:
+        if list(argv)[:2] == ["git", "status"] and "agent:plan" in world.events:
+            return CommandResult(0, "?? leftover.txt\n")
+        return original(argv, cwd)
+
+    result = run_item(
+        ITEM,
+        world.config(),
+        world.options(),
+        agent_runner=world.agent,
+        subprocess_runner=dirty_after_plan,
+        pr_client=world,
+        clock=world.clock,
+        today=TODAY,
+    )
+    assert result.checkpoint is Checkpoint.C8
+    assert "agent:build" not in world.events
+    assert world.checkouts == []
+
+
+def test_resume_checks_out_the_items_own_branch(world: World) -> None:
+    world.push_rc = 1
+    assert world.run().checkpoint is Checkpoint.C8  # stopped at push, branch committed
+    world.push_rc = 0
+    world.branch_exists = True
+    world.current_branch = "sisyphus/other-item-12345678"  # another item ran meanwhile
+    result = world.run()
+    assert result.completed
+    assert world.checkouts[-1] == branch_name(ITEM)
+    assert result.stages_skipped == ("intake", "plan", "build")
+    assert world.events.count("agent:build") == 1  # committed work not redone
+
+
+def test_resume_without_the_branch_is_an_error(world: World) -> None:
+    world.push_rc = 1
+    world.run()
+    world.branch_exists = False
+    world.current_branch = "elsewhere"
+    with pytest.raises(OrchestratorError, match="does not exist"):
+        world.run()

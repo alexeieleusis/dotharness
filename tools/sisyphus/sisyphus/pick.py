@@ -27,11 +27,11 @@ from typing import Any, Protocol
 
 from sisyphus.config import WorkItemSource
 from sisyphus.orchestrator import BRANCH_CREATED_KEY, OPEN_PR_STAGE, PullRequest, branch_name
-from sisyphus.runrecord import RunRecord, record_path
+from sisyphus.resume import iter_records
+from sisyphus.runrecord import record_path
 
 LINEAR_API_URL = "https://api.linear.app/graphql"
 GITHUB_OPEN_STATE = "OPEN"
-SIDECAR_SUFFIXES = (".stop.json", ".intake.json")
 # Stages at or after "open-pr": an earlier run may have left a PR open.
 _PR_STAGES = (OPEN_PR_STAGE, "ci-fix", "merge")
 
@@ -196,25 +196,14 @@ def find_awaiting_review(
     """
     ws = Path(workspace_dir).expanduser()
     found: list[AwaitingReview] = []
-    if not ws.is_dir():
-        return found
-    for path in sorted(ws.glob("*.json")):
-        if path.name.endswith(SIDECAR_SUFFIXES):
+    for rec in iter_records(ws):
+        # An item stopped at a checkpoint waits for an answer, not a review; it never blocks picking.
+        if rec.checkpoint is not None or not rec.retries.get(BRANCH_CREATED_KEY) or rec.stage not in _PR_STAGES:
             continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        item = data.get("item") if isinstance(data, dict) else None
-        if not isinstance(item, str) or record_path(ws, item) != path:
-            continue
-        rec = RunRecord.open(ws, item)
-        if not rec.retries.get(BRANCH_CREATED_KEY) or rec.stage not in _PR_STAGES:
-            continue
-        branch = branch_name(item)
+        branch = branch_name(rec.item)
         pr = find_open_pr(branch)
         if pr is not None:
-            found.append(AwaitingReview(item, branch, pr))
+            found.append(AwaitingReview(rec.item, branch, pr))
     return found
 
 

@@ -20,6 +20,7 @@ from pathlib import Path
 from sisyphus.config import SisyphusConfig
 from sisyphus.rails import Checkpoint
 from sisyphus.runrecord import STAGE_COMPLETE, RunRecord
+from sisyphus.stoprecord import StopRecord, read_stop_record
 
 SECTIONS = ("Needs you", "Done", "Declined", "Deviations", "Limits hit", "Cost and time")
 
@@ -28,14 +29,14 @@ CI_FIX_STAGE = "ci-fix"
 MERGE_STAGE = "merge"
 
 CHECKPOINT_QUESTIONS: dict[str, str] = {
-    Checkpoint.C1.value: "The brief has open decisions that block the requirements doc. Answer them in the brief, then re-run.",
-    Checkpoint.C2.value: "OPEN_QUESTIONS.md has unresolved entries after draft-overview. Answer them, then re-run.",
-    Checkpoint.C3.value: "A leaf reported an open question. Answer it, then re-run.",
+    Checkpoint.C1.value: "The brief has open decisions that block the requirements doc. Answer them in the brief, then resume.",
+    Checkpoint.C2.value: "OPEN_QUESTIONS.md has unresolved entries after draft-overview. Answer them, then resume.",
+    Checkpoint.C3.value: "A leaf reported an open question. Answer it, then resume.",
     Checkpoint.C4.value: "A leaf reported a deviation that may change a later leaf (or the sub-agent could not tell). Accept it or redirect the later leaves?",
     Checkpoint.C5.value: "A leaf exhausted its retry cycles or violated its scope. Fix the cause by hand, or change the leaf?",
     Checkpoint.C6.value: "A hard run limit was hit. Raise the limit or accept the partial result?",
     Checkpoint.C7.value: "The PR branch cannot be updated without a rebase or force-push. Rebase it by hand?",
-    Checkpoint.C8.value: "A GitHub or Linear call failed in a way the agent could not recover from. Fix access (auth, network), then re-run?",
+    Checkpoint.C8.value: "A GitHub or Linear call failed in a way the agent could not recover from. Fix access (auth, network), then resume?",
 }
 
 
@@ -50,6 +51,8 @@ class NeedsYou:
     item: str
     checkpoint: str
     question: str
+    action: str = ""
+    resume: str = ""
 
 
 @dataclass(frozen=True)
@@ -104,16 +107,47 @@ def _stage_desc(rec: RunRecord) -> str:
     return f"{rec.stage} ({rec.stage_status or 'unknown'})"
 
 
+ERROR_QUESTION = "The run stopped on an unexpected error. Can you fix the cause shown below?"
+
+
+def needs_from_stop(stop: StopRecord) -> NeedsYou:
+    """Render a stop record as a Needs-you entry: question, the action to take and the resume command."""
+    if stop.checkpoint is None:
+        question = f"{ERROR_QUESTION} Detail: {stop.detail}"
+    else:
+        base = CHECKPOINT_QUESTIONS.get(stop.checkpoint, "The run stopped at this checkpoint. How should it proceed?")
+        question = f"{base} Detail: {stop.detail}"
+    return NeedsYou(stop.item, stop.label, question, stop.action, stop.resume_command)
+
+
+def needs_from_record(rec: RunRecord) -> NeedsYou | None:
+    """Needs-you entry for a run record: its stop record when present, else the built-in question."""
+    stop = read_stop_record(rec.path)
+    if stop is not None and (stop.checkpoint == rec.checkpoint or stop.checkpoint is None):
+        return needs_from_stop(stop)
+    if rec.checkpoint is None:
+        return None
+    question = CHECKPOINT_QUESTIONS.get(rec.checkpoint, "The run stopped at this checkpoint. How should it proceed?")
+    return NeedsYou(rec.item, rec.checkpoint, f"{question} Stage reached: {_stage_desc(rec)}.")
+
+
+def _needs_line(n: NeedsYou) -> str:
+    line = f"[{n.checkpoint}] {n.item}: {n.question}"
+    if n.action:
+        line += f" Action: {n.action}"
+    if n.resume:
+        line += f" Resume: `{n.resume}`"
+    return line
+
+
 def _needs_you(records: Sequence[RunRecord], report: DigestReport) -> list[str]:
-    lines = [f"[{n.checkpoint}] {n.item}: {n.question}" for n in report.needs_you]
+    lines = [_needs_line(n) for n in report.needs_you]
     covered = {(n.item, n.checkpoint) for n in report.needs_you}
     for rec in records:
-        if rec.checkpoint is None or (rec.item, rec.checkpoint) in covered:
+        need = needs_from_record(rec)
+        if need is None or (need.item, need.checkpoint) in covered:
             continue
-        question = CHECKPOINT_QUESTIONS.get(
-            rec.checkpoint, "The run stopped at this checkpoint. How should it proceed?"
-        )
-        lines.append(f"[{rec.checkpoint}] {rec.item}: {question} Stage reached: {_stage_desc(rec)}.")
+        lines.append(_needs_line(need))
     return lines
 
 
