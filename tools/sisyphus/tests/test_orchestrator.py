@@ -1,0 +1,982 @@
+"""Orchestrator tests: every external effect (agent, subprocess, PR client) is a fake.
+
+Only the intake stage's own ``git status`` snapshot touches a real (temporary) git repository.
+No test runs an agent, harness, spec-prism-flow, gh or ``git push``.
+"""
+
+# ruff: noqa: TRY003
+from __future__ import annotations
+
+import ast
+import json
+import re
+import subprocess
+import sys
+from collections.abc import Sequence
+from dataclasses import replace
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from sisyphus import orchestrator
+from sisyphus.config import DigestConfig, LimitsConfig, MergeConfig, ProjectConfig, SisyphusConfig
+from sisyphus.digest import DigestWriteError
+from sisyphus.gaterecord import gate_record_path, read_gate_record
+from sisyphus.lock import LockHeld, clone_lock
+from sisyphus.orchestrator import (
+    CommandResult,
+    GitHubError,
+    OrchestratorError,
+    OrchestratorOptions,
+    PullRequest,
+    branch_name,
+    build_orchestration_prompt,
+    default_subprocess_runner,
+    package_dirs,
+    read_build_commands,
+    run_item,
+    stop_report_path,
+)
+from sisyphus.paths import find_checkout_root, knowledge_file, tool_dir
+from sisyphus.rails import Checkpoint
+from sisyphus.runrecord import RunRecord
+
+ITEM = "ENG-1"
+SHA1 = "1" * 40
+SHA2 = "2" * 40
+SHA3 = "3" * 40
+SHA4 = "4" * 40
+BRIEF_NONE = "# Brief\n\n## Open decisions log\n\nNone\n"
+BRIEF_OPEN = "# Brief\n\n## Open decisions log\n\n1. Which tracker?\n"
+TODAY = datetime(2026, 1, 2, tzinfo=UTC)
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)  # noqa: S603, S607
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class World:
+    """Shared event log plus the three fakes, wired to one temporary world."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        self.tmp = tmp_path
+        self.repo = tmp_path / "repo"
+        self.repo.mkdir()
+        _git(self.repo, "init", "-q")
+        _git(self.repo, "config", "user.email", "t@example.com")
+        _git(self.repo, "config", "user.name", "t")
+        (self.repo / "tools" / "pkg").mkdir(parents=True)
+        (self.repo / "tools" / "pkg" / "Makefile").write_text("check:\n")
+        (self.repo / "tracked.txt").write_text("one\n")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-q", "-m", "init")
+        self.phases = tmp_path / "phases"
+        self.phases.mkdir()
+        self.state = tmp_path / "state"
+        self.clock = Clock()
+        self.events: list[str] = []
+        self.shell_calls: list[tuple[tuple[str, ...], Path | None]] = []
+        # agent behaviour
+        self.brief_text = BRIEF_NONE
+        self.leaves = 2
+        self.plan_stop: dict | None = None
+        self.build_stops: list[dict | None] = []
+        self.agent_prompts: list[str] = []
+        self.touch_repo_in_intake = False
+        # git behaviour
+        self.head = SHA1
+        self.remote_head = SHA1
+        self.remote_exists = False
+        self.branch_exists = False
+        self.ancestor_rc = 0
+        self.push_rc = 0
+        self.fetch_rc = 0
+        self.ff_rc = 0
+        self.ahead = "1"
+        self.current_branch: str | None = None
+        self.changed = "tools/pkg/x.py\n"
+        self.gate_rc = 0
+        self.ci_fix_pushes: list[str] = []  # new head per ci-fix call; exhausted -> no push
+        self.ci_fix_rc = 0
+        self.merge_rc = 0
+        # PR client behaviour
+        self.existing_pr: PullRequest | None = None
+        self.opened: list[tuple[str, str, str, str]] = []
+        self.client_error: GitHubError | None = None
+        self.find_calls = 0
+        # config
+        self.limits = LimitsConfig()
+        self.merge_enabled = False
+        (self.repo / ".spec-prism-flow.toml").write_text('[build]\ncommands = ["make check", "make test"]\n')
+
+    # ---- config / options
+    def config(self) -> SisyphusConfig:
+        return SisyphusConfig(
+            project=ProjectConfig(
+                repo_dir=str(self.repo),
+                workspace_dir=str(self.tmp / "ws"),
+                brief_path_template="<workspace_dir>/<item-id>/brief.md",
+            ),
+            limits=self.limits,
+            merge=MergeConfig(enabled=self.merge_enabled),
+            digest=DigestConfig(path_template=str(self.tmp / "digest-<date>.md")),
+        )
+
+    def options(self, **kw: object) -> OrchestratorOptions:
+        base = OrchestratorOptions(
+            base_branch="base-branch",
+            repo_slug="owner-repo",
+            phase_dir=self.phases,
+            state_dir=self.state,
+            lock_dir=self.tmp / "locks",
+            home=self.tmp / "nohome",
+        )
+        return replace(base, **kw)
+
+    # ---- fakes
+    def agent(self, prompt: str) -> None:
+        self.agent_prompts.append(prompt)
+        match = re.search(r"Save it to (\S+)", prompt)
+        if match:
+            self.events.append("agent:intake")
+            brief = Path(match.group(1))
+            brief.parent.mkdir(parents=True, exist_ok=True)
+            brief.write_text(self.brief_text)
+            if self.touch_repo_in_intake:
+                (self.repo / "tracked.txt").write_text("changed\n")
+            return
+        stage = re.search(r"Stage to run now: `(\w+)`", prompt).group(1)  # ty: ignore[unresolved-attribute]
+        self.events.append(f"agent:{stage}")
+        stop_path = Path(re.search(r"Stop report file: (\S+)", prompt).group(1))  # ty: ignore[unresolved-attribute]
+        if stage == "plan":
+            self.clock.now += 0
+            for i in range(self.leaves):
+                (self.phases / f"{i:02d}-leaf{i}-leaf.md").write_text("x")
+            if self.plan_stop:
+                stop_path.write_text(json.dumps(self.plan_stop))
+        else:
+            stop = self.build_stops.pop(0) if self.build_stops else None
+            if stop:
+                stop_path.write_text(json.dumps(stop))
+
+    def shell(self, argv: Sequence[str], cwd: Path | None) -> CommandResult:
+        a = list(argv)
+        self.shell_calls.append((tuple(a), cwd))
+        if a[0] == "git":
+            return self._git(a[1:])
+        if a[:3] == ["harness", "run", "ci-fix"]:
+            self.events.append("ci-fix")
+            if self.ci_fix_pushes:
+                self.remote_head = self.ci_fix_pushes.pop(0)
+            return CommandResult(self.ci_fix_rc)
+        if a[:3] == ["harness", "run", "merge"]:
+            self.events.append("merge")
+            return CommandResult(self.merge_rc)
+        if a[0] == "make":
+            self.events.append(f"gate:{' '.join(a)}@{cwd.name if cwd else None}")
+            return CommandResult(self.gate_rc, "", "gate failed" if self.gate_rc else "")
+        raise AssertionError(f"unexpected command {a}")
+
+    def _git(self, a: list[str]) -> CommandResult:  # noqa: C901
+        sub = a[0]
+        if sub == "fetch":
+            return CommandResult(self.fetch_rc, "", "network down" if self.fetch_rc else "")
+        if sub == "rev-parse" and a[1] == "--verify":
+            return CommandResult(0 if self.branch_exists else 1)
+        if sub == "checkout":
+            if a[1] == "-b":
+                self.current_branch = a[2]
+            else:
+                self.current_branch = a[1]
+            return CommandResult(0)
+        if sub == "rev-parse" and a[1:] == ["--abbrev-ref", "HEAD"]:
+            return CommandResult(0, f"{self.current_branch}\n")
+        if sub == "rev-list":
+            return CommandResult(0, f"{self.ahead}\n")
+        if sub == "ls-remote":
+            return CommandResult(0, f"{SHA1}\trefs/heads/{a[-1]}\n" if self.remote_exists else "")
+        if sub == "merge-base":
+            return CommandResult(self.ancestor_rc)
+        if sub == "push":
+            self.events.append(f"git {' '.join(a)}")
+            return CommandResult(self.push_rc, "", "denied" if self.push_rc else "")
+        if sub == "rev-parse" and a[1] == "HEAD":
+            return CommandResult(0, f"{self.head}\n")
+        if sub == "rev-parse" and a[1] == "FETCH_HEAD":
+            return CommandResult(0, f"{self.remote_head}\n")
+        if sub == "diff":
+            return CommandResult(0, self.changed)
+        if sub == "merge":
+            if self.ff_rc == 0:
+                self.head = self.remote_head
+            return CommandResult(self.ff_rc)
+        raise AssertionError(f"unexpected git {a}")
+
+    def find_pr(self, branch: str) -> PullRequest | None:
+        self.find_calls += 1
+        self.events.append("find_pr")
+        return self.existing_pr
+
+    def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
+        self.events.append("open_pr")
+        if self.client_error:
+            raise self.client_error
+        self.opened.append((branch, base, title, body))
+        self.existing_pr = PullRequest(42, "https://example.test/pr/42")
+        return self.existing_pr
+
+    # ---- run
+    def run(self, **kw: object) -> orchestrator.RunResult:
+        return run_item(
+            ITEM,
+            self.config(),
+            self.options(**kw),
+            agent_runner=self.agent,
+            subprocess_runner=self.shell,
+            pr_client=self,
+            clock=self.clock,
+            today=TODAY,
+        )
+
+    def digest_text(self) -> str:
+        return (self.tmp / "digest-2026-01-02.md").read_text()
+
+    def counts(self) -> tuple[int, int, int]:
+        return len(self.agent_prompts), len(self.shell_calls), self.find_calls
+
+    def mark_log(self, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+        log: list[tuple[str, str]] = []
+        original = RunRecord.mark_stage
+
+        def spy(rec: RunRecord, stage: str, status: str = "in_progress") -> None:
+            log.append((stage, status))
+            original(rec, stage, status)
+
+        monkeypatch.setattr(RunRecord, "mark_stage", spy)
+        return log
+
+
+@pytest.fixture
+def world(tmp_path: Path) -> World:
+    return World(tmp_path)
+
+
+def _needs_you_lines(digest: str, cp: str) -> list[str]:
+    section = digest.split("## Needs you")[1].split("## Done")[0]
+    return [line for line in section.splitlines() if f"[{cp}]" in line]
+
+
+def _assert_stop(world: World, result: orchestrator.RunResult, cp: Checkpoint) -> None:
+    assert result.checkpoint is cp
+    assert not result.completed
+    assert RunRecord.open(world.tmp / "ws", ITEM).checkpoint == cp.value
+    assert len(_needs_you_lines(world.digest_text(), cp.value)) == 1
+
+
+# ------------------------------------------------------------------ AC1, happy path
+
+
+def test_stage_order_and_record_writes(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    log = world.mark_log(monkeypatch)
+    result = world.run()
+    assert result.completed
+    assert result.stages_run == ("intake", "plan", "build", "push", "open-pr")
+    expected = []
+    for stage in result.stages_run:
+        expected += [(stage, "in_progress"), (stage, "complete")]
+    assert log == expected  # a record write before and after each stage, in order
+    kinds = [e for e in world.events if e.startswith(("agent", "git push", "open_pr", "gate"))]
+    assert kinds == [
+        "agent:intake",
+        "agent:plan",
+        "agent:build",
+        f"git push origin {branch_name(ITEM)}",
+        "open_pr",
+        "gate:make check@pkg",
+        "gate:make test@pkg",
+    ]
+
+
+def test_happy_path_pr_gate_and_digest(world: World) -> None:
+    result = world.run()
+    assert world.opened == [(branch_name(ITEM), "base-branch", "Sisyphus: ENG-1", world.opened[0][3])]
+    assert result.pr == PullRequest(42, "https://example.test/pr/42")
+    assert result.gate_recorded
+    assert read_gate_record("owner-repo", 42, world.state) == SHA1
+    data = json.loads(gate_record_path("owner-repo", 42, world.state).read_text())
+    assert data["commands"] == ["make check", "make test"]
+    digest = world.digest_text()
+    assert "PR #42 open" in digest
+    assert f"gate record written for {SHA1}" in digest
+    assert any(c[0] == ("git", "checkout", "-b", branch_name(ITEM), "origin/base-branch") for c in world.shell_calls)
+    assert RunRecord.open(world.tmp / "ws", ITEM).retries.get("branch-created") == 1
+
+
+def test_base_branch_is_a_parameter_not_a_literal() -> None:
+    src = Path(orchestrator.__file__).read_text()
+    assert "95_pr-review" not in src
+    assert '"main"' not in src
+
+
+def test_prompts_carry_resolved_paths(world: World) -> None:
+    world.run()
+    plan, build = world.agent_prompts[1], world.agent_prompts[2]
+    root = find_checkout_root()
+    assert root is not None
+    cheat = str(tool_dir(world.tmp / "nohome", root) / "docs" / "lifecycle-cheat-sheet.md")
+    for prompt, stage in ((plan, "plan"), (build, "build")):
+        assert f"Stage to run now: `{stage}`" in prompt
+        assert cheat in prompt
+        assert str(knowledge_file("spec-prism-flow/plan-generation-prompt.md", world.tmp / "nohome", root)) in prompt
+        assert str(knowledge_file("spec-prism-flow/build-execution-prompt.md", world.tmp / "nohome", root)) in prompt
+        assert f"Target branch (already checked out in that checkout): {branch_name(ITEM)}" in prompt
+        assert not re.search(
+            r"<(stage|brief path|workspace dir|target repo dir|target branch|stop report path)>", prompt
+        )
+
+
+# ---------------------------------------------------------------- AC2: checkpoints
+
+
+def test_c1_brief_open_decisions(world: World) -> None:
+    world.brief_text = BRIEF_OPEN
+    result = world.run()
+    _assert_stop(world, result, Checkpoint.C1)
+    assert result.stages_run == ()  # intake did not finish its stage in this run
+    assert world.events == ["agent:intake"]  # no plan agent, no git
+
+
+def test_c2_open_questions_after_overview(world: World) -> None:
+    world.plan_stop = {"checkpoint": "C2", "leaf": "", "detail": "Which API version?"}
+    result = world.run()
+    _assert_stop(world, result, Checkpoint.C2)
+    assert "agent:build" not in world.events
+    assert "Which API version?" in world.digest_text()
+    assert not any(c[0][:2] == ("git", "fetch") for c in world.shell_calls)
+
+
+def test_c3_leaf_open_question(world: World) -> None:
+    world.build_stops = [{"checkpoint": "C3", "leaf": "13-foo", "detail": "Use A or B?"}]
+    result = world.run()
+    _assert_stop(world, result, Checkpoint.C3)
+    assert "Use A or B?" in result.detail
+    assert not any(c[0][:2] == ("git", "push") for c in world.shell_calls)
+    assert world.find_calls == 0
+
+
+def test_c4_deviation_changes_later_leaf(world: World) -> None:
+    world.build_stops = [{"checkpoint": "C4", "leaf": "13-foo", "detail": "cannot tell"}]
+    result = world.run()
+    _assert_stop(world, result, Checkpoint.C4)
+    assert not any(c[0][:2] == ("git", "push") for c in world.shell_calls)
+
+
+def test_c5_leaf_scope_violation_from_agent(world: World) -> None:
+    world.build_stops = [{"checkpoint": "C5", "leaf": "13-foo", "detail": "touched config.py"}]
+    result = world.run()
+    _assert_stop(world, result, Checkpoint.C5)
+    assert RunRecord.open(world.tmp / "ws", ITEM).retries["build:retry-cycles"] == 1
+    assert world.find_calls == 0
+
+
+def test_c5_gate_command_failure_writes_no_record(world: World) -> None:
+    world.gate_rc = 2
+    result = world.run()
+    _assert_stop(world, result, Checkpoint.C5)
+    assert result.pr is not None  # PR is open, but not gated
+    assert not result.gate_recorded
+    assert read_gate_record("owner-repo", 42, world.state) is None
+    assert not gate_record_path("owner-repo", 42, world.state).exists()
+    assert world.events.count("gate:make check@pkg") == 1  # stopped at first failure
+
+
+def test_c5_intake_boundary_violation(world: World) -> None:
+    world.touch_repo_in_intake = True
+    result = world.run()
+    _assert_stop(world, result, Checkpoint.C5)
+    assert world.events == ["agent:intake"]
+
+
+def test_c6_five_leaves(world: World) -> None:
+    world.leaves = 5
+    result = world.run()
+    _assert_stop(world, result, Checkpoint.C6)
+    assert "5 leaves" in result.detail
+    assert "agent:build" not in world.events
+    assert "Limits hit" in world.digest_text()
+    assert "max_leaves_per_run" in world.digest_text().split("## Limits hit")[1]
+
+
+def test_four_leaves_is_allowed(world: World) -> None:
+    world.leaves = 4
+    assert world.run().completed
+
+
+def test_c6_leaf_limit_rerun_does_not_replan(world: World) -> None:
+    world.leaves = 5
+    world.run()
+    plans_before = world.events.count("agent:plan")
+    result = world.run()
+    assert result.checkpoint is Checkpoint.C6
+    assert world.events.count("agent:plan") == plans_before
+    world.limits = LimitsConfig(max_leaves_per_run=5)  # the human raised the limit
+    result = world.run()
+    assert result.completed
+    assert world.events.count("agent:plan") == plans_before
+
+
+def test_c6_run_time_limit(world: World) -> None:
+    original = world.agent
+
+    def slow(prompt: str) -> None:
+        original(prompt)
+        world.clock.now += 3 * 3600
+
+    world.agent_prompts = []
+    result = run_item(
+        ITEM,
+        world.config(),
+        world.options(),
+        agent_runner=slow,
+        subprocess_runner=world.shell,
+        pr_client=world,
+        clock=world.clock,
+        today=TODAY,
+    )
+    _assert_stop(world, result, Checkpoint.C6)
+    assert "agent:plan" not in world.events
+
+
+def test_c7_branch_needs_rebase(world: World) -> None:
+    world.remote_exists = True
+    world.ancestor_rc = 1
+    result = world.run()
+    _assert_stop(world, result, Checkpoint.C7)
+    assert not any(c[0][:2] == ("git", "push") for c in world.shell_calls)
+    assert world.find_calls == 0
+
+
+def test_c8_pr_client_failure(world: World) -> None:
+    world.client_error = GitHubError("auth failed")
+    result = world.run()
+    _assert_stop(world, result, Checkpoint.C8)
+    assert "auth failed" in result.detail
+    assert not any(e.startswith("gate") for e in world.events)
+
+
+def test_c8_push_failure(world: World) -> None:
+    world.push_rc = 1
+    result = world.run()
+    _assert_stop(world, result, Checkpoint.C8)
+    assert world.find_calls == 0
+
+
+def test_c8_network_fetch_failure(world: World) -> None:
+    world.fetch_rc = 1
+    result = world.run()
+    _assert_stop(world, result, Checkpoint.C8)
+    assert "agent:build" not in world.events
+
+
+# ------------------------------------------------------------ resume and retries
+
+
+def test_resume_after_c3_relaunches_build_without_replanning(world: World) -> None:
+    world.build_stops = [{"checkpoint": "C3", "leaf": "13-foo", "detail": "Use A or B?"}]
+    world.run()
+    world.branch_exists = True
+    result = world.run()
+    assert result.completed
+    assert result.stages_run == ("build", "push", "open-pr")
+    assert result.stages_skipped == ("intake", "plan")
+    assert world.events.count("agent:plan") == 1
+    assert world.events.count("agent:build") == 2
+    assert RunRecord.open(world.tmp / "ws", ITEM).checkpoint is None
+
+
+def test_build_not_relaunched_after_retry_cycles_exhausted(world: World) -> None:
+    world.build_stops = [{"checkpoint": "C5", "detail": "again"}] * 3
+    for _ in range(3):
+        assert world.run().checkpoint is Checkpoint.C5
+        world.branch_exists = True
+    builds = world.events.count("agent:build")
+    result = world.run()
+    assert result.checkpoint is Checkpoint.C5
+    assert world.events.count("agent:build") == builds == 3
+
+
+def test_bad_stop_reports_raise(world: World) -> None:
+    world.plan_stop = {"checkpoint": "C3", "detail": "wrong stage"}
+    with pytest.raises(OrchestratorError, match="not valid for stage plan"):
+        world.run()
+    rec = RunRecord.open(world.tmp / "ws", ITEM)
+    assert (rec.stage, rec.stage_status) == ("plan", "in_progress")
+    assert "# Sisyphus digest" in world.digest_text()  # digest still written when a stage raises
+
+
+def test_build_without_commits_raises(world: World) -> None:
+    world.ahead = "0"
+    with pytest.raises(OrchestratorError, match="no commits"):
+        world.run()
+
+
+def test_preexisting_branch_not_created_by_sisyphus_is_refused(world: World) -> None:
+    world.branch_exists = True
+    with pytest.raises(OrchestratorError, match="did not create it"):
+        world.run()
+    assert "agent:build" not in world.events
+
+
+# ------------------------------------------------------------------- AC3: idempotence
+
+
+def test_rerun_with_unchanged_inputs_repeats_nothing(world: World) -> None:
+    world.run()
+    before = world.counts()
+    events = list(world.events)
+    result = world.run()
+    assert result.completed
+    assert result.stages_run == ()
+    assert result.stages_skipped == ("intake", "plan", "build", "push", "open-pr")
+    assert world.counts() == before
+    assert world.events == events
+    assert len(world.opened) == 1
+
+
+def test_rerun_after_gate_failure_reuses_existing_pr(world: World) -> None:
+    world.gate_rc = 1
+    world.run()
+    world.gate_rc = 0
+    result = world.run()
+    assert result.completed
+    assert len(world.opened) == 1  # find_pr found the PR; no second PR
+    assert read_gate_record("owner-repo", 42, world.state) == SHA1
+    assert world.events.count("agent:build") == 1  # earlier stages not repeated
+    assert world.events.count("agent:plan") == 1
+
+
+def test_rerun_after_c1_unchanged_brief_makes_no_agent_call(world: World) -> None:
+    world.brief_text = BRIEF_OPEN
+    world.run()
+    result = world.run()
+    assert result.checkpoint is Checkpoint.C1
+    assert world.events == ["agent:intake"]  # the sidecar skip means no second intake call
+
+
+# --------------------------------------------------------------- AC5: push guard
+
+
+def test_push_to_protected_branch_is_refused(world: World) -> None:
+    protected = branch_name(ITEM)
+    with pytest.raises(OrchestratorError, match="push refused: push to the default branch"):
+        world.run(default_branch=protected)
+    assert not any(c[0][:2] == ("git", "push") for c in world.shell_calls)
+    assert world.find_calls == 0
+
+
+def test_push_refused_when_branch_not_recorded_as_created(world: World) -> None:
+    world.run()
+    rec = RunRecord.open(world.tmp / "ws", ITEM)
+    rec.retries.pop("branch-created")
+    rec.mark_stage("build", "complete")
+    world.shell_calls.clear()
+    with pytest.raises(OrchestratorError, match="not created by Sisyphus"):
+        world.run()
+    assert not any(c[0][:2] == ("git", "push") for c in world.shell_calls)
+
+
+def test_push_argv_is_plain_non_force(world: World) -> None:
+    world.run()
+    pushes = [c[0] for c in world.shell_calls if c[0][:2] == ("git", "push")]
+    assert pushes == [("git", "push", "origin", branch_name(ITEM))]
+
+
+# ------------------------------------------------------------- AC6: ci-fix and merge
+
+
+def test_ci_fix_argv_and_attempt_cap(world: World) -> None:
+    world.limits = LimitsConfig(max_fix_attempts_per_pr=2)
+    world.ci_fix_pushes = [SHA2, SHA3, SHA4]
+    result = world.run(ci_fix=True)
+    argvs = [c[0] for c in world.shell_calls if c[0][0] == "harness"]
+    assert argvs == [("harness", "run", "ci-fix", "--pr", "42")] * 2
+    assert list(argvs[0]) == ["harness", "run", "ci-fix", "--pr", "42"]
+    _assert_stop(world, result, Checkpoint.C6)
+    assert RunRecord.open(world.tmp / "ws", ITEM).retries["ci-fix:attempts"] == 2
+    # every ci-fix push re-gated the PR at the new head
+    assert read_gate_record("owner-repo", 42, world.state) == SHA3
+    assert world.events.count("gate:make check@pkg") == 3
+
+
+def test_ci_fix_cap_not_exceeded_on_rerun(world: World) -> None:
+    world.limits = LimitsConfig(max_fix_attempts_per_pr=1)
+    world.ci_fix_pushes = [SHA2, SHA3]
+    world.run(ci_fix=True)
+    result = world.run(ci_fix=True)
+    assert result.checkpoint is Checkpoint.C6
+    assert sum(1 for c in world.shell_calls if c[0][:3] == ("harness", "run", "ci-fix")) == 1
+
+
+def test_ci_fix_with_nothing_to_fix_settles_after_one_call(world: World) -> None:
+    result = world.run(ci_fix=True)
+    assert result.completed
+    assert sum(1 for c in world.shell_calls if c[0][:3] == ("harness", "run", "ci-fix")) == 1
+    assert read_gate_record("owner-repo", 42, world.state) == SHA1
+    assert world.events.count("gate:make check@pkg") == 1  # no new head, no re-gate
+
+
+def test_ci_fix_that_pushes_once_then_settles_regates(world: World) -> None:
+    world.ci_fix_pushes = [SHA2]
+    result = world.run(ci_fix=True)
+    assert result.completed
+    assert read_gate_record("owner-repo", 42, world.state) == SHA2
+    assert result.stages_run[-1] == "ci-fix"
+
+
+def test_ci_fix_failed_gate_after_fix_writes_no_new_record(world: World) -> None:
+    world.ci_fix_pushes = [SHA2]
+    original_shell = world.shell
+    state = {"made": 0}
+
+    def shell(argv: Sequence[str], cwd: Path | None) -> CommandResult:
+        a = list(argv)
+        if a[0] == "make":
+            state["made"] += 1
+            if state["made"] > 2:
+                world.gate_rc = 1
+        return original_shell(argv, cwd)
+
+    result = run_item(
+        ITEM,
+        world.config(),
+        world.options(ci_fix=True),
+        agent_runner=world.agent,
+        subprocess_runner=shell,
+        pr_client=world,
+        clock=world.clock,
+        today=TODAY,
+    )
+    _assert_stop(world, result, Checkpoint.C5)
+    assert read_gate_record("owner-repo", 42, world.state) == SHA1  # stale for SHA2: the merge runner refuses
+
+
+def test_ci_fix_ff_failure_is_c7(world: World) -> None:
+    world.ci_fix_pushes = [SHA2]
+    world.ff_rc = 1
+    result = world.run(ci_fix=True)
+    _assert_stop(world, result, Checkpoint.C7)
+
+
+def test_ci_fix_command_failure_is_c8(world: World) -> None:
+    world.ci_fix_rc = 1
+    result = world.run(ci_fix=True)
+    _assert_stop(world, result, Checkpoint.C8)
+
+
+def test_ci_fix_disabled_by_default(world: World) -> None:
+    world.run()
+    assert not any(c[0][0] == "harness" for c in world.shell_calls)
+
+
+def test_merge_runner_invoked_only_via_harness_cli_when_enabled(world: World) -> None:
+    world.merge_enabled = True
+    result = world.run()
+    assert result.completed
+    merges = [c[0] for c in world.shell_calls if c[0][:3] == ("harness", "run", "merge")]
+    assert merges == [("harness", "run", "merge", "--pr", "42")]
+    assert result.stages_run[-1] == "merge"
+
+
+def test_merge_not_run_when_disabled(world: World) -> None:
+    world.run()
+    assert not any("merge" in c[0] and c[0][0] == "harness" for c in world.shell_calls)
+
+
+def test_nothing_ever_approves(world: World) -> None:
+    world.merge_enabled = True
+    world.run(ci_fix=True)
+    for argv, _ in world.shell_calls:
+        assert "approve" not in " ".join(argv)
+
+
+def test_merge_command_failure_is_c8(world: World) -> None:
+    world.merge_enabled = True
+    world.merge_rc = 1
+    _assert_stop(world, world.run(), Checkpoint.C8)
+
+
+# ---------------------------------------------------------- gate commands (FR-3.3.10)
+
+
+def test_no_build_commands_writes_no_record_and_reports_in_digest(world: World) -> None:
+    (world.repo / ".spec-prism-flow.toml").write_text('[plan]\nphase_dir = "x"\n')
+    result = world.run()
+    assert result.completed
+    assert not result.gate_recorded
+    assert not gate_record_path("owner-repo", 42, world.state).exists()
+    assert "no build.commands" in world.digest_text().split("## Deviations")[1]
+    assert not any(e.startswith("gate") for e in world.events)
+
+
+def test_missing_spf_config_writes_no_record(world: World) -> None:
+    (world.repo / ".spec-prism-flow.toml").unlink()
+    result = world.run()
+    assert result.completed
+    assert not gate_record_path("owner-repo", 42, world.state).exists()
+    assert "no build.commands" in world.digest_text()
+
+
+def test_gate_runs_in_each_touched_package_dir(world: World) -> None:
+    (world.repo / "other").mkdir()
+    (world.repo / "other" / "Makefile").write_text("x:\n")
+    world.changed = "tools/pkg/a.py\nother/b.py\n"
+    world.run()
+    gates = [c for c in world.shell_calls if c[0][0] == "make"]
+    assert {(c[0], c[1].name) for c in gates if c[1]} == {
+        (("make", "check"), "pkg"),
+        (("make", "test"), "pkg"),
+        (("make", "check"), "other"),
+        (("make", "test"), "other"),
+    }
+
+
+def test_gate_record_records_exact_tested_head(world: World) -> None:
+    world.head = SHA4
+    world.run()
+    assert read_gate_record("owner-repo", 42, world.state) == SHA4
+
+
+def test_package_dirs(tmp_path: Path) -> None:
+    (tmp_path / "a" / "deep").mkdir(parents=True)
+    (tmp_path / "a" / "Makefile").write_text("")
+    (tmp_path / "b").mkdir()
+    assert package_dirs(tmp_path, ["a/deep/x.py", "a/y.py", "b/z.txt", "top.md"]) == [tmp_path, tmp_path / "a"]
+
+
+def test_read_build_commands(tmp_path: Path) -> None:
+    p = tmp_path / "c.toml"
+    assert read_build_commands(p) is None
+    p.write_text('[build]\ncommands = ["make check"]\n')
+    assert read_build_commands(p) == ["make check"]
+    p.write_text("[build]\ncommands = []\n")
+    assert read_build_commands(p) is None
+    p.write_text("[build]\ncommands = [1]\n")
+    with pytest.raises(OrchestratorError, match="list of non-empty strings"):
+        read_build_commands(p)
+    p.write_text("= bad")
+    with pytest.raises(OrchestratorError, match="cannot read"):
+        read_build_commands(p)
+
+
+# ---------------------------------------------------- lock, digest and misc surfaces
+
+
+def test_lock_held_propagates_before_any_state(world: World) -> None:
+    with clone_lock(world.repo, world.tmp / "locks"), pytest.raises(LockHeld):
+        world.run()
+    assert world.events == []
+    assert not (world.tmp / "ws").exists()
+    assert not (world.tmp / "digest-2026-01-02.md").exists()
+
+
+def test_lock_released_after_run(world: World) -> None:
+    world.run()
+    with clone_lock(world.repo, world.tmp / "locks"):
+        pass
+
+
+def test_digest_write_error_surfaces(world: World) -> None:
+    blocker = world.tmp / "file"
+    blocker.write_text("x")
+    config = replace(world.config(), digest=DigestConfig(path_template=str(blocker / "d.md")))
+    with pytest.raises(DigestWriteError):
+        run_item(
+            ITEM,
+            config,
+            world.options(),
+            agent_runner=world.agent,
+            subprocess_runner=world.shell,
+            pr_client=world,
+            clock=world.clock,
+            today=TODAY,
+        )
+
+
+def test_digest_error_is_chained_to_stage_error(world: World) -> None:
+    blocker = world.tmp / "file"
+    blocker.write_text("x")
+    world.ahead = "0"
+    config = replace(world.config(), digest=DigestConfig(path_template=str(blocker / "d.md")))
+    with pytest.raises(DigestWriteError) as info:
+        run_item(
+            ITEM,
+            config,
+            world.options(),
+            agent_runner=world.agent,
+            subprocess_runner=world.shell,
+            pr_client=world,
+            clock=world.clock,
+            today=TODAY,
+        )
+    assert isinstance(info.value.__cause__, OrchestratorError)
+
+
+def test_digest_can_be_deferred_to_the_caller(world: World) -> None:
+    result = run_item(
+        ITEM,
+        world.config(),
+        world.options(),
+        agent_runner=world.agent,
+        subprocess_runner=world.shell,
+        pr_client=world,
+        clock=world.clock,
+        write_digest_file=False,
+    )
+    assert result.digest_path is None
+    assert result.report.done
+
+
+def test_required_config_is_validated(world: World) -> None:
+    config = replace(world.config(), project=ProjectConfig())
+    with pytest.raises(OrchestratorError, match="repo_dir"):
+        run_item(
+            ITEM,
+            config,
+            world.options(),
+            agent_runner=world.agent,
+            subprocess_runner=world.shell,
+            pr_client=world,
+        )
+    with pytest.raises(OrchestratorError, match="base_branch"):
+        world.run(base_branch="")
+
+
+def test_branch_name_is_deterministic_and_safe() -> None:
+    assert branch_name("ENG-1") == branch_name("ENG-1")
+    assert branch_name("ENG-1") != branch_name("eng-1")
+    assert re.fullmatch(r"sisyphus/eng-1-[0-9a-f]{8}", branch_name("ENG-1"))
+    assert re.fullmatch(r"sisyphus/item-[0-9a-f]{8}", branch_name("###"))
+
+
+def test_stop_report_path_sits_next_to_record(world: World) -> None:
+    rec = RunRecord.open(world.tmp / "ws", ITEM)
+    assert stop_report_path(rec).parent == rec.path.parent
+
+
+def test_default_subprocess_runner_captures_output(tmp_path: Path) -> None:
+    res = default_subprocess_runner([sys.executable, "-c", "import sys; print('out'); sys.exit(3)"], tmp_path)
+    assert (res.returncode, res.stdout.strip()) == (3, "out")
+    assert default_subprocess_runner(["definitely-not-a-real-binary-xyz"], tmp_path).returncode == 127
+
+
+def test_pr_client_protocol_is_satisfied_by_the_fake(world: World) -> None:
+    client: orchestrator.PullRequestClient = world
+    assert client.find_pr("b") is None
+
+
+# -------------------------------------------------- AC7 / checklist: static guarantees
+
+
+def _imports(path: str) -> set[str]:
+    tree = ast.parse(Path(path).read_text())
+    names = {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+    names |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    return {n.split(".")[0] for n in names}
+
+
+def test_orchestrator_does_not_import_harness_or_spec_prism_flow() -> None:
+    assert not _imports(orchestrator.__file__) & {"harness", "spec_prism_flow"}
+    text = Path(orchestrator.__file__).read_text()
+    assert "import harness" not in text
+    assert "spec_prism_flow" not in text
+
+
+def test_tests_never_invoke_real_tools(world: World) -> None:
+    world.merge_enabled = True
+    world.run(ci_fix=True)
+    for argv, _ in world.shell_calls:
+        assert argv[0] in {"git", "harness", "make"}  # all through the fake, none executed for real
+    assert world.events  # the fake saw every call
+
+
+# ------------------------------------------------------------ AC10: prompt file
+
+PROMPT = Path(find_checkout_root() or ".") / "knowledge" / "sisyphus" / "orchestration-prompt.md"
+PARAMS = [
+    "stage",
+    "work-item reference",
+    "brief path",
+    "workspace dir",
+    "target repo dir",
+    "target branch",
+    "phase config path",
+    "cheat sheet path",
+    "plan prompt path",
+    "build prompt path",
+    "max retry cycles",
+    "stop report path",
+]
+
+
+def test_prompt_has_exactly_the_documented_placeholders() -> None:
+    found = set(re.findall(r"<([^<>\n]+)>", PROMPT.read_text()))
+    assert found == {*PARAMS, "leaf name"}  # "<leaf name>" is the handoffs/NN-<leaf name>.md convention
+
+
+def test_prompt_substitution_leaves_no_parameter() -> None:
+    text = build_orchestration_prompt(PROMPT.read_text(), {p: f"VALUE[{p}]" for p in PARAMS})
+    assert set(re.findall(r"<([^<>\n]+)>", text)) == {"leaf name"}
+    assert all(f"VALUE[{p}]" in text for p in PARAMS)
+
+
+def test_prompt_is_tool_agnostic() -> None:
+    text = PROMPT.read_text().lower()
+    for word in (
+        "claude",
+        "anthropic",
+        "codex",
+        "cursor",
+        "gemini",
+        "copilot",
+        "openai",
+        "gpt",
+        "harness",
+        "spec-prism",
+    ):
+        assert word not in text
+    assert re.search(r"\bgh\b", text) is None
+    assert "build run" not in text
+
+
+def test_prompt_references_but_does_not_restate() -> None:
+    text = PROMPT.read_text()
+    assert "Delegating plan and build to sub-agents" in " ".join(text.split())
+    assert "plan prompt" in text.lower()
+    assert "build prompt" in text.lower()
+    root = find_checkout_root()
+    assert root is not None
+    sources = [
+        root / "knowledge" / "spec-prism-flow" / "plan-generation-prompt.md",
+        root / "knowledge" / "spec-prism-flow" / "build-execution-prompt.md",
+        root / "tools" / "spec-prism-flow" / "docs" / "lifecycle-cheat-sheet.md",
+    ]
+    corpus = "\n".join(s.read_text() for s in sources)
+    for line in text.splitlines():
+        stripped = line.strip(" -*>")
+        if len(stripped) > 40:
+            assert stripped not in corpus, line
+
+
+def test_prompt_states_the_required_behaviours() -> None:
+    text = " ".join(PROMPT.read_text().split())
+    for needle in ("handoffs/NN-<leaf name>.md", "one after the other", "never in parallel", "C3", "C4", "C5", "C2"):
+        assert needle in text
