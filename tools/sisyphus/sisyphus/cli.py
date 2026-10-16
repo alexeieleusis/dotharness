@@ -32,7 +32,7 @@ import click
 
 from sisyphus import gaterecord
 from sisyphus.config import ConfigError, SisyphusConfig, load_config
-from sisyphus.digest import DigestReport, DigestWriteError, NeedsYou, needs_from_record, write_digest
+from sisyphus.digest import DigestReport, DigestWriteError, NeedsYou, describe_reset, needs_from_record, write_digest
 from sisyphus.intake import AgentRunner, run_intake
 from sisyphus.lock import LockHeld, clone_lock
 from sisyphus.orchestrator import (
@@ -58,7 +58,15 @@ from sisyphus.pick import (
     pick_items,
 )
 from sisyphus.rails import PERMISSION_FLAG, LimitTracker
-from sisyphus.resume import AUTO_RETRY_KEY, cleared, is_abandoned, is_stopped, iter_records, list_waiting
+from sisyphus.resume import (
+    AUTO_RETRY_KEY,
+    cleared,
+    is_abandoned,
+    is_stopped,
+    iter_records,
+    list_waiting,
+    reset_stage_retries,
+)
 from sisyphus.runrecord import RunRecord, record_path
 from sisyphus.stoprecord import (
     CLEARS_BY,
@@ -531,11 +539,24 @@ def _check_resumable(rec: RunRecord, again: bool) -> None:
 @config_option
 @click.option("--base", default=None, help="PR base branch (default: [project].base_branch, else 'main').")
 @click.option("--again", is_flag=True, help="Re-enable an abandoned item: clear the abandoned mark, then resume.")
+@click.option(
+    "--reset-retries",
+    is_flag=True,
+    help="Zero the retry counters of the item's recorded stage (see docs/usage.md for the exact keys) before resuming.",
+)
 @click.pass_obj
 def resume_item_command(
-    factory: ServicesFactory | None, work_item_ref: str, config_path: str, base: str | None, again: bool
+    factory: ServicesFactory | None,
+    work_item_ref: str,
+    config_path: str,
+    base: str | None,
+    again: bool,
+    reset_retries: bool,
 ) -> None:
-    """Resume a stopped WORK_ITEM_REF from its recorded stage (explicit; no need to wait for the blocker check)."""
+    """Resume a stopped WORK_ITEM_REF from its recorded stage (explicit; no need to wait for the blocker check).
+
+    --reset-retries (explicit only, never done by `run`) first gives the recorded stage a fresh retry budget.
+    """
     config = _load(config_path)
     _require(config, "repo_dir", "workspace_dir")
     assert config.project.repo_dir and config.project.workspace_dir  # noqa: S101
@@ -550,6 +571,12 @@ def resume_item_command(
                 raise _fail(f"no run record for {work_item_ref}; nothing to resume")
             rec = RunRecord.open(workspace, work_item_ref)
             _check_resumable(rec, again)
+            if reset_retries:
+                changed = reset_stage_retries(rec, services.now())
+                click.echo(
+                    f"{work_item_ref}: reset retries at stage {rec.stage or 'none'}: "
+                    + (", ".join(f"{k} {v}->0" for k, v in changed.items()) or "nothing to reset")
+                )
             try:
                 _run_phase([Candidate(work_item_ref)], config, services, base, state, config_path)
             except Exception as exc:
@@ -623,6 +650,7 @@ def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_
         lines.insert(1, "  state: abandoned")
         lines.append(f"  abandoned_at: {stop.stopped_at}")
         lines.append(f"  re-enable: {stop.resume_command}")
+    lines.extend(f"  {describe_reset(rec.item, e)}" for e in rec.resets)
     if need is not None:
         lines.append(f"  question: {need.question}")
         if need.action:

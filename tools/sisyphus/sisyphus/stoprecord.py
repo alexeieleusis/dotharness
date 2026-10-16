@@ -41,7 +41,10 @@ ACTIONS: dict[str, str] = {
     "C3": "Write your answer to the leaf's open question (see the detail) in {answer}. " + _RESUME,
     "C4": "Write in {answer} whether to accept the leaf's deviation or how to redirect the later leaves. " + _RESUME,
     "C5": "Decide how to proceed (change the leaf or the config, or fix the cause), then run the resume command. "
-    "Not automatic. The retry budget is kept, so an exhausted build budget stops again at C5.",
+    "Not automatic. The retry budget is kept, so an exhausted build budget stops again at C5 without launching the "
+    "agent. After you fixed the cause by hand (in the brief or the answer file) or decided to give the build another "
+    "budget, run `{resume} --reset-retries`: it does not skip the build, it gives the build a fresh budget of "
+    "max_retry_cycles (3) and records the reset in the run record and the digest.",
     "C6": "Raise the exceeded limit in .sisyphus.toml (a time limit needs nothing), then run the resume command. "
     "Not automatic.",
     "C7": "No automatic way out: Sisyphus never rebases or force-pushes. Run `sisyphus abandon REF --config F` to "
@@ -101,11 +104,16 @@ def stop_record_path(record_path: Path) -> Path:
     return record_path.with_name(record_path.name + STOP_RECORD_SUFFIX)
 
 
-def action_for(checkpoint: str | None, brief_path: str = "the brief", answer_path: str = "the answer file") -> str:
+def action_for(
+    checkpoint: str | None,
+    brief_path: str = "the brief",
+    answer_path: str = "the answer file",
+    resume_command: str = "sisyphus resume REF --config F",
+) -> str:
     if checkpoint is None:
         return ERROR_ACTION
     text = ACTIONS.get(checkpoint, "Resolve the stop described in the detail, then run the resume command.")
-    return text.format(brief=brief_path, answer=answer_path)
+    return text.replace("{brief}", brief_path).replace("{answer}", answer_path).replace("{resume}", resume_command)
 
 
 def build_stop_record(
@@ -129,7 +137,7 @@ def build_stop_record(
         checkpoint=checkpoint,
         questions=questions or ((detail,) if detail else ()),
         detail=detail,
-        action=action_for(checkpoint, brief_path, answer_path),
+        action=action_for(checkpoint, brief_path, answer_path, resume_command),
         resume_command=resume_command,
         stopped_at=(now or datetime.now(UTC)).isoformat(),
     )

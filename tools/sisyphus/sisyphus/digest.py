@@ -166,6 +166,23 @@ def _abandoned(records: Sequence[RunRecord]) -> list[str]:
     return lines
 
 
+def describe_reset(item: str, event: dict[str, object]) -> str:
+    """One line for a reset event of the run record: item, stage, time and each ``key previous->0``."""
+    keys = event.get("keys")
+    changes = (
+        ", ".join(f"{k} {v.get('from')}->{v.get('to')}" for k, v in keys.items() if isinstance(v, dict))
+        if isinstance(keys, dict)
+        else ""
+    )
+    return f"Retry reset: {item} at stage {event.get('stage') or 'none'} on {event.get('at')}: " + (
+        changes or "no counters to reset"
+    )
+
+
+def _resets(records: Sequence[RunRecord]) -> list[str]:
+    return [describe_reset(rec.item, e) for rec in records for e in rec.resets]
+
+
 def _retry_note(rec: RunRecord, stage: str) -> str:
     counts = {k: v for k, v in sorted(rec.retries.items()) if k.startswith(stage)}
     return " ".join(f"{k}={v}" for k, v in counts.items())
@@ -232,7 +249,7 @@ def render_digest(records: Sequence[RunRecord], report: DigestReport | None = No
         _numbered(_needs_you(records, report)),
         _bullets(_done(records, report)),
         _bullets(_declined(records, report)),
-        _bullets([*report.deviations, *_abandoned(records)]),
+        _bullets([*report.deviations, *_abandoned(records), *_resets(records)]),
         _bullets(_limits(records, report)),
         _bullets(_cost(records, report)),
     ]

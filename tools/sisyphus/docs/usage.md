@@ -99,11 +99,38 @@ run record or the item is not stopped, and exits 0 quietly if another invocation
 | C2 | OPEN_QUESTIONS.md unresolved after draft-overview | write the answer file | automatic (answer file) | re-runs the plan stage with your answer, then build |
 | C3 | a leaf has an open question | write the answer file | automatic (answer file) | re-runs build with your answer; the build prompt continues from the stopped leaf |
 | C4 | a leaf deviation may change later leaves | write the answer file (accept or redirect) | automatic (answer file) | same as C3 |
-| C5 | retries exhausted, scope violation or a failed gate | decide: change the leaf or config, or fix the cause | explicit | re-runs the stage; the build retry budget (3) is kept, so an exhausted budget stops again at C5 without a new agent run |
+| C5 | retries exhausted, scope violation or a failed gate | decide: change the leaf or config, or fix the cause; to give the build another budget run `sisyphus resume REF --config F --reset-retries` | explicit | re-runs the stage; the build retry budget (3) is kept, so an exhausted budget stops again at C5 without a new agent run, unless you pass `--reset-retries` (below), which gives the build a fresh budget of 3 (it does not skip the build) |
 | C6 | a limit was hit | raise the limit in `.sisyphus.toml` (`max_run_minutes` needs nothing: the clock is per invocation) | explicit | leaf limit: re-counts the leaves, no re-plan; fix attempts: counter kept; time limit: continues at the next stage |
 | C7 | branch cannot be updated without rebase | no automatic way out: run `sisyphus abandon REF --config F` (the branch and any PR stay as they are for you to handle) | explicit | after you fixed the branch outside Sisyphus: re-runs the push or ci-fix stage on the same branch and PR |
 | C8 | gh, Linear, git network call failed, or a dirty clone | fix access; for a dirty clone clean it yourself | automatic retry after 30 minutes, 3 times, then explicit | retries the failed call in the same stage |
 | error | unexpected exception | fix the cause shown | explicit | re-runs the in-progress stage |
+
+## Fresh retry budget: `resume --reset-retries`
+
+`sisyphus resume REF --config F [--base B] --reset-retries` is the only way to zero retry counters, and it is
+explicit: `run`, auto-resume, plain `resume` and loading a record never reset anything. Use it after you fixed the
+cause by hand (in the brief or the answer file) or decided to give the build another budget. It does **not** skip
+the stage: it gives the recorded stage a fresh budget (build: `max_retry_cycles`, 3) and then continues the
+resume as usual. It is only valid for a stopped item (same errors as `resume`), takes the same lock, and
+combines with `--again` for an abandoned item.
+
+It resets the counters of the stage recorded in the item's run record, nothing else:
+
+| recorded stage | counters set to 0 | never touched |
+|---|---|---|
+| intake, plan, push, open-pr, merge | `auto-retry` | `build:retry-cycles`, `ci-fix:attempts`, `plan:leaf-limit`, `branch-created` |
+| build | `build:retry-cycles`, `auto-retry` | `ci-fix:attempts`, `plan:leaf-limit`, `branch-created` |
+| ci-fix | `ci-fix:attempts`, `auto-retry` | `build:retry-cycles`, `plan:leaf-limit`, `branch-created` |
+
+`auto-retry` is the C8 automatic-resume count (stage independent). `branch-created` is not a retry counter (it
+records that Sisyphus made the branch, which the push guard relies on) and `plan:leaf-limit` is a marker that
+stops a C6 resume re-planning; neither is ever reset. The mapping is `resume.RESET_KEYS`. If the recorded stage
+has no counter above zero (for example an item stopped at C1) the flag is still accepted: it records a reset with
+no keys ("no counters to reset") and continues.
+
+Every reset is recorded durably in the run record (additive `resets` list: time, stage, each key with its
+previous value) and is shown by `sisyphus status` and under Deviations in the digest, for example
+`Retry reset: PROJ-7 at stage build on 2026-03-04T05:06:00+00:00: build:retry-cycles 3->0, auto-retry 1->0`.
 
 ## Dead ends: `sisyphus abandon`
 
@@ -132,7 +159,7 @@ flag says "I know I abandoned this".
 `sisyphus status [REF] --config F` is read-only (no lock, no agent). For each item (all items without REF) it
 prints stage, stage_status, checkpoint (`state: abandoned` plus `abandoned_at` and `re-enable` for an abandoned item), `awaiting` (`you` for a checkpoint, `error`, `review` for an open PR,
 `none`), and for a stopped item the question, action, resume command and auto-resume rule (with whether it is
-cleared now). No items prints `no items`; an unknown REF exits 1.
+cleared now) and every recorded `Retry reset:` line. No items prints `no items`; an unknown REF exits 1.
 
 ## Exit codes
 

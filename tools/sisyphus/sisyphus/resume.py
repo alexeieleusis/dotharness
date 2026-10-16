@@ -30,6 +30,38 @@ ANSWER_SUFFIX = ".answer.md"
 USED_SUFFIX = ".used"
 AUTO_RETRY_KEY = "auto-retry"
 
+# `sisyphus resume --reset-retries` zeroes exactly these run-record counters for the RECORDED stage of the
+# stopped item, and nothing else. Exact key names, no prefix matching. `branch-created` is a marker that
+# Sisyphus made the branch (the push guard relies on it), not a retry counter: it is never listed here.
+# `plan:leaf-limit` is also left alone: it is a "leaves already planned" marker that stops a C6 resume from
+# re-planning (and overwriting the leaves), not a budget. `auto-retry` is the C8 auto-resume budget; it belongs
+# to whichever stage the item stopped at. Stages without their own counter reset only `auto-retry`.
+BUILD_RETRY_KEY = "build:retry-cycles"
+CI_FIX_ATTEMPTS_KEY = "ci-fix:attempts"
+RESET_KEYS: dict[str, tuple[str, ...]] = {
+    "intake": (AUTO_RETRY_KEY,),
+    "plan": (AUTO_RETRY_KEY,),
+    "build": (BUILD_RETRY_KEY, AUTO_RETRY_KEY),
+    "push": (AUTO_RETRY_KEY,),
+    "open-pr": (AUTO_RETRY_KEY,),
+    "ci-fix": (CI_FIX_ATTEMPTS_KEY, AUTO_RETRY_KEY),
+    "merge": (AUTO_RETRY_KEY,),
+}
+
+
+def reset_keys_for(stage: str | None) -> tuple[str, ...]:
+    """The counters ``--reset-retries`` zeroes for ``stage`` (empty for no or an unknown stage)."""
+    return RESET_KEYS.get(stage or "", ())
+
+
+def reset_stage_retries(rec: RunRecord, now: datetime | None = None) -> dict[str, int]:
+    """Explicit reset for the recorded stage of ``rec``; returns ``{key: previous}`` for what changed.
+
+    Records the event on the run record (also when there was nothing to reset). Only ever called from
+    ``sisyphus resume --reset-retries``: never by auto-resume, ``run`` or loading a record.
+    """
+    return rec.reset_retries(reset_keys_for(rec.stage), stage=rec.stage, now=now)
+
 
 def answer_path(rec_path: Path) -> Path:
     """``<item-encoded>.answer.md`` next to the run record; the user writes the answer here."""
