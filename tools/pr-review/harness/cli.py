@@ -11,8 +11,10 @@ from harness.config import load_config
 from harness.runners import (
     address_comments,
     auto_approve,
+    ci_fix,
     focused_review,
     local_review,
+    merge,
     review_prs,
     review_requested,
     self_review,
@@ -254,10 +256,59 @@ def run_auto_approve(ctx, dry_run):
     auto_approve.run(cfg, dry_run=dry_run)
 
 
+@cmd_run.command("ci-fix")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Reproduce and log what would be fixed, without any push or GitHub write.",
+)
+@click.option(
+    "--pr",
+    "pr",
+    type=click.INT,
+    default=None,
+    metavar="N",
+    help="Only process the PR with this number (default: all of your open PRs).",
+)
+@click.pass_context
+def run_ci_fix(ctx, dry_run, pr):
+    """Fix failing required CI checks on your own PRs and push the fix to the PR branch. Off unless [ci_fix].enabled."""
+    _setup_logging("ci-fix", ctx.obj.get("verbose", False))
+    cfg = load_config(ctx.obj["config_path"])
+    ci_fix.run(cfg, dry_run=dry_run, pr=pr)
+
+
+@cmd_run.command("merge")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Evaluate and log whether each PR would be merged, without any merge or GitHub write.",
+)
+@click.option(
+    "--pr",
+    "pr",
+    type=click.INT,
+    default=None,
+    metavar="N",
+    help="Only process the PR with this number (default: all of your open PRs).",
+)
+@click.pass_context
+def run_merge(ctx, dry_run, pr):
+    """Squash-merge your own PRs once every merge condition holds. Never approves. Off unless [merge].enabled."""
+    _setup_logging("merge", ctx.obj.get("verbose", False))
+    cfg = load_config(ctx.obj["config_path"])
+    merge.run(cfg, dry_run=dry_run, pr=pr)
+
+
 @cmd_run.command("all")
 @click.pass_context
 def run_all(ctx):
-    """Run all runners in sequence: review-prs, focused-review, self-review, review-requested, address-comments, auto-approve."""
+    """Run all runners in sequence: review-prs, focused-review, self-review, review-requested, address-comments, auto-approve, ci-fix, merge.
+
+    ci-fix and merge are no-ops unless [ci_fix].enabled / [merge].enabled is set.
+    """
     _setup_logging("all", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
     log = logging.getLogger(__name__)
@@ -269,6 +320,8 @@ def run_all(ctx):
         ("review_requested", lambda: review_requested.run(cfg)),
         ("address_comments", lambda: address_comments.run(cfg)),
         ("auto_approve", lambda: auto_approve.run(cfg)),
+        ("ci_fix", lambda: ci_fix.run(cfg)),
+        ("merge", lambda: merge.run(cfg)),
     ]
 
     failed = []

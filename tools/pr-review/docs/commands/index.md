@@ -16,18 +16,20 @@ harness run [--config PATH] [--verbose] <command> [command options]
 | [`self-review`](self-review.md) | Your own open PRs (`--author @me`) | Get an automated first-pass AI review of your own PRs before asking a human. |
 | [`address-comments`](address-comments.md) | Open PRs (drafts included) you authored or are assigned to, with pending reviewer feedback | Have the AI backend read unresolved review comments, make the smallest fix (or reply), commit, and push. |
 | [`auto-approve`](auto-approve.md) | PRs where review was explicitly requested from the `gh` account, once the PR author has answered the reviewer | Mark small files viewed and approve small PRs. Off by default (`[auto_approve].enabled`). The one command allowed to conclude a review. |
+| [`ci-fix`](ci-fix.md) | Your own open, non-draft PRs (`--author @me`) with a failing required check | Reproduce the failing check locally, have the AI backend make the smallest fix, and push it to the PR's own branch. Off by default (`[ci_fix].enabled`). Takes `--dry-run` and `--pr N`. |
+| [`merge`](merge.md) | Your own open PRs (`--author @me`) | Squash-merge a PR only when every merge condition holds. Never approves. Off by default (`[merge].enabled`). Takes `--dry-run` and `--pr N`. |
 | [`local-review`](local-review.md) | The branch checked out in `repo.working_dir`, compared with its base ref | Review a local branch before you push, and write findings to Markdown files. With `--address`, the backend also fixes the open findings and commits the fixes on your branch (never pushed). No GitHub access. `harness run all` does not include `local-review`. |
 
 There is also an optional `regret-review` pass — enabled via the [`[regret_review]`](../configuration.md#regret_review) config section — that re-checks old, ignored review comments on the PRs `self-review` and `review-requested` already cover.
 
-There's also a convenience command that runs all six in sequence:
+There's also a convenience command that runs eight commands in sequence:
 
 ```
 harness run [--config PATH] [--verbose] all
 ```
 
-`all` runs the six commands in this order: `review-prs`, `focused-review`,
-`self-review`, `review-requested`, `address-comments`, `auto-approve`. `harness run all` does not include `local-review`. If one command fails, `all`
+`all` runs the commands in this order: `review-prs`, `focused-review`,
+`self-review`, `review-requested`, `address-comments`, `auto-approve`, `ci-fix`, `merge`. `ci-fix` and `merge` do nothing unless enabled in their config sections. `harness run all` does not include `local-review`. If one command fails, `all`
 continues to the next. If any command fails, `all` exits non-zero.
 
 ## Shared behavior
@@ -35,7 +37,7 @@ continues to the next. If any command fails, `all` exits non-zero.
 - **Locking.**
   - Every command acquires a non-blocking file lock before doing any work.
   - The lock key is the resolved `repo.working_dir` path, not `repo.name` or `repo_slug`.
-  - All six commands share the lock, not just same-command invocations. Since all six commands mutate the same `repo.working_dir` checkout, a second concurrent invocation against the same working directory exits immediately. It does not queue or race the first invocation.
+  - All commands share the lock, not just same-command invocations. Since the commands mutate the same `repo.working_dir` checkout, a second concurrent invocation against the same working directory exits immediately. It does not queue or race the first invocation.
   - Two configs that point at the same checkout share a lock even if their `repo.name` differs. Two configs with the same `repo.name` but separate `working_dir` clones (e.g. a second clone dedicated to a cheaper backend) get independent locks and can run concurrently.
 - **Logging.** Logs always go to `~/.local/share/dotharness/logs/<command>/<date>.log`.
   `--verbose` additionally enables DEBUG-level logging and mirrors it to stdout.

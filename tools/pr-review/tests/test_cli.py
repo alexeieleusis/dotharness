@@ -1,6 +1,7 @@
 import tomllib
 from unittest.mock import patch
 
+import pytest
 from click.testing import CliRunner
 
 from harness.cli import TEMPLATE, cli
@@ -232,3 +233,102 @@ def test_init_template_has_commented_auto_approve_block():
     assert "# viewed_max_lines = 75" in block
     assert "# approve_max_lines = 500" in block
     assert "auto_approve" not in tomllib.loads(TEMPLATE)
+
+
+@pytest.mark.parametrize(("command", "module"), [("ci-fix", "ci_fix"), ("merge", "merge")])
+def test_new_runner_registered_under_run(command, module):
+    result = CliRunner().invoke(cli, ["run", "--help"])
+    assert result.exit_code == 0
+    assert command in result.output
+
+
+@pytest.mark.parametrize(("command", "module"), [("ci-fix", "ci_fix"), ("merge", "merge")])
+def test_new_runner_help_shows_flags(command, module):
+    result = CliRunner().invoke(cli, ["run", command, "--help"])
+    assert result.exit_code == 0
+    assert "--dry-run" in result.output
+    assert "--pr" in result.output
+
+
+@pytest.mark.parametrize(("command", "module"), [("ci-fix", "ci_fix"), ("merge", "merge")])
+def test_new_runner_forwards_dry_run_and_pr(minimal_toml, tmp_xdg, command, module):
+    with patch(f"harness.runners.{module}.run") as mock_run:
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), command, "--dry-run", "--pr", "42"])
+    assert result.exit_code == 0, result.output
+    mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs == {"dry_run": True, "pr": 42}
+
+
+@pytest.mark.parametrize(("command", "module"), [("ci-fix", "ci_fix"), ("merge", "merge")])
+def test_new_runner_defaults_and_error_exit(minimal_toml, tmp_xdg, command, module):
+    with patch(f"harness.runners.{module}.run") as mock_run:
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), command])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs == {"dry_run": False, "pr": None}
+    with patch(f"harness.runners.{module}.run", side_effect=RuntimeError("boom")):
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), command])
+    assert result.exit_code != 0
+
+
+@pytest.mark.parametrize("bad", ["abc", "https://github.com/o/r/pull/1"])
+def test_new_runner_pr_must_be_integer(minimal_toml, tmp_xdg, bad):
+    result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "ci-fix", "--pr", bad])
+    assert result.exit_code != 0
+
+
+def test_run_all_with_ci_fix_and_merge_unset_makes_no_calls(minimal_toml, tmp_xdg):
+    runner = CliRunner()
+    call_order = []
+
+    def make_side_effect(name):
+        def _fn(*args, **kwargs):
+            call_order.append(name)
+
+        return _fn
+
+    with (
+        patch("harness.runners.review_prs.run", side_effect=make_side_effect("review_prs")),
+        patch("harness.runners.focused_review.run", side_effect=make_side_effect("focused_review")),
+        patch("harness.runners.self_review.run", side_effect=make_side_effect("self_review")),
+        patch("harness.runners.review_requested.run", side_effect=make_side_effect("review_requested")),
+        patch("harness.runners.address_comments.run", side_effect=make_side_effect("address_comments")),
+        patch("harness.runners.auto_approve.run", side_effect=make_side_effect("auto_approve")),
+        patch("harness.runners.ci_fix.acquire_lock") as ci_lock,
+        patch("harness.runners.merge.acquire_lock") as merge_lock,
+        patch("subprocess.run") as mock_sub,
+    ):
+        result = runner.invoke(cli, ["run", "--config", str(minimal_toml), "all"])
+
+    assert result.exit_code == 0, result.output
+    assert call_order == [
+        "review_prs",
+        "focused_review",
+        "self_review",
+        "review_requested",
+        "address_comments",
+        "auto_approve",
+    ]
+    ci_lock.assert_not_called()
+    merge_lock.assert_not_called()
+    mock_sub.assert_not_called()
+
+
+def test_run_all_calls_ci_fix_then_merge_last(minimal_toml, tmp_xdg):
+    call_order = []
+
+    def make_side_effect(name):
+        def _fn(*args, **kwargs):
+            call_order.append(name)
+
+        return _fn
+
+    names = ["review_prs", "focused_review", "self_review", "review_requested", "address_comments", "auto_approve"]
+    names += ["ci_fix", "merge"]
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        for n in names:
+            stack.enter_context(patch(f"harness.runners.{n}.run", side_effect=make_side_effect(n)))
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "all"])
+    assert result.exit_code == 0, result.output
+    assert call_order == names
