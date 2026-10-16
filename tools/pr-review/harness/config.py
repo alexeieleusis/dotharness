@@ -89,6 +89,19 @@ class AutoApproveConfig:
 
 
 @dataclass
+class CiFixConfig:
+    enabled: bool = False
+    max_fix_attempts: int = 3
+
+
+@dataclass
+class MergeConfig:
+    enabled: bool = False
+    require_all_files_viewed: bool = True
+    max_changed_lines: int = 500
+
+
+@dataclass
 class LocalReviewConfig:
     base: str | None = None
     output_dir: str | None = None
@@ -124,6 +137,8 @@ class HarnessConfig:
     regret_review: RegretReviewConfig = field(default_factory=RegretReviewConfig)
     local_review: LocalReviewConfig = field(default_factory=LocalReviewConfig)
     auto_approve: AutoApproveConfig = field(default_factory=AutoApproveConfig)
+    ci_fix: CiFixConfig = field(default_factory=CiFixConfig)
+    merge: MergeConfig = field(default_factory=MergeConfig)
 
     @property
     def repo_slug(self) -> str:
@@ -211,6 +226,57 @@ def _parse_auto_approve(section: dict) -> AutoApproveConfig:
     return AutoApproveConfig(enabled=enabled, **values)
 
 
+def _parse_strict_section(
+    name: str,
+    section: dict,
+    *,
+    bool_keys: tuple[str, ...],
+    int_keys: tuple[str, ...],
+    defaults: object,
+) -> dict:
+    """Validate a section that rejects unknown keys and non-positive integers."""
+    for key in section:
+        if key not in (*bool_keys, *int_keys):
+            raise ConfigError(f"{name}.{key} is not a recognized key")  # noqa: TRY003
+    values: dict = {}
+    for key in bool_keys:
+        value = section.get(key, getattr(defaults, key))
+        if not isinstance(value, bool):
+            raise ConfigError(f"{name}.{key} must be a boolean, got {value!r}")  # noqa: TRY003
+        values[key] = value
+    for key in int_keys:
+        value = section.get(key, getattr(defaults, key))
+        # bool is an int subclass; reject it explicitly.
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ConfigError(f"{name}.{key} must be a positive integer, got {value!r}")  # noqa: TRY003
+        values[key] = value
+    return values
+
+
+def _parse_ci_fix(section: dict) -> CiFixConfig:
+    return CiFixConfig(
+        **_parse_strict_section(
+            "ci_fix",
+            section,
+            bool_keys=("enabled",),
+            int_keys=("max_fix_attempts",),
+            defaults=CiFixConfig(),
+        )
+    )
+
+
+def _parse_merge(section: dict) -> MergeConfig:
+    return MergeConfig(
+        **_parse_strict_section(
+            "merge",
+            section,
+            bool_keys=("enabled", "require_all_files_viewed"),
+            int_keys=("max_changed_lines",),
+            defaults=MergeConfig(),
+        )
+    )
+
+
 def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
     with open(path, "rb") as f:
         try:
@@ -278,6 +344,9 @@ def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
 
     auto_approve = _parse_auto_approve(data.get("auto_approve", {}))
 
+    ci_fix = _parse_ci_fix(data.get("ci_fix", {}))
+    merge = _parse_merge(data.get("merge", {}))
+
     lr = data.get("local_review", {})
     local_review = LocalReviewConfig(
         base=lr.get("base") or None,
@@ -293,4 +362,6 @@ def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
         regret_review=regret_review,
         local_review=local_review,
         auto_approve=auto_approve,
+        ci_fix=ci_fix,
+        merge=merge,
     )

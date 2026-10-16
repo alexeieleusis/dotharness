@@ -3,7 +3,7 @@ import re
 
 import pytest
 
-from harness.config import ConfigError, PreCommand, load_config
+from harness.config import CiFixConfig, ConfigError, MergeConfig, PreCommand, load_config
 from harness.lock import working_dir_lock_key
 from harness.runners.common import build_subprocess_env
 
@@ -486,3 +486,84 @@ def test_auto_approve_bad_int_names_field(tmp_path, field_name, bad):
 def test_auto_approve_enabled_non_bool_rejected(tmp_path, bad):
     with pytest.raises(ConfigError, match=r"auto_approve\.enabled"):
         load_config(_auto_approve_toml(tmp_path, f"enabled = {bad}"))
+
+
+def _section_toml(tmp_path, section: str, body: str):
+    p = tmp_path / ".harness.toml"
+    p.write_text(f'[harness]\n[repo]\nname = "a/b"\nworking_dir = "/tmp"\n\n[{section}]\n{body}\n')
+    return p
+
+
+def _ci_fix_toml(tmp_path, body: str):
+    return _section_toml(tmp_path, "ci_fix", body)
+
+
+def _merge_toml(tmp_path, body: str):
+    return _section_toml(tmp_path, "merge", body)
+
+
+def test_ci_fix_and_merge_defaults_when_absent(minimal_toml):
+    cfg = load_config(minimal_toml)
+    assert cfg.ci_fix == CiFixConfig()
+    assert cfg.merge == MergeConfig()
+    assert cfg.ci_fix.enabled is False
+    assert cfg.ci_fix.max_fix_attempts == 3
+    assert cfg.merge.enabled is False
+    assert cfg.merge.require_all_files_viewed is True
+    assert cfg.merge.max_changed_lines == 500
+    assert cfg.auto_approve.approve_max_lines == 500
+
+
+def test_ci_fix_defaults_when_empty(tmp_path):
+    assert load_config(_ci_fix_toml(tmp_path, "")).ci_fix == CiFixConfig()
+
+
+def test_merge_defaults_when_empty(tmp_path):
+    assert load_config(_merge_toml(tmp_path, "")).merge == MergeConfig()
+
+
+def test_ci_fix_parsed(tmp_path):
+    cfg = load_config(_ci_fix_toml(tmp_path, "enabled = true\nmax_fix_attempts = 5"))
+    assert cfg.ci_fix == CiFixConfig(enabled=True, max_fix_attempts=5)
+
+
+def test_merge_parsed(tmp_path):
+    cfg = load_config(
+        _merge_toml(tmp_path, "enabled = true\nrequire_all_files_viewed = false\nmax_changed_lines = 120")
+    )
+    assert cfg.merge == MergeConfig(enabled=True, require_all_files_viewed=False, max_changed_lines=120)
+
+
+def test_ci_fix_unknown_key_named(tmp_path):
+    with pytest.raises(ConfigError, match=r"ci_fix\.bogus"):
+        load_config(_ci_fix_toml(tmp_path, "bogus = 1"))
+
+
+def test_merge_unknown_key_named(tmp_path):
+    with pytest.raises(ConfigError, match=r"merge\.bogus"):
+        load_config(_merge_toml(tmp_path, "bogus = 1"))
+
+
+@pytest.mark.parametrize("bad", ['"yes"', "1", "0"])
+def test_ci_fix_enabled_non_bool_rejected(tmp_path, bad):
+    with pytest.raises(ConfigError, match=r"ci_fix\.enabled"):
+        load_config(_ci_fix_toml(tmp_path, f"enabled = {bad}"))
+
+
+@pytest.mark.parametrize("key", ["enabled", "require_all_files_viewed"])
+@pytest.mark.parametrize("bad", ['"yes"', "1", "0"])
+def test_merge_bool_keys_non_bool_rejected(tmp_path, key, bad):
+    with pytest.raises(ConfigError, match=rf"merge\.{key}"):
+        load_config(_merge_toml(tmp_path, f"{key} = {bad}"))
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "true", "false", "2.5", '"3"'])
+def test_ci_fix_max_fix_attempts_invalid(tmp_path, bad):
+    with pytest.raises(ConfigError, match=r"ci_fix\.max_fix_attempts"):
+        load_config(_ci_fix_toml(tmp_path, f"max_fix_attempts = {bad}"))
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "true", "false", "2.5", '"3"'])
+def test_merge_max_changed_lines_invalid(tmp_path, bad):
+    with pytest.raises(ConfigError, match=r"merge\.max_changed_lines"):
+        load_config(_merge_toml(tmp_path, f"max_changed_lines = {bad}"))

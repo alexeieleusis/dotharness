@@ -129,6 +129,31 @@ Used by `harness run auto-approve` (and `harness run all`). Off by default.
 
 The comparison is strictly less than, so a value of `0` never matches and disables that feature. Invalid values (a non-boolean `enabled`, or a negative or non-integer threshold) raise `ConfigError` naming the field. Like `max_diff_lines` in `[regret_review]`, `75` and `500` are round, conservative starting points pending real usage data. See [`auto-approve`](commands/auto-approve.md) for the full rules.
 
+### `[ci_fix]`
+
+Settings for the `ci-fix` runner. Off by default. Whether `ci-fix` joins `harness run all` is not decided here.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Turns the `ci-fix` runner on. While `false`, the runner does nothing. |
+| `max_fix_attempts` | integer | `3` | Maximum number of fix attempts per PR. Must be a positive integer. |
+
+Unknown keys and invalid values (a non-boolean `enabled`, or a zero, negative, boolean or non-integer `max_fix_attempts`) raise `ConfigError` naming the key.
+
+### `[merge]`
+
+Settings for the `merge` runner. Off by default: with `enabled = false` the runner does nothing and a run ends at an open PR.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Turns the `merge` runner on. |
+| `require_all_files_viewed` | boolean | `true` | Only merge a PR whose files have all been marked as viewed. |
+| `max_changed_lines` | integer | `500` | Maximum total modified lines for a PR to be merged. Equal to the `[auto_approve]` `approve_max_lines` default, so merge is not more permissive than approve by default. Must be a positive integer. |
+
+Unknown keys and invalid values (a non-boolean `enabled` or `require_all_files_viewed`, or a zero, negative, boolean or non-integer `max_changed_lines`) raise `ConfigError` naming the key.
+
+No secrets belong in these sections; credentials come from `gh_token_cmd`.
+
 ### `[local_review]`
 
 Optional. Used only by `harness run local-review`. All other commands ignore it. Both fields are optional, and an absent section behaves as if both were unset.
@@ -203,6 +228,15 @@ enabled = false
 # enabled = false
 # viewed_max_lines = 75
 # approve_max_lines = 500
+
+[ci_fix]
+# enabled = false
+# max_fix_attempts = 3
+
+[merge]
+# enabled = false
+# require_all_files_viewed = true
+# max_changed_lines = 500
 
 [regret_review]
 enabled = false
