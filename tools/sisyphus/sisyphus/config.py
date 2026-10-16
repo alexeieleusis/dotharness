@@ -31,6 +31,7 @@ class ProjectConfig:
     repo_dir: str | None = None
     workspace_dir: str | None = None
     brief_path_template: str | None = None
+    base_branch: str | None = None
 
 
 @dataclass(frozen=True)
@@ -210,11 +211,12 @@ def _parse(data: dict[str, Any]) -> SisyphusConfig:
     if "project" not in data:
         raise ConfigError("missing required [project] table")
 
-    t = _table(data["project"], "project", ("repo_dir", "workspace_dir", "brief_path_template"))
+    t = _table(data["project"], "project", ("repo_dir", "workspace_dir", "brief_path_template", "base_branch"))
     project = ProjectConfig(
         repo_dir=_str(t, "project", "repo_dir"),
         workspace_dir=_str(t, "project", "workspace_dir"),
         brief_path_template=_str(t, "project", "brief_path_template"),
+        base_branch=_str(t, "project", "base_branch"),
     )
     source = _parse_source(data["source"]) if "source" in data else SourceConfig()
 

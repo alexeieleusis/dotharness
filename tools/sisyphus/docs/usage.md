@@ -30,9 +30,10 @@ sisyphus intake <work-item-ref> --config <file>
 Nothing to do prints nothing and exits 0. When something ran, one line per item and the digest path go to
 stdout.
 
-`--base <branch>` is the PR base branch. The config has no base-branch key and no default is assumed, so
-`--base` is required whenever there is an item to run (it is not needed for a run that finds nothing to do).
-Until PR #96 merges, use `95_pr-review_auto-approve`, then `main`.
+`--base <branch>` is the PR base branch. Precedence: `--base`, then `[project].base_branch` in the config,
+then `main`. Self-hosting on a stacked branch (for example building Sisyphus on branch `sisyphus` stacked on
+`95_pr-review_auto-approve`) needs `--base` or the config key, since `main` would be wrong there. Until PR #96
+merges, use `95_pr-review_auto-approve`, then `main`.
 
 The CLI holds the clone lock only while it checks for an awaiting PR and picks; the orchestrator takes the
 same lock for the length of each item. A lock taken by another process in between makes the run stop quietly

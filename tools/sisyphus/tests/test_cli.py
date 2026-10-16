@@ -187,13 +187,24 @@ def test_picks_and_runs_item_with_base_and_writes_digest(tmp_path: Path, fake_ru
     assert "## Needs you" in env.digest
 
 
-def test_base_is_required_when_there_is_work(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+def test_base_flag_wins_over_config(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
     env = make_env(tmp_path, ["ENG-1"])
-    result = env.invoke("run", "--config", str(env.config))
-    assert result.exit_code == 1
-    assert "no base branch" in result.output
-    assert fake_run_item["calls"] == []
-    assert "no base branch" in env.digest
+    env.config.write_text(env.config.read_text().replace("[project]\n", '[project]\nbase_branch = "cfg-base"\n', 1))
+    assert env.invoke("run", "--config", str(env.config), "--base", "flag-base").exit_code == 0
+    assert fake_run_item["calls"][0][1].base_branch == "flag-base"
+
+
+def test_config_base_wins_over_main(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+    env = make_env(tmp_path, ["ENG-1"])
+    env.config.write_text(env.config.read_text().replace("[project]\n", '[project]\nbase_branch = "cfg-base"\n', 1))
+    assert env.invoke("run", "--config", str(env.config)).exit_code == 0
+    assert fake_run_item["calls"][0][1].base_branch == "cfg-base"
+
+
+def test_base_defaults_to_main_when_neither_given(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+    env = make_env(tmp_path, ["ENG-1"])
+    assert env.invoke("run", "--config", str(env.config)).exit_code == 0
+    assert fake_run_item["calls"][0][1].base_branch == cli.DEFAULT_BASE_BRANCH == "main"
 
 
 def test_max_tickets_per_run_caps_picks(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:

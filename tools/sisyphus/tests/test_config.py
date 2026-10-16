@@ -85,6 +85,7 @@ conventions_path = "c"
 """
     cfg = load_config(write(tmp_path, text))
     assert cfg.project.brief_path_template == "b/{id}.md"
+    assert cfg.project.base_branch is None
     assert cfg.source.ci is not None
     assert cfg.source.ci.max_fix_attempts == 2
     assert cfg.source.host is not None
@@ -198,6 +199,7 @@ def test_relative_paths_verbatim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ("text", "key"),
     [
         ("[project]\nrepo_dir = 3\n", "repo_dir"),
+        ("[project]\nbase_branch = 3\n", "base_branch"),
         ('[project]\n[limits]\nmax_run_minutes = "x"\n', "max_run_minutes"),
         ("[project]\n[limits]\nmax_run_minutes = 1.5\n", "max_run_minutes"),
         ("[project]\n[limits]\nmax_run_minutes = true\n", "max_run_minutes"),

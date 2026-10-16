@@ -65,6 +65,7 @@ AGENT_COMMANDS = {
     "opencode": lambda prompt: ["opencode", "run", prompt],
 }
 TOKEN_CMD_TIMEOUT = 30
+DEFAULT_BASE_BRANCH = "main"
 AWAITING_REVIEW = "awaiting-review"
 
 
@@ -243,11 +244,7 @@ def _summarise(result: RunResult) -> str:
 
 
 def _resolve_options(config: SisyphusConfig, services: Services, base: str | None) -> OrchestratorOptions:
-    if not base:
-        raise _fail(
-            "config error: no base branch; pass --base <branch> (the .sisyphus.toml schema has no base-branch key "
-            "and no default is assumed)"
-        )
+    base = base or config.project.base_branch or DEFAULT_BASE_BRANCH
     slug, default_branch = (
         services.repo_info()
         if services.repo_info
@@ -386,7 +383,9 @@ def _write_digest(config: SisyphusConfig, services: Services, state: _RunState) 
 
 @main.command("run")
 @config_option
-@click.option("--base", default=None, help="PR base branch (no default; required when there is work to run).")
+@click.option(
+    "--base", default=None, help=f"PR base branch (default: [project].base_branch, else {DEFAULT_BASE_BRANCH!r})."
+)
 @click.pass_obj
 def run_command(factory: ServicesFactory | None, config_path: str, base: str | None) -> None:
     """Pick up to max_tickets_per_run items, run each through the orchestrator, write one digest."""

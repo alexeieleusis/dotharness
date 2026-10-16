@@ -28,6 +28,11 @@ default is listed.
 | `repo_dir` | string | none |
 | `workspace_dir` | string | none |
 | `brief_path_template` | string | none |
+| `base_branch` | string | none (the CLI falls back to `main`) |
+
+`base_branch` is the PR base branch. Precedence: `sisyphus run --base <branch>`, then `[project].base_branch`,
+then `main`. Self-hosting on a stacked branch (for example building Sisyphus on branch `sisyphus` stacked on
+`95_pr-review_auto-approve`) needs `--base` or this key, because `main` would be the wrong base there.
 
 ### `[source.work_item]`
 
