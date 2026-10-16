@@ -10,6 +10,12 @@ copyright = 'Maintained by <a href="https://alexeieleusis.com">alexeieleusis</a>
 
 nav = [
     { "Home" = "index.md" },
+    { "Usage" = "usage.md" },
+    { "Configuration" = "configuration.md" },
+    { "Orchestrator" = "orchestrator.md" },
+    { "Intake" = "intake.md" },
+    { "Digest" = "digest.md" },
+    { "Safety rails" = "safety-rails.md" },
     { "Modules" = "modules.md" },
 ]
 
