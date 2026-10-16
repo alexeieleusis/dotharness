@@ -8,6 +8,7 @@ license-files = ["LICENSE"]
 readme = "README.md"
 keywords = ['python']
 requires-python = ">=3.11,<4.0"
+dependencies = ["click>=8.1"]
 classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python",
@@ -18,6 +19,9 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+
+[project.scripts]
+sisyphus = "sisyphus.cli:main"
 
 [project.urls]
 Homepage = "https://alexeieleusis.github.io/sisyphus/"
