@@ -11,8 +11,9 @@ sisyphus intake <work-item-ref> --config <file>
 ## `sisyphus run`
 
 1. Loads the config (`.sisyphus.toml`, see [configuration](configuration.md)).
-2. Takes the per-clone lock for `[project].repo_dir` without blocking. If another run holds it, exits 0
-   quietly.
+2. Takes the per-clone lock for `[project].repo_dir` without blocking, and holds it for the whole
+   invocation (awaiting-review check, pick, every item, digest write). If another run holds it, exits 0
+   quietly before doing anything else.
 3. If an earlier Sisyphus PR (a run record that reached the PR stage whose branch still has an open PR)
    awaits review, skips picking and reports it under "Needs you" in the digest.
 4. Otherwise picks up to `[limits].max_tickets_per_run` items (default 1) the tracker offers and Sisyphus has
@@ -35,9 +36,9 @@ then `main`. Self-hosting on a stacked branch (for example building Sisyphus on 
 `95_pr-review_auto-approve`) needs `--base` or the config key, since `main` would be wrong there. Until PR #96
 merges, use `95_pr-review_auto-approve`, then `main`.
 
-The CLI holds the clone lock only while it checks for an awaiting PR and picks; the orchestrator takes the
-same lock for the length of each item. A lock taken by another process in between makes the run stop quietly
-with exit 0.
+The CLI takes the clone lock once, at the start of `run` and `intake`, and releases it when the invocation ends
+(including on error). It calls the orchestrator with `lock_held=True` so the orchestrator does not lock again
+(`flock` is not re-entrant), so there is no unlocked window between the pick and the items or between items.
 
 ### Credentials and backends
 

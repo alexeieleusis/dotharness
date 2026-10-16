@@ -20,6 +20,7 @@ import subprocess
 import time
 import tomllib
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -588,11 +589,14 @@ def run_item(
     clock: Callable[[], float] = time.monotonic,
     today: datetime | None = None,
     write_digest_file: bool = True,
+    lock_held: bool = False,
 ) -> RunResult:
     """Run one work item through the stages, stopping at the first checkpoint.
 
     Takes the per-clone lock for the whole run (``LockHeld`` propagates before any state is
-    touched). Writes the digest even when a stage raises; a digest failure raises
+    touched) unless ``lock_held=True``, which means the caller (a CLI command) already holds
+    ``clone_lock(repo_dir, options.lock_dir)`` for the invocation; flock is not re-entrant, so
+    locking again would contend with the caller. Writes the digest even when a stage raises; a digest failure raises
     ``DigestWriteError`` (chained to the stage error if any). ``write_digest_file=False`` lets a
     multi-item caller aggregate ``RunResult.record`` and ``RunResult.report`` into one digest.
     Unexpected failures (agent runner errors, ``RunRecordError``, ``IntakeError``,
@@ -600,7 +604,7 @@ def run_item(
     """
     if not config.project.repo_dir:
         raise OrchestratorError("[project].repo_dir is not set")
-    with clone_lock(config.project.repo_dir, options.lock_dir):
+    with nullcontext() if lock_held else clone_lock(config.project.repo_dir, options.lock_dir):
         run = _Run(item, config, options, agent_runner, subprocess_runner, pr_client, clock)
         error: BaseException | None = None
         checkpoint: Checkpoint | None = None

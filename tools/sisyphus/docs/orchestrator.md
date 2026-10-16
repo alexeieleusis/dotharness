@@ -1,6 +1,6 @@
 # Orchestrator
 
-`sisyphus.orchestrator.run_item(item, config, options, *, agent_runner, subprocess_runner, pr_client, clock=..., today=None, write_digest_file=True)`
+`sisyphus.orchestrator.run_item(item, config, options, *, agent_runner, subprocess_runner, pr_client, clock=..., today=None, write_digest_file=True, lock_held=False)`
 runs one work item through intake, plan, build, push, open PR and, optionally, ci-fix and merge. It never
 imports `harness` or `spec_prism_flow`; those tools are reached only through the injected subprocess runner.
 It returns a `RunResult` (`checkpoint`, `detail`, `stages_run`, `stages_skipped`, `branch`, `pr`, `head_sha`,
@@ -85,7 +85,9 @@ absent it writes nothing and the digest "Deviations" section says so; commands a
 
 ## Locking, digest and reruns
 
-The whole run holds `lock.clone_lock(repo_dir)`; `LockHeld` propagates before any state is touched. The digest is
+By default the whole run holds `lock.clone_lock(repo_dir)`; `LockHeld` propagates before any state is touched.
+`lock_held=True` means the caller (a CLI command that holds one lock for its whole invocation) already holds that
+lock, so `run_item` does not take it again; direct library callers should leave it `False`. The digest is
 written for this item by `digest.write_digest` even when a stage raises; `DigestWriteError` propagates (chained to
 the stage error, if any). A multi-item caller passes `write_digest_file=False` and aggregates `RunResult.record` and
 `RunResult.report` itself.

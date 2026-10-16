@@ -261,27 +261,81 @@ def test_lock_held_exits_zero_and_orchestrator_not_called(tmp_path: Path, fake_r
     assert fake_run_item["calls"] == []
 
 
-def test_cli_lock_is_released_before_orchestrator_takes_its_own(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+def _is_locked(tmp_path: Path) -> bool:
+    """True when a second open cannot take the clone lock right now."""
+    try:
+        with clone_lock(tmp_path / "repo", tmp_path / "locks"):
+            return False
+    except LockHeld:
+        return True
+
+
+def test_lock_held_for_whole_invocation_with_no_gap(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+    env = make_env(tmp_path, ["ENG-1", "ENG-2", "ENG-3"], extra="\n[limits]\nmax_tickets_per_run = 3\n")
+    seen: dict[str, list[bool]] = {"awaiting": [], "pick": [], "items": []}
+    real_pick, real_find = cli.pick_items, cli.find_awaiting_review
+
+    def find(*a: Any, **k: Any) -> Any:
+        seen["awaiting"].append(_is_locked(tmp_path))
+        return real_find(*a, **k)
+
+    def pick(*a: Any, **k: Any) -> Any:
+        seen["pick"].append(_is_locked(tmp_path))
+        return real_pick(*a, **k)
+
+    fake_run_item["hook"] = lambda _c, _o: seen["items"].append(_is_locked(tmp_path))
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cli, "find_awaiting_review", find)
+        mp.setattr(cli, "pick_items", pick)
+        result = env.invoke("run", "--config", str(env.config), "--base", "b")
+    assert result.exit_code == 0, result.output
+    assert items(fake_run_item) == ["ENG-1", "ENG-2", "ENG-3"]
+    assert seen == {"awaiting": [True], "pick": [True], "items": [True, True, True]}
+    assert all(c[2]["lock_held"] is True for c in fake_run_item["calls"])
+    assert not _is_locked(tmp_path)
+
+
+def test_lock_held_while_writing_digest(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
     env = make_env(tmp_path, ["ENG-1"])
     seen: list[bool] = []
+    real = cli.write_digest
 
-    def hook(config: Any, options: Any) -> None:
-        try:
-            with clone_lock(config.project.repo_dir, options.lock_dir):
-                seen.append(True)
-        except LockHeld:
-            seen.append(False)
+    def spy(*a: Any, **k: Any) -> Any:
+        seen.append(_is_locked(tmp_path))
+        return real(*a, **k)
 
-    fake_run_item["hook"] = hook
-    env.invoke("run", "--config", str(env.config), "--base", "b")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cli, "write_digest", spy)
+        env.invoke("run", "--config", str(env.config), "--base", "b")
     assert seen == [True]
 
 
-def test_lock_held_during_item_stops_quietly(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+def test_lock_released_after_error(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
     env = make_env(tmp_path, ["ENG-1"])
-    fake_run_item["raise"]["ENG-1"] = LockHeld("busy")
+    fake_run_item["raise"]["ENG-1"] = RuntimeError("boom")
     result = env.invoke("run", "--config", str(env.config), "--base", "b")
+    assert result.exit_code == 1
+    assert not _is_locked(tmp_path)
+
+
+def test_lock_released_after_success(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+    env = make_env(tmp_path, ["ENG-1"])
+    env.invoke("run", "--config", str(env.config), "--base", "b")
+    assert not _is_locked(tmp_path)
+
+
+def test_lock_held_means_no_pick_or_awaiting_check(
+    tmp_path: Path, fake_run_item: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, ["ENG-1"])
+    touched: list[str] = []
+    monkeypatch.setattr(cli, "find_awaiting_review", lambda *a, **k: touched.append("a") or [])
+    monkeypatch.setattr(cli, "pick_items", lambda *a, **k: touched.append("p") or [])
+    with clone_lock(tmp_path / "repo", tmp_path / "locks"):
+        result = env.invoke("run", "--config", str(env.config), "--base", "b")
     assert (result.exit_code, result.output) == (0, "")
+    assert touched == []
+    assert fake_run_item["calls"] == []
 
 
 def test_checkpoint_stop_exits_zero_with_digest(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
@@ -380,6 +434,7 @@ def test_intake_lock_held_and_failure(tmp_path: Path, monkeypatch: pytest.Monkey
     with clone_lock(tmp_path / "repo", tmp_path / "locks"):
         held = env.invoke("intake", "ENG-9", "--config", str(env.config))
     assert (held.exit_code, held.output) == (0, "")
+    assert not _is_locked(tmp_path)
 
 
 # ------------------------------------------------------ real service builders

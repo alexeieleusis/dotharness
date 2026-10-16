@@ -235,11 +235,12 @@ class World:
         return self.existing_pr
 
     # ---- run
-    def run(self, **kw: object) -> orchestrator.RunResult:
+    def run(self, lock_held: bool = False, **kw: object) -> orchestrator.RunResult:
         return run_item(
             ITEM,
             self.config(),
             self.options(**kw),
+            lock_held=lock_held,
             agent_runner=self.agent,
             subprocess_runner=self.shell,
             pr_client=self,
@@ -786,6 +787,20 @@ def test_lock_held_propagates_before_any_state(world: World) -> None:
     assert world.events == []
     assert not (world.tmp / "ws").exists()
     assert not (world.tmp / "digest-2026-01-02.md").exists()
+
+
+def test_lock_held_by_caller_skips_locking(world: World) -> None:
+    with clone_lock(world.repo, world.tmp / "locks"):
+        result = world.run(lock_held=True)
+    assert result.stages_run
+    with clone_lock(world.repo, world.tmp / "locks"):
+        pass
+
+
+def test_default_still_locks_and_releases_on_error(world: World) -> None:
+    with clone_lock(world.repo, world.tmp / "locks"), pytest.raises(LockHeld):
+        world.run(lock_held=False)
+    assert world.events == []
 
 
 def test_lock_released_after_run(world: World) -> None:

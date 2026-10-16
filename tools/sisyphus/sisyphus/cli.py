@@ -1,6 +1,6 @@
 """Single-shot ``sisyphus`` CLI (D-17): ``sisyphus run`` and ``sisyphus intake``.
 
-One invocation, one config, no daemon. ``run`` takes the per-clone lock non-blockingly, skips picking
+One invocation, one config, no daemon. ``run`` takes the per-clone lock non-blockingly once, holds it for the whole invocation, skips picking
 when an earlier Sisyphus PR still awaits review, otherwise picks up to ``max_tickets_per_run`` items,
 runs each through the orchestrator and writes one merged digest. Credentials come only from the
 inherited environment and ``[source.host].token_cmd``.
@@ -289,29 +289,28 @@ class _RunState:
 
 
 def _pick_phase(config: SisyphusConfig, services: Services, state: _RunState) -> list[Candidate]:
-    """Under the clone lock: report an earlier PR awaiting review, else pick items. Raises LockHeld."""
-    assert config.project.repo_dir and config.project.workspace_dir  # noqa: S101
+    """Report an earlier PR awaiting review, else pick items. The caller holds the clone lock."""
+    assert config.project.workspace_dir  # noqa: S101
     workspace = Path(config.project.workspace_dir).expanduser()
-    with clone_lock(config.project.repo_dir, services.lock_dir):
-        awaiting = find_awaiting_review(workspace, services.pr_client.find_pr)
-        for a in awaiting:
-            state.needs.append(
-                NeedsYou(
-                    a.item,
-                    AWAITING_REVIEW,
-                    f"PR #{a.pr.number} {a.pr.url} from an earlier run still awaits review, so no new item "
-                    "was picked. Review or merge it.",
-                )
+    awaiting = find_awaiting_review(workspace, services.pr_client.find_pr)
+    for a in awaiting:
+        state.needs.append(
+            NeedsYou(
+                a.item,
+                AWAITING_REVIEW,
+                f"PR #{a.pr.number} {a.pr.url} from an earlier run still awaits review, so no new item "
+                "was picked. Review or merge it.",
             )
-        if awaiting:
-            return []
-        return pick_items(
-            config.source.work_item,
-            services.tracker,
-            services.lookup,
-            workspace_dir=workspace,
-            limit=config.limits.max_tickets_per_run,
         )
+    if awaiting:
+        return []
+    return pick_items(
+        config.source.work_item,
+        services.tracker,
+        services.lookup,
+        workspace_dir=workspace,
+        limit=config.limits.max_tickets_per_run,
+    )
 
 
 def _run_one(
@@ -329,9 +328,8 @@ def _run_one(
             clock=services.clock,
             today=services.today,
             write_digest_file=False,
+            lock_held=True,
         )
-    except LockHeld:
-        raise
     except Exception as exc:
         workspace = Path(config.project.workspace_dir).expanduser()
         if record_path(workspace, cand.ref).exists():
@@ -346,7 +344,7 @@ def _run_one(
 def _run_phase(
     picked: Sequence[Candidate], config: SisyphusConfig, services: Services, base: str | None, state: _RunState
 ) -> None:
-    """Run each picked item (outside the CLI lock; the orchestrator takes its own), honouring max_run_minutes."""
+    """Run each picked item (the caller holds the clone lock, so ``run_item`` is told not to), honouring max_run_minutes."""
     if not picked:
         return
     if not config.agent.backend:
@@ -360,10 +358,7 @@ def _run_phase(
             )
             return
         tracker.record_ticket()
-        try:
-            _run_one(cand, config, services, options, state)
-        except LockHeld:
-            return
+        _run_one(cand, config, services, options, state)
 
 
 def _write_digest(config: SisyphusConfig, services: Services, state: _RunState) -> DigestWriteError | None:
@@ -391,19 +386,24 @@ def run_command(factory: ServicesFactory | None, config_path: str, base: str | N
     """Pick up to max_tickets_per_run items, run each through the orchestrator, write one digest."""
     config = _load(config_path)
     _require(config, "repo_dir", "workspace_dir")
+    assert config.project.repo_dir  # noqa: S101
     services = _services(factory, config)
     state = _RunState()
     error: Exception | None = None
+    digest_error: DigestWriteError | None = None
     try:
-        picked = _pick_phase(config, services, state)
-        _run_phase(picked, config, services, base, state)
+        # One non-blocking lock for the whole invocation: awaiting-review check, pick, every item, digest.
+        with clone_lock(config.project.repo_dir, services.lock_dir):
+            try:
+                picked = _pick_phase(config, services, state)
+                _run_phase(picked, config, services, base, state)
+            except Exception as exc:
+                error = exc
+                if not state.notes:
+                    state.notes.append(f"run failed: {exc}")
+            digest_error = _write_digest(config, services, state) if state.has_content else None
     except LockHeld:
         return
-    except Exception as exc:
-        error = exc
-        if not state.notes:
-            state.notes.append(f"run failed: {exc}")
-    digest_error = _write_digest(config, services, state) if state.has_content else None
     if error is not None:
         raise _fail(str(error)) from error
     if digest_error is not None:

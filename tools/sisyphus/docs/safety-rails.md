@@ -25,7 +25,8 @@ History rewrite and rebase-needed are git-state facts the caller passes in.
 `clone_lock(clone_dir, lock_dir=None)` takes a non-blocking `flock` on a file named by a hash of
 the resolved clone directory (path only). Contention raises `LockHeld`, which the CLI maps to a
 quiet exit 0. The lock is released on normal exit and on exceptions. Different clone directories
-never contend.
+never contend. The lock is not re-entrant (a second open contends even in the same process), so a CLI command
+takes it once for the invocation and tells the orchestrator `lock_held=True`.
 
 ## Path resolution order
 
