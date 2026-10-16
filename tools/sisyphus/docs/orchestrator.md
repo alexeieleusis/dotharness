@@ -104,8 +104,17 @@ The orchestration prompt is `knowledge/sisyphus/orchestration-prompt.md`; its pa
 When a stage raises a checkpoint, or an unexpected error escapes, `run_item` writes the stop record
 (`stoprecord.py`, a sidecar next to the run record; the run record schema is unchanged) and deletes it when a
 run completes. `OrchestratorOptions.resume_command` is the command text stored in it (`{item}` is replaced).
+After a clean finish `run_item` calls `cleanup.cleanup_branch` (inside the lock, never turning a clean finish into an
+error). Steps, each of which keeps the branch and adds a `Branch kept:` note if it fails: branch exists (else
+silent no-op); clean clone; `ls-remote` and `fetch` of `origin/<branch>`; `merge-base --is-ancestor <branch>
+origin/<branch>` (upstream tracking is not consulted); a detached HEAD must itself be on `origin/<branch>`; switch to
+the base, `fetch` and `merge --ff-only origin/<base>`; `branch --set-upstream-to=origin/<branch>` then
+`branch -d` (plain `-d` alone would refuse an unmerged PR branch; the verified upstream is git's second check).
+`-D` is never used (unlike pr-review's `git_restore`, which uses `-D` after saving a recovery ref).
 A complete stage is always skipped on a rerun, except intake stopped at C1, which only re-parses the brief
 (`run_intake(reparse_only=True)`) so a human-edited brief is never redrafted. An answer file
 (`resume.answer_path`) is appended to the next agent prompt and then renamed `*.used`. Before the first stage a
 new item requires a clean clone, and a resume after the build stage checks out the item's branch; a dirty clone
-is a C8 stop and is never stashed or reset. `resume.py` holds the cleared-detection rules used by `sisyphus run`.
+is a C8 stop and is never stashed or reset. If the local branch is gone (see below) a resume from the PR stage on
+fetches `origin/<branch>` and works detached at that head; earlier resumes still need the local branch.
+`resume.py` holds the cleared-detection rules used by `sisyphus run`.

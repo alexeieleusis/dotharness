@@ -25,7 +25,7 @@ Always all six, always in this order. An empty section says `None`.
    did not finish.
 4. **Deviations**: `DigestReport.deviations`, plus one `Abandoned: REF ...` note (when, and the re-enable command) for
    each record whose stop record has `kind` `abandoned` (see `sisyphus abandon` in usage). Abandoned items are
-   never listed under Needs you. Each explicit retry reset adds `Retry reset: REF at stage S on <time>: key a 3->0, ...`
+   never listed under Needs you. A kept local branch adds `Branch kept: REF <branch> <reason>`; a deleted one is listed under Done. Each explicit retry reset adds `Retry reset: REF at stage S on <time>: key a 3->0, ...`
    (or `no counters to reset`), read from the run record's `resets` list, so it is shown on every later digest.
 5. **Limits hit**: `DigestReport.limits_hit` plus records at checkpoint C6.
 6. **Cost and time**: per record, the stage reached and wall-clock since `started_at`; per `StageTiming`, seconds

@@ -41,6 +41,7 @@ from sisyphus.orchestrator import (
 from sisyphus.paths import find_checkout_root, knowledge_file, tool_dir
 from sisyphus.rails import Checkpoint
 from sisyphus.runrecord import RunRecord
+from sisyphus.stoprecord import build_abandoned_record, write_stop_record
 
 ITEM = "ENG-1"
 SHA1 = "1" * 40
@@ -98,6 +99,7 @@ class World:
         self.remote_exists = False
         self.branch_exists = False
         self.ancestor_rc = 0
+        self.ancestor_rc_after_pr = 0
         self.push_rc = 0
         self.fetch_rc = 0
         self.ff_rc = 0
@@ -107,6 +109,8 @@ class World:
         self.gate_rc = 0
         self.dirty = ""
         self.checkouts: list[str] = []
+        self.branch_present_after_pr = False  # the local branch is still there when the cleanup probes for it
+        self.branch_cmds: list[list[str]] = []
         self.ci_fix_pushes: list[str] = []  # new head per ci-fix call; exhausted -> no push
         self.ci_fix_rc = 0
         self.merge_rc = 0
@@ -193,7 +197,15 @@ class World:
         if sub == "fetch":
             return CommandResult(self.fetch_rc, "", "network down" if self.fetch_rc else "")
         if sub == "rev-parse" and a[1] == "--verify":
-            return CommandResult(0 if self.branch_exists else 1)
+            present = self.branch_exists or (self.branch_present_after_pr and self.existing_pr is not None)
+            return CommandResult(0 if present else 1)
+        if sub == "rev-parse" and a[1].startswith("refs/heads/"):
+            return CommandResult(0, f"{SHA1}\n")
+        if sub == "branch":
+            self.branch_cmds.append(a)
+            if a[1] == "-d":
+                self.branch_present_after_pr = False
+            return CommandResult(0)
         if sub == "status":
             return CommandResult(0, self.dirty)
         if sub == "checkout":
@@ -210,7 +222,7 @@ class World:
         if sub == "ls-remote":
             return CommandResult(0, f"{SHA1}\trefs/heads/{a[-1]}\n" if self.remote_exists else "")
         if sub == "merge-base":
-            return CommandResult(self.ancestor_rc)
+            return CommandResult(self.ancestor_rc if self.existing_pr is None else self.ancestor_rc_after_pr)
         if sub == "push":
             self.events.append(f"git {' '.join(a)}")
             return CommandResult(self.push_rc, "", "denied" if self.push_rc else "")
@@ -553,7 +565,12 @@ def test_rerun_with_unchanged_inputs_repeats_nothing(world: World) -> None:
     assert result.completed
     assert result.stages_run == ()
     assert result.stages_skipped == ("intake", "plan", "build", "push", "open-pr")
-    assert world.counts() == before
+    agents, _shells, finds = world.counts()
+    assert (agents, finds) == (before[0], before[2])
+    # the only extra call is the read-only "is the local branch still there?" probe of the branch cleanup
+    assert [c[0] for c in world.shell_calls[before[1] :]] == [
+        ("git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_name(ITEM)}")
+    ]
     assert world.events == events
     assert len(world.opened) == 1
 
@@ -1262,5 +1279,147 @@ def test_resume_without_the_branch_is_an_error(world: World) -> None:
     world.run()
     world.branch_exists = False
     world.current_branch = "elsewhere"
+    with pytest.raises(OrchestratorError, match="does not exist"):
+        world.run()
+
+
+# ------------------------------------------------- local branch cleanup after a clean finish
+
+
+def _cleanup_ready(world: World) -> None:
+    world.branch_present_after_pr = True
+    world.remote_exists = True
+
+
+def test_clean_finish_deletes_the_branch_with_d_after_switching_to_base(world: World) -> None:
+    _cleanup_ready(world)
+    result = world.run()
+    assert result.completed
+    assert world.branch_cmds == [
+        ["branch", f"--set-upstream-to=origin/{branch_name(ITEM)}", branch_name(ITEM)],
+        ["branch", "-d", branch_name(ITEM)],
+    ]
+    assert world.current_branch == "base-branch"
+    calls = [c[0] for c in world.shell_calls]
+    assert calls.index(("git", "checkout", "base-branch")) < calls.index(("git", "branch", "-d", branch_name(ITEM)))
+    assert ("git", "merge", "--ff-only", "refs/remotes/origin/base-branch") in calls
+    assert f"local branch {branch_name(ITEM)} deleted" in world.digest_text()
+
+
+def test_never_uses_capital_d(world: World) -> None:
+    _cleanup_ready(world)
+    world.run()
+    assert not any("-D" in argv for argv, _ in world.shell_calls)
+
+
+def test_branch_already_gone_is_silent_and_idempotent(world: World) -> None:
+    _cleanup_ready(world)
+    world.run()
+    before = len(world.shell_calls)
+    result = world.run()
+    assert result.completed
+    assert [c[0] for c in world.shell_calls[before:]] == [
+        ("git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_name(ITEM)}")
+    ]
+    assert "Branch kept" not in world.digest_text()
+    assert "deleted" not in world.digest_text()
+
+
+def test_not_pushed_keeps_the_branch_and_notes_it(world: World) -> None:
+    world.branch_present_after_pr = True
+    world.remote_exists = False
+    world.run()
+    assert world.branch_cmds == []
+    assert f"Branch kept: {ITEM} {branch_name(ITEM)} not pushed" in world.digest_text()
+
+
+def test_commits_not_on_origin_keep_the_branch(world: World) -> None:
+    _cleanup_ready(world)
+    world.ancestor_rc_after_pr = 1
+    world.ahead = "2"
+    world.run()
+    assert world.branch_cmds == []
+    assert "has 2 commit(s) not on origin" in world.digest_text()
+
+
+def test_dirty_clone_keeps_the_branch_and_touches_nothing(world: World) -> None:
+    _cleanup_ready(world)
+    world.run()  # deleted; now a second item state: a dirty clone on a re-created branch
+    world.branch_present_after_pr = True
+    world.dirty = " M tracked.txt\n"
+    before = len(world.shell_calls)
+    world.run()
+    new = [c[0] for c in world.shell_calls[before:]]
+    assert not any(c[:2] in (("git", "checkout"), ("git", "branch"), ("git", "merge")) for c in new)
+    assert not any(c[1] in ("stash", "reset", "clean") for c in new)
+    assert "the clone is dirty" in world.digest_text()
+
+
+def test_failed_base_fast_forward_keeps_the_branch(world: World) -> None:
+    _cleanup_ready(world)
+    world.ff_rc = 1
+    world.run()
+    assert world.branch_cmds == []
+    assert "cannot be fast-forwarded" in world.digest_text()
+
+
+@pytest.mark.parametrize("fault", ["gate", "c1", "error"])
+def test_stopped_or_failed_item_keeps_its_branch(world: World, fault: str) -> None:
+    _cleanup_ready(world)
+    if fault == "gate":
+        world.gate_rc = 1
+    elif fault == "c1":
+        world.brief_text = BRIEF_OPEN
+    else:
+        world.ahead = "0"  # build produced no commits: OrchestratorError
+    if fault == "error":
+        with pytest.raises(OrchestratorError):
+            world.run()
+    else:
+        assert not world.run().completed
+    assert world.branch_cmds == []
+    assert not any(c[0][:2] == ("git", "checkout") and c[0][2] == "base-branch" for c in world.shell_calls)
+
+
+def test_abandoned_item_keeps_its_branch(world: World) -> None:
+    world.run()
+    rec = RunRecord.open(world.tmp / "ws", ITEM)
+    write_stop_record(
+        rec.path,
+        build_abandoned_record(ITEM, stage="open-pr", stage_status="complete", prior_label="C7", reenable_command="x"),
+    )
+    _cleanup_ready(world)
+    world.run()
+    assert world.branch_cmds == []
+
+
+def test_ci_fix_after_branch_deleted_works_from_the_remote_head(world: World) -> None:
+    _cleanup_ready(world)
+    world.run()
+    assert world.branch_present_after_pr is False
+    before = len(world.shell_calls)
+    result = world.run(ci_fix=True)
+    assert result.completed
+    assert result.stages_run == ("ci-fix",)
+    new = [c[0] for c in world.shell_calls[before:]]
+    assert ("git", "checkout", "--detach", "FETCH_HEAD") in new
+    assert ("harness", "run", "ci-fix", "--pr", "42") in new
+    assert not any(c[:3] == ("git", "checkout", branch_name(ITEM)) for c in new)
+
+
+def test_merge_after_branch_deleted_works_from_the_remote_head(world: World) -> None:
+    _cleanup_ready(world)
+    world.run()
+    world.merge_enabled = True
+    result = world.run()
+    assert result.completed
+    assert result.stages_run == ("merge",)
+
+
+def test_resume_before_the_pr_stage_still_needs_the_local_branch(world: World) -> None:
+    world.run()
+    rec = RunRecord.open(world.tmp / "ws", ITEM)
+    rec.mark_stage("push", "in_progress")
+    world.current_branch = "base-branch"
     with pytest.raises(OrchestratorError, match="does not exist"):
         world.run()

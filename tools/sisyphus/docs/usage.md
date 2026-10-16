@@ -80,7 +80,18 @@ answer in files under `workspace_dir` (outside the repo): the brief, or an answe
 branch `sisyphus/<slug>-<8 hex>`, so partial work stays on its branch while another item runs. The clone must
 be clean between items: a new item, and a build checkout, refuse to start on a dirty clone (checkpoint C8 plus a
 digest entry); Sisyphus never stashes, resets or discards anything. A resume at push, PR, ci-fix or merge checks
-out the item's own branch first; committed work is never redone.
+out the item's own branch first (or, if it was already deleted after a clean finish, works from `origin/<branch>`
+detached); committed work is never redone.
+
+**Local branch cleanup.** After a clean finish (every wanted stage complete, no checkpoint, no error, no stop or
+abandoned mark, and the branch was created by Sisyphus) the local branch is deleted so the clone does not collect
+stale branches. It is kept, with a `Branch kept: REF <branch> ...` note in the digest's Deviations, unless: the
+clone is clean; `origin` has the branch and its head is an ancestor of `origin/<branch>` (not pushed, or N commits
+not on origin: kept); base can be switched to and fast-forwarded from `origin/<base>`; and `git branch -d` agrees.
+Never `-D`, never a remote branch or PR change. A deletion is shown under Done. Rerunning after the branch is gone
+is a silent no-op. `harness run ci-fix` and `merge` do not need the local branch (ci-fix does
+`checkout -B <branch> origin/<branch>` itself; merge uses no checkout). The run record, digest, stop and answer
+files and `<brief>.intake.json` are never deleted.
 
 **Answering.** C1: edit the brief and mark each open decision resolved. C2, C3, C4: write your answer to
 `<workspace_dir>/<item-encoded>.answer.md` (the path is in the action text; any non-empty text counts). The

@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from sisyphus import gaterecord
+from sisyphus.cleanup import DELETED, KEPT, cleanup_branch
 from sisyphus.config import SisyphusConfig
 from sisyphus.digest import (
     CI_FIX_STAGE,
@@ -51,7 +52,14 @@ from sisyphus.rails import (
 )
 from sisyphus.resume import answer_path, consume_answer, read_answer
 from sisyphus.runrecord import STAGE_COMPLETE, RunRecord
-from sisyphus.stoprecord import StopRecord, build_stop_record, clear_stop_record, write_stop_record
+from sisyphus.stoprecord import (
+    StopRecord,
+    build_stop_record,
+    clear_stop_record,
+    is_abandoned,
+    read_stop_record,
+    write_stop_record,
+)
 
 PLAN_STAGE = "plan"
 BUILD_STAGE = "build"
@@ -288,6 +296,8 @@ class _Run:
         self.timings: list[StageTiming] = []
         self.stop: _Stop | None = None
         self.stop_rec: StopRecord | None = None
+        self.was_abandoned = False
+        self.cleanup_done: str | None = None
 
     # -- git / process helpers
 
@@ -359,8 +369,44 @@ class _Run:
             self.stop = stop
             self.stop_rec = self.write_stop(stop.checkpoint.value, stop.detail, stop.questions)
             return stop.checkpoint
+        self.was_abandoned = is_abandoned(self.rec.path)
         clear_stop_record(self.rec.path)
         return None
+
+    # -- local branch cleanup after a clean finish (see sisyphus.cleanup)
+
+    def finished_cleanly(self) -> bool:
+        """True only when the item's wanted stages are all complete and nothing marks it stopped."""
+        wanted = [STAGE_ORDER.index(s) for s in self.stages()]
+        return (
+            self.stop is None
+            and not self.was_abandoned
+            and self.rec.checkpoint is None
+            and read_stop_record(self.rec.path) is None
+            and self.rec.stage in STAGE_ORDER
+            and self.rec.stage_status == STAGE_COMPLETE
+            and STAGE_ORDER.index(self.rec.stage) >= max(wanted)
+            and BRANCH_CREATED_KEY in self.rec.retries
+        )
+
+    def cleanup_branch(self) -> None:
+        """Delete the local branch if (and only if) every safety check passes; otherwise keep it and say why."""
+        if not self.finished_cleanly():
+            return
+        try:
+            outcome = cleanup_branch(
+                lambda args: self.sh(["git", *args], self.repo),
+                item=self.item,
+                branch=self.branch,
+                base=self.opt.base_branch,
+            )
+        except Exception as exc:  # a failed cleanup never turns a clean finish into an error
+            self.note(f"Branch kept: {self.item} {self.branch} cleanup failed: {type(exc).__name__}: {exc}")
+            return
+        if outcome.status == DELETED:
+            self.cleanup_done = outcome.message
+        elif outcome.status == KEPT:
+            self.note(outcome.message)
 
     def resume_command(self) -> str:
         template = self.opt.resume_command or "sisyphus resume {item} --config <your .sisyphus.toml>"
@@ -407,9 +453,19 @@ class _Run:
         if start > STAGE_ORDER.index(BUILD_STAGE) and any(STAGE_ORDER.index(st) >= start for st in self.stages()):
             self.ensure_clean()
             if self.git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip() != self.branch:
-                if self.git("rev-parse", "--verify", "--quiet", f"refs/heads/{self.branch}", ok=False).returncode != 0:
+                if self.git("rev-parse", "--verify", "--quiet", f"refs/heads/{self.branch}", ok=False).returncode == 0:
+                    self.git("checkout", self.branch)
+                    return
+                # No local branch: expected after a clean finish (it is deleted once verified on origin).
+                # From the PR stage on the branch is already pushed, so work from the remote head, detached.
+                if start < STAGE_ORDER.index(OPEN_PR_STAGE):
                     raise OrchestratorError(f"cannot resume: branch {self.branch} does not exist in {self.repo}")
-                self.git("checkout", self.branch)
+                fetched = self.git("fetch", "origin", self.branch, ok=False)
+                if fetched.returncode != 0:
+                    raise OrchestratorError(
+                        f"cannot resume: branch {self.branch} is not in {self.repo} and not on origin: {_tail(fetched.stderr)}"
+                    )
+                self.git("checkout", "--detach", "FETCH_HEAD")
 
     def check_time(self) -> None:
         if self.tracker.elapsed_minutes() >= self.config.limits.max_run_minutes:
@@ -697,6 +753,8 @@ def run_item(
         checkpoint: Checkpoint | None = None
         try:
             checkpoint = run.execute()
+            if checkpoint is None:
+                run.cleanup_branch()
         except Exception as exc:
             error = exc
             run.record_error(exc)
@@ -736,7 +794,11 @@ def _report(run: _Run) -> DigestReport:
     if run.pr is not None:
         evidence = [run.pr.url or f"PR #{run.pr.number}", f"branch {run.branch}"]
         evidence.append(f"gate record written for {run.head_sha}" if run.gate_recorded else "no gate record written")
+        if run.cleanup_done:
+            evidence.append(run.cleanup_done)
         done = (DoneEntry(f"{run.item}: PR #{run.pr.number} open", tuple(evidence)),)
+    elif run.cleanup_done:
+        done = (DoneEntry(f"{run.item}: local branch removed", (run.cleanup_done,)),)
     return DigestReport(
         needs_you=needs,
         done=done,
