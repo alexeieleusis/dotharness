@@ -22,7 +22,7 @@ runs (`RunRecord.stage_scope`). A stage that stops at a checkpoint stays `in_pro
 | `merge` (only when `[merge].enabled`) | `harness run merge --pr N`. The orchestrator never approves. |
 
 The branch is `sisyphus/<slug>-<8 hex of sha256(item)>` (`branch_name`). The base branch is `options.base_branch`
-(a config or CLI value, never a constant); `options.default_branch` is an extra branch that is never pushed to.
+(a parameter, never a constant here; the CLI resolves `--base`, then `[project].base_branch`, then `main`); `options.default_branch` is an extra branch that is never pushed to.
 
 ## Checkpoints
 

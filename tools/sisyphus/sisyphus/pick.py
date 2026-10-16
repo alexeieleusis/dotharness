@@ -29,6 +29,7 @@ from sisyphus.config import WorkItemSource
 from sisyphus.orchestrator import BRANCH_CREATED_KEY, OPEN_PR_STAGE, PullRequest, branch_name
 from sisyphus.resume import iter_records
 from sisyphus.runrecord import record_path
+from sisyphus.stoprecord import is_abandoned
 
 LINEAR_API_URL = "https://api.linear.app/graphql"
 GITHUB_OPEN_STATE = "OPEN"
@@ -198,7 +199,13 @@ def find_awaiting_review(
     found: list[AwaitingReview] = []
     for rec in iter_records(ws):
         # An item stopped at a checkpoint waits for an answer, not a review; it never blocks picking.
-        if rec.checkpoint is not None or not rec.retries.get(BRANCH_CREATED_KEY) or rec.stage not in _PR_STAGES:
+        # An abandoned item never blocks picking either (its PR, if any, is the human's to handle).
+        if (
+            is_abandoned(rec.path)
+            or rec.checkpoint is not None
+            or not rec.retries.get(BRANCH_CREATED_KEY)
+            or rec.stage not in _PR_STAGES
+        ):
             continue
         branch = branch_name(rec.item)
         pr = find_open_pr(branch)

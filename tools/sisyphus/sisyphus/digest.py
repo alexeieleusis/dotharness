@@ -20,7 +20,7 @@ from pathlib import Path
 from sisyphus.config import SisyphusConfig
 from sisyphus.rails import Checkpoint
 from sisyphus.runrecord import STAGE_COMPLETE, RunRecord
-from sisyphus.stoprecord import StopRecord, read_stop_record
+from sisyphus.stoprecord import KIND_ABANDONED, StopRecord, read_stop_record
 
 SECTIONS = ("Needs you", "Done", "Declined", "Deviations", "Limits hit", "Cost and time")
 
@@ -123,6 +123,8 @@ def needs_from_stop(stop: StopRecord) -> NeedsYou:
 def needs_from_record(rec: RunRecord) -> NeedsYou | None:
     """Needs-you entry for a run record: its stop record when present, else the built-in question."""
     stop = read_stop_record(rec.path)
+    if stop is not None and stop.kind == KIND_ABANDONED:
+        return None
     if stop is not None and (stop.checkpoint == rec.checkpoint or stop.checkpoint is None):
         return needs_from_stop(stop)
     if rec.checkpoint is None:
@@ -148,6 +150,19 @@ def _needs_you(records: Sequence[RunRecord], report: DigestReport) -> list[str]:
         if need is None or (need.item, need.checkpoint) in covered:
             continue
         lines.append(_needs_line(need))
+    return lines
+
+
+def _abandoned(records: Sequence[RunRecord]) -> list[str]:
+    """Short notes for abandoned items (not "Needs you": nothing is waiting on the user)."""
+    lines: list[str] = []
+    for rec in records:
+        stop = read_stop_record(rec.path)
+        if stop is not None and stop.kind == KIND_ABANDONED:
+            lines.append(
+                f"Abandoned: {rec.item} on {stop.stopped_at} (stage {_stage_desc(rec)}). Not picked or resumed again; "
+                f"branch and any PR left as they are. Re-enable: `{stop.resume_command}`"
+            )
     return lines
 
 
@@ -217,7 +232,7 @@ def render_digest(records: Sequence[RunRecord], report: DigestReport | None = No
         _numbered(_needs_you(records, report)),
         _bullets(_done(records, report)),
         _bullets(_declined(records, report)),
-        _bullets(list(report.deviations)),
+        _bullets([*report.deviations, *_abandoned(records)]),
         _bullets(_limits(records, report)),
         _bullets(_cost(records, report)),
     ]

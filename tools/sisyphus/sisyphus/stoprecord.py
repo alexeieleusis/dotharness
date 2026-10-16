@@ -19,6 +19,7 @@ from typing import Any
 STOP_RECORD_SUFFIX = ".stopped.json"
 KIND_CHECKPOINT = "checkpoint"
 KIND_ERROR = "error"
+KIND_ABANDONED = "abandoned"
 ERROR_LABEL = "error"
 
 # How a stop clears: "brief" (re-parse the brief), "answer" (non-empty answer file), "retry" (bounded
@@ -43,10 +44,16 @@ ACTIONS: dict[str, str] = {
     "Not automatic. The retry budget is kept, so an exhausted build budget stops again at C5.",
     "C6": "Raise the exceeded limit in .sisyphus.toml (a time limit needs nothing), then run the resume command. "
     "Not automatic.",
-    "C7": "Rebase the branch yourself, then run the resume command. Not automatic.",
+    "C7": "No automatic way out: Sisyphus never rebases or force-pushes. Run `sisyphus abandon REF --config F` to "
+    "stop this item and stop it blocking the next runs. The branch and any PR stay exactly as they are, for you "
+    "to handle by hand; the resume command is only for after the branch was fixed outside Sisyphus.",
     "C8": f"Fix access (auth or network) if needed. The run retries by itself after {AUTO_RETRY_DELAY_MINUTES} "
     f"minutes, at most {AUTO_RETRY_MAX} times; after that run the resume command.",
 }
+ABANDONED_ACTION = (
+    "Nothing to do. The item is abandoned: it is not picked or resumed again. The remote branch, any PR, the local "
+    "branch, the run record and the digest are untouched. To work on it again, run the re-enable command."
+)
 ERROR_ACTION = "Fix the cause of the error shown in the detail, then run the resume command. Not automatic."
 
 
@@ -69,7 +76,9 @@ class StopRecord:
 
     @property
     def label(self) -> str:
-        """``C1``..``C8``, or ``error``."""
+        """``C1``..``C8``, ``abandoned`` or ``error``."""
+        if self.kind == KIND_ABANDONED:
+            return KIND_ABANDONED
         return self.checkpoint or ERROR_LABEL
 
     def to_dict(self) -> dict[str, Any]:
@@ -124,6 +133,35 @@ def build_stop_record(
         resume_command=resume_command,
         stopped_at=(now or datetime.now(UTC)).isoformat(),
     )
+
+
+def build_abandoned_record(
+    item: str,
+    *,
+    stage: str | None,
+    stage_status: str | None,
+    prior_label: str,
+    reenable_command: str,
+    now: datetime | None = None,
+) -> StopRecord:
+    """The mark written by ``sisyphus abandon``: kind ``abandoned``, ``stopped_at`` is when, ``resume_command`` re-enables."""
+    return StopRecord(
+        item=item,
+        kind=KIND_ABANDONED,
+        stage=stage,
+        stage_status=stage_status,
+        checkpoint=None,
+        questions=(),
+        detail=f"Abandoned by the user while stopped at {prior_label} (stage {stage or 'none'}, {stage_status or 'none'}).",
+        action=ABANDONED_ACTION,
+        resume_command=reenable_command,
+        stopped_at=(now or datetime.now(UTC)).isoformat(),
+    )
+
+
+def is_abandoned(record_path: Path) -> bool:
+    stop = read_stop_record(record_path)
+    return stop is not None and stop.kind == KIND_ABANDONED
 
 
 def write_stop_record(record_path: Path, stop: StopRecord) -> Path:

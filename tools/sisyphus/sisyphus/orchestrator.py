@@ -128,7 +128,8 @@ class PullRequestClient(Protocol):
 class OrchestratorOptions:
     """Per-run inputs that are not in ``.sisyphus.toml``.
 
-    ``base_branch`` is the PR base (config or CLI input, never a constant). ``repo_slug`` is the
+    ``base_branch`` is the PR base, a required parameter with no default here (the CLI resolves
+    ``--base`` > ``[project].base_branch`` > ``main`` and passes the result in). ``repo_slug`` is the
     hyphenated ``owner-repo`` slug the gate record is filed under. ``default_branch`` is the
     repository default branch when it differs from ``base_branch``; both are never pushed to.
     ``spf_config_path`` defaults to ``<repo_dir>/.spec-prism-flow.toml`` (``build.commands`` and

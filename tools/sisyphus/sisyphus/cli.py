@@ -58,9 +58,17 @@ from sisyphus.pick import (
     pick_items,
 )
 from sisyphus.rails import PERMISSION_FLAG, LimitTracker
-from sisyphus.resume import AUTO_RETRY_KEY, cleared, is_stopped, iter_records, list_waiting
+from sisyphus.resume import AUTO_RETRY_KEY, cleared, is_abandoned, is_stopped, iter_records, list_waiting
 from sisyphus.runrecord import RunRecord, record_path
-from sisyphus.stoprecord import CLEARS_BY, build_stop_record, clear_stop_record, read_stop_record, write_stop_record
+from sisyphus.stoprecord import (
+    CLEARS_BY,
+    KIND_ABANDONED,
+    build_abandoned_record,
+    build_stop_record,
+    clear_stop_record,
+    read_stop_record,
+    write_stop_record,
+)
 
 AGENT_COMMANDS = {
     "claude": lambda prompt: ["claude", "-p", prompt, PERMISSION_FLAG],
@@ -502,13 +510,30 @@ def intake_command(factory: ServicesFactory | None, work_item_ref: str, config_p
         click.echo(f"open decision (C1): {decision}")
 
 
+def _check_resumable(rec: RunRecord, again: bool) -> None:
+    """Exit 1 unless ``rec`` is stopped (or, with ``--again``, abandoned; the abandoned mark is then cleared)."""
+    stop = read_stop_record(rec.path)
+    if is_abandoned(stop):
+        if not again:
+            raise _fail(
+                f"{rec.item} is abandoned; run `sisyphus resume {shlex.quote(rec.item)} --config <config> --again` "
+                "to re-enable it"
+            )
+        clear_stop_record(rec.path)
+    elif again:
+        raise _fail(f"{rec.item} is not abandoned; --again only re-enables an abandoned item")
+    elif not is_stopped(rec, stop):
+        raise _fail(f"{rec.item} is not stopped (stage {rec.stage}, {rec.stage_status}); nothing to resume")
+
+
 @main.command("resume")
 @click.argument("work_item_ref")
 @config_option
 @click.option("--base", default=None, help="PR base branch (default: [project].base_branch, else 'main').")
+@click.option("--again", is_flag=True, help="Re-enable an abandoned item: clear the abandoned mark, then resume.")
 @click.pass_obj
 def resume_item_command(
-    factory: ServicesFactory | None, work_item_ref: str, config_path: str, base: str | None
+    factory: ServicesFactory | None, work_item_ref: str, config_path: str, base: str | None, again: bool
 ) -> None:
     """Resume a stopped WORK_ITEM_REF from its recorded stage (explicit; no need to wait for the blocker check)."""
     config = _load(config_path)
@@ -524,10 +549,7 @@ def resume_item_command(
             if not record_path(workspace, work_item_ref).exists():
                 raise _fail(f"no run record for {work_item_ref}; nothing to resume")
             rec = RunRecord.open(workspace, work_item_ref)
-            if not is_stopped(rec, read_stop_record(rec.path)):
-                raise _fail(
-                    f"{work_item_ref} is not stopped (stage {rec.stage}, {rec.stage_status}); nothing to resume"
-                )
+            _check_resumable(rec, again)
             try:
                 _run_phase([Candidate(work_item_ref)], config, services, base, state, config_path)
             except Exception as exc:
@@ -543,6 +565,50 @@ def resume_item_command(
         raise click.exceptions.Exit(1)
 
 
+@main.command("abandon")
+@click.argument("work_item_ref")
+@config_option
+@click.pass_obj
+def abandon_command(factory: ServicesFactory | None, work_item_ref: str, config_path: str) -> None:
+    """Abandon WORK_ITEM_REF: the explicit way out of a dead end (C7 and others).
+
+    Marks the item abandoned and removes its waiting state so it no longer blocks auto-resume or picking.
+    Touches only Sisyphus's own state files: never the remote branch, any PR, the local branch, the run
+    record or the digest, and never rewrites history.
+    """
+    config = _load(config_path)
+    _require(config, "repo_dir", "workspace_dir")
+    assert config.project.repo_dir and config.project.workspace_dir  # noqa: S101
+    services = _services(factory, config)
+    try:
+        with clone_lock(config.project.repo_dir, services.lock_dir):
+            workspace = Path(config.project.workspace_dir).expanduser()
+            if not record_path(workspace, work_item_ref).exists():
+                raise _fail(f"no run record for {work_item_ref}; nothing to abandon")
+            rec = RunRecord.open(workspace, work_item_ref)
+            if is_abandoned(read_stop_record(rec.path)):
+                click.echo(f"{work_item_ref}: already abandoned")
+                return
+            prior = rec.checkpoint or ("an error" if read_stop_record(rec.path) else "no stop")
+            write_stop_record(
+                rec.path,
+                build_abandoned_record(
+                    work_item_ref,
+                    stage=rec.stage,
+                    stage_status=rec.stage_status,
+                    prior_label=prior,
+                    reenable_command=_resume_template(config_path, None).replace("{item}", shlex.quote(work_item_ref))
+                    + " --again",
+                    now=services.now(),
+                ),
+            )
+            if rec.checkpoint is not None:
+                rec.set_checkpoint(None)
+    except LockHeld:
+        return
+    click.echo(f"{work_item_ref}: abandoned (branch, any PR and the run record left as they are)")
+
+
 def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_path: str) -> list[str]:
     stop = read_stop_record(rec.path)
     need = needs_from_record(rec)
@@ -553,6 +619,10 @@ def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_
         f"  checkpoint: {rec.checkpoint or 'none'}",
         f"  awaiting: {awaiting}",
     ]
+    if stop is not None and stop.kind == KIND_ABANDONED:
+        lines.insert(1, "  state: abandoned")
+        lines.append(f"  abandoned_at: {stop.stopped_at}")
+        lines.append(f"  re-enable: {stop.resume_command}")
     if need is not None:
         lines.append(f"  question: {need.question}")
         if need.action:
@@ -596,7 +666,9 @@ def status_command(factory: ServicesFactory | None, work_item_ref: str | None, c
     for rec in records:
         if rec.checkpoint is not None:
             awaiting = "you"
-        elif read_stop_record(rec.path) is not None:
+        elif (stop := read_stop_record(rec.path)) is not None and stop.kind == KIND_ABANDONED:
+            awaiting = "none"
+        elif stop is not None:
             awaiting = "error"
         elif reviews is None:
             awaiting = "unknown (PR lookup failed)"

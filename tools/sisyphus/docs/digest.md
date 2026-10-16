@@ -23,7 +23,9 @@ Always all six, always in this order. An empty section says `None`.
    stage is `ci-fix` or `merge` and complete.
 3. **Declined**: CI failures not auto-fixed with why (`DeclinedEntry`), plus `ci-fix` or `merge` records that
    did not finish.
-4. **Deviations**: `DigestReport.deviations`.
+4. **Deviations**: `DigestReport.deviations`, plus one `Abandoned: REF ...` note (when, and the re-enable command) for
+   each record whose stop record has `kind` `abandoned` (see `sisyphus abandon` in usage). Abandoned items are
+   never listed under Needs you.
 5. **Limits hit**: `DigestReport.limits_hit` plus records at checkpoint C6.
 6. **Cost and time**: per record, the stage reached and wall-clock since `started_at`; per `StageTiming`, seconds
    and tokens when the backend reported them.

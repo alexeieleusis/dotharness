@@ -20,6 +20,7 @@ from sisyphus.stoprecord import (
     AUTO_RETRY_DELAY_MINUTES,
     AUTO_RETRY_MAX,
     CLEARS_BY,
+    KIND_ABANDONED,
     StopRecord,
     read_stop_record,
 )
@@ -66,7 +67,14 @@ def iter_records(workspace: Path) -> Iterator[RunRecord]:
         yield RunRecord.open(workspace, item)
 
 
+def is_abandoned(stop: StopRecord | None) -> bool:
+    return stop is not None and stop.kind == KIND_ABANDONED
+
+
 def is_stopped(rec: RunRecord, stop: StopRecord | None) -> bool:
+    """Stopped at a checkpoint or on an error. An abandoned item is not stopped: nothing resumes it."""
+    if is_abandoned(stop):
+        return False
     return rec.checkpoint is not None or stop is not None
 
 
@@ -81,7 +89,8 @@ def _stopped_at(rec: RunRecord, stop: StopRecord | None) -> datetime:
 
 def list_waiting(workspace: Path) -> list[tuple[RunRecord, StopRecord | None]]:
     """Items stopped at a checkpoint (record checkpoint set), oldest stop first."""
-    found = [(r, read_stop_record(r.path)) for r in iter_records(workspace) if r.checkpoint is not None]
+    pairs = [(r, read_stop_record(r.path)) for r in iter_records(workspace) if r.checkpoint is not None]
+    found = [(r, stop) for r, stop in pairs if not is_abandoned(stop)]
     return sorted(found, key=lambda pair: _stopped_at(*pair))
 
 
