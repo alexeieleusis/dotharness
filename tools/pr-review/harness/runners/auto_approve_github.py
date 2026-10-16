@@ -149,10 +149,16 @@ def _scan_issue_comments(issue_comments: list[dict], acting: str) -> tuple[bool,
     return has_summary, has_design, has_traceability, qualifying
 
 
+def _is_review_inline_comment(body: str) -> bool:
+    """An inline comment from any review pass: the design and traceability passes tag theirs with
+    their own marker, not the file pass's inline marker."""
+    return is_inline_review_comment(body) or is_design_review_comment(body) or is_traceability_review_comment(body)
+
+
 def _scan_inline_comments(review_comments: list[dict], acting: str) -> list[datetime] | str:
     qualifying: list[datetime] = []
     for comment in review_comments:
-        if _login(comment) == acting and is_inline_review_comment(comment.get("body") or ""):
+        if _login(comment) == acting and _is_review_inline_comment(comment.get("body") or ""):
             ts = _parse_ts(comment.get("created_at"))
             if ts is None:
                 return "inline comment has no valid created_at"

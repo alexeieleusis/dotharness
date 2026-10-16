@@ -90,6 +90,33 @@ def test_regret_comment_ignored_for_t():
     assert r.reason == "author-activity-after-T"
 
 
+@pytest.mark.parametrize("marker", [DESIGN_REVIEW_MARKER, TRACEABILITY_REVIEW_MARKER])
+def test_design_and_traceability_inline_comments_are_findings(marker):
+    # Regression: inline comments tagged only with the design/traceability marker were not
+    # counted, so the gate passed as "zero-findings" before the author responded.
+    r = run(all_three(), [issue(f"finding {marker}", ts=LATER)], [], EMPTY_COMMITS)
+    assert r.status is GateStatus.NOT_PASSED
+    assert r.reason == "no author activity after T"
+
+
+def test_author_activity_after_design_inline_comment_passes():
+    r = run(
+        all_three(),
+        [issue(f"finding {DESIGN_REVIEW_MARKER}", ts=T)],
+        [],
+        EMPTY_COMMITS,
+    )
+    assert r.status is GateStatus.NOT_PASSED
+    r = run(
+        [*all_three(), issue("reply", AUTHOR, ts=LATER)],
+        [issue(f"finding {DESIGN_REVIEW_MARKER}", ts=T)],
+        [],
+        EMPTY_COMMITS,
+    )
+    assert r.status is GateStatus.PASSED
+    assert r.reason == "author-activity-after-T"
+
+
 def test_inline_comments_count_for_t():
     # author comment is after the summary trio but before the newest inline comment
     r = run(
