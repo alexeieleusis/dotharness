@@ -6,7 +6,7 @@ for that account. For each PR, it posts review comments via the configured AI
 backend in four places: per-file findings, a summary, a PR-level
 design/architecture review, and a PR-level requirement-traceability review. An
 optional fifth PR-level pass — the regret review — runs on top of these when
-`[regret_review].enabled` is `true` (off by default): it re-checks old, ignored
+`[regret_review].enabled` is `true` (off by default). It re-checks old, ignored
 review comments on the PRs this command covers (see [State and idempotency](#state-and-idempotency)).
 Run it whenever you want the bot/user account to handle pending review
 requests instead of scanning every open PR. Scanning every open PR is what
@@ -34,7 +34,7 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
    commands share this lock (see [Shared behavior](index.md#shared-behavior)).
    If another instance holds it — this runner or any of the other four — the
    runner exits immediately with an error instead of blocking.
-2. The runner fetches a `gh` token (via `harness.gh_token_cmd`) and builds a
+2. The runner fetches a `gh` token (via `harness.gh_token_cmd`). It builds a
    subprocess environment (`PATH` prepends + `harness.env` + `GITHUB_TOKEN`).
    It then finds the current `gh` user's login (`gh api user --jq .login`).
 3. The runner builds the list of PRs to process:
@@ -49,14 +49,14 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
     PR body.
 4. The runner loads the review prompts from
    `harness.knowledge_dir/pr-review/review-file.md`, `.../review-summary.md`,
-   `.../review-design.md`, and `.../review-traceability.md`. The
-   `.../review-regret.md` template is read separately, only when
+   `.../review-design.md`, and `.../review-traceability.md`. The runner
+   reads the `.../review-regret.md` template separately, only when
    `[regret_review].enabled` is `true` and the regret pass actually runs for a
    PR (see below). If configured, it also loads the optional
    `harness.review_knowledge_file`. It constructs a `Backend` for
    `harness.backend` (`opencode` or `claude`).
 5. The runner records the repo's current commit (`git checkout --detach HEAD`)
-   so it can be restored after each PR.
+   so the runner can restore it after each PR.
 6. For each candidate PR, in order:
     - The runner determines whether the file+summary part still has work to do
       (the "already approved / already reviewed" check below). It separately
@@ -87,14 +87,13 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
       [Configuration](../configuration.md)) posts the inline review comments
       to GitHub. It posts them via `gh api repos/{repo}/pulls/{pr}/comments`,
       per the instructions in `review-file.md`, for any P0/P1 findings it
-      identifies. A per-file backend timeout is caught and logged. The loop
+      identifies. The runner catches and logs a per-file backend timeout. The loop
       then continues to the next file.
     - After all files, the runner builds one summary prompt: the summary
       instructions, any extra knowledge, PR/repo metadata, the list of
       reviewed files, the PR description, and any vibe-heal context. It
       invokes the backend once more. Per `review-summary.md` this posts a
-      single `gh pr comment` starting with `# Review Summary`. A timeout here
-      is likewise caught and logged.
+      single `gh pr comment` starting with `# Review Summary`. The runner likewise catches and logs a timeout here.
     - **Design pass:** Before invoking the backend, the runner checks GitHub
       directly for an existing `<!-- dotharness-review-design -->`-marked comment on
       the PR. This marker is the *only* idempotency signal for this pass,
@@ -104,8 +103,7 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
       file's diff, concatenated — not just the files touched this run) and
       invokes the backend once. Per `review-design.md` this posts inline
       comments for file-specific P0/P1 design findings plus exactly one
-      PR-level `# Design Review` comment. A timeout here is likewise caught
-      and logged.
+      PR-level `# Design Review` comment. The runner likewise catches and logs a timeout here.
     - **Traceability pass:** Before invoking the backend, the runner checks
       GitHub directly for an existing
       `<!-- dotharness-review-traceability -->`-marked comment on the PR. This
@@ -119,7 +117,7 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
       for an issue reference. If neither mechanism resolves a ticket, the
       runner posts `# Requirement Traceability\nNo linked ticket
       found...` directly via `gh pr comment`, with **no backend call**. This
-      outcome is terminal: it is never retried for this PR, even if a ticket
+      outcome is terminal: the runner never retries it for this PR, even if a ticket
       link is added later. Otherwise, the runner builds one PR-wide prompt
       from `review-traceability.md` (the same concatenated diff as the design
       pass, plus the resolved ticket(s)' title and body, and any
@@ -127,14 +125,13 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
       `review-traceability.md` this posts inline comments for file-anchored
       P0/P1 **scope-creep** findings only (gap findings are PR-level-only,
       because they have no line to anchor to), plus exactly one PR-level
-      `# Requirement Traceability` comment. A timeout here is likewise caught
-      and logged.
+      `# Requirement Traceability` comment. The runner likewise catches and logs a timeout here.
     - **Regret pass (optional):** When `[regret_review].enabled` is `true`
       (off by default), the runner can also run the regret-review pass on
-      small, bugfix-shaped PRs: it traces this PR's changed lines back to the
-      commit/PR that introduced them and, when that introducing PR carried a
+      small, bugfix-shaped PRs. It traces this PR's changed lines back to the
+      commit/PR that introduced them. When that introducing PR carried a
       review comment on the same change that the backend judges would have
-      prevented this bug, posts one PR-level
+      prevented this bug, it posts one PR-level
       `# Previously flagged review comments` comment linking back to those
       comments (one backend invocation per PR, only when
       candidates exist). See
@@ -142,15 +139,15 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
       invoking the backend, the runner checks GitHub directly for an existing
       `<!-- dotharness-review-regret -->`-marked comment, which is this pass's *only*
       idempotency signal in this stateless runner. Unlike the backend-posted
-      design and traceability comments, this one is posted by the runner
+      design and traceability comments, the runner posts this one
       itself: the backend replies only with verdict lines, which the runner
       parses. When the candidate search finds nothing to judge, or the backend
-      judges every candidate `NO`, nothing is posted, so the marker check
+      judges every candidate `NO`, the runner posts nothing, so the marker check
       stays false and the pass simply re-runs, with a fresh candidate search,
       whenever this PR is next processed.
     - The runner never removes the current user as a requested reviewer, even
       once every pass — file+summary, design, traceability, and regret when
-      enabled — has succeeded. This runner only posts automated findings; concluding a review is the job of
+      enabled — has succeeded. This runner only posts automated findings. Concluding a review is the job of
       the separate, opt-in [`auto-approve`](auto-approve.md) command. The
       human still reviews and approves the PR themselves, which is what
       actually clears the review request on GitHub. If any pass submits a
@@ -158,7 +155,7 @@ harness run [--config PATH] [--verbose] review-requested [--pr PR_URL]
       (for example `review-prs`'s vibe_heal post), the PR would otherwise
       silently vanish from `user-review-requested:@me` before that submission
       was intentional. So the whole per-PR block re-adds the reviewer
-      afterward if they held that status going in — the same
+      afterward if they held that status going in. This is the same
       `preserve_reviewer_request` guard `review-prs`, `focused-review`, and
       `address-comments` use (see [Shared behavior](index.md#shared-behavior)).
     - Any other exception while processing a PR is caught and logged. The
@@ -189,8 +186,8 @@ pre-existing vibe-heal review output on disk
 the branch. It finds that output via `repo.subdirs`.
 
 This runner reads the `[regret_review]` fields only when
-`regret_review.enabled` is `true` (off by default). When the pass is off, no
-other field of that section is consulted and the pass costs nothing. See
+`regret_review.enabled` is `true` (off by default). When the pass is off, the runner
+consults no other field of that section, and the pass costs nothing. See
 [`../configuration.md`](../configuration.md#regret_review) for the full
 schema.
 
@@ -219,28 +216,28 @@ duplicate work using live signals read from GitHub on every run:
    a comment containing `<!-- dotharness-review-regret -->`. This marker is the
    regret pass's *only* idempotency signal in this stateless runner, and its
    fate is decoupled from (1)-(4). Unlike the design and traceability
-   markers, it is posted only when the backend confirms at least one regret
-   finding: when the candidate search finds nothing to judge, or the backend
-   judges every candidate `NO`, nothing is posted, so the marker stays absent
-   and the pass simply re-runs, with a fresh candidate search, whenever this
-   PR is next processed.
+   markers, the runner posts it only when the backend confirms at least one regret
+   finding. When the candidate search finds nothing to judge, or the backend
+   judges every candidate `NO`, the runner posts nothing. The marker then stays
+   absent, and the pass simply re-runs, with a fresh candidate search,
+   whenever this PR is next processed.
 6. It never removes itself as a requested reviewer, even once every part
-   above (1)-(5) has succeeded — the human still reviews and approves the PR
+   above (1)-(5) has succeeded. The human still reviews and approves the PR
    themselves, and that (or GitHub's own bookkeeping around a submitted
    review) is what actually clears the request. If a pass submits a formal
    review as a side effect, or races a concurrent runner that does (for
    example `review-prs`'s vibe_heal post), the whole per-PR block re-adds the
-   reviewer afterward if they held that status going in — the same
+   reviewer afterward if they held that status going in. This is the same
    `preserve_reviewer_request` guard `review-prs`, `focused-review`, and
    `address-comments` use.
 
-Because the PR only drops out of the `user-review-requested:@me` search once
+Because the PR only leaves the `user-review-requested:@me` search once
 the human submits their own review, this runner keeps reprocessing a PR every
-run until (1)-(5) are all satisfied. There is no SHA comparison, so pushing
-new commits (which GitHub re-requests review for automatically depending on
-branch protection settings) or manually re-requesting review resets nothing
-extra — it's (1)-(5) reading live GitHub state on every run that keeps this
-idempotent either way.
+run until (1)-(5) are all satisfied. There is no SHA comparison. Pushing new commits, or manually
+re-requesting review, resets nothing extra. GitHub re-requests review
+automatically when new commits are pushed, depending on branch protection
+settings. What keeps this idempotent either way is (1)-(5) reading live
+GitHub state on every run.
 
 ## Notes
 - This runner uses the shared locking and working-directory-mutation
@@ -248,18 +245,17 @@ idempotent either way.
   [Commands → Shared behavior](index.md#shared-behavior). It additionally
   runs its git commands with `--recurse-submodules`, so submodule state moves
   with the branch.
-- Failure isolation: a PR that raises an exception (for example, a failed
-  `gh` or git call) is logged and skipped. It does not stop the rest of the
-  batch. It is not marked "done" in any way, so the runner retries it on the
-  next run.
+- Failure isolation: the runner logs and skips a PR that raises an exception
+(for example, a failed `gh` or git call). It does not stop the rest of the
+  batch. The runner does not mark it "done" in any way, so it retries the PR
+  on the next run.
 - Backend timeouts are non-fatal at the per-file, summary, design,
-  traceability, and regret steps. They are logged, and the run proceeds to
+  traceability, and regret steps. The runner logs them, and the run proceeds to
   the next step. A slow or hung backend on one file does not block review of
   the rest. Since a marker/approval check (not an in-memory success flag) is
   each part's only idempotency signal, a timeout at any of them simply leaves
-  that part's marker unposted, so it's retried next run. There is no
-  special-casing of the design or traceability pass relative to the other
-  two. See [State and idempotency](#state-and-idempotency).
+  that part's marker unposted, so the runner retries it next run. The runner does not special-case the design or traceability pass relative to
+  the other two. See [State and idempotency](#state-and-idempotency).
 - Building the batch list makes one `gh pr list --search` call. No extra
   per-PR call is needed: `headRefName`, `createdAt`, and
   `closingIssuesReferences` all come from that one call.
@@ -271,8 +267,8 @@ idempotent either way.
 - The regret pass's cost is likewise independent, and gated. It runs only
   when `[regret_review].enabled` is `true` (off by default), and at most one
   backend invocation per PR — zero when the candidate search (blame →
-  introducing-PR lookup → comment match) finds nothing to judge, which posts
-  nothing. Unlike `self-review`, this runner persists no state for this
+  introducing-PR lookup → comment match) finds nothing to judge, so the runner
+  posts nothing. Unlike `self-review`, this runner persists no state for this
   pass, so a run that posts nothing (no candidates, or every candidate
   judged `NO`) simply re-runs the bounded candidate search the next time the
   PR is processed. Its `git blame`/`gh api`/comment-fetch cost is bounded by

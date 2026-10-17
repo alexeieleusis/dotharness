@@ -22,7 +22,7 @@ _COMMAND_FILES = {
 def _validate_repo_slug(slug: str) -> str:
     # HarnessConfig.repo_slug hyphenates "owner/repo" into a single path segment
     # (e.g. "Oscilar-backend") before it reaches here, so no "/" is expected.
-    if not re.match(r"^[a-zA-Z0-9._-]+$", slug):
+    if slug in {".", ".."} or not re.fullmatch(r"[a-zA-Z0-9._-]+", slug):
         raise ValueError(f"Invalid repo slug: {slug!r}")  # noqa: TRY003
     return slug
 

@@ -1,0 +1,15 @@
+coverage:
+  range: 70..100
+  round: down
+  precision: 1
+  status:
+    project:
+      sisyphus:
+        target: 90%
+        threshold: 0.5%
+        flags:
+          - sisyphus
+flags:
+  sisyphus:
+    paths:
+      - tools/sisyphus/

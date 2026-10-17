@@ -63,7 +63,7 @@ review or pre-commit step.
 `pre_commands` entries may take either of two forms:
 
 - **Plain string** — `"npm ci"` becomes `PreCommand(cmd="npm ci", critical=False)`.
-- **Table** — `{ cmd = "npm ci", critical = true }` becomes `PreCommand(cmd="npm ci", critical=True)`. `critical` defaults to `false` if omitted from the table form too. A `critical` pre-command failing is treated as fatal for that subdir. A non-critical one is not.
+- **Table** — `{ cmd = "npm ci", critical = true }` becomes `PreCommand(cmd="npm ci", critical=True)`. `critical` defaults to `false` if omitted from the table form too. A `critical` pre-command that fails is treated as fatal for that subdir. A non-critical pre-command that fails is not treated as fatal.
 
 ### `[vibe_heal]`
 
@@ -87,10 +87,7 @@ review or pre-commit step.
 | `vibe_types_repo` | path | `"~/.harness/vendor/vibe-types"` | Local git checkout of `jpablo/vibe-types`, used to resolve knowledge-file content (via `git show <commit>:<path>`) for SonarQube comments that cite it. `~` is expanded. |
 
 Enabling `focused_review.enabled` now also enables the resolve and minimise
-behaviour. When the backend judges a target comment a false positive, the
-harness resolves the review thread (`resolveReviewThread`), minimises the root
-comment (`minimizeComment`, classifier `RESOLVED`), after first posting a reply, ending with the
-`[focused-review-bot]` marker, that states the finding is a false positive. No new config field exists for this behaviour,
+behaviour. When the backend judges a target comment a false positive, the harness first posts a reply that states the finding is a false positive and ends with the `[focused-review-bot]` marker. It then resolves the review thread (`resolveReviewThread`). It then minimises the root comment (`minimizeComment`, classifier `RESOLVED`). No new config field exists for this behaviour,
 so there is no separate opt-in or opt-out. The refactor-description reply path
 is unchanged.
 
@@ -129,6 +126,31 @@ Used by `harness run auto-approve` (and `harness run all`). Off by default.
 
 The comparison is strictly less than, so a value of `0` never matches and disables that feature. Invalid values (a non-boolean `enabled`, or a negative or non-integer threshold) raise `ConfigError` naming the field. Like `max_diff_lines` in `[regret_review]`, `75` and `500` are round, conservative starting points pending real usage data. See [`auto-approve`](commands/auto-approve.md) for the full rules.
 
+### `[ci_fix]`
+
+Settings for the `ci-fix` runner. Off by default. Whether `ci-fix` joins `harness run all` is not decided here.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Turns the `ci-fix` runner on. While `false`, the runner does nothing. |
+| `max_fix_attempts` | integer | `3` | Maximum number of agent fix runs per PR. Must be a positive integer. |
+
+Unknown keys and invalid values (a non-boolean `enabled`, or a zero, negative, boolean or non-integer `max_fix_attempts`) raise `ConfigError` naming the key.
+
+### `[merge]`
+
+Settings for the `merge` runner. Off by default: with `enabled = false` the runner does nothing and a run ends at an open PR.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Turns the `merge` runner on. |
+| `require_all_files_viewed` | boolean | `true` | Only merge a PR whose files have all been marked as viewed. |
+| `max_changed_lines` | integer | `500` | Maximum total modified lines for a PR to be merged. Equal to the `[auto_approve]` `approve_max_lines` default, so merge is not more permissive than approve by default. Must be a positive integer. |
+
+Unknown keys and invalid values (a non-boolean `enabled` or `require_all_files_viewed`, or a zero, negative, boolean or non-integer `max_changed_lines`) raise `ConfigError` naming the key.
+
+No secrets belong in these sections. Credentials come from `gh_token_cmd`.
+
 ### `[local_review]`
 
 Optional. Used only by `harness run local-review`. All other commands ignore it. Both fields are optional, and an absent section behaves as if both were unset.
@@ -150,7 +172,7 @@ Optional. Used only by `harness run local-review`. All other commands ignore it.
 |---|---|---|---|
 | `enabled` | boolean | `false` | Turns the `regret-review` pass on. Off by default — unlike the other commands, this is the one pass you must explicitly opt into. |
 | `max_diff_lines` | integer | `50` | The bugfix-shaped threshold: a PR is skipped entirely when its diff (added + removed lines across all files) exceeds this size. `50` is a round, conservative starting point for "small fix" — pending real usage data. |
-| `authors` | string or list of strings | `"*"` | Which PR authors the pass applies to. `"*"` means all authors. Otherwise it is a list of GitHub usernames. Applies to the **current** PR's author; the introducing PR's author is never filtered. The point is tracing *whoever's* old comment was ignored. |
+| `authors` | string or list of strings | `"*"` | Which PR authors the pass applies to. `"*"` means all authors. Otherwise it is a list of GitHub usernames. Applies to the **current** PR's author. The introducing PR's author is never filtered. The point is tracing *whoever's* old comment was ignored. |
 | `regret_review_timeout` | integer | `300` | Per-PR wall-clock budget (seconds) for the pass's own git/`gh` calls (blame, commit→PR lookups, comment fetches), checked and decremented before each call. Does not bound the backend invocation itself, which uses `harness.backend_timeout_seconds` independently. |
 
 ## Full example
@@ -203,6 +225,15 @@ enabled = false
 # enabled = false
 # viewed_max_lines = 75
 # approve_max_lines = 500
+
+[ci_fix]
+# enabled = false
+# max_fix_attempts = 3
+
+[merge]
+# enabled = false
+# require_all_files_viewed = true
+# max_changed_lines = 500
 
 [regret_review]
 enabled = false

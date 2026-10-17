@@ -34,6 +34,7 @@ traceability comments exist.
 import json
 import logging
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -275,6 +276,35 @@ def _text(data: bytes | str | None) -> str:
     if isinstance(data, bytes):
         return data.decode("utf-8", errors="replace")
     return data or ""
+
+
+def list_own_open_prs(
+    repo: str, only_pr: int | None, env: dict, failures: list[str], fields: str, gh: Callable = _gh
+) -> list[dict]:
+    """Open PRs authored by the acting user (``gh``'s ``@me``), or just ``only_pr``, sorted by number.
+
+    Any problem (gh failure, non-JSON output, not a list of PR objects) is appended to ``failures``
+    and yields ``[]``. ``gh`` lets a caller pass its own module's ``_gh``.
+    """
+    if only_pr is None:
+        args = ["pr", "list", "--repo", repo, "--state", "open", "--author", "@me", "--json", fields]
+        args += ["--limit", "500"]
+    else:
+        args = ["pr", "view", str(only_pr), "--repo", repo, "--json", fields]
+    result = gh(args, env)
+    if result.returncode != 0:
+        failures.append(f"gh pr {'list' if only_pr is None else 'view'} failed (exit {result.returncode})")
+        return []
+    try:
+        data = json.loads(_text(result.stdout))
+    except ValueError:
+        failures.append("gh pr output was not JSON")
+        return []
+    prs = data if isinstance(data, list) else [data]
+    if not all(isinstance(p, dict) and isinstance(p.get("number"), int) for p in prs):
+        failures.append("gh pr output was not a list of PR objects")
+        return []
+    return sorted(prs, key=lambda p: p["number"])
 
 
 def _parse_buckets(stdout: str) -> list[str] | None:
