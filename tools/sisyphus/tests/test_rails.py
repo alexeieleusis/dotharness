@@ -62,12 +62,14 @@ def test_rebase_needed_maps_to_c7() -> None:
 
 
 def test_parse_push_argv() -> None:
-    r = parse_push_argv(["git", "push", "--force", "origin", "sisyphus/eng-1"])
+    r = parse_push_argv(
+        ["git", "push", "--force", "origin", "sisyphus/eng-1"], history_rewrite=False, needs_rebase=False
+    )
     assert r == PushRequest("origin", "sisyphus/eng-1", ("--force",))
     assert not guard(r).allowed
-    assert parse_push_argv(["origin", "x"]).refspec == "x"
+    assert parse_push_argv(["origin", "x"], history_rewrite=False, needs_rebase=False).refspec == "x"
     with pytest.raises(ValueError, match="expected"):
-        parse_push_argv(["push", "origin"])
+        parse_push_argv(["push", "origin"], history_rewrite=False, needs_rebase=False)
 
 
 class Clock:
@@ -150,3 +152,14 @@ def test_no_harness_imports() -> None:
                 mods = [node.module or ""]
             for m in mods:
                 assert m.split(".")[0] not in ("harness", "spec_prism_flow")
+
+
+@pytest.mark.parametrize("flag", ["--force-with", "--force-i", "--dele", "--prun", "--mirr", "--unknown", "-x"])
+def test_rejects_abbreviated_and_unknown_flags(flag: str) -> None:
+    req = parse_push_argv(["git", "push", flag, "origin", "sisyphus/eng-1"], history_rewrite=False, needs_rebase=False)
+    assert not guard(req).allowed
+
+
+@pytest.mark.parametrize("flag", ["-u", "--set-upstream", "--no-verify"])
+def test_allows_known_flags(flag: str) -> None:
+    assert guard(PushRequest("origin", "sisyphus/eng-1", (flag,))).allowed

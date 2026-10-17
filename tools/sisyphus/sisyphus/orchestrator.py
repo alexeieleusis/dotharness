@@ -611,7 +611,9 @@ class _Run:
 
     def stage_push(self) -> None:
         with self.rec.stage_scope(PUSH_STAGE):
-            request = parse_push_argv(["push", "origin", self.branch], needs_rebase=self.needs_rebase())
+            request = parse_push_argv(
+                ["push", "origin", self.branch], history_rewrite=False, needs_rebase=self.needs_rebase()
+            )
             protected = {self.opt.base_branch, *([self.opt.default_branch] if self.opt.default_branch else [])}
             for default in sorted(protected):
                 decision = push_guard(request, default, self.created_branches())

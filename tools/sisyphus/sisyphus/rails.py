@@ -57,10 +57,16 @@ _FORCE_LONG = ("--force", "--force-with-lease", "--force-if-includes", "--mirror
 _REWRITE_LONG = ("--delete", "--prune")
 
 
-def parse_push_argv(argv: Sequence[str], *, history_rewrite: bool = False, needs_rebase: bool = False) -> PushRequest:
+# Fail closed: git accepts any unambiguous prefix of a long option (``--force-with``, ``--dele``),
+# so a denylist of spellings cannot be complete. Only flags Sisyphus actually uses pass.
+_ALLOWED_FLAGS = ("-u", "--set-upstream", "--no-verify")
+
+
+def parse_push_argv(argv: Sequence[str], *, history_rewrite: bool, needs_rebase: bool) -> PushRequest:
     """Parse ``[git] push [flags] <remote> <refspec>`` into a :class:`PushRequest`.
 
-    History-rewrite and rebase-needed are facts the caller knows from git state; pass them in.
+    History-rewrite and rebase-needed are facts the caller knows from git state; they are
+    required so a caller cannot silently skip the checks.
     Raises ``ValueError`` unless exactly one remote and one refspec are present.
     """
     args = list(argv)
@@ -98,6 +104,9 @@ def push_guard(request: PushRequest, default_branch: str, created_branches: Iter
     created = set(created_branches)
     if request.refspec.startswith("+") or any(_is_force_flag(f) for f in request.flags):
         return PushDecision(False, "force-push is forbidden")
+    unknown = [f for f in request.flags if f not in _ALLOWED_FLAGS and not _is_rewrite_flag(f)]
+    if unknown:
+        return PushDecision(False, f"push flag(s) not allowed: {', '.join(unknown)}")
     if request.history_rewrite or any(_is_rewrite_flag(f) for f in request.flags) or request.refspec.startswith(":"):
         return PushDecision(False, "history rewrite or ref deletion is forbidden")
     branch = target_branch(request.refspec)
