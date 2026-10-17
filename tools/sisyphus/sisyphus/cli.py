@@ -695,11 +695,10 @@ def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_
         how = stop.clears_by if stop else CLEARS_BY.get(rec.checkpoint, "explicit")
         if rec.checkpoint is None:
             how = "explicit"
-        done = (
-            f" (cleared now: {'yes' if cleared(rec, stop, config, datetime.now(UTC)) else 'no'})"
-            if how != "explicit"
-            else ""
-        )
+        done = ""
+        if how != "explicit":
+            is_cleared = cleared(rec, stop, config, datetime.now(UTC))
+            done = f" (cleared now: {'yes' if is_cleared else 'no'})"
         lines.append(f"  auto-resume: {how}{done}")
     return lines
 
