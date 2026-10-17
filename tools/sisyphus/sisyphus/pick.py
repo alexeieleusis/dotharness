@@ -159,15 +159,25 @@ def pick_items(
         if lookup is None:
             raise PickError("a pull-request lookup is required for GitHub issues")
         candidates.sort(key=lambda c: (c.created_at, c.number if c.number is not None else 0))
+    return _take_unstarted(candidates, workspace_dir, limit, src.kind, lookup, open_pr_check)
+
+
+def _take_unstarted(
+    candidates: Sequence[Candidate],
+    workspace_dir: str | Path,
+    limit: int,
+    kind: str | None,
+    lookup: PullRequestLookup | None,
+    open_pr_check: OpenPrCheck,
+) -> list[Candidate]:
+    """First ``limit`` candidates with no run record (and, for GitHub, no open PR), de-duplicated by ref."""
     picked: list[Candidate] = []
     seen: set[str] = set()
     for cand in candidates:
         if cand.ref in seen or is_started(workspace_dir, cand.ref):
             continue
-        if src.kind == "github":
-            assert lookup is not None  # noqa: S101
-            if open_pr_check(cand, lookup):
-                continue
+        if lookup is not None and kind == "github" and open_pr_check(cand, lookup):
+            continue
         seen.add(cand.ref)
         picked.append(cand)
         if len(picked) >= limit:
