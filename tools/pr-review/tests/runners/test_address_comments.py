@@ -3,6 +3,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
+from harness.backend import Backend
 from harness.runners import address_comments
 from harness.runners.address_comments import (
     _address_single_comment,
@@ -928,3 +929,80 @@ def test_filter_by_unresolved_removes_inline_comment_in_resolved_thread():
     with patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value={6}):
         result = address_comments._filter_by_unresolved([resolved, open_], 1, "acme/frontend", {})
     assert result == [open_]
+
+
+_ISSUE_COMMENT = {"type": "issue", "id": 6161750034, "author": "eva-oscilar", "body": "notes"}
+
+
+def test_filter_already_replied_skips_issue_comment_we_recorded_replying_to():
+    # Issue comments have no reply linkage, so our own reply is invisible on GitHub's side.
+    result = address_comments._filter_already_replied([_ISSUE_COMMENT], 1, "alexei", {"issue:6161750034"})
+    assert result == []
+
+
+def test_filter_already_replied_keeps_issue_comment_not_recorded():
+    result = address_comments._filter_already_replied([_ISSUE_COMMENT], 1, "alexei", {"issue:1"})
+    assert result == [_ISSUE_COMMENT]
+
+
+def test_address_single_comment_records_issue_comment_after_clean_run(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
+    monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha")
+    backend = MagicMock(spec=Backend)
+    backend.run.return_value = None
+    address_comments._address_single_comment(
+        _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, None, "acme-frontend"
+    )
+    assert recorded == [("acme-frontend", 7, "issue:6161750034")]
+
+
+def test_address_single_comment_does_not_record_when_backend_raises(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
+    monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha")
+
+    boom = MagicMock(spec=Backend)
+    boom.run.side_effect = RuntimeError("boom")
+
+    address_comments._address_single_comment(
+        _ISSUE_COMMENT, 7, "tmpl", boom, "/w", "acme/frontend", {}, "sha", None, None, "acme-frontend"
+    )
+    assert recorded == []
+
+
+def test_address_single_comment_does_not_record_when_no_commit_and_no_reply_observed(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
+    monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha")
+    monkeypatch.setattr(address_comments, "_reply_observed", lambda *a, **k: False)
+    backend = MagicMock(spec=Backend)
+    backend.run.return_value = None
+    address_comments._address_single_comment(
+        _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, "bot", "acme-frontend"
+    )
+    assert recorded == []
+
+
+def test_address_single_comment_records_when_reply_observed_without_commit(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
+    monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha")
+    monkeypatch.setattr(address_comments, "_reply_observed", lambda *a, **k: True)
+    backend = MagicMock(spec=Backend)
+    backend.run.return_value = None
+    address_comments._address_single_comment(
+        _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, "bot", "acme-frontend"
+    )
+    assert recorded == [("acme-frontend", 7, "issue:6161750034")]
+
+
+def test_list_all_open_pr_numbers_returns_none_on_failure():
+    from types import SimpleNamespace
+
+    from harness.runners import address_comments as ac
+
+    with patch.object(ac, "run_cmd", return_value=SimpleNamespace(returncode=1, stdout="")):
+        assert ac._list_all_open_pr_numbers("o/r", {}) is None
+    with patch.object(ac, "run_cmd", return_value=SimpleNamespace(returncode=0, stdout='[{"number": 7}]')):
+        assert ac._list_all_open_pr_numbers("o/r", {}) == {7}
