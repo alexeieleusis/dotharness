@@ -19,6 +19,7 @@ import pytest
 from click.testing import CliRunner
 
 from sisyphus import cli
+from sisyphus.cleanup import PrInfo
 from sisyphus.cli import Services, main
 from sisyphus.config import ConfigError, WorkItemSource, load_config
 from sisyphus.intake import IntakeResult, OpenDecision
@@ -62,6 +63,9 @@ class FakePrs:
 
     def find_pr(self, branch: str) -> PullRequest | None:
         return self.open.get(branch)
+
+    def pr_state(self, ref: str) -> PrInfo | None:
+        return None
 
     def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
         raise AssertionError("not used")
@@ -494,6 +498,24 @@ def test_gh_pull_request_client() -> None:
         client.open_pr("b", "base", "T", "B")
     with pytest.raises(GitHubError):
         client.find_pr("b")
+
+
+def test_gh_client_pr_state_reads_state_and_head_oid() -> None:
+    replies = [
+        ExecResult(0, '{"number": 7, "state": "MERGED", "headRefOid": "abc"}'),
+        ExecResult(1, "", "no pull requests found"),
+    ]
+    calls: list[list[str]] = []
+
+    def ex(argv: Sequence[str], _cwd: Path | None, _env: Any) -> ExecResult:
+        calls.append(list(argv))
+        return replies.pop(0)
+
+    client = cli.GhPullRequestClient(GhCli(None, None, ex))
+    assert client.pr_state("7") == PrInfo(7, "MERGED", "abc")
+    assert calls[0] == ["gh", "pr", "view", "7", "--json", "number,state,headRefOid"]
+    with pytest.raises(GitHubError):
+        client.pr_state("b")
 
 
 def test_default_services_builds_clients(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

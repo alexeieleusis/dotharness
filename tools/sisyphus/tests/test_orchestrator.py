@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from sisyphus import orchestrator
+from sisyphus.cleanup import PrInfo
 from sisyphus.config import DigestConfig, LimitsConfig, MergeConfig, ProjectConfig, SisyphusConfig
 from sisyphus.digest import DigestWriteError
 from sisyphus.gaterecord import gate_record_path, read_gate_record
@@ -118,6 +119,9 @@ class World:
         self.existing_pr: PullRequest | None = None
         self.opened: list[tuple[str, str, str, str]] = []
         self.client_error: GitHubError | None = None
+        self.pr_info: PrInfo | None = None
+        self.pr_state_error: GitHubError | None = None
+        self.pr_state_refs: list[str] = []
         self.find_calls = 0
         # config
         self.limits = LimitsConfig()
@@ -242,6 +246,12 @@ class World:
         self.find_calls += 1
         self.events.append("find_pr")
         return self.existing_pr
+
+    def pr_state(self, ref: str) -> PrInfo | None:
+        self.pr_state_refs.append(ref)
+        if self.pr_state_error:
+            raise self.pr_state_error
+        return self.pr_info
 
     def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
         self.events.append("open_pr")
@@ -1267,6 +1277,7 @@ def test_resume_checks_out_the_items_own_branch(world: World) -> None:
     world.push_rc = 0
     world.branch_exists = True
     world.current_branch = "sisyphus/other-item-12345678"  # another item ran meanwhile
+    world.ancestor_rc_after_pr = 1  # nothing proves the branch deletable, so cleanup leaves the checkout alone
     result = world.run()
     assert result.completed
     assert world.checkouts[-1] == branch_name(ITEM)
@@ -1328,9 +1339,46 @@ def test_branch_already_gone_is_silent_and_idempotent(world: World) -> None:
 def test_not_pushed_keeps_the_branch_and_notes_it(world: World) -> None:
     world.branch_present_after_pr = True
     world.remote_exists = False
+    world.ancestor_rc_after_pr = 1  # not on origin/<base> either
     world.run()
     assert world.branch_cmds == []
-    assert f"Branch kept: {ITEM} {branch_name(ITEM)} not pushed" in world.digest_text()
+    text = world.digest_text()
+    assert f"Branch kept: {ITEM} {branch_name(ITEM)} no deletion proof held: (1) not pushed" in text
+    assert "(2) head is not an ancestor of origin/base-branch" in text
+    assert "(3) no PR found for 42" in text  # the run record stores the PR number
+
+
+def test_done_line_names_the_proof(world: World) -> None:
+    _cleanup_ready(world)
+    world.run()
+    assert f"deleted (proof 1: head {SHA1[:12]} is an ancestor of origin/{branch_name(ITEM)})" in world.digest_text()
+    assert world.pr_state_refs == []  # gh is not asked when git proves it
+
+
+def test_remote_branch_gone_after_merge_is_proven_against_base(world: World) -> None:
+    world.branch_present_after_pr = True
+    world.remote_exists = False
+    world.ancestor_rc_after_pr = 1
+    world.run()
+    world.ancestor_rc_after_pr = 0  # merged into origin/base-branch, remote branch deleted
+    world.pr_state_refs.clear()
+    world.branch_present_after_pr = True
+    world.run()
+    assert ["branch", "-d", branch_name(ITEM)] in world.branch_cmds
+    assert not any(c[1].startswith("--set-upstream") for c in world.branch_cmds)
+    assert "proof 2: head" in world.digest_text()
+    assert world.pr_state_refs == []
+
+
+def test_squash_merge_proof_uses_the_stored_pr_number_and_gh_error_keeps(world: World) -> None:
+    world.branch_present_after_pr = True
+    world.remote_exists = False
+    world.ancestor_rc_after_pr = 1
+    world.pr_state_error = GitHubError("gh pr view failed (exit 1): boom")
+    world.run()
+    assert world.pr_state_refs == ["42"]
+    assert world.branch_cmds == []
+    assert "(3) gh lookup of 42 failed: gh pr view failed (exit 1): boom" in world.digest_text()
 
 
 def test_commits_not_on_origin_keep_the_branch(world: World) -> None:

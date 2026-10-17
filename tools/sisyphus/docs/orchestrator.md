@@ -105,11 +105,21 @@ When a stage raises a checkpoint, or an unexpected error escapes, `run_item` wri
 (`stoprecord.py`, a sidecar next to the run record; the run record schema is unchanged) and deletes it when a
 run completes. `OrchestratorOptions.resume_command` is the command text stored in it (`{item}` is replaced).
 After a clean finish `run_item` calls `cleanup.cleanup_branch` (inside the lock, never turning a clean finish into an
-error). Steps, each of which keeps the branch and adds a `Branch kept:` note if it fails: branch exists (else
-silent no-op); clean clone; `ls-remote` and `fetch` of `origin/<branch>`; `merge-base --is-ancestor <branch>
-origin/<branch>` (upstream tracking is not consulted); a detached HEAD must itself be on `origin/<branch>`; switch to
-the base, `fetch` and `merge --ff-only origin/<base>`; `branch --set-upstream-to=origin/<branch>` then
-`branch -d` (plain `-d` alone would refuse an unmerged PR branch; the verified upstream is git's second check).
+error). Preconditions, each of which keeps the branch and adds a `Branch kept:` note if it fails: branch exists
+(else silent no-op); clean clone. Then one of three proofs, cheapest first (a later one is not evaluated once an
+earlier one holds, so `gh` is only called when git cannot prove it): (1) `ls-remote` + `fetch` of `origin/<branch>`
+and `merge-base --is-ancestor <branch> origin/<branch>` (upstream tracking is not consulted); (2) fetch of the base
+and the head is an ancestor of `origin/<base>` (merge-commit/rebase merge, remote branch gone or not); (3)
+`PullRequestClient.pr_state(ref)` (`gh pr view <ref> --json number,state,headRefOid`) is MERGED and `headRefOid`
+equals the local head, `ref` being the PR number stored in the run record (`retries["pr-number"]`, written by the
+open-pr stage) or else the branch. If none holds the note reads `no deletion proof held: (1) ...; (2) ...; (3) ...`.
+A detached HEAD must itself be on the branch, `origin/<branch>` or `origin/<base>`; then switch to the base, `fetch`
+and `merge --ff-only origin/<base>`; then `branch -d`: after proof (1) first `--set-upstream-to=origin/<branch>`
+(plain `-d` would refuse an unmerged PR branch; the verified upstream is git's second check); after proof (2) the
+head is an ancestor of the checked-out base so `-d` accepts it as is. Proof (3) alone cannot satisfy `-d` (a
+squash-merged head is in neither HEAD nor an upstream; no clean way around this was found), so the branch is kept
+with `proof (3) holds (...) but deleting it needs git branch -D`; this is one marked function
+(`_delete_squash_merged`), an open decision. The Done line names the proof used.
 `-D` is never used (unlike pr-review's `git_restore`, which uses `-D` after saving a recovery ref).
 A complete stage is always skipped on a rerun, except intake stopped at C1, which only re-parses the brief
 (`run_intake(reparse_only=True)`) so a human-edited brief is never redrafted. An answer file

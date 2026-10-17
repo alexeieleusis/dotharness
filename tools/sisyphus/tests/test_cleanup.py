@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from sisyphus.cleanup import ABSENT, DELETED, KEPT, cleanup_branch
-from sisyphus.orchestrator import CommandResult
+from sisyphus.cleanup import ABSENT, DELETED, KEPT, PrInfo, cleanup_branch
+from sisyphus.orchestrator import CommandResult, GitHubError
 
 BRANCH = "sisyphus/eng-1-abcd1234"
 ITEM = "ENG-1"
@@ -61,8 +61,44 @@ class Repo:
         res = subprocess.run(["git", "-C", str(self.clone), *args], capture_output=True, text=True, check=False)  # noqa: S603, S607
         return CommandResult(res.returncode, res.stdout, res.stderr)
 
-    def cleanup(self):
-        return cleanup_branch(self.git, item=ITEM, branch=BRANCH, base="main")
+    def merge_on_origin(self, *, squash: bool, delete_remote_branch: bool = True) -> None:
+        """Merge the pushed branch into origin/main from a second clone, as GitHub would, then drop the branch."""
+        if not self.other.exists():
+            subprocess.run(["git", "clone", "-q", str(self.origin), str(self.other)], check=True, capture_output=True)  # noqa: S603, S607
+            _run(self.other, "config", "user.email", "t@example.com")
+            _run(self.other, "config", "user.name", "t")
+        _run(self.other, "fetch", "-q", "origin")
+        _run(self.other, "checkout", "-q", "main")
+        _run(self.other, "pull", "-q", "--ff-only", "origin", "main")
+        if squash:
+            _run(self.other, "merge", "--squash", f"origin/{BRANCH}")
+            _run(self.other, "commit", "-q", "-m", "squashed")
+        else:
+            _run(self.other, "merge", "--no-ff", "-q", "-m", "merge pr", f"origin/{BRANCH}")
+        _run(self.other, "push", "-q", "origin", "main")
+        if delete_remote_branch:
+            _run(self.other, "push", "-q", "origin", "--delete", BRANCH)
+
+    def head(self) -> str:
+        return _run(self.clone, "rev-parse", BRANCH)
+
+    def cleanup(self, pr: object = None, pr_ref: str | None = None):
+        self.pr_calls: list[str] = []
+
+        def lookup(ref: str) -> PrInfo | None:
+            self.pr_calls.append(ref)
+            if isinstance(pr, Exception):
+                raise pr
+            return pr if isinstance(pr, PrInfo) else None
+
+        return cleanup_branch(
+            self.git,
+            item=ITEM,
+            branch=BRANCH,
+            base="main",
+            pr_lookup=lookup if pr != "none-client" else None,
+            pr_ref=pr_ref,
+        )
 
     def branches(self) -> list[str]:
         return _run(self.clone, "branch", "--format=%(refname:short)").splitlines()
@@ -103,7 +139,11 @@ def test_not_pushed_is_kept(repo: Repo) -> None:
     repo.make_branch(push=False)
     out = repo.cleanup()
     assert out.status == KEPT
-    assert out.message == f"Branch kept: {ITEM} {BRANCH} not pushed (no such branch on origin)"
+    assert out.message.startswith(
+        f"Branch kept: {ITEM} {BRANCH} no deletion proof held: (1) not pushed (no such branch"
+    )
+    assert "(2) head is not an ancestor of origin/main" in out.message
+    assert "(3) no PR found for " + BRANCH in out.message
     assert BRANCH in repo.branches()
     assert repo.current() == BRANCH
     repo.assert_no_capital_d()
@@ -114,7 +154,7 @@ def test_local_commits_not_on_origin_are_kept(repo: Repo) -> None:
     repo.commit(repo.clone, "late.txt", "unpushed")
     out = repo.cleanup()
     assert out.status == KEPT
-    assert "has 1 commit(s) not on origin" in out.message
+    assert "(1) has 1 commit(s) not on origin" in out.message
     assert BRANCH in repo.branches()
     assert repo.current() == BRANCH
 
@@ -189,3 +229,130 @@ def test_unreachable_origin_keeps_the_branch(repo: Repo) -> None:
     out = repo.cleanup()
     assert out.status == KEPT
     assert BRANCH in repo.branches()
+
+
+# ---------------------------------------------------------------- the three proofs
+
+
+def test_done_message_names_proof_one(repo: Repo) -> None:
+    repo.make_branch()
+    out = repo.cleanup()
+    assert out.status == DELETED
+    assert "(proof 1: head " in out.message
+    assert f"is an ancestor of origin/{BRANCH}" in out.message
+    assert repo.pr_calls == []  # cheapest first: gh is never asked
+
+
+def test_merge_commit_merge_with_remote_branch_gone_is_proof_two(repo: Repo) -> None:
+    repo.make_branch()
+    repo.merge_on_origin(squash=False)
+    out = repo.cleanup()
+    assert out.status == DELETED
+    assert "(proof 2: head " in out.message and "is an ancestor of origin/main" in out.message
+    assert BRANCH not in repo.branches()  # no local branch left behind
+    assert repo.current() == "main"
+    assert ["branch", "-d", BRANCH] in repo.log
+    assert not any(a[0] == "branch" and a[1].startswith("--set-upstream") for a in repo.log)
+    assert repo.pr_calls == []
+    repo.assert_no_capital_d()
+
+
+def test_rebase_style_merge_is_proof_two(repo: Repo) -> None:
+    repo.make_branch()
+    # a rebase merge on GitHub replays commits; a fast-forward of main to the branch head is the same shape
+    _run(repo.clone, "checkout", "-q", "main")
+    _run(repo.clone, "merge", "-q", "--ff-only", BRANCH)
+    _run(repo.clone, "push", "-q", "origin", "main")
+    _run(repo.clone, "push", "-q", "origin", "--delete", BRANCH)
+    _run(repo.clone, "checkout", "-q", BRANCH)
+    out = repo.cleanup()
+    assert out.status == DELETED
+    assert "proof 2" in out.message
+    assert BRANCH not in repo.branches()
+
+
+def test_unmerged_branch_with_nothing_pushed_names_all_three_proofs(repo: Repo) -> None:
+    repo.make_branch(push=False)
+    out = repo.cleanup(None)
+    assert out.status == KEPT
+    assert "(1) " in out.message and "(2) " in out.message and "(3) no PR found" in out.message
+    assert repo.pr_calls == [BRANCH]
+    assert BRANCH in repo.branches()
+
+
+def test_pr_number_from_the_run_record_is_what_gh_is_asked(repo: Repo) -> None:
+    repo.make_branch(push=False)
+    repo.cleanup(None, pr_ref="17")
+    assert repo.pr_calls == ["17"]
+
+
+@pytest.mark.parametrize(
+    ("info", "needle"),
+    [
+        (PrInfo(5, "OPEN", "x"), "PR #5 is OPEN, not MERGED"),
+        (PrInfo(5, "CLOSED", "x"), "PR #5 is CLOSED, not MERGED"),
+        (GitHubError("gh pr view failed (exit 1): boom"), "gh lookup of " + BRANCH + " failed: gh pr view failed"),
+        (None, "no PR found for " + BRANCH),
+        ("none-client", "no GitHub client available"),
+    ],
+)
+def test_proof_three_failures_keep_the_branch_and_name_the_proofs(repo: Repo, info: object, needle: str) -> None:
+    repo.make_branch(push=False)
+    if isinstance(info, PrInfo) and info.head_sha == "x":
+        info = PrInfo(info.number, info.state, repo.head())
+    out = repo.cleanup(info)
+    assert out.status == KEPT
+    assert out.message.startswith(f"Branch kept: {ITEM} {BRANCH} no deletion proof held: (1) ")
+    assert needle in out.message
+    assert BRANCH in repo.branches()
+    repo.assert_no_capital_d()
+
+
+def test_proof_three_with_a_mismatching_head_keeps_the_branch(repo: Repo) -> None:
+    repo.make_branch(push=False)
+    out = repo.cleanup(PrInfo(5, "MERGED", "0" * 40))
+    assert out.status == KEPT
+    assert "PR #5 is MERGED but its head 000000000000 differs from the local head" in out.message
+
+
+def test_squash_merge_with_remote_branch_gone_is_proven_but_kept_because_d_refuses(repo: Repo) -> None:
+    """The open question: a squash-merged head is in neither HEAD nor an upstream, so plain -d refuses."""
+    repo.make_branch()
+    repo.merge_on_origin(squash=True)
+    out = repo.cleanup(PrInfo(9, "MERGED", repo.head()), pr_ref="9")
+    assert out.status == KEPT
+    assert "proof (3) holds (PR #9 is MERGED with head " in out.message
+    assert "needs git branch -D" in out.message
+    assert BRANCH in repo.branches()  # not deleted: -D is not used
+    assert repo.current() == "main"  # the clone is on base, clean
+    assert _run(repo.clone, "status", "--porcelain") == ""
+    assert repo.pr_calls == ["9"]
+    assert ["branch", "-d", BRANCH] in repo.log
+    repo.assert_no_capital_d()
+    assert _run(repo.clone, "for-each-ref", "refs/sisyphus", "--format=%(refname)") == ""  # no recovery ref yet
+
+
+def test_squash_merge_leaves_no_helper_refs_or_branches_behind(repo: Repo) -> None:
+    repo.make_branch()
+    repo.merge_on_origin(squash=True)
+    before = _run(repo.clone, "for-each-ref", "--format=%(refname)")
+    repo.cleanup(PrInfo(9, "MERGED", repo.head()))
+    after = _run(repo.clone, "for-each-ref", "--format=%(refname)")
+    assert set(after.splitlines()) - set(before.splitlines()) <= {"refs/remotes/origin/main"}
+    assert sorted(repo.branches()) == sorted(["main", BRANCH])
+
+
+def test_proofs_are_cheapest_first_and_gh_not_called_when_git_proves_it(repo: Repo) -> None:
+    repo.make_branch()
+    repo.merge_on_origin(squash=False)
+    repo.cleanup(PrInfo(1, "MERGED", repo.head()))
+    assert repo.pr_calls == []
+    order = [a[0] for a in repo.log]
+    assert order.index("ls-remote") < order.index("merge-base")
+
+
+def test_dirty_clone_never_asks_gh(repo: Repo) -> None:
+    repo.make_branch(push=False)
+    (repo.clone / "scratch.txt").write_text("mine")
+    repo.cleanup(PrInfo(1, "MERGED", repo.head()))
+    assert repo.pr_calls == []

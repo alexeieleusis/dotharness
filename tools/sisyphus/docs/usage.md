@@ -85,10 +85,14 @@ detached); committed work is never redone.
 
 **Local branch cleanup.** After a clean finish (every wanted stage complete, no checkpoint, no error, no stop or
 abandoned mark, and the branch was created by Sisyphus) the local branch is deleted so the clone does not collect
-stale branches. It is kept, with a `Branch kept: REF <branch> ...` note in the digest's Deviations, unless: the
-clone is clean; `origin` has the branch and its head is an ancestor of `origin/<branch>` (not pushed, or N commits
-not on origin: kept); base can be switched to and fast-forwarded from `origin/<base>`; and `git branch -d` agrees.
-Never `-D`, never a remote branch or PR change. A deletion is shown under Done. Rerunning after the branch is gone
+stale branches. It is kept, with a `Branch kept: REF <branch> ...` note in the digest's Deviations, unless the
+clone is clean, base can be switched to and fast-forwarded from `origin/<base>`, and one proof holds (checked in this
+order, cheapest first): (1) the head is an ancestor of `origin/<branch>`; (2) the head is an ancestor of
+`origin/<base>` (a merge-commit or rebase merge, even after GitHub deleted the remote branch); (3) `gh pr view`
+says the PR is MERGED with a head equal to the local head. Then `git branch -d` must agree. A squash-merged branch
+is proven by (3) but `-d` refuses it, so it is kept with a note saying that deleting it needs `-D` (undecided).
+When nothing is proven the note lists each proof tried and why it failed.
+Never `-D`, never a remote branch or PR change. A deletion is shown under Done and names the proof used. Rerunning after the branch is gone
 is a silent no-op. `harness run ci-fix` and `merge` do not need the local branch (ci-fix does
 `checkout -B <branch> origin/<branch>` itself; merge uses no checkout). The run record, digest, stop and answer
 files and `<brief>.intake.json` are never deleted.

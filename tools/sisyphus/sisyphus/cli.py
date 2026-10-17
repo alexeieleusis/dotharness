@@ -31,6 +31,7 @@ from typing import Any
 import click
 
 from sisyphus import gaterecord
+from sisyphus.cleanup import PrInfo
 from sisyphus.config import ConfigError, SisyphusConfig, load_config
 from sisyphus.digest import DigestReport, DigestWriteError, NeedsYou, describe_reset, needs_from_record, write_digest
 from sisyphus.intake import AgentRunner, run_intake
@@ -146,6 +147,14 @@ class GhPullRequestClient:
             return PullRequest(int(row["number"]), row.get("url", ""))
         return None
 
+    def pr_state(self, ref: str) -> PrInfo | None:
+        """``gh pr view <number or branch> --json number,state,headRefOid``; any state (used by branch cleanup)."""
+        try:
+            row = self.gh.json("pr", "view", ref, "--json", "number,state,headRefOid")
+        except PickError as exc:
+            raise GitHubError(str(exc)) from exc
+        return _pr_info(row) if isinstance(row, dict) else None
+
     def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
         res = self.gh._run(
             ["gh", "pr", "create", "--head", branch, "--base", base, "--title", title, "--body", body],
@@ -158,6 +167,13 @@ class GhPullRequestClient:
                 f"gh pr create failed (exit {res.returncode}): {(res.stderr or res.stdout).strip()[-300:]}"
             )
         return PullRequest(int(match.group(1)), res.stdout.strip().splitlines()[-1])
+
+
+def _pr_info(row: dict[str, Any]) -> PrInfo:
+    number = row.get("number")
+    return PrInfo(
+        int(number) if isinstance(number, int) else None, str(row.get("state") or ""), str(row.get("headRefOid") or "")
+    )
 
 
 @dataclass

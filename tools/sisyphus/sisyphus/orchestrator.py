@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from sisyphus import gaterecord
-from sisyphus.cleanup import DELETED, KEPT, cleanup_branch
+from sisyphus.cleanup import DELETED, KEPT, PrInfo, cleanup_branch
 from sisyphus.config import SisyphusConfig
 from sisyphus.digest import (
     CI_FIX_STAGE,
@@ -78,6 +78,7 @@ BRANCH_PREFIX = "sisyphus/"
 PACKAGE_MARKERS = ("Makefile", "pyproject.toml", "package.json", "Cargo.toml", "go.mod")
 
 BRANCH_CREATED_KEY = "branch-created"
+PR_NUMBER_KEY = "pr-number"  # additive: the PR number, so the branch cleanup can ask gh about it by number
 BUILD_RETRY_KEY = "build:retry-cycles"
 CI_FIX_ATTEMPTS_KEY = "ci-fix:attempts"
 LEAF_LIMIT_KEY = "plan:leaf-limit"
@@ -129,6 +130,10 @@ class PullRequestClient(Protocol):
 
     def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
         """Open one PR from ``branch`` into ``base``."""
+        ...
+
+    def pr_state(self, ref: str) -> PrInfo | None:
+        """``gh pr view <number or branch>``: the PR's state and head SHA (any state), or ``None`` if none."""
         ...
 
 
@@ -399,6 +404,8 @@ class _Run:
                 item=self.item,
                 branch=self.branch,
                 base=self.opt.base_branch,
+                pr_lookup=self.gh.pr_state,
+                pr_ref=str(stored) if (stored := self.rec.retries.get(PR_NUMBER_KEY)) else None,
             )
         except Exception as exc:  # a failed cleanup never turns a clean finish into an error
             self.note(f"Branch kept: {self.item} {self.branch} cleanup failed: {type(exc).__name__}: {exc}")
@@ -646,6 +653,9 @@ class _Run:
                     self.pr = self.gh.open_pr(self.branch, self.opt.base_branch, f"Sisyphus: {self.item}", body)
             except GitHubError as exc:
                 raise _Stop(Checkpoint.C8, str(exc)) from exc
+            if self.rec.retries.get(PR_NUMBER_KEY) != self.pr.number:
+                self.rec.retries[PR_NUMBER_KEY] = self.pr.number
+                self.rec.save()
             self.gate()
 
     def note(self, text: str) -> None:
