@@ -1406,6 +1406,101 @@ def fetch_pr_comments(pr_number: int, script_path: Path, wdir: str, env: dict) -
     return comments
 
 
+GRAPHQL_QUERY_REVIEW_THREAD_STATE = """
+query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
+  repository(owner:$owner,name:$repo){
+    pullRequest(number:$number){
+      reviewThreads(first:100,after:$cursor){
+        pageInfo{endCursor hasNextPage}
+        nodes{
+          id
+          isResolved
+          comments(first:100){nodes{id databaseId isMinimized}}
+        }
+      }
+    }
+  }
+}
+""".strip()
+
+
+def _fetch_review_threads_page(pr_number: int, repo: str, cursor: str | None, env: dict) -> dict | None:
+    """Fetch one page of review threads. Returns the `reviewThreads` object, or None on
+    any failure (non-zero exit, unparsable JSON, missing data)."""
+    owner, repo_name = repo.split("/")
+    cmd = [
+        "gh",
+        "api",
+        "graphql",
+        "-f",
+        f"query={GRAPHQL_QUERY_REVIEW_THREAD_STATE}",
+        "-F",
+        f"owner={owner}",
+        "-F",
+        f"repo={repo_name}",
+        "-F",
+        f"number={pr_number}",
+    ]
+    if cursor:
+        cmd += ["-f", f"cursor={cursor}"]
+    result = run_cmd(cmd, cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
+    if result.returncode != 0:
+        logger.warning("PR #%d: could not fetch review thread state (rc=%d)", pr_number, result.returncode)
+        return None
+    try:
+        data = json.loads(result.stdout)
+        threads = data["data"]["repository"]["pullRequest"]["reviewThreads"]
+    except (ValueError, KeyError, TypeError):
+        logger.warning("PR #%d: could not parse GraphQL review thread state response", pr_number)
+        return None
+    if not isinstance(threads, dict) or not isinstance(threads.get("nodes"), list):
+        logger.warning("PR #%d: GraphQL review thread state response had no thread nodes", pr_number)
+        return None
+    return threads
+
+
+def fetch_review_threads(pr_number: int, repo: str, env: dict) -> list[dict] | None:
+    """Return the review thread nodes (all pages) of a PR with ids and resolved/minimised
+    state, or None if any page fails to fetch or parse."""
+    nodes: list[dict] = []
+    cursor: str | None = None
+    while True:
+        page = _fetch_review_threads_page(pr_number, repo, cursor, env)
+        if page is None:
+            return None
+        nodes.extend(page["nodes"])
+        page_info = page.get("pageInfo") or {}
+        cursor = page_info.get("endCursor")
+        if not page_info.get("hasNextPage") or not cursor:
+            return nodes
+
+
+def merge_thread_state(comments: list[dict], threads: list[dict]) -> None:
+    """Add thread_id, thread_resolved, node_id and is_minimized to each inline comment
+    that is the root comment of one of `threads`. Mutates the comment dicts in place.
+    Other comments, and threads whose root is not in `comments`, are left alone."""
+    by_root: dict[int, tuple[dict, dict]] = {}
+    for thread in threads:
+        root_nodes = (thread.get("comments") or {}).get("nodes") or []
+        if not root_nodes:
+            continue
+        root = root_nodes[0]
+        db_id = root.get("databaseId")
+        if db_id is not None:
+            by_root[db_id] = (thread, root)
+    for comment in comments:
+        if comment.get("type") != "inline":
+            continue
+        found = by_root.get(comment.get("id"))
+        if found is None:
+            continue
+        thread, root = found
+        comment["thread_id"] = thread.get("id")
+        comment["thread_resolved"] = bool(thread.get("isResolved"))
+        comment["node_id"] = root.get("id")
+        comment["is_minimized"] = bool(root.get("isMinimized"))
+
+
 def find_reply_with_marker(comment: dict, marker: str = FOCUSED_REVIEW_MARKER) -> dict | None:
     """Return the first reply on `comment` whose body contains `marker`, or None."""
     for reply in comment.get("replies") or []:

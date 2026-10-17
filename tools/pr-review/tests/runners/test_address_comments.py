@@ -740,7 +740,7 @@ def test_get_unresolved_comment_ids_paginates_across_multiple_pages():
         MagicMock(returncode=0, stdout=json.dumps(page1).encode()),
         MagicMock(returncode=0, stdout=json.dumps(page2).encode()),
     ])
-    with patch("harness.runners.address_comments.run_cmd", side_effect=lambda *a, **k: next(responses)):
+    with patch("harness.runners.common.run_cmd", side_effect=lambda *a, **k: next(responses)):
         ids = address_comments._get_unresolved_comment_ids(1, "acme/frontend", {})
     assert ids == {1, 2}
 
@@ -911,3 +911,20 @@ def test_address_single_comment_skips_reply_check_when_our_login_not_provided(ca
             _FAKE_COMMENT, 1, "instructions", mock_backend, "/repo", "acme/frontend", {}, "sha-before"
         )
     mock_reply_observed.assert_not_called()
+
+
+def test_target_comment_without_marker_reply_is_not_selected_as_approved():
+    selected, rest = address_comments._select_approved_focused_review_comments(
+        [_PLAIN_COMMENT], 1, "acme/frontend", "alexei", {}
+    )
+    assert selected == []
+    assert rest == [_PLAIN_COMMENT]
+    assert address_comments._focused_review_approved(_PLAIN_COMMENT, "acme/frontend", "alexei", {}) is False
+
+
+def test_filter_by_unresolved_removes_inline_comment_in_resolved_thread():
+    resolved = {**_PLAIN_COMMENT, "id": 5}
+    open_ = {**_PLAIN_COMMENT, "id": 6}
+    with patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value={6}):
+        result = address_comments._filter_by_unresolved([resolved, open_], 1, "acme/frontend", {})
+    assert result == [open_]

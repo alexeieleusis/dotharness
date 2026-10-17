@@ -83,8 +83,24 @@ review or pre-commit step.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `enabled` | boolean | `false` | Turns on the `focused-review` command. It is independent of `vibe_heal.enabled`. |
+| `enabled` | boolean | `false` | Turns on the `focused-review` command, including its resolve and minimise behaviour for false-positive comments (see below). It is independent of `vibe_heal.enabled`. |
 | `vibe_types_repo` | path | `"~/.harness/vendor/vibe-types"` | Local git checkout of `jpablo/vibe-types`, used to resolve knowledge-file content (via `git show <commit>:<path>`) for SonarQube comments that cite it. `~` is expanded. |
+
+Enabling `focused_review.enabled` now also enables the resolve and minimise
+behaviour. When the backend judges a target comment a false positive, the
+harness resolves the review thread (`resolveReviewThread`), minimises the root
+comment (`minimizeComment`, classifier `RESOLVED`), after first posting a reply, ending with the
+`[focused-review-bot]` marker, that states the finding is a false positive. No new config field exists for this behaviour,
+so there is no separate opt-in or opt-out. The refactor-description reply path
+is unchanged.
+
+Risks of `focused_review.enabled`:
+
+- R1: enabling `focused_review.enabled` also enables resolve and minimise. There is no separate opt-in or opt-out, and no config field for it.
+- R2: the root comment is hidden even when humans have replied in the thread, so a human conversation may be hidden.
+- R3: the comment body, the diff and the knowledge file are untrusted input. A crafted one could persuade the backend to judge a finding a false positive and hide a comment. This is accepted because the scope is limited to target comments (SonarQube inline comments citing a vibe-types knowledge file) and the action is reversible: unresolve the thread and unminimise the comment in the GitHub UI. Nothing is deleted.
+- R4: if a hidden comment is recreated, the harness hides it again each time.
+- V1: if the harness token lacks the permission to resolve or minimise, the feature has no effect. The two mutations were run directly with the `alexei-oscilar` token on a real PR comment and both succeeded, so the permission is available. The backend's end-to-end behaviour (judging a finding and issuing the mutations itself) has not yet been observed. The result is recorded in the PR description of the change that introduced this behaviour.
 
 ### `[address_comments]`
 

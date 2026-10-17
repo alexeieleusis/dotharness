@@ -11,7 +11,7 @@ harness run [--config PATH] [--verbose] <command> [command options]
 | Command | Scope | Purpose |
 |---|---|---|
 | [`review-prs`](review-prs.md) | Every open, non-draft PR in the repo | Sweep all open PRs and post `vibe_heal`/SonarQube-style static-analysis feedback, tracking progress with a persisted watermark. |
-| [`focused-review`](focused-review.md) | Open PRs (drafts included) where the current `gh` user is author, assignee, or requested reviewer | Expand SonarQube comments into a detailed refactor description, citing a `jpablo/vibe-types` knowledge file. Post the description as a reply. |
+| [`focused-review`](focused-review.md) | Open PRs (drafts included) where the current `gh` user is author, assignee, or requested reviewer | Expand SonarQube comments into a detailed refactor description, citing a `jpablo/vibe-types` knowledge file. Post the description as a reply, or, when the finding is judged a false positive, post a reply saying so, then resolve the review thread and minimise the comment. |
 | [`review-requested`](review-requested.md) | PRs where review was explicitly requested from the `gh` account | Have the configured AI backend produce inline + summary code review comments. The command reacts to GitHub review-request state, not a schedule. |
 | [`self-review`](self-review.md) | Your own open PRs (`--author @me`) | Get an automated first-pass AI review of your own PRs before asking a human. |
 | [`address-comments`](address-comments.md) | Open PRs (drafts included) you authored or are assigned to, with pending reviewer feedback | Have the AI backend read unresolved review comments, make the smallest fix (or reply), commit, and push. |

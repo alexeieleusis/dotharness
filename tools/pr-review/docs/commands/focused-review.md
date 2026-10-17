@@ -1,8 +1,8 @@
 # focused-review
 
-`focused-review` turns the review comments that SonarQube posts into detailed, actionable refactor descriptions. It handles only the comments that cite a knowledge file from the `jpablo/vibe-types` catalog. Those comments cite it through a `knowledgeUrl()`-generated link embedded in the ESLint rule message that fed the SonarQube finding. Each description is posted as a reply on the same comment thread.
+`focused-review` turns the review comments that SonarQube posts into detailed, actionable refactor descriptions. It handles only the comments that cite a knowledge file from the `jpablo/vibe-types` catalog. Those comments cite it through a `knowledgeUrl()`-generated link embedded in the ESLint rule message that fed the SonarQube finding. For each such comment, the command has the backend either post a refactor description as a reply on the same comment thread, or, when the backend judges the finding a false positive (whatever the cause), resolve the review thread and minimise the root comment, after first posting a reply that explains it is a false positive. The refactor-description path is unchanged.
 
-It sits between `review-prs` (which posts the terse SonarQube findings in the first place) and the AI-authored reviews (`self-review`, `review-requested`) in the `all` sequence. It does not produce a review or fix code. It only enriches an existing automated comment with grounded, specific guidance.
+It sits between `review-prs` (which posts the terse SonarQube findings in the first place) and the AI-authored reviews (`self-review`, `review-requested`) in the `all` sequence. It does not produce a review or fix code. It only enriches an existing automated comment with grounded, specific guidance, or, when the finding is a false positive, says so in a reply and then dismisses it. It never deletes a comment.
 
 ## Usage
 ```
@@ -21,12 +21,17 @@ harness run [--config PATH] [--verbose] focused-review
 6. The command detaches HEAD and records the current commit so it can restore the working tree after each PR.
 7. For each eligible PR, in ascending order:
    - It fetches all comments via `scripts/pr-comments.py fetch --pr <N>` (the same mechanism `address-comments` uses), without checking out the branch yet.
-   - It keeps only the inline comments whose body contains a `https://raw.githubusercontent.com/jpablo/vibe-types/<commit>/<path>.md` URL. It skips the comments that already have a reply containing the `[focused-review-bot]` marker.
+   - It keeps only the inline comments whose body contains a `https://raw.githubusercontent.com/jpablo/vibe-types/<commit>/<path>.md` URL, and skips the ones that already have a reply containing the `[focused-review-bot]` marker, or whose thread is resolved or whose root comment is minimised (see the thread-state fetch below and [State and idempotency](#state-and-idempotency)).
    - If none match, it moves on to the next PR without checking out anything.
+   - It then fetches the PR's review-thread state through the GraphQL `reviewThreads` query: the thread id, `isResolved`, and for each comment its node id, `databaseId` and `isMinimized`. It merges this into the comments fetched by `scripts/pr-comments.py fetch --pr <N>`, matching by `databaseId`. The resolved-thread and minimised-comment skip applies to the merged data, so a resolved thread is skipped whoever resolved it. If the thread-state fetch fails, the command logs a warning and skips that PR for the run, then moves on to the next PR. No checkout is done, because the fetch precedes the checkout.
    - Otherwise, it fetches and checks out the PR's head branch (using the shared rebase/reset behavior — see [Shared behavior](index.md#shared-behavior)), then for each matching comment:
      - It resolves the cited knowledge file's content by running `git show <commit>:<path>` inside `focused_review.vibe_types_repo`. If the commit is not available locally, it fetches the commit and retries once. If that still fails, it fetches `origin/main` and tries `git show origin/main:<path>` instead. If all three attempts fail, it logs a warning and skips this comment.
-     - It builds a prompt from the `focused-review.md` template, the comment's file/line/URL/body/diff-hunk, and the resolved knowledge-file content.
-     - It runs the configured backend against the checked-out working directory. Per the template's own instructions, the backend reads the flagged file in full. It writes a refactor description sized for a PR comment. It then posts it itself as a reply via `gh api .../pulls/<N>/comments/<ID>/replies`, appending the `[focused-review-bot]` marker. The backend must not edit code, commit, or push for this command.
+     - It builds a prompt from the `focused-review.md` template, the comment's file/line/URL/body/diff-hunk, and the resolved knowledge-file content. The prompt also carries the thread node id and the comment node id from the thread-state fetch, so the backend can act on them.
+     - It runs the configured backend against the checked-out working directory. Per the template's own instructions, the backend reads the flagged file in full. It then produces one of two outcomes:
+       - Real finding: it writes a refactor description sized for a PR comment and posts it itself as a reply via `gh api .../pulls/<N>/comments/<ID>/replies`, appending the `[focused-review-bot]` marker.
+       - False positive (whatever the cause): it first posts a short reply stating the finding is a false positive and why, ending with the `[focused-review-bot]` marker. It then resolves the thread (GraphQL `resolveReviewThread`) and minimises the root comment (`minimizeComment`, classifier `RESOLVED`).
+
+       The backend must not edit code, commit, or push for this command.
      - If the backend invocation raises, the command logs the error and moves to the next matching comment.
    - The command catches and logs any other exception while processing the PR. It then moves to the next PR regardless.
    - It always restores the working tree to the SHA recorded in step 6 before moving to the next PR.
@@ -53,7 +58,10 @@ Fields this runner does **not** read: `vibe_heal.authors`, `vibe_heal.enabled`, 
 
 `focused-review` does not persist state between runs. Like `address-comments`, it has no "last processed PR/comment" file. The command does not support `harness state reset focused-review`.
 
-Instead, it avoids reprocessing with a live signal. It reads that signal from GitHub on each run. It skips a matching comment if any existing reply on its thread already contains the literal `[focused-review-bot]` marker.
+Instead, it avoids reprocessing with two live signals. It reads both from GitHub on each run:
+
+1. Refactor-description path: it skips a matching comment if any existing reply on its thread already contains the literal `[focused-review-bot]` marker.
+2. False-positive path: it skips a matching comment whose review thread is resolved, or whose root comment is minimised. The false-positive reply also carries the marker, so path 1 covers it too; the thread and comment state remains the signal if that reply failed to post.
 
 This check is deliberately not author-based. The original SonarQube comment, a focused-review reply, and a later `address-comments` "addressed in ..." reply can all be posted under the same `gh` identity. So a check on the last reply author cannot distinguish them.
 
@@ -63,4 +71,16 @@ This check is deliberately not author-based. The original SonarQube comment, a f
 - The recognized knowledge-source repo slug (`jpablo/vibe-types`) is currently hardcoded, not configurable.
 - Draft PRs are listed like any other PR. There's no draft-specific behavior and no config flag.
 - If a backend exception occurs for one comment, the command logs it and skips only that comment. It does not stop the rest of the PR's matching comments or the rest of the batch.
+- Resolve and minimise are best effort. If either fails, the command logs it and ignores it. It does not stop the remaining comments or PRs.
+- The real `resolveReviewThread` and `minimizeComment` calls were checked against GitHub with the harness account (`alexei-oscilar`): both succeeded on a real inline comment. That check ran the two mutations directly; it did not exercise the backend's judgement end to end.
 - This command is subject to the shared locking, `gh` account, and working-directory-mutation caveats in [Shared behavior](index.md#shared-behavior).
+
+## Risks
+
+Enabling `focused_review.enabled` also enables the resolve (`resolveReviewThread`) and minimise (`minimizeComment`, classifier `RESOLVED`) behaviour for false-positive comments, with a preceding marked false-positive reply. The harness never deletes a comment.
+
+- R1: enabling `focused_review.enabled` also enables resolve and minimise. There is no separate opt-in or opt-out, and no config field for it.
+- R2: the root comment is hidden even when humans have replied in the thread, so a human conversation may be hidden.
+- R3: the comment body, the diff and the knowledge file are untrusted input. A crafted one could persuade the backend to judge a finding a false positive and hide a comment. This is accepted because the scope is limited to target comments (SonarQube inline comments citing a vibe-types knowledge file) and the action is reversible: unresolve the thread and unminimise the comment in the GitHub UI. Nothing is deleted.
+- R4: if a hidden comment is recreated, the harness hides it again each time.
+- V1: if the harness token lacks the permission to resolve or minimise, the feature has no effect. The two mutations were run directly with the `alexei-oscilar` token on a real PR comment and both succeeded, so the permission is available. The backend's end-to-end behaviour (judging a finding and issuing the mutations itself) has not yet been observed. The result is recorded in the PR description of the change that introduced this behaviour.
