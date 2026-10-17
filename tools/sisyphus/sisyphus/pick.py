@@ -16,9 +16,7 @@ Imports only Package A modules (never ``harness`` or ``spec_prism_flow``).
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -31,6 +29,7 @@ from sisyphus.resume import iter_records
 from sisyphus.runrecord import record_path
 from sisyphus.stages import CI_FIX_STAGE, MERGE_STAGE, OPEN_PR_STAGE
 from sisyphus.stoprecord import is_abandoned
+from sisyphus.subproc import CommandResult, run_command
 
 LINEAR_API_URL = "https://api.linear.app/graphql"
 GITHUB_OPEN_STATE = "OPEN"
@@ -218,11 +217,7 @@ def find_awaiting_review(
 # --------------------------------------------------------------- real clients
 
 
-@dataclass(frozen=True)
-class ExecResult:
-    returncode: int
-    stdout: str = ""
-    stderr: str = ""
+ExecResult = CommandResult
 
 
 Exec = Callable[[Sequence[str], Path | None, Mapping[str, str] | None], ExecResult]
@@ -230,12 +225,7 @@ Exec = Callable[[Sequence[str], Path | None, Mapping[str, str] | None], ExecResu
 
 def default_exec(argv: Sequence[str], cwd: Path | None, env: Mapping[str, str] | None) -> ExecResult:
     """Run ``argv`` with captured text output. ``env`` entries are added to the inherited environment."""
-    full = {**os.environ, **env} if env else None
-    try:
-        proc = subprocess.run(list(argv), cwd=cwd, env=full, capture_output=True, text=True, check=False)  # noqa: S603
-    except OSError as exc:
-        return ExecResult(127, "", str(exc))
-    return ExecResult(proc.returncode, proc.stdout, proc.stderr)
+    return run_command(argv, cwd, env)
 
 
 class GhCli:

@@ -16,7 +16,6 @@ import hashlib
 import json
 import re
 import shlex
-import subprocess
 import time
 import tomllib
 from collections.abc import Callable, Sequence
@@ -72,6 +71,7 @@ from sisyphus.stoprecord import (
     read_stop_record,
     write_stop_record,
 )
+from sisyphus.subproc import CommandResult, run_command
 
 PROMPT_FILE = "sisyphus/orchestration-prompt.md"
 CHEAT_SHEET = Path("docs") / "lifecycle-cheat-sheet.md"
@@ -97,25 +97,12 @@ class GitHubError(Exception):
     """Raised by a :class:`PullRequestClient` for an unrecoverable failure (auth, network). Maps to C8."""
 
 
-@dataclass(frozen=True)
-class CommandResult:
-    """Outcome of one subprocess call."""
-
-    returncode: int
-    stdout: str = ""
-    stderr: str = ""
-
-
 SubprocessRunner = Callable[[Sequence[str], Path | None], CommandResult]
 
 
 def default_subprocess_runner(argv: Sequence[str], cwd: Path | None) -> CommandResult:
-    """Real :class:`SubprocessRunner` for the CLI: ``subprocess.run`` with captured text output."""
-    try:
-        proc = subprocess.run(list(argv), cwd=cwd, capture_output=True, text=True, check=False)  # noqa: S603
-    except OSError as exc:
-        return CommandResult(127, "", str(exc))
-    return CommandResult(proc.returncode, proc.stdout, proc.stderr)
+    """Real :class:`SubprocessRunner` for the CLI: :func:`run_command` without an env."""
+    return run_command(argv, cwd)
 
 
 @dataclass(frozen=True)
