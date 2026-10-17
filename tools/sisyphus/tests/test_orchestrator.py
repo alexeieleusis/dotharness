@@ -276,7 +276,10 @@ class World:
         )
 
     def digest_text(self) -> str:
-        return (self.tmp / "digest-2026-01-02.md").read_text()
+        # a digest is never overwritten: later runs of the same day land in -2, -3...; read the latest
+        first = self.tmp / "digest-2026-01-02.md"
+        later = sorted(self.tmp.glob("digest-2026-01-02-*.md"), key=lambda p: int(p.stem.rsplit("-", 1)[1]))
+        return (later[-1] if later else first).read_text()
 
     def counts(self) -> tuple[int, int, int]:
         return len(self.agent_prompts), len(self.shell_calls), self.find_calls
