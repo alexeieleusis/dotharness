@@ -37,6 +37,25 @@ def test_rejects_force_flags(flag: str) -> None:
     assert "force" in d.reason
 
 
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "--force-if-includes",
+        "--mirror",
+        "--prune",
+        "--del",
+        "--dele",
+        "--force-with",
+        "--force-if",
+        "--mir",
+        "--pru",
+    ],
+)
+def test_rejects_full_and_abbreviated_long_flags(flag: str) -> None:
+    # git accepts unambiguous option prefixes; the allowlist must reject them all.
+    assert not guard(PushRequest("origin", "sisyphus/eng-1", (flag,))).allowed
+
+
 def test_rejects_plus_refspec() -> None:
     assert not guard(PushRequest("origin", "+sisyphus/eng-1")).allowed
 
