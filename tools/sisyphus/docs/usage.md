@@ -30,7 +30,8 @@ sisyphus resume <work-item-ref> --config <file> [--base <branch>]
 5. Runs each item through the orchestrator (intake, plan, build, push, open PR, optional ci-fix and merge) and
    stops at the first checkpoint (C1..C8). Before starting each further item it checks `max_run_minutes`; once
    exceeded it starts nothing else and notes it under "Limits hit" (exit 0).
-6. Writes one merged digest to `[digest].path_template`.
+6. Writes one merged digest to `[digest].path_template`. An existing file is never overwritten: a second run
+   on the same day writes `digest-<date>-2.md`, then `-3`, and so on.
 
 Nothing to do prints nothing and exits 0. When something ran, one line per item and the digest path go to
 stdout.

@@ -102,6 +102,22 @@ def test_write_digest_expands_template(tmp_path: Path) -> None:
     assert len(list((tmp_path / "out").iterdir())) == 1
 
 
+def test_second_write_same_day_keeps_first_digest(tmp_path: Path) -> None:
+    cfg = _config(str(tmp_path / "digest-<date>.md"))
+    today = datetime(2026, 10, 16, tzinfo=UTC)
+    first = write_digest([], cfg, DigestReport(deviations=("first run",)), today=today)
+    first_text = first.read_text()
+    second = write_digest([], cfg, DigestReport(deviations=("second run",)), today=today)
+    third = write_digest([], cfg, today=today)
+    assert first == tmp_path / "digest-2026-10-16.md"
+    assert second == tmp_path / "digest-2026-10-16-2.md"
+    assert third == tmp_path / "digest-2026-10-16-3.md"
+    assert first.read_text() == first_text
+    assert "first run" in first_text
+    assert "second run" in second.read_text()
+    assert sorted(p.name for p in tmp_path.iterdir()) == [first.name, second.name, third.name]
+
+
 def test_missing_template_raises() -> None:
     with pytest.raises(DigestWriteError):
         write_digest([], _config(None))

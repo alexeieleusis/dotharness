@@ -12,6 +12,8 @@ Imports only Package A modules (never ``harness`` or ``spec_prism_flow``).
 # ruff: noqa: TRY003
 from __future__ import annotations
 
+import os
+import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -270,18 +272,41 @@ def resolve_digest_path(config: SisyphusConfig, today: datetime | None = None) -
     return Path(path).expanduser()
 
 
+def _publish_unique(text: str, path: Path) -> Path:
+    """Write ``text`` to ``path``, or to ``<stem>-2``, ``-3``... if taken; never overwrite, never leave a partial file."""
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        n = 1
+        target = path
+        while True:
+            try:
+                os.link(tmp, target)  # atomic, and fails if the target exists
+            except FileExistsError:
+                n += 1
+                target = path.with_name(f"{path.stem}-{n}{path.suffix}")
+            else:
+                return target
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def write_digest(
     records: Sequence[RunRecord],
     config: SisyphusConfig,
     report: DigestReport | None = None,
     today: datetime | None = None,
 ) -> Path:
-    """Write exactly one digest file and return its path; raise :class:`DigestWriteError` on failure."""
+    """Write one new digest file and return its path; raise :class:`DigestWriteError` on failure.
+
+    An existing digest is never overwritten: a later run on the same day gets ``-2``, ``-3``... appended to the stem.
+    """
     path = resolve_digest_path(config, today)
     text = render_digest(records, report)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        return _publish_unique(text, path)
     except OSError as exc:
         raise DigestWriteError(f"cannot write digest to {path}: {exc}") from exc
-    return path
