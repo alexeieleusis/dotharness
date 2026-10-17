@@ -458,6 +458,40 @@ def _write_digest(config: SisyphusConfig, services: Services, state: _RunState) 
     return None
 
 
+def _run_locked(
+    config: SisyphusConfig,
+    services: Services,
+    state: _RunState,
+    phase: Callable[[], None],
+    prepare: Callable[[], None] | None = None,
+) -> None:
+    """Shared skeleton of ``run`` and ``resume``: one lock, ``prepare`` (errors propagate), ``phase``, digest, exit code.
+
+    A lock held elsewhere exits 0 quietly. An error in ``phase`` is noted, the digest is still attempted, then the
+    error maps to exit 1; a failed digest write alone also exits 1.
+    """
+    assert config.project.repo_dir  # noqa: S101
+    error: Exception | None = None
+    digest_error: DigestWriteError | None = None
+    try:
+        with clone_lock(config.project.repo_dir, services.lock_dir):
+            if prepare is not None:
+                prepare()
+            try:
+                phase()
+            except Exception as exc:
+                error = exc
+                if not state.notes:
+                    state.notes.append(f"run failed: {exc}")
+            digest_error = _write_digest(config, services, state) if state.has_content else None
+    except LockHeld:
+        return
+    if error is not None:
+        raise _fail(str(error)) from error
+    if digest_error is not None:
+        raise click.exceptions.Exit(1)
+
+
 @main.command("run")
 @config_option
 @click.option(
@@ -471,25 +505,13 @@ def run_command(factory: ServicesFactory | None, config_path: str, base: str | N
     assert config.project.repo_dir  # noqa: S101
     services = _services(factory, config)
     state = _RunState()
-    error: Exception | None = None
-    digest_error: DigestWriteError | None = None
-    try:
-        # One non-blocking lock for the whole invocation: awaiting-review check, pick, every item, digest.
-        with clone_lock(config.project.repo_dir, services.lock_dir):
-            try:
-                picked = _pick_phase(config, services, state)
-                _run_phase(picked, config, services, base, state, config_path)
-            except Exception as exc:
-                error = exc
-                if not state.notes:
-                    state.notes.append(f"run failed: {exc}")
-            digest_error = _write_digest(config, services, state) if state.has_content else None
-    except LockHeld:
-        return
-    if error is not None:
-        raise _fail(str(error)) from error
-    if digest_error is not None:
-        raise click.exceptions.Exit(1)
+
+    def phase() -> None:
+        picked = _pick_phase(config, services, state)
+        _run_phase(picked, config, services, base, state, config_path)
+
+    # One non-blocking lock for the whole invocation: awaiting-review check, pick, every item, digest.
+    _run_locked(config, services, state, phase)
 
 
 @main.command("intake")
@@ -579,34 +601,25 @@ def resume_item_command(
     assert config.project.repo_dir and config.project.workspace_dir  # noqa: S101
     services = _services(factory, config)
     state = _RunState()
-    error: Exception | None = None
-    digest_error: DigestWriteError | None = None
-    try:
-        with clone_lock(config.project.repo_dir, services.lock_dir):
-            workspace = Path(config.project.workspace_dir).expanduser()
-            if not record_path(workspace, work_item_ref).exists():
-                raise _fail(f"no run record for {work_item_ref}; nothing to resume")
-            rec = RunRecord.open(workspace, work_item_ref)
-            _check_resumable(rec, again)
-            if reset_retries:
-                changed = reset_stage_retries(rec, services.now())
-                click.echo(
-                    f"{work_item_ref}: reset retries at stage {rec.stage or 'none'}: "
-                    + (", ".join(f"{k} {v}->0" for k, v in changed.items()) or "nothing to reset")
-                )
-            try:
-                _run_phase([Candidate(work_item_ref)], config, services, base, state, config_path)
-            except Exception as exc:
-                error = exc
-                if not state.notes:
-                    state.notes.append(f"run failed: {exc}")
-            digest_error = _write_digest(config, services, state) if state.has_content else None
-    except LockHeld:
-        return
-    if error is not None:
-        raise _fail(str(error)) from error
-    if digest_error is not None:
-        raise click.exceptions.Exit(1)
+
+    def prepare() -> None:
+        assert config.project.workspace_dir  # noqa: S101
+        workspace = Path(config.project.workspace_dir).expanduser()
+        if not record_path(workspace, work_item_ref).exists():
+            raise _fail(f"no run record for {work_item_ref}; nothing to resume")
+        rec = RunRecord.open(workspace, work_item_ref)
+        _check_resumable(rec, again)
+        if reset_retries:
+            changed = reset_stage_retries(rec, services.now())
+            click.echo(
+                f"{work_item_ref}: reset retries at stage {rec.stage or 'none'}: "
+                + (", ".join(f"{k} {v}->0" for k, v in changed.items()) or "nothing to reset")
+            )
+
+    def phase() -> None:
+        _run_phase([Candidate(work_item_ref)], config, services, base, state, config_path)
+
+    _run_locked(config, services, state, phase, prepare)
 
 
 @main.command("abandon")
