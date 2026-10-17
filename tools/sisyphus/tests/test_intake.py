@@ -167,6 +167,16 @@ def test_missing_brief_after_runner_raises(config: SisyphusConfig) -> None:
     assert rec.stage_status == "in_progress"
 
 
+def test_stale_brief_not_accepted_when_runner_writes_nothing(config: SisyphusConfig) -> None:
+    first = run_intake("ENG-7", config, FakeRunner(BRIEF_OPEN))
+    # the prompt digest no longer matches (as after editing the prompt): the sidecar is stale
+    Path(str(first.brief_path) + intake.SIDECAR_SUFFIX).write_text("{}")
+    with pytest.raises(IntakeError, match="did not write"):
+        run_intake("ENG-7", config, lambda _prompt: None)
+    # no fresh sidecar vouches for the stale brief
+    assert Path(str(first.brief_path) + intake.SIDECAR_SUFFIX).read_text() == "{}"
+
+
 def test_runner_modifying_tracked_file_fails_stage(config: SisyphusConfig, repo: Path) -> None:
     runner = FakeRunner(side_effect=lambda: (repo / "tracked.txt").write_text("two\n"))
     with pytest.raises(BoundaryViolation):

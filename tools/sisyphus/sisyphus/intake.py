@@ -178,6 +178,15 @@ def _sidecar(brief: Path) -> Path:
     return brief.with_name(brief.name + SIDECAR_SUFFIX)
 
 
+def _brief_stamp(brief: Path) -> tuple[int, int] | None:
+    """``(mtime_ns, size)`` of the brief, or ``None`` when absent; detects a stale brief the runner left alone."""
+    try:
+        st = brief.stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size
+
+
 def _unchanged(brief: Path, item: str, digest: str) -> bool:
     if not brief.is_file():
         return False
@@ -221,9 +230,11 @@ def run_intake(
     with rec.stage_scope(INTAKE_STAGE):
         if not skipped:
             brief.parent.mkdir(parents=True, exist_ok=True)
+            before = _brief_stamp(brief)
             with repo_unchanged(repo, ignore=(brief, _sidecar(brief))):
                 runner(prompt)
-            if not brief.is_file():
+            after = _brief_stamp(brief)
+            if after is None or after == before:
                 raise IntakeError(f"the agent did not write the brief at {brief}")
             _sidecar(brief).write_text(json.dumps({"item": item, "prompt_sha256": digest}), encoding="utf-8")
     decisions = parse_open_decisions(brief.read_text(encoding="utf-8"))
