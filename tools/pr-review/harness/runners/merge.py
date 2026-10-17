@@ -15,11 +15,11 @@ Public entry point (takes the shared working-directory lock itself, like the sib
 * A skip is logged as ``PR #N: skipped: <reason>`` and is not an error. A per-PR exception (or a
   failed merge call) is collected and raised as :class:`MergeError` after the loop.
 
-Gate record (PROVISIONAL, open question Q-4): the evidence that ``build.commands`` passed on the
-head SHA is expected to be written by a different component (Package A). Its real format is not
-decided. This module reads a stand-in: a JSON file ``{"head_sha": "<sha>"}`` at
-``<XDG_DATA>/state/<repo_slug>/build_gate_<pr>.json`` (see :func:`gate_record_path`). A missing,
-unreadable or SHA-mismatched record blocks the merge.
+Gate record: the evidence that ``build.commands`` passed on the head SHA is written by Package A
+(``tools/sisyphus/sisyphus/gaterecord.py``). The format is settled: a JSON file
+``{"head_sha": "<sha>"}`` (other keys are ignored) at ``<XDG_DATA>/state/<repo_slug>/build_gate_<pr>.json``
+(see :func:`gate_record_path`). The reader here and the writer in gaterecord.py must stay in sync. A
+missing, unreadable or SHA-mismatched record blocks the merge.
 """
 
 import json
@@ -123,7 +123,7 @@ def _read_one_pr(repo: str, number: int, env: dict) -> dict:
 
 
 def gate_record_path(repo_slug: str, pr_number: int) -> Path:
-    """Location of the PROVISIONAL (Q-4) gate record. Read-only: creates no directory."""
+    """Location of the gate record written by Package A (sisyphus gaterecord.py). Read-only: creates no directory."""
     return state.XDG_DATA / "state" / state._validate_repo_slug(repo_slug) / f"build_gate_{pr_number}.json"
 
 

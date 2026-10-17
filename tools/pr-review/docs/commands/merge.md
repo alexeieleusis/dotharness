@@ -65,11 +65,11 @@ max_changed_lines = 500
 
 Unknown keys are rejected. See [configuration](../configuration.md).
 
-## Gate record (provisional)
+## Gate record
 
-The evidence that `build.commands` passed on the head SHA is meant to be written by another component (open question Q-4). Its real format and location are not decided. Until then the runner reads a stand-in, which may change:
+The evidence that `build.commands` passed on the head SHA is written by Package A (`tools/sisyphus`, `gaterecord.py`). The format is settled, and the reader here and the writer there must stay in sync:
 
 - File: `~/.local/share/dotharness/state/<repo-slug>/build_gate_<PR number>.json`
-- Content: `{"head_sha": "<sha>"}`
+- Content: `{"head_sha": "<sha>"}` (other keys are ignored)
 
 A missing, unreadable or SHA-mismatched record blocks the merge.
