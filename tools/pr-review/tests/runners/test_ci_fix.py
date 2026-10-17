@@ -52,6 +52,7 @@ def _mocks(
     repro_rc=1,
     after_rc=0,
     push_rc=0,
+    push_stderr=b"! [rejected] (non-fast-forward)",
     pr_state=None,
     backend_raises=None,
     status=b"",
@@ -78,7 +79,7 @@ def _mocks(
             return _proc(0, status)
         if cmd[:2] == ["git", "push"]:
             pushes.append(cmd)
-            return _proc(push_rc, b"", b"! [rejected] (non-fast-forward)" if push_rc else b"")
+            return _proc(push_rc, b"", push_stderr if push_rc else b"")
         return _proc(0)
 
     def backend_run(*args, **kwargs):
@@ -271,6 +272,19 @@ def test_push_rejected_is_rebase_needed_digest_still_an_attempt(tmp_path, caplog
     assert len(m.pushes) == 1
     assert ci_fix.get_attempts(SLUG, 1) == 1  # counted when the agent ran
     assert any("rebase-needed" in d for d in _digests(caplog))
+
+
+def test_push_failure_other_than_rejection_raises_and_still_restores(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, push_rc=128, push_stderr=b"fatal: Authentication failed") as m,
+        caplog.at_level(logging.INFO),
+        pytest.raises(CiFixError, match="push to feat failed"),
+    ):
+        ci_fix.run(_cfg(tmp_path))
+    assert len(m.pushes) == 1
+    assert ci_fix.get_attempts(SLUG, 1) == 1  # recorded before the agent ran, so it still counts
+    assert not any("rebase-needed" in d for d in _digests(caplog))
+    m.restore.assert_called_once()
 
 
 def test_conflicting_pr_is_rebase_needed_digest(tmp_path, caplog):
