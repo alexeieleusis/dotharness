@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -191,10 +192,40 @@ def test_reparse_only_runs_when_brief_missing(config: SisyphusConfig) -> None:
         run_intake("ENG-4d", config, lambda _prompt: None, reparse_only=True)
 
 
-def test_rerun_when_item_differs_or_brief_missing(config: SisyphusConfig) -> None:
+def test_rerun_when_brief_missing(config: SisyphusConfig) -> None:
     run_intake("ENG-5", config, FakeRunner())
     brief = resolve_brief_path(config, "ENG-5")
     brief.unlink()
+    runner = FakeRunner()
+    assert not run_intake("ENG-5", config, runner).skipped
+    assert len(runner.prompts) == 1
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda real: {**real, "item": "OTHER"},
+        lambda real: {**real, "prompt_sha256": "bad"},
+        lambda real: "not json",
+        lambda real: "[]",
+    ],
+    ids=["item-differs", "digest-differs", "corrupt-json", "not-a-dict"],
+)
+def test_rerun_when_sidecar_does_not_vouch(config: SisyphusConfig, mutate) -> None:
+    first = run_intake("ENG-5", config, FakeRunner())
+    sidecar = Path(str(first.brief_path) + intake.SIDECAR_SUFFIX)
+    real = json.loads(sidecar.read_text())
+    assert real["item"] == "ENG-5"
+    changed = mutate(real)
+    sidecar.write_text(changed if isinstance(changed, str) else json.dumps(changed))
+    runner = FakeRunner()
+    assert not run_intake("ENG-5", config, runner).skipped
+    assert len(runner.prompts) == 1
+
+
+def test_rerun_when_sidecar_missing(config: SisyphusConfig) -> None:
+    first = run_intake("ENG-5", config, FakeRunner())
+    Path(str(first.brief_path) + intake.SIDECAR_SUFFIX).unlink()
     runner = FakeRunner()
     assert not run_intake("ENG-5", config, runner).skipped
     assert len(runner.prompts) == 1
