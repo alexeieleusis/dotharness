@@ -36,9 +36,8 @@ Nothing to do prints nothing and exits 0. When something ran, one line per item 
 stdout.
 
 `--base <branch>` is the PR base branch. Precedence: `--base`, then `[project].base_branch` in the config,
-then `main`. Self-hosting on a stacked branch (for example building Sisyphus on branch `sisyphus` stacked on
-`95_pr-review_auto-approve`) needs `--base` or the config key, since `main` would be wrong there. Until PR #96
-merges, use `95_pr-review_auto-approve`, then `main`.
+then `main`. `main` is the correct base for normal use. Only if you work on your own stacked branch (a branch
+whose PR targets another unmerged branch) do you need `--base` or the config key to point at that parent branch.
 
 The CLI takes the clone lock once, at the start of `run` and `intake`, and releases it when the invocation ends
 (including on error). It calls the orchestrator with `lock_held=True` so the orchestrator does not lock again

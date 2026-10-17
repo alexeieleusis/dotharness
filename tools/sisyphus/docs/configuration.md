@@ -31,8 +31,8 @@ default is listed.
 | `base_branch` | string | none (the CLI falls back to `main`) |
 
 `base_branch` is the PR base branch. Precedence: `sisyphus run --base <branch>`, then `[project].base_branch`,
-then `main`. Self-hosting on a stacked branch (for example building Sisyphus on branch `sisyphus` stacked on
-`95_pr-review_auto-approve`) needs `--base` or this key, because `main` would be the wrong base there.
+then `main`. `main` is the correct base for normal use. Only if you work on your own stacked branch (a branch
+whose PR targets another unmerged branch) do you need `--base` or this key to point at that parent branch.
 
 ### `[source.work_item]`
 
