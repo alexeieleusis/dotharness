@@ -9,46 +9,53 @@ This tool lives in the [alexeieleusis/dotharness](https://github.com/alexeieleus
 
 - **Documentation**: <https://alexeieleusis.github.io/dotharness/sisyphus/>
 
-## Getting started
+## Quickstart
 
-### 1. Set Up Your Development Environment
-
-Install the environment and the pre-commit hooks with
+Requires Python 3.11+, [uv](https://docs.astral.sh/uv/), `git`, `gh` and an agent CLI (`claude` or `opencode`).
 
 ```bash
 make install
 ```
 
-This will also generate your `uv.lock` file
+Create a `.sisyphus.toml` for the dedicated clone Sisyphus works in:
 
-### 2. Run the pre-commit hooks
+```toml
+[project]
+repo_dir = "/path/to/dedicated/clone"
+workspace_dir = "/path/to/workspace"
+brief_path_template = "/path/to/workspace/{item}.brief.md"
 
-Initially, the CI/CD pipeline might be failing due to formatting issues. To resolve those run:
+[source.work_item]
+kind = "github"
+assignee = "your-login"
 
-```bash
-uv run pre-commit run -a
+[source.ci]
+kind = "github"
+
+[agent]
+backend = "claude"
+
+[limits]
+max_tickets_per_run = 1
 ```
 
-### 3. Commit the changes
-
-Lastly, commit the changes made by the two steps above to your repository.
+Then run a single pass and inspect or continue stopped items:
 
 ```bash
-git add .
-git commit -m 'Fix formatting issues'
-git push origin main
+uv run sisyphus run --config .sisyphus.toml --base main
+uv run sisyphus status --config .sisyphus.toml
+uv run sisyphus resume <work-item-ref> --config .sisyphus.toml
+uv run sisyphus abandon <work-item-ref> --config .sisyphus.toml
 ```
 
-You are now ready to start development on your project!
-The CI/CD pipeline will be triggered when you open a pull request, merge to main, or when you create a new release.
+Sisyphus never pushes to the base branch: each item gets its own `sisyphus/<slug>-<8 hex>` branch and a PR.
 
-To finalize the set-up for publishing to PyPI, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/publishing/#set-up-for-pypi).
-For activating the automatic documentation with MkDocs/Zensical, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/docs_tool/#deploying-to-github-pages).
-To enable the code coverage reports, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/codecov/).
+> **Caveat:** the real `claude`/`opencode`, `gh`, Linear and `git push` paths (including the `harness`
+> ci-fix and merge runners) are covered by tests with fakes only; they have not been exercised against the
+> real services.
 
-## Releasing a new version
-
-
+See the [documentation](https://alexeieleusis.github.io/dotharness/sisyphus/) for usage, configuration,
+checkpoints and safety rails.
 
 ---
 
