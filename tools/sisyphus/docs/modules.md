@@ -1,1 +1,1 @@
-::: sisyphus.foo
+::: sisyphus.config
