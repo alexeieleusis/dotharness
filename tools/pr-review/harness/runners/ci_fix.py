@@ -336,26 +336,38 @@ def find_step_command(wdir: str, step_name: str) -> _Step | None:
     A step whose command uses a ``${{ }}`` expression cannot be run locally and is not returned.
     """
     for path in sorted((Path(wdir) / ".github" / "workflows").glob("*.y*ml")):
-        lines = path.read_text(encoding="utf-8").splitlines()
-        jobs_at = next((i for i, line in enumerate(lines) if line.rstrip() == "jobs:"), None)
-        if jobs_at is None:
+        found = _step_in_workflow(path.read_text(encoding="utf-8").splitlines(), step_name)
+        if found:
+            return found
+    return None
+
+
+def _step_in_workflow(lines: list[str], step_name: str) -> _Step | None:
+    jobs_at = next((i for i, line in enumerate(lines) if line.rstrip() == "jobs:"), None)
+    if jobs_at is None:
+        return None
+    file_wd = _first_wd(lines[:jobs_at])
+    body = lines[jobs_at + 1 :]
+    starts = [i for i, line in enumerate(body) if _JOB_KEY_RE.match(line)] + [len(body)]
+    for a, b in pairwise(starts):
+        found = _step_in_job(body[a:b], step_name, file_wd)
+        if found:
+            return found
+    return None
+
+
+def _step_in_job(job: list[str], step_name: str, file_wd: str) -> _Step | None:
+    steps_at = next((i for i, line in enumerate(job) if line.strip() == "steps:"), None)
+    if steps_at is None:
+        return None
+    job_wd = _first_wd(job[:steps_at]) or file_wd
+    for lines_of_step, key_indent in _split_steps(job[steps_at + 1 :]):
+        name = _step_field(lines_of_step, "name", key_indent)
+        command = _step_field(lines_of_step, "run", key_indent)
+        if name != step_name or not command or "${{" in command:
             continue
-        file_wd = _first_wd(lines[:jobs_at])
-        body = lines[jobs_at + 1 :]
-        starts = [i for i, line in enumerate(body) if _JOB_KEY_RE.match(line)] + [len(body)]
-        for a, b in pairwise(starts):
-            job = body[a:b]
-            steps_at = next((i for i, line in enumerate(job) if line.strip() == "steps:"), None)
-            if steps_at is None:
-                continue
-            job_wd = _first_wd(job[:steps_at]) or file_wd
-            for lines_of_step, key_indent in _split_steps(job[steps_at + 1 :]):
-                name = _step_field(lines_of_step, "name", key_indent)
-                command = _step_field(lines_of_step, "run", key_indent)
-                if name != step_name or not command or "${{" in command:
-                    continue
-                step_wd = _step_field(lines_of_step, "working-directory", key_indent) or job_wd
-                return _Step(step_name, command, step_wd)
+        step_wd = _step_field(lines_of_step, "working-directory", key_indent) or job_wd
+        return _Step(step_name, command, step_wd)
     return None
 
 
