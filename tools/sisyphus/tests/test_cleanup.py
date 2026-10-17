@@ -1,7 +1,7 @@
 """Branch cleanup against real temporary git repositories with a local bare ``origin``.
 
 No network, no harness, no dotharness repo. Every git command is logged so the tests can assert that
-``-D`` is never used.
+``-D`` is used only on the proof 3 path.
 """
 
 from __future__ import annotations
@@ -107,7 +107,7 @@ class Repo:
         return _run(self.clone, "rev-parse", "--abbrev-ref", "HEAD")
 
     def assert_no_capital_d(self) -> None:
-        assert not any("-D" in args or "--force" in args for args in self.log)
+        assert not any("-D" in args or "--force" in args or "-f" in args for args in self.log)
 
 
 @pytest.fixture
@@ -315,31 +315,54 @@ def test_proof_three_with_a_mismatching_head_keeps_the_branch(repo: Repo) -> Non
     assert "PR #5 is MERGED but its head 000000000000 differs from the local head" in out.message
 
 
-def test_squash_merge_with_remote_branch_gone_is_proven_but_kept_because_d_refuses(repo: Repo) -> None:
-    """The open question: a squash-merged head is in neither HEAD nor an upstream, so plain -d refuses."""
+def test_squash_merge_is_deleted_with_capital_d_only_after_the_merged_head_check(repo: Repo) -> None:
     repo.make_branch()
     repo.merge_on_origin(squash=True)
-    out = repo.cleanup(PrInfo(9, "MERGED", repo.head()), pr_ref="9")
-    assert out.status == KEPT
-    assert "proof (3) holds (PR #9 is MERGED with head " in out.message
-    assert "needs git branch -D" in out.message
-    assert BRANCH in repo.branches()  # not deleted: -D is not used
+    sha = repo.head()
+    before = set(_run(repo.clone, "for-each-ref", "--format=%(refname)").splitlines())
+    out = repo.cleanup(PrInfo(9, "MERGED", sha), pr_ref="9")
+    assert out.status == DELETED
+    assert BRANCH not in repo.branches()
     assert repo.current() == "main"  # the clone is on base, clean
     assert _run(repo.clone, "status", "--porcelain") == ""
     assert repo.pr_calls == ["9"]
-    assert ["branch", "-d", BRANCH] in repo.log
-    repo.assert_no_capital_d()
-    assert _run(repo.clone, "for-each-ref", "refs/sisyphus", "--format=%(refname)") == ""  # no recovery ref yet
+    # the Done line carries what is needed to recover the commit
+    assert f"proof 3: PR #9 is MERGED with head {sha}" in out.message
+    assert len(sha) == 40
+    assert "git fetch origin pull/9/head" in out.message
+    # no recovery or helper refs: the refs afterwards are the earlier ones minus the deleted branch
+    after = set(_run(repo.clone, "for-each-ref", "--format=%(refname)").splitlines())
+    assert after - before <= {"refs/remotes/origin/main"}
+    assert before - after == {f"refs/heads/{BRANCH}"}
+    assert _run(repo.clone, "for-each-ref", "refs/sisyphus", "--format=%(refname)") == ""
+    # -D only on this path, only after the lookup, never with --force
+    capital = [i for i, args in enumerate(repo.log) if "-D" in args]
+    assert [repo.log[i] for i in capital] == [["branch", "-D", BRANCH]]
+    assert capital[0] > repo.log.index(["checkout", "main"])
+    assert not any("--force" in a or "-f" in a for a in repo.log)
 
 
-def test_squash_merge_leaves_no_helper_refs_or_branches_behind(repo: Repo) -> None:
+@pytest.mark.parametrize(
+    "pr",
+    [
+        PrInfo(9, "OPEN", "x"),
+        PrInfo(9, "CLOSED", "x"),
+        PrInfo(9, "MERGED", "0" * 40),
+        GitHubError("gh pr view failed (exit 1): boom"),
+        None,
+    ],
+)
+def test_squash_without_a_full_proof_keeps_the_branch_and_issues_no_capital_d(repo: Repo, pr: object) -> None:
     repo.make_branch()
     repo.merge_on_origin(squash=True)
-    before = _run(repo.clone, "for-each-ref", "--format=%(refname)")
-    repo.cleanup(PrInfo(9, "MERGED", repo.head()))
-    after = _run(repo.clone, "for-each-ref", "--format=%(refname)")
-    assert set(after.splitlines()) - set(before.splitlines()) <= {"refs/remotes/origin/main"}
-    assert sorted(repo.branches()) == sorted(["main", BRANCH])
+    if isinstance(pr, PrInfo) and pr.head_sha == "x":
+        pr = PrInfo(pr.number, pr.state, repo.head())
+    out = repo.cleanup(pr, pr_ref="9")
+    assert out.status == KEPT
+    assert out.message.startswith(f"Branch kept: {ITEM} {BRANCH} no deletion proof held: ")
+    assert BRANCH in repo.branches()
+    assert not any("-D" in args for args in repo.log)
+    repo.assert_no_capital_d()
 
 
 def test_proofs_are_cheapest_first_and_gh_not_called_when_git_proves_it(repo: Repo) -> None:

@@ -116,11 +116,13 @@ open-pr stage) or else the branch. If none holds the note reads `no deletion pro
 A detached HEAD must itself be on the branch, `origin/<branch>` or `origin/<base>`; then switch to the base, `fetch`
 and `merge --ff-only origin/<base>`; then `branch -d`: after proof (1) first `--set-upstream-to=origin/<branch>`
 (plain `-d` would refuse an unmerged PR branch; the verified upstream is git's second check); after proof (2) the
-head is an ancestor of the checked-out base so `-d` accepts it as is. Proof (3) alone cannot satisfy `-d` (a
-squash-merged head is in neither HEAD nor an upstream; no clean way around this was found), so the branch is kept
-with `proof (3) holds (...) but deleting it needs git branch -D`; this is one marked function
-(`_delete_squash_merged`), an open decision. The Done line names the proof used.
-`-D` is never used (unlike pr-review's `git_restore`, which uses `-D` after saving a recovery ref).
+head is an ancestor of the checked-out base so `-d` accepts it as is. Proof (3) cannot satisfy `-d` (a
+squash-merged head is in neither HEAD nor an upstream), so there, and only there, `_delete_squash_merged` runs
+`git branch -D <branch>` after the clone is on a clean, fast-forwarded base. `-D` is never issued on proofs 1 or 2
+(a refusal of `-d` there still keeps the branch), and `--force` is never used. No recovery ref or helper ref is
+created; the reflog is the last-resort recovery (decided by the user). The Done line names the proof used; for
+proof 3 it carries the FULL 40-character head SHA, the PR number and `git fetch origin pull/<N>/head` (GitHub
+keeps the commit in the merged PR's history).
 A complete stage is always skipped on a rerun, except intake stopped at C1, which only re-parses the brief
 (`run_intake(reparse_only=True)`) so a human-edited brief is never redrafted. An answer file
 (`resume.answer_path`) is appended to the next agent prompt and then renamed `*.used`. Before the first stage a

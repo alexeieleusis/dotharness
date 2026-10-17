@@ -20,9 +20,10 @@ A detached HEAD (left by ``harness run ci-fix``) must itself be on the branch, `
 from ``origin/<base>`` (``--ff-only`` only) and ``git branch -d`` is run (never ``-D``/``--force``): after proof
 (1) the verified remote branch is first made the upstream (``--set-upstream-to``) because an unmerged PR branch
 would otherwise be refused; after proof (2) the head is an ancestor of the checked-out base, which ``-d``
-accepts as is. Proof (3) cannot satisfy ``-d`` (a squash-merged head is in neither HEAD nor an upstream; no
-clean way around that was found), see :func:`_delete_squash_merged`: it keeps the branch and says so. No remote
-branch, PR or other ref is touched.
+accepts as is. Proof (3) cannot satisfy ``-d`` (a squash-merged head is in neither HEAD nor an upstream), so
+:func:`_delete_squash_merged` runs ``git branch -D`` there and ONLY there (proofs 1 and 2 never use ``-D``;
+``--force`` is never used). No recovery ref is made: the reflog is the last resort, and the digest carries the
+full head SHA, the PR number and ``git fetch origin pull/<N>/head``. No remote branch, PR or other ref is touched.
 """
 
 from __future__ import annotations
@@ -122,7 +123,9 @@ def _prove_pr_merged(pr_lookup: PrLookup | None, ref: str, sha: str) -> tuple[st
         return f"{label} is {info.state or 'in an unknown state'}, not MERGED", ""
     if info.head_sha != sha:
         return f"{label} is MERGED but its head {info.head_sha[:12]} differs from the local head {sha[:12]}", ""
-    return None, f"{label} is MERGED with head {sha[:12]}"
+    number = info.number if info.number is not None else (ref if ref.isdigit() else None)
+    recover = f"; recover with: git fetch origin pull/{number}/head" if number is not None else ""
+    return None, f"{label} is MERGED with head {sha}{recover}"
 
 
 def _detached_head_unsafe(git: GitFn, branch: str, base: str, sha: str) -> str | None:
@@ -147,22 +150,17 @@ def _switch_to_base(git: GitFn, base: str, *, fetch: bool) -> str | None:
 
 
 def _delete_squash_merged(git: GitFn, item: str, branch: str, detail: str, base: str) -> CleanupOutcome:
-    """Proof (3) holds. Delete only if plain ``git branch -d`` agrees (it does not for a squash merge).
+    """Proof (3) holds (PR MERGED, ``headRefOid`` == local head) and the clone is on base and clean: ``-D``.
 
-    A squash-merged head is neither reachable from the checked-out base nor from any upstream, so ``-d``
-    refuses and this keeps the branch. This function is the single place for the open decision: to finish the
-    job, save ``refs/sisyphus/recovered/<branch>`` at the head (``update-ref``), verify it, and only then run
-    ``git branch -D <branch>``. That is deliberately NOT done here; see follow-ups/G-branch-cleanup.md.
+    A squash-merged head is neither reachable from the checked-out base nor from any upstream, so plain ``-d``
+    refuses; the proof is what makes ``-D`` safe. This is the ONLY place ``-D`` is issued. No recovery ref and no
+    helper refs: the reflog is the last-resort recovery, and ``detail`` (full head SHA, PR number and the
+    ``git fetch origin pull/<N>/head`` hint) goes to the digest so the commit can be fetched from GitHub.
     """
-    deleted = git(["branch", "-d", branch])
+    deleted = git(["branch", "-D", branch])
     if deleted.returncode == 0:
         return CleanupOutcome(DELETED, f"local branch {branch} deleted (proof 3: {detail}); clone is on {base}")
-    return _kept(
-        item,
-        branch,
-        f"proof (3) holds ({detail}) but deleting it needs git branch -D (a squash merge is not 'merged' "
-        f"for git branch -d); kept, clone is on {base}",
-    )
+    return _kept(item, branch, f"proof (3) holds ({detail}) but git branch -D refused: {_err(deleted)}")
 
 
 def _first_proof(

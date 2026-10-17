@@ -89,10 +89,11 @@ stale branches. It is kept, with a `Branch kept: REF <branch> ...` note in the d
 clone is clean, base can be switched to and fast-forwarded from `origin/<base>`, and one proof holds (checked in this
 order, cheapest first): (1) the head is an ancestor of `origin/<branch>`; (2) the head is an ancestor of
 `origin/<base>` (a merge-commit or rebase merge, even after GitHub deleted the remote branch); (3) `gh pr view`
-says the PR is MERGED with a head equal to the local head. Then `git branch -d` must agree. A squash-merged branch
-is proven by (3) but `-d` refuses it, so it is kept with a note saying that deleting it needs `-D` (undecided).
-When nothing is proven the note lists each proof tried and why it failed.
-Never `-D`, never a remote branch or PR change. A deletion is shown under Done and names the proof used. Rerunning after the branch is gone
+says the PR is MERGED with a head equal to the local head. After (1) or (2) `git branch -d` must agree (a refusal keeps the branch). A squash-merged branch is proven by (3)
+and deleted with `git branch -D`, which is used on that path only (never `--force`, no recovery ref; the reflog is
+the last resort). When nothing is proven the note lists each proof tried and why it failed.
+Never a remote branch or PR change. A deletion is shown under Done and names the proof used; for proof (3) it gives
+the full head SHA, the PR number and `git fetch origin pull/<N>/head`, which recovers the commit from GitHub. Rerunning after the branch is gone
 is a silent no-op. `harness run ci-fix` and `merge` do not need the local branch (ci-fix does
 `checkout -B <branch> origin/<branch>` itself; merge uses no checkout). The run record, digest, stop and answer
 files and `<brief>.intake.json` are never deleted.

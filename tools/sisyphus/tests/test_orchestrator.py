@@ -1317,10 +1317,11 @@ def test_clean_finish_deletes_the_branch_with_d_after_switching_to_base(world: W
     assert f"local branch {branch_name(ITEM)} deleted" in world.digest_text()
 
 
-def test_never_uses_capital_d(world: World) -> None:
-    _cleanup_ready(world)
+def test_capital_d_is_used_only_on_the_proof_3_path_and_never_with_force(world: World) -> None:
+    _cleanup_ready(world)  # proof 1 holds: plain -d, gh not asked
     world.run()
-    assert not any("-D" in argv for argv, _ in world.shell_calls)
+    assert not any("-D" in argv or "--force" in argv for argv, _ in world.shell_calls)
+    assert world.pr_state_refs == []
 
 
 def test_branch_already_gone_is_silent_and_idempotent(world: World) -> None:
