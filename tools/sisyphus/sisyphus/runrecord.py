@@ -4,7 +4,7 @@ Standard library only; deliberately independent of the config loader and of ever
 other Sisyphus or spec-prism-flow module. Stage and checkpoint names are opaque strings owned by the
 caller. One record file lives under the caller-supplied workspace directory for
 each item reference. Writes are atomic (temp file in the same directory, then
-rename. There is no file locking. Retry counters are never reset on load or by any automatic path; the only
+rename). There is no file locking. Retry counters are never reset on load or by any automatic path; the only
 way to zero them is the explicit :meth:`RunRecord.reset_retries`, which also appends an event to the optional
 ``resets`` list (additive field, absent from records that never had a reset).
 """
