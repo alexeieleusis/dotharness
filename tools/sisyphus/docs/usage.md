@@ -56,7 +56,19 @@ the token, passed to `gh` as `GH_TOKEN` and used as the Linear API key). Linear 
 | `claude` | `claude -p <prompt> --dangerously-skip-permissions` |
 | `opencode` | `opencode run <prompt>` |
 
-The agent runs in the dedicated clone only (see [safety rails](safety-rails.md)). Real `claude`/`opencode`,
+The agent's working directory is the dedicated clone (see [safety rails](safety-rails.md)), but that is not a
+sandbox. `claude --dangerously-skip-permissions` can read and write anywhere the invoking user can, and Sisyphus
+does not scrub the environment: the agent inherits the full environment of the `sisyphus` process, including
+`LINEAR_API_KEY` or `GH_TOKEN` if they are exported there. (A token produced by `token_cmd` is added only to the
+`gh` calls Sisyphus makes itself, not to the agent command.) Intake feeds ticket and issue text to the agent, so
+a prompt injection in that text could try to exfiltrate those credentials or push elsewhere. Mitigate it by:
+
+- using a least-privilege token scoped to the one repository (and a Linear key limited to what is needed);
+- running Sisyphus under a dedicated OS user or in a container, with nothing else of value reachable;
+- preferring `token_cmd` over exporting tracker credentials in the environment, and keeping them out of the
+  crontab/plist environment.
+
+Real `claude`/`opencode`,
 `gh`, Linear and `git push` calls are built from subprocess and `urllib` and are covered by tests with fakes
 only; they have not been exercised against the real services.
 
