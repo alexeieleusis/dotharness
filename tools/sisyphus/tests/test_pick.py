@@ -11,7 +11,7 @@ import pytest
 
 from sisyphus import pick
 from sisyphus.config import WorkItemSource
-from sisyphus.orchestrator import BRANCH_CREATED_KEY, OPEN_PR_STAGE, PullRequest, branch_name
+from sisyphus.orchestrator import BRANCH_CREATED_KEY, CI_FIX_STAGE, MERGE_STAGE, OPEN_PR_STAGE, PullRequest, branch_name
 from sisyphus.pick import (
     Candidate,
     ExecResult,
@@ -161,6 +161,27 @@ def test_awaiting_review_found_for_open_pr(tmp_path: Path) -> None:
     got = find_awaiting_review(tmp_path, find)
     assert [(a.item, a.pr.number) for a in got] == [("ENG-1", 5)]
     assert sorted(seen) == sorted([branch_name("ENG-1"), branch_name("ENG-2")])
+
+
+def test_awaiting_review_excludes_checkpointed_record_without_lookup(tmp_path: Path) -> None:
+    _record(tmp_path, "ENG-1", OPEN_PR_STAGE)
+    rec = RunRecord.open(tmp_path, "ENG-1")
+    rec.set_checkpoint("C7")
+    seen: list[str] = []
+
+    def find(branch: str) -> PullRequest | None:
+        seen.append(branch)
+        return PullRequest(5, "u")
+
+    assert find_awaiting_review(tmp_path, find) == []
+    assert seen == []
+
+
+@pytest.mark.parametrize("stage", [CI_FIX_STAGE, MERGE_STAGE])
+def test_awaiting_review_includes_later_pr_stages(tmp_path: Path, stage: str) -> None:
+    _record(tmp_path, "ENG-1", stage)
+    got = find_awaiting_review(tmp_path, lambda _b: PullRequest(5, "u"))
+    assert [(a.item, a.pr.number) for a in got] == [("ENG-1", 5)]
 
 
 def test_awaiting_review_missing_workspace(tmp_path: Path) -> None:
