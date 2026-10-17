@@ -168,6 +168,29 @@ def test_skip_when_unchanged_and_c1_reparsed(config: SisyphusConfig) -> None:
     assert RunRecord.open(Path(config.project.workspace_dir or ""), "ENG-4").checkpoint is None
 
 
+def test_reparse_only_never_redrafts_existing_brief(config: SisyphusConfig) -> None:
+    first = run_intake("ENG-4b", config, FakeRunner(BRIEF_NONE))
+    # the sidecar no longer matches (as after editing the prompt), and a human edited the brief
+    Path(str(first.brief_path) + intake.SIDECAR_SUFFIX).write_text("{}")
+    first.brief_path.write_text(BRIEF_OPEN)
+    runner = FakeRunner()
+    result = run_intake("ENG-4b", config, runner, reparse_only=True)
+    assert runner.prompts == []
+    assert result.skipped
+    assert result.blocked
+    assert [d.number for d in result.open_decisions] == [1, 3]
+    assert first.brief_path.read_text() == BRIEF_OPEN
+
+
+def test_reparse_only_runs_when_brief_missing(config: SisyphusConfig) -> None:
+    runner = FakeRunner()
+    result = run_intake("ENG-4c", config, runner, reparse_only=True)
+    assert len(runner.prompts) == 1
+    assert not result.skipped
+    with pytest.raises(IntakeError, match="did not write"):
+        run_intake("ENG-4d", config, lambda _prompt: None, reparse_only=True)
+
+
 def test_rerun_when_item_differs_or_brief_missing(config: SisyphusConfig) -> None:
     run_intake("ENG-5", config, FakeRunner())
     brief = resolve_brief_path(config, "ENG-5")
