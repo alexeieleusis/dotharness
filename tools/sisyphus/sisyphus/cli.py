@@ -212,7 +212,7 @@ def default_services(config: SisyphusConfig) -> Services:
     gh = GhCli(repo_dir, token)
     work_item = config.source.work_item
     if work_item is not None and work_item.kind == "linear":
-        tracker: TrackerClient = LinearTracker(token or os.environ.get("LINEAR_API_KEY", ""))
+        tracker: TrackerClient = LinearTracker(os.environ.get("LINEAR_API_KEY", ""))
     else:
         tracker = GitHubIssueTracker(gh)
     runner = (

@@ -330,12 +330,12 @@ class LinearTracker:
     """Issues in ``pick_state`` assigned to ``assignee``, ordered by Linear priority.
 
     Urgent (1) first through low (4); issues with no priority (0) last; ties keep Linear's manual
-    ``sortOrder``. Needs an API key (``token_cmd`` output or ``LINEAR_API_KEY`` supplied by the caller).
+    ``sortOrder``. Needs an API key (``LINEAR_API_KEY`` supplied by the caller).
     """
 
     def __init__(self, token: str, post: Post = _urlopen_post) -> None:
         if not token:
-            raise PickError("Linear needs an API key: set [source.host].token_cmd or LINEAR_API_KEY")
+            raise PickError("Linear needs an API key: set LINEAR_API_KEY")
         self.token = token
         self._post = post
 
