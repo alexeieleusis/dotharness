@@ -218,3 +218,14 @@ def test_never_approves(tmp_path):
     assert "--approve" not in flat
     for flag in ("--admin", "--auto", "--delete-branch"):
         assert flag not in flat
+
+
+def test_malformed_pr_list_output_is_a_collected_failure_not_a_raw_error(tmp_path):
+    cfg = _cfg(tmp_path)
+    with _mocks(tmp_path, cfg) as calls:
+        with (
+            patch(P + "_gh", return_value=_proc(stdout=b"not json")),
+            pytest.raises(MergeError, match="gh pr output was not JSON"),
+        ):
+            _run(cfg)
+        assert _merge_calls(calls) == []

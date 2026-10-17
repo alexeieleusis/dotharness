@@ -39,6 +39,7 @@ from harness.runners.auto_approve_github import (
     _read_pr_state,
     _state_skip_reason,
     _text,
+    list_own_open_prs,
 )
 from harness.runners.common import (
     TIMEOUT_GIT,
@@ -110,7 +111,7 @@ def _run_locked(config: HarnessConfig, dry_run: bool, only_pr: int | None) -> No
     repo = config.repo.name
     failures: list[str] = []
 
-    prs = _list_prs(repo, only_pr, env, failures)
+    prs = list_own_open_prs(repo, only_pr, env, failures, _PR_FIELDS, _gh)
     if only_pr is None and not dry_run and not failures:
         _prune_counters(config.repo_slug, {p["number"] for p in prs})
     if not prs and not failures:
@@ -138,29 +139,6 @@ def _run_locked(config: HarnessConfig, dry_run: bool, only_pr: int | None) -> No
 # ---------------------------------------------------------------------------
 # PR discovery and scope (FR-1, FR-2)
 # ---------------------------------------------------------------------------
-
-
-def _list_prs(repo: str, only_pr: int | None, env: dict, failures: list[str]) -> list[dict]:
-    """Open PRs authored by the acting user (``gh``'s ``@me``), or just ``only_pr``."""
-    if only_pr is None:
-        args = ["pr", "list", "--repo", repo, "--state", "open", "--author", "@me", "--json", _PR_FIELDS]
-        args += ["--limit", "500"]
-    else:
-        args = ["pr", "view", str(only_pr), "--repo", repo, "--json", _PR_FIELDS]
-    result = _gh(args, env)
-    if result.returncode != 0:
-        failures.append(f"gh pr {'list' if only_pr is None else 'view'} failed (exit {result.returncode})")
-        return []
-    try:
-        data = json.loads(_text(result.stdout))
-    except ValueError:
-        failures.append("gh pr output was not JSON")
-        return []
-    prs = data if isinstance(data, list) else [data]
-    if not all(isinstance(p, dict) and isinstance(p.get("number"), int) for p in prs):
-        failures.append("gh pr output was not a list of PR objects")
-        return []
-    return sorted(prs, key=lambda p: p["number"])
 
 
 def _is_in_scope(pr: dict, current_user: str) -> bool:

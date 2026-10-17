@@ -37,6 +37,7 @@ from harness.runners.auto_approve_github import (
     _read_pr_state,
     _state_skip_reason,
     _text,
+    list_own_open_prs,
     read_viewed_states,
 )
 from harness.runners.common import build_subprocess_env, get_current_user, get_gh_token
@@ -76,9 +77,8 @@ def _run_locked(config: HarnessConfig, dry_run: bool, pr: int | None) -> None:
     env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
     current_user = get_current_user(env)
     repo = config.repo.name
-    prs = [_read_one_pr(repo, pr, env)] if pr is not None else _list_prs(repo, env)
-
     failures: list[str] = []
+    prs = list_own_open_prs(repo, pr, env, failures, "number,author", _gh)
     summary: dict[int, str] = {}
     for item in sorted(prs, key=lambda p: p["number"]):
         number = item["number"]
@@ -90,36 +90,6 @@ def _run_locked(config: HarnessConfig, dry_run: bool, pr: int | None) -> None:
     logger.info("merge summary: %s", summary or "no PRs")
     if failures:
         raise MergeError("merge failed for: " + "; ".join(failures))
-
-
-def _list_prs(repo: str, env: dict) -> list[dict]:
-    result = _gh(
-        [
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            "--state",
-            "open",
-            "--author",
-            "@me",
-            "--json",
-            "number,author",
-            "--limit",
-            "500",
-        ],
-        env,
-    )
-    if result.returncode != 0:
-        raise MergeError(f"gh pr list failed (exit {result.returncode})")  # noqa: TRY003
-    return json.loads(_text(result.stdout))
-
-
-def _read_one_pr(repo: str, number: int, env: dict) -> dict:
-    result = _gh(["pr", "view", str(number), "--repo", repo, "--json", "number,author"], env)
-    if result.returncode != 0:
-        raise MergeError(f"gh pr view #{number} failed (exit {result.returncode})")  # noqa: TRY003
-    return json.loads(_text(result.stdout))
 
 
 def gate_record_path(repo_slug: str, pr_number: int) -> Path:
