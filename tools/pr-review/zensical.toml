@@ -18,6 +18,7 @@ nav = [
         { "review-requested" = "commands/review-requested.md" },
         { "self-review" = "commands/self-review.md" },
         { "address-comments" = "commands/address-comments.md" },
+        { "auto-approve" = "commands/auto-approve.md" },
     ] },
     { "Modules" = "modules.md" },
     { "Spec Prism Flow" = "https://alexeieleusis.github.io/dotharness/spec-prism-flow/" },

@@ -4,6 +4,7 @@ import os
 import re
 import signal
 import subprocess
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -373,14 +374,13 @@ def is_review_summary_comment(body: str) -> bool:
     return "review summary" in lower or "dotharness-review" in lower
 
 
-def fetch_all_pages(path: str, env: dict) -> list[dict] | None:
-    """GET-paginate a GitHub REST list endpoint, returning every item. Unlike
-    fetch_pr_comments (which goes through scripts/pr-comments.py's cache), this returns
-    raw REST dicts that keep the snake_case `created_at` timestamp the cache drops.
-    Returns None if any page fails."""
-    items: list[dict] = []
-    page = 1
-    while True:
+_PAGE_ATTEMPTS = 3
+_PAGE_RETRY_DELAY = 2.0
+
+
+def _fetch_page(path: str, page: int, env: dict) -> list[dict] | None:
+    """One page of a REST list endpoint. Retries transient gh failures; None if all attempts fail."""
+    for attempt in range(1, _PAGE_ATTEMPTS + 1):
         result = run_cmd(
             ["gh", "api", "--method", "GET", path, "-F", "per_page=100", "-F", f"page={page}"],
             cwd="/",
@@ -388,9 +388,34 @@ def fetch_all_pages(path: str, env: dict) -> list[dict] | None:
             timeout=TIMEOUT_GH,
             check=False,
         )
-        if result.returncode != 0:
+        if result.returncode == 0:
+            return json.loads(result.stdout)
+        stderr = result.stderr.decode("utf-8", errors="replace") if isinstance(result.stderr, bytes) else result.stderr
+        logger.warning(
+            "gh api %s page %d failed (exit %d, attempt %d/%d): %s",
+            path,
+            page,
+            result.returncode,
+            attempt,
+            _PAGE_ATTEMPTS,
+            (stderr or "").strip(),
+        )
+        if attempt < _PAGE_ATTEMPTS:
+            time.sleep(_PAGE_RETRY_DELAY * attempt)
+    return None
+
+
+def fetch_all_pages(path: str, env: dict) -> list[dict] | None:
+    """GET-paginate a GitHub REST list endpoint, returning every item. Unlike
+    fetch_pr_comments (which goes through scripts/pr-comments.py's cache), this returns
+    raw REST dicts that keep the snake_case `created_at` timestamp the cache drops.
+    Transient page failures are retried; returns None if a page still fails."""
+    items: list[dict] = []
+    page = 1
+    while True:
+        batch = _fetch_page(path, page, env)
+        if batch is None:
             return None
-        batch = json.loads(result.stdout)
         items.extend(batch)
         if len(batch) < 100:
             return items

@@ -101,6 +101,18 @@ thread is addressed using that reply's own content as the actual "comment to
 address" (not the terse original finding it responded to). See
 [`address-comments`](commands/address-comments.md#notes) for details.
 
+### `[auto_approve]`
+
+Used by `harness run auto-approve` (and `harness run all`). Off by default.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Turns the `auto-approve` command on. While `false`, the command does nothing and exits 0. |
+| `viewed_max_lines` | integer | `75` | A file with fewer than this many modified lines (added + removed) is marked as viewed. |
+| `approve_max_lines` | integer | `500` | A PR whose total modified lines are fewer than this is approved. |
+
+The comparison is strictly less than, so a value of `0` never matches and disables that feature. Invalid values (a non-boolean `enabled`, or a negative or non-integer threshold) raise `ConfigError` naming the field. Like `max_diff_lines` in `[regret_review]`, `75` and `500` are round, conservative starting points pending real usage data. See [`auto-approve`](commands/auto-approve.md) for the full rules.
+
 ### `[local_review]`
 
 Optional. Used only by `harness run local-review`. All other commands ignore it. Both fields are optional, and an absent section behaves as if both were unset.
@@ -170,6 +182,11 @@ enabled = false
 [address_comments]
 # enabled = true
 # trusted_commenters = "*"
+
+[auto_approve]
+# enabled = false
+# viewed_max_lines = 75
+# approve_max_lines = 500
 
 [regret_review]
 enabled = false

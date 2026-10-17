@@ -447,3 +447,42 @@ def test_invalid_repo_name_rejected(tmp_path, bad):
         load_config(p)
     with pytest.raises(ConfigError, match=r"Invalid repo\.name"):
         load_config(p, require_repo_name=False)
+
+
+def _auto_approve_toml(tmp_path, body: str):
+    p = tmp_path / ".harness.toml"
+    p.write_text(f'[harness]\n[repo]\nname = "a/b"\nworking_dir = "/tmp"\n\n[auto_approve]\n{body}\n')
+    return p
+
+
+def test_auto_approve_defaults(minimal_toml):
+    cfg = load_config(minimal_toml)
+    assert cfg.auto_approve.enabled is False
+    assert cfg.auto_approve.viewed_max_lines == 75
+    assert cfg.auto_approve.approve_max_lines == 500
+
+
+def test_auto_approve_parsed(tmp_path):
+    cfg = load_config(_auto_approve_toml(tmp_path, "enabled = true\nviewed_max_lines = 10\napprove_max_lines = 20"))
+    assert cfg.auto_approve.enabled is True
+    assert cfg.auto_approve.viewed_max_lines == 10
+    assert cfg.auto_approve.approve_max_lines == 20
+
+
+def test_auto_approve_zero_accepted(tmp_path):
+    cfg = load_config(_auto_approve_toml(tmp_path, "viewed_max_lines = 0\napprove_max_lines = 0"))
+    assert cfg.auto_approve.viewed_max_lines == 0
+    assert cfg.auto_approve.approve_max_lines == 0
+
+
+@pytest.mark.parametrize("field_name", ["viewed_max_lines", "approve_max_lines"])
+@pytest.mark.parametrize("bad", ["true", "-1", '"75"', "7.5"])
+def test_auto_approve_bad_int_names_field(tmp_path, field_name, bad):
+    with pytest.raises(ConfigError, match=rf"auto_approve\.{field_name}"):
+        load_config(_auto_approve_toml(tmp_path, f"{field_name} = {bad}"))
+
+
+@pytest.mark.parametrize("bad", ['"yes"', "1"])
+def test_auto_approve_enabled_non_bool_rejected(tmp_path, bad):
+    with pytest.raises(ConfigError, match=r"auto_approve\.enabled"):
+        load_config(_auto_approve_toml(tmp_path, f"enabled = {bad}"))
