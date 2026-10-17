@@ -90,7 +90,7 @@ def resolve_brief_path(config: SisyphusConfig, item: str) -> Path:
 _HEADING = re.compile(r"^(#{1,6})\s*(?:\d+\.\s*)?open[- ]decisions?(?:\s+log)?\s*:?\s*$", re.IGNORECASE)
 _ANY_HEADING = re.compile(r"^(#{1,6})\s")
 _ENTRY = re.compile(r"^(\d+)[.)]\s+(.*)$")
-_RESOLVED = re.compile(r"^\W*resolved\b|\bstatus:\s*resolved\b", re.IGNORECASE)
+_RESOLVED = re.compile(r"(?:^\W*resolved\b)|(?:\bstatus:\s*resolved\b)", re.IGNORECASE)
 
 
 def parse_open_decisions(text: str) -> tuple[OpenDecision, ...]:
