@@ -4,6 +4,12 @@ coverage:
   precision: 1
   status:
     project:
-      default:
+      sisyphus:
         target: 90%
         threshold: 0.5%
+        flags:
+          - sisyphus
+flags:
+  sisyphus:
+    paths:
+      - tools/sisyphus/

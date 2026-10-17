@@ -68,6 +68,8 @@ jobs:
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v4
         if: ${{ matrix.python-version == '3.12' }}
+        with:
+          flags: sisyphus
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
