@@ -30,8 +30,6 @@ from sisyphus import gaterecord
 from sisyphus.cleanup import DELETED, KEPT, PrInfo, cleanup_branch
 from sisyphus.config import SisyphusConfig
 from sisyphus.digest import (
-    CI_FIX_STAGE,
-    MERGE_STAGE,
     DigestReport,
     DoneEntry,
     NeedsYou,
@@ -39,7 +37,7 @@ from sisyphus.digest import (
     needs_from_stop,
     write_digest,
 )
-from sisyphus.intake import INTAKE_STAGE, AgentRunner, BoundaryViolation, resolve_brief_path, run_intake
+from sisyphus.intake import AgentRunner, BoundaryViolation, resolve_brief_path, run_intake
 from sisyphus.lock import clone_lock
 from sisyphus.paths import knowledge_file, tool_dir
 from sisyphus.rails import (
@@ -52,6 +50,19 @@ from sisyphus.rails import (
 )
 from sisyphus.resume import answer_path, consume_answer, read_answer
 from sisyphus.runrecord import STAGE_COMPLETE, RunRecord
+from sisyphus.stages import (
+    BUILD_RETRY_KEY,
+    BUILD_STAGE,
+    CI_FIX_ATTEMPTS_KEY,
+    CI_FIX_STAGE,
+    INTAKE_STAGE,
+    LEAF_LIMIT_KEY,
+    MERGE_STAGE,
+    OPEN_PR_STAGE,
+    PLAN_STAGE,
+    PUSH_STAGE,
+    STAGE_ORDER,
+)
 from sisyphus.stoprecord import (
     StopRecord,
     build_stop_record,
@@ -61,12 +72,6 @@ from sisyphus.stoprecord import (
     read_stop_record,
     write_stop_record,
 )
-
-PLAN_STAGE = "plan"
-BUILD_STAGE = "build"
-PUSH_STAGE = "push"
-OPEN_PR_STAGE = "open-pr"
-STAGE_ORDER = (INTAKE_STAGE, PLAN_STAGE, BUILD_STAGE, PUSH_STAGE, OPEN_PR_STAGE, CI_FIX_STAGE, MERGE_STAGE)
 
 PROMPT_FILE = "sisyphus/orchestration-prompt.md"
 CHEAT_SHEET = Path("docs") / "lifecycle-cheat-sheet.md"
@@ -80,9 +85,6 @@ PACKAGE_MARKERS = ("Makefile", "pyproject.toml", "package.json", "Cargo.toml", "
 
 BRANCH_CREATED_KEY = "branch-created"
 PR_NUMBER_KEY = "pr-number"  # additive: the PR number, so the branch cleanup can ask gh about it by number
-BUILD_RETRY_KEY = "build:retry-cycles"
-CI_FIX_ATTEMPTS_KEY = "ci-fix:attempts"
-LEAF_LIMIT_KEY = "plan:leaf-limit"
 
 _STOP_CHECKPOINTS = {PLAN_STAGE: {"C2"}, BUILD_STAGE: {"C3", "C4", "C5"}}
 

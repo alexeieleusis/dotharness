@@ -20,13 +20,10 @@ from pathlib import Path
 from sisyphus.config import SisyphusConfig
 from sisyphus.rails import Checkpoint
 from sisyphus.runrecord import STAGE_COMPLETE, RunRecord
+from sisyphus.stages import CI_FIX_STAGE, MERGE_STAGE
 from sisyphus.stoprecord import KIND_ABANDONED, StopRecord, read_stop_record
 
 SECTIONS = ("Needs you", "Done", "Declined", "Deviations", "Limits hit", "Cost and time")
-
-# Stage names the digest recognises as ci-fix and merge-runner outcomes in run records.
-CI_FIX_STAGE = "ci-fix"
-MERGE_STAGE = "merge"
 
 CHECKPOINT_QUESTIONS: dict[str, str] = {
     Checkpoint.C1.value: "The brief has open decisions that block the requirements doc. Answer them in the brief, then resume.",

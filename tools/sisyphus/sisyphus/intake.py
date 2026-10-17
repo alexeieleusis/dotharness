@@ -22,8 +22,8 @@ from sisyphus.config import SisyphusConfig
 from sisyphus.paths import knowledge_file
 from sisyphus.rails import Checkpoint
 from sisyphus.runrecord import RunRecord, encode_item
+from sisyphus.stages import INTAKE_STAGE
 
-INTAKE_STAGE = "intake"
 PROMPT_FILE = "sisyphus/intake-prompt.md"
 DRAFTING_PROMPT_FILE = "spec-prism-flow/requirements-doc-drafting-prompt.md"
 ITEM_PLACEHOLDER = "<work-item reference>"

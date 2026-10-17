@@ -16,6 +16,18 @@ from pathlib import Path
 from sisyphus.config import SisyphusConfig
 from sisyphus.intake import IntakeError, parse_open_decisions, resolve_brief_path
 from sisyphus.runrecord import RunRecord, record_path
+from sisyphus.stages import (
+    AUTO_RETRY_KEY,
+    BUILD_RETRY_KEY,
+    BUILD_STAGE,
+    CI_FIX_ATTEMPTS_KEY,
+    CI_FIX_STAGE,
+    INTAKE_STAGE,
+    MERGE_STAGE,
+    OPEN_PR_STAGE,
+    PLAN_STAGE,
+    PUSH_STAGE,
+)
 from sisyphus.stoprecord import (
     AUTO_RETRY_DELAY_MINUTES,
     AUTO_RETRY_MAX,
@@ -28,7 +40,6 @@ from sisyphus.stoprecord import (
 SIDECAR_SUFFIXES = (".stop.json", ".intake.json", ".stopped.json")
 ANSWER_SUFFIX = ".answer.md"
 USED_SUFFIX = ".used"
-AUTO_RETRY_KEY = "auto-retry"
 
 # `sisyphus resume --reset-retries` zeroes exactly these run-record counters for the RECORDED stage of the
 # stopped item, and nothing else. Exact key names, no prefix matching. `branch-created` is a marker that
@@ -36,16 +47,14 @@ AUTO_RETRY_KEY = "auto-retry"
 # `plan:leaf-limit` is also left alone: it is a "leaves already planned" marker that stops a C6 resume from
 # re-planning (and overwriting the leaves), not a budget. `auto-retry` is the C8 auto-resume budget; it belongs
 # to whichever stage the item stopped at. Stages without their own counter reset only `auto-retry`.
-BUILD_RETRY_KEY = "build:retry-cycles"
-CI_FIX_ATTEMPTS_KEY = "ci-fix:attempts"
 RESET_KEYS: dict[str, tuple[str, ...]] = {
-    "intake": (AUTO_RETRY_KEY,),
-    "plan": (AUTO_RETRY_KEY,),
-    "build": (BUILD_RETRY_KEY, AUTO_RETRY_KEY),
-    "push": (AUTO_RETRY_KEY,),
-    "open-pr": (AUTO_RETRY_KEY,),
-    "ci-fix": (CI_FIX_ATTEMPTS_KEY, AUTO_RETRY_KEY),
-    "merge": (AUTO_RETRY_KEY,),
+    INTAKE_STAGE: (AUTO_RETRY_KEY,),
+    PLAN_STAGE: (AUTO_RETRY_KEY,),
+    BUILD_STAGE: (BUILD_RETRY_KEY, AUTO_RETRY_KEY),
+    PUSH_STAGE: (AUTO_RETRY_KEY,),
+    OPEN_PR_STAGE: (AUTO_RETRY_KEY,),
+    CI_FIX_STAGE: (CI_FIX_ATTEMPTS_KEY, AUTO_RETRY_KEY),
+    MERGE_STAGE: (AUTO_RETRY_KEY,),
 }
 
 

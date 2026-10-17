@@ -69,6 +69,7 @@ from sisyphus.resume import (
     reset_stage_retries,
 )
 from sisyphus.runrecord import RunRecord, record_path
+from sisyphus.stages import INTAKE_STAGE
 from sisyphus.stoprecord import (
     CLEARS_BY,
     KIND_ABANDONED,
@@ -524,7 +525,7 @@ def intake_command(factory: ServicesFactory | None, work_item_ref: str, config_p
             build_stop_record(
                 work_item_ref,
                 checkpoint="C1",
-                stage="intake",
+                stage=INTAKE_STAGE,
                 stage_status="complete",
                 detail=f"open decisions in {result.brief_path}: " + "; ".join(texts),
                 resume_command=_resume_command(config_path, work_item_ref),

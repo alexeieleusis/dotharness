@@ -26,15 +26,16 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from sisyphus.config import WorkItemSource
-from sisyphus.orchestrator import BRANCH_CREATED_KEY, OPEN_PR_STAGE, PullRequest, branch_name
+from sisyphus.orchestrator import BRANCH_CREATED_KEY, PullRequest, branch_name
 from sisyphus.resume import iter_records
 from sisyphus.runrecord import record_path
+from sisyphus.stages import CI_FIX_STAGE, MERGE_STAGE, OPEN_PR_STAGE
 from sisyphus.stoprecord import is_abandoned
 
 LINEAR_API_URL = "https://api.linear.app/graphql"
 GITHUB_OPEN_STATE = "OPEN"
 # Stages at or after "open-pr": an earlier run may have left a PR open.
-_PR_STAGES = (OPEN_PR_STAGE, "ci-fix", "merge")
+_PR_STAGES = (OPEN_PR_STAGE, CI_FIX_STAGE, MERGE_STAGE)
 
 
 class PickError(Exception):
