@@ -434,14 +434,17 @@ def _fix_check(
     if log is None or step_name is None:
         _digest(OUTCOME_PARSE_FAILURE, number, check.name, "could not read the failing job log or its step")
         return False
-    step = find_step_command(wdir, step_name)
-    if step is None:
-        _digest(OUTCOME_PARSE_FAILURE, number, check.name, f"no runnable command for step {step_name!r} in workflows")
-        return False
 
     original_sha = git_detach_and_record(wdir, env)
     try:
         git_fetch_and_checkout(branch, wdir, env)
+        # Look the step up only now: the failing run's step name comes from the PR head's workflows.
+        step = find_step_command(wdir, step_name)
+        if step is None:
+            _digest(
+                OUTCOME_PARSE_FAILURE, number, check.name, f"no runnable command for step {step_name!r} in workflows"
+            )
+            return False
         before = _run_step(step, wdir, env)
         if before.returncode == 0:
             _digest(OUTCOME_NOT_REPRODUCED, number, check.name, f"step {step_name!r} passes locally")

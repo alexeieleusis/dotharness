@@ -262,6 +262,21 @@ def test_unreadable_check_output_is_parse_failure_digest(tmp_path, caplog):
     assert any("parse-failure" in d for d in _digests(caplog))
 
 
+def test_step_is_looked_up_after_checkout_of_the_pr_branch(tmp_path, caplog):
+    order: list[str] = []
+    with (
+        _mocks(tmp_path) as m,
+        patch(P + "find_step_command", side_effect=lambda *a: order.append("find") or None),
+        caplog.at_level(logging.INFO),
+    ):
+        m.checkout.side_effect = lambda *a: order.append("checkout")
+        ci_fix.run(_cfg(tmp_path))
+    assert order == ["checkout", "find"]
+    assert m.pushes == []
+    m.restore.assert_called_once()
+    assert any("parse-failure" in d for d in _digests(caplog))
+
+
 def test_ac9_restore_runs_when_exception_mid_run(tmp_path):
     with (
         _mocks(tmp_path, backend_raises=RuntimeError("agent died")) as m,
