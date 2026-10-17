@@ -37,7 +37,8 @@ exits 0. It does not even take the lock.
 4. For a failed required check, reads the failing job's log with
    `gh run view --log-failed`.
 5. Finds the command that job ran in the workflow file under
-   `.github/workflows/`.
+   `.github/workflows/`. Step names such as `Run tests` repeat across
+   workflows, so only the workflow the failing check belongs to is searched.
 6. Fetches `origin` and checks out the PR branch with
    `git_fetch_and_checkout`, in a dedicated clone or worktree.
 7. Runs that command locally.
