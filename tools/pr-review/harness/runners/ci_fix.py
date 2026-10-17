@@ -84,6 +84,7 @@ class CiFixError(RuntimeError):
 class _Check:
     name: str
     link: str
+    workflow: str = ""  # workflow name as reported by gh; "" when unknown
 
 
 @dataclass(frozen=True)
@@ -216,7 +217,7 @@ def _prune_counters(repo_slug: str, open_pr_numbers: set[int]) -> None:
 
 def _read_failing_checks(repo: str, pr_number: int, env: dict) -> list[_Check] | None:
     """Failing required checks (all checks when the PR has none required). None = unreadable output."""
-    base = ["pr", "checks", str(pr_number), "--repo", repo, "--json", "name,bucket,link"]
+    base = ["pr", "checks", str(pr_number), "--repo", repo, "--json", "name,bucket,link,workflow"]
     result = _gh([*base, "--required"], env)
     if result.returncode == 1 and "no required checks" in _text(result.stderr):
         result = _gh(base, env)
@@ -237,7 +238,8 @@ def _read_failing_checks(repo: str, pr_number: int, env: dict) -> list[_Check] |
             name, link = c.get("name"), c.get("link")
             if not isinstance(name, str) or not isinstance(link, str):
                 return None
-            failing.append(_Check(name, link))
+            workflow = c.get("workflow")
+            failing.append(_Check(name, link, workflow if isinstance(workflow, str) else ""))
     return failing
 
 
@@ -329,15 +331,28 @@ def _split_steps(lines: list[str]) -> list[tuple[list[str], int]]:
     return steps
 
 
-def find_step_command(wdir: str, step_name: str) -> _Step | None:
+def _workflow_matches(path: Path, lines: list[str], workflow: str) -> bool:
+    """Whether a workflow file is the one gh calls ``workflow`` (its ``name:``, else its repo-relative path)."""
+    top = next((line for line in lines if line.startswith("name:")), None)
+    declared = _unquote(top[len("name:") :]) if top else f".github/workflows/{path.name}"
+    return declared == workflow
+
+
+def find_step_command(wdir: str, step_name: str, workflow: str = "") -> _Step | None:
     """Find the ``run:`` command of the workflow step called ``step_name``.
+
+    Step names such as ``Run tests`` repeat across workflows, so when ``workflow`` is given only the
+    workflow file with that name is searched.
 
     A small line-based reader (no YAML dependency): it understands the standard two-space layout
     and takes the working directory from the step, else the job's ``defaults``, else the workflow's.
     A step whose command uses a ``${{ }}`` expression cannot be run locally and is not returned.
     """
     for path in sorted((Path(wdir) / ".github" / "workflows").glob("*.y*ml")):
-        found = _step_in_workflow(path.read_text(encoding="utf-8").splitlines(), step_name)
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if workflow and not _workflow_matches(path, lines, workflow):
+            continue
+        found = _step_in_workflow(lines, step_name)
         if found:
             return found
     return None
@@ -440,7 +455,7 @@ def _fix_check(
     try:
         git_fetch_and_checkout(branch, wdir, env)
         # Look the step up only now: the failing run's step name comes from the PR head's workflows.
-        step = find_step_command(wdir, step_name)
+        step = find_step_command(wdir, step_name, check.workflow)
         if step is None:
             _digest(
                 OUTCOME_PARSE_FAILURE, number, check.name, f"no runnable command for step {step_name!r} in workflows"

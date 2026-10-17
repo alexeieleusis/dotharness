@@ -401,6 +401,34 @@ def test_find_step_command_reads_workflow(tmp_path):
     assert ci_fix.find_step_command(str(tmp_path), "Missing") is None
 
 
+def test_find_step_command_picks_the_workflow_the_check_belongs_to(tmp_path):
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    for file, name, wd in (("a.yml", "Alpha", "tools/a"), ("b.yml", "Beta", "tools/b")):
+        (wf / file).write_text(
+            f"name: {name}\njobs:\n  t:\n    steps:\n      - name: Run tests\n"
+            f"        working-directory: {wd}\n        run: pytest\n",
+            encoding="utf-8",
+        )
+    (wf / "c.yml").write_text(
+        "jobs:\n  t:\n    steps:\n      - name: Run tests\n        run: make c\n", encoding="utf-8"
+    )
+    assert ci_fix.find_step_command(str(tmp_path), "Run tests", "Beta") == _Step("Run tests", "pytest", "tools/b")
+    assert ci_fix.find_step_command(str(tmp_path), "Run tests", ".github/workflows/c.yml") == _Step(
+        "Run tests", "make c", ""
+    )
+    assert ci_fix.find_step_command(str(tmp_path), "Run tests", "Nope") is None
+    assert ci_fix.find_step_command(str(tmp_path), "Run tests") == _Step("Run tests", "pytest", "tools/a")
+
+
+def test_read_failing_checks_carries_the_workflow():
+    out = b'[{"name":"t (3.12)","bucket":"fail","link":"https://x/actions/runs/1/job/2","workflow":"Beta"}]'
+    with patch(P + "_gh", return_value=_proc(0, out)):
+        assert ci_fix._read_failing_checks("o/r", 1, {}) == [
+            _Check("t (3.12)", "https://x/actions/runs/1/job/2", "Beta")
+        ]
+
+
 def test_failed_step_name_from_log():
     assert ci_fix._failed_step_name("quality\tRun checks\t2024Z ##[error]x") == "Run checks"
     assert ci_fix._failed_step_name("no tabs here") is None
