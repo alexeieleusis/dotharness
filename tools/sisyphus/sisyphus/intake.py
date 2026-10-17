@@ -87,36 +87,56 @@ def resolve_brief_path(config: SisyphusConfig, item: str) -> Path:
 
 # ------------------------------------------------------- open-decisions log
 
-_HEADING = re.compile(r"^(#{1,6})\s*(?:\d+\.\s*)?open[- ]decisions?(?:\s+log)?\s*:?\s*$", re.IGNORECASE)
+_HEADING = re.compile(
+    r"^(?:(#{1,6})\s*(?:\d+\.\s*)?|\*\*\s*)open[- ](?:decisions?|questions?)\b.*$",
+    re.IGNORECASE,
+)
 _ANY_HEADING = re.compile(r"^(#{1,6})\s")
-_ENTRY = re.compile(r"^(\d+)[.)]\s+(.*)$")
+_ENTRY = re.compile(r"^\s*(?:(\d+)[.)]|[-*+]\s+D-(\d+)\s*[:.)]?)\s+(.*)$")
 _RESOLVED = re.compile(r"(?:^\W*resolved\b)|(?:\bstatus:\s*resolved\b)", re.IGNORECASE)
+_NONE = re.compile(r"^\W*(?:none|n/?a|nothing|no (?:open )?(?:decisions?|questions?))\b\W*$", re.IGNORECASE)
+_MENTION = re.compile(r"open[- ]decisions?", re.IGNORECASE)
+
+
+def _unparsed(reason: str) -> tuple[OpenDecision, ...]:
+    return (OpenDecision(0, f"Open-decisions log could not be parsed ({reason}); resolve it by hand"),)
 
 
 def parse_open_decisions(text: str) -> tuple[OpenDecision, ...]:
-    """Return the unresolved numbered entries of the brief's open-decisions log.
+    """Return the unresolved entries of the brief's open-decisions log, failing closed.
 
-    The log is the section under a heading named "Open decisions" (optionally numbered, optionally
-    followed by "log"); entries are top-level numbered items. An entry starting with "resolved"
-    (after any markup) or containing "status: resolved" is not blocking. No such section means none.
+    The log is the section under a heading (or a bold line) named "Open decisions"; entries are
+    numbered items or ``- D-n:`` bullets. An entry starting with "resolved" (after any markup) or
+    containing "status: resolved" is not blocking. A section that is explicitly "None" yields no
+    decisions. If the text mentions open decisions but no section parses, or a section has content
+    but no entries, a single sentinel decision (number 0) is returned so C1 still blocks.
     """
     entries: list[list[str]] = []
     level = 0
+    found = False
+    body: list[str] = []
     for line in text.splitlines():
-        if not level:
+        if not found:
             m = _HEADING.match(line)
             if m:
-                level = len(m.group(1))
+                found = True
+                level = len(m.group(1)) if m.group(1) else 7
             continue
         heading = _ANY_HEADING.match(line)
         if heading and len(heading.group(1)) <= level:
             break
+        if line.strip():
+            body.append(line.strip())
         entry = _ENTRY.match(line)
         if entry:
-            entries.append([entry.group(1), entry.group(2).strip()])
+            entries.append([entry.group(1) or entry.group(2), entry.group(3).strip()])
         elif entries and line.strip():
             entries[-1][1] += " " + line.strip()
-    return tuple(OpenDecision(int(n), body) for n, body in entries if not _RESOLVED.search(body))
+    if not found:
+        return _unparsed("no recognisable section") if _MENTION.search(text) else ()
+    if not entries and body and not all(_NONE.match(b) for b in body):
+        return _unparsed("section has content but no entries")
+    return tuple(OpenDecision(int(n), t) for n, t in entries if not _RESOLVED.search(t))
 
 
 # ----------------------------------------------------------- git boundary

@@ -118,6 +118,23 @@ def test_parse_open_decisions() -> None:
     assert parse_open_decisions("# No such section\n1. x\n") == ()
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "## Open decisions (2)\n1. Which auth provider?\n",
+        "## Open decisions (D-1..D-5)\n1. Q?\n",
+        "**Open decisions**\n\n1. Q?\n",
+        "## Open questions\n1. Q?\n",
+        "## Open decisions log\n- D-3: Q?\n",
+        "## Open decisions log\n  1. Q?\n",
+        "Open decisions\n---\n1. Q?\n",
+        "## Open decisions log\nWe still need to pick a provider.\n",
+    ],
+)
+def test_parse_open_decisions_fails_closed(text: str) -> None:
+    assert parse_open_decisions(text)
+
+
 def test_c1_result_when_open_decisions(config: SisyphusConfig) -> None:
     result = run_intake("ENG-2", config, FakeRunner(BRIEF_OPEN))
     assert result.blocked
