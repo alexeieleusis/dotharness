@@ -35,7 +35,7 @@ def test_path_creates_nothing(tmp_path: Path) -> None:
     assert not (tmp_path / "state").exists()
 
 
-@pytest.mark.parametrize("slug", ["owner/repo", "", "a b", "../x"])
+@pytest.mark.parametrize("slug", ["owner/repo", "", "a b", "../x", "..", ".", "o-r\n"])
 def test_invalid_slug_rejected(slug: str, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Invalid repo slug"):
         gate_record_path(slug, 1, tmp_path)
