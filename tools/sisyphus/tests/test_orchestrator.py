@@ -722,6 +722,7 @@ def test_ci_fix_disabled_by_default(world: World) -> None:
 
 def test_merge_runner_invoked_only_via_harness_cli_when_enabled(world: World) -> None:
     world.merge_enabled = True
+    world.pr_info = PrInfo(42, "MERGED", SHA1)
     result = world.run()
     assert result.completed
     merges = [c[0] for c in world.shell_calls if c[0][:3] == ("harness", "run", "merge")]
@@ -736,6 +737,7 @@ def test_merge_not_run_when_disabled(world: World) -> None:
 
 def test_nothing_ever_approves(world: World) -> None:
     world.merge_enabled = True
+    world.pr_info = PrInfo(42, "MERGED", SHA1)
     world.run(ci_fix=True)
     for argv, _ in world.shell_calls:
         assert "approve" not in " ".join(argv)
@@ -745,6 +747,16 @@ def test_merge_command_failure_is_c8(world: World) -> None:
     world.merge_enabled = True
     world.merge_rc = 1
     _assert_stop(world, world.run(), Checkpoint.C8)
+
+
+def test_merge_skipped_with_exit_zero_is_not_a_completed_merge(world: World) -> None:
+    world.merge_enabled = True
+    world.pr_info = PrInfo(42, "OPEN", SHA1)  # the runner exited 0 but skipped the merge
+    result = world.run()
+    _assert_stop(world, result, Checkpoint.C8)
+    assert "not merged" in result.detail
+    assert "merge" not in result.stages_run
+    assert not world.branch_cmds  # the branch is not cleaned up
 
 
 # ---------------------------------------------------------- gate commands (FR-3.3.10)
@@ -949,6 +961,7 @@ def test_orchestrator_does_not_import_harness_or_spec_prism_flow() -> None:
 
 def test_tests_never_invoke_real_tools(world: World) -> None:
     world.merge_enabled = True
+    world.pr_info = PrInfo(42, "MERGED", SHA1)
     world.run(ci_fix=True)
     for argv, _ in world.shell_calls:
         assert argv[0] in {"git", "harness", "make"}  # all through the fake, none executed for real
@@ -1460,6 +1473,7 @@ def test_merge_after_branch_deleted_works_from_the_remote_head(world: World) -> 
     _cleanup_ready(world)
     world.run()
     world.merge_enabled = True
+    world.pr_info = PrInfo(42, "MERGED", SHA1)
     result = world.run()
     assert result.completed
     assert result.stages_run == ("merge",)

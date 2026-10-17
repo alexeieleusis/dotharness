@@ -718,6 +718,19 @@ class _Run:
             res = self.sh(["harness", "run", "merge", "--pr", str(number)], self.repo)
             if res.returncode != 0:
                 raise _Stop(Checkpoint.C8, f"harness run merge failed (exit {res.returncode}): {_tail(res.stderr)}")
+            # `harness run merge` exits 0 for every skip (checks pending, unviewed files, stale gate record...):
+            # only the PR's own state proves the merge happened.
+            try:
+                info = self.gh.pr_state(str(number))
+            except GitHubError as exc:
+                raise _Stop(Checkpoint.C8, str(exc)) from exc
+            if info is None or info.state.upper() != "MERGED":
+                state = info.state if info else "unknown"
+                raise _Stop(
+                    Checkpoint.C8,
+                    f"harness run merge exited 0 but PR #{number} is not merged (state {state}); "
+                    "the merge runner skipped it. Resolve the skip reason and resume to retry the merge",
+                )
 
 
 def run_item(
