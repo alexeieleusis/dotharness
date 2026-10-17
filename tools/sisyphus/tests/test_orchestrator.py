@@ -155,7 +155,7 @@ class World:
     # ---- fakes
     def agent(self, prompt: str) -> None:
         self.agent_prompts.append(prompt)
-        match = re.search(r"Save it to (\S+)", prompt)
+        match = re.search(r"Save the brief file to (\S+)\.", prompt)
         if match:
             self.events.append("agent:intake")
             brief = Path(match.group(1))

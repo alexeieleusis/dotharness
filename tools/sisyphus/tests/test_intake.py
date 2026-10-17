@@ -67,7 +67,7 @@ class FakeRunner:
 
     def __call__(self, prompt: str) -> None:
         self.prompts.append(prompt)
-        match = re.search(r"Save it to (\S+)", prompt)
+        match = re.search(r"Save the brief file to (\S+)\.", prompt)
         assert match
         Path(match.group(1)).write_text(self.brief_text)
         if self.side_effect:
