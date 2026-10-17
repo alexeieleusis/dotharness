@@ -47,6 +47,7 @@ def _mocks(
     lines=(100, 20),
     viewed="all",
     merge_rc=0,
+    size_proc=None,
 ):
     prs = [{"number": 1, "author": {"login": author}}] if prs is None else prs
     calls: list[list[str]] = []
@@ -58,9 +59,12 @@ def _mocks(
         if args[:2] == ["pr", "view"] and "number,author" in args:
             return _proc(stdout=json.dumps(prs[0]).encode())
         if args[:2] == ["pr", "view"] and "additions,deletions" in args:
+            if size_proc is not None:
+                return size_proc
             return _proc(stdout=json.dumps({"additions": lines[0], "deletions": lines[1]}).encode())
         if args[:2] == ["pr", "merge"]:
-            return _proc(returncode=merge_rc, stderr=b"boom")
+            rc = merge_rc.get(int(args[2]), 0) if isinstance(merge_rc, dict) else merge_rc
+            return _proc(returncode=rc, stderr=b"boom")
         pytest.fail(f"unexpected gh call {args}")
 
     states = {
@@ -73,6 +77,14 @@ def _mocks(
         },
         "draft": {"state": "OPEN", "isDraft": True, "mergeable": "MERGEABLE", "headRefOid": SHA},
         "conflict": {"state": "OPEN", "isDraft": False, "mergeable": "CONFLICTING", "headRefOid": SHA},
+        "unknown": {"state": "OPEN", "isDraft": False, "mergeable": "UNKNOWN", "headRefOid": SHA},
+        "auto": {
+            "state": "OPEN",
+            "isDraft": False,
+            "mergeable": "MERGEABLE",
+            "autoMergeRequest": {"mergeMethod": "SQUASH"},
+            "headRefOid": SHA,
+        },
         "unreadable": None,
     }
     ci_results = {
@@ -98,7 +110,8 @@ def _mocks(
         patch(P + "read_viewed_states", return_value=viewed_results[viewed]),
     ):
         if record is not None:
-            _write_record(tmp_path, cfg, 1, sha=record)
+            for pr in prs:
+                _write_record(tmp_path, cfg, pr["number"], sha=record)
         yield calls
 
 
@@ -134,10 +147,16 @@ def test_all_conditions_met_merges_once(tmp_path):
         ({"ci": "unreadable"}, merge.SKIP_CHECKS_READ_FAILED),
         ({"pr_state": "conflict"}, "conflicting"),
         ({"pr_state": "draft"}, "draft"),
+        ({"pr_state": "unknown"}, "mergeable-unknown"),
+        ({"pr_state": "auto"}, "auto-merge"),
         ({"pr_state": "unreadable"}, merge.SKIP_STATE_READ_FAILED),
         ({"record": None}, merge.SKIP_GATE_RECORD_MISSING),
         ({"record": "old-sha"}, merge.SKIP_GATE_RECORD_STALE),
         ({"lines": (400, 101)}, merge.SKIP_OVER_MAX_CHANGED_LINES),
+        ({"size_proc": _proc(returncode=1)}, merge.SKIP_SIZE_READ_FAILED),
+        ({"size_proc": _proc(stdout=b"not json")}, merge.SKIP_SIZE_READ_FAILED),
+        ({"size_proc": _proc(stdout=b'{"additions": null, "deletions": 3}')}, merge.SKIP_SIZE_READ_FAILED),
+        ({"size_proc": _proc(stdout=b"{}")}, merge.SKIP_SIZE_READ_FAILED),
         ({"viewed": "some"}, merge.SKIP_UNVIEWED_FILES),
         ({"viewed": "empty"}, merge.SKIP_UNVIEWED_FILES),
         ({"viewed": "unreadable"}, merge.SKIP_VIEWED_READ_FAILED),
@@ -195,6 +214,16 @@ def test_merge_failure_raises_merge_error_after_loop(tmp_path):
     cfg = _cfg(tmp_path)
     with _mocks(tmp_path, cfg, merge_rc=1), pytest.raises(MergeError, match="#1"):
         _run(cfg)
+
+
+def test_merge_failure_on_first_pr_does_not_abort_the_loop(tmp_path):
+    cfg = _cfg(tmp_path)
+    prs = [{"number": n, "author": {"login": "me"}} for n in (1, 2)]
+    with _mocks(tmp_path, cfg, prs=prs, merge_rc={1: 1}) as calls:
+        with pytest.raises(MergeError, match="#1") as exc:
+            _run(cfg)
+        assert "#2" not in str(exc.value)
+        assert [c[2] for c in _merge_calls(calls)] == ["1", "2"]
 
 
 def test_blank_current_user_is_not_author(tmp_path, caplog):
