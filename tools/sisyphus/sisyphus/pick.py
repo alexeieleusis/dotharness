@@ -349,9 +349,16 @@ class LinearTracker:
             data = json.loads(raw)
         except (OSError, ValueError) as exc:
             raise PickError(f"Linear request failed: {exc}") from exc
+        if not isinstance(data, dict):
+            raise PickError(f"Linear returned an unexpected response: {data!r}")
         if data.get("errors"):
             raise PickError(f"Linear returned errors: {data['errors']}")
-        nodes = data["data"]["issues"]["nodes"]
+        try:
+            nodes = data["data"]["issues"]["nodes"]
+        except (KeyError, TypeError) as exc:
+            raise PickError(f"Linear response has no issues: {data!r}") from exc
+        if not isinstance(nodes, list):
+            raise PickError(f"Linear response has no issues: {data!r}")
         nodes.sort(key=lambda n: ((n.get("priority") or 5), n.get("sortOrder") or 0.0))
         return [
             Candidate(

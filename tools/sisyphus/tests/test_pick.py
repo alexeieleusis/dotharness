@@ -296,6 +296,19 @@ def test_linear_tracker_errors() -> None:
         LinearTracker("k", down).list_candidates(WorkItemSource(kind="linear", assignee="Me", pick_state="Todo"))
 
 
+@pytest.mark.parametrize("raw", [b'{"data": null}', b"null", b"[]", b'{"data": {"issues": null}}'])
+def test_linear_tracker_malformed_body_raises_pick_error(raw: bytes) -> None:
+    with pytest.raises(PickError):
+        LinearTracker("k", lambda _u, _p, _h: raw).list_candidates(LIN)
+
+
+def test_linear_tracker_display_name_assignee_filter() -> None:
+    seen: list = []
+    src = WorkItemSource(kind="linear", assignee="Me", pick_state="Todo")
+    LinearTracker("k", _linear_post([], seen)).list_candidates(src)
+    assert seen[0][1]["variables"]["assignee"] == {"displayName": {"eq": "Me"}}
+
+
 def test_no_harness_or_spec_prism_flow_import() -> None:
     tree = ast.parse(Path(pick.__file__).read_text())
     names = {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
