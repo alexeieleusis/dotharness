@@ -178,7 +178,7 @@ def test_still_failing_after_fix_no_push_digest(tmp_path, caplog):
     with _mocks(tmp_path, after_rc=1) as m, caplog.at_level(logging.INFO):
         ci_fix.run(_cfg(tmp_path))
     assert m.pushes == []
-    assert ci_fix.get_attempts(SLUG, 1) == 0
+    assert ci_fix.get_attempts(SLUG, 1) == 1  # the agent ran, so the attempt counts
     assert any("still-failing" in d for d in _digests(caplog))
 
 
@@ -237,11 +237,11 @@ def test_ac8_push_is_plain_and_to_own_branch(tmp_path):
         assert cmd == ["git", "push", "origin", "my-branch"]
 
 
-def test_push_rejected_is_rebase_needed_digest_not_an_attempt(tmp_path, caplog):
+def test_push_rejected_is_rebase_needed_digest_still_an_attempt(tmp_path, caplog):
     with _mocks(tmp_path, push_rc=1) as m, caplog.at_level(logging.INFO):
         ci_fix.run(_cfg(tmp_path))
     assert len(m.pushes) == 1
-    assert ci_fix.get_attempts(SLUG, 1) == 0
+    assert ci_fix.get_attempts(SLUG, 1) == 1  # counted when the agent ran
     assert any("rebase-needed" in d for d in _digests(caplog))
 
 

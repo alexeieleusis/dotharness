@@ -136,7 +136,7 @@ Settings for the `ci-fix` runner. Off by default. Whether `ci-fix` joins `harnes
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | boolean | `false` | Turns the `ci-fix` runner on. While `false`, the runner does nothing. |
-| `max_fix_attempts` | integer | `3` | Maximum number of fix attempts per PR. Must be a positive integer. |
+| `max_fix_attempts` | integer | `3` | Maximum number of agent fix runs per PR. Must be a positive integer. |
 
 Unknown keys and invalid values (a non-boolean `enabled`, or a zero, negative, boolean or non-integer `max_fix_attempts`) raise `ConfigError` naming the key.
 

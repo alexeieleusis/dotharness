@@ -10,7 +10,7 @@ Public entry point (takes the shared working-directory lock itself, like the sib
   failing job log, finds the step command in ``.github/workflows/``, reproduces it locally,
   lets the backend agent make the smallest fix (instructions: ``knowledge/pr-review/ci-fix-prompt.md``,
   read-only), re-runs the command and, only if it passes, commits and plain-pushes to the PR's own
-  branch. One push is one attempt; at most ``max_fix_attempts`` pushes per PR, counted across runs in
+  branch. One agent run is one attempt; at most ``max_fix_attempts`` agent runs per PR, counted across runs in
   ``ci_fix_state.json``. At most one push per PR per run.
 * ``dry_run=True`` fetches, checks out and reproduces, but never commits, pushes, runs the agent or
   changes a counter.
@@ -500,6 +500,8 @@ def _agent_fix_and_push(
     )
     opencode_dir = str(config.repo.opencode_dir) if config.repo.opencode_dir else None
     pre_sha = _head(wdir, env)
+    # Count the attempt before the (expensive) agent run, so failed runs also hit the cap.
+    _record_attempt(config.repo_slug, number)
     backend.run(
         _build_instructions(prompt, check, step, before, log),
         cwd=wdir,
@@ -550,7 +552,7 @@ def _commit_if_dirty(check: _Check, wdir: str, env: dict) -> None:
 
 
 def _push(number: int, check: _Check, branch: str, config: HarnessConfig, wdir: str, env: dict) -> bool:
-    """Plain ``git push origin <branch>`` (never force, never another ref); counts one attempt on success."""
+    """Plain ``git push origin <branch>`` (never force, never another ref)."""
     result = run_cmd(["git", "push", "origin", branch], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
     if result.returncode != 0:
         stderr = _text(result.stderr)
@@ -558,7 +560,6 @@ def _push(number: int, check: _Check, branch: str, config: HarnessConfig, wdir: 
             _digest(OUTCOME_REBASE_NEEDED, number, check.name, "push rejected, the branch moved on the remote")
             return False
         raise CiFixError(f"git push to {branch} failed (exit {result.returncode}): {stderr.strip()}")  # noqa: TRY003
-    _record_attempt(config.repo_slug, number)
     logger.info("PR #%d: pushed a fix for %r to %s", number, check.name, branch)
     return True
 
