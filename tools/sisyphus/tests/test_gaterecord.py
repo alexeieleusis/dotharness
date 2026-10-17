@@ -123,3 +123,36 @@ def test_no_harness_import() -> None:
     names = {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
     names |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     assert not any(n.split(".")[0] in {"harness", "spec_prism_flow"} for n in names)
+
+
+GOLDEN = json.loads((Path(__file__).resolve().parents[2] / "contracts/gate_record_golden.json").read_text())
+
+
+@pytest.mark.parametrize("case", GOLDEN["path_cases"], ids=lambda c: c["slug"])
+def test_golden_paths_and_slugs(case: dict, tmp_path: Path) -> None:
+    slug = repo_slug_from_name(case["repo_name"])
+    assert slug == case["slug"]
+    assert gate_record_path(slug, case["pr"], tmp_path / "state") == tmp_path / case["relative_path"]
+
+
+@pytest.mark.parametrize("case", GOLDEN["fallback_slug_cases"], ids=lambda c: c["slug"])
+def test_golden_fallback_slug(case: dict) -> None:
+    assert fallback_repo_slug(case["working_dir"]) == case["slug"]
+
+
+@pytest.mark.parametrize("slug", GOLDEN["valid_slugs"])
+def test_golden_valid_slugs(slug: str) -> None:
+    assert validate_repo_slug(slug) == slug
+
+
+@pytest.mark.parametrize("slug", GOLDEN["invalid_slugs"])
+def test_golden_invalid_slugs(slug: str) -> None:
+    with pytest.raises(ValueError, match="Invalid repo slug"):
+        validate_repo_slug(slug)
+
+
+def test_golden_record_is_readable_back(tmp_path: Path) -> None:
+    sha = GOLDEN["record"]["head_sha"]
+    path = write_gate_record("acme-frontend", 1, sha, tmp_path)
+    assert set(json.loads(path.read_text())) >= set(GOLDEN["record"])
+    assert json.loads(path.read_text())["head_sha"] == sha

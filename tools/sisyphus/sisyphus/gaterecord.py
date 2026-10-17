@@ -5,6 +5,10 @@ Standard library and the stdlib-only ``sisyphus.runrecord`` only (never imports 
 ``<XDG_DATA>/state/<repo_slug>/build_gate_<PR>.json`` with ``XDG_DATA = ~/.local/share/dotharness``.
 The merge runner reads only ``head_sha`` and ignores other keys, so ``commands`` and ``passed_at``
 are informational. The record vouches for exactly one head SHA; any later push makes it stale.
+
+The two implementations are pinned together by the shared golden fixture
+``tools/contracts/gate_record_golden.json``, which both suites check (this one in
+``tests/test_gaterecord.py``, the harness in ``tests/runners/test_merge.py``).
 """
 
 # ruff: noqa: TRY003

@@ -1,0 +1,38 @@
+{
+  "_comment": "Golden fixture for the build->merge gate-record contract. Checked by tools/sisyphus/tests/test_gaterecord.py (writer) and tools/pr-review/tests/runners/test_merge.py (reader). Change it only together with both implementations.",
+  "path_cases": [
+    {
+      "repo_name": "acme/frontend",
+      "slug": "acme-frontend",
+      "pr": 7,
+      "relative_path": "state/acme-frontend/build_gate_7.json"
+    },
+    {
+      "repo_name": "Oscilar/backend",
+      "slug": "Oscilar-backend",
+      "pr": 102,
+      "relative_path": "state/Oscilar-backend/build_gate_102.json"
+    }
+  ],
+  "fallback_slug_cases": [
+    {
+      "working_dir": "/opt/golden/My Repo.git",
+      "slug": "My-Repo.git-f579e724"
+    }
+  ],
+  "valid_slugs": [
+    "acme-frontend",
+    "a.b_c-1",
+    "My-Repo.git-f579e724"
+  ],
+  "invalid_slugs": [
+    "acme/frontend",
+    "",
+    "a b",
+    "../x",
+    ".."
+  ],
+  "record": {
+    "head_sha": "0123456789abcdef0123456789abcdef01234567"
+  }
+}

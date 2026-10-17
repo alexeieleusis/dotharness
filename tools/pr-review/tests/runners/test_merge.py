@@ -1,12 +1,13 @@
 import contextlib
 import json
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
-from harness.config import HarnessConfig, HarnessSection, MergeConfig, RepoConfig
+from harness.config import HarnessConfig, HarnessSection, MergeConfig, RepoConfig, _fallback_repo_slug
 from harness.runners import merge
 from harness.runners.auto_approve_github import SafetyResult, SafetyStatus
 from harness.runners.merge import MergeError
@@ -258,3 +259,39 @@ def test_malformed_pr_list_output_is_a_collected_failure_not_a_raw_error(tmp_pat
         ):
             _run(cfg)
         assert _merge_calls(calls) == []
+
+
+_GOLDEN = json.loads((Path(__file__).resolve().parents[3] / "contracts/gate_record_golden.json").read_text())
+
+
+@pytest.mark.parametrize("case", _GOLDEN["path_cases"], ids=lambda c: c["slug"])
+def test_golden_paths_and_slugs(case, tmp_path, monkeypatch):
+    monkeypatch.setattr(merge.state, "XDG_DATA", tmp_path)
+    cfg = _cfg(tmp_path)
+    cfg.repo = RepoConfig(case["repo_name"], tmp_path)
+    assert cfg.repo_slug == case["slug"]
+    assert merge.gate_record_path(case["slug"], case["pr"]) == tmp_path / case["relative_path"]
+
+
+@pytest.mark.parametrize("case", _GOLDEN["fallback_slug_cases"], ids=lambda c: c["slug"])
+def test_golden_fallback_slug(case):
+    assert _fallback_repo_slug(Path(case["working_dir"])) == case["slug"]
+
+
+@pytest.mark.parametrize("slug", _GOLDEN["valid_slugs"])
+def test_golden_valid_slugs(slug):
+    assert merge.state._validate_repo_slug(slug) == slug
+
+
+@pytest.mark.parametrize("slug", _GOLDEN["invalid_slugs"])
+def test_golden_invalid_slugs(slug):
+    with pytest.raises(ValueError, match="Invalid repo slug"):
+        merge.state._validate_repo_slug(slug)
+
+
+def test_golden_record_is_read_back(tmp_path, monkeypatch):
+    monkeypatch.setattr(merge.state, "XDG_DATA", tmp_path)
+    path = merge.gate_record_path("acme-frontend", 1)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(_GOLDEN["record"]), encoding="utf-8")
+    assert merge.read_gate_record("acme-frontend", 1) == _GOLDEN["record"]["head_sha"]
