@@ -270,7 +270,7 @@ def _failed_step_name(log: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 _WD_RE = re.compile(r"^\s+working-directory:\s*(\S.*?)\s*$")
-_JOB_KEY_RE = re.compile(r"^  [\w.-]+:\s*$")
+_JOB_KEY_RE = re.compile(r"^ {2}[\w.-]+:\s*$")
 _DASH_RE = re.compile(r"^(\s*)-\s")
 
 
