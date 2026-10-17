@@ -12,6 +12,7 @@ from sisyphus.gaterecord import (
     gate_record_path,
     read_gate_record,
     repo_slug_from_name,
+    validate_repo_slug,
     write_gate_record,
 )
 
@@ -87,11 +88,17 @@ def test_write_is_atomic_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert [p.name for p in (tmp_path / "o-r").iterdir()] == ["build_gate_5.json"]
 
 
-@pytest.mark.parametrize("sha", ["abc", "g" * 40, "a" * 39, ""])
+@pytest.mark.parametrize("sha", ["abc", "g" * 40, "a" * 39, "", "a" * 40 + "\n"])
 def test_short_or_bad_sha_rejected_and_nothing_written(sha: str, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="40-character"):
         write_gate_record("o-r", 5, sha, tmp_path)
     assert not (tmp_path / "o-r").exists()
+
+
+@pytest.mark.parametrize("slug", [".", "..", "a\n", "", "a/b"])
+def test_validate_repo_slug_rejects_traversal_and_newline(slug: str) -> None:
+    with pytest.raises(ValueError, match="Invalid repo slug"):
+        validate_repo_slug(slug)
 
 
 def test_read_missing_or_corrupt_is_none(tmp_path: Path) -> None:

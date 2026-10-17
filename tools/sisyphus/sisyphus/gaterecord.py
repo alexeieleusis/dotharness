@@ -20,8 +20,8 @@ from pathlib import Path
 
 from sisyphus.runrecord import atomic_write_json
 
-_SLUG = re.compile(r"^[a-zA-Z0-9._-]+$")
-_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
+_SLUG = re.compile(r"[a-zA-Z0-9._-]+")
+_SHA = re.compile(r"[0-9a-fA-F]{40}")
 
 
 def xdg_data() -> Path:
@@ -47,7 +47,7 @@ def fallback_repo_slug(working_dir: str | os.PathLike[str]) -> str:
 
 def validate_repo_slug(slug: str) -> str:
     """Return ``slug`` or raise ``ValueError`` unless it is one path segment of ``[a-zA-Z0-9._-]``."""
-    if not _SLUG.match(slug):
+    if slug in {".", ".."} or not _SLUG.fullmatch(slug):
         raise ValueError(f"Invalid repo slug: {slug!r}")
     return slug
 
@@ -83,7 +83,7 @@ def write_gate_record(
     Writes a temp file in the same directory, fsyncs it, then ``os.replace``. Call it only after
     every gate command passed at exactly ``head_sha``.
     """
-    if not _SHA.match(head_sha):
+    if not _SHA.fullmatch(head_sha):
         raise ValueError(f"head_sha must be a full 40-character hex SHA, got {head_sha!r}")
     path = gate_record_path(repo_slug, pr_number, state_dir)
     data: dict[str, object] = {"head_sha": head_sha.lower()}
