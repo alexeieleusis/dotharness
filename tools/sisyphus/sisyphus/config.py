@@ -20,6 +20,7 @@ TRACKER_KINDS = ("linear", "github")
 CI_KINDS = ("github",)
 AGENT_BACKENDS = ("claude", "opencode")
 DEFAULT_PICK_LABEL = "sisyphus"
+_CI_SECTION = "source.ci"
 
 
 class ConfigError(Exception):
@@ -191,10 +192,10 @@ def _parse_source(raw: Any) -> SourceConfig:
     work_item = _parse_work_item(raw["work_item"]) if "work_item" in raw else None
     ci = None
     if "ci" in raw:
-        t = _table(raw["ci"], "source.ci", ("kind", "max_fix_attempts"))
+        t = _table(raw["ci"], _CI_SECTION, ("kind", "max_fix_attempts"))
         ci = CiSource(
-            kind=_choice(_str(t, "source.ci", "kind"), "source.ci", "kind", CI_KINDS),
-            max_fix_attempts=_posint(t, "source.ci", "max_fix_attempts", None),
+            kind=_choice(_str(t, _CI_SECTION, "kind"), _CI_SECTION, "kind", CI_KINDS),
+            max_fix_attempts=_posint(t, _CI_SECTION, "max_fix_attempts", None),
         )
     host = None
     if "host" in raw:
