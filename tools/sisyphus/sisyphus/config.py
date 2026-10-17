@@ -47,7 +47,6 @@ class WorkItemSource:
 @dataclass(frozen=True)
 class CiSource:
     kind: str | None = None
-    max_fix_attempts: int | None = None
 
 
 @dataclass(frozen=True)
@@ -78,8 +77,6 @@ class LimitsConfig:
 @dataclass(frozen=True)
 class MergeConfig:
     enabled: bool = False
-    require_all_files_viewed: bool | None = None
-    max_changed_lines: int | None = None
 
 
 @dataclass(frozen=True)
@@ -104,11 +101,12 @@ class SisyphusConfig:
     knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
 
 
-def _table(raw: Any, name: str, allowed: tuple[str, ...]) -> dict[str, Any]:
+def _table(raw: Any, name: str, allowed: tuple[str, ...], *, passthrough: bool = False) -> dict[str, Any]:
+    """Check ``raw`` is a table; unknown keys are rejected unless ``passthrough`` (harness-owned keys)."""
     if not isinstance(raw, dict):
         raise ConfigError(f"[{name}] must be a table, got {type(raw).__name__}")
     for key in raw:
-        if key not in allowed:
+        if not passthrough and key not in allowed:
             raise ConfigError(f"unknown key '{key}' in [{name}] (allowed: {', '.join(allowed)})")
     return raw
 
@@ -192,11 +190,9 @@ def _parse_source(raw: Any) -> SourceConfig:
     work_item = _parse_work_item(raw["work_item"]) if "work_item" in raw else None
     ci = None
     if "ci" in raw:
-        t = _table(raw["ci"], _CI_SECTION, ("kind", "max_fix_attempts"))
-        ci = CiSource(
-            kind=_choice(_str(t, _CI_SECTION, "kind"), _CI_SECTION, "kind", CI_KINDS),
-            max_fix_attempts=_posint(t, _CI_SECTION, "max_fix_attempts", None),
-        )
+        # Other keys (e.g. max_fix_attempts) belong to harness, which validates them.
+        t = _table(raw["ci"], _CI_SECTION, ("kind",), passthrough=True)
+        ci = CiSource(kind=_choice(_str(t, _CI_SECTION, "kind"), _CI_SECTION, "kind", CI_KINDS))
     host = None
     if "host" in raw:
         t = _table(raw["host"], "source.host", ("token_cmd",))
@@ -240,12 +236,9 @@ def _parse(data: dict[str, Any]) -> SisyphusConfig:
 
     merge = MergeConfig()
     if "merge" in data:
-        t = _table(data["merge"], "merge", ("enabled", "require_all_files_viewed", "max_changed_lines"))
-        merge = MergeConfig(
-            enabled=bool(_bool(t, "merge", "enabled", False)),
-            require_all_files_viewed=_bool(t, "merge", "require_all_files_viewed", None),
-            max_changed_lines=_posint(t, "merge", "max_changed_lines", None),
-        )
+        # Only ``enabled`` is read here; the remaining keys are harness-owned and validated there.
+        t = _table(data["merge"], "merge", ("enabled",), passthrough=True)
+        merge = MergeConfig(enabled=bool(_bool(t, "merge", "enabled", False)))
 
     digest = DigestConfig()
     if "digest" in data:

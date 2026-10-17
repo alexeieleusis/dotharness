@@ -87,13 +87,11 @@ conventions_path = "c"
     assert cfg.project.brief_path_template == "b/{id}.md"
     assert cfg.project.base_branch is None
     assert cfg.source.ci is not None
-    assert cfg.source.ci.max_fix_attempts == 2
     assert cfg.source.host is not None
     assert cfg.source.host.token_cmd == "gh auth token"  # noqa: S105
     assert cfg.agent.backend == "opencode"
     assert cfg.limits.max_run_minutes == 10
     assert cfg.merge.enabled is True
-    assert cfg.merge.max_changed_lines == 50
     assert cfg.knowledge.conventions_path == "c"
 
 
@@ -138,11 +136,9 @@ def test_unknown_top_level(tmp_path: Path) -> None:
         "project",
         "source",
         "source.work_item",
-        "source.ci",
         "source.host",
         "agent",
         "limits",
-        "merge",
         "digest",
         "knowledge",
     ],
@@ -204,8 +200,6 @@ def test_relative_paths_verbatim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         ("[project]\n[limits]\nmax_run_minutes = 1.5\n", "max_run_minutes"),
         ("[project]\n[limits]\nmax_run_minutes = true\n", "max_run_minutes"),
         ('[project]\n[merge]\nenabled = "yes"\n', "enabled"),
-        ("[project]\n[merge]\nrequire_all_files_viewed = 1\n", "require_all_files_viewed"),
-        ('[project]\n[source.ci]\nmax_fix_attempts = "3"\n', "max_fix_attempts"),
         ("[project]\nsource = 1\n", "source"),
         ("project = 1\n", "project"),
     ],
@@ -224,11 +218,11 @@ def test_limits_positive(tmp_path: Path, key: str, value: int) -> None:
         load_config(write(tmp_path, MIN + f"[limits]\n{key} = {value}\n"))
 
 
-def test_optional_positive_ints(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="max_changed_lines"):
-        load_config(write(tmp_path, MIN + "[merge]\nmax_changed_lines = 0\n"))
-    with pytest.raises(ConfigError, match="max_fix_attempts"):
-        load_config(write(tmp_path, MIN + "[source.ci]\nmax_fix_attempts = -2\n"))
+def test_harness_owned_keys_pass_through(tmp_path: Path) -> None:
+    text = MIN + "[merge]\nmax_changed_lines = 0\nfuture_key = 1\n[source.ci]\nmax_fix_attempts = -2\nfuture = 1\n"
+    cfg = load_config(write(tmp_path, text))
+    assert cfg.merge.enabled is False
+    assert cfg.source.ci is not None
 
 
 def test_invalid_toml(tmp_path: Path) -> None:
