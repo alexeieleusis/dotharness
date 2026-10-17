@@ -54,10 +54,13 @@ def _mocks(
     push_rc=0,
     pr_state=None,
     backend_raises=None,
+    status=b"",
+    agent_commits=True,
 ):
     prs = [_pr()] if prs is None else prs
     head = {"sha": "sha0"}
     pushes: list[list[str]] = []
+    cmds: list[list[str]] = []
     step_results = [_proc(repro_rc, b"boom"), _proc(after_rc)]
 
     def fake_gh(args, env):
@@ -65,10 +68,14 @@ def _mocks(
         return _proc(0, json.dumps(data).encode())
 
     def fake_run_cmd(cmd, cwd, env, timeout, check=True, shell=False):
+        cmds.append(cmd)
+        if cmd[:2] == ["git", "commit"]:
+            head["sha"] = f"commit-{head['sha']}"
+            return _proc(0)
         if cmd[:2] == ["git", "rev-parse"]:
             return _proc(0, head["sha"].encode())
         if cmd[:2] == ["git", "status"]:
-            return _proc(0, b"")
+            return _proc(0, status)
         if cmd[:2] == ["git", "push"]:
             pushes.append(cmd)
             return _proc(push_rc, b"", b"! [rejected] (non-fast-forward)" if push_rc else b"")
@@ -77,7 +84,8 @@ def _mocks(
     def backend_run(*args, **kwargs):
         if backend_raises:
             raise backend_raises
-        head["sha"] = f"sha-{len(pushes)}-{head['sha']}"
+        if agent_commits:
+            head["sha"] = f"sha-{len(pushes)}-{head['sha']}"
         return _proc(0)
 
     backend = MagicMock()
@@ -110,6 +118,7 @@ def _mocks(
             restore=restore,
             run_step=run_step,
             pushes=pushes,
+            cmds=cmds,
             backend=backend,
             backend_cls=backend_cls,
         )
@@ -145,6 +154,25 @@ def test_ac2_reproduced_and_fixed_pushes_once_to_same_branch(tmp_path):
     assert "**Failure to fix**" in instructions
     assert "make check" in instructions
     m.restore.assert_called_once()
+
+
+def test_uncommitted_agent_edits_are_committed_before_the_single_push(tmp_path):
+    with _mocks(tmp_path, status=b" M f.py", agent_commits=False) as m:
+        ci_fix.run(_cfg(tmp_path))
+    add = m.cmds.index(["git", "add", "-u"])
+    commit = m.cmds.index(["git", "commit", "-m", "ci-fix: Run checks"])
+    assert add < commit < m.cmds.index(["git", "push", "origin", "feat"])
+    assert m.pushes == [["git", "push", "origin", "feat"]]
+    assert ["git", "add", "-A"] not in m.cmds
+
+
+def test_agent_changes_nothing_while_step_passes_is_not_reproduced(tmp_path, caplog):
+    with _mocks(tmp_path, agent_commits=False) as m, caplog.at_level(logging.INFO):
+        ci_fix.run(_cfg(tmp_path))
+    assert m.pushes == []
+    assert not any(c[:2] == ["git", "commit"] for c in m.cmds)
+    assert ci_fix.get_attempts(SLUG, 1) == 1  # the agent ran, so the attempt counts
+    assert any("did-not-reproduce" in d and "no change to the branch" in d for d in _digests(caplog))
 
 
 def test_ac3_cap_reached_across_runs_writes_digest(tmp_path, caplog):
