@@ -7,7 +7,7 @@ author has answered the reviewer's comments. It is off until you set
 `[auto_approve].enabled = true`.
 
 Every other command only posts findings and leaves the decision to a human.
-This one deliberately does not (see [`review-requested`](review-requested.md)).
+This one deliberately does not leave that to a human (see [`review-requested`](review-requested.md)).
 
 ## Usage
 ```
@@ -38,12 +38,9 @@ nothing and exits 0. It does not even take the lock.
 4. Checks the timing rule, then the safety conditions. All reads happen before
    any write.
 5. Marks each file with fewer than `viewed_max_lines` modified lines as
-   viewed, and approves the PR if its total is fewer than `approve_max_lines`.
-   A PR of any size is also approved once every one of its files is viewed
-   (marked by you in the GitHub UI, or by this command). That waives only the
-   size limit: the timing rule, the safety conditions, the already-approved
-   check and the head-SHA binding still apply, so the PR author must have
-   commented or pushed after the review first.
+   viewed. It approves the PR if its total is fewer than `approve_max_lines`.
+   A PR of any size is also approved once all of its files are viewed
+   (marked by you in the GitHub UI, or by this command). That waives only the size limit. The timing rule, the safety conditions, the already-approved check and the head-SHA binding still apply. So the PR author must have commented or pushed after the review first.
 
 Comparisons are strictly "less than". A threshold of `0` never matches, so it
 turns that half of the feature off.
@@ -51,8 +48,7 @@ turns that half of the feature off.
 ## The timing rule
 
 Nothing happens until the PR author has responded to the reviewer. The
-command looks at the account running it: once it has left comments, the PR
-author must comment or push a commit after the newest of them. Until then the
+command looks at the account running it. Once that account has left comments, the PR author must comment or push a commit after the newest of them. Until then the
 PR is left alone and checked again on the next run. This is why the command
 is separate from the review commands: it needs to run on a later pass than the
 one that posted the comments.
@@ -89,11 +85,8 @@ approval after more commits is manual.
 ## State and idempotency
 
 The command is stateless. It reads GitHub on every run and keeps no state
-file. Files already marked viewed are skipped, and a PR the account has
-already approved is skipped, so re-running is safe.
+file. Files already marked viewed are skipped, and a PR that the account has already approved is skipped, so re-running is safe.
 
 ## Errors
 
-If any PR fails (a read failed, a write failed, a git error), the command
-logs it, keeps going with the other PRs, and exits non-zero at the end with
-the list of failures. In `harness run all` this makes `all` exit non-zero.
+If any PR fails (a read failed, a write failed, or a git error), the command logs the failure and continues with the other PRs. At the end it exits non-zero with the list of failures. In `harness run all` this makes `all` exit non-zero.

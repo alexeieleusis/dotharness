@@ -2,8 +2,8 @@
 
 `ci-fix` fixes CI overnight on your own open pull requests. For each PR you
 authored whose required checks have failed, it reproduces the failure locally,
-makes the smallest fix, and pushes it to the PR's own branch, with the goal of
-making CI green. It is off until you set `[ci_fix].enabled = true`
+makes the smallest fix, and pushes it to the PR's own branch to make CI green.
+It is off until you set `[ci_fix].enabled = true`
 (`enabled = false` by default).
 
 It never approves or merges a PR. Approving belongs to
@@ -49,7 +49,7 @@ exits 0. It does not even take the lock.
 11. Restores state with `git_restore`.
 
 The target is "make it green". There is no fixed table mapping CI jobs to
-commands; the command comes from the workflow file each time.
+commands. The command comes from the workflow file each time.
 
 ## Bounds
 
@@ -84,20 +84,20 @@ Settings live in the `[ci_fix]` section of `.harness.toml` (see
   reproduce, the attempt cap was reached, the check output could not be
   parsed, a rebase is needed, or the check is still failing after a fix.
 
-Attempt counters and digest entries are written by the runner; this page only
+Attempt counters and digest entries are written by the runner. This page only
 describes them.
 
 ## The fix prompt
 
 The fixing agent is instructed by `knowledge/pr-review/ci-fix-prompt.md`. The
-runner uses that file as-is; change the file to change how the agent works.
+runner uses that file as-is. Edit the file to change how the agent works.
 
 ## Known limitation
 
 `gh pr checks` can exit with code 8 while still printing JSON. That
 combination is not verified against live GitHub (PR #96). The command
 reads the output the way `auto-approve` does: exit code 8 with empty output
-means the status is unknown; otherwise the JSON is parsed, and output that is
+means the status is unknown. Otherwise the JSON is parsed, and output that is
 not a list of check objects also means unknown. If parsing fails, the PR gets
 a digest entry instead of a fix attempt.
 

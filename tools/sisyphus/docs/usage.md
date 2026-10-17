@@ -1,7 +1,7 @@
 # Usage
 
 `sisyphus` is a single-shot command line tool. One invocation reads one config, does one pass and exits.
-There is no daemon, no loop and no scheduler installer; run it from cron or launchd.
+There is no daemon, no loop and no scheduler installer. Run it from cron or launchd.
 
 ```
 sisyphus run --config <file> [--base <branch>]
@@ -17,20 +17,20 @@ sisyphus resume <work-item-ref> --config <file> [--base <branch>]
    invocation (awaiting-review check, pick, every item, digest write). If another run holds it, exits 0
    quietly before doing anything else.
 3. Auto-resumes stopped items whose blocker is cleared (see "Stopped items and resume"), oldest stop first.
-   Items still waiting for you never stop the loop; they are listed under "Needs you" as "Awaiting you".
+   Items still waiting for you never stop the loop. They are listed under "Needs you" as "Awaiting you".
 4. If an earlier Sisyphus PR (a run record that reached the PR stage, not stopped at a checkpoint, whose branch
    still has an open PR) awaits review, skips picking and reports it under "Needs you" in the digest.
-   Otherwise picks as many new items as are left of `[limits].max_tickets_per_run` (default 1; resumed and new
+   Otherwise picks as many new items as are left of `[limits].max_tickets_per_run` (default 1. Resumed and new
    items share it) that the tracker offers and Sisyphus has not started (no run record):
    - Linear: assigned to `assignee`, in `pick_state`, in Linear's priority order (urgent first, no priority
      last).
-   - GitHub: open, assigned to `assignee`, labelled `pick_label` (default `sisyphus`), oldest first; an issue
+   - GitHub: open, assigned to `assignee`, labelled `pick_label` (default `sisyphus`), oldest first. An issue
      with an open linked PR, or one mentioned as `#N` in an open PR body, is skipped. Merged or closed PRs do
      not exclude an issue.
 5. Runs each item through the orchestrator (intake, plan, build, push, open PR, optional ci-fix and merge) and
-   stops at the first checkpoint (C1..C8). Before starting each further item it checks `max_run_minutes`; once
+   stops at the first checkpoint (C1..C8). Before starting each further item it checks `max_run_minutes`. Once
    exceeded it starts nothing else and notes it under "Limits hit" (exit 0).
-6. Writes one merged digest to `[digest].path_template`. An existing file is never overwritten: a second run
+6. Writes one merged digest to `[digest].path_template`. It never overwrites an existing file: a second run
    on the same day writes `digest-<date>-2.md`, then `-3`, and so on.
 
 Nothing to do prints nothing and exits 0. When something ran, one line per item and the digest path go to
@@ -41,14 +41,14 @@ then `main`. `main` is the correct base for normal use. Only if you work on your
 whose PR targets another unmerged branch) do you need `--base` or the config key to point at that parent branch.
 
 The CLI takes the clone lock once, at the start of `run` and `intake`, and releases it when the invocation ends
-(including on error). It calls the orchestrator with `lock_held=True` so the orchestrator does not lock again
-(`flock` is not re-entrant), so there is no unlocked window between the pick and the items or between items.
+(including on error). It calls the orchestrator with `lock_held=True`. The orchestrator does not lock again
+(`flock` is not re-entrant). There is no unlocked window between the pick and the items, or between items.
 
 ### Credentials and backends
 
-Credentials come only from the inherited environment and `[source.host].token_cmd` (no shell; its stdout is
+Credentials come only from the inherited environment and `[source.host].token_cmd` (no shell. Its stdout is
 the token, passed to `gh` as `GH_TOKEN` only). Linear always reads its API key from `LINEAR_API_KEY` in the
-environment; `token_cmd` is never sent to Linear. `gh` must be installed and able to reach the repository.
+environment. `token_cmd` is never sent to Linear. `gh` must be installed and able to reach the repository.
 
 `[agent].backend` selects the agent command, run inside `repo_dir`:
 
@@ -64,20 +64,20 @@ does not scrub the environment: the agent inherits the full environment of the `
 `gh` calls Sisyphus makes itself, not to the agent command.) Intake feeds ticket and issue text to the agent, so
 a prompt injection in that text could try to exfiltrate those credentials or push elsewhere. Mitigate it by:
 
-- using a least-privilege token scoped to the one repository (and a Linear key limited to what is needed);
-- running Sisyphus under a dedicated OS user or in a container, with nothing else of value reachable;
+- using a least-privilege token scoped to the one repository (and a Linear key limited to what is needed).
+- running Sisyphus under a dedicated OS user or in a container, with nothing else of value reachable.
 - preferring `token_cmd` over exporting tracker credentials in the environment, and keeping them out of the
   crontab/plist environment.
 
 Real `claude`/`opencode`,
 `gh`, Linear and `git push` calls are built from subprocess and `urllib` and are covered by tests with fakes
-only; they have not been exercised against the real services.
+only. They have not been exercised against the real services.
 
 ## `sisyphus intake`
 
 Runs only the intake stage for one work item reference: the agent drafts the brief at the path from
 `brief_path_template`. Prints `brief: <path>` and any open decisions (checkpoint C1). Needs
-`[project].repo_dir`, `workspace_dir` and `brief_path_template`. Takes the same lock; exits 0 quietly if held.
+`[project].repo_dir`, `workspace_dir` and `brief_path_template`. Takes the same lock. Exits 0 quietly if held.
 
 ## Stopped items and resume
 
@@ -91,27 +91,27 @@ or a resume.
 answer in files under `workspace_dir` (outside the repo): the brief, or an answer file. Each item has its own
 branch `sisyphus/<slug>-<8 hex>`, so partial work stays on its branch while another item runs. The clone must
 be clean between items: a new item, and a build checkout, refuse to start on a dirty clone (checkpoint C8 plus a
-digest entry); Sisyphus never stashes, resets or discards anything. A resume at push, PR, ci-fix or merge checks
+digest entry). Sisyphus never stashes, resets or discards anything. A resume at push, PR, ci-fix or merge checks
 out the item's own branch first (or, if it was already deleted after a clean finish, works from `origin/<branch>`
-detached); committed work is never redone.
+detached). Committed work is never redone.
 
 **Local branch cleanup.** After a clean finish (every wanted stage complete, no checkpoint, no error, no stop or
 abandoned mark, and the branch was created by Sisyphus) the local branch is deleted so the clone does not collect
 stale branches. It is kept, with a `Branch kept: REF <branch> ...` note in the digest's Deviations, unless the
 clone is clean, base can be switched to and fast-forwarded from `origin/<base>`, and one proof holds (checked in this
-order, cheapest first): (1) the head is an ancestor of `origin/<branch>`; (2) the head is an ancestor of
-`origin/<base>` (a merge-commit or rebase merge, even after GitHub deleted the remote branch); (3) `gh pr view`
+order, cheapest first): (1) the head is an ancestor of `origin/<branch>`. (2) the head is an ancestor of
+`origin/<base>` (a merge-commit or rebase merge, even after GitHub deleted the remote branch). (3) `gh pr view`
 says the PR is MERGED with a head equal to the local head. After (1) or (2) `git branch -d` must agree (a refusal keeps the branch). A squash-merged branch is proven by (3)
-and deleted with `git branch -D`, which is used on that path only (never `--force`, no recovery ref; the reflog is
+and deleted with `git branch -D`, which is used on that path only (never `--force`, no recovery ref. The reflog is
 the last resort). When nothing is proven the note lists each proof tried and why it failed.
-Never a remote branch or PR change. A deletion is shown under Done and names the proof used; for proof (3) it gives
+Never a remote branch or PR change. A deletion is shown under Done and names the proof used. For proof (3) it gives
 the full head SHA, the PR number and `git fetch origin pull/<N>/head`, which recovers the commit from GitHub. Rerunning after the branch is gone
 is a silent no-op. `harness run ci-fix` and `merge` do not need the local branch (ci-fix does
-`checkout -B <branch> origin/<branch>` itself; merge uses no checkout). The run record, digest, stop and answer
+`checkout -B <branch> origin/<branch>` itself. Merge uses no checkout). The run record, digest, stop and answer
 files and `<brief>.intake.json` are never deleted.
 
 **Answering.** C1: edit the brief and mark each open decision resolved. C2, C3, C4: write your answer to
-`<workspace_dir>/<item-encoded>.answer.md` (the path is in the action text; any non-empty text counts). The
+`<workspace_dir>/<item-encoded>.answer.md` (the path is in the action text. Any non-empty text counts). The
 agent gets the answer text with its next prompt and the file is renamed `*.answer.md.used`.
 
 **Automatic or explicit.** Each `run` first resumes the stopped items that are cleared, with no agent call
@@ -125,12 +125,12 @@ run record or the item is not stopped, and exits 0 quietly if another invocation
 |---|---|---|---|---|
 | C1 | brief has open decisions | edit the brief, mark them resolved | automatic (brief re-parsed) | re-parses the brief (never redrafts it), then plan init, plan, build, push, PR |
 | C2 | OPEN_QUESTIONS.md unresolved after draft-overview | write the answer file | automatic (answer file) | re-runs the plan stage with your answer, then build |
-| C3 | a leaf has an open question | write the answer file | automatic (answer file) | re-runs build with your answer; the build prompt continues from the stopped leaf |
+| C3 | a leaf has an open question | write the answer file | automatic (answer file) | re-runs build with your answer. The build prompt continues from the stopped leaf |
 | C4 | a leaf deviation may change later leaves | write the answer file (accept or redirect) | automatic (answer file) | same as C3 |
-| C5 | retries exhausted, scope violation or a failed gate | decide: change the leaf or config, or fix the cause; to give the build another budget run `sisyphus resume REF --config F --reset-retries` | explicit | re-runs the stage; the build retry budget (3) is kept, so an exhausted budget stops again at C5 without a new agent run, unless you pass `--reset-retries` (below), which gives the build a fresh budget of 3 (it does not skip the build) |
-| C6 | a limit was hit | raise the limit in `.sisyphus.toml` (`max_run_minutes` needs nothing: the clock is per invocation) | explicit | leaf limit: re-counts the leaves, no re-plan; fix attempts: counter kept; time limit: continues at the next stage |
+| C5 | retries exhausted, scope violation or a failed gate | decide: change the leaf or config, or fix the cause. To give the build another budget, run `sisyphus resume REF --config F --reset-retries` | explicit | re-runs the stage. The build retry budget (3) is kept, so an exhausted budget stops again at C5 without a new agent run, unless you pass `--reset-retries` (below), which gives the build a fresh budget of 3 (it does not skip the build) |
+| C6 | a limit was hit | raise the limit in `.sisyphus.toml` (`max_run_minutes` needs nothing: the clock is per invocation) | explicit | leaf limit: re-counts the leaves, no re-plan. Fix attempts: counter kept. Time limit: continues at the next stage |
 | C7 | branch cannot be updated without rebase | no automatic way out: run `sisyphus abandon REF --config F` (the branch and any PR stay as they are for you to handle) | explicit | after you fixed the branch outside Sisyphus: re-runs the push or ci-fix stage on the same branch and PR |
-| C8 | gh, Linear, git network call failed, or a dirty clone | fix access; for a dirty clone clean it yourself | automatic retry after 30 minutes, 3 times, then explicit | retries the failed call in the same stage |
+| C8 | gh, Linear, git network call failed, or a dirty clone | fix access. For a dirty clone, clean it yourself | automatic retry after 30 minutes, 3 times, then explicit | retries the failed call in the same stage |
 | error | unexpected exception | fix the cause shown | explicit | re-runs the in-progress stage |
 
 ## Fresh retry budget: `resume --reset-retries`
@@ -152,7 +152,7 @@ It resets the counters of the stage recorded in the item's run record, nothing e
 
 `auto-retry` is the C8 automatic-resume count (stage independent). `branch-created` is not a retry counter (it
 records that Sisyphus made the branch, which the push guard relies on) and `plan:leaf-limit` is a marker that
-stops a C6 resume re-planning; neither is ever reset. The mapping is `resume.RESET_KEYS`. If the recorded stage
+stops a C6 resume re-planning. Neither is ever reset. The mapping is `resume.RESET_KEYS`. If the recorded stage
 has no counter above zero (for example an item stopped at C1) the flag is still accepted: it records a reset with
 no keys ("no counters to reset") and continues.
 
@@ -175,7 +175,7 @@ message otherwise) and then:
   you to decide by hand.
 
 Abandoning an already abandoned item is a no-op (exit 0). `status` shows `state: abandoned`, `abandoned_at` and
-the `re-enable` command; the digest lists a short "Abandoned" note under Deviations (not under "Needs you").
+the `re-enable` command. The digest lists a short "Abandoned" note under Deviations (not under "Needs you").
 
 **Re-enabling is deliberate:** `sisyphus resume REF --config F --again` clears the abandoned mark and resumes
 from the recorded stage (without `--again`, `resume` refuses an abandoned item and says so). `--again` on an item
@@ -187,7 +187,7 @@ flag says "I know I abandoned this".
 `sisyphus status [REF] --config F` is read-only (no lock, no agent). For each item (all items without REF) it
 prints stage, stage_status, checkpoint (`state: abandoned` plus `abandoned_at` and `re-enable` for an abandoned item), `awaiting` (`you` for a checkpoint, `error`, `review` for an open PR,
 `none`), and for a stopped item the question, action, resume command and auto-resume rule (with whether it is
-cleared now) and every recorded `Retry reset:` line. No items prints `no items`; an unknown REF exits 1.
+cleared now) and every recorded `Retry reset:` line. No items prints `no items`. An unknown REF exits 1.
 
 ## Exit codes
 
@@ -196,7 +196,7 @@ cleared now) and every recorded `Retry reset:` line. No items prints `no items`;
 | 0 | success, nothing to do, lock held, or a run stopped at a checkpoint (C1..C8) after its digest was written (the checkpoint is in the digest's "Needs you" section) |
 | 1 | an unhandled error, a config error, `resume`/`status` of an item that has no record (or `resume` of one that is not stopped), or a digest that cannot be written (message on stderr) |
 
-The digest is always attempted when anything ran, even if the run failed early; the failure is recorded in
+The digest is always attempted when anything ran, even if the run failed early. The failure is recorded in
 its Deviations section.
 
 ## Scheduling
@@ -211,7 +211,7 @@ cron mailer stays quiet.
 */30 * * * * cd /path/to/dedicated/clone && /usr/local/bin/sisyphus run --config /path/to/.sisyphus.toml --base main >> "$HOME/.local/state/sisyphus.log" 2>&1
 ```
 
-Cron has a minimal `PATH`; use absolute paths, or set `PATH` (so `gh`, `git`, `claude` are found) at the top of
+Cron has a minimal `PATH`. Use absolute paths, or set `PATH` (so `gh`, `git`, `claude` are found) at the top of
 the crontab.
 
 ### launchd

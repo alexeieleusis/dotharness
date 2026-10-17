@@ -3,7 +3,7 @@
 > Every value in angle brackets below is a parameter. The caller substitutes all of them
 > before you see this text. This prompt names the files you must follow. It does not copy them.
 
-You orchestrate one stage of the work for a single work item. Run only the stage named here.
+You orchestrate one stage for a single work item. Run only the stage named here.
 
 - Stage to run now: `<stage>` (either `plan` or `build`)
 - Work item: <work-item reference>
@@ -21,37 +21,43 @@ You orchestrate one stage of the work for a single work item. Run only the stage
 ## First
 
 Read the lifecycle cheat sheet, especially the section "Delegating plan and build to
-sub-agents". Follow it for how to split the work among sub-agents.
+sub-agents". Follow it to split the work among sub-agents.
 
 ## If the stage is `plan`
 
-Run exactly one plan sub-agent. Give it the plan prompt, the phase configuration file and the
-brief, and have it follow the plan prompt end to end. Do not ask a person to review the overview
-alone; an unreviewed overview does not stop the stage. Stop only when the open-questions file
+Run exactly one plan sub-agent. Give it the plan prompt, the phase configuration file, and the brief. Have it
+follow the plan prompt end to end. Do not ask a person to review the overview
+alone. An unreviewed overview does not stop the stage. Stop only when the open-questions file
 that the planning step writes contains entries that cannot be resolved from the repository. In
-that case write the stop report with checkpoint `C2` and return. Do not build, push or open a
+that case, write the stop report with checkpoint `C2` and return. Do not build, push or open a
 pull request.
 
 ## If the stage is `build`
 
 Run exactly one build sub-agent, working inside the target repository checkout on the target
-branch. Give it the build prompt and the phase configuration file, and have it follow the build
-prompt. Do not use any automated end-to-end build command; the build prompt describes the
-per-leaf procedure to use instead.
+branch. Give it the build prompt and the phase configuration file. Have it follow the
+build prompt. Do not use any automated end-to-end build command. The build prompt describes
+the per-leaf procedure to use instead.
 
 The build sub-agent launches one sub-agent per leaf, strictly one after the other and never in
 parallel. For each leaf:
 
-- require a handoff summary in the template the build prompt gives;
-- save it to `handoffs/NN-<leaf name>.md` inside the workspace directory;
+- require a handoff summary in the template the build prompt gives.
+- save it to `handoffs/NN-<leaf name>.md` inside the workspace directory.
 - give the paths of every earlier summary to the next leaf's sub-agent.
 
-Commit only to the target branch. Never push, never open or edit a pull request, never approve
-or merge, never rewrite history, and never change the base branch.
+Commit only to the target branch. Never do any of the following:
+
+- push
+- open or edit a pull request
+- approve or merge
+- rewrite history
+- change the base branch
 
 ## When to stop
 
-Stop immediately, do not guess, and do not start a later leaf when any of these happens. Write
+When any of these happens, stop immediately. Do not guess. Do not start a later
+leaf. Write
 the stop report, then return:
 
 - A leaf reports an open question: checkpoint `C3`.
@@ -61,6 +67,6 @@ the stop report, then return:
   scope: checkpoint `C5`.
 
 The stop report is a JSON object with the keys `checkpoint` (one of the codes above), `leaf`
-(the leaf name, or an empty string) and `detail` (what a person needs to decide, in plain
+(the leaf name, or an empty string), and `detail` (what a person needs to decide, in plain
 words). When the stage finishes without a stop, do not write the stop report. Finish by listing
-every commit, every deviation and every question that was raised.
+every commit, every deviation, and every question that was raised.

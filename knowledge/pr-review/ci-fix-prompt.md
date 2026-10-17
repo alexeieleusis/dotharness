@@ -13,14 +13,14 @@ After you are done, the runner decides whether to push the branch to origin — 
 
 ## Step 1 — Understand the failure
 
-Read the check name and the log excerpt. Read the files the log points at. Work out the root cause before editing anything.
+Read the check name and the log excerpt. Read the files the log points at. Determine the root cause before editing anything.
 
 ---
 
 ## Step 2 — Make the smallest fix
 
-1. Make the smallest change that makes the reproducing command pass.
-2. Do **not** make unrelated changes: no drive-by fixes, no refactors, no formatting of code you did not need to touch.
+1. Make the smallest change so the reproducing command passes.
+2. Do **not** make unrelated changes: no incidental fixes, no refactors, no formatting of code you did not need to touch.
 3. Do **not** touch CI configuration (workflow files, CI settings) unless the failure itself is in that configuration.
 
 **If the failure needs a rebase, or cannot be fixed by a small change, stop.** Change no files and report that instead.
@@ -35,7 +35,7 @@ Re-run the same reproducing command after your change. **Report pass or fail exp
 
 ## Step 4 — Commit
 
-If you want a commit, create a brand new commit on top of the current HEAD. Stage only the files you changed (never `git add -A`). Never use `--no-verify`.
+If you commit, create a new commit on top of the current HEAD. Stage only the files you changed (never `git add -A`). Never use `--no-verify`.
 
 ---
 

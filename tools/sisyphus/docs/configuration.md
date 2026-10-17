@@ -1,9 +1,9 @@
 # Configuration
 
-Each target repository declares its Sisyphus settings in a `.sisyphus.toml` file, loaded by
-`sisyphus.config.load_config(path)`. The file is validated when it is loaded: unknown keys, unsupported
-kinds, wrong value types, non-positive limits and mixed trackers all fail with a `ConfigError` that names
-the section and key.
+Each target repository declares its Sisyphus settings in a `.sisyphus.toml` file.
+`sisyphus.config.load_config(path)` loads and validates the file. It fails with a `ConfigError` that names
+the section and key when the file has unknown keys, unsupported kinds, wrong value types, non-positive limits,
+or mixed trackers.
 
 ## Path rule
 
@@ -31,8 +31,8 @@ default is listed.
 | `base_branch` | string | none (the CLI falls back to `main`) |
 
 `base_branch` is the PR base branch. Precedence: `sisyphus run --base <branch>`, then `[project].base_branch`,
-then `main`. `main` is the correct base for normal use. Only if you work on your own stacked branch (a branch
-whose PR targets another unmerged branch) do you need `--base` or this key to point at that parent branch.
+then `main`. `main` is the correct base for normal use. You need `--base` or this key only if you work on your own stacked branch (a branch whose PR targets
+another unmerged branch). Set it to point at that parent branch.
 
 ### `[source.work_item]`
 
@@ -82,7 +82,7 @@ All values are positive integers.
 
 ### `[merge]`
 
-Parsed and validated only; the merge runner is separate.
+Parsed and validated only. The merge runner is separate.
 
 | Key | Type | Default |
 |---|---|---|

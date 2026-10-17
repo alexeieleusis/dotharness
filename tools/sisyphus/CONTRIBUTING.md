@@ -1,6 +1,6 @@
 # Contributing to `sisyphus`
 
-Contributions are welcome, and they are greatly appreciated!
+Contributions are welcome and appreciated!
 Every little bit helps, and credit will always be given.
 
 You can contribute in many ways:
@@ -19,21 +19,21 @@ If you are reporting a bug, please include:
 
 ## Fix Bugs
 
-Look through the GitHub issues for bugs.
-Anything tagged with "bug" and "help wanted" is open to whoever wants to implement a fix for it.
+Review the GitHub issues for bugs.
+Anything tagged with "bug" and "help wanted" is open to whoever wants to implement a fix.
 
 ## Implement Features
 
-Look through the GitHub issues for features.
+Review the GitHub issues for features.
 Anything tagged with "enhancement" and "help wanted" is open to whoever wants to implement it.
 
 ## Write Documentation
 
-sisyphus could always use more documentation, whether as part of the official docs, in docstrings, or even on the web in blog posts, articles, and such.
+sisyphus could always use more documentation, whether as part of the official docs, in docstrings, or even on the web in blog posts or articles.
 
 ## Submit Feedback
 
-The best way to send feedback is to file an issue at https://github.com/alexeieleusis/dotharness/issues.
+To send feedback, file an issue at https://github.com/alexeieleusis/dotharness/issues.
 
 If you are proposing a new feature:
 
@@ -44,8 +44,8 @@ If you are proposing a new feature:
 
 # Get Started!
 
-Ready to contribute? Here's how to set up `sisyphus` for local development.
-Please note this documentation assumes you already have `uv` and `Git` installed and ready to go.
+Ready to contribute? Here's how to prepare `sisyphus` for local development.
+Note that this documentation assumes you already have `uv` and `Git` installed.
 
 1. Fork the `sisyphus` repo on GitHub.
 
@@ -56,7 +56,7 @@ cd <directory_in_which_repo_should_be_created>
 git clone git@github.com:YOUR_NAME/sisyphus.git
 ```
 
-3. Now we need to install the environment. Navigate into the directory
+3. Install the environment. Navigate into the `sisyphus` directory:
 
 ```bash
 cd sisyphus
@@ -82,29 +82,29 @@ git checkout -b name-of-your-bugfix-or-feature
 
 Now you can make your changes locally.
 
-6. Don't forget to add test cases for your added functionality to the `tests` directory.
+6. Add test cases for your changes to the `tests` directory.
 
-7. When you're done making changes, check that your changes pass the formatting tests.
+7. When you're done, check that your changes pass the formatting tests:
 
 ```bash
 make check
 ```
 
-Now, validate that all unit tests are passing:
+Then, validate that all unit tests pass:
 
 ```bash
 make test
 ```
 
-9. Before raising a pull request you should also run tox.
-   This will run the tests across different versions of Python:
+9. Before raising a pull request, you should also run tox.
+   This runs the tests across multiple Python versions:
 
 ```bash
 tox
 ```
 
-This requires you to have multiple versions of python installed.
-This step is also triggered in the CI/CD pipeline, so you could also choose to skip this step locally.
+This requires multiple versions of Python to be installed.
+This step also runs in the CI/CD pipeline, so you could skip it locally.
 
 10. Commit your changes and push your branch to GitHub:
 
@@ -122,5 +122,5 @@ Before you submit a pull request, check that it meets these guidelines:
 
 1. The pull request should include tests.
 
-2. If the pull request adds functionality, the docs should be updated.
-   Put your new functionality into a function with a docstring, and add the feature to the list in `README.md`.
+2. If the pull request adds a feature, you should update the docs.
+   Put your new feature into a function with a docstring, and add it to the list in `README.md`.
