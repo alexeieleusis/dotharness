@@ -21,7 +21,7 @@ from sisyphus.config import SisyphusConfig
 from sisyphus.rails import Checkpoint
 from sisyphus.runrecord import STAGE_COMPLETE, RunRecord
 from sisyphus.stages import CI_FIX_STAGE, MERGE_STAGE
-from sisyphus.stoprecord import KIND_ABANDONED, StopRecord, read_stop_record
+from sisyphus.stoprecord import StopRecord, read_stop_record
 
 SECTIONS = ("Needs you", "Done", "Declined", "Deviations", "Limits hit", "Cost and time")
 
@@ -120,7 +120,7 @@ def needs_from_stop(stop: StopRecord) -> NeedsYou:
 def needs_from_record(rec: RunRecord) -> NeedsYou | None:
     """Needs-you entry for a run record: its stop record when present, else the built-in question."""
     stop = read_stop_record(rec.path)
-    if stop is not None and stop.kind == KIND_ABANDONED:
+    if stop is not None and stop.abandoned:
         return None
     if stop is not None and (stop.checkpoint == rec.checkpoint or stop.checkpoint is None):
         return needs_from_stop(stop)
@@ -155,7 +155,7 @@ def _abandoned(records: Sequence[RunRecord]) -> list[str]:
     lines: list[str] = []
     for rec in records:
         stop = read_stop_record(rec.path)
-        if stop is not None and stop.kind == KIND_ABANDONED:
+        if stop is not None and stop.abandoned:
             lines.append(
                 f"Abandoned: {rec.item} on {stop.stopped_at} (stage {_stage_desc(rec)}). Not picked or resumed again; "
                 f"branch and any PR left as they are. Re-enable: `{stop.resume_command}`"

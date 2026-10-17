@@ -32,8 +32,8 @@ from sisyphus.stoprecord import (
     AUTO_RETRY_DELAY_MINUTES,
     AUTO_RETRY_MAX,
     CLEARS_BY,
-    KIND_ABANDONED,
     StopRecord,
+    is_abandoned,
     read_stop_record,
 )
 
@@ -106,10 +106,6 @@ def iter_records(workspace: Path) -> Iterator[RunRecord]:
         if not isinstance(item, str) or record_path(workspace, item) != path:
             continue
         yield RunRecord.open(workspace, item)
-
-
-def is_abandoned(stop: StopRecord | None) -> bool:
-    return stop is not None and stop.kind == KIND_ABANDONED
 
 
 def is_stopped(rec: RunRecord, stop: StopRecord | None) -> bool:

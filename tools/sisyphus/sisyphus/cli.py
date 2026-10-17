@@ -62,7 +62,6 @@ from sisyphus.rails import PERMISSION_FLAG, LimitTracker
 from sisyphus.resume import (
     AUTO_RETRY_KEY,
     cleared,
-    is_abandoned,
     is_stopped,
     iter_records,
     list_waiting,
@@ -72,11 +71,11 @@ from sisyphus.runrecord import RunRecord, record_path
 from sisyphus.stages import INTAKE_STAGE
 from sisyphus.stoprecord import (
     CLEARS_BY,
-    KIND_ABANDONED,
     build_abandoned_record,
     build_stop_record,
     clear_stop_record,
     fill_resume_template,
+    is_abandoned,
     read_stop_record,
     write_stop_record,
 )
@@ -663,7 +662,7 @@ def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_
         f"  checkpoint: {rec.checkpoint or 'none'}",
         f"  awaiting: {awaiting}",
     ]
-    if stop is not None and stop.kind == KIND_ABANDONED:
+    if stop is not None and stop.abandoned:
         lines.insert(1, "  state: abandoned")
         lines.append(f"  abandoned_at: {stop.stopped_at}")
         lines.append(f"  re-enable: {stop.resume_command}")
@@ -711,7 +710,7 @@ def status_command(factory: ServicesFactory | None, work_item_ref: str | None, c
     for rec in records:
         if rec.checkpoint is not None:
             awaiting = "you"
-        elif (stop := read_stop_record(rec.path)) is not None and stop.kind == KIND_ABANDONED:
+        elif is_abandoned(stop := read_stop_record(rec.path)):
             awaiting = "none"
         elif stop is not None:
             awaiting = "error"

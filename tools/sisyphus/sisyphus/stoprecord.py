@@ -81,9 +81,13 @@ class StopRecord:
     @property
     def label(self) -> str:
         """``C1``..``C8``, ``abandoned`` or ``error``."""
-        if self.kind == KIND_ABANDONED:
+        if self.abandoned:
             return KIND_ABANDONED
         return self.checkpoint or ERROR_LABEL
+
+    @property
+    def abandoned(self) -> bool:
+        return self.kind == KIND_ABANDONED
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -174,9 +178,10 @@ def build_abandoned_record(
     )
 
 
-def is_abandoned(record_path: Path) -> bool:
-    stop = read_stop_record(record_path)
-    return stop is not None and stop.kind == KIND_ABANDONED
+def is_abandoned(source: Path | StopRecord | None) -> bool:
+    """True when ``source`` (a stop record, or the run-record path whose stop record is read) is an abandon mark."""
+    stop = read_stop_record(source) if isinstance(source, Path) else source
+    return stop is not None and stop.abandoned
 
 
 def write_stop_record(record_path: Path, stop: StopRecord) -> Path:
