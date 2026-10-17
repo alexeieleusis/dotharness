@@ -289,25 +289,28 @@ def _first_wd(lines: list[str]) -> str:
     return ""
 
 
+def _block_scalar(following: list[str], key_indent: int) -> str:
+    """The body of a ``|`` / ``>`` block: the lines after the key that are indented deeper than it."""
+    block = []
+    for follow in following:
+        if follow.strip() and len(follow) - len(follow.lstrip()) <= key_indent:
+            break
+        block.append(follow)
+    indent = min((len(b) - len(b.lstrip()) for b in block if b.strip()), default=0)
+    return "\n".join(b[indent:] for b in block).strip()
+
+
 def _step_field(step: list[str], key: str, key_indent: int) -> str | None:
     """Value of ``key:`` at ``key_indent`` inside a step; handles ``|`` and ``>`` blocks."""
     prefix = " " * key_indent
     for i, line in enumerate(step):
-        text = line
-        if i == 0:
-            text = prefix + line.lstrip()[2:] if line.lstrip().startswith("- ") else line
+        text = prefix + line.lstrip()[2:] if i == 0 and line.lstrip().startswith("- ") else line
         if not text.startswith(prefix + key + ":"):
             continue
         value = text[len(prefix) + len(key) + 1 :].strip()
-        if value[:1] not in ("|", ">"):
-            return _unquote(value)
-        block = []
-        for follow in step[i + 1 :]:
-            if follow.strip() and len(follow) - len(follow.lstrip()) <= key_indent:
-                break
-            block.append(follow)
-        indent = min((len(b) - len(b.lstrip()) for b in block if b.strip()), default=0)
-        return "\n".join(b[indent:] for b in block).strip()
+        if value[:1] in ("|", ">"):
+            return _block_scalar(step[i + 1 :], key_indent)
+        return _unquote(value)
     return None
 
 
