@@ -1,11 +1,23 @@
-name: Main
+name: Sisyphus Main
 
 on:
   push:
     branches:
       - main
+    paths:
+      - "tools/sisyphus/**"
+      - ".github/workflows/sisyphus-main.yml"
+      - ".github/actions/setup-python-env/**"
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "tools/sisyphus/**"
+      - ".github/workflows/sisyphus-main.yml"
+      - ".github/actions/setup-python-env/**"
+
+defaults:
+  run:
+    working-directory: tools/sisyphus
 
 jobs:
   quality:
@@ -17,10 +29,12 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/pre-commit
-          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          key: pre-commit-${{ hashFiles('tools/sisyphus/.pre-commit-config.yaml') }}
 
       - name: Set up the environment
         uses: ./.github/actions/setup-python-env
+        with:
+          working-directory: tools/sisyphus
 
       - name: Run checks
         run: make check
@@ -33,6 +47,7 @@ jobs:
       fail-fast: false
     defaults:
       run:
+        working-directory: tools/sisyphus
         shell: bash
     steps:
       - name: Check out
@@ -42,6 +57,7 @@ jobs:
         uses: ./.github/actions/setup-python-env
         with:
           python-version: ${{ matrix.python-version }}
+          working-directory: tools/sisyphus
 
       - name: Run tests
         run: uv run python -m pytest tests --cov --cov-config=pyproject.toml --cov-report=xml
@@ -49,10 +65,9 @@ jobs:
       - name: Check typing
         run: uv run ty check
 
-
-      - name: Upload coverage reports to Codecov with GitHub Action on Python 3.11
+      - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v4
-        if: ${{ matrix.python-version == '3.11' }}
+        if: ${{ matrix.python-version == '3.12' }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
@@ -64,6 +79,9 @@ jobs:
 
       - name: Set up the environment
         uses: ./.github/actions/setup-python-env
+        with:
+          working-directory: tools/sisyphus
 
       - name: Check if documentation can be built
         run: uv run zensical build -s
+        working-directory: tools/sisyphus

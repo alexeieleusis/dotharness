@@ -24,9 +24,9 @@ classifiers = [
 sisyphus = "sisyphus.cli:main"
 
 [project.urls]
-Homepage = "https://alexeieleusis.github.io/sisyphus/"
-Repository = "https://github.com/alexeieleusis/sisyphus"
-Documentation = "https://alexeieleusis.github.io/sisyphus/"
+Homepage = "https://alexeieleusis.github.io/dotharness/sisyphus/"
+Repository = "https://github.com/alexeieleusis/dotharness"
+Documentation = "https://alexeieleusis.github.io/dotharness/sisyphus/"
 
 [dependency-groups]
 dev = [

@@ -1,33 +1,19 @@
 # sisyphus
 
-[![Release](https://img.shields.io/github/v/release/alexeieleusis/sisyphus)](https://img.shields.io/github/v/release/alexeieleusis/sisyphus)
-[![Build status](https://img.shields.io/github/actions/workflow/status/alexeieleusis/sisyphus/main.yml?branch=main)](https://github.com/alexeieleusis/sisyphus/actions/workflows/main.yml?query=branch%3Amain)
-[![codecov](https://codecov.io/gh/alexeieleusis/sisyphus/branch/main/graph/badge.svg)](https://codecov.io/gh/alexeieleusis/sisyphus)
-[![Commit activity](https://img.shields.io/github/commit-activity/m/alexeieleusis/sisyphus)](https://img.shields.io/github/commit-activity/m/alexeieleusis/sisyphus)
-[![License](https://img.shields.io/github/license/alexeieleusis/sisyphus)](https://img.shields.io/github/license/alexeieleusis/sisyphus)
+[![CI](https://github.com/alexeieleusis/dotharness/actions/workflows/sisyphus-main.yml/badge.svg)](https://github.com/alexeieleusis/dotharness/actions/workflows/sisyphus-main.yml)
+[![codecov](https://codecov.io/gh/alexeieleusis/dotharness/branch/main/graph/badge.svg)](https://codecov.io/gh/alexeieleusis/dotharness)
 
 Autonomous development loop: tracker intake to merged PR
 
-- **Github repository**: <https://github.com/alexeieleusis/sisyphus/>
-- **Documentation** <https://alexeieleusis.github.io/sisyphus/>
+This tool lives in the [alexeieleusis/dotharness](https://github.com/alexeieleusis/dotharness) monorepo under `tools/sisyphus/`. It is not (yet) published as a standalone repository or package.
 
-## Getting started with your project
+- **Documentation**: <https://alexeieleusis.github.io/dotharness/sisyphus/>
 
-### 1. Create a New Repository
+## Getting started
 
-First, create a repository on GitHub with the same name as this project, and then run the following commands:
+### 1. Set Up Your Development Environment
 
-```bash
-git init -b main
-git add .
-git commit -m "init commit"
-git remote add origin git@github.com:alexeieleusis/sisyphus.git
-git push -u origin main
-```
-
-### 2. Set Up Your Development Environment
-
-Then, install the environment and the pre-commit hooks with
+Install the environment and the pre-commit hooks with
 
 ```bash
 make install
@@ -35,7 +21,7 @@ make install
 
 This will also generate your `uv.lock` file
 
-### 3. Run the pre-commit hooks
+### 2. Run the pre-commit hooks
 
 Initially, the CI/CD pipeline might be failing due to formatting issues. To resolve those run:
 
@@ -43,7 +29,7 @@ Initially, the CI/CD pipeline might be failing due to formatting issues. To reso
 uv run pre-commit run -a
 ```
 
-### 4. Commit the changes
+### 3. Commit the changes
 
 Lastly, commit the changes made by the two steps above to your repository.
 

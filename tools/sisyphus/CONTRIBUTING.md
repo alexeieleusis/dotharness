@@ -9,7 +9,7 @@ You can contribute in many ways:
 
 ## Report Bugs
 
-Report bugs at https://github.com/alexeieleusis/sisyphus/issues
+Report bugs at https://github.com/alexeieleusis/dotharness/issues
 
 If you are reporting a bug, please include:
 
@@ -33,7 +33,7 @@ sisyphus could always use more documentation, whether as part of the official do
 
 ## Submit Feedback
 
-The best way to send feedback is to file an issue at https://github.com/alexeieleusis/sisyphus/issues.
+The best way to send feedback is to file an issue at https://github.com/alexeieleusis/dotharness/issues.
 
 If you are proposing a new feature:
 

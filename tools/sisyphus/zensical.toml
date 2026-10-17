@@ -1,11 +1,11 @@
 [project]
 site_name = "sisyphus"
-repo_url = "https://github.com/alexeieleusis/sisyphus"
-site_url = "https://alexeieleusis.github.io/sisyphus"
+repo_url = "https://github.com/alexeieleusis/dotharness"
+site_url = "https://alexeieleusis.github.io/dotharness/sisyphus"
 site_description = "Autonomous development loop: tracker intake to merged PR"
 site_author = "Alexei Diaz"
 edit_uri = "edit/main/docs/"
-repo_name = "alexeieleusis/sisyphus"
+repo_name = "alexeieleusis/dotharness"
 copyright = 'Maintained by <a href="https://alexeieleusis.com">alexeieleusis</a>.'
 
 nav = [
@@ -73,7 +73,7 @@ toggle.name = "Switch to system preference"
 
 [[project.extra.social]]
 icon = "fontawesome/brands/github"
-link = "https://github.com/alexeieleusis/sisyphus"
+link = "https://github.com/alexeieleusis/dotharness"
 
 [[project.extra.social]]
 icon = "fontawesome/brands/python"
