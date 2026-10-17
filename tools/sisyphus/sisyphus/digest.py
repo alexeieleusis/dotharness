@@ -181,7 +181,7 @@ def _resets(records: Sequence[RunRecord]) -> list[str]:
 
 
 def _retry_note(rec: RunRecord, stage: str) -> str:
-    counts = {k: v for k, v in sorted(rec.retries.items()) if k.startswith(stage)}
+    counts = {k: v for k, v in sorted(rec.retries.items()) if k == stage or k.startswith(f"{stage}:")}
     return " ".join(f"{k}={v}" for k, v in counts.items())
 
 

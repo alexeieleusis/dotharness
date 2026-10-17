@@ -126,3 +126,12 @@ def test_no_harness_imports() -> None:
     mods = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
     mods |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     assert not {m for m in mods if m.split(".")[0] in ("harness", "spec_prism_flow")}
+
+
+def test_retry_note_matches_exact_stage_or_stage_colon_keys_only(tmp_path: Path) -> None:
+    rec = RunRecord.open(tmp_path / "ws", "PR-9")
+    rec.mark_stage("merge", "in_progress")
+    for key in ("merge", "merge:attempts", "merged-elsewhere", "merge-queue:1", "build:retry-cycles", "auto-retry"):
+        rec.increment_retry(key)
+    text = render_digest([rec])
+    assert "PR-9: merge in_progress (retries: merge=1 merge:attempts=1) and did not finish" in text
