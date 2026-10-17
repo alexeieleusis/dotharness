@@ -256,21 +256,25 @@ def run_auto_approve(ctx, dry_run):
     auto_approve.run(cfg, dry_run=dry_run)
 
 
+def _dry_run_and_pr_options(dry_run_help: str):
+    """The ``--dry-run`` and ``--pr N`` options shared by the ``ci-fix`` and ``merge`` commands."""
+
+    def decorator(f):
+        f = click.option(
+            "--pr",
+            "pr",
+            type=click.INT,
+            default=None,
+            metavar="N",
+            help="Only process the PR with this number (default: all of your open PRs).",
+        )(f)
+        return click.option("--dry-run", is_flag=True, default=False, help=dry_run_help)(f)
+
+    return decorator
+
+
 @cmd_run.command("ci-fix")
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    default=False,
-    help="Reproduce and log what would be fixed, without any push or GitHub write.",
-)
-@click.option(
-    "--pr",
-    "pr",
-    type=click.INT,
-    default=None,
-    metavar="N",
-    help="Only process the PR with this number (default: all of your open PRs).",
-)
+@_dry_run_and_pr_options("Reproduce and log what would be fixed, without any push or GitHub write.")
 @click.pass_context
 def run_ci_fix(ctx, dry_run, pr):
     """Fix failing required CI checks on your own PRs and push the fix to the PR branch. Off unless [ci_fix].enabled."""
@@ -280,20 +284,7 @@ def run_ci_fix(ctx, dry_run, pr):
 
 
 @cmd_run.command("merge")
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    default=False,
-    help="Evaluate and log whether each PR would be merged, without any merge or GitHub write.",
-)
-@click.option(
-    "--pr",
-    "pr",
-    type=click.INT,
-    default=None,
-    metavar="N",
-    help="Only process the PR with this number (default: all of your open PRs).",
-)
+@_dry_run_and_pr_options("Evaluate and log whether each PR would be merged, without any merge or GitHub write.")
 @click.pass_context
 def run_merge(ctx, dry_run, pr):
     """Squash-merge your own PRs once every merge condition holds. Never approves. Off unless [merge].enabled."""
