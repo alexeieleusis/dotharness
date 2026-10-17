@@ -123,7 +123,9 @@ def _prove_pr_merged(pr_lookup: PrLookup | None, ref: str, sha: str) -> tuple[st
         return f"{label} is {info.state or 'in an unknown state'}, not MERGED", ""
     if info.head_sha != sha:
         return f"{label} is MERGED but its head {info.head_sha[:12]} differs from the local head {sha[:12]}", ""
-    number = info.number if info.number is not None else (ref if ref.isdigit() else None)
+    number: int | str | None = info.number
+    if number is None and ref.isdigit():
+        number = ref
     recover = f"; recover with: git fetch origin pull/{number}/head" if number is not None else ""
     return None, f"{label} is MERGED with head {sha}{recover}"
 
