@@ -388,6 +388,7 @@ class _Run:
         """Delete the local branch if (and only if) every safety check passes; otherwise keep it and say why."""
         if not self.finished_cleanly():
             return
+        stored_pr = self.rec.retries.get(PR_NUMBER_KEY)
         try:
             outcome = cleanup_branch(
                 lambda args: self.sh(["git", *args], self.repo),
@@ -395,7 +396,7 @@ class _Run:
                 branch=self.branch,
                 base=self.opt.base_branch,
                 pr_lookup=self.gh.pr_state,
-                pr_ref=str(stored) if (stored := self.rec.retries.get(PR_NUMBER_KEY)) else None,
+                pr_ref=str(stored_pr) if stored_pr else None,
             )
         except Exception as exc:  # a failed cleanup never turns a clean finish into an error
             self.note(f"Branch kept: {self.item} {self.branch} cleanup failed: {type(exc).__name__}: {exc}")
