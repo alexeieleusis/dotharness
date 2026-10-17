@@ -246,8 +246,12 @@ class GhCli:
         self.env = {"GH_TOKEN": token} if token else None
         self._run = run
 
+    def run(self, *args: str) -> ExecResult:
+        """Run ``gh <args>`` in the configured directory and environment; the caller inspects the result."""
+        return self._run(["gh", *args], self.cwd, self.env)
+
     def json(self, *args: str) -> Any:
-        res = self._run(["gh", *args], self.cwd, self.env)
+        res = self.run(*args)
         if res.returncode != 0:
             raise PickError(f"gh {' '.join(args[:2])} failed (exit {res.returncode}): {res.stderr.strip()[-300:]}")
         try:

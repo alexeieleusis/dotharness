@@ -280,3 +280,10 @@ def test_no_harness_or_spec_prism_flow_import() -> None:
     names = {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
     names |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     assert not any(n.split(".")[0] in ("harness", "spec_prism_flow") for n in names)
+
+
+def test_gh_cli_run_returns_the_raw_result_with_cwd_and_env(tmp_path: Path) -> None:
+    ex = FakeExec([ExecResult(1, "out", "err")])
+    res = GhCli(tmp_path, "tok", ex).run("pr", "create")
+    assert res == ExecResult(1, "out", "err")
+    assert ex.calls == [(["gh", "pr", "create"], tmp_path, {"GH_TOKEN": "tok"})]

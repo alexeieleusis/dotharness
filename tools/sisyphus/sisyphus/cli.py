@@ -158,11 +158,7 @@ class GhPullRequestClient:
         return _pr_info(row) if isinstance(row, dict) else None
 
     def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
-        res = self.gh._run(
-            ["gh", "pr", "create", "--head", branch, "--base", base, "--title", title, "--body", body],
-            self.gh.cwd,
-            self.gh.env,
-        )
+        res = self.gh.run("pr", "create", "--head", branch, "--base", base, "--title", title, "--body", body)
         match = _PR_URL.search(res.stdout)
         if res.returncode != 0 or not match:
             raise GitHubError(
