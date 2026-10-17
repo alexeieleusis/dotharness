@@ -65,6 +65,7 @@ OUTCOME_CAP_REACHED = "cap-reached"
 OUTCOME_PARSE_FAILURE = "parse-failure"
 OUTCOME_REBASE_NEEDED = "rebase-needed"
 OUTCOME_STILL_FAILING = "still-failing"
+OUTCOME_UNSAFE_CHANGE = "unsafe-change"
 
 TIMEOUT_REPRO = 1200  # seconds, per workflow step command
 LOG_EXCERPT_MAX = 20_000  # characters of the failing log given to the agent
@@ -510,6 +511,10 @@ def _agent_fix_and_push(
     if after.returncode != 0:
         _digest(OUTCOME_STILL_FAILING, number, check.name, f"step {step.name!r} still fails (exit {after.returncode})")
         return False
+    unsafe = _unsafe_change(wdir, env, pre_sha)
+    if unsafe:
+        _digest(OUTCOME_UNSAFE_CHANGE, number, check.name, unsafe)
+        return False
     _commit_if_dirty(check, wdir, env)
     if _head(wdir, env) == pre_sha:
         _digest(OUTCOME_NOT_REPRODUCED, number, check.name, "command passes with no change to the branch")
@@ -522,12 +527,25 @@ def _head(wdir: str, env: dict) -> str:
     return _text(result.stdout).strip()
 
 
+def _unsafe_change(wdir: str, env: dict, pre_sha: str) -> str | None:
+    """Why the result must not be pushed: untracked files, or a change under ``.github/``; else None."""
+    untracked = run_cmd(["git", "ls-files", "--others", "--exclude-standard"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
+    files = _text(untracked.stdout).split()
+    if files:
+        return f"untracked files left in the tree: {', '.join(files[:10])}"
+    changed = run_cmd(["git", "diff", "--name-only", pre_sha], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
+    protected = [f for f in _text(changed.stdout).split() if f.startswith(".github/")]
+    if protected:
+        return f"change touches .github/: {', '.join(protected[:10])}"
+    return None
+
+
 def _commit_if_dirty(check: _Check, wdir: str, env: dict) -> None:
-    """Commit anything the agent left uncommitted; a no-op when it committed everything itself."""
+    """Commit tracked changes the agent left uncommitted (never untracked files); a no-op when clean."""
     status = run_cmd(["git", "status", "--porcelain"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
     if not _text(status.stdout).strip():
         return
-    run_cmd(["git", "add", "-A"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
+    run_cmd(["git", "add", "-u"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
     run_cmd(["git", "commit", "-m", f"ci-fix: {check.name}"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
 
 
