@@ -813,7 +813,7 @@ def test_template_no_code_change_statement_covers_resolve_and_minimise():
     assert "This step only posts a comment" in text  # prefix of the new wording
     assert "This step only posts a comment —" not in text
     assert "This step only posts a comment, resolves the thread, or minimises the comment" in text
-    assert "it never changes code" in text
+    assert "It never changes code" in text
 
 
 def test_template_states_mutation_failure_handling():
