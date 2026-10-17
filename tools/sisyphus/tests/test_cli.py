@@ -540,3 +540,15 @@ def test_default_path_without_linear_key_is_a_config_error(tmp_path: Path, monke
     result = CliRunner().invoke(main, ["run", "--config", str(env.config)])
     assert result.exit_code == 1
     assert "LINEAR_API_KEY" in result.stderr
+
+
+def test_agent_runner_timeout(tmp_path: Path) -> None:
+    seen: dict[str, Any] = {}
+
+    def hung(argv: list[str], **kw: Any) -> Proc:
+        seen.update(kw)
+        raise subprocess.TimeoutExpired(argv, kw["timeout"])
+
+    with pytest.raises(cli.AgentError, match="timed out after 2 minutes"):
+        cli.make_agent_runner("claude", tmp_path, hung, timeout_minutes=2)("x")
+    assert seen["timeout"] == 120

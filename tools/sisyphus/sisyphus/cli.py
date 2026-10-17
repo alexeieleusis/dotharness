@@ -109,11 +109,17 @@ def run_token_cmd(token_cmd: str | None, run: Callable[..., Any] = subprocess.ru
     return proc.stdout.strip()
 
 
-def make_agent_runner(backend: str | None, cwd: Path, run: Callable[..., Any] = subprocess.run) -> AgentRunner:
+def make_agent_runner(
+    backend: str | None,
+    cwd: Path,
+    run: Callable[..., Any] = subprocess.run,
+    timeout_minutes: float | None = None,
+) -> AgentRunner:
     """Subprocess wrapper for the configured agent backend, run in ``cwd`` (the dedicated clone).
 
     ``claude`` runs ``claude -p <prompt> --dangerously-skip-permissions``; ``opencode`` runs
-    ``opencode run <prompt>`` (D-11). A non-zero exit raises :class:`AgentError`.
+    ``opencode run <prompt>`` (D-11). A non-zero exit or a run past ``timeout_minutes`` raises
+    :class:`AgentError`, so a hung agent stops at a checkpoint and the clone lock is released.
     """
     if backend not in AGENT_COMMANDS:
         raise ConfigError("[agent] backend must be set to 'claude' or 'opencode' to run an agent")
@@ -121,7 +127,9 @@ def make_agent_runner(backend: str | None, cwd: Path, run: Callable[..., Any] = 
 
     def runner(prompt: str) -> None:
         try:
-            proc = run(build(prompt), cwd=cwd, check=False)
+            proc = run(build(prompt), cwd=cwd, check=False, timeout=timeout_minutes * 60 if timeout_minutes else None)
+        except subprocess.TimeoutExpired as exc:
+            raise AgentError(f"the {backend} backend timed out after {timeout_minutes} minutes") from exc
         except OSError as exc:
             raise AgentError(f"cannot start the {backend} backend: {exc}") from exc
         if proc.returncode != 0:
@@ -207,7 +215,11 @@ def default_services(config: SisyphusConfig) -> Services:
         tracker: TrackerClient = LinearTracker(token or os.environ.get("LINEAR_API_KEY", ""))
     else:
         tracker = GitHubIssueTracker(gh)
-    runner = make_agent_runner(config.agent.backend, repo_dir) if config.agent.backend else _no_backend
+    runner = (
+        make_agent_runner(config.agent.backend, repo_dir, timeout_minutes=config.limits.max_run_minutes)
+        if config.agent.backend
+        else _no_backend
+    )
 
     def repo_info() -> tuple[str, str | None]:
         """``(repo_slug, default_branch)`` from ``gh repo view``; falls back to the path-based slug."""
