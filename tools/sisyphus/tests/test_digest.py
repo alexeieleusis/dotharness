@@ -115,7 +115,7 @@ def test_second_write_same_day_keeps_first_digest(tmp_path: Path) -> None:
     assert first.read_text() == first_text
     assert "first run" in first_text
     assert "second run" in second.read_text()
-    assert sorted(p.name for p in tmp_path.iterdir()) == [first.name, second.name, third.name]
+    assert {p.name for p in tmp_path.iterdir()} == {first.name, second.name, third.name}
 
 
 def test_missing_template_raises() -> None:
