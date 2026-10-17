@@ -211,6 +211,28 @@ def test_boundary_detects_untracked_and_second_edit(repo: Path) -> None:
         (repo / "tracked.txt").write_text("dirtier\n")
 
 
+def test_boundary_detects_commit_branch_and_ignored_changes(repo: Path) -> None:
+    (repo / ".gitignore").write_text(".env\n")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-q", "-m", "ignore")
+    with pytest.raises(BoundaryViolation), repo_unchanged(repo):
+        (repo / "tracked.txt").write_text("two\n")
+        _git(repo, "commit", "-q", "-am", "agent commit")
+    with pytest.raises(BoundaryViolation), repo_unchanged(repo):
+        _git(repo, "switch", "-q", "-c", "other")
+    with pytest.raises(BoundaryViolation), repo_unchanged(repo):
+        (repo / ".env").write_text("SECRET=1\n")
+
+
+def test_boundary_violation_reported_when_runner_raises(repo: Path) -> None:
+    with pytest.raises(BoundaryViolation) as info, repo_unchanged(repo):
+        (repo / "new.txt").write_text("x")
+        raise RuntimeError
+    assert isinstance(info.value.__cause__, RuntimeError)
+    with pytest.raises(RuntimeError), repo_unchanged(repo):
+        raise RuntimeError
+
+
 def test_boundary_passes_without_change(repo: Path) -> None:
     with repo_unchanged(repo):
         pass

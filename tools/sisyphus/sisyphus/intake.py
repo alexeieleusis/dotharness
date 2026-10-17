@@ -142,29 +142,34 @@ def parse_open_decisions(text: str) -> tuple[OpenDecision, ...]:
 # ----------------------------------------------------------- git boundary
 
 
-def _git(repo_dir: Path, *args: str) -> bytes:
+def _git(repo_dir: Path, *args: str, ok_codes: tuple[int, ...] = (0,)) -> bytes:
     try:
         proc = subprocess.run(  # noqa: S603
             ["git", "-C", str(repo_dir), *args],  # noqa: S607
             capture_output=True,
-            check=True,
+            check=False,
         )
-    except (OSError, subprocess.CalledProcessError) as exc:
+    except OSError as exc:
         raise IntakeError(f"git {' '.join(args)} failed in {repo_dir}: {exc}") from exc
+    if proc.returncode not in ok_codes:
+        raise IntakeError(f"git {' '.join(args)} failed in {repo_dir}: exit status {proc.returncode}")
     return proc.stdout
 
 
-def snapshot_git_status(repo_dir: Path | str, ignore: Iterable[Path | str] = ()) -> tuple[bytes, dict[str, str]]:
-    """Snapshot ``git status`` plus a content hash of every non-clean file.
+def snapshot_git_status(
+    repo_dir: Path | str, ignore: Iterable[Path | str] = ()
+) -> tuple[bytes, dict[str, str], bytes, bytes]:
+    """Snapshot ``git status`` (ignored files included), a content hash of every non-clean file, HEAD and the branch.
 
-    Hashes make a second edit to an already-modified file visible. ``ignore`` lists paths (absolute,
-    or relative to ``repo_dir``) to leave out, such as a brief that lives inside the repository.
+    Hashes make a second edit to an already-modified file visible; HEAD and the symbolic ref expose
+    commits, resets and branch switches that leave the status unchanged. ``ignore`` lists paths
+    (absolute, or relative to ``repo_dir``) to leave out, such as a brief that lives inside the repository.
     """
     repo = Path(repo_dir)
     root = repo.resolve()
     skip = {(p if Path(p).is_absolute() else root / p) for p in map(Path, ignore)}
     skip = {Path(p).resolve() for p in skip}
-    raw = _git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    raw = _git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored")
     kept: list[bytes] = []
     hashes: dict[str, str] = {}
     for entry in raw.split(b"\0"):
@@ -177,18 +182,26 @@ def snapshot_git_status(repo_dir: Path | str, ignore: Iterable[Path | str] = ())
         target = repo / name
         if target.is_file():
             hashes[name] = hashlib.sha256(target.read_bytes()).hexdigest()
-    return b"\0".join(kept), hashes
+    head = _git(repo, "rev-parse", "--verify", "-q", "HEAD", ok_codes=(0, 1))  # exit 1: no commits yet
+    branch = _git(repo, "symbolic-ref", "-q", "HEAD", ok_codes=(0, 1))  # exit 1: detached HEAD
+    return b"\0".join(kept), hashes, head, branch
 
 
 @contextmanager
 def repo_unchanged(repo_dir: Path | str, ignore: Iterable[Path | str] = ()) -> Generator[None]:
-    """Fail with :class:`BoundaryViolation` if ``git status`` of ``repo_dir`` differs after the body."""
+    """Fail with :class:`BoundaryViolation` if the git state of ``repo_dir`` differs after the body, even when it raises."""
     ignore = tuple(ignore)
     before = snapshot_git_status(repo_dir, ignore)
-    yield
-    after = snapshot_git_status(repo_dir, ignore)
-    if before != after:
-        raise BoundaryViolation(f"intake changed the target repository {repo_dir}: git status differs before and after")
+    message = f"intake changed the target repository {repo_dir}: git state differs before and after"
+    try:
+        yield
+    except BaseException as exc:
+        # A failing runner may still have modified the repository: report that instead of the bare error.
+        if snapshot_git_status(repo_dir, ignore) != before:
+            raise BoundaryViolation(message) from exc
+        raise
+    if snapshot_git_status(repo_dir, ignore) != before:
+        raise BoundaryViolation(message)
 
 
 # ------------------------------------------------------------------ stage
