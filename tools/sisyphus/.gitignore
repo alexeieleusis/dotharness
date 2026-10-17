@@ -209,3 +209,7 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# vibe-heal / SonarQube local config (credentials, never commit)
+.env.vibeheal
+sonar-project.properties
