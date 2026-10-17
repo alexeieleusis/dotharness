@@ -458,6 +458,20 @@ def _write_digest(config: SisyphusConfig, services: Services, state: _RunState) 
     return None
 
 
+def _phase_and_digest(
+    config: SisyphusConfig, services: Services, state: _RunState, phase: Callable[[], None]
+) -> tuple[Exception | None, DigestWriteError | None]:
+    """Run ``phase`` (an error is noted, not raised), then attempt the digest; returns both outcomes."""
+    error: Exception | None = None
+    try:
+        phase()
+    except Exception as exc:
+        error = exc
+        if not state.notes:
+            state.notes.append(f"run failed: {exc}")
+    return error, _write_digest(config, services, state) if state.has_content else None
+
+
 def _run_locked(
     config: SisyphusConfig,
     services: Services,
@@ -471,19 +485,11 @@ def _run_locked(
     error maps to exit 1; a failed digest write alone also exits 1.
     """
     assert config.project.repo_dir  # noqa: S101
-    error: Exception | None = None
-    digest_error: DigestWriteError | None = None
     try:
         with clone_lock(config.project.repo_dir, services.lock_dir):
             if prepare is not None:
                 prepare()
-            try:
-                phase()
-            except Exception as exc:
-                error = exc
-                if not state.notes:
-                    state.notes.append(f"run failed: {exc}")
-            digest_error = _write_digest(config, services, state) if state.has_content else None
+            error, digest_error = _phase_and_digest(config, services, state, phase)
     except LockHeld:
         return
     if error is not None:
