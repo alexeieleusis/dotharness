@@ -9,13 +9,13 @@ completes. Retry counters live only in the run record. Standard library only.
 from __future__ import annotations
 
 import json
-import os
 import shlex
-import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from sisyphus.runrecord import atomic_write_json
 
 STOP_RECORD_SUFFIX = ".stopped.json"
 KIND_CHECKPOINT = "checkpoint"
@@ -182,16 +182,7 @@ def is_abandoned(record_path: Path) -> bool:
 def write_stop_record(record_path: Path, stop: StopRecord) -> Path:
     """Atomically write the sidecar for the run record at ``record_path``."""
     path = stop_record_path(record_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=STOP_RECORD_SUFFIX)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(stop.to_dict(), fh, indent=2)
-            fh.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    atomic_write_json(path, stop.to_dict(), suffix=STOP_RECORD_SUFFIX)
     return path
 
 

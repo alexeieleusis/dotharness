@@ -1,6 +1,6 @@
 """Per-PR gate record: the file the Package B merge runner reads before it merges.
 
-Standard library only (never imports ``harness``). The location and the ``head_sha`` key match
+Standard library and the stdlib-only ``sisyphus.runrecord`` only (never imports ``harness``). The location and the ``head_sha`` key match
 ``harness/runners/merge.py`` (``gate_record_path`` / ``read_gate_record``):
 ``<XDG_DATA>/state/<repo_slug>/build_gate_<PR>.json`` with ``XDG_DATA = ~/.local/share/dotharness``.
 The merge runner reads only ``head_sha`` and ignores other keys, so ``commands`` and ``passed_at``
@@ -14,10 +14,11 @@ import hashlib
 import json
 import os
 import re
-import tempfile
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+
+from sisyphus.runrecord import atomic_write_json
 
 _SLUG = re.compile(r"^[a-zA-Z0-9._-]+$")
 _SHA = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -85,20 +86,9 @@ def write_gate_record(
     if not _SHA.match(head_sha):
         raise ValueError(f"head_sha must be a full 40-character hex SHA, got {head_sha!r}")
     path = gate_record_path(repo_slug, pr_number, state_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
     data: dict[str, object] = {"head_sha": head_sha.lower()}
     if commands is not None:
         data["commands"] = list(commands)
     data["passed_at"] = datetime.now(UTC).isoformat()
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=".json")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh)
-            fh.write("\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    atomic_write_json(path, data, indent=None)
     return path

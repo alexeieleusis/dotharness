@@ -22,6 +22,26 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+
+def atomic_write_json(path: Path, data: Any, *, indent: int | None = 2, suffix: str = ".json") -> None:
+    """Write ``data`` as JSON to ``path``: temp file in the same directory, fsync, then ``os.replace``.
+
+    Creates the parent directory; the temp file is removed if anything fails.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=suffix)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=indent)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 DEFAULT_STATE_DIR = "~/.local/share/dotharness/sisyphus"
 
 STAGE_IN_PROGRESS = "in_progress"
@@ -137,18 +157,7 @@ class RunRecord:
     def save(self) -> None:
         """Atomically write the record (temp file in the same directory, then rename)."""
         self.updated_at = _now()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".tmp-", suffix=RECORD_SUFFIX)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(self.to_dict(), fh, indent=2)
-                fh.write("\n")
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, self.path)
-        except BaseException:
-            Path(tmp).unlink(missing_ok=True)
-            raise
+        atomic_write_json(self.path, self.to_dict(), suffix=RECORD_SUFFIX)
 
     def mark_stage(self, stage: str, status: str = STAGE_IN_PROGRESS) -> None:
         """Record ``stage`` with ``status`` (``in_progress`` or ``complete``)."""
