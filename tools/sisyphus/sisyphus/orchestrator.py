@@ -707,12 +707,10 @@ class _Run:
         cap = self.config.limits.max_fix_attempts_per_pr
         with self.rec.stage_scope(CI_FIX_STAGE):
             attempts = self.rec.retries.get(CI_FIX_ATTEMPTS_KEY, 0)
-            self.tracker.fix_attempts[str(number)] = attempts
             settled = False
             while attempts < cap:
                 res = self.sh(["harness", "run", "ci-fix", "--pr", str(number)], self.repo)
                 attempts = self.rec.increment_retry(CI_FIX_ATTEMPTS_KEY)
-                self.tracker.record_fix_attempt(str(number))
                 if res.returncode != 0:
                     raise _Stop(
                         Checkpoint.C8, f"harness run ci-fix failed (exit {res.returncode}): {_tail(res.stderr)}"
