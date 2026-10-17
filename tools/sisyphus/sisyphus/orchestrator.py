@@ -56,6 +56,7 @@ from sisyphus.stoprecord import (
     StopRecord,
     build_stop_record,
     clear_stop_record,
+    fill_resume_template,
     is_abandoned,
     read_stop_record,
     write_stop_record,
@@ -417,7 +418,7 @@ class _Run:
 
     def resume_command(self) -> str:
         template = self.opt.resume_command or "sisyphus resume {item} --config <your .sisyphus.toml>"
-        return template.replace("{item}", shlex.quote(self.item))
+        return fill_resume_template(template, self.item)
 
     def write_stop(self, checkpoint: str | None, detail: str, questions: tuple[str, ...] = ()) -> StopRecord:
         stop = build_stop_record(

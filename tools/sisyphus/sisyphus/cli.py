@@ -75,6 +75,7 @@ from sisyphus.stoprecord import (
     build_abandoned_record,
     build_stop_record,
     clear_stop_record,
+    fill_resume_template,
     read_stop_record,
     write_stop_record,
 )
@@ -281,6 +282,10 @@ def _summarise(result: RunResult) -> str:
 def _resume_template(config_path: str, base: str | None) -> str:
     cmd = f"sisyphus resume {{item}} --config {shlex.quote(str(Path(config_path).resolve()))}"
     return f"{cmd} --base {shlex.quote(base)}" if base else cmd
+
+
+def _resume_command(config_path: str, item: str, base: str | None = None, *, again: bool = False) -> str:
+    return fill_resume_template(_resume_template(config_path, base), item, again=again)
 
 
 def _resolve_options(
@@ -522,7 +527,7 @@ def intake_command(factory: ServicesFactory | None, work_item_ref: str, config_p
                 stage="intake",
                 stage_status="complete",
                 detail=f"open decisions in {result.brief_path}: " + "; ".join(texts),
-                resume_command=_resume_template(config_path, None).replace("{item}", shlex.quote(work_item_ref)),
+                resume_command=_resume_command(config_path, work_item_ref),
                 questions=texts,
                 brief_path=str(result.brief_path),
             ),
@@ -640,8 +645,7 @@ def abandon_command(factory: ServicesFactory | None, work_item_ref: str, config_
                     stage=rec.stage,
                     stage_status=rec.stage_status,
                     prior_label=prior,
-                    reenable_command=_resume_template(config_path, None).replace("{item}", shlex.quote(work_item_ref))
-                    + " --again",
+                    reenable_command=_resume_command(config_path, work_item_ref, again=True),
                     now=services.now(),
                 ),
             )
@@ -671,7 +675,7 @@ def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_
         lines.append(f"  question: {need.question}")
         if need.action:
             lines.append(f"  action: {need.action}")
-        resume = need.resume or _resume_template(config_path, None).replace("{item}", shlex.quote(rec.item))
+        resume = need.resume or _resume_command(config_path, rec.item)
         lines.append(f"  resume: {resume}")
         how = stop.clears_by if stop else CLEARS_BY.get(rec.checkpoint, "explicit")
         if rec.checkpoint is None:

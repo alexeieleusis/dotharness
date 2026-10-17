@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -102,6 +103,12 @@ class StopRecord:
 
 def stop_record_path(record_path: Path) -> Path:
     return record_path.with_name(record_path.name + STOP_RECORD_SUFFIX)
+
+
+def fill_resume_template(template: str, item: str, *, again: bool = False) -> str:
+    """Substitute the shell-quoted ``item`` for ``{item}`` in a resume-command template (``--again`` optional)."""
+    command = template.replace("{item}", shlex.quote(item))
+    return f"{command} --again" if again else command
 
 
 def action_for(
