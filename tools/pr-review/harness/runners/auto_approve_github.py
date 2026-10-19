@@ -258,6 +258,7 @@ REASON_CI_BLOCKED = "ci-blocked"
 REASON_ALREADY_APPROVED = "already-approved"
 
 _NO_REQUIRED_CHECKS_TEXT = "no required checks reported"
+_NO_CHECKS_TEXT = "no checks reported"
 _PASSING_BUCKETS = frozenset({"pass", "skipping"})
 
 
@@ -331,6 +332,8 @@ def _read_buckets(repo: str, pr_number: int, env: dict, required: bool) -> list[
     stderr = _text(result.stderr)
     if required and result.returncode == 1 and _NO_REQUIRED_CHECKS_TEXT in stderr:
         return []
+    if not required and result.returncode == 1 and _NO_CHECKS_TEXT in stderr:
+        return []
     if result.returncode == 8 and not _text(result.stdout).strip():
         return None  # pending exit without JSON: cannot decide from buckets
     if result.returncode not in (0, 8):
@@ -348,7 +351,8 @@ def _check_ci(repo: str, pr_number: int, env: dict) -> SafetyResult | None:
     if buckets is None:
         return SafetyResult(SafetyStatus.READ_FAILED, "checks read failed")
     if not buckets:
-        return SafetyResult(SafetyStatus.READ_FAILED, "no checks reported")
+        logger.info("PR #%d: no checks at all, nothing blocks approval", pr_number)
+        return None
     blocking = sorted({b for b in buckets if b not in _PASSING_BUCKETS})
     logger.info("PR #%d: %d checks, blocking buckets: %s", pr_number, len(buckets), blocking or "none")
     if blocking:

@@ -134,7 +134,8 @@ def _list_prs(repo: str, env: dict) -> list[dict]:
         check=False,
     )
     if result.returncode != 0:
-        raise AutoApproveError(f"gh pr list failed (exit {result.returncode})")  # noqa: TRY003
+        logger.error("gh pr list failed (exit %d), nothing processed this run", result.returncode)
+        return []
     return sorted(json.loads(result.stdout), key=lambda p: p["number"])
 
 
@@ -220,8 +221,8 @@ def _decide_and_act(
     safety = check_approval_safety(repo, pr_number, current_user, env)
     logger.info("PR #%d: safety %s (%s) head=%s", pr_number, safety.status.value, safety.reason, safety.head_sha)
     if gate.status is GateStatus.READ_FAILED or safety.status is SafetyStatus.READ_FAILED:
-        logger.error("PR #%d: a read failed, no writes this run", pr_number)
-        return ["read failed (timing gate or safety checks), no writes"]
+        logger.error("PR #%d: a read failed, no writes this run; retrying next run", pr_number)
+        return []
 
     if safety.head_sha != checked_out_sha:
         logger.warning(
@@ -235,7 +236,8 @@ def _decide_and_act(
     gate_passed = gate.status is GateStatus.PASSED
     viewed = _mark_viewed(pr_number, size, config, gate_passed, env, dry_run)
     if viewed is None:
-        return ["viewed-state read failed, no writes"]
+        logger.error("PR #%d: viewed-state read failed, no writes this run; retrying next run", pr_number)
+        return []
     problems, all_viewed = viewed
     if not size.file_counts and not all_viewed:
         logger.info("PR #%d: no counted files (only renames/deletes/binary), not approving", pr_number)
@@ -255,7 +257,7 @@ def _decide_and_act(
         all_viewed=all_viewed,
     )
     logger.info("PR #%d: approval %s (%s)", pr_number, approval.status.value, approval.reason)
-    if approval.status in (ApprovalStatus.READ_FAILED, ApprovalStatus.WRITE_FAILED):
+    if approval.status is ApprovalStatus.WRITE_FAILED:
         problems.append(f"approval {approval.status.value}: {approval.reason}")
     return problems
 

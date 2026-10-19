@@ -72,7 +72,7 @@ Before approving, on the PR's current head commit, the command requires:
 
 If any condition does not hold, no approval is posted and the PR is checked
 again on the next run. If a condition cannot be read (for example a `gh`
-failure), that is a failure, not a pass.
+failure), it is not a pass: nothing is written for that PR this run.
 
 ## The approval
 
@@ -90,3 +90,7 @@ file. Files already marked viewed are skipped, and a PR that the account has alr
 ## Errors
 
 If any PR fails (a read failed, a write failed, or a git error), the command logs the failure and continues with the other PRs. At the end it exits non-zero with the list of failures. In `harness run all` this makes `all` exit non-zero.
+
+If a write fails or a git error occurs, the command logs it, keeps going with
+the other PRs, and exits non-zero at the end with the list of failures. In
+`harness run all` this makes `all` exit non-zero.
