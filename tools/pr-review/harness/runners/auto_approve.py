@@ -163,7 +163,7 @@ def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, current_u
     try:
         checked_out_sha = _checkout_pr_head(pr_number, wdir, env)
         size = evaluate_size(pr["baseRefName"], wdir, env, config.auto_approve)
-        return _decide_and_act(pr, size, checked_out_sha, config, env, current_user, dry_run)
+        _decide_and_act(pr, size, checked_out_sha, config, env, current_user, dry_run)
     finally:
         # Detached checkout: no local branch was created, so there is none to delete.
         git_restore(original_sha, "", wdir, env)
@@ -209,7 +209,7 @@ def _decide_and_act(
     env: dict,
     current_user: str,
     dry_run: bool,
-) -> list[str]:
+) -> None:
     pr_number = pr["number"]
     repo = config.repo.name
     _log_size(pr_number, size, config)
