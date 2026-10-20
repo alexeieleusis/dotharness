@@ -188,19 +188,17 @@ def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) 
     logger.info("PR #%d: found %d comment(s) to address", number, len(comments))
     head_sha = get_head_sha(ctx.wdir, ctx.env)
     for comment in comments:
-        if comment.get("type") == "inline":
-            still_unresolved = _comment_thread_state(comment, number, ctx.repo, ctx.env)
-            if still_unresolved is None and comment.get("focused_review_original") is not None:
-                logger.warning(
-                    "PR #%d: thread-state lookup failed; skipping re-pointed focused-review comment %s",
-                    number,
-                    comment.get("id", "?"),
-                )
-                continue
-            still_unresolved = still_unresolved is not False
-        else:
-            still_unresolved = True
-        if not still_unresolved:
+        thread_state = (
+            _comment_thread_state(comment, number, ctx.repo, ctx.env) if comment.get("type") == "inline" else True
+        )
+        if thread_state is None and comment.get("focused_review_original") is not None:
+            logger.warning(
+                "PR #%d: thread-state lookup failed; skipping re-pointed focused-review comment %s",
+                number,
+                comment.get("id", "?"),
+            )
+            continue
+        if thread_state is False:
             logger.info(
                 "PR #%d: comment %s's thread was resolved since this run started, skipping",
                 number,
