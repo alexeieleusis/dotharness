@@ -683,6 +683,25 @@ def abandon_command(factory: ServicesFactory | None, work_item_ref: str, config_
     click.echo(f"{work_item_ref}: abandoned (branch, any PR and the run record left as they are)")
 
 
+def _need_lines(rec: RunRecord, stop: Any, need: NeedsYou, config: SisyphusConfig, config_path: str) -> list[str]:
+    """Question, action, resume command and auto-resume mode for an item that is waiting on someone."""
+    lines = [f"  question: {need.question}"]
+    if need.action:
+        lines.append(f"  action: {need.action}")
+    lines.append(f"  resume: {need.resume or _resume_command(config_path, rec.item)}")
+    how = (
+        "explicit"
+        if rec.checkpoint is None
+        else (stop.clears_by if stop else CLEARS_BY.get(rec.checkpoint, "explicit"))
+    )
+    done = ""
+    if how != "explicit":
+        is_cleared = cleared(rec, stop, config, datetime.now(UTC))
+        done = f" (cleared now: {'yes' if is_cleared else 'no'})"
+    lines.append(f"  auto-resume: {how}{done}")
+    return lines
+
+
 def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_path: str) -> list[str]:
     stop = read_stop_record(rec.path)
     need = needs_from_record(rec)
@@ -699,19 +718,7 @@ def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_
         lines.append(f"  re-enable: {stop.resume_command}")
     lines.extend(f"  {describe_reset(rec.item, e)}" for e in rec.resets)
     if need is not None:
-        lines.append(f"  question: {need.question}")
-        if need.action:
-            lines.append(f"  action: {need.action}")
-        resume = need.resume or _resume_command(config_path, rec.item)
-        lines.append(f"  resume: {resume}")
-        how = stop.clears_by if stop else CLEARS_BY.get(rec.checkpoint, "explicit")
-        if rec.checkpoint is None:
-            how = "explicit"
-        done = ""
-        if how != "explicit":
-            is_cleared = cleared(rec, stop, config, datetime.now(UTC))
-            done = f" (cleared now: {'yes' if is_cleared else 'no'})"
-        lines.append(f"  auto-resume: {how}{done}")
+        lines.extend(_need_lines(rec, stop, need, config, config_path))
     return lines
 
 
