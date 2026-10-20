@@ -263,7 +263,6 @@ def _as_focused_review_comment(parent: dict, marker_reply: dict) -> dict:
 def _select_focused_review_comments(
     comments: list[dict],
     pr_number: int,
-    repo: str,
     our_login: str | None,
     env: dict,
     *,
@@ -433,7 +432,7 @@ def _filter_comments(
     comments = _filter_by_trusted_commenters(comments, pr_number, trusted_commenters)
     comments, unresolved_ids = _filter_by_unresolved_with_state(comments, pr_number, repo, env)
     selected, comments = _select_focused_review_comments(
-        comments, pr_number, repo, our_login, env, unresolved_ids=unresolved_ids
+        comments, pr_number, our_login, env, unresolved_ids=unresolved_ids
     )
     comments = _filter_already_replied(comments, pr_number, our_login, replied_keys)
     comments = selected + comments
