@@ -106,20 +106,11 @@ def _digest(outcome: str, pr_number: int, check: str | None = None, detail: str 
     logger.warning("%s %s pr=%d check=%r %s", DIGEST_PREFIX, outcome, pr_number, check or "", detail)
 
 
-def _run_locked(config: HarnessConfig, dry_run: bool, only_pr: int | None) -> None:
-    gh_token = get_gh_token(config.harness.gh_token_cmd)
-    env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
-    current_user = get_current_user(env)
-    repo = config.repo.name
+def _process_prs(
+    prs: list[dict], config: HarnessConfig, env: dict, current_user: str, prompt: str, dry_run: bool
+) -> list[str]:
+    """Process each in-scope PR; returns one failure message per PR that errored (stops at a fatal git error)."""
     failures: list[str] = []
-
-    prs = list_own_open_prs(repo, only_pr, env, failures, _PR_FIELDS, _gh)
-    if only_pr is None and not dry_run and not failures:
-        _prune_counters(config.repo_slug, {p["number"] for p in prs})
-    if not prs and not failures:
-        logger.info("ci-fix: no open PRs to check on %s, nothing to do", repo)
-
-    prompt = (config.harness.knowledge_dir / "pr-review" / PROMPT_FILE).read_text(encoding="utf-8") if prs else ""
     wdir = str(config.repo.working_dir)
     for pr in prs:
         number = pr["number"]
@@ -134,6 +125,24 @@ def _run_locked(config: HarnessConfig, dry_run: bool, only_pr: int | None) -> No
         except Exception as e:
             logger.exception("PR #%d: error", number)
             failures.append(f"#{number}: {e}")
+    return failures
+
+
+def _run_locked(config: HarnessConfig, dry_run: bool, only_pr: int | None) -> None:
+    gh_token = get_gh_token(config.harness.gh_token_cmd)
+    env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
+    current_user = get_current_user(env)
+    repo = config.repo.name
+    failures: list[str] = []
+
+    prs = list_own_open_prs(repo, only_pr, env, failures, _PR_FIELDS, _gh)
+    if only_pr is None and not dry_run and not failures:
+        _prune_counters(config.repo_slug, {p["number"] for p in prs})
+    if not prs and not failures:
+        logger.info("ci-fix: no open PRs to check on %s, nothing to do", repo)
+
+    prompt = (config.harness.knowledge_dir / "pr-review" / PROMPT_FILE).read_text(encoding="utf-8") if prs else ""
+    failures.extend(_process_prs(prs, config, env, current_user, prompt, dry_run))
     if failures:
         raise CiFixError("ci-fix failed for: " + "; ".join(failures))
 
