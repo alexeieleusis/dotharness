@@ -689,11 +689,9 @@ def _need_lines(rec: RunRecord, stop: Any, need: NeedsYou, config: SisyphusConfi
     if need.action:
         lines.append(f"  action: {need.action}")
     lines.append(f"  resume: {need.resume or _resume_command(config_path, rec.item)}")
-    how = (
-        "explicit"
-        if rec.checkpoint is None
-        else (stop.clears_by if stop else CLEARS_BY.get(rec.checkpoint, "explicit"))
-    )
+    how = "explicit"
+    if rec.checkpoint is not None:
+        how = stop.clears_by if stop else CLEARS_BY.get(rec.checkpoint, "explicit")
     done = ""
     if how != "explicit":
         is_cleared = cleared(rec, stop, config, datetime.now(UTC))
