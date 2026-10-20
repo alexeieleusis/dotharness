@@ -107,11 +107,14 @@ Risks of `focused_review.enabled`:
 | `trusted_commenters` | `"*"` or list of strings | `"*"` | Restricts which comment authors `address-comments` will act on at all. `"*"` (default) considers everyone. |
 
 An inline comment thread carrying a `focused-review`-bot reply (marked
-`[focused-review-bot]`) is always held back until the harness's own `gh`
-account has left a `+1` reaction on that specific reply. The harness checks
-this live on every run. No config flag can change this. Once approved, the
-thread is addressed using that reply's own content as the actual "comment to
-address" (not the terse original finding it responded to). See
+`[focused-review-bot]`) is addressed without any reaction or other human
+approval. It is addressed as long as that reply is the last one in the thread
+and the thread is neither resolved nor minimised. If the thread-state lookup
+fails, marked threads are skipped (fail closed). No config flag changes this,
+and there is no human approval gate, so to limit whose comments are acted on,
+restrict `trusted_commenters` (the default `"*"` is permissive). The thread is
+addressed using that reply's own content as the actual "comment to address"
+(not the terse original finding it responded to). See
 [`address-comments`](commands/address-comments.md#notes) for details.
 
 ### `[auto_approve]`
