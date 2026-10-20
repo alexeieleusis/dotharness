@@ -288,7 +288,7 @@ def _select_focused_review_comments(
     all, non-inline types) is left in `rest`.
 
     `thread_state` is the result of the single thread-state lookup done by
-    `_filter_by_unresolved` (None when that lookup failed). Marked threads fail closed:
+    `_filter_comments` (None when that lookup failed). Marked threads fail closed:
     with no thread state they are neither selected nor forwarded to `rest`; a marked
     thread that is resolved or whose root comment is minimised is dropped the same way.
     Unmarked comments are unaffected.
@@ -362,14 +362,11 @@ def _filter_by_trusted_commenters(
     return comments
 
 
-def _filter_by_unresolved_with_state(
-    comments: list[dict], pr_number: int, repo: str, env: dict
-) -> tuple[list[dict], ThreadState | None]:
-    """Filter resolved inline threads and also return the lookup result (None on failure)
-    so the focused-review selector can fail closed without a second lookup."""
-    thread_state = _get_unresolved_comment_ids(pr_number, repo, env)
+def _filter_by_unresolved(comments: list[dict], pr_number: int, thread_state: ThreadState | None) -> list[dict]:
+    """Drop inline comments in resolved threads. A failed lookup (`thread_state` None) keeps
+    everything, so a flaky API never blocks addressing."""
     if thread_state is None:
-        return comments, None
+        return comments
     before = len(comments)
     comments = [c for c in comments if c["type"] != "inline" or c.get("id") in thread_state.unresolved_ids]
     if len(comments) < before:
@@ -379,11 +376,7 @@ def _filter_by_unresolved_with_state(
             len(comments),
             before,
         )
-    return comments, thread_state
-
-
-def _filter_by_unresolved(comments: list[dict], pr_number: int, repo: str, env: dict) -> list[dict]:
-    return _filter_by_unresolved_with_state(comments, pr_number, repo, env)[0]
+    return comments
 
 
 def _comment_thread_state(comment: dict, pr_number: int, repo: str, env: dict) -> bool | None:
@@ -457,7 +450,8 @@ def _filter_comments(
     replied_keys: set[str] | None = None,
 ) -> list[dict]:
     comments = _filter_by_trusted_commenters(comments, pr_number, trusted_commenters)
-    comments, thread_state = _filter_by_unresolved_with_state(comments, pr_number, repo, env)
+    thread_state = _get_unresolved_comment_ids(pr_number, repo, env)
+    comments = _filter_by_unresolved(comments, pr_number, thread_state)
     selected, comments = _select_focused_review_comments(
         comments,
         pr_number,

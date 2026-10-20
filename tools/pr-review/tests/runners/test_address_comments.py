@@ -902,8 +902,7 @@ def test_target_comment_without_marker_reply_is_not_selected():
 def test_filter_by_unresolved_removes_inline_comment_in_resolved_thread():
     resolved = {**_PLAIN_COMMENT, "id": 5}
     open_ = {**_PLAIN_COMMENT, "id": 6}
-    with patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value=_state(6)):
-        result = address_comments._filter_by_unresolved([resolved, open_], 1, "acme/frontend", {})
+    result = address_comments._filter_by_unresolved([resolved, open_], 1, _state(6))
     assert result == [open_]
 
 
