@@ -537,6 +537,23 @@ def test_build_comment_instructions_steers_backend_for_marked_focused_review_com
     # The fix spec (marker reply body) must appear before the background-only original
     # finding, so a backend reading top-to-bottom sees the actionable content first.
     assert instructions.index("suggested fix") < instructions.index("terse sonar message")
+    lowered = instructions.lower()
+    assert "false positive" in lowered
+    assert "no change" in lowered
+    assert "approved" not in lowered
+    assert "reaction" not in lowered
+    assert "\U0001f44d" not in instructions
+
+
+def test_build_comment_instructions_focused_review_steer_has_false_positive_carveout_only():
+    instructions = address_comments._build_comment_instructions("template", _FOCUSED_REVIEW_COMMENT, 1, "acme/frontend")
+    lowered = instructions.lower()
+    assert "false positive" in lowered
+    assert "no change" in lowered
+    assert "acknowledgment" in lowered
+    assert "committed" in lowered
+    for removed in ("approved", "reaction", "\U0001f44d"):
+        assert removed not in lowered
 
 
 def test_build_comment_instructions_no_marker_note_for_plain_comment():

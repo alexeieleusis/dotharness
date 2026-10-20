@@ -272,7 +272,7 @@ def _select_focused_review_comments(
     unresolved_ids: set[int] | None,
 ) -> tuple[list[dict], list[dict]]:
     """Split out inline comments whose last reply carries the focused-review-bot marker,
-    re-pointed at that reply via `_as_focused_review_comment`. No reaction lookup and no
+    re-pointed at that reply via `_as_focused_review_comment`. No extra API lookup and no
     dependence on `our_login`. Selection is deterministic and programmatic rather than
     left to the backend's judgment, since a detailed marker reply can otherwise be
     misread as evidence of prior completion. Idempotency needs no state: once any reply
@@ -590,13 +590,14 @@ def _build_comment_instructions(template: str, comment: dict, pr_number: int, re
         original = comment.get("focused_review_original")
         if original is not None:
             lines += [
-                f"This comment is our own {FOCUSED_REVIEW_MARKER} bot's fix spec, and it has "
-                "already been approved with a \U0001f44d reaction — it was selected "
-                "programmatically because it needs a real fix, not because it merits a "
-                "judgment call. Skip Step 0 of the instructions above entirely: go straight "
-                "to Steps 2-4 (make the fix, commit, reply). Do not reply with just an "
-                "acknowledgment, and do not claim the fix is done unless you actually made "
-                "and committed it.",
+                f"This comment is our own {FOCUSED_REVIEW_MARKER} bot's fix spec, and it was "
+                "selected programmatically because it needs a real fix, not because it "
+                "merits a judgment call. Skip Step 0 of the instructions above entirely: go "
+                "straight to Steps 2-4 (make the fix, commit, reply). Make the fix described "
+                "in the spec, unless the spec itself says it is a false positive; in that case "
+                "make no change and reply saying that no change was made and why. Do not reply "
+                "with just an acknowledgment, and do not claim the fix is done unless you "
+                "actually made and committed it.",
                 "",
             ]
         lines += [
