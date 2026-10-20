@@ -546,7 +546,7 @@ def test_build_comment_instructions_no_marker_note_for_plain_comment():
 def test_select_focused_review_comments_selects_marked_comment_without_reaction_lookup():
     with patch("harness.runners.common.run_cmd") as mock_run:
         selected, rest = address_comments._select_focused_review_comments(
-            [_MARKED_COMMENT, _PLAIN_COMMENT], 1, "acme/frontend", "alexei", {}
+            [_MARKED_COMMENT, _PLAIN_COMMENT], 1, "acme/frontend", "alexei", {}, unresolved_ids={1, 2}
         )
     assert selected == [_FOCUSED_REVIEW_COMMENT]
     assert selected[0]["id"] == 99
@@ -558,7 +558,7 @@ def test_select_focused_review_comments_selects_marked_comment_without_reaction_
 @pytest.mark.parametrize("our_login", ["someone-else", None])
 def test_select_focused_review_comments_selects_marked_comment_regardless_of_our_login(our_login):
     selected, rest = address_comments._select_focused_review_comments(
-        [_MARKED_COMMENT], 1, "acme/frontend", our_login, {}
+        [_MARKED_COMMENT], 1, "acme/frontend", our_login, {}, unresolved_ids={1, 2}
     )
     assert selected == [_FOCUSED_REVIEW_COMMENT]
     assert rest == []
@@ -567,7 +567,7 @@ def test_select_focused_review_comments_selects_marked_comment_regardless_of_our
 def test_select_focused_review_comments_ignores_non_inline_types():
     review_comment = {"type": "review", "id": "review-1", "body": FOCUSED_REVIEW_MARKER, "replies": []}
     selected, rest = address_comments._select_focused_review_comments(
-        [review_comment], 1, "acme/frontend", "alexei", {}
+        [review_comment], 1, "acme/frontend", "alexei", {}, unresolved_ids={1, 2}
     )
     assert selected == []
     assert rest == [review_comment]
@@ -578,7 +578,7 @@ def test_select_focused_review_comments_leaves_already_addressed_thread_in_rest(
     # thread must NOT be re-selected — it should fall through to `rest`, where the
     # pre-existing our_login-last-reply skip takes over.
     selected, rest = address_comments._select_focused_review_comments(
-        [_ADDRESSED_MARKED_COMMENT], 1, "acme/frontend", "alexei", {}
+        [_ADDRESSED_MARKED_COMMENT], 1, "acme/frontend", "alexei", {}, unresolved_ids={1, 2}
     )
     assert selected == []
     assert rest == [_ADDRESSED_MARKED_COMMENT]
@@ -586,7 +586,7 @@ def test_select_focused_review_comments_leaves_already_addressed_thread_in_rest(
 
 def test_addressed_marked_thread_is_not_selected_and_is_dropped_by_already_replied():
     selected, rest = address_comments._select_focused_review_comments(
-        [_ADDRESSED_MARKED_COMMENT], 1, "acme/frontend", "alexei", {}
+        [_ADDRESSED_MARKED_COMMENT], 1, "acme/frontend", "alexei", {}, unresolved_ids={1, 2}
     )
     assert selected == []
     assert address_comments._filter_already_replied(rest, 1, "alexei") == []
@@ -600,7 +600,9 @@ def test_addressed_marked_thread_with_other_login_completion_reply_falls_to_rest
             {"id": 100, "author": "someone-else", "body": "Addressed in http://commit-url"},
         ],
     }
-    selected, rest = address_comments._select_focused_review_comments([thread], 1, "acme/frontend", "alexei", {})
+    selected, rest = address_comments._select_focused_review_comments(
+        [thread], 1, "acme/frontend", "alexei", {}, unresolved_ids={1, 2}
+    )
     assert selected == []
     assert rest == [thread]
 
@@ -609,7 +611,7 @@ def test_filter_comments_admits_marked_comment_transformed_without_reaction_look
     # The comment reaching the backend must be the marker reply itself (re-pointed via
     # `_as_focused_review_comment`), not the terse parent it responded to.
     with (
-        patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value=None),
+        patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value={1}),
         patch("harness.runners.common.run_cmd") as mock_run,
     ):
         result = address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
@@ -869,7 +871,7 @@ def test_address_single_comment_skips_reply_check_when_our_login_not_provided(ca
 
 def test_target_comment_without_marker_reply_is_not_selected():
     selected, rest = address_comments._select_focused_review_comments(
-        [_PLAIN_COMMENT], 1, "acme/frontend", "alexei", {}
+        [_PLAIN_COMMENT], 1, "acme/frontend", "alexei", {}, unresolved_ids={1, 2}
     )
     assert selected == []
     assert rest == [_PLAIN_COMMENT]
@@ -958,3 +960,66 @@ def test_list_all_open_pr_numbers_returns_none_on_failure():
         assert ac._list_all_open_pr_numbers("o/r", {}) is None
     with patch.object(ac, "run_cmd", return_value=SimpleNamespace(returncode=0, stdout='[{"number": 7}]')):
         assert ac._list_all_open_pr_numbers("o/r", {}) == {7}
+
+
+def _thread(root_id, *, resolved=False, minimized=False):
+    return {
+        "isResolved": resolved,
+        "comments": {"nodes": [{"id": f"n{root_id}", "databaseId": root_id, "isMinimized": minimized}]},
+    }
+
+
+def test_filter_comments_drops_marked_comment_in_resolved_thread():
+    with patch("harness.runners.address_comments.fetch_review_threads", return_value=[_thread(1, resolved=True)]):
+        result = address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
+    assert result == []
+
+
+def test_select_focused_review_comments_drops_marked_comment_not_in_unresolved_ids():
+    selected, rest = address_comments._select_focused_review_comments(
+        [_MARKED_COMMENT], 1, "acme/frontend", "alexei", {}, unresolved_ids=set()
+    )
+    assert selected == []
+    assert rest == []
+
+
+def test_filter_comments_drops_minimized_marked_thread_and_does_not_forward_to_rest():
+    threads = [_thread(1, minimized=True), _thread(2)]
+    with patch("harness.runners.address_comments.fetch_review_threads", return_value=threads):
+        result = address_comments._filter_comments([_MARKED_COMMENT, _PLAIN_COMMENT], 1, "acme/frontend", "alexei", {})
+    assert result == [_PLAIN_COMMENT]
+
+
+def test_filter_comments_selects_unresolved_unminimized_marked_thread():
+    with patch("harness.runners.address_comments.fetch_review_threads", return_value=[_thread(1)]):
+        result = address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
+    assert result == [_FOCUSED_REVIEW_COMMENT]
+
+
+@pytest.mark.parametrize("patch_target", ["fetch_review_threads", "_get_unresolved_comment_ids"])
+def test_filter_comments_lookup_failure_fails_closed_for_marked_threads(patch_target, caplog):
+    with (
+        patch(f"harness.runners.address_comments.{patch_target}", return_value=None),
+        caplog.at_level("WARNING"),
+    ):
+        result = address_comments._filter_comments([_MARKED_COMMENT, _PLAIN_COMMENT], 7, "acme/frontend", "alexei", {})
+    assert result == [_PLAIN_COMMENT]
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "#7" in warnings[0].getMessage()
+    assert "1 marked" in warnings[0].getMessage()
+
+
+def test_filter_comments_lookup_failure_without_marked_threads_logs_no_warning(caplog):
+    with (
+        patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value=None),
+        caplog.at_level("WARNING"),
+    ):
+        result = address_comments._filter_comments([_PLAIN_COMMENT], 1, "acme/frontend", "alexei", {})
+    assert result == [_PLAIN_COMMENT]
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
+def test_comment_still_unresolved_returns_true_on_lookup_failure_for_unmarked_comment():
+    with patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value=None):
+        assert address_comments._comment_still_unresolved(_PLAIN_COMMENT, 1, "acme/frontend", {}) is True
