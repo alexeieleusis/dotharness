@@ -260,11 +260,21 @@ def _as_focused_review_comment(parent: dict, marker_reply: dict) -> dict:
     }
 
 
+@dataclass(frozen=True)
+class ThreadState:
+    """Result of the single review-thread lookup: `unresolved_ids` are the REST databaseIds
+    of inline comments in unresolved threads; `minimized_ids` are the databaseIds of
+    unresolved threads' root comments that are minimised."""
+
+    unresolved_ids: frozenset[int] = frozenset()
+    minimized_ids: frozenset[int] = frozenset()
+
+
 def _select_focused_review_comments(
     comments: list[dict],
     pr_number: int,
     *,
-    unresolved_ids: set[int] | None,
+    thread_state: ThreadState | None,
     our_login: str | None = None,
     trusted_commenters: str | list[str] = "*",
 ) -> tuple[list[dict], list[dict]]:
@@ -277,7 +287,7 @@ def _select_focused_review_comments(
     `rest`, where `_filter_already_replied` handles it. Everything else (no marker at
     all, non-inline types) is left in `rest`.
 
-    `unresolved_ids` is the result of the single thread-state lookup done by
+    `thread_state` is the result of the single thread-state lookup done by
     `_filter_by_unresolved` (None when that lookup failed). Marked threads fail closed:
     with no thread state they are neither selected nor forwarded to `rest`; a marked
     thread that is resolved or whose root comment is minimised is dropped the same way.
@@ -287,7 +297,6 @@ def _select_focused_review_comments(
     and by an author allowed by `trusted_commenters`; otherwise any commenter could post the
     marker text and trigger an unattended commit and push. Such threads are dropped, not
     forwarded to `rest`."""
-    minimized_ids = getattr(unresolved_ids, "minimized_ids", set())
     selected, rest = [], []
     skipped = 0
     untrusted = 0
@@ -301,9 +310,9 @@ def _select_focused_review_comments(
             or not _filter_by_trusted_commenters([marker_reply], pr_number, trusted_commenters)
         ):
             untrusted += 1
-        elif unresolved_ids is None:
+        elif thread_state is None:
             skipped += 1
-        elif c.get("id") in unresolved_ids and c.get("id") not in minimized_ids:
+        elif c.get("id") in thread_state.unresolved_ids and c.get("id") not in thread_state.minimized_ids:
             selected.append(_as_focused_review_comment(c, marker_reply))
     if untrusted:
         logger.warning(
@@ -355,14 +364,14 @@ def _filter_by_trusted_commenters(
 
 def _filter_by_unresolved_with_state(
     comments: list[dict], pr_number: int, repo: str, env: dict
-) -> tuple[list[dict], set[int] | None]:
+) -> tuple[list[dict], ThreadState | None]:
     """Filter resolved inline threads and also return the lookup result (None on failure)
     so the focused-review selector can fail closed without a second lookup."""
-    unresolved_ids = _get_unresolved_comment_ids(pr_number, repo, env)
-    if unresolved_ids is None:
+    thread_state = _get_unresolved_comment_ids(pr_number, repo, env)
+    if thread_state is None:
         return comments, None
     before = len(comments)
-    comments = [c for c in comments if c["type"] != "inline" or c.get("id") in unresolved_ids]
+    comments = [c for c in comments if c["type"] != "inline" or c.get("id") in thread_state.unresolved_ids]
     if len(comments) < before:
         logger.info(
             "PR #%d: filtered to %d unresolved comment(s) (was %d)",
@@ -370,7 +379,7 @@ def _filter_by_unresolved_with_state(
             len(comments),
             before,
         )
-    return comments, unresolved_ids
+    return comments, thread_state
 
 
 def _filter_by_unresolved(comments: list[dict], pr_number: int, repo: str, env: dict) -> list[dict]:
@@ -386,10 +395,10 @@ def _comment_thread_state(comment: dict, pr_number: int, repo: str, env: dict) -
     comment_id = comment.get("id")
     if not isinstance(comment_id, int):
         return True
-    unresolved_ids = _get_unresolved_comment_ids(pr_number, repo, env)
-    if unresolved_ids is None:
+    thread_state = _get_unresolved_comment_ids(pr_number, repo, env)
+    if thread_state is None:
         return None
-    return comment_id in unresolved_ids
+    return comment_id in thread_state.unresolved_ids
 
 
 def _comment_still_unresolved(comment: dict, pr_number: int, repo: str, env: dict) -> bool:
@@ -448,11 +457,11 @@ def _filter_comments(
     replied_keys: set[str] | None = None,
 ) -> list[dict]:
     comments = _filter_by_trusted_commenters(comments, pr_number, trusted_commenters)
-    comments, unresolved_ids = _filter_by_unresolved_with_state(comments, pr_number, repo, env)
+    comments, thread_state = _filter_by_unresolved_with_state(comments, pr_number, repo, env)
     selected, comments = _select_focused_review_comments(
         comments,
         pr_number,
-        unresolved_ids=unresolved_ids,
+        thread_state=thread_state,
         our_login=our_login,
         trusted_commenters=trusted_commenters,
     )
@@ -729,33 +738,26 @@ def _list_prs(repo: str, env: dict, filter_flag: str) -> list[dict]:
     return json.loads(result.stdout)
 
 
-class _UnresolvedIds(set):
-    """Set of unresolved-thread comment ids that also carries `minimized_ids`: the ids of
-    unresolved threads whose root comment is minimised (same single lookup, no new query)."""
-
-    minimized_ids: set[int]
-
-
-def _get_unresolved_comment_ids(pr_number: int, repo: str, env: dict) -> set[int] | None:
-    """Return REST API databaseIds of inline comments in unresolved threads.
+def _get_unresolved_comment_ids(pr_number: int, repo: str, env: dict) -> ThreadState | None:
+    """Return the `ThreadState` of the PR's review threads.
     Returns None if the GraphQL query fails (caller should skip filtering)."""
     threads = fetch_review_threads(pr_number, repo, env)
     if threads is None:
         return None
-    ids = _UnresolvedIds()
-    ids.minimized_ids = set()
+    ids: set[int] = set()
+    minimized_ids: set[int] = set()
     for thread in threads:
         if thread.get("isResolved"):
             continue
         nodes = (thread.get("comments") or {}).get("nodes") or []
         if nodes and nodes[0].get("isMinimized") and nodes[0].get("databaseId"):
-            ids.minimized_ids.add(nodes[0]["databaseId"])
+            minimized_ids.add(nodes[0]["databaseId"])
         for c in nodes:
             db_id = c.get("databaseId")
             if db_id:
                 ids.add(db_id)
     logger.debug("PR #%d: %d unresolved inline comment id(s)", pr_number, len(ids))
-    return ids
+    return ThreadState(frozenset(ids), frozenset(minimized_ids))
 
 
 def _check_gql_unresolved_threads(pr_number: int, repo: str, env: dict) -> tuple[int, int, bool]:
