@@ -265,6 +265,8 @@ def _select_focused_review_comments(
     pr_number: int,
     *,
     unresolved_ids: set[int] | None,
+    our_login: str | None = None,
+    trusted_commenters: str | list[str] = "*",
 ) -> tuple[list[dict], list[dict]]:
     """Split out inline comments whose last reply carries the focused-review-bot marker,
     re-pointed at that reply via `_as_focused_review_comment`. No extra API lookup and no
@@ -279,18 +281,36 @@ def _select_focused_review_comments(
     `_filter_by_unresolved` (None when that lookup failed). Marked threads fail closed:
     with no thread state they are neither selected nor forwarded to `rest`; a marked
     thread that is resolved or whose root comment is minimised is dropped the same way.
-    Unmarked comments are unaffected."""
+    Unmarked comments are unaffected.
+
+    The marker reply must have been written by `our_login` (fail closed when it is unknown)
+    and by an author allowed by `trusted_commenters`; otherwise any commenter could post the
+    marker text and trigger an unattended commit and push. Such threads are dropped, not
+    forwarded to `rest`."""
     minimized_ids = getattr(unresolved_ids, "minimized_ids", set())
     selected, rest = [], []
     skipped = 0
+    untrusted = 0
     for c in comments:
         marker_reply = find_last_reply_if_marked(c) if c.get("type") == "inline" else None
         if marker_reply is None:
             rest.append(c)
+        elif (
+            not our_login
+            or marker_reply.get("author") != our_login
+            or not _filter_by_trusted_commenters([marker_reply], pr_number, trusted_commenters)
+        ):
+            untrusted += 1
         elif unresolved_ids is None:
             skipped += 1
         elif c.get("id") in unresolved_ids and c.get("id") not in minimized_ids:
             selected.append(_as_focused_review_comment(c, marker_reply))
+    if untrusted:
+        logger.warning(
+            "PR #%d: ignored %d marked thread(s) whose marker reply was not authored by us or a trusted commenter",
+            pr_number,
+            untrusted,
+        )
     if skipped:
         logger.warning(
             "PR #%d: thread-state lookup failed; skipped %d marked focused-review thread(s)", pr_number, skipped
@@ -429,7 +449,13 @@ def _filter_comments(
 ) -> list[dict]:
     comments = _filter_by_trusted_commenters(comments, pr_number, trusted_commenters)
     comments, unresolved_ids = _filter_by_unresolved_with_state(comments, pr_number, repo, env)
-    selected, comments = _select_focused_review_comments(comments, pr_number, unresolved_ids=unresolved_ids)
+    selected, comments = _select_focused_review_comments(
+        comments,
+        pr_number,
+        unresolved_ids=unresolved_ids,
+        our_login=our_login,
+        trusted_commenters=trusted_commenters,
+    )
     comments = _filter_already_replied(comments, pr_number, our_login, replied_keys)
     comments = selected + comments
     comments = _filter_by_plugin_prefix(comments, pr_number, plugin_prefix)
