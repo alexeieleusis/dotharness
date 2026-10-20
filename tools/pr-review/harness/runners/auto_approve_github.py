@@ -685,7 +685,9 @@ def _post_approval(repo: str, pr_number: int, head_sha: str, env: dict) -> bool:
         env,
     )
     if result.returncode != 0:
-        logger.error("PR #%d: approval POST failed (exit %d)", pr_number, result.returncode)
+        logger.error(
+            "PR #%d: approval POST failed (exit %d): %s", pr_number, result.returncode, _text(result.stderr).strip()
+        )
         return False
     return True
 

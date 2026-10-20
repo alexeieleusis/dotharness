@@ -40,7 +40,6 @@ import subprocess
 from harness.config import HarnessConfig
 from harness.lock import acquire_lock
 from harness.runners.auto_approve_github import (
-    ApprovalStatus,
     GateStatus,
     SafetyStatus,
     ViewedStatus,
@@ -257,8 +256,6 @@ def _decide_and_act(
         all_viewed=all_viewed,
     )
     logger.info("PR #%d: approval %s (%s)", pr_number, approval.status.value, approval.reason)
-    if approval.status is ApprovalStatus.WRITE_FAILED:
-        problems.append(f"approval {approval.status.value}: {approval.reason}")
     return problems
 
 
@@ -284,4 +281,4 @@ def _mark_viewed(
     )
     if viewed.status is ViewedStatus.READ_FAILED:
         return None
-    return [f"failed to mark viewed: {p}" for p in viewed.failed], viewed.all_viewed
+    return [], viewed.all_viewed

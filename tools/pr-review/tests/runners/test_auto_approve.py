@@ -226,11 +226,10 @@ def test_viewed_read_failure_blocks_approval_and_does_not_raise(tmp_path):
     m.approve.assert_not_called()
 
 
-def test_write_failure_raises_after_loop(tmp_path):
+def test_write_failure_does_not_raise(tmp_path):
     with _mocks() as m:
         m.approve.return_value = ApprovalResult(ApprovalStatus.WRITE_FAILED, "post failed")
-        with pytest.raises(auto_approve.AutoApproveError, match="post failed"):
-            auto_approve.run(_cfg(tmp_path))
+        auto_approve.run(_cfg(tmp_path))
 
 
 def test_one_pr_failing_does_not_stop_others_and_raises(tmp_path):

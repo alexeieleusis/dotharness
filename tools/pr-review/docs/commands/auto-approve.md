@@ -89,8 +89,12 @@ file. Files already marked viewed are skipped, and a PR that the account has alr
 
 ## Errors
 
-If any PR fails (a read failed, a write failed, or a git error), the command logs the failure and continues with the other PRs. At the end it exits non-zero with the list of failures. In `harness run all` this makes `all` exit non-zero.
+A `gh` failure (a read of the PR list, the timing gate, the safety checks or
+the viewed states, or a failed approval or mark-viewed write) is logged as an
+error, with `gh`'s stderr for the approval, and does not fail the run. A failed
+read means no writes for that PR; every PR is checked again on the next run.
 
-If a write fails or a git error occurs, the command logs it, keeps going with
-the other PRs, and exits non-zero at the end with the list of failures. In
+If a git error or an unexpected exception occurs, the command logs it, keeps
+going with the other PRs (a git error stops the loop), and exits non-zero at
+the end with the list of failures. In
 `harness run all` this makes `all` exit non-zero.
