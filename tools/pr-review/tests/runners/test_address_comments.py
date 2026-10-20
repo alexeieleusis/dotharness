@@ -564,7 +564,7 @@ def test_build_comment_instructions_no_marker_note_for_plain_comment():
 def test_select_focused_review_comments_selects_marked_comment_without_reaction_lookup():
     with patch("harness.runners.common.run_cmd") as mock_run:
         selected, rest = address_comments._select_focused_review_comments(
-            [_MARKED_COMMENT, _PLAIN_COMMENT], 1, "alexei", {}, unresolved_ids={1, 2}
+            [_MARKED_COMMENT, _PLAIN_COMMENT], 1, unresolved_ids={1, 2}
         )
     assert selected == [_FOCUSED_REVIEW_COMMENT]
     assert selected[0]["id"] == 99
@@ -573,20 +573,15 @@ def test_select_focused_review_comments_selects_marked_comment_without_reaction_
     mock_run.assert_not_called()
 
 
-@pytest.mark.parametrize("our_login", ["someone-else", None])
-def test_select_focused_review_comments_selects_marked_comment_regardless_of_our_login(our_login):
-    selected, rest = address_comments._select_focused_review_comments(
-        [_MARKED_COMMENT], 1, our_login, {}, unresolved_ids={1, 2}
-    )
+def test_select_focused_review_comments_selects_marked_comment():
+    selected, rest = address_comments._select_focused_review_comments([_MARKED_COMMENT], 1, unresolved_ids={1, 2})
     assert selected == [_FOCUSED_REVIEW_COMMENT]
     assert rest == []
 
 
 def test_select_focused_review_comments_ignores_non_inline_types():
     review_comment = {"type": "review", "id": "review-1", "body": FOCUSED_REVIEW_MARKER, "replies": []}
-    selected, rest = address_comments._select_focused_review_comments(
-        [review_comment], 1, "alexei", {}, unresolved_ids={1, 2}
-    )
+    selected, rest = address_comments._select_focused_review_comments([review_comment], 1, unresolved_ids={1, 2})
     assert selected == []
     assert rest == [review_comment]
 
@@ -596,7 +591,7 @@ def test_select_focused_review_comments_leaves_already_addressed_thread_in_rest(
     # thread must NOT be re-selected — it should fall through to `rest`, where the
     # pre-existing our_login-last-reply skip takes over.
     selected, rest = address_comments._select_focused_review_comments(
-        [_ADDRESSED_MARKED_COMMENT], 1, "alexei", {}, unresolved_ids={1, 2}
+        [_ADDRESSED_MARKED_COMMENT], 1, unresolved_ids={1, 2}
     )
     assert selected == []
     assert rest == [_ADDRESSED_MARKED_COMMENT]
@@ -604,7 +599,7 @@ def test_select_focused_review_comments_leaves_already_addressed_thread_in_rest(
 
 def test_addressed_marked_thread_is_not_selected_and_is_dropped_by_already_replied():
     selected, rest = address_comments._select_focused_review_comments(
-        [_ADDRESSED_MARKED_COMMENT], 1, "alexei", {}, unresolved_ids={1, 2}
+        [_ADDRESSED_MARKED_COMMENT], 1, unresolved_ids={1, 2}
     )
     assert selected == []
     assert address_comments._filter_already_replied(rest, 1, "alexei") == []
@@ -618,7 +613,7 @@ def test_addressed_marked_thread_with_other_login_completion_reply_falls_to_rest
             {"id": 100, "author": "someone-else", "body": "Addressed in http://commit-url"},
         ],
     }
-    selected, rest = address_comments._select_focused_review_comments([thread], 1, "alexei", {}, unresolved_ids={1, 2})
+    selected, rest = address_comments._select_focused_review_comments([thread], 1, unresolved_ids={1, 2})
     assert selected == []
     assert rest == [thread]
 
@@ -886,9 +881,7 @@ def test_address_single_comment_skips_reply_check_when_our_login_not_provided(ca
 
 
 def test_target_comment_without_marker_reply_is_not_selected():
-    selected, rest = address_comments._select_focused_review_comments(
-        [_PLAIN_COMMENT], 1, "alexei", {}, unresolved_ids={1, 2}
-    )
+    selected, rest = address_comments._select_focused_review_comments([_PLAIN_COMMENT], 1, unresolved_ids={1, 2})
     assert selected == []
     assert rest == [_PLAIN_COMMENT]
 
@@ -992,9 +985,7 @@ def test_filter_comments_drops_marked_comment_in_resolved_thread():
 
 
 def test_select_focused_review_comments_drops_marked_comment_not_in_unresolved_ids():
-    selected, rest = address_comments._select_focused_review_comments(
-        [_MARKED_COMMENT], 1, "alexei", {}, unresolved_ids=set()
-    )
+    selected, rest = address_comments._select_focused_review_comments([_MARKED_COMMENT], 1, unresolved_ids=set())
     assert selected == []
     assert rest == []
 

@@ -263,14 +263,12 @@ def _as_focused_review_comment(parent: dict, marker_reply: dict) -> dict:
 def _select_focused_review_comments(
     comments: list[dict],
     pr_number: int,
-    our_login: str | None,
-    env: dict,
     *,
     unresolved_ids: set[int] | None,
 ) -> tuple[list[dict], list[dict]]:
     """Split out inline comments whose last reply carries the focused-review-bot marker,
     re-pointed at that reply via `_as_focused_review_comment`. No extra API lookup and no
-    dependence on `our_login`. Selection is deterministic and programmatic rather than
+    dependence on the commenting account. Selection is deterministic and programmatic rather than
     left to the backend's judgment, since a detailed marker reply can otherwise be
     misread as evidence of prior completion. Idempotency needs no state: once any reply
     is posted after the marker reply, the thread is no longer marked and falls into
@@ -431,9 +429,7 @@ def _filter_comments(
 ) -> list[dict]:
     comments = _filter_by_trusted_commenters(comments, pr_number, trusted_commenters)
     comments, unresolved_ids = _filter_by_unresolved_with_state(comments, pr_number, repo, env)
-    selected, comments = _select_focused_review_comments(
-        comments, pr_number, our_login, env, unresolved_ids=unresolved_ids
-    )
+    selected, comments = _select_focused_review_comments(comments, pr_number, unresolved_ids=unresolved_ids)
     comments = _filter_already_replied(comments, pr_number, our_login, replied_keys)
     comments = selected + comments
     comments = _filter_by_plugin_prefix(comments, pr_number, plugin_prefix)
