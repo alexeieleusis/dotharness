@@ -280,10 +280,11 @@ def test_missing_author_reaches_gate_as_empty_and_blocks_writes(tmp_path, author
     m.approve.assert_not_called()
 
 
-def test_pr_list_failure_does_not_raise(tmp_path):
+def test_pr_list_failure_raises_with_stderr(tmp_path):
     with _mocks() as m:
-        m.run_cmd.return_value = SimpleNamespace(returncode=1, stdout=b"")
-        auto_approve.run(_cfg(tmp_path))
+        m.run_cmd.return_value = SimpleNamespace(returncode=1, stdout=b"", stderr=b"bad credentials")
+        with pytest.raises(auto_approve.AutoApproveError, match="bad credentials"):
+            auto_approve.run(_cfg(tmp_path))
     m.approve.assert_not_called()
 
 

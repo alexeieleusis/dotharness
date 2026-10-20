@@ -10,8 +10,8 @@ Public entry point (takes the shared working-directory lock itself, like the sib
 * ``dry_run=True`` performs every read and check but no write: the sibling write functions
   in ``auto_approve_github`` (the only write points: ``markFileAsViewed`` and the review POST)
   receive ``dry_run`` and log what they would do.
-* Raises :class:`AutoApproveError` after the loop if any PR failed (read failure, write failure,
-  or an exception), so the CLI exits non-zero. Returns None when every PR succeeded.
+* Raises :class:`AutoApproveError` if the PR list itself cannot be read (e.g. bad token), or after
+  the loop if any PR failed (read failure, write failure, or an exception), so the CLI exits non-zero. Returns None when every PR succeeded.
 
 Per PR: size evaluation, timing gate, approval-safety reads (all reads before any write; any
 read failure means no write on that PR), then mark small files viewed (gate open), then approve
@@ -133,8 +133,8 @@ def _list_prs(repo: str, env: dict) -> list[dict]:
         check=False,
     )
     if result.returncode != 0:
-        logger.error("gh pr list failed (exit %d), nothing processed this run", result.returncode)
-        return []
+        stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
+        raise AutoApproveError(f"gh pr list failed (exit {result.returncode}): {stderr}")  # noqa: TRY003
     return sorted(json.loads(result.stdout), key=lambda p: p["number"])
 
 
