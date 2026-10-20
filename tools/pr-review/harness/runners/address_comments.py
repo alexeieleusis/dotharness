@@ -26,7 +26,6 @@ from harness.runners.common import (
     git_restore,
     is_ancestor,
     preserve_reviewer_request,
-    reply_has_reaction_from,
     run_cmd,
 )
 
@@ -226,18 +225,8 @@ def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) 
             break
 
 
-def _focused_review_approved(comment: dict, repo: str, our_login: str | None, env: dict) -> bool:
-    """True if our_login left a +1 reaction on this comment's (last, marker-carrying) reply."""
-    if not our_login:
-        return False
-    last_reply = find_last_reply_if_marked(comment)
-    if last_reply is None or "id" not in last_reply:
-        return False
-    return reply_has_reaction_from(last_reply["id"], repo, our_login, env)
-
-
 def _as_focused_review_comment(parent: dict, marker_reply: dict) -> dict:
-    """Re-point an approved focused-review thread at its marker reply — the real fix spec —
+    """Re-point a marked focused-review thread at its marker reply — the real fix spec —
     as the actual "comment to address", instead of the terse automated finding it replied
     to. File location and diff context are inherited from the parent; the parent itself is
     carried along as background-only context under `focused_review_original`."""
@@ -261,33 +250,26 @@ def _as_focused_review_comment(parent: dict, marker_reply: dict) -> dict:
     }
 
 
-def _select_approved_focused_review_comments(
+def _select_focused_review_comments(
     comments: list[dict], pr_number: int, repo: str, our_login: str | None, env: dict
 ) -> tuple[list[dict], list[dict]]:
-    """Split out inline comments whose last reply carries the focused-review-bot marker and
-    has a +1 reaction from our_login, re-pointed at that reply via `_as_focused_review_comment`.
-    Selection is deterministic and programmatic rather than left to the backend's judgment,
-    since a detailed marker reply can otherwise be misread as evidence of prior completion.
-    A marked-but-not-yet-approved comment is dropped outright, here, rather than left in
-    `rest` for `_filter_already_replied`'s last-reply-author check to catch — that check only
-    happens to work while `our_login` matches whoever posted the marker reply, and stops
-    matching the moment those two logins diverge (stale gh session, account switch, token
-    rotation), which would let the untransformed marker-carrying comment back into the
-    ordinary pipeline. Everything else (no marker at all) is left in `rest`."""
+    """Split out inline comments whose last reply carries the focused-review-bot marker,
+    re-pointed at that reply via `_as_focused_review_comment`. No reaction lookup and no
+    dependence on `our_login`: every marked thread is selected. Selection is deterministic
+    and programmatic rather than left to the backend's judgment, since a detailed marker
+    reply can otherwise be misread as evidence of prior completion. Idempotency needs no
+    state: once any reply is posted after the marker reply, the thread is no longer marked
+    and falls into `rest`, where `_filter_already_replied` handles it. Everything else (no
+    marker at all, non-inline types) is left in `rest`."""
     selected, rest = [], []
-    dropped = 0
     for c in comments:
         marker_reply = find_last_reply_if_marked(c) if c.get("type") == "inline" else None
         if marker_reply is None:
             rest.append(c)
-        elif _focused_review_approved(c, repo, our_login, env):
-            selected.append(_as_focused_review_comment(c, marker_reply))
         else:
-            dropped += 1
+            selected.append(_as_focused_review_comment(c, marker_reply))
     if selected:
-        logger.info("PR #%d: %d approved focused-review comment(s) selected for addressing", pr_number, len(selected))
-    if dropped:
-        logger.info("PR #%d: %d marked focused-review comment(s) not yet approved, held back", pr_number, dropped)
+        logger.info("PR #%d: %d focused-review comment(s) selected for addressing", pr_number, len(selected))
     return selected, rest
 
 
@@ -403,7 +385,7 @@ def _filter_comments(
 ) -> list[dict]:
     comments = _filter_by_trusted_commenters(comments, pr_number, trusted_commenters)
     comments = _filter_by_unresolved(comments, pr_number, repo, env)
-    selected, comments = _select_approved_focused_review_comments(comments, pr_number, repo, our_login, env)
+    selected, comments = _select_focused_review_comments(comments, pr_number, repo, our_login, env)
     comments = _filter_already_replied(comments, pr_number, our_login, replied_keys)
     comments = selected + comments
     comments = _filter_by_plugin_prefix(comments, pr_number, plugin_prefix)
