@@ -188,7 +188,19 @@ def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) 
     logger.info("PR #%d: found %d comment(s) to address", number, len(comments))
     head_sha = get_head_sha(ctx.wdir, ctx.env)
     for comment in comments:
-        if comment.get("type") == "inline" and not _comment_still_unresolved(comment, number, ctx.repo, ctx.env):
+        if comment.get("type") == "inline":
+            still_unresolved = _comment_thread_state(comment, number, ctx.repo, ctx.env)
+            if still_unresolved is None and comment.get("focused_review_original") is not None:
+                logger.warning(
+                    "PR #%d: thread-state lookup failed; skipping re-pointed focused-review comment %s",
+                    number,
+                    comment.get("id", "?"),
+                )
+                continue
+            still_unresolved = still_unresolved is not False
+        else:
+            still_unresolved = True
+        if not still_unresolved:
             logger.info(
                 "PR #%d: comment %s's thread was resolved since this run started, skipping",
                 number,
@@ -350,6 +362,21 @@ def _filter_by_unresolved(comments: list[dict], pr_number: int, repo: str, env: 
     return _filter_by_unresolved_with_state(comments, pr_number, repo, env)[0]
 
 
+def _comment_thread_state(comment: dict, pr_number: int, repo: str, env: dict) -> bool | None:
+    """Tri-state thread check: True (unresolved), False (resolved), None (lookup failed).
+
+    Makes exactly one `_get_unresolved_comment_ids` call; a non-int id returns True without
+    a lookup. Callers decide whether None fails open or closed.
+    """
+    comment_id = comment.get("id")
+    if not isinstance(comment_id, int):
+        return True
+    unresolved_ids = _get_unresolved_comment_ids(pr_number, repo, env)
+    if unresolved_ids is None:
+        return None
+    return comment_id in unresolved_ids
+
+
 def _comment_still_unresolved(comment: dict, pr_number: int, repo: str, env: dict) -> bool:
     """Re-check one comment's thread resolution status right before addressing it.
 
@@ -360,13 +387,7 @@ def _comment_still_unresolved(comment: dict, pr_number: int, repo: str, env: dic
     own turn comes up later in the loop. Fails open (True) if the GraphQL check itself
     fails, matching `_filter_by_unresolved`'s policy of not blocking on a flaky API.
     """
-    comment_id = comment.get("id")
-    if not isinstance(comment_id, int):
-        return True
-    unresolved_ids = _get_unresolved_comment_ids(pr_number, repo, env)
-    if unresolved_ids is None:
-        return True
-    return comment_id in unresolved_ids
+    return _comment_thread_state(comment, pr_number, repo, env) is not False
 
 
 def _filter_already_replied(

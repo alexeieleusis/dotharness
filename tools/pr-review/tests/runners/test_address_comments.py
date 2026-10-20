@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
@@ -1023,3 +1024,51 @@ def test_filter_comments_lookup_failure_without_marked_threads_logs_no_warning(c
 def test_comment_still_unresolved_returns_true_on_lookup_failure_for_unmarked_comment():
     with patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value=None):
         assert address_comments._comment_still_unresolved(_PLAIN_COMMENT, 1, "acme/frontend", {}) is True
+
+
+def _run_pending(comments, lookup_return):
+    ctx = address_comments._ProcessPrContext(
+        script_path=Path("s"),
+        instructions_template="t",
+        backend=MagicMock(),
+        our_login="alexei",
+        wdir="w",
+        original_sha="sha",
+        repo="acme/frontend",
+        env={},
+        trusted_commenters=[],
+    )
+    with (
+        patch("harness.runners.address_comments.git_fetch_and_checkout"),
+        patch("harness.runners.address_comments.fetch_pr_comments", return_value=comments),
+        patch("harness.runners.address_comments._filter_comments", return_value=comments),
+        patch("harness.runners.address_comments.get_head_sha", return_value="head"),
+        patch("harness.runners.address_comments._get_unresolved_comment_ids", return_value=lookup_return) as lookup,
+        patch("harness.runners.address_comments._address_single_comment", return_value=("head", False)) as single,
+        patch("harness.runners.address_comments._push_branch", return_value=True),
+    ):
+        address_comments._address_pending_comments(5, "br", ctx)
+    return lookup, single
+
+
+def test_prerun_recheck_skips_repointed_comment_on_lookup_failure(caplog):
+    marked = {**_PLAIN_COMMENT, "focused_review_original": {"author": "sonar", "body": "x"}}
+    with caplog.at_level("WARNING"):
+        lookup, single = _run_pending([marked], None)
+    single.assert_not_called()
+    assert lookup.call_count == 1
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "#5" in warnings[0].getMessage()
+    assert "2" in warnings[0].getMessage()
+
+
+def test_prerun_recheck_addresses_repointed_comment_when_unresolved():
+    marked = {**_PLAIN_COMMENT, "focused_review_original": {"author": "sonar", "body": "x"}}
+    _, single = _run_pending([marked], {2})
+    single.assert_called_once()
+
+
+def test_prerun_recheck_addresses_unmarked_comment_on_lookup_failure():
+    _, single = _run_pending([_PLAIN_COMMENT], None)
+    single.assert_called_once()
