@@ -379,7 +379,7 @@ def test_local_review_cli_end_to_end_no_network(tmp_xdg, tmp_path, monkeypatch):
     cfg_path = _lr_config(tmp_path, repo)  # no repo.name
     monkeypatch.setenv("PATH", "/usr/bin:/bin")  # gh absent
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    with patch("harness.runners.local_review.Backend", _StubBackend):
+    with patch("harness.runners.local_review.address.Backend", _StubBackend):
         r = CliRunner().invoke(cli, ["run", "--config", str(cfg_path), "local-review"])
     assert r.exit_code == 0, r.output
     assert "per-file: 1/1 done" in r.output
@@ -414,10 +414,19 @@ def test_local_review_cli_failed_pass_exits_nonzero(tmp_xdg, tmp_path):
         def run(self, prompt, cwd, opencode_dir=None, context=None):
             return subprocess.CompletedProcess([], 1, "", "boom")
 
-    with patch("harness.runners.local_review.Backend", _Failing):
+    with patch("harness.runners.local_review.address.Backend", _Failing):
         r = CliRunner().invoke(cli, ["run", "--config", str(cfg_path), "local-review"])
     assert r.exit_code != 0
     assert "per-file: 0/1 done" in r.output
+
+
+def test_cli_resolves_run_local_review_from_package_attribute(tmp_xdg, tmp_path):
+    repo = _make_repo(tmp_path)
+    cfg_path = _lr_config(tmp_path, repo)
+    with patch("harness.runners.local_review.run_local_review", return_value=0) as lr:
+        r = CliRunner().invoke(cli, ["run", "--config", str(cfg_path), "local-review"])
+    assert r.exit_code == 0, r.output
+    lr.assert_called_once()  # fails if the patch no longer reaches where cli.py resolves the name
 
 
 def test_local_review_not_in_run_all(tmp_xdg, minimal_toml):

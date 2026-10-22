@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import cast
 
@@ -33,6 +34,8 @@ from harness.runners.local_review import (
     stamp_findings_file,
     write_manifest,
 )
+from harness.runners.local_review import findings as lr_findings
+from harness.runners.local_review import prompts as lr_prompts
 
 KNOWLEDGE = Path(__file__).resolve().parents[4] / "knowledge" / "pr-review"
 
@@ -85,7 +88,7 @@ def test_restamp_is_idempotent() -> None:
 def test_missing_required_field_unstamped_counted_and_warned(missing: str, caplog: pytest.LogCaptureFixture) -> None:
     bad = "\n".join(ln for ln in BLOCK_A.splitlines() if not ln.startswith(f"- {missing}:"))
     text = bad + "\n\n" + BLOCK_B + "\n"
-    with caplog.at_level(logging.WARNING, logger=lr.logger.name):
+    with caplog.at_level(logging.WARNING, logger=lr_findings.logger.name):
         res = stamp_findings(text, "file")
     assert res.unparseable == 1
     assert res.stamped == 1
@@ -214,7 +217,7 @@ def test_description_commit_cap(repo: tuple[Path, LocalReviewTarget]) -> None:
     desc = build_change_description(path, tgt)
     assert desc.endswith("\n(truncated)")
     assert desc.count(" commit ") == 50
-    assert len(desc) <= lr.MAX_DESCRIPTION_CHARS
+    assert len(desc) <= lr_prompts.MAX_DESCRIPTION_CHARS
 
 
 def test_description_char_cap(repo: tuple[Path, LocalReviewTarget]) -> None:
@@ -223,7 +226,7 @@ def test_description_char_cap(repo: tuple[Path, LocalReviewTarget]) -> None:
         _commit(path, i, "x" * 6000)
     desc = build_change_description(path, tgt)
     assert desc.endswith("\n(truncated)")
-    assert len(desc) <= lr.MAX_DESCRIPTION_CHARS
+    assert len(desc) <= lr_prompts.MAX_DESCRIPTION_CHARS
 
 
 def test_context_repo_name_and_fallback(repo: tuple[Path, LocalReviewTarget]) -> None:
@@ -239,16 +242,16 @@ def test_context_repo_name_and_fallback(repo: tuple[Path, LocalReviewTarget]) ->
 # ---- prompts / templates --------------------------------------------------
 
 
-@pytest.mark.parametrize("name", list(lr.REVIEW_TEMPLATES))
+@pytest.mark.parametrize("name", list(lr_prompts.REVIEW_TEMPLATES))
 def test_templates_are_local(name: str) -> None:
     text = (KNOWLEDGE / name).read_text(encoding="utf-8")
-    assert lr.OUTPUT_FILE_PLACEHOLDER in text
+    assert lr_prompts.OUTPUT_FILE_PLACEHOLDER in text
     assert "dotharness-review-" not in text
     assert "gh api" not in text
     assert "gh pr comment" not in text
 
 
-@pytest.mark.parametrize("name", [lr.FILE_TEMPLATE, lr.DESIGN_TEMPLATE])
+@pytest.mark.parametrize("name", [lr_prompts.FILE_TEMPLATE, lr_prompts.DESIGN_TEMPLATE])
 def test_finding_templates_spec_format(name: str) -> None:
     text = (KNOWLEDGE / name).read_text(encoding="utf-8")
     assert "## Finding: <short title>\n- severity: P0 | P1\n- file: " in text
@@ -257,10 +260,10 @@ def test_finding_templates_spec_format(name: str) -> None:
 
 def test_prompts_assemble(tmp_path: Path) -> None:
     out = tmp_path / "out.md"
-    file_t = (KNOWLEDGE / lr.FILE_TEMPLATE).read_text(encoding="utf-8")
+    file_t = (KNOWLEDGE / lr_prompts.FILE_TEMPLATE).read_text(encoding="utf-8")
     p = build_file_prompt(file_t, out, "\n\n## Diff for a\nD", "\n\nRepo: r", "GUIDE", "SONAR")
     assert str(out.resolve()) in p
-    assert lr.OUTPUT_FILE_PLACEHOLDER not in p
+    assert lr_prompts.OUTPUT_FILE_PLACEHOLDER not in p
     assert "## Additional Review Guide\nGUIDE" in p
     assert "## Static Analysis\nSONAR" in p
     s = build_summary_prompt("S {OUTPUT_FILE}", out, ["a.py", "b.py"], "\n\nRepo: r")
@@ -320,7 +323,7 @@ def env(tmp_path: Path):
     _git(repo, "commit", "-m", "feat")
     kd = tmp_path / "knowledge"
     (kd / "pr-review").mkdir(parents=True)
-    for name in lr.REVIEW_TEMPLATES:
+    for name in lr_prompts.REVIEW_TEMPLATES:
         (kd / "pr-review" / name).write_text("T {OUTPUT_FILE}", encoding="utf-8")
     cfg = HarnessConfig(
         harness=HarnessSection(knowledge_dir=kd),
@@ -529,3 +532,64 @@ def test_output_dir_inside_repo_refused(env) -> None:
     cfg, target, _, _, repo = env
     with pytest.raises(LocalReviewError):
         lr.run(cfg, target, output_root=repo / "out", backend=cast(Backend, FakeBackend(lambda: repo)))
+
+
+# ---------------------------------------------------------------------------
+# Package structure: acyclic submodules, isolation of findings/store, patch targets
+# ---------------------------------------------------------------------------
+
+SUBMODULES = ("types", "git", "prompts", "findings", "store", "review", "address")
+PKG = "harness.runners.local_review"
+
+
+def _fresh_python(code: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)  # noqa: S603
+
+
+@pytest.mark.parametrize("name", SUBMODULES)
+def test_each_submodule_imports_alone_in_a_fresh_interpreter(name: str) -> None:
+    proc = _fresh_python(f"import {PKG}.{name}")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("name", ["findings", "store"])
+def test_findings_and_store_do_not_import_backend_lock_or_orchestrators(name: str) -> None:
+    # The package `__init__` eagerly re-exports everything, so load the submodule under a stand-in
+    # package (same `__path__`, no `__init__` code) to observe the submodule's own import graph.
+    pkg_dir = str(Path(lr.__file__).parent)
+    code = (
+        f"import importlib, sys, types\n"
+        f"pkg = types.ModuleType('{PKG}'); pkg.__path__ = [{pkg_dir!r}]; sys.modules['{PKG}'] = pkg\n"
+        f"importlib.import_module('{PKG}.{name}')\n"
+        "bad = [m for m in ('harness.backend', 'harness.lock', 'harness.runners.review_prs', "
+        "'harness.runners.self_review', 'harness.runners.address_comments', 'harness.runners.focused_review', "
+        f"'{PKG}.review', '{PKG}.address', '{PKG}.git', '{PKG}.prompts') if m in sys.modules]\n"
+        f"assert '{PKG}.{name}' in sys.modules\n"
+        "print(bad)\n"
+        "sys.exit(1 if bad else 0)"
+    )
+    proc = _fresh_python(code)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_no_bare_subprocess_run_in_package() -> None:
+    pkg_dir = Path(lr.__file__).parent
+    for path in pkg_dir.glob("*.py"):
+        assert "subprocess.run(" not in path.read_text(encoding="utf-8"), path.name
+
+
+def test_backend_patch_on_address_module_reaches_review_run(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    from harness.runners.local_review import address
+
+    cfg, target, root, rdir, _ = env
+    created: list[object] = []
+
+    class Stub(FakeBackend):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(lambda: rdir)
+            created.append(self)
+
+    monkeypatch.setattr(address, "Backend", Stub)
+    result = lr.run(cfg, target, output_root=root)
+    assert created, "patching address.Backend did not reach the backend factory used by review.run"
+    assert result.ok

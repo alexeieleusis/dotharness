@@ -8,13 +8,17 @@ from pathlib import Path
 
 import pytest
 
-from harness.runners import common, local_review
+from harness.runners import common
 from harness.runners.common import get_changed_files, get_file_diff, is_ancestor
 from harness.runners.local_review import (
     LocalReviewError,
     NothingToReviewError,
-    check_output_dir_outside_repo,
     check_preconditions,
+)
+from harness.runners.local_review import git as lr_git
+from harness.runners.local_review import review as lr_review
+from harness.runners.local_review.git import (
+    check_output_dir_outside_repo,
     check_templates,
     compute_merge_base,
     resolve_base_ref,
@@ -52,13 +56,13 @@ def repo(tmp_path: Path) -> Path:
 @pytest.fixture
 def git_calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     calls: list[list[str]] = []
-    real = subprocess.run
+    real = subprocess.Popen
 
     def spy(args, *a, **kw):
         calls.append(list(args))
         return real(args, *a, **kw)
 
-    monkeypatch.setattr(local_review.subprocess, "run", spy)
+    monkeypatch.setattr(common.subprocess, "Popen", spy)
     return calls
 
 
@@ -312,8 +316,8 @@ def test_git_timeout_becomes_failed_process(repo: Path, monkeypatch: pytest.Monk
     def boom(cmd: list[str], **_kw: object) -> None:
         raise subprocess.TimeoutExpired(cmd, 30)
 
-    monkeypatch.setattr(local_review.subprocess, "run", boom)
-    proc = local_review._git(repo, "status")
+    monkeypatch.setattr(lr_git, "run_cmd", boom)  # `git.py` owns the `run_cmd` lookup
+    proc = lr_git.git(repo, "status")
     assert proc.returncode == 124
     assert "timed out" in proc.stderr
-    assert "git status failed" in (local_review._guard_violation(repo, "abc") or "")
+    assert "git status failed" in (lr_review._guard_violation(repo, "abc") or "")
