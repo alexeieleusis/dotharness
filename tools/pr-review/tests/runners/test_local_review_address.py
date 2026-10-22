@@ -19,6 +19,9 @@ from harness.cli import cli
 from harness.config import HarnessConfig, HarnessSection, LocalReviewConfig, RepoConfig
 from harness.runners import local_review as lr
 from harness.runners.local_review import LocalReviewError, LocalReviewTarget, read_manifest, review_dir_for
+from harness.runners.local_review import address as lr_address
+from harness.runners.local_review import prompts as lr_prompts
+from harness.runners.local_review import store as lr_store
 
 ADDRESS_TEXT = "ADDRESS INSTRUCTIONS"
 DATES = ("2020-01-01T00:00:00Z", "2020-01-02T00:00:00Z", "2020-01-03T00:00:00Z")
@@ -99,7 +102,7 @@ class Env:
         lr.write_manifest(rdir, manifest)
         return rdir
 
-    def collection(self, rdir: Path) -> lr.FindingCollection:
+    def collection(self, rdir: Path) -> lr_address.FindingCollection:
         return lr.collect_findings(rdir)
 
 
@@ -114,10 +117,10 @@ def build_env(tmp_path: Path, dates: tuple[str, ...] = DATES, with_address_templ
         shas.append(commit_file(repo, "a.py", f"print({i})\n", date=date))
     kd = tmp_path / "knowledge"
     (kd / "pr-review").mkdir(parents=True)
-    for name in lr.REVIEW_TEMPLATES:
+    for name in lr_prompts.REVIEW_TEMPLATES:
         (kd / "pr-review" / name).write_text("OUT {OUTPUT_FILE}", encoding="utf-8")
     if with_address_template:
-        (kd / "pr-review" / lr.ADDRESS_TEMPLATE).write_text(ADDRESS_TEXT, encoding="utf-8")
+        (kd / "pr-review" / lr_prompts.ADDRESS_TEMPLATE).write_text(ADDRESS_TEXT, encoding="utf-8")
     cfg = HarnessConfig(
         harness=HarnessSection(knowledge_dir=kd),
         repo=RepoConfig(name="o/r", working_dir=repo, name_provided=False),
@@ -277,7 +280,7 @@ def test_without_skip_review_missing_head_directory_is_an_error(env: Env) -> Non
 
 
 def _set_mtime(rdir: Path, when: float) -> None:
-    os.utime(rdir / lr.MANIFEST_NAME, (when, when))
+    os.utime(rdir / lr_store.MANIFEST_NAME, (when, when))
 
 
 def test_skip_review_picks_newest_commit_date_not_newest_mtime(env: Env) -> None:
@@ -314,7 +317,7 @@ def test_skip_review_ignores_non_ancestors_corrupt_and_other_branch_reviews(env:
     env.write_review(side)  # newest commit date, but not in HEAD's history
     env.write_review(env.shas[2], branch="other")  # another branch
     bad = env.write_review(env.shas[1])
-    (bad / lr.MANIFEST_NAME).write_text("{not json", encoding="utf-8")
+    (bad / lr_store.MANIFEST_NAME).write_text("{not json", encoding="utf-8")
     good = env.write_review(env.shas[0])
     assert lr.select_review_dir(env.cfg, env.target, env.root, skip_review=True) == good
 
@@ -490,7 +493,7 @@ def test_two_fixed_findings_each_get_a_commit_line_and_keep_the_rest_of_the_file
 def test_stale_resolution_file_is_deleted_before_the_call(env: Env) -> None:
     rdir = env.write_review(files={"a.py": stamped(block("one"))})
     (fid,) = [f.id for f in env.collection(rdir).open]
-    stale = rdir / lr.RESOLUTIONS_DIR / f"{fid}.md"
+    stale = rdir / lr_store.RESOLUTIONS_DIR / f"{fid}.md"
     stale.parent.mkdir(parents=True)
     stale.write_text("decision: declined\nleft over\n", encoding="utf-8")
     _, result = addr(env, rdir, StubBackend(cast(Script, no_resolution)))
@@ -679,7 +682,7 @@ def test_prompt_contents(env: Env) -> None:
     lr.address_findings(env.cfg, env.target, rdir, coll, backend=cast(Backend, backend))
     (prompt,) = backend.prompts
     assert prompt.startswith(ADDRESS_TEXT)
-    assert f"{lr.ADDRESS_HEADING}" in prompt
+    assert f"{lr_prompts.ADDRESS_HEADING}" in prompt
     assert f"- finding id: {finding.id}" in prompt
     assert f"- review head sha (12 chars): {env.shas[1][:12]}" in prompt
     assert "- file: a.py" in prompt
@@ -693,10 +696,10 @@ def test_prompt_contents(env: Env) -> None:
 
 def test_prompt_diff_is_capped_and_vibe_context_optional() -> None:
     finding = lr.AddressFinding("file-12345678", "file", Path("x.md"), lr.parse_findings(block("t"))[0])
-    big = "x" * (lr.MAX_DIFF_CHARS + 100)
+    big = "x" * (lr_prompts.MAX_DIFF_CHARS + 100)
     prompt = lr.build_address_prompt("INSTR", finding, Path("/r.md"), "a" * 40, big)
-    assert lr.TRUNCATED_MARKER in prompt
-    assert "x" * (lr.MAX_DIFF_CHARS + 1) not in prompt
+    assert lr_prompts.TRUNCATED_MARKER in prompt
+    assert "x" * (lr_prompts.MAX_DIFF_CHARS + 1) not in prompt
     assert "vibe-heal" not in prompt
     with_ctx = lr.build_address_prompt("INSTR", finding, Path("/r.md"), "a" * 40, "d", "SONAR SAYS")
     assert "SONAR SAYS" in with_ctx
@@ -769,7 +772,7 @@ def test_run_local_review_missing_address_template_exits_one(
     env.write_review(files={"a.py": stamped(block("one"))})
     code = lr.run_local_review(env.cfg, address=True, skip_review=True, backend=cast(Backend, StubBackend()))
     assert code == 1
-    assert lr.ADDRESS_TEMPLATE in capsys.readouterr().err
+    assert lr_prompts.ADDRESS_TEMPLATE in capsys.readouterr().err
 
 
 def test_run_local_review_explicit_review_dir(env: Env, tmp_xdg: Path) -> None:

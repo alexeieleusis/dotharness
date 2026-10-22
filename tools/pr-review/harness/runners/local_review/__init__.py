@@ -1,63 +1,30 @@
 """`harness run local-review`: review the commits of the current branch offline, then optionally address findings.
 
 The implementation lives in the submodules (`types`, `git`, `prompts`, `findings`, `store`, `review`,
-`address`); this package only re-exports their public names.
+`address`); this package re-exports only the public names documented in `docs/modules.md`. Everything else
+(constants, private helpers) is reached through its defining submodule, which is also where tests patch it.
 """
 
 from __future__ import annotations
 
-import logging
-
 from harness.runners.local_review.address import (
-    OUTCOME_DECLINED,
-    OUTCOME_FAILED,
-    OUTCOME_FIXED,
-    AddressResult,
-    FindingCollection,
     address_findings,
-    address_summary_line,
     address_usage_error,
     collect_findings,
     run_address_phase,
     select_review_dir,
 )
 from harness.runners.local_review.findings import (
-    FINDING_HEADING,
-    VALID_PASSES,
-    VALID_SEVERITIES,
-    VALID_STATUSES,
     AddressFinding,
     FindingBlock,
     StampResult,
     finding_id,
     parse_findings,
-    sha8,
     stamp_findings,
     stamp_findings_file,
 )
-from harness.runners.local_review.git import (
-    _NO_UNTRACKED_FLAG,
-    DEFAULT_BASE_FALLBACK,
-    MAX_DIRTY_PATHS_SHOWN,
-    check_output_dir_outside_repo,
-    check_preconditions,
-    check_templates,
-    compute_merge_base,
-    resolve_base_ref,
-)
-from harness.runners.local_review.git import git as _git
+from harness.runners.local_review.git import check_preconditions
 from harness.runners.local_review.prompts import (
-    ADDRESS_HEADING,
-    ADDRESS_TEMPLATE,
-    DESIGN_TEMPLATE,
-    FILE_TEMPLATE,
-    MAX_DESCRIPTION_CHARS,
-    MAX_DESCRIPTION_COMMITS,
-    MAX_DIFF_CHARS,
-    OUTPUT_FILE_PLACEHOLDER,
-    REVIEW_TEMPLATES,
-    SUMMARY_TEMPLATE,
-    TRUNCATED_MARKER,
     build_address_prompt,
     build_change_context,
     build_change_description,
@@ -65,19 +32,8 @@ from harness.runners.local_review.prompts import (
     build_file_prompt,
     build_summary_prompt,
 )
-from harness.runners.local_review.review import ReviewResult, _guard_violation, run, run_local_review
+from harness.runners.local_review.review import ReviewResult, run, run_local_review
 from harness.runners.local_review.store import (
-    DEFAULT_OUTPUT_ROOT,
-    DESIGN_NAME,
-    FILES_DIR,
-    INDEX_NAME,
-    MANIFEST_NAME,
-    MANIFEST_VERSION,
-    NO_FINDINGS_TEXT,
-    RESOLUTIONS_DIR,
-    STATUS_DONE,
-    STATUS_FAILED,
-    SUMMARY_NAME,
     read_finding_status,
     read_manifest,
     reset,
@@ -94,55 +50,16 @@ from harness.runners.local_review.types import (
     RepoMutatedError,
 )
 
-logger = logging.getLogger(__name__)
-
 __all__ = [
-    "ADDRESS_HEADING",
-    "ADDRESS_TEMPLATE",
-    "DEFAULT_BASE_FALLBACK",
-    "DEFAULT_OUTPUT_ROOT",
-    "DESIGN_NAME",
-    "DESIGN_TEMPLATE",
-    "FILES_DIR",
-    "FILE_TEMPLATE",
-    "FINDING_HEADING",
-    "INDEX_NAME",
-    "MANIFEST_NAME",
-    "MANIFEST_VERSION",
-    "MAX_DESCRIPTION_CHARS",
-    "MAX_DESCRIPTION_COMMITS",
-    "MAX_DIFF_CHARS",
-    "MAX_DIRTY_PATHS_SHOWN",
-    "NO_FINDINGS_TEXT",
-    "OUTCOME_DECLINED",
-    "OUTCOME_FAILED",
-    "OUTCOME_FIXED",
-    "OUTPUT_FILE_PLACEHOLDER",
-    "RESOLUTIONS_DIR",
-    "REVIEW_TEMPLATES",
-    "STATUS_DONE",
-    "STATUS_FAILED",
-    "SUMMARY_NAME",
-    "SUMMARY_TEMPLATE",
-    "TRUNCATED_MARKER",
-    "VALID_PASSES",
-    "VALID_SEVERITIES",
-    "VALID_STATUSES",
-    "_NO_UNTRACKED_FLAG",
     "AddressFinding",
-    "AddressResult",
     "FindingBlock",
-    "FindingCollection",
     "LocalReviewError",
     "LocalReviewTarget",
     "NothingToReviewError",
     "RepoMutatedError",
     "ReviewResult",
     "StampResult",
-    "_git",
-    "_guard_violation",
     "address_findings",
-    "address_summary_line",
     "address_usage_error",
     "build_address_prompt",
     "build_change_context",
@@ -150,18 +67,13 @@ __all__ = [
     "build_design_prompt",
     "build_file_prompt",
     "build_summary_prompt",
-    "check_output_dir_outside_repo",
     "check_preconditions",
-    "check_templates",
     "collect_findings",
-    "compute_merge_base",
     "finding_id",
-    "logger",
     "parse_findings",
     "read_finding_status",
     "read_manifest",
     "reset",
-    "resolve_base_ref",
     "resolve_output_root",
     "review_dir_for",
     "review_root_for_reset",
@@ -169,7 +81,6 @@ __all__ = [
     "run_address_phase",
     "run_local_review",
     "select_review_dir",
-    "sha8",
     "stamp_findings",
     "stamp_findings_file",
     "write_finding_status",

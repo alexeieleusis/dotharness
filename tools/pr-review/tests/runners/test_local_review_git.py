@@ -8,18 +8,21 @@ from pathlib import Path
 
 import pytest
 
-from harness.runners import common, local_review
+from harness.runners import common
 from harness.runners.common import get_changed_files, get_file_diff, is_ancestor
 from harness.runners.local_review import (
     LocalReviewError,
     NothingToReviewError,
-    check_output_dir_outside_repo,
     check_preconditions,
+)
+from harness.runners.local_review import git as lr_git
+from harness.runners.local_review import review as lr_review
+from harness.runners.local_review.git import (
+    check_output_dir_outside_repo,
     check_templates,
     compute_merge_base,
     resolve_base_ref,
 )
-from harness.runners.local_review import git as lr_git
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -314,7 +317,7 @@ def test_git_timeout_becomes_failed_process(repo: Path, monkeypatch: pytest.Monk
         raise subprocess.TimeoutExpired(cmd, 30)
 
     monkeypatch.setattr(lr_git, "run_cmd", boom)  # `git.py` owns the `run_cmd` lookup
-    proc = local_review._git(repo, "status")
+    proc = lr_git.git(repo, "status")
     assert proc.returncode == 124
     assert "timed out" in proc.stderr
-    assert "git status failed" in (local_review._guard_violation(repo, "abc") or "")
+    assert "git status failed" in (lr_review._guard_violation(repo, "abc") or "")

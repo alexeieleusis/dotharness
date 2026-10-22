@@ -34,6 +34,8 @@ from harness.runners.local_review import (
     stamp_findings_file,
     write_manifest,
 )
+from harness.runners.local_review import findings as lr_findings
+from harness.runners.local_review import prompts as lr_prompts
 
 KNOWLEDGE = Path(__file__).resolve().parents[4] / "knowledge" / "pr-review"
 
@@ -86,7 +88,7 @@ def test_restamp_is_idempotent() -> None:
 def test_missing_required_field_unstamped_counted_and_warned(missing: str, caplog: pytest.LogCaptureFixture) -> None:
     bad = "\n".join(ln for ln in BLOCK_A.splitlines() if not ln.startswith(f"- {missing}:"))
     text = bad + "\n\n" + BLOCK_B + "\n"
-    with caplog.at_level(logging.WARNING, logger=lr.logger.name):
+    with caplog.at_level(logging.WARNING, logger=lr_findings.logger.name):
         res = stamp_findings(text, "file")
     assert res.unparseable == 1
     assert res.stamped == 1
@@ -215,7 +217,7 @@ def test_description_commit_cap(repo: tuple[Path, LocalReviewTarget]) -> None:
     desc = build_change_description(path, tgt)
     assert desc.endswith("\n(truncated)")
     assert desc.count(" commit ") == 50
-    assert len(desc) <= lr.MAX_DESCRIPTION_CHARS
+    assert len(desc) <= lr_prompts.MAX_DESCRIPTION_CHARS
 
 
 def test_description_char_cap(repo: tuple[Path, LocalReviewTarget]) -> None:
@@ -224,7 +226,7 @@ def test_description_char_cap(repo: tuple[Path, LocalReviewTarget]) -> None:
         _commit(path, i, "x" * 6000)
     desc = build_change_description(path, tgt)
     assert desc.endswith("\n(truncated)")
-    assert len(desc) <= lr.MAX_DESCRIPTION_CHARS
+    assert len(desc) <= lr_prompts.MAX_DESCRIPTION_CHARS
 
 
 def test_context_repo_name_and_fallback(repo: tuple[Path, LocalReviewTarget]) -> None:
@@ -240,16 +242,16 @@ def test_context_repo_name_and_fallback(repo: tuple[Path, LocalReviewTarget]) ->
 # ---- prompts / templates --------------------------------------------------
 
 
-@pytest.mark.parametrize("name", list(lr.REVIEW_TEMPLATES))
+@pytest.mark.parametrize("name", list(lr_prompts.REVIEW_TEMPLATES))
 def test_templates_are_local(name: str) -> None:
     text = (KNOWLEDGE / name).read_text(encoding="utf-8")
-    assert lr.OUTPUT_FILE_PLACEHOLDER in text
+    assert lr_prompts.OUTPUT_FILE_PLACEHOLDER in text
     assert "dotharness-review-" not in text
     assert "gh api" not in text
     assert "gh pr comment" not in text
 
 
-@pytest.mark.parametrize("name", [lr.FILE_TEMPLATE, lr.DESIGN_TEMPLATE])
+@pytest.mark.parametrize("name", [lr_prompts.FILE_TEMPLATE, lr_prompts.DESIGN_TEMPLATE])
 def test_finding_templates_spec_format(name: str) -> None:
     text = (KNOWLEDGE / name).read_text(encoding="utf-8")
     assert "## Finding: <short title>\n- severity: P0 | P1\n- file: " in text
@@ -258,10 +260,10 @@ def test_finding_templates_spec_format(name: str) -> None:
 
 def test_prompts_assemble(tmp_path: Path) -> None:
     out = tmp_path / "out.md"
-    file_t = (KNOWLEDGE / lr.FILE_TEMPLATE).read_text(encoding="utf-8")
+    file_t = (KNOWLEDGE / lr_prompts.FILE_TEMPLATE).read_text(encoding="utf-8")
     p = build_file_prompt(file_t, out, "\n\n## Diff for a\nD", "\n\nRepo: r", "GUIDE", "SONAR")
     assert str(out.resolve()) in p
-    assert lr.OUTPUT_FILE_PLACEHOLDER not in p
+    assert lr_prompts.OUTPUT_FILE_PLACEHOLDER not in p
     assert "## Additional Review Guide\nGUIDE" in p
     assert "## Static Analysis\nSONAR" in p
     s = build_summary_prompt("S {OUTPUT_FILE}", out, ["a.py", "b.py"], "\n\nRepo: r")
@@ -321,7 +323,7 @@ def env(tmp_path: Path):
     _git(repo, "commit", "-m", "feat")
     kd = tmp_path / "knowledge"
     (kd / "pr-review").mkdir(parents=True)
-    for name in lr.REVIEW_TEMPLATES:
+    for name in lr_prompts.REVIEW_TEMPLATES:
         (kd / "pr-review" / name).write_text("T {OUTPUT_FILE}", encoding="utf-8")
     cfg = HarnessConfig(
         harness=HarnessSection(knowledge_dir=kd),
