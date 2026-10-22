@@ -301,29 +301,53 @@ def _verify_resolution(
     return decision, None, ""
 
 
-def _address_one(ctx: _AddressContext, finding: AddressFinding, result: AddressResult) -> bool:
-    """Address one finding and record its outcome; return False when the phase must stop."""
+def _pre_call_head(ctx: _AddressContext, finding: AddressFinding, result: AddressResult) -> str | None:
+    """HEAD before the backend call, or None after stopping the phase on a bad state."""
     problem = _state_problem(ctx.wdir, ctx.target.branch)
     if problem:
         _stop_phase(result, finding, f"before finding {finding.id}: {problem}")
-        return False
+        return None
     try:
-        pre_sha = _head(ctx.wdir)
+        return _head(ctx.wdir)
     except LocalReviewError as exc:
         _stop_phase(result, finding, str(exc))
-        return False
-    resolution = ctx.res_dir / f"{finding.id}.md"
-    if resolution.resolve().parent != ctx.res_dir.resolve():
-        _fail_finding(result, finding, "finding id resolves outside the resolutions directory")
-        return True
-    resolution.unlink(missing_ok=True)  # a stale file must not be mistaken for this run's answer
+        return None
+
+
+def _run_address_backend(ctx: _AddressContext, finding: AddressFinding, resolution: Path) -> str:
+    """Build the address prompt (with the file diff) and run the backend; return its error or ""."""
     diff = ""
     if finding.file:
         diff = get_file_diff(
             finding.file, ctx.target.base_ref, ctx.wdir_s, ctx.env, rev_range=f"{ctx.target.base_sha} HEAD"
         )
     prompt = build_address_prompt(ctx.instructions, finding, resolution.resolve(), ctx.review_head, diff, ctx.vibe)
-    backend_error = _call_address_backend(ctx, finding, prompt)
+    return _call_address_backend(ctx, finding, prompt)
+
+
+def _record_outcome(result: AddressResult, finding: AddressFinding, decision: str, commit: str | None) -> None:
+    """Write the finding status and record `fixed` / `declined`; a write error fails the finding."""
+    try:
+        write_finding_status(finding.source_file, finding.id, decision, commit)
+    except (LocalReviewError, OSError) as exc:
+        _fail_finding(result, finding, f"cannot record status: {exc}")
+        return
+    outcome = OUTCOME_FIXED if decision == OUTCOME_FIXED else OUTCOME_DECLINED
+    result.outcomes[finding.id] = outcome
+    logger.info("finding %s: %s%s", finding.id, outcome, f" ({commit})" if commit else "")
+
+
+def _address_one(ctx: _AddressContext, finding: AddressFinding, result: AddressResult) -> bool:
+    """Address one finding and record its outcome; return False when the phase must stop."""
+    pre_sha = _pre_call_head(ctx, finding, result)
+    if pre_sha is None:
+        return False
+    resolution = ctx.res_dir / f"{finding.id}.md"
+    if resolution.resolve().parent != ctx.res_dir.resolve():
+        _fail_finding(result, finding, "finding id resolves outside the resolutions directory")
+        return True
+    resolution.unlink(missing_ok=True)  # a stale file must not be mistaken for this run's answer
+    backend_error = _run_address_backend(ctx, finding, resolution)
 
     # 7.4: stop-the-phase checks, after every call, even a failed one. No repair (G3).
     new_head, stop_reasons = _post_call_stop_reasons(ctx, pre_sha)
@@ -337,16 +361,39 @@ def _address_one(ctx: _AddressContext, finding: AddressFinding, result: AddressR
     decision, commit, error = _verify_resolution(ctx, resolution, pre_sha, new_head)
     if error:
         _fail_finding(result, finding, error)
-        return True
-    try:
-        write_finding_status(finding.source_file, finding.id, decision, commit)
-    except (LocalReviewError, OSError) as exc:
-        _fail_finding(result, finding, f"cannot record status: {exc}")
-        return True
-    outcome = OUTCOME_FIXED if decision == OUTCOME_FIXED else OUTCOME_DECLINED
-    result.outcomes[finding.id] = outcome
-    logger.info("finding %s: %s%s", finding.id, outcome, f" ({commit})" if commit else "")
+    else:
+        _record_outcome(result, finding, decision, commit)
     return True
+
+
+def _build_address_context(
+    config: HarnessConfig, target: LocalReviewTarget, review_dir: Path, backend: Backend | None
+) -> _AddressContext:
+    wdir = Path(config.repo.working_dir).expanduser().resolve()
+    env = build_subprocess_env(config.harness.path_prepend, config.harness.env)
+    env.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "color.diff", "GIT_CONFIG_VALUE_0": "never"})
+    review_head = target.head_sha
+    manifest = read_manifest(review_dir)
+    if manifest and isinstance(manifest.get("head_sha"), str):
+        review_head = manifest["head_sha"]
+    return _AddressContext(
+        target=target,
+        wdir=wdir,
+        env=env,
+        backend=backend or _make_backend(config),
+        instructions=(Path(config.harness.knowledge_dir) / "pr-review" / ADDRESS_TEMPLATE).read_text(encoding="utf-8"),
+        vibe=get_vibe_heal_context(config.repo.subdirs, str(wdir), target.branch) or None,
+        review_head=review_head,
+        res_dir=review_dir / RESOLUTIONS_DIR,
+    )
+
+
+def _address_loop(ctx: _AddressContext, pending: list[AddressFinding], result: AddressResult) -> None:
+    """Address each pending finding in order; on a stop, count the rest as not reached."""
+    for index, finding in enumerate(pending):
+        if not _address_one(ctx, finding, result):
+            result.not_reached = len(pending) - index - 1
+            break
 
 
 def address_findings(
@@ -363,30 +410,11 @@ def address_findings(
     otherwise it is `failed` and keeps `status: open`. Stops (no repair, no further backend calls)
     when history was rewritten, tracked files are dirty, or the branch changed (7.4).
     """
-    wdir = Path(config.repo.working_dir).expanduser().resolve()
-    env = build_subprocess_env(config.harness.path_prepend, config.harness.env)
-    env.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "color.diff", "GIT_CONFIG_VALUE_0": "never"})
-    review_head = target.head_sha
-    manifest = read_manifest(review_dir)
-    if manifest and isinstance(manifest.get("head_sha"), str):
-        review_head = manifest["head_sha"]
-    ctx = _AddressContext(
-        target=target,
-        wdir=wdir,
-        env=env,
-        backend=backend or _make_backend(config),
-        instructions=(Path(config.harness.knowledge_dir) / "pr-review" / ADDRESS_TEMPLATE).read_text(encoding="utf-8"),
-        vibe=get_vibe_heal_context(config.repo.subdirs, str(wdir), target.branch) or None,
-        review_head=review_head,
-        res_dir=review_dir / RESOLUTIONS_DIR,
-    )
+    ctx = _build_address_context(config, target, review_dir, backend)
     result = AddressResult()
     pending = list(collection.open)
     ctx.res_dir.mkdir(parents=True, exist_ok=True)
-    for index, finding in enumerate(pending):
-        if not _address_one(ctx, finding, result):
-            result.not_reached = len(pending) - index - 1
-            break
+    _address_loop(ctx, pending, result)
     return result
 
 

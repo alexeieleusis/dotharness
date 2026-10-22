@@ -397,6 +397,65 @@ def _select_and_address(
     return run_address_phase(config, target, chosen, collection, backend=backend)
 
 
+def _check_preconditions_or_none(
+    config: HarnessConfig, base: str | None, output_root: Path, skip_review: bool
+) -> LocalReviewTarget | None:
+    """The review target; None (message printed) when there is nothing to review (exit 0)."""
+    try:
+        return check_preconditions(
+            Path(config.repo.working_dir),
+            base=base,
+            config_base=config.local_review.base,
+            output_root=output_root,
+            review_phase=not skip_review,
+        )
+    except NothingToReviewError as exc:
+        print(str(exc))
+        return None
+
+
+def _check_phase_templates(config: HarnessConfig, skip_review: bool, address: bool) -> None:
+    templates = ([] if skip_review else list(REVIEW_TEMPLATES)) + ([ADDRESS_TEMPLATE] if address else [])
+    check_templates(Path(config.harness.knowledge_dir), templates)
+
+
+def _exit_code(review_ok: bool, address_ok: bool = True) -> int:
+    return 0 if (review_ok and address_ok) else 1
+
+
+def _run_phases(
+    config: HarnessConfig,
+    base: str | None,
+    output_dir: str | Path | None,
+    force: bool,
+    backend: Backend | None,
+    *,
+    address: bool,
+    skip_review: bool,
+    review_dir: str | Path | None,
+) -> int:
+    """Preconditions, templates, review phase, address phase; may raise LocalReviewError."""
+    output_root = resolve_output_root(config, output_dir)
+    target = _check_preconditions_or_none(config, base, output_root, skip_review)
+    if target is None:
+        return 0
+    _check_phase_templates(config, skip_review, address)
+    print(f"Base: {target.base_ref} (merge base {target.base_sha})")
+    print(f"Head: {target.head_sha}")
+    review_ok = True
+    reviewed_dir: Path | None = None
+    if not skip_review:
+        result = _run_review_phase(config, target, output_root, force, backend)
+        if result is None:
+            return 1
+        review_ok = result.ok
+        reviewed_dir = result.review_dir
+    if not address:
+        return _exit_code(review_ok)
+    address_ok = _select_and_address(config, target, output_root, backend, review_dir, skip_review, reviewed_dir)
+    return _exit_code(review_ok, address_ok)
+
+
 def _run_locked(
     config: HarnessConfig,
     base: str | None,
@@ -408,39 +467,10 @@ def _run_locked(
     skip_review: bool = False,
     review_dir: str | Path | None = None,
 ) -> int:
-    wdir = Path(config.repo.working_dir)
-    review_ok = True
     try:
-        output_root = resolve_output_root(config, output_dir)
-        try:
-            target = check_preconditions(
-                wdir,
-                base=base,
-                config_base=config.local_review.base,
-                output_root=output_root,
-                review_phase=not skip_review,
-            )
-        except NothingToReviewError as exc:
-            print(str(exc))
-            return 0
-        knowledge_dir = Path(config.harness.knowledge_dir)
-        templates = ([] if skip_review else list(REVIEW_TEMPLATES)) + ([ADDRESS_TEMPLATE] if address else [])
-        check_templates(knowledge_dir, templates)
-        print(f"Base: {target.base_ref} (merge base {target.base_sha})")
-        print(f"Head: {target.head_sha}")
-        reviewed_dir: Path | None = None
-        if not skip_review:
-            result = _run_review_phase(config, target, output_root, force, backend)
-            if result is None:
-                return 1
-            review_ok = result.ok
-            reviewed_dir = result.review_dir
-        if address:
-            address_ok = _select_and_address(
-                config, target, output_root, backend, review_dir, skip_review, reviewed_dir
-            )
-            return 0 if (review_ok and address_ok) else 1
+        return _run_phases(
+            config, base, output_dir, force, backend, address=address, skip_review=skip_review, review_dir=review_dir
+        )
     except LocalReviewError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    return 0 if review_ok else 1
