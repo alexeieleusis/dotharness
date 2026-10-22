@@ -96,6 +96,15 @@ def test_stamp_inserts_id_after_metadata_and_counts() -> None:
     assert NO_LINE in res.text
 
 
+def test_stamp_handles_blank_line_before_metadata() -> None:
+    block = "## Finding: X\n\n- severity: P1\n- file: a.py\n- line: 3\n- status: open"
+    res = stamp_findings(block + "\n", "file")
+    assert res.stamped == 1
+    assert len(res.blocks) == 1
+    assert res.blocks[0].valid
+    assert res.blocks[0].id == f"file-{sha8(block)}"
+
+
 def test_stamp_is_idempotent() -> None:
     first = stamp_findings(GOOD + "\n", "file")
     second = stamp_findings(first.text, "file")

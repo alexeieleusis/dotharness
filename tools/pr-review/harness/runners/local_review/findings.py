@@ -156,6 +156,8 @@ def stamp_findings(text: str, pass_name: str) -> StampResult:
             continue
         # insertion point: just after the last metadata line (contiguous `- key:` lines)
         pos = s + 1
+        while pos < blk.end_line and not lines[pos].strip():  # mirror `_metadata`: skip leading blanks
+            pos += 1
         while pos < blk.end_line and _FIELD_RE.match(lines[pos]):
             pos += 1
         inserts.append((pos, f"- id: {finding_id(pass_name, blk.text)}"))
