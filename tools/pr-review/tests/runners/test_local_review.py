@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import cast
 
@@ -529,3 +530,64 @@ def test_output_dir_inside_repo_refused(env) -> None:
     cfg, target, _, _, repo = env
     with pytest.raises(LocalReviewError):
         lr.run(cfg, target, output_root=repo / "out", backend=cast(Backend, FakeBackend(lambda: repo)))
+
+
+# ---------------------------------------------------------------------------
+# Package structure: acyclic submodules, isolation of findings/store, patch targets
+# ---------------------------------------------------------------------------
+
+SUBMODULES = ("types", "git", "prompts", "findings", "store", "review", "address")
+PKG = "harness.runners.local_review"
+
+
+def _fresh_python(code: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)  # noqa: S603
+
+
+@pytest.mark.parametrize("name", SUBMODULES)
+def test_each_submodule_imports_alone_in_a_fresh_interpreter(name: str) -> None:
+    proc = _fresh_python(f"import {PKG}.{name}")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("name", ["findings", "store"])
+def test_findings_and_store_do_not_import_backend_lock_or_orchestrators(name: str) -> None:
+    # The package `__init__` eagerly re-exports everything, so load the submodule under a stand-in
+    # package (same `__path__`, no `__init__` code) to observe the submodule's own import graph.
+    pkg_dir = str(Path(lr.__file__).parent)
+    code = (
+        f"import importlib, sys, types\n"
+        f"pkg = types.ModuleType('{PKG}'); pkg.__path__ = [{pkg_dir!r}]; sys.modules['{PKG}'] = pkg\n"
+        f"importlib.import_module('{PKG}.{name}')\n"
+        "bad = [m for m in ('harness.backend', 'harness.lock', 'harness.runners.review_prs', "
+        "'harness.runners.self_review', 'harness.runners.address_comments', 'harness.runners.focused_review', "
+        f"'{PKG}.review', '{PKG}.address', '{PKG}.git', '{PKG}.prompts') if m in sys.modules]\n"
+        f"assert '{PKG}.{name}' in sys.modules\n"
+        "print(bad)\n"
+        "sys.exit(1 if bad else 0)"
+    )
+    proc = _fresh_python(code)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_no_bare_subprocess_run_in_package() -> None:
+    pkg_dir = Path(lr.__file__).parent
+    for path in pkg_dir.glob("*.py"):
+        assert "subprocess.run(" not in path.read_text(encoding="utf-8"), path.name
+
+
+def test_backend_patch_on_address_module_reaches_review_run(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    from harness.runners.local_review import address
+
+    cfg, target, root, rdir, _ = env
+    created: list[object] = []
+
+    class Stub(FakeBackend):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(lambda: rdir)
+            created.append(self)
+
+    monkeypatch.setattr(address, "Backend", Stub)
+    result = lr.run(cfg, target, output_root=root)
+    assert created, "patching address.Backend did not reach the backend factory used by review.run"
+    assert result.ok

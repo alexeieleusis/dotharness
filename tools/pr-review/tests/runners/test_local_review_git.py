@@ -19,6 +19,7 @@ from harness.runners.local_review import (
     compute_merge_base,
     resolve_base_ref,
 )
+from harness.runners.local_review import git as lr_git
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -312,7 +313,7 @@ def test_git_timeout_becomes_failed_process(repo: Path, monkeypatch: pytest.Monk
     def boom(cmd: list[str], **_kw: object) -> None:
         raise subprocess.TimeoutExpired(cmd, 30)
 
-    monkeypatch.setattr(local_review, "run_cmd", boom)
+    monkeypatch.setattr(lr_git, "run_cmd", boom)  # `git.py` owns the `run_cmd` lookup
     proc = local_review._git(repo, "status")
     assert proc.returncode == 124
     assert "timed out" in proc.stderr

@@ -806,7 +806,7 @@ def test_run_local_review_with_review_phase_addresses_the_fresh_review(env: Env,
 
 
 class CliStub:
-    """Replaces `harness.runners.local_review.Backend`: reviews, then fixes one finding and declines another."""
+    """Replaces `harness.runners.local_review.address.Backend`: reviews, then fixes one finding and declines another."""
 
     calls: ClassVar[list[str]] = []
 
@@ -865,9 +865,10 @@ def test_full_command_without_remotes_or_gh(
         return real_popen(args, *a, **kw)
 
     monkeypatch.setattr(subprocess, "Popen", spy)
-    monkeypatch.setattr("harness.runners.local_review.Backend", CliStub)
+    monkeypatch.setattr("harness.runners.local_review.address.Backend", CliStub)  # `_make_backend` owner
     r = CliRunner().invoke(cli, ["run", "--config", str(cfg_path), "local-review", "--address"])
     assert r.exit_code == 0, r.output
+    assert CliStub.calls, "Backend patch did not take effect"
     assert "findings: 1 fixed, 1 declined, 0 failed, 0 skipped (not open), 0 unparseable" in r.output
     assert git(env.repo, "log", "--oneline", "-n1").endswith("change a.py")
     assert git(env.repo, "rev-list", "--count", "main..HEAD") == str(len(env.shas) + 1)
