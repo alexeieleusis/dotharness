@@ -857,14 +857,14 @@ def test_full_command_without_remotes_or_gh(
     )
     CliStub.calls = []
     git_calls: list[list[str]] = []
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
 
     def spy(args, *a, **kw):
         if isinstance(args, list) and args and args[0] == "git":
             git_calls.append([str(a) for a in args])
-        return real_run(args, *a, **kw)
+        return real_popen(args, *a, **kw)
 
-    monkeypatch.setattr(subprocess, "run", spy)
+    monkeypatch.setattr(subprocess, "Popen", spy)
     monkeypatch.setattr("harness.runners.local_review.Backend", CliStub)
     r = CliRunner().invoke(cli, ["run", "--config", str(cfg_path), "local-review", "--address"])
     assert r.exit_code == 0, r.output

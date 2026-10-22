@@ -32,6 +32,7 @@ from harness.runners.common import (
     get_file_diff,
     get_vibe_heal_context,
     is_ancestor,
+    run_cmd,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,22 +60,39 @@ class LocalReviewTarget:
     head_sha: str
 
 
-def _git(working_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def _git(working_dir: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """Run `git *args` in `working_dir` through `common.run_cmd`; never raises on failure or timeout.
+
+    Contract: 30s timeout (`_GIT_TIMEOUT_SECONDS`), `check=False`, stdout/stderr decoded to text.
+    A timeout is returned as returncode 124 with empty stdout and a "timed out" stderr.
+    Environment: the current process environment unless the caller passes an explicit `env`.
+    """
     cmd = ["git", *args]
     try:
-        return subprocess.run(  # noqa: S603
+        proc = run_cmd(
             cmd,
             cwd=str(working_dir),
-            capture_output=True,
-            text=True,
-            check=False,
+            env=dict(os.environ) if env is None else env,
             timeout=_GIT_TIMEOUT_SECONDS,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         # Surface a timeout as a failed command so callers' returncode handling covers it.
         return subprocess.CompletedProcess(
             cmd, _GIT_TIMEOUT_RETURNCODE, "", f"git {' '.join(args)} timed out after {_GIT_TIMEOUT_SECONDS}s"
         )
+    return subprocess.CompletedProcess(
+        cmd,
+        proc.returncode,
+        _decode(proc.stdout),
+        _decode(proc.stderr),
+    )
+
+
+def _decode(data: bytes | str | None) -> str:
+    if data is None:
+        return ""
+    return data if isinstance(data, str) else data.decode("utf-8", errors="replace")
 
 
 def _ref_exists(working_dir: Path, ref: str) -> bool:

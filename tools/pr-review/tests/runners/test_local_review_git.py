@@ -52,13 +52,13 @@ def repo(tmp_path: Path) -> Path:
 @pytest.fixture
 def git_calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     calls: list[list[str]] = []
-    real = subprocess.run
+    real = subprocess.Popen
 
     def spy(args, *a, **kw):
         calls.append(list(args))
         return real(args, *a, **kw)
 
-    monkeypatch.setattr(local_review.subprocess, "run", spy)
+    monkeypatch.setattr(common.subprocess, "Popen", spy)
     return calls
 
 
@@ -312,7 +312,7 @@ def test_git_timeout_becomes_failed_process(repo: Path, monkeypatch: pytest.Monk
     def boom(cmd: list[str], **_kw: object) -> None:
         raise subprocess.TimeoutExpired(cmd, 30)
 
-    monkeypatch.setattr(local_review.subprocess, "run", boom)
+    monkeypatch.setattr(local_review, "run_cmd", boom)
     proc = local_review._git(repo, "status")
     assert proc.returncode == 124
     assert "timed out" in proc.stderr
