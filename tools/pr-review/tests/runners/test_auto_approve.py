@@ -208,31 +208,28 @@ def test_runner_passes_identical_writer_args_on_each_run(tmp_path):
 
 
 @pytest.mark.parametrize("which", ["gate", "safety"])
-def test_read_failure_means_zero_writes_and_raises(tmp_path, which):
+def test_read_failure_means_zero_writes_and_does_not_raise(tmp_path, which):
     with _mocks() as m:
         if which == "gate":
             m.gate.return_value = GateResult(GateStatus.READ_FAILED, "boom")
         else:
             m.safety.return_value = SafetyResult(SafetyStatus.READ_FAILED, "boom", "sha1")
-        with pytest.raises(auto_approve.AutoApproveError, match="#1"):
-            auto_approve.run(_cfg(tmp_path))
+        auto_approve.run(_cfg(tmp_path))
     m.mark.assert_not_called()
     m.approve.assert_not_called()
 
 
-def test_viewed_read_failure_blocks_approval_and_raises(tmp_path):
+def test_viewed_read_failure_blocks_approval_and_does_not_raise(tmp_path):
     with _mocks() as m:
         m.mark.return_value = ViewedResult(ViewedStatus.READ_FAILED)
-        with pytest.raises(auto_approve.AutoApproveError):
-            auto_approve.run(_cfg(tmp_path))
+        auto_approve.run(_cfg(tmp_path))
     m.approve.assert_not_called()
 
 
-def test_write_failure_raises_after_loop(tmp_path):
+def test_write_failure_does_not_raise(tmp_path):
     with _mocks() as m:
         m.approve.return_value = ApprovalResult(ApprovalStatus.WRITE_FAILED, "post failed")
-        with pytest.raises(auto_approve.AutoApproveError, match="post failed"):
-            auto_approve.run(_cfg(tmp_path))
+        auto_approve.run(_cfg(tmp_path))
 
 
 def test_one_pr_failing_does_not_stop_others_and_raises(tmp_path):
@@ -277,17 +274,16 @@ def test_missing_author_reaches_gate_as_empty_and_blocks_writes(tmp_path, author
     # Deleted accounts come back from gh as null; the real gate treats an empty author as READ_FAILED.
     with _mocks(prs=[{**PR, "author": author}]) as m:
         m.gate.return_value = GateResult(GateStatus.READ_FAILED, "acting account or PR author unknown")
-        with pytest.raises(auto_approve.AutoApproveError, match="#1"):
-            auto_approve.run(_cfg(tmp_path))
+        auto_approve.run(_cfg(tmp_path))
     assert m.gate.call_args.args[2] == ""
     m.mark.assert_not_called()
     m.approve.assert_not_called()
 
 
-def test_pr_list_failure_raises(tmp_path):
+def test_pr_list_failure_raises_with_stderr(tmp_path):
     with _mocks() as m:
-        m.run_cmd.return_value = SimpleNamespace(returncode=1, stdout=b"")
-        with pytest.raises(auto_approve.AutoApproveError):
+        m.run_cmd.return_value = SimpleNamespace(returncode=1, stdout=b"", stderr=b"bad credentials")
+        with pytest.raises(auto_approve.AutoApproveError, match="bad credentials"):
             auto_approve.run(_cfg(tmp_path))
     m.approve.assert_not_called()
 

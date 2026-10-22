@@ -10,8 +10,9 @@ Public entry point (takes the shared working-directory lock itself, like the sib
 * ``dry_run=True`` performs every read and check but no write: the sibling write functions
   in ``auto_approve_github`` (the only write points: ``markFileAsViewed`` and the review POST)
   receive ``dry_run`` and log what they would do.
-* Raises :class:`AutoApproveError` after the loop if any PR failed (read failure, write failure,
-  or an exception), so the CLI exits non-zero. Returns None when every PR succeeded.
+* Raises :class:`AutoApproveError` if the PR list itself cannot be read (e.g. bad token), or after
+  the loop if any PR hit a git error or an unexpected exception, so the CLI exits non-zero. A failed
+  ``gh`` read or write on a PR is logged at ERROR and does not fail the run; the PR is retried next run.
 
 Per PR: size evaluation, timing gate, approval-safety reads (all reads before any write; any
 read failure means no write on that PR), then mark small files viewed (gate open), then approve
@@ -97,7 +98,7 @@ def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
             continue
         pr_number = pr["number"]
         try:
-            problems = _process_pr(pr, config, wdir, env, current_user, dry_run)
+            _process_pr(pr, config, wdir, env, current_user, dry_run)
         except FatalGitError as e:
             logger.exception("PR #%d: fatal git error", pr_number)
             failures.append(f"#{pr_number}: {e}")
@@ -106,7 +107,6 @@ def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
             logger.exception("PR #%d: error", pr_number)
             failures.append(f"#{pr_number}: {e}")
             continue
-        failures.extend(f"#{pr_number}: {p}" for p in problems)
     if failures:
         raise AutoApproveError("auto-approve failed for: " + "; ".join(failures))
 
@@ -134,7 +134,8 @@ def _list_prs(repo: str, env: dict) -> list[dict]:
         check=False,
     )
     if result.returncode != 0:
-        raise AutoApproveError(f"gh pr list failed (exit {result.returncode})")  # noqa: TRY003
+        stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
+        raise AutoApproveError(f"gh pr list failed (exit {result.returncode}): {stderr}")  # noqa: TRY003
     return sorted(json.loads(result.stdout), key=lambda p: p["number"])
 
 
@@ -154,15 +155,15 @@ def _is_candidate(pr: dict) -> bool:
     return True
 
 
-def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, current_user: str, dry_run: bool) -> list[str]:
-    """Process one PR; return a list of problems (empty when it succeeded)."""
+def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, current_user: str, dry_run: bool) -> None:
+    """Process one PR. gh read/write failures are logged, not returned; git errors raise."""
     pr_number = pr["number"]
     logger.info("PR #%d: starting%s", pr_number, " (dry-run)" if dry_run else "")
     original_sha = git_detach_and_record(wdir, env)
     try:
         checked_out_sha = _checkout_pr_head(pr_number, wdir, env)
         size = evaluate_size(pr["baseRefName"], wdir, env, config.auto_approve)
-        return _decide_and_act(pr, size, checked_out_sha, config, env, current_user, dry_run)
+        _decide_and_act(pr, size, checked_out_sha, config, env, current_user, dry_run)
     finally:
         # Detached checkout: no local branch was created, so there is none to delete.
         git_restore(original_sha, "", wdir, env)
@@ -208,7 +209,7 @@ def _decide_and_act(
     env: dict,
     current_user: str,
     dry_run: bool,
-) -> list[str]:
+) -> None:
     pr_number = pr["number"]
     repo = config.repo.name
     _log_size(pr_number, size, config)
@@ -220,8 +221,8 @@ def _decide_and_act(
     safety = check_approval_safety(repo, pr_number, current_user, env)
     logger.info("PR #%d: safety %s (%s) head=%s", pr_number, safety.status.value, safety.reason, safety.head_sha)
     if gate.status is GateStatus.READ_FAILED or safety.status is SafetyStatus.READ_FAILED:
-        logger.error("PR #%d: a read failed, no writes this run", pr_number)
-        return ["read failed (timing gate or safety checks), no writes"]
+        logger.error("PR #%d: a read failed, no writes this run; retrying next run", pr_number)
+        return
 
     if safety.head_sha != checked_out_sha:
         logger.warning(
@@ -230,16 +231,17 @@ def _decide_and_act(
             checked_out_sha,
             safety.head_sha,
         )
-        return []
+        return
 
     gate_passed = gate.status is GateStatus.PASSED
     viewed = _mark_viewed(pr_number, size, config, gate_passed, env, dry_run)
     if viewed is None:
-        return ["viewed-state read failed, no writes"]
-    problems, all_viewed = viewed
+        logger.error("PR #%d: viewed-state read failed, no writes this run; retrying next run", pr_number)
+        return
+    all_viewed = viewed
     if not size.file_counts and not all_viewed:
         logger.info("PR #%d: no counted files (only renames/deletes/binary), not approving", pr_number)
-        return problems
+        return
     if all_viewed:
         logger.info("PR #%d: every file is viewed, size limit waived for approval", pr_number)
     approval = approve_pr(
@@ -254,16 +256,14 @@ def _decide_and_act(
         dry_run,
         all_viewed=all_viewed,
     )
-    logger.info("PR #%d: approval %s (%s)", pr_number, approval.status.value, approval.reason)
-    if approval.status in (ApprovalStatus.READ_FAILED, ApprovalStatus.WRITE_FAILED):
-        problems.append(f"approval {approval.status.value}: {approval.reason}")
-    return problems
+    level = logging.ERROR if approval.status is ApprovalStatus.WRITE_FAILED else logging.INFO
+    logger.log(level, "PR #%d: approval %s (%s)", pr_number, approval.status.value, approval.reason)
 
 
 def _mark_viewed(
     pr_number: int, size: SizeEvaluation, config: HarnessConfig, gate_passed: bool, env: dict, dry_run: bool
-) -> tuple[list[str], bool] | None:
-    """Mark small files viewed. Returns (problems, all files viewed), or None when the read failed.
+) -> bool | None:
+    """Mark small files viewed. Returns whether all files are viewed, or None when the read failed.
 
     Runs even when no file is small: the viewed states are also how a PR the reviewer viewed by
     hand is recognised.
@@ -282,4 +282,4 @@ def _mark_viewed(
     )
     if viewed.status is ViewedStatus.READ_FAILED:
         return None
-    return [f"failed to mark viewed: {p}" for p in viewed.failed], viewed.all_viewed
+    return viewed.all_viewed

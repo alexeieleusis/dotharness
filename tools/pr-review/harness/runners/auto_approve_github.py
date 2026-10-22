@@ -258,6 +258,7 @@ REASON_CI_BLOCKED = "ci-blocked"
 REASON_ALREADY_APPROVED = "already-approved"
 
 _NO_REQUIRED_CHECKS_TEXT = "no required checks reported"
+_NO_CHECKS_TEXT = "no checks reported"
 _PASSING_BUCKETS = frozenset({"pass", "skipping"})
 
 
@@ -331,12 +332,29 @@ def _read_buckets(repo: str, pr_number: int, env: dict, required: bool) -> list[
     stderr = _text(result.stderr)
     if required and result.returncode == 1 and _NO_REQUIRED_CHECKS_TEXT in stderr:
         return []
+    if not required and result.returncode == 1 and _NO_CHECKS_TEXT in stderr:
+        return []
     if result.returncode == 8 and not _text(result.stdout).strip():
         return None  # pending exit without JSON: cannot decide from buckets
     if result.returncode not in (0, 8):
         logger.error("PR #%d: gh pr checks failed (exit %d): %s", pr_number, result.returncode, stderr.strip())
         return None
     return _parse_buckets(_text(result.stdout))
+
+
+def _repo_has_workflows(repo: str, env: dict) -> bool | None:
+    """True when the repo has an active workflow; None on read failure."""
+    result = _gh(["api", f"repos/{repo}/actions/workflows?per_page=100"], env)
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(_text(result.stdout))
+    except ValueError:
+        return None
+    workflows = data.get("workflows") if isinstance(data, dict) else None
+    if not isinstance(workflows, list):
+        return None
+    return any(isinstance(w, dict) and w.get("state") == "active" for w in workflows)
 
 
 def _check_ci(repo: str, pr_number: int, env: dict) -> SafetyResult | None:
@@ -348,7 +366,15 @@ def _check_ci(repo: str, pr_number: int, env: dict) -> SafetyResult | None:
     if buckets is None:
         return SafetyResult(SafetyStatus.READ_FAILED, "checks read failed")
     if not buckets:
-        return SafetyResult(SafetyStatus.READ_FAILED, "no checks reported")
+        # Empty is also what gh reports before a push's workflows register, so only trust it when no CI exists.
+        has_workflows = _repo_has_workflows(repo, env)
+        if has_workflows is None:
+            return SafetyResult(SafetyStatus.READ_FAILED, "workflows read failed")
+        if has_workflows:
+            logger.info("PR #%d: no checks yet but repo has workflows, treating CI as pending", pr_number)
+            return SafetyResult(SafetyStatus.SKIP, REASON_CI_BLOCKED)
+        logger.info("PR #%d: no checks and no workflows, nothing blocks approval", pr_number)
+        return None
     blocking = sorted({b for b in buckets if b not in _PASSING_BUCKETS})
     logger.info("PR #%d: %d checks, blocking buckets: %s", pr_number, len(buckets), blocking or "none")
     if blocking:
@@ -681,7 +707,9 @@ def _post_approval(repo: str, pr_number: int, head_sha: str, env: dict) -> bool:
         env,
     )
     if result.returncode != 0:
-        logger.error("PR #%d: approval POST failed (exit %d)", pr_number, result.returncode)
+        logger.error(
+            "PR #%d: approval POST failed (exit %d): %s", pr_number, result.returncode, _text(result.stderr).strip()
+        )
         return False
     return True
 

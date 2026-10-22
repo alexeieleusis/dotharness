@@ -17,6 +17,7 @@ ME = "reviewer"
 HEAD = "abc123"
 OLD = "old999"
 NO_REQ = b"no required checks reported on the 'x' branch"
+NO_CHECKS = b"no checks reported on the 'x' branch"
 
 
 def pr_json(**over):
@@ -33,17 +34,20 @@ def proc(code=0, out=b"", err=b""):
     return MagicMock(returncode=code, stdout=out, stderr=err)
 
 
-def run(view=None, required=None, allc=None, reviews=(), user=ME):
+def run(view=None, required=None, allc=None, reviews=(), user=ME, workflows=None):
     """view/required/allc: CompletedProcess mocks. reviews: list or None (read failed)."""
     view = view or proc(out=pr_json())
     required = required or proc(out=buckets("pass"))
     allc = allc or proc(out=buckets())
+    workflows = workflows or proc(out=json.dumps({"workflows": []}).encode())
     calls = []
 
     def fake_cmd(cmd, **kwargs):
         calls.append(cmd)
         if cmd[1:3] == ["pr", "view"]:
             return view
+        if cmd[1] == "api":
+            return workflows
         return required if "--required" in cmd else allc
 
     page = None if reviews is None else list(reviews)
@@ -110,13 +114,32 @@ def test_other_exit_1_is_read_failed():
     assert res.status is SafetyStatus.READ_FAILED
 
 
-def test_exit_1_without_required_flag_is_read_failed():
-    res, _ = run(required=proc(1, b"", NO_REQ), allc=proc(1, b"", NO_REQ))
+def test_other_exit_1_without_required_flag_is_read_failed():
+    res, _ = run(required=proc(1, b"", NO_REQ), allc=proc(1, b"", b"HTTP 502"))
     assert res.status is SafetyStatus.READ_FAILED
 
 
-def test_no_checks_at_all_is_read_failed():
-    res, _ = run(required=proc(1, b"", NO_REQ), allc=proc(out=buckets()))
+def test_no_checks_at_all_is_safe():
+    for allc in (proc(1, b"", NO_CHECKS), proc(out=buckets())):
+        res, _ = run(required=proc(1, b"", NO_REQ), allc=allc)
+        assert res.status is SafetyStatus.SAFE
+
+
+def test_no_checks_but_repo_has_workflows_skips():
+    wf = proc(out=json.dumps({"workflows": [{"state": "active"}]}).encode())
+    for allc in (proc(1, b"", NO_CHECKS), proc(out=buckets())):
+        res, _ = run(required=proc(1, b"", NO_REQ), allc=allc, workflows=wf)
+        assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
+
+
+def test_no_checks_inactive_workflows_only_is_safe():
+    wf = proc(out=json.dumps({"workflows": [{"state": "disabled_manually"}]}).encode())
+    res, _ = run(required=proc(1, b"", NO_REQ), allc=proc(out=buckets()), workflows=wf)
+    assert res.status is SafetyStatus.SAFE
+
+
+def test_no_checks_workflows_read_failed():
+    res, _ = run(required=proc(1, b"", NO_REQ), allc=proc(out=buckets()), workflows=proc(1, b"", b"HTTP 502"))
     assert res.status is SafetyStatus.READ_FAILED
 
 
