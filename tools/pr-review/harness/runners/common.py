@@ -1521,27 +1521,3 @@ def find_last_reply_if_marked(comment: dict, marker: str = FOCUSED_REVIEW_MARKER
     if replies and marker in replies[-1].get("body", ""):
         return replies[-1]
     return None
-
-
-def reply_has_reaction_from(comment_id: int, repo: str, login: str, env: dict) -> bool:
-    """Return True if `login` left a +1 reaction on inline review comment `comment_id`.
-
-    Fails closed (returns False) if the reactions API call fails or the response
-    can't be parsed — a gate should default to blocking under uncertainty.
-    """
-    result = run_cmd(
-        ["gh", "api", f"repos/{repo}/pulls/comments/{comment_id}/reactions"],
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return False
-    try:
-        reactions = json.loads(result.stdout)
-    except ValueError:
-        return False
-    if not isinstance(reactions, list):
-        return False
-    return any(r.get("content") == "+1" and r.get("user", {}).get("login") == login for r in reactions)

@@ -5,7 +5,6 @@ from harness.runners.common import (
     FOCUSED_REVIEW_MARKER,
     fetch_pr_comments,
     find_reply_with_marker,
-    reply_has_reaction_from,
 )
 
 
@@ -73,53 +72,3 @@ def test_find_reply_with_marker_handles_missing_replies_key():
 
 def test_find_reply_with_marker_handles_none_replies():
     assert find_reply_with_marker({"replies": None}) is None
-
-
-def test_reply_has_reaction_from_true_when_reaction_present():
-    payload = [
-        {"content": "heart", "user": {"login": "someone-else"}},
-        {"content": "+1", "user": {"login": "alexei"}},
-    ]
-    with patch("harness.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(payload).encode(), stderr=b"")
-        result = reply_has_reaction_from(123, "acme/frontend", "alexei", {})
-    assert result is True
-
-
-def test_reply_has_reaction_from_false_when_wrong_user_reacted():
-    payload = [{"content": "+1", "user": {"login": "someone-else"}}]
-    with patch("harness.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(payload).encode(), stderr=b"")
-        result = reply_has_reaction_from(123, "acme/frontend", "alexei", {})
-    assert result is False
-
-
-def test_reply_has_reaction_from_false_when_only_other_reaction_type():
-    payload = [{"content": "heart", "user": {"login": "alexei"}}]
-    with patch("harness.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(payload).encode(), stderr=b"")
-        result = reply_has_reaction_from(123, "acme/frontend", "alexei", {})
-    assert result is False
-
-
-def test_reply_has_reaction_from_fails_closed_on_api_error():
-    with patch("harness.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-        result = reply_has_reaction_from(123, "acme/frontend", "alexei", {})
-    assert result is False
-
-
-def test_reply_has_reaction_from_fails_closed_on_bad_json():
-    with patch("harness.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"not json", stderr=b"")
-        result = reply_has_reaction_from(123, "acme/frontend", "alexei", {})
-    assert result is False
-
-
-def test_reply_has_reaction_from_fails_closed_on_non_list_json():
-    with patch("harness.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=json.dumps({"message": "not found"}).encode(), stderr=b""
-        )
-        result = reply_has_reaction_from(123, "acme/frontend", "alexei", {})
-    assert result is False

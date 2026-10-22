@@ -26,7 +26,6 @@ from harness.runners.common import (
     git_restore,
     is_ancestor,
     preserve_reviewer_request,
-    reply_has_reaction_from,
     run_cmd,
 )
 
@@ -189,7 +188,17 @@ def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) 
     logger.info("PR #%d: found %d comment(s) to address", number, len(comments))
     head_sha = get_head_sha(ctx.wdir, ctx.env)
     for comment in comments:
-        if comment.get("type") == "inline" and not _comment_still_unresolved(comment, number, ctx.repo, ctx.env):
+        thread_state = (
+            _comment_thread_state(comment, number, ctx.repo, ctx.env) if comment.get("type") == "inline" else True
+        )
+        if thread_state is None and comment.get("focused_review_original") is not None:
+            logger.warning(
+                "PR #%d: thread-state lookup failed; skipping re-pointed focused-review comment %s",
+                number,
+                comment.get("id", "?"),
+            )
+            continue
+        if thread_state is False:
             logger.info(
                 "PR #%d: comment %s's thread was resolved since this run started, skipping",
                 number,
@@ -226,18 +235,8 @@ def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) 
             break
 
 
-def _focused_review_approved(comment: dict, repo: str, our_login: str | None, env: dict) -> bool:
-    """True if our_login left a +1 reaction on this comment's (last, marker-carrying) reply."""
-    if not our_login:
-        return False
-    last_reply = find_last_reply_if_marked(comment)
-    if last_reply is None or "id" not in last_reply:
-        return False
-    return reply_has_reaction_from(last_reply["id"], repo, our_login, env)
-
-
 def _as_focused_review_comment(parent: dict, marker_reply: dict) -> dict:
-    """Re-point an approved focused-review thread at its marker reply — the real fix spec —
+    """Re-point a marked focused-review thread at its marker reply — the real fix spec —
     as the actual "comment to address", instead of the terse automated finding it replied
     to. File location and diff context are inherited from the parent; the parent itself is
     carried along as background-only context under `focused_review_original`."""
@@ -261,33 +260,72 @@ def _as_focused_review_comment(parent: dict, marker_reply: dict) -> dict:
     }
 
 
-def _select_approved_focused_review_comments(
-    comments: list[dict], pr_number: int, repo: str, our_login: str | None, env: dict
+@dataclass(frozen=True)
+class ThreadState:
+    """Result of the single review-thread lookup: `unresolved_ids` are the REST databaseIds
+    of inline comments in unresolved threads; `minimized_ids` are the databaseIds of
+    unresolved threads' root comments that are minimised."""
+
+    unresolved_ids: frozenset[int] = frozenset()
+    minimized_ids: frozenset[int] = frozenset()
+
+
+def _select_focused_review_comments(
+    comments: list[dict],
+    pr_number: int,
+    *,
+    thread_state: ThreadState | None,
+    our_login: str | None = None,
+    trusted_commenters: str | list[str] = "*",
 ) -> tuple[list[dict], list[dict]]:
-    """Split out inline comments whose last reply carries the focused-review-bot marker and
-    has a +1 reaction from our_login, re-pointed at that reply via `_as_focused_review_comment`.
-    Selection is deterministic and programmatic rather than left to the backend's judgment,
-    since a detailed marker reply can otherwise be misread as evidence of prior completion.
-    A marked-but-not-yet-approved comment is dropped outright, here, rather than left in
-    `rest` for `_filter_already_replied`'s last-reply-author check to catch — that check only
-    happens to work while `our_login` matches whoever posted the marker reply, and stops
-    matching the moment those two logins diverge (stale gh session, account switch, token
-    rotation), which would let the untransformed marker-carrying comment back into the
-    ordinary pipeline. Everything else (no marker at all) is left in `rest`."""
+    """Split out inline comments whose last reply carries the focused-review-bot marker,
+    re-pointed at that reply via `_as_focused_review_comment`. No extra API lookup and no
+    dependence on the commenting account. Selection is deterministic and programmatic rather than
+    left to the backend's judgment, since a detailed marker reply can otherwise be
+    misread as evidence of prior completion. Idempotency needs no state: once any reply
+    is posted after the marker reply, the thread is no longer marked and falls into
+    `rest`, where `_filter_already_replied` handles it. Everything else (no marker at
+    all, non-inline types) is left in `rest`.
+
+    `thread_state` is the result of the single thread-state lookup done by
+    `_filter_comments` (None when that lookup failed). Marked threads fail closed:
+    with no thread state they are neither selected nor forwarded to `rest`; a marked
+    thread that is resolved or whose root comment is minimised is dropped the same way.
+    Unmarked comments are unaffected.
+
+    The marker reply must have been written by `our_login` (fail closed when it is unknown)
+    and by an author allowed by `trusted_commenters`; otherwise any commenter could post the
+    marker text and trigger an unattended commit and push. Such threads are dropped, not
+    forwarded to `rest`."""
     selected, rest = [], []
-    dropped = 0
+    skipped = 0
+    untrusted = 0
     for c in comments:
         marker_reply = find_last_reply_if_marked(c) if c.get("type") == "inline" else None
         if marker_reply is None:
             rest.append(c)
-        elif _focused_review_approved(c, repo, our_login, env):
+        elif (
+            not our_login
+            or marker_reply.get("author") != our_login
+            or not _filter_by_trusted_commenters([marker_reply], pr_number, trusted_commenters)
+        ):
+            untrusted += 1
+        elif thread_state is None:
+            skipped += 1
+        elif c.get("id") in thread_state.unresolved_ids and c.get("id") not in thread_state.minimized_ids:
             selected.append(_as_focused_review_comment(c, marker_reply))
-        else:
-            dropped += 1
+    if untrusted:
+        logger.warning(
+            "PR #%d: ignored %d marked thread(s) whose marker reply was not authored by us or a trusted commenter",
+            pr_number,
+            untrusted,
+        )
+    if skipped:
+        logger.warning(
+            "PR #%d: thread-state lookup failed; skipped %d marked focused-review thread(s)", pr_number, skipped
+        )
     if selected:
-        logger.info("PR #%d: %d approved focused-review comment(s) selected for addressing", pr_number, len(selected))
-    if dropped:
-        logger.info("PR #%d: %d marked focused-review comment(s) not yet approved, held back", pr_number, dropped)
+        logger.info("PR #%d: %d focused-review comment(s) selected for addressing", pr_number, len(selected))
     return selected, rest
 
 
@@ -324,12 +362,13 @@ def _filter_by_trusted_commenters(
     return comments
 
 
-def _filter_by_unresolved(comments: list[dict], pr_number: int, repo: str, env: dict) -> list[dict]:
-    unresolved_ids = _get_unresolved_comment_ids(pr_number, repo, env)
-    if unresolved_ids is None:
+def _filter_by_unresolved(comments: list[dict], pr_number: int, thread_state: ThreadState | None) -> list[dict]:
+    """Drop inline comments in resolved threads. A failed lookup (`thread_state` None) keeps
+    everything, so a flaky API never blocks addressing."""
+    if thread_state is None:
         return comments
     before = len(comments)
-    comments = [c for c in comments if c["type"] != "inline" or c.get("id") in unresolved_ids]
+    comments = [c for c in comments if c["type"] != "inline" or c.get("id") in thread_state.unresolved_ids]
     if len(comments) < before:
         logger.info(
             "PR #%d: filtered to %d unresolved comment(s) (was %d)",
@@ -338,6 +377,21 @@ def _filter_by_unresolved(comments: list[dict], pr_number: int, repo: str, env: 
             before,
         )
     return comments
+
+
+def _comment_thread_state(comment: dict, pr_number: int, repo: str, env: dict) -> bool | None:
+    """Tri-state thread check: True (unresolved), False (resolved), None (lookup failed).
+
+    Makes exactly one `_get_unresolved_comment_ids` call; a non-int id returns True without
+    a lookup. Callers decide whether None fails open or closed.
+    """
+    comment_id = comment.get("id")
+    if not isinstance(comment_id, int):
+        return True
+    thread_state = _get_unresolved_comment_ids(pr_number, repo, env)
+    if thread_state is None:
+        return None
+    return comment_id in thread_state.unresolved_ids
 
 
 def _comment_still_unresolved(comment: dict, pr_number: int, repo: str, env: dict) -> bool:
@@ -350,13 +404,7 @@ def _comment_still_unresolved(comment: dict, pr_number: int, repo: str, env: dic
     own turn comes up later in the loop. Fails open (True) if the GraphQL check itself
     fails, matching `_filter_by_unresolved`'s policy of not blocking on a flaky API.
     """
-    comment_id = comment.get("id")
-    if not isinstance(comment_id, int):
-        return True
-    unresolved_ids = _get_unresolved_comment_ids(pr_number, repo, env)
-    if unresolved_ids is None:
-        return True
-    return comment_id in unresolved_ids
+    return _comment_thread_state(comment, pr_number, repo, env) is not False
 
 
 def _filter_already_replied(
@@ -402,8 +450,15 @@ def _filter_comments(
     replied_keys: set[str] | None = None,
 ) -> list[dict]:
     comments = _filter_by_trusted_commenters(comments, pr_number, trusted_commenters)
-    comments = _filter_by_unresolved(comments, pr_number, repo, env)
-    selected, comments = _select_approved_focused_review_comments(comments, pr_number, repo, our_login, env)
+    thread_state = _get_unresolved_comment_ids(pr_number, repo, env)
+    comments = _filter_by_unresolved(comments, pr_number, thread_state)
+    selected, comments = _select_focused_review_comments(
+        comments,
+        pr_number,
+        thread_state=thread_state,
+        our_login=our_login,
+        trusted_commenters=trusted_commenters,
+    )
     comments = _filter_already_replied(comments, pr_number, our_login, replied_keys)
     comments = selected + comments
     comments = _filter_by_plugin_prefix(comments, pr_number, plugin_prefix)
@@ -557,13 +612,14 @@ def _build_comment_instructions(template: str, comment: dict, pr_number: int, re
         original = comment.get("focused_review_original")
         if original is not None:
             lines += [
-                f"This comment is our own {FOCUSED_REVIEW_MARKER} bot's fix spec, and it has "
-                "already been approved with a \U0001f44d reaction — it was selected "
-                "programmatically because it needs a real fix, not because it merits a "
-                "judgment call. Skip Step 0 of the instructions above entirely: go straight "
-                "to Steps 2-4 (make the fix, commit, reply). Do not reply with just an "
-                "acknowledgment, and do not claim the fix is done unless you actually made "
-                "and committed it.",
+                f"This comment is our own {FOCUSED_REVIEW_MARKER} bot's fix spec, and it was "
+                "selected programmatically because it needs a real fix, not because it "
+                "merits a judgment call. Skip Step 0 of the instructions above entirely: go "
+                "straight to Steps 2-4 (make the fix, commit, reply). Make the fix described "
+                "in the spec, unless the spec itself says it is a false positive; in that case "
+                "make no change and reply saying that no change was made and why. Do not reply "
+                "with just an acknowledgment, and do not claim the fix is done unless you "
+                "actually made and committed it.",
                 "",
             ]
         lines += [
@@ -676,22 +732,26 @@ def _list_prs(repo: str, env: dict, filter_flag: str) -> list[dict]:
     return json.loads(result.stdout)
 
 
-def _get_unresolved_comment_ids(pr_number: int, repo: str, env: dict) -> set[int] | None:
-    """Return REST API databaseIds of inline comments in unresolved threads.
+def _get_unresolved_comment_ids(pr_number: int, repo: str, env: dict) -> ThreadState | None:
+    """Return the `ThreadState` of the PR's review threads.
     Returns None if the GraphQL query fails (caller should skip filtering)."""
     threads = fetch_review_threads(pr_number, repo, env)
     if threads is None:
         return None
     ids: set[int] = set()
+    minimized_ids: set[int] = set()
     for thread in threads:
         if thread.get("isResolved"):
             continue
-        for c in (thread.get("comments") or {}).get("nodes") or []:
+        nodes = (thread.get("comments") or {}).get("nodes") or []
+        if nodes and nodes[0].get("isMinimized") and nodes[0].get("databaseId"):
+            minimized_ids.add(nodes[0]["databaseId"])
+        for c in nodes:
             db_id = c.get("databaseId")
             if db_id:
                 ids.add(db_id)
     logger.debug("PR #%d: %d unresolved inline comment id(s)", pr_number, len(ids))
-    return ids
+    return ThreadState(frozenset(ids), frozenset(minimized_ids))
 
 
 def _check_gql_unresolved_threads(pr_number: int, repo: str, env: dict) -> tuple[int, int, bool]:
