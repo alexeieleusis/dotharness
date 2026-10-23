@@ -1,7 +1,9 @@
 import json
+import logging
 from unittest.mock import MagicMock, patch
 
 from harness.runners.auto_approve_github import (
+    _MAX_NAMED_CHECKS,
     REASON_ALREADY_APPROVED,
     REASON_AUTO_MERGE,
     REASON_CI_BLOCKED,
@@ -28,6 +30,10 @@ def pr_json(**over):
 
 def buckets(*names):
     return json.dumps([{"bucket": n} for n in names]).encode()
+
+
+def named(*pairs):
+    return json.dumps([{"name": n, "bucket": b} for n, b in pairs]).encode()
 
 
 def proc(code=0, out=b"", err=b""):
@@ -218,3 +224,39 @@ def test_unknown_acting_account_read_failed():
 def test_exception_read_failed():
     with patch("harness.runners.auto_approve_github.run_cmd", side_effect=OSError("boom")):
         assert check_approval_safety("o/r", 5, ME, {}).status is SafetyStatus.READ_FAILED
+
+
+def test_skip_logs_failing_check_names_with_exact_reason(caplog):
+    checks = named(("lint", "pass"), ("unit", "fail"), ("e2e", "pending"))
+    with caplog.at_level(logging.INFO):
+        res, _ = run(required=proc(out=checks))
+    assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
+    assert res.reason == "ci-blocked"
+    assert "failing checks: unit(fail)" in caplog.text
+    assert "lint" not in caplog.text and "e2e" not in caplog.text  # passing and pending are not named
+
+
+def test_failing_check_list_is_capped_with_omitted_count(caplog):
+    checks = named(*[(f"c{i:02d}", "fail") for i in range(_MAX_NAMED_CHECKS + 3)])
+    with caplog.at_level(logging.INFO):
+        res, _ = run(required=proc(out=checks))
+    assert res.reason == REASON_CI_BLOCKED
+    assert f"c{_MAX_NAMED_CHECKS - 1:02d}(fail)" in caplog.text
+    assert f"c{_MAX_NAMED_CHECKS:02d}(fail)" not in caplog.text
+    assert "(+3 more omitted)" in caplog.text
+
+
+def test_missing_name_is_tolerated_but_missing_bucket_is_not(caplog):
+    with caplog.at_level(logging.INFO):
+        res, _ = run(required=proc(out=buckets("fail")))
+    assert res.reason == REASON_CI_BLOCKED
+    assert "<unnamed>(fail)" in caplog.text
+    res, _ = run(required=proc(out=named(("x", "pass")).replace(b"bucket", b"state")))
+    assert res.status is SafetyStatus.READ_FAILED
+
+
+def test_passing_checks_log_no_failing_names(caplog):
+    with caplog.at_level(logging.INFO):
+        res, _ = run(required=proc(out=named(("lint", "pass"))))
+    assert res.status is SafetyStatus.SAFE
+    assert "failing checks" not in caplog.text

@@ -38,6 +38,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import NamedTuple
 
 from harness.runners.auto_approve_size import SizeEvaluation
 from harness.runners.common import (
@@ -260,6 +261,13 @@ REASON_ALREADY_APPROVED = "already-approved"
 _NO_REQUIRED_CHECKS_TEXT = "no required checks reported"
 _NO_CHECKS_TEXT = "no checks reported"
 _PASSING_BUCKETS = frozenset({"pass", "skipping"})
+_MAX_NAMED_CHECKS = 10
+_UNNAMED_CHECK = "<unnamed>"
+
+
+class Check(NamedTuple):
+    name: str
+    bucket: str
 
 
 @dataclass(frozen=True)
@@ -308,26 +316,30 @@ def list_own_open_prs(
     return sorted(prs, key=lambda p: p["number"])
 
 
-def _parse_buckets(stdout: str) -> list[str] | None:
-    """Return the bucket of every check, or None when the output is not a list of check objects."""
+def _parse_buckets(stdout: str) -> list[Check] | None:
+    """Return every check (name, bucket), or None when the output is not a list of check objects.
+
+    ``bucket`` is required; a missing or non-string ``name`` is tolerated and shown as ``<unnamed>``.
+    """
     try:
         checks = json.loads(stdout)
     except ValueError:
         return None
     if not isinstance(checks, list):
         return None
-    buckets = []
+    parsed = []
     for check in checks:
         bucket = check.get("bucket") if isinstance(check, dict) else None
         if not isinstance(bucket, str):
             return None
-        buckets.append(bucket)
-    return buckets
+        name = check.get("name")
+        parsed.append(Check(name if isinstance(name, str) and name else _UNNAMED_CHECK, bucket))
+    return parsed
 
 
-def _read_buckets(repo: str, pr_number: int, env: dict, required: bool) -> list[str] | None:
-    """Buckets for the PR's checks. None = read failure; [] with required=True = no required checks."""
-    args = ["pr", "checks", str(pr_number), "--repo", repo, "--json", "bucket"]
+def _read_buckets(repo: str, pr_number: int, env: dict, required: bool) -> list[Check] | None:
+    """Checks (name, bucket) for the PR. None = read failure; [] with required=True = no required checks."""
+    args = ["pr", "checks", str(pr_number), "--repo", repo, "--json", "bucket,name"]
     result = _gh([*args, "--required"] if required else args, env)
     stderr = _text(result.stderr)
     if required and result.returncode == 1 and _NO_REQUIRED_CHECKS_TEXT in stderr:
@@ -359,13 +371,13 @@ def _repo_has_workflows(repo: str, env: dict) -> bool | None:
 
 def _check_ci(repo: str, pr_number: int, env: dict) -> SafetyResult | None:
     """None when CI allows approval; otherwise the SKIP or READ_FAILED result (head SHA not set)."""
-    buckets = _read_buckets(repo, pr_number, env, required=True)
-    if buckets is not None and not buckets:
+    checks = _read_buckets(repo, pr_number, env, required=True)
+    if checks is not None and not checks:
         logger.info("PR #%d: no required checks, falling back to all checks", pr_number)
-        buckets = _read_buckets(repo, pr_number, env, required=False)
-    if buckets is None:
+        checks = _read_buckets(repo, pr_number, env, required=False)
+    if checks is None:
         return SafetyResult(SafetyStatus.READ_FAILED, "checks read failed")
-    if not buckets:
+    if not checks:
         # Empty is also what gh reports before a push's workflows register, so only trust it when no CI exists.
         has_workflows = _repo_has_workflows(repo, env)
         if has_workflows is None:
@@ -375,11 +387,27 @@ def _check_ci(repo: str, pr_number: int, env: dict) -> SafetyResult | None:
             return SafetyResult(SafetyStatus.SKIP, REASON_CI_BLOCKED)
         logger.info("PR #%d: no checks and no workflows, nothing blocks approval", pr_number)
         return None
-    blocking = sorted({b for b in buckets if b not in _PASSING_BUCKETS})
-    logger.info("PR #%d: %d checks, blocking buckets: %s", pr_number, len(buckets), blocking or "none")
+    blocking = sorted({c.bucket for c in checks if c.bucket not in _PASSING_BUCKETS})
+    logger.info("PR #%d: %d checks, blocking buckets: %s", pr_number, len(checks), blocking or "none")
     if blocking:
+        _log_failing_checks(pr_number, checks)
         return SafetyResult(SafetyStatus.SKIP, REASON_CI_BLOCKED)
     return None
+
+
+def _log_failing_checks(pr_number: int, checks: list[Check]) -> None:
+    """Name the failing checks (``fail`` bucket), capped at ``_MAX_NAMED_CHECKS``, and log how many were omitted.
+
+    Pending, cancelled and unrecognised buckets still block but are not named: they appear only in the
+    "blocking buckets" line.
+    """
+    failing = sorted(f"{c.name}({c.bucket})" for c in checks if c.bucket == "fail")
+    if not failing:
+        return
+    named = ", ".join(failing[:_MAX_NAMED_CHECKS])
+    omitted = len(failing) - _MAX_NAMED_CHECKS
+    suffix = f" (+{omitted} more omitted)" if omitted > 0 else ""
+    logger.info("PR #%d: failing checks: %s%s", pr_number, named, suffix)
 
 
 def _read_pr_state(repo: str, pr_number: int, env: dict) -> dict | None:
