@@ -56,7 +56,7 @@ def repo_json(name="main"):
     return json.dumps({"defaultBranchRef": {"name": name}}).encode()
 
 
-def run(view=None, required=None, allc=None, reviews=(), user=ME, repo=None, heads=None, roots=None):
+def run(view=None, required=None, allc=None, reviews=(), user=ME, repo=None, heads=None, roots=None, workflows=None):
     """view/required/allc/repo: CompletedProcess mocks (or an exception for repo). reviews: list or None (read failed).
 
     heads: {branch: mock} for ``pr list --head``; roots: {pr number: mock} for ``pr checks <n> --required`` of
@@ -65,6 +65,7 @@ def run(view=None, required=None, allc=None, reviews=(), user=ME, repo=None, hea
     heads = heads or {}
     roots = roots or {}
     repo = repo or proc(out=repo_json())
+    workflows = workflows or proc(out=json.dumps({"workflows": []}).encode())
     view = view or proc(out=pr_json())
     required = required or proc(out=buckets("pass"))
     allc = allc or proc(out=buckets())
@@ -74,6 +75,8 @@ def run(view=None, required=None, allc=None, reviews=(), user=ME, repo=None, hea
         calls.append(cmd)
         if cmd[1:3] == ["pr", "view"]:
             return view
+        if cmd[1] == "api":
+            return workflows
         if cmd[1:3] == ["repo", "view"]:
             if isinstance(repo, Exception):
                 raise repo
@@ -196,6 +199,24 @@ def test_no_checks_at_all_is_safe():
     for allc in (proc(1, b"", NO_CHECKS), proc(out=buckets())):
         res, _ = run(required=proc(1, b"", NO_REQ), allc=allc)
         assert res.status is SafetyStatus.SAFE
+
+
+def test_no_checks_but_repo_has_workflows_skips():
+    wf = proc(out=json.dumps({"workflows": [{"state": "active"}]}).encode())
+    for allc in (proc(1, b"", NO_CHECKS), proc(out=buckets())):
+        res, _ = run(required=proc(1, b"", NO_REQ), allc=allc, workflows=wf)
+        assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
+
+
+def test_no_checks_inactive_workflows_only_is_safe():
+    wf = proc(out=json.dumps({"workflows": [{"state": "disabled_manually"}]}).encode())
+    res, _ = run(required=proc(1, b"", NO_REQ), allc=proc(out=buckets()), workflows=wf)
+    assert res.status is SafetyStatus.SAFE
+
+
+def test_no_checks_workflows_read_failed():
+    res, _ = run(required=proc(1, b"", NO_REQ), allc=proc(out=buckets()), workflows=proc(1, b"", b"HTTP 502"))
+    assert res.status is SafetyStatus.READ_FAILED
 
 
 def test_unparseable_checks_read_failed():

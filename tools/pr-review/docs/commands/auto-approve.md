@@ -82,7 +82,8 @@ Before approving, on the PR's current head commit, the command requires:
   passing rerun does not block. A pending, failing or not-yet-completed latest
   run blocks approval. If a repeated check has a run with no usable timestamp,
   the checks count as unreadable. A PR with no checks at all passes this
-  condition when nothing is required of it;
+  condition only when the repo has no active workflows (otherwise checks may not have
+  registered yet and the PR is skipped);
 - the account has not already approved the PR.
 
 If any condition does not hold, no approval is posted and the PR is checked

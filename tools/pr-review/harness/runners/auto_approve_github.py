@@ -13,7 +13,8 @@ D-14): re-approval after a later push is manual.
 OD-3 any bucket other than pass/skipping blocks with the single reason "CI blocked", judged on the
 latest run of each check only. Runs are keyed by (``workflow``, ``name``); among several runs of one
 key the latest by ``completedAt`` (else ``startedAt``) decides, so a failed run followed by a passing
-rerun does not block (see ``latest_runs``). A PR with no checks passes.
+rerun does not block (see ``latest_runs``). A PR with no checks passes only when the repo has no active
+workflow (empty is also what gh reports before a push's workflows register).
 Stack-root rule (Phase 3b): when the PR's own base has no required checks (a stacked PR's base is another
 PR's unprotected head branch), the base chain is walked through open PRs matched by head branch name only
 (``_find_stack_root``) up to the default branch. Only the check names required at the root PR are then
@@ -542,6 +543,21 @@ def _fallback_checks(
     return [c for c in checks if c.name in required], sorted(required - {c.name for c in checks})
 
 
+def _repo_has_workflows(repo: str, env: dict) -> bool | None:
+    """True when the repo has an active workflow; None on read failure."""
+    result = _gh(["api", f"repos/{repo}/actions/workflows?per_page=100"], env)
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(_text(result.stdout))
+    except ValueError:
+        return None
+    workflows = data.get("workflows") if isinstance(data, dict) else None
+    if not isinstance(workflows, list):
+        return None
+    return any(isinstance(w, dict) and w.get("state") == "active" for w in workflows)
+
+
 def _check_ci(repo: str, pr_number: int, base_branch: str, env: dict) -> SafetyResult | None:
     """None when CI allows approval; otherwise the SKIP or READ_FAILED result (head SHA not set).
 
@@ -566,7 +582,14 @@ def _check_ci(repo: str, pr_number: int, base_branch: str, env: dict) -> SafetyR
         logger.info("PR #%d: required checks with no run: %s", pr_number, ", ".join(missing))
         return SafetyResult(SafetyStatus.SKIP, REASON_CI_BLOCKED)
     if not checks:
-        logger.info("PR #%d: no checks, nothing blocks approval", pr_number)
+        # Empty is also what gh reports before a push's workflows register, so only trust it when no CI exists.
+        has_workflows = _repo_has_workflows(repo, env)
+        if has_workflows is None:
+            return SafetyResult(SafetyStatus.READ_FAILED, "workflows read failed")
+        if has_workflows:
+            logger.info("PR #%d: no checks yet but repo has workflows, treating CI as pending", pr_number)
+            return SafetyResult(SafetyStatus.SKIP, REASON_CI_BLOCKED)
+        logger.info("PR #%d: no checks and no workflows, nothing blocks approval", pr_number)
         return None
     blocking = sorted({c.bucket for c in checks if c.bucket not in _PASSING_BUCKETS})
     logger.info("PR #%d: %d checks, blocking buckets: %s", pr_number, len(checks), blocking or "none")
