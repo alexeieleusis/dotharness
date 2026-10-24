@@ -50,7 +50,7 @@ def run(
 
     pages = None if reviews is None else list(reviews)
     with (
-        patch("harness.runners.auto_approve_github.run_cmd", side_effect=fake),
+        patch("harness.runners.ci_checks.run_cmd", side_effect=fake),
         patch("harness.runners.auto_approve_github.fetch_all_pages", return_value=pages),
     ):
         gate_result = GateResult(GateStatus.PASSED if gate else GateStatus.NOT_PASSED, "")

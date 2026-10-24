@@ -33,13 +33,13 @@ from harness.runners.auto_approve_github import (
     VIEWED_STATE,
     SafetyStatus,
     _check_ci,
-    _gh,
     _read_pr_state,
     _state_skip_reason,
-    _text,
     list_own_open_prs,
     read_viewed_states,
 )
+from harness.runners.ci_checks import gh as _gh
+from harness.runners.ci_checks import text as _text
 from harness.runners.common import build_subprocess_env, get_current_user, get_gh_token
 
 logger = logging.getLogger(__name__)

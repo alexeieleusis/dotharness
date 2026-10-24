@@ -89,7 +89,7 @@ def run(view=None, required=None, allc=None, reviews=(), user=ME, repo=None, hea
 
     page = None if reviews is None else list(reviews)
     with (
-        patch("harness.runners.auto_approve_github.run_cmd", side_effect=fake_cmd),
+        patch("harness.runners.ci_checks.run_cmd", side_effect=fake_cmd),
         patch("harness.runners.auto_approve_github.fetch_all_pages", return_value=page),
     ):
         result = check_approval_safety("o/r", 5, user, {})
@@ -292,7 +292,7 @@ def test_unknown_acting_account_read_failed():
 
 
 def test_exception_read_failed():
-    with patch("harness.runners.auto_approve_github.run_cmd", side_effect=OSError("boom")):
+    with patch("harness.runners.ci_checks.run_cmd", side_effect=OSError("boom")):
         assert check_approval_safety("o/r", 5, ME, {}).status is SafetyStatus.READ_FAILED
 
 
@@ -408,7 +408,7 @@ def test_malformed_check_output_is_read_failed():
 def test_checks_requested_with_run_fields():
     _, calls = run()
     (cmd,) = [c for c in calls if "--required" in c]
-    assert cmd[cmd.index("--json") + 1] == "name,bucket,workflow,startedAt,completedAt"
+    assert cmd[cmd.index("--json") + 1] == "name,bucket,link,workflow,startedAt,completedAt"
 
 
 # --- stack-root walk (Phase 3b) ---
@@ -515,7 +515,7 @@ def test_walk_timeout_is_read_failed():
             raise subprocess.TimeoutExpired(cmd, 30)
         return proc(out=repo_json()) if cmd[1:3] == ["repo", "view"] else proc(1, b"", NO_REQ)
 
-    with patch("harness.runners.auto_approve_github.run_cmd", side_effect=boom):
+    with patch("harness.runners.ci_checks.run_cmd", side_effect=boom):
         res = _check_ci("o/r", 5, "stack-a", {})
     assert res is not None
     assert res.status is SafetyStatus.READ_FAILED
