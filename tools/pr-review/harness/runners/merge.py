@@ -131,14 +131,14 @@ def _evaluate(pr: dict, config: HarnessConfig, env: dict, current_user: str) -> 
     head_sha = pr_state["headRefOid"]
     reason = _state_skip_reason(pr_state)
     if reason is None:
-        reason = _check_ci_and_record(config, number, head_sha, env)
+        reason = _check_ci_and_record(config, number, head_sha, pr_state.get("baseRefName", ""), env)
     if reason is None:
         reason = _check_size_and_viewed(config, number, env)
     return reason, head_sha
 
 
-def _check_ci_and_record(config: HarnessConfig, number: int, head_sha: str, env: dict) -> str | None:
-    ci = _check_ci(config.repo.name, number, env)
+def _check_ci_and_record(config: HarnessConfig, number: int, head_sha: str, base_branch: str, env: dict) -> str | None:
+    ci = _check_ci(config.repo.name, number, base_branch, env)
     if ci is not None:
         return SKIP_CHECKS_READ_FAILED if ci.status is SafetyStatus.READ_FAILED else ci.reason
     recorded = read_gate_record(config.repo_slug, number)

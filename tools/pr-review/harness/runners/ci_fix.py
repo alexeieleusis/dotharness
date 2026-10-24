@@ -424,7 +424,7 @@ def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, prompt: s
     repo = config.repo.name
     logger.info("PR #%d: starting%s", number, " (dry-run)" if dry_run else "")
 
-    blocked = _check_ci(repo, number, env)
+    blocked = _check_ci(repo, number, pr.get("baseRefName", ""), env)
     if blocked is None:
         logger.info("PR #%d: CI is green, nothing to fix", number)
         return

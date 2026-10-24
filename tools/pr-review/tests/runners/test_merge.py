@@ -295,3 +295,22 @@ def test_golden_record_is_read_back(tmp_path, monkeypatch):
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(_GOLDEN["record"]), encoding="utf-8")
     assert merge.read_gate_record("acme-frontend", 1) == _GOLDEN["record"]["head_sha"]
+
+
+def test_check_ci_receives_base_branch_from_pr_state(tmp_path):
+    with (
+        patch(P + "_check_ci", return_value=SafetyResult(SafetyStatus.SKIP, "ci-blocked")) as check_ci,
+        patch(
+            P + "_read_pr_state",
+            return_value={
+                "state": "OPEN",
+                "isDraft": False,
+                "mergeable": "MERGEABLE",
+                "headRefOid": SHA,
+                "baseRefName": "stack-a",
+            },
+        ),
+    ):
+        reason, _ = merge._evaluate({"number": 4, "author": {"login": "me"}}, _cfg(tmp_path), {}, "me")
+    assert reason == "ci-blocked"
+    check_ci.assert_called_once_with("acme/frontend", 4, "stack-a", {})

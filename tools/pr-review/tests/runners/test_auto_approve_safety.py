@@ -76,6 +76,14 @@ def approval(sha=HEAD, login=ME, state="APPROVED"):
     return {"state": state, "commit_id": sha, "user": {"login": login}}
 
 
+def test_pr_view_requests_base_branch_and_checks_sequence_unchanged():
+    result, calls = run(view=proc(out=pr_json(baseRefName="stack-a")))
+    assert result.status is SafetyStatus.SAFE
+    assert "baseRefName" in calls[0][calls[0].index("--json") + 1]
+    assert sum("checks" in c for c in calls) == 1
+    assert "--required" in calls[-1]
+
+
 def test_required_pass_and_skipping_safe():
     res, calls = run(required=proc(out=buckets("pass", "skipping")))
     assert res.status is SafetyStatus.SAFE

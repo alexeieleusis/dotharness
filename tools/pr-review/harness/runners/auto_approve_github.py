@@ -409,8 +409,15 @@ def _read_buckets(repo: str, pr_number: int, env: dict, required: bool) -> list[
     return _parse_buckets(_text(result.stdout))
 
 
-def _check_ci(repo: str, pr_number: int, env: dict) -> SafetyResult | None:
-    """None when CI allows approval; otherwise the SKIP or READ_FAILED result (head SHA not set)."""
+def _check_ci(repo: str, pr_number: int, base_branch: str, env: dict) -> SafetyResult | None:
+    """None when CI allows approval; otherwise the SKIP or READ_FAILED result (head SHA not set).
+
+    ``base_branch`` is the PR's base (``baseRefName``). It is carried for the stack-root walk (Phase 3b) and
+    does not affect the outcome yet. The repository default branch is deliberately not looked up here: Phase 3b
+    resolves it lazily, only on the no-required-checks path, so this path makes no extra gh call.
+    ``ci_fix._read_failing_checks`` is not aligned with that walk yet; that decision is deferred to Phase 3b.
+    """
+    logger.debug("PR #%d: checking CI (base %s)", pr_number, base_branch)
     checks = _read_buckets(repo, pr_number, env, required=True)
     if checks is not None and not checks:
         logger.info("PR #%d: no required checks, falling back to all checks", pr_number)
@@ -452,7 +459,7 @@ def _read_pr_state(repo: str, pr_number: int, env: dict) -> dict | None:
             "--repo",
             repo,
             "--json",
-            "mergeable,autoMergeRequest,isDraft,state,headRefOid",
+            "mergeable,autoMergeRequest,isDraft,state,headRefOid,baseRefName",
         ],
         env,
     )
@@ -525,7 +532,7 @@ def _check_approval_safety(repo: str, pr_number: int, current_user: str, env: di
     if _already_approved(reviews, acting):
         return SafetyResult(SafetyStatus.SKIP, REASON_ALREADY_APPROVED, head)
 
-    blocked = _check_ci(repo, pr_number, env)
+    blocked = _check_ci(repo, pr_number, pr.get("baseRefName", ""), env)
     if blocked is not None:
         return SafetyResult(blocked.status, blocked.reason, head)
     return SafetyResult(SafetyStatus.SAFE, "all safety checks passed", head)

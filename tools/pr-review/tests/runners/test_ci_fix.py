@@ -247,6 +247,7 @@ def test_ac7_pr_option_processes_only_that_pr(tmp_path):
         ci_fix.run(_cfg(tmp_path), pr=7)
     assert m.gh.call_args.args[0][:3] == ["pr", "view", "7"]
     assert m.check_ci.call_args.args[1] == 7
+    assert m.check_ci.call_args.args[2] == "main"
     assert m.pushes == [["git", "push", "origin", "seven"]]
 
 
