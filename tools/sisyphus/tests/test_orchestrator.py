@@ -12,6 +12,7 @@ import json
 import re
 import subprocess
 import sys
+import tomllib
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -34,7 +35,9 @@ from sisyphus.orchestrator import (
     branch_name,
     build_orchestration_prompt,
     default_subprocess_runner,
+    dump_spf_config,
     package_dirs,
+    plan_dir_name,
     read_build_commands,
     run_item,
     stop_report_path,
@@ -773,6 +776,36 @@ def test_no_build_commands_writes_no_record_and_reports_in_digest(world: World) 
     assert not gate_record_path("owner-repo", 42, world.state).exists()
     assert "no build.commands" in world.digest_text().split("## Deviations")[1]
     assert not any(e.startswith("gate") for e in world.events)
+
+
+def test_item_config_points_at_this_items_plan_dir_not_the_repos(world: World) -> None:
+    stale = world.tmp / "ws" / "plan-82"
+    (world.repo / ".spec-prism-flow.toml").write_text(
+        f'[plan]\nworkspace_dir = "{stale}"\nphase_dir = "{stale}/phases"\n\n'
+        '[build]\ncommands = ["make check", "make test"]\nworkers = 1\n'
+    )
+    base_before = (world.repo / ".spec-prism-flow.toml").read_text()
+    plan_dir = world.tmp / "ws" / plan_dir_name(ITEM)
+    world.phases = plan_dir / "phases"
+    world.phases.mkdir(parents=True)
+    result = world.run(phase_dir=None)
+    assert result.completed
+    data = tomllib.loads((plan_dir / ".spec-prism-flow.toml").read_text())
+    assert data["plan"] == {"workspace_dir": str(plan_dir), "phase_dir": str(plan_dir / "phases")}
+    assert data["build"] == {"commands": ["make check", "make test"], "workers": 1}
+    assert (world.repo / ".spec-prism-flow.toml").read_text() == base_before
+    assert any(str(plan_dir / ".spec-prism-flow.toml") in p for p in world.agent_prompts)
+
+
+def test_plan_dir_name() -> None:
+    assert plan_dir_name("#118") == "plan-118"
+    assert plan_dir_name("118") == "plan-118"
+    assert plan_dir_name("owner/repo#7") == "plan-owner-repo-7"
+
+
+def test_dump_spf_config_round_trips() -> None:
+    data = {"agent": {"backend": "claude"}, "build": {"commands": ["a b", 'q"x'], "workers": 2, "on": True}}
+    assert tomllib.loads(dump_spf_config(data)) == data
 
 
 def test_missing_spf_config_writes_no_record(world: World) -> None:

@@ -135,8 +135,9 @@ class OrchestratorOptions:
     ``--base`` > ``[project].base_branch`` > ``main`` and passes the result in). ``repo_slug`` is the
     hyphenated ``owner-repo`` slug the gate record is filed under. ``default_branch`` is the
     repository default branch when it differs from ``base_branch``; both are never pushed to.
-    ``spf_config_path`` defaults to ``<repo_dir>/.spec-prism-flow.toml`` (``build.commands`` and
-    ``plan.phase_dir`` are read from it). ``phase_dir`` overrides ``plan.phase_dir``.
+    ``spf_config_path`` defaults to ``<repo_dir>/.spec-prism-flow.toml``: the base each item's own config
+    (``<workspace_dir>/plan-<n>/.spec-prism-flow.toml``) is copied from, with ``plan.workspace_dir`` and
+    ``plan.phase_dir`` set for the item. ``phase_dir`` overrides the item's ``plan.phase_dir``.
     ``resume_command`` is the exact command stored in the stop record (the CLI supplies it with the config
     path and base); the library default has a placeholder for the config path.
     """
@@ -189,6 +190,37 @@ def branch_name(item: str) -> str:
     """Deterministic Sisyphus branch for ``item``: ``sisyphus/<slug>-<8 hex of sha256>``."""
     slug = re.sub(r"[^a-z0-9]+", "-", item.lower()).strip("-")[:40].strip("-") or "item"
     return f"{BRANCH_PREFIX}{slug}-{hashlib.sha256(item.encode()).hexdigest()[:8]}"
+
+
+def plan_dir_name(item: str) -> str:
+    """Per-item plan directory name: ``plan-<n>`` for ``#<n>``, else ``plan-<slug of the reference>``."""
+    match = re.fullmatch(r"#?(\d+)", item.strip())
+    slug = match.group(1) if match else re.sub(r"[^a-z0-9]+", "-", item.lower()).strip("-")[:40].strip("-")
+    return f"plan-{slug or 'item'}"
+
+
+def _toml_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, str):
+        return json.dumps(value)  # a JSON string is a valid TOML basic string
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    raise OrchestratorError(f"cannot write a {type(value).__name__} value to the spec-prism-flow config")
+
+
+def dump_spf_config(data: dict[str, Any]) -> str:
+    """Serialise a one-level-deep config (tables of scalars and lists) back to TOML."""
+    lines: list[str] = []
+    for key, value in data.items():
+        if not isinstance(value, dict):
+            lines.append(f"{key} = {_toml_value(value)}")
+    for table, values in data.items():
+        if isinstance(values, dict):
+            lines += ["", f"[{table}]", *(f"{k} = {_toml_value(v)}" for k, v in values.items())]
+    return "\n".join(lines).strip() + "\n"
 
 
 def stop_report_path(record: RunRecord) -> Path:
@@ -278,7 +310,9 @@ class _Run:
         self.repo = Path(config.project.repo_dir).expanduser()
         self.workspace = Path(config.project.workspace_dir).expanduser()
         self.branch = branch_name(item)
-        self.spf = options.spf_config_path or self.repo / SPF_CONFIG_NAME
+        self.base_spf = options.spf_config_path or self.repo / SPF_CONFIG_NAME
+        self.plan_dir = self.workspace / plan_dir_name(item)
+        self.spf = self.plan_dir / SPF_CONFIG_NAME  # per-item copy of base_spf; see write_item_config
         self.tracker = LimitTracker(config.limits, clock)
         self.rec = RunRecord.open(self.workspace, item)
         self.prior_cp = self.rec.checkpoint
@@ -516,7 +550,22 @@ class _Run:
             "stop report path": str(stop_report_path(self.rec)),
         }
 
+    def write_item_config(self) -> None:
+        """Write the item's own spec-prism-flow config: the repo's file with this item's plan directories.
+
+        The repo's file is shared by every item, so its ``plan.workspace_dir``/``plan.phase_dir`` belong to
+        whichever item ran last. Agents, the leaf count and the gate commands all read the per-item copy.
+        """
+        data = read_spf_config(self.base_spf) or {}
+        plan = dict(data.get("plan") or {})
+        plan["workspace_dir"] = str(self.plan_dir)
+        plan["phase_dir"] = str(self.opt.phase_dir or self.plan_dir / "phases")
+        data["plan"] = plan
+        self.plan_dir.mkdir(parents=True, exist_ok=True)
+        self.spf.write_text(dump_spf_config(data), encoding="utf-8")
+
     def run_agent_stage(self, stage: str) -> None:
+        self.write_item_config()
         template = knowledge_file(PROMPT_FILE, self.opt.home, self.opt.checkout_root).read_text(encoding="utf-8")
         prompt = build_orchestration_prompt(template, self.prompt_values(stage))
         stop_file = stop_report_path(self.rec)
@@ -558,6 +607,7 @@ class _Run:
                 raise _Stop(Checkpoint.C6, f"the plan has {leaves} leaves; max_leaves_per_run is {limit}")
 
     def count_leaves(self) -> int:
+        self.write_item_config()
         phase_dir = self.opt.phase_dir
         if phase_dir is None:
             data = read_spf_config(self.spf)
@@ -658,6 +708,7 @@ class _Run:
     def gate(self) -> None:
         """Run the gate commands at HEAD and write the gate record only if every command exits 0."""
         number = self.pr_number()
+        self.write_item_config()
         commands = read_build_commands(self.spf)
         if commands is None:
             self.note(f"no gate record for PR #{number}: no build.commands in {self.spf}")
