@@ -14,6 +14,14 @@ OD-3 any bucket other than pass/skipping blocks with the single reason "CI block
 latest run of each check only. Runs are keyed by (``workflow``, ``name``); among several runs of one
 key the latest by ``completedAt`` (else ``startedAt``) decides, so a failed run followed by a passing
 rerun does not block (see ``latest_runs``). A PR with no checks passes.
+Stack-root rule (Phase 3b): when the PR's own base has no required checks (a stacked PR's base is another
+PR's unprotected head branch), the base chain is walked through open PRs matched by head branch name only
+(``_find_stack_root``) up to the default branch. Only the check names required at the root PR are then
+evaluated on this PR; a required name with no run on it is not passing, and an empty required set with no
+checks passes. With no stack, or a root with no required checks, all checks are evaluated as before. OD-A: more
+than one open PR for one head name is ambiguous and fails closed (READ_FAILED). A walk deeper than
+``_MAX_STACK_DEPTH``, any read failure, malformed output, or pending required checks at the root also fail
+closed. A PR whose own base has required checks makes no walk calls.
 
 FR-6.4: approval idempotency uses a new tri-state read (``_read_approval_state``) instead of
 ``review_requested._has_user_approved`` (which returns False on a read error); a read failure
@@ -266,6 +274,7 @@ _NO_CHECKS_TEXT = "no checks reported"
 _PASSING_BUCKETS = frozenset({"pass", "skipping"})
 _MAX_NAMED_CHECKS = 10
 _UNNAMED_CHECK = "<unnamed>"
+_MAX_STACK_DEPTH = 10
 
 
 class Check(NamedTuple):
@@ -429,24 +438,128 @@ def _read_default_branch(repo: str, env: dict) -> str | None:
     return name if isinstance(name, str) and name else None
 
 
+def _open_prs_with_head(repo: str, branch: str, env: dict) -> list[dict] | None:
+    """Open PRs whose head branch is ``branch`` (name only, D-5), as ``{number, baseRefName}``; None on failure."""
+    args = ["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number,baseRefName"]
+    try:
+        result = _gh(args, env)
+    except subprocess.TimeoutExpired:
+        logger.exception("gh pr list timed out for head %s", branch)
+        return None
+    if result.returncode != 0:
+        logger.error(
+            "gh pr list --head %s failed (exit %d): %s", branch, result.returncode, _text(result.stderr).strip()
+        )
+        return None
+    try:
+        prs = json.loads(_text(result.stdout))
+    except ValueError:
+        return None
+    if not isinstance(prs, list):
+        return None
+    for pr in prs:
+        if not (isinstance(pr, dict) and isinstance(pr.get("number"), int) and isinstance(pr.get("baseRefName"), str)):
+            return None
+    return prs
+
+
+def _find_stack_root(repo: str, base_branch: str, default_branch: str, env: dict) -> tuple[bool, int | None]:
+    """Walk up the open-PR stack from ``base_branch``. Returns (ok, root PR number or None when there is no stack).
+
+    Each step finds the open PR whose head is the current branch and moves to that PR's base. It stops at the
+    default branch or when no open PR has the branch as head. ok is False (fail closed) on a read failure,
+    malformed output, several PRs for one head name (OD-A), or more than ``_MAX_STACK_DEPTH`` steps.
+    """
+    branch, root = base_branch, None
+    for _ in range(_MAX_STACK_DEPTH):
+        if not branch or branch == default_branch:
+            return True, root
+        prs = _open_prs_with_head(repo, branch, env)
+        if prs is None:
+            return False, None
+        if not prs:
+            return True, root
+        if len(prs) > 1:
+            logger.error("head branch %s has %d open PRs; stack root is ambiguous", branch, len(prs))
+            return False, None
+        root, branch = prs[0]["number"], prs[0]["baseRefName"]
+    if branch and branch != default_branch:
+        logger.error("stack deeper than %d PRs from base %s; giving up", _MAX_STACK_DEPTH, base_branch)
+        return False, None
+    return True, root
+
+
+def _read_root_required_names(repo: str, root: int, env: dict) -> set[str] | None:
+    """Required check names of the root PR. Empty set = no required checks. None = read failure (incl. pending)."""
+    args = ["pr", "checks", str(root), "--repo", repo, "--required", "--json", "name"]
+    try:
+        result = _gh(args, env)
+    except subprocess.TimeoutExpired:
+        logger.exception("gh pr checks timed out for stack root #%d", root)
+        return None
+    stderr = _text(result.stderr)
+    if result.returncode == 1 and _NO_REQUIRED_CHECKS_TEXT in stderr:
+        return set()
+    if result.returncode != 0:  # includes exit 8 (pending required checks at the root): fail closed
+        logger.error("stack root #%d: gh pr checks failed (exit %d): %s", root, result.returncode, stderr.strip())
+        return None
+    try:
+        entries = json.loads(_text(result.stdout))
+    except ValueError:
+        return None
+    if not isinstance(entries, list) or not all(
+        isinstance(e, dict) and isinstance(e.get("name"), str) for e in entries
+    ):
+        return None
+    return {e["name"] for e in entries}
+
+
+def _fallback_checks(
+    repo: str, pr_number: int, base_branch: str, default_branch: str, env: dict
+) -> tuple[list[Check], list[str]] | None:
+    """Checks to judge when the PR's own base has no required checks: (checks, missing required names), None = failure.
+
+    With a stack root that has required checks, only those names count (a name with no run on the PR is
+    missing). Otherwise all checks of the PR count, as before.
+    """
+    ok, root = _find_stack_root(repo, base_branch, default_branch, env)
+    if not ok:
+        return None
+    required = _read_root_required_names(repo, root, env) if root is not None else set()
+    if required is None:
+        return None
+    checks = _read_buckets(repo, pr_number, env, required=False)
+    if checks is None:
+        return None
+    if not required:
+        return checks, []
+    logger.info("PR #%d: required checks from stack root #%s: %s", pr_number, root, sorted(required))
+    return [c for c in checks if c.name in required], sorted(required - {c.name for c in checks})
+
+
 def _check_ci(repo: str, pr_number: int, base_branch: str, env: dict) -> SafetyResult | None:
     """None when CI allows approval; otherwise the SKIP or READ_FAILED result (head SHA not set).
 
     ``base_branch`` is the PR's base (``baseRefName``). The repository default branch is looked up eagerly
-    (an extra ``gh repo view`` call); a failed lookup is READ_FAILED. Both are carried for the stack-root walk
-    (Phase 3b) and do not affect the outcome of any other path yet.
-    ``ci_fix._read_failing_checks`` is not aligned with that walk yet; that decision is deferred to Phase 3b.
+    (an extra ``gh repo view`` call); a failed lookup is READ_FAILED. When the PR's own base has required
+    checks they are judged and nothing else is read. Otherwise ``_fallback_checks`` applies the stack-root rule.
+    ``ci_fix._read_failing_checks`` deliberately does not follow the stack-root rule (see docs/commands/ci-fix.md).
     """
     default_branch = _read_default_branch(repo, env)
     if default_branch is None:
         return SafetyResult(SafetyStatus.READ_FAILED, "default branch read failed")
     logger.debug("PR #%d: checking CI (base %s, default branch %s)", pr_number, base_branch, default_branch)
     checks = _read_buckets(repo, pr_number, env, required=True)
+    missing: list[str] = []
     if checks is not None and not checks:
-        logger.info("PR #%d: no required checks, falling back to all checks", pr_number)
-        checks = _read_buckets(repo, pr_number, env, required=False)
+        logger.info("PR #%d: no required checks on base, looking for a stack root", pr_number)
+        fallback = _fallback_checks(repo, pr_number, base_branch, default_branch, env)
+        checks, missing = fallback if fallback is not None else (None, [])
     if checks is None:
         return SafetyResult(SafetyStatus.READ_FAILED, "checks read failed")
+    if missing:
+        logger.info("PR #%d: required checks with no run: %s", pr_number, ", ".join(missing))
+        return SafetyResult(SafetyStatus.SKIP, REASON_CI_BLOCKED)
     if not checks:
         logger.info("PR #%d: no checks, nothing blocks approval", pr_number)
         return None

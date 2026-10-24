@@ -230,6 +230,11 @@ def _read_failing_checks(repo: str, pr_number: int, env: dict) -> list[_Check] |
 
     Only the latest run of each check counts (``latest_runs``, the same rule as ``_check_ci``), so a failed
     run followed by a passing rerun is not returned.
+
+    OD-B: deliberately NOT aligned with the stack-root rule of ``_check_ci`` (Phase 3b). For a stacked PR whose
+    base has no required checks this still falls back to all checks, so it may try to fix a non-required
+    failure. That is harmless: ci-fix only runs after ``_check_ci`` blocked, and fixing a real failing check
+    on the PR is still a valid fix. Aligning would add a stack walk and a default-branch lookup here.
     """
     base = ["pr", "checks", str(pr_number), "--repo", repo, "--json", "name,bucket,link,workflow,startedAt,completedAt"]
     result = _gh([*base, "--required"], env)

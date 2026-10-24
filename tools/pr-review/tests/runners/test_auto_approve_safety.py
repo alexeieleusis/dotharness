@@ -13,6 +13,7 @@ from harness.runners.auto_approve_github import (
     REASON_MERGEABLE_UNKNOWN,
     REASON_NOT_OPEN,
     SafetyStatus,
+    _check_ci,
     check_approval_safety,
 )
 
@@ -55,8 +56,14 @@ def repo_json(name="main"):
     return json.dumps({"defaultBranchRef": {"name": name}}).encode()
 
 
-def run(view=None, required=None, allc=None, reviews=(), user=ME, repo=None):
-    """view/required/allc/repo: CompletedProcess mocks (or an exception for repo). reviews: list or None (read failed)."""
+def run(view=None, required=None, allc=None, reviews=(), user=ME, repo=None, heads=None, roots=None):
+    """view/required/allc/repo: CompletedProcess mocks (or an exception for repo). reviews: list or None (read failed).
+
+    heads: {branch: mock} for ``pr list --head``; roots: {pr number: mock} for ``pr checks <n> --required`` of
+    a stack root. Calls for PR 5 (the PR under test) use required/allc; a missing heads key means no open PR.
+    """
+    heads = heads or {}
+    roots = roots or {}
     repo = repo or proc(out=repo_json())
     view = view or proc(out=pr_json())
     required = required or proc(out=buckets("pass"))
@@ -71,6 +78,10 @@ def run(view=None, required=None, allc=None, reviews=(), user=ME, repo=None):
             if isinstance(repo, Exception):
                 raise repo
             return repo
+        if cmd[1:3] == ["pr", "list"]:
+            return heads.get(cmd[cmd.index("--head") + 1], proc(out=b"[]"))
+        if cmd[1:3] == ["pr", "checks"] and cmd[3] != "5":
+            return roots[int(cmd[3])]
         return required if "--required" in cmd else allc
 
     page = None if reviews is None else list(reviews)
@@ -377,3 +388,191 @@ def test_checks_requested_with_run_fields():
     _, calls = run()
     (cmd,) = [c for c in calls if "--required" in c]
     assert cmd[cmd.index("--json") + 1] == "name,bucket,workflow,startedAt,completedAt"
+
+
+# --- stack-root walk (Phase 3b) ---
+
+STACK_VIEW = proc(out=pr_json(baseRefName="stack-a"))
+
+
+def pr_list(*pairs):
+    """pairs: (number, baseRefName)."""
+    return proc(out=json.dumps([{"number": n, "baseRefName": b} for n, b in pairs]).encode())
+
+
+def walk(heads=None, roots=None, **kw):
+    kw.setdefault("view", STACK_VIEW)
+    kw.setdefault("required", proc(1, b"", NO_REQ))
+    return run(
+        heads=heads or {"stack-a": pr_list((4, "main"))}, roots=roots or {4: proc(out=named(("build", "x")))}, **kw
+    )
+
+
+def no_post(calls):
+    return not any(c[1:3] == ["pr", "review"] for c in calls)
+
+
+def test_stacked_pr_with_only_non_required_failures_is_approved():
+    allc = proc(out=named(("build", "pass"), ("lint", "fail")))
+    res, calls = walk(allc=allc)
+    assert res.status is SafetyStatus.SAFE
+    assert res.head_sha == HEAD
+    assert any(c[1:3] == ["pr", "list"] for c in calls)
+    (root_read,) = [c for c in calls if c[1:3] == ["pr", "checks"] and c[3] == "4"]
+    assert root_read[4:] == ["--repo", "o/r", "--required", "--json", "name"]
+
+
+def test_walk_follows_chain_to_the_root():
+    heads = {"stack-a": pr_list((3, "stack-b")), "stack-b": pr_list((4, "main"))}
+    res, calls = walk(heads=heads, allc=proc(out=named(("build", "pass"), ("lint", "fail"))))
+    assert res.status is SafetyStatus.SAFE
+    assert [c[c.index("--head") + 1] for c in calls if c[1:3] == ["pr", "list"]] == ["stack-a", "stack-b"]
+    assert not any(c[1:3] == ["pr", "checks"] and c[3] == "3" for c in calls)
+
+
+def test_required_at_root_failing_on_pr_is_skipped_and_named(caplog):
+    with caplog.at_level(logging.INFO):
+        res, calls = walk(allc=proc(out=named(("build", "fail"), ("lint", "pass"))))
+    assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
+    assert any("failing checks: build(fail)" in r.getMessage() for r in caplog.records)
+    assert no_post(calls)
+
+
+def test_required_check_pending_on_pr_blocks():
+    res, _ = walk(allc=proc(8, named(("build", "pending"))))
+    assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
+
+
+def test_own_base_with_required_checks_makes_no_walk_calls():
+    res, calls = run(view=STACK_VIEW, required=proc(out=buckets("pass")))
+    assert res.status is SafetyStatus.SAFE
+    assert sum("checks" in c for c in calls) == 1
+    assert not any(c[1:3] == ["pr", "list"] for c in calls)
+    assert len(calls) == 3  # pr view, repo view, required checks
+
+
+def test_base_is_default_branch_falls_back_to_all_without_walk():
+    res, calls = run(
+        view=proc(out=pr_json(baseRefName="main")),
+        required=proc(1, b"", NO_REQ),
+        allc=proc(out=buckets("pass", "fail")),
+    )
+    assert res.status is SafetyStatus.SKIP
+    assert not any(c[1:3] == ["pr", "list"] for c in calls)
+
+
+def test_no_open_pr_for_base_falls_back_to_all_checks():
+    res, _ = walk(heads={"x": pr_list()}, allc=proc(out=buckets("pass", "fail")))
+    assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
+    res, _ = walk(heads={"x": pr_list()}, allc=proc(out=buckets("pass", "skipping")))
+    assert res.status is SafetyStatus.SAFE
+
+
+def test_root_without_required_checks_falls_back_to_all():
+    roots = {4: proc(1, b"", NO_REQ)}
+    assert walk(roots=roots, allc=proc(out=buckets("pass", "fail")))[0].reason == REASON_CI_BLOCKED
+    assert walk(roots=roots, allc=proc(out=buckets("pass")))[0].status is SafetyStatus.SAFE
+
+
+def test_walk_read_failures_are_read_failed_without_post():
+    bad_heads = [
+        proc(1, b"", b"boom"),
+        proc(out=b"not json"),
+        proc(out=b'{"a": 1}'),
+        proc(out=b'[{"number": 4}]'),
+        proc(out=b'[{"number": "4", "baseRefName": "main"}]'),
+    ]
+    for bad in bad_heads:
+        res, calls = walk(heads={"stack-a": bad})
+        assert res.status is SafetyStatus.READ_FAILED
+        assert no_post(calls)
+
+
+def test_walk_timeout_is_read_failed():
+    def boom(cmd, **kwargs):
+        if cmd[1:3] == ["pr", "list"]:
+            raise subprocess.TimeoutExpired(cmd, 30)
+        return proc(out=repo_json()) if cmd[1:3] == ["repo", "view"] else proc(1, b"", NO_REQ)
+
+    with patch("harness.runners.auto_approve_github.run_cmd", side_effect=boom):
+        res = _check_ci("o/r", 5, "stack-a", {})
+    assert res is not None
+    assert res.status is SafetyStatus.READ_FAILED
+
+
+def test_ambiguous_head_match_fails_closed():
+    res, calls = walk(heads={"stack-a": pr_list((4, "main"), (6, "main"))})
+    assert res.status is SafetyStatus.READ_FAILED
+    assert no_post(calls)
+
+
+def test_root_read_failures_are_read_failed_without_post():
+    bad_roots = [
+        proc(1, b"", b"HTTP 502"),
+        proc(2, b"", b"x"),
+        proc(8, named(("build", "pending"))),
+        proc(8, b""),
+        proc(out=b"not json"),
+        proc(out=b'{"a": 1}'),
+        proc(out=b'[{"nom": "x"}]'),
+    ]
+    for bad in bad_roots:
+        res, calls = walk(roots={4: bad})
+        assert res.status is SafetyStatus.READ_FAILED
+        assert no_post(calls)
+
+
+def test_default_branch_lookup_failure_skips_before_walk():
+    res, calls = walk(repo=proc(1, b"", b"boom"))
+    assert res.status is SafetyStatus.READ_FAILED
+    assert not any(c[1:3] == ["pr", "list"] for c in calls)
+    assert no_post(calls)
+
+
+def test_depth_cap_fails_closed_and_ten_is_allowed():
+    def chain(n):
+        heads = {f"b{i}": pr_list((100 + i, f"b{i + 1}")) for i in range(n)}
+        heads[f"b{n - 1}"] = pr_list((100 + n - 1, "main"))
+        return heads, {100 + n - 1: proc(out=named(("build", "x")))}
+
+    ok_heads, ok_roots = chain(10)
+    res, calls = walk(
+        view=proc(out=pr_json(baseRefName="b0")),
+        heads=ok_heads,
+        roots=ok_roots,
+        allc=proc(out=named(("build", "pass"))),
+    )
+    assert res.status is SafetyStatus.SAFE
+    assert sum(c[1:3] == ["pr", "list"] for c in calls) == 10
+
+    heads, roots = chain(11)
+    res, calls = walk(view=proc(out=pr_json(baseRefName="b0")), heads=heads, roots=roots)
+    assert res.status is SafetyStatus.READ_FAILED
+    assert sum(c[1:3] == ["pr", "list"] for c in calls) == 10
+    assert no_post(calls)
+
+    cyc = {"stack-a": pr_list((4, "stack-b")), "stack-b": pr_list((3, "stack-a"))}
+    res, calls = walk(heads=cyc)
+    assert res.status is SafetyStatus.READ_FAILED
+
+
+def test_required_name_with_no_run_on_pr_does_not_pass(caplog):
+    roots = {4: proc(out=named(("build", "x"), ("test", "x")))}
+    with caplog.at_level(logging.INFO):
+        res, _ = walk(roots=roots, allc=proc(out=named(("build", "pass"), ("lint", "pass"))))
+    assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
+    assert any("no run: test" in r.getMessage() for r in caplog.records)
+    res, _ = walk(allc=proc(1, b"", NO_CHECKS))
+    assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
+
+
+def test_superseded_failed_run_of_required_name_does_not_block():
+    allc = proc(out=runs(("build", "fail", "W", T1, T1), ("build", "pass", "W", T2, T2)))
+    assert walk(allc=allc)[0].status is SafetyStatus.SAFE
+
+
+def test_empty_required_set_and_no_pr_checks_passes():
+    for roots in ({4: proc(1, b"", NO_REQ)}, {4: proc(out=b"[]")}):
+        for allc in (proc(1, b"", NO_CHECKS), proc(out=buckets())):
+            res, _ = walk(roots=roots, allc=allc)
+            assert res.status is SafetyStatus.SAFE
