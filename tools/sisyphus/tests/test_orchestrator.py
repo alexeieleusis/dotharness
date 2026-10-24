@@ -815,6 +815,15 @@ def test_dump_spf_config_round_trips() -> None:
     assert tomllib.loads(dump_spf_config(data)) == data
 
 
+def test_dump_spf_config_round_trips_nested_tables_quoted_keys_and_datetimes() -> None:
+    src = (
+        'when = 2024-01-02T03:04:05Z\n[build]\ncommands = ["make"]\n[build.env]\nFOO = "1"\n"my key" = "x"\n"a.b" = 1\n'
+        "[[steps]]\nn = 1\n[[steps]]\nn = 2\n"
+    )
+    data = tomllib.loads(src)
+    assert tomllib.loads(dump_spf_config(data)) == data
+
+
 def test_missing_spf_config_writes_no_record(world: World) -> None:
     (world.repo / ".spec-prism-flow.toml").unlink()
     result = world.run()

@@ -21,7 +21,8 @@ import tomllib
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext, suppress
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+from datetime import time as dtime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -204,27 +205,66 @@ def plan_dir_name(item: str) -> str:
     return f"plan-{slug}-{hashlib.sha256(item.encode()).hexdigest()[:8]}"
 
 
+_BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _toml_key(key: str) -> str:
+    return key if _BARE_KEY.fullmatch(key) else _toml_string(key)
+
+
+def _toml_string(value: str) -> str:
+    return json.dumps(value).replace("\x7f", "\\u007f")  # a JSON string is a valid TOML basic string
+
+
 def _toml_value(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, (int, float)):
+    if isinstance(value, int):
         return repr(value)
+    if isinstance(value, float):
+        if value != value:
+            return "nan"
+        return {float("inf"): "inf", float("-inf"): "-inf"}.get(value, repr(value))
     if isinstance(value, str):
-        return json.dumps(value)  # a JSON string is a valid TOML basic string
+        return _toml_string(value)
+    if isinstance(value, (datetime, date, dtime)):
+        return value.isoformat()
     if isinstance(value, list):
         return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{_toml_key(k)} = {_toml_value(v)}" for k, v in value.items()) + "}"
     raise OrchestratorError(f"cannot write a {type(value).__name__} value to the spec-prism-flow config")
 
 
-def dump_spf_config(data: dict[str, Any]) -> str:
-    """Serialise a one-level-deep config (tables of scalars and lists) back to TOML."""
-    lines: list[str] = []
+def _dump_table(data: dict[str, Any], path: tuple[str, ...], lines: list[str]) -> None:
+    """Append ``data``'s scalars as ``key = value`` lines, then recurse into sub-tables and arrays of tables."""
     for key, value in data.items():
-        if not isinstance(value, dict):
-            lines.append(f"{key} = {_toml_value(value)}")
-    for table, values in data.items():
-        if isinstance(values, dict):
-            lines += ["", f"[{table}]", *(f"{k} = {_toml_value(v)}" for k, v in values.items())]
+        if not _is_table(value) and not _is_table_array(value):
+            lines.append(f"{_toml_key(key)} = {_toml_value(value)}")
+    for key, value in data.items():
+        sub = (*path, key)
+        header = ".".join(_toml_key(k) for k in sub)
+        if _is_table(value):
+            lines += ["", f"[{header}]"]
+            _dump_table(value, sub, lines)
+        elif _is_table_array(value):
+            for item in value:
+                lines += ["", f"[[{header}]]"]
+                _dump_table(item, sub, lines)
+
+
+def _is_table(value: object) -> bool:
+    return isinstance(value, dict)
+
+
+def _is_table_array(value: object) -> bool:
+    return isinstance(value, list) and bool(value) and all(isinstance(v, dict) for v in value)
+
+
+def dump_spf_config(data: dict[str, Any]) -> str:
+    """Serialise a parsed config back to TOML: nested tables, arrays of tables, quoted keys and datetimes."""
+    lines: list[str] = []
+    _dump_table(data, (), lines)
     return "\n".join(lines).strip() + "\n"
 
 
