@@ -409,15 +409,38 @@ def _read_buckets(repo: str, pr_number: int, env: dict, required: bool) -> list[
     return _parse_buckets(_text(result.stdout))
 
 
+def _read_default_branch(repo: str, env: dict) -> str | None:
+    """The repository default branch (``gh repo view --json defaultBranchRef``), or None on any failure.
+
+    Failure means a non-zero exit, a timeout, unparseable JSON, or a missing or empty ``defaultBranchRef.name``.
+    """
+    try:
+        result = _gh(["repo", "view", repo, "--json", "defaultBranchRef"], env)
+    except subprocess.TimeoutExpired:
+        logger.exception("gh repo view timed out for %s", repo)
+        return None
+    if result.returncode != 0:
+        logger.error("gh repo view failed for %s (exit %d): %s", repo, result.returncode, _text(result.stderr).strip())
+        return None
+    try:
+        name = json.loads(_text(result.stdout))["defaultBranchRef"]["name"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return name if isinstance(name, str) and name else None
+
+
 def _check_ci(repo: str, pr_number: int, base_branch: str, env: dict) -> SafetyResult | None:
     """None when CI allows approval; otherwise the SKIP or READ_FAILED result (head SHA not set).
 
-    ``base_branch`` is the PR's base (``baseRefName``). It is carried for the stack-root walk (Phase 3b) and
-    does not affect the outcome yet. The repository default branch is deliberately not looked up here: Phase 3b
-    resolves it lazily, only on the no-required-checks path, so this path makes no extra gh call.
+    ``base_branch`` is the PR's base (``baseRefName``). The repository default branch is looked up eagerly
+    (an extra ``gh repo view`` call); a failed lookup is READ_FAILED. Both are carried for the stack-root walk
+    (Phase 3b) and do not affect the outcome of any other path yet.
     ``ci_fix._read_failing_checks`` is not aligned with that walk yet; that decision is deferred to Phase 3b.
     """
-    logger.debug("PR #%d: checking CI (base %s)", pr_number, base_branch)
+    default_branch = _read_default_branch(repo, env)
+    if default_branch is None:
+        return SafetyResult(SafetyStatus.READ_FAILED, "default branch read failed")
+    logger.debug("PR #%d: checking CI (base %s, default branch %s)", pr_number, base_branch, default_branch)
     checks = _read_buckets(repo, pr_number, env, required=True)
     if checks is not None and not checks:
         logger.info("PR #%d: no required checks, falling back to all checks", pr_number)

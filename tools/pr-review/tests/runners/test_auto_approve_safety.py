@@ -1,5 +1,6 @@
 import json
 import logging
+import subprocess
 from unittest.mock import MagicMock, patch
 
 from harness.runners.auto_approve_github import (
@@ -50,8 +51,13 @@ def proc(code=0, out=b"", err=b""):
     return MagicMock(returncode=code, stdout=out, stderr=err)
 
 
-def run(view=None, required=None, allc=None, reviews=(), user=ME):
-    """view/required/allc: CompletedProcess mocks. reviews: list or None (read failed)."""
+def repo_json(name="main"):
+    return json.dumps({"defaultBranchRef": {"name": name}}).encode()
+
+
+def run(view=None, required=None, allc=None, reviews=(), user=ME, repo=None):
+    """view/required/allc/repo: CompletedProcess mocks (or an exception for repo). reviews: list or None (read failed)."""
+    repo = repo or proc(out=repo_json())
     view = view or proc(out=pr_json())
     required = required or proc(out=buckets("pass"))
     allc = allc or proc(out=buckets())
@@ -61,6 +67,10 @@ def run(view=None, required=None, allc=None, reviews=(), user=ME):
         calls.append(cmd)
         if cmd[1:3] == ["pr", "view"]:
             return view
+        if cmd[1:3] == ["repo", "view"]:
+            if isinstance(repo, Exception):
+                raise repo
+            return repo
         return required if "--required" in cmd else allc
 
     page = None if reviews is None else list(reviews)
@@ -82,6 +92,37 @@ def test_pr_view_requests_base_branch_and_checks_sequence_unchanged():
     assert "baseRefName" in calls[0][calls[0].index("--json") + 1]
     assert sum("checks" in c for c in calls) == 1
     assert "--required" in calls[-1]
+
+
+def test_default_branch_lookup_success_keeps_result_and_checks_calls():
+    result, calls = run(repo=proc(out=repo_json("trunk")))
+    assert result.status is SafetyStatus.SAFE
+    (lookup,) = [c for c in calls if c[1:3] == ["repo", "view"]]
+    assert lookup[3:] == ["o/r", "--json", "defaultBranchRef"]
+    assert sum("checks" in c for c in calls) == 1
+
+
+def test_default_branch_reaches_check_ci(caplog):
+    with caplog.at_level(logging.DEBUG):
+        run(view=proc(out=pr_json(baseRefName="stack-a")), repo=proc(out=repo_json("trunk")))
+    assert any("base stack-a, default branch trunk" in r.getMessage() for r in caplog.records)
+
+
+def test_default_branch_lookup_failure_is_read_failed_without_approval():
+    bad = [
+        proc(code=1, err=b"boom"),
+        proc(out=b"not json"),
+        proc(out=b"{}"),
+        proc(out=repo_json("")),
+        proc(out=json.dumps({"defaultBranchRef": None}).encode()),
+        proc(out=json.dumps({"defaultBranchRef": {"name": 7}}).encode()),
+        subprocess.TimeoutExpired(["gh"], 30),
+    ]
+    for repo in bad:
+        result, calls = run(repo=repo)
+        assert result.status is SafetyStatus.READ_FAILED
+        assert not any("checks" in c for c in calls)
+        assert not any(c[1:3] == ["pr", "review"] for c in calls)
 
 
 def test_required_pass_and_skipping_safe():
