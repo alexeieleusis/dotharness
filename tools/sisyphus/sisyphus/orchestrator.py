@@ -193,10 +193,15 @@ def branch_name(item: str) -> str:
 
 
 def plan_dir_name(item: str) -> str:
-    """Per-item plan directory name: ``plan-<n>`` for ``#<n>``, else ``plan-<slug of the reference>``."""
+    """Per-item plan directory name: ``plan-<n>`` for ``#<n>``, else ``plan-<slug>-<8 hex of sha256>``.
+
+    The slug is truncated, so non-numeric references carry a hash of the full reference to keep distinct items apart.
+    """
     match = re.fullmatch(r"#?(\d+)", item.strip())
-    slug = match.group(1) if match else re.sub(r"[^a-z0-9]+", "-", item.lower()).strip("-")[:40].strip("-")
-    return f"plan-{slug or 'item'}"
+    if match:
+        return f"plan-{match.group(1)}"
+    slug = re.sub(r"[^a-z0-9]+", "-", item.lower()).strip("-")[:40].strip("-") or "item"
+    return f"plan-{slug}-{hashlib.sha256(item.encode()).hexdigest()[:8]}"
 
 
 def _toml_value(value: object) -> str:

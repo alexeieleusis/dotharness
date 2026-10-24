@@ -800,7 +800,14 @@ def test_item_config_points_at_this_items_plan_dir_not_the_repos(world: World) -
 def test_plan_dir_name() -> None:
     assert plan_dir_name("#118") == "plan-118"
     assert plan_dir_name("118") == "plan-118"
-    assert plan_dir_name("owner/repo#7") == "plan-owner-repo-7"
+    assert plan_dir_name("owner/repo#7").startswith("plan-owner-repo-7-")
+
+
+def test_plan_dir_name_distinguishes_refs_sharing_a_long_prefix() -> None:
+    prefix = "https://linear.app/acme/issue/ENG-"
+    a, b = plan_dir_name(f"{prefix}1/very-long-title"), plan_dir_name(f"{prefix}2/very-long-title")
+    assert a != b
+    assert plan_dir_name("owner/repo#7") != plan_dir_name("other/repo#7")
 
 
 def test_dump_spf_config_round_trips() -> None:
