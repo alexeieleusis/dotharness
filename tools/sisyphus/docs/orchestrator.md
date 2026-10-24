@@ -54,7 +54,7 @@ stage finished.
 ## Gate record and gate commands
 
 After the PR exists, and again after every ci-fix push, the orchestrator reads `build.commands` read-only from the
-target repository's `.spec-prism-flow.toml`. The config path is `options.spf_config_path` (default
+item's `.spec-prism-flow.toml` (see below), a copy of `options.spf_config_path` (default
 `<repo_dir>/.spec-prism-flow.toml`). The orchestrator reads it with stdlib `tomllib`. It runs each command in each
 package directory the change touched, using the injected subprocess runner at the pushed head. A package directory is the nearest ancestor of a changed file (from
 `git diff --name-only origin/<base>...HEAD`) that holds `Makefile`, `pyproject.toml`, `package.json`, `Cargo.toml` or
@@ -82,8 +82,16 @@ section says so. Commands are never guessed.
 - `clock: Callable[[], float]` (default `time.monotonic`) feeds `LimitTracker`.
 
 `OrchestratorOptions` carries `base_branch`, `repo_slug`, `default_branch`, `ci_fix`, `spf_config_path`, `phase_dir`,
-`state_dir`, `lock_dir`, `home` and `checkout_root`. `phase_dir` defaults to `plan.phase_dir` from the
-`.spec-prism-flow.toml` (relative paths resolve against `[project].repo_dir`).
+`state_dir`, `lock_dir`, `home` and `checkout_root`. `phase_dir` defaults to `<workspace_dir>/plan-<n>/phases`.
+
+### Per-item spec-prism-flow config
+
+The repository's `.spec-prism-flow.toml` is shared by every item, so its `plan.workspace_dir` and `plan.phase_dir`
+belong to whichever item ran last. Before each agent stage, the leaf count and the gate commands, the orchestrator
+writes `<workspace_dir>/plan-<n>/.spec-prism-flow.toml`: the repository's file (`spf_config_path`) with `plan.workspace_dir`
+set to `<workspace_dir>/plan-<n>` and `plan.phase_dir` set to `phase_dir` or `<workspace_dir>/plan-<n>/phases`. The agents
+receive this path as `phase config path`, and the orchestrator reads `build.commands` and counts leaves from it. The
+repository's file is never modified.
 
 ## Locking, digest and reruns
 
