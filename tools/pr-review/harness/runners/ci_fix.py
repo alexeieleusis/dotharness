@@ -39,6 +39,7 @@ from harness.runners.auto_approve_github import (
     _read_pr_state,
     _state_skip_reason,
     _text,
+    latest_runs,
     list_own_open_prs,
 )
 from harness.runners.common import (
@@ -225,8 +226,12 @@ def _prune_counters(repo_slug: str, open_pr_numbers: set[int]) -> None:
 
 
 def _read_failing_checks(repo: str, pr_number: int, env: dict) -> list[_Check] | None:
-    """Failing required checks (all checks when the PR has none required). None = unreadable output."""
-    base = ["pr", "checks", str(pr_number), "--repo", repo, "--json", "name,bucket,link,workflow"]
+    """Failing required checks (all checks when the PR has none required). None = unreadable output.
+
+    Only the latest run of each check counts (``latest_runs``, the same rule as ``_check_ci``), so a failed
+    run followed by a passing rerun is not returned.
+    """
+    base = ["pr", "checks", str(pr_number), "--repo", repo, "--json", "name,bucket,link,workflow,startedAt,completedAt"]
     result = _gh([*base, "--required"], env)
     if result.returncode == 1 and "no required checks" in _text(result.stderr):
         result = _gh(base, env)
@@ -241,8 +246,11 @@ def _read_failing_checks(repo: str, pr_number: int, env: dict) -> list[_Check] |
         return None
     if not isinstance(checks, list) or not all(isinstance(c, dict) for c in checks):
         return None
+    latest = latest_runs(checks)
+    if latest is None:
+        return None
     failing = []
-    for c in checks:
+    for c in latest:
         if c.get("bucket") == "fail":
             name, link = c.get("name"), c.get("link")
             if not isinstance(name, str) or not isinstance(link, str):

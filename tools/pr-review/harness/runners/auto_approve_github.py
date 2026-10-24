@@ -10,7 +10,10 @@ the next run, because approving on partial information is the unsafe direction; 
 CONFLICTING is named by D-16 but UNKNOWN is not a positive "no conflicts" signal. OD-2 an
 APPROVED review by the acting account on ANY commit counts as "already approved" (FR-6.4,
 D-14): re-approval after a later push is manual.
-OD-3 any bucket other than pass/skipping blocks with the single reason "CI blocked".
+OD-3 any bucket other than pass/skipping blocks with the single reason "CI blocked", judged on the
+latest run of each check only. Runs are keyed by (``workflow``, ``name``); among several runs of one
+key the latest by ``completedAt`` (else ``startedAt``) decides, so a failed run followed by a passing
+rerun does not block (see ``latest_runs``). A PR with no checks and no workflows passes.
 
 FR-6.4: approval idempotency uses a new tri-state read (``_read_approval_state``) instead of
 ``review_requested._has_user_approved`` (which returns False on a read error); a read failure
@@ -36,7 +39,7 @@ import logging
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import NamedTuple
 
@@ -316,10 +319,60 @@ def list_own_open_prs(
     return sorted(prs, key=lambda p: p["number"])
 
 
+_ZERO_YEAR = 1  # gh reports an unset completedAt as 0001-01-01T00:00:00Z
+
+
+def _check_ts(value: object) -> datetime | None:
+    """A usable check timestamp (aware, not the zero value), else None."""
+    ts = _parse_ts(value)
+    if ts is None or ts.year <= _ZERO_YEAR:
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+
+
+def _run_key(entry: dict) -> tuple[str, str]:
+    workflow, name = entry.get("workflow"), entry.get("name")
+    return (workflow if isinstance(workflow, str) else "", name if isinstance(name, str) else "")
+
+
+def latest_runs(entries: list[dict]) -> list[dict] | None:
+    """Keep only the latest run of each check (key = ``workflow`` + ``name``); None = cannot decide (fail closed).
+
+    A key with one run is kept as is and needs no timestamps. For a key with several runs, "latest" is the
+    greatest ``completedAt``, falling back to ``startedAt`` when ``completedAt`` is missing, empty or the zero
+    value; an incomplete run (``startedAt`` only) is placed on the same timeline by its ``startedAt``. A run with
+    neither usable timestamp makes the result None. If the latest run has no ``completedAt`` it is not completed
+    and counts as pending whatever its bucket says. Runs tied for latest are all kept, so a tie blocks when any
+    of them blocks. Entries come back in first-seen key order. gh's real values for pending, queued and skipped
+    runs are unverified; behaviour is pinned by fixtures only.
+    """
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for entry in entries:
+        groups.setdefault(_run_key(entry), []).append(entry)
+    kept: list[dict] = []
+    for runs in groups.values():
+        if len(runs) == 1:
+            kept.extend(runs)
+            continue
+        stamped = []
+        for run in runs:
+            completed = _check_ts(run.get("completedAt"))
+            when = completed or _check_ts(run.get("startedAt"))
+            if when is None:
+                return None
+            stamped.append((when, completed is not None, run))
+        newest = max(when for when, _, _ in stamped)
+        for when, done, run in stamped:
+            if when == newest:
+                kept.append(run if done else {**run, "bucket": "pending"})
+    return kept
+
+
 def _parse_buckets(stdout: str) -> list[Check] | None:
-    """Return every check (name, bucket), or None when the output is not a list of check objects.
+    """Return the latest run of every check (name, bucket), or None when the output is unusable.
 
     ``bucket`` is required; a missing or non-string ``name`` is tolerated and shown as ``<unnamed>``.
+    Superseded runs are dropped by ``latest_runs``; None also when that cannot decide.
     """
     try:
         checks = json.loads(stdout)
@@ -327,19 +380,21 @@ def _parse_buckets(stdout: str) -> list[Check] | None:
         return None
     if not isinstance(checks, list):
         return None
+    if not all(isinstance(c, dict) and isinstance(c.get("bucket"), str) for c in checks):
+        return None
+    latest = latest_runs(checks)
+    if latest is None:
+        return None
     parsed = []
-    for check in checks:
-        bucket = check.get("bucket") if isinstance(check, dict) else None
-        if not isinstance(bucket, str):
-            return None
+    for check in latest:
         name = check.get("name")
-        parsed.append(Check(name if isinstance(name, str) and name else _UNNAMED_CHECK, bucket))
+        parsed.append(Check(name if isinstance(name, str) and name else _UNNAMED_CHECK, check["bucket"]))
     return parsed
 
 
 def _read_buckets(repo: str, pr_number: int, env: dict, required: bool) -> list[Check] | None:
-    """Checks (name, bucket) for the PR. None = read failure; [] with required=True = no required checks."""
-    args = ["pr", "checks", str(pr_number), "--repo", repo, "--json", "bucket,name"]
+    """Latest run of each check (name, bucket) for the PR. None = read failure; [] with required=True = no required checks."""
+    args = ["pr", "checks", str(pr_number), "--repo", repo, "--json", "name,bucket,workflow,startedAt,completedAt"]
     result = _gh([*args, "--required"] if required else args, env)
     stderr = _text(result.stderr)
     if required and result.returncode == 1 and _NO_REQUIRED_CHECKS_TEXT in stderr:

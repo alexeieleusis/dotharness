@@ -33,7 +33,7 @@ exits 0. It does not even take the lock.
    immediately.
 2. Lists the PRs in scope: open, not a draft, authored by the current `gh`
    account, in this repository.
-3. Reads each PR's check status with `gh pr checks`.
+3. Reads each PR's check status with `gh pr checks`. Only the latest run of each check counts, as in [auto-approve](auto-approve.md#safety-conditions), so a failure that a rerun has already fixed is ignored.
 4. For a failed required check, reads the failing job's log with
    `gh run view --log-failed`.
 5. Finds the command that job ran in the workflow file under

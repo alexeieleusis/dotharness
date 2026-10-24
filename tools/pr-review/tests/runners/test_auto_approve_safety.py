@@ -29,11 +29,21 @@ def pr_json(**over):
 
 
 def buckets(*names):
-    return json.dumps([{"bucket": n} for n in names]).encode()
+    return json.dumps([{"name": f"check-{i}", "bucket": n} for i, n in enumerate(names)]).encode()
 
 
 def named(*pairs):
     return json.dumps([{"name": n, "bucket": b} for n, b in pairs]).encode()
+
+
+def runs(*rows):
+    """rows: (name, bucket, workflow, startedAt, completedAt); None fields are omitted."""
+    keys = ("name", "bucket", "workflow", "startedAt", "completedAt")
+    return json.dumps([{k: v for k, v in zip(keys, row, strict=True) if v is not None} for row in rows]).encode()
+
+
+T1, T2, T3 = "2026-01-01T10:00:00Z", "2026-01-01T11:00:00Z", "2026-01-01T12:00:00Z"
+ZERO = "0001-01-01T00:00:00Z"
 
 
 def proc(code=0, out=b"", err=b""):
@@ -248,7 +258,7 @@ def test_failing_check_list_is_capped_with_omitted_count(caplog):
 
 def test_missing_name_is_tolerated_but_missing_bucket_is_not(caplog):
     with caplog.at_level(logging.INFO):
-        res, _ = run(required=proc(out=buckets("fail")))
+        res, _ = run(required=proc(out=b'[{"bucket": "fail"}]'))
     assert res.reason == REASON_CI_BLOCKED
     assert "<unnamed>(fail)" in caplog.text
     res, _ = run(required=proc(out=named(("x", "pass")).replace(b"bucket", b"state")))
@@ -260,3 +270,82 @@ def test_passing_checks_log_no_failing_names(caplog):
         res, _ = run(required=proc(out=named(("lint", "pass"))))
     assert res.status is SafetyStatus.SAFE
     assert "failing checks" not in caplog.text
+
+
+def _ci(*rows):
+    res, calls = run(required=proc(out=runs(*rows)))
+    assert not any(c[1:3] == ["pr", "review"] for c in calls)
+    return res
+
+
+def test_failed_then_passing_rerun_does_not_block():
+    res = _ci(("t", "fail", "W", T1, T1), ("t", "pass", "W", T2, T3))
+    assert res.status is SafetyStatus.SAFE
+
+
+def test_latest_order_independent_of_list_order():
+    res = _ci(("t", "pass", "W", T2, T3), ("t", "fail", "W", T1, T1))
+    assert res.status is SafetyStatus.SAFE
+
+
+def test_passing_then_failed_rerun_blocks():
+    res = _ci(("t", "pass", "W", T1, T1), ("t", "fail", "W", T2, T3))
+    assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
+
+
+def test_pending_rerun_blocks():
+    res = _ci(("t", "fail", "W", T1, T1), ("t", "pending", "W", T2, ZERO))
+    assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
+
+
+def test_latest_started_without_completed_blocks_even_with_pass_bucket():
+    res = _ci(("t", "pass", "W", T1, T1), ("t", "pass", "W", T2, None))
+    assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
+
+
+def test_incomplete_run_compared_by_started_at_against_completed_at():
+    # Incomplete run started before the other run completed: the completed one is later on the timeline.
+    res = _ci(("t", "pending", "W", T1, ZERO), ("t", "pass", "W", T1, T2))
+    assert res.status is SafetyStatus.SAFE
+
+
+def test_duplicate_without_any_timestamp_is_read_failed():
+    for rows in (
+        (("t", "fail", "W", None, None), ("t", "pass", "W", T2, T3)),
+        (("t", "pass", "W", T1, T1), ("t", "pass", "W", None, ZERO)),
+    ):
+        res = _ci(*rows)
+        assert res.status is SafetyStatus.READ_FAILED
+
+
+def test_tie_for_latest_blocks_when_any_blocks():
+    res = _ci(("t", "fail", "W", T1, T2), ("t", "pass", "W", T1, T2))
+    assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
+
+
+def test_same_name_in_different_workflows_are_separate_checks():
+    res = _ci(("t", "fail", "A", T1, T1), ("t", "pass", "B", T2, T3))
+    assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
+
+
+def test_single_runs_need_no_timestamps():
+    res = _ci(("a", "pass", None, None, None), ("b", "skipping", "W", None, None))
+    assert res.status is SafetyStatus.SAFE
+
+
+def test_latest_run_applies_to_fallback_read():
+    allc = proc(out=runs(("t", "fail", "W", T1, T1), ("t", "pass", "W", T2, T3)))
+    res, _ = run(required=proc(1, b"", NO_REQ), allc=allc)
+    assert res.status is SafetyStatus.SAFE
+
+
+def test_malformed_check_output_is_read_failed():
+    for out in (b"not json", b'{"a": 1}', b'["x"]', b'[{"name": "x"}]', b'[{"bucket": 3}]'):
+        res, _ = run(required=proc(out=out))
+        assert res.status is SafetyStatus.READ_FAILED
+
+
+def test_checks_requested_with_run_fields():
+    _, calls = run()
+    (cmd,) = [c for c in calls if "--required" in c]
+    assert cmd[cmd.index("--json") + 1] == "name,bucket,workflow,startedAt,completedAt"

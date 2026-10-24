@@ -66,8 +66,14 @@ Before approving, on the PR's current head commit, the command requires:
 - the PR is open, not a draft, and has no merge conflicts;
 - auto-merge is not enabled on it;
 - CI is green. Required checks are used when the repo has them, otherwise all
-  checks. A pending or failing check blocks approval. A PR with no checks at
-  all passes this condition;
+  checks. Only the latest run of each check counts: runs are matched by
+  workflow and check name, and the one with the latest completion time (or
+  start time when it has not completed) decides. A failed run followed by a
+  passing rerun does not block. A pending, failing or not-yet-completed latest
+  run blocks approval. If a repeated check has a run with no usable timestamp,
+  the checks count as unreadable. A PR with no checks at all passes this
+  condition (unless the repo has workflows, which means checks may not have
+  registered yet and the PR is skipped);
 - the account has not already approved the PR.
 
 If any condition does not hold, no approval is posted and the PR is checked
