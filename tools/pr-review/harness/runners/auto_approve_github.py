@@ -344,6 +344,21 @@ def _run_key(entry: dict) -> tuple[str, str]:
     return (workflow if isinstance(workflow, str) else "", name if isinstance(name, str) else "")
 
 
+def _newest_runs(runs: list[dict]) -> list[dict] | None:
+    """The latest run(s) of one check key; None when a run has no usable timestamp."""
+    if len(runs) == 1:
+        return runs
+    stamped = []
+    for run in runs:
+        completed = _check_ts(run.get("completedAt"))
+        when = completed or _check_ts(run.get("startedAt"))
+        if when is None:
+            return None
+        stamped.append((when, completed is not None, run))
+    newest = max(when for when, _, _ in stamped)
+    return [run if done else {**run, "bucket": "pending"} for when, done, run in stamped if when == newest]
+
+
 def latest_runs(entries: list[dict]) -> list[dict] | None:
     """Keep only the latest run of each check (key = ``workflow`` + ``name``); None = cannot decide (fail closed).
 
@@ -360,20 +375,10 @@ def latest_runs(entries: list[dict]) -> list[dict] | None:
         groups.setdefault(_run_key(entry), []).append(entry)
     kept: list[dict] = []
     for runs in groups.values():
-        if len(runs) == 1:
-            kept.extend(runs)
-            continue
-        stamped = []
-        for run in runs:
-            completed = _check_ts(run.get("completedAt"))
-            when = completed or _check_ts(run.get("startedAt"))
-            if when is None:
-                return None
-            stamped.append((when, completed is not None, run))
-        newest = max(when for when, _, _ in stamped)
-        for when, done, run in stamped:
-            if when == newest:
-                kept.append(run if done else {**run, "bucket": "pending"})
+        newest = _newest_runs(runs)
+        if newest is None:
+            return None
+        kept.extend(newest)
     return kept
 
 
