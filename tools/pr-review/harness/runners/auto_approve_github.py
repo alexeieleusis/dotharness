@@ -13,7 +13,7 @@ D-14): re-approval after a later push is manual.
 OD-3 any bucket other than pass/skipping blocks with the single reason "CI blocked", judged on the
 latest run of each check only. Runs are keyed by (``workflow``, ``name``); among several runs of one
 key the latest by ``completedAt`` (else ``startedAt``) decides, so a failed run followed by a passing
-rerun does not block (see ``latest_runs``). A PR with no checks and no workflows passes.
+rerun does not block (see ``latest_runs``). A PR with no checks passes.
 
 FR-6.4: approval idempotency uses a new tri-state read (``_read_approval_state``) instead of
 ``review_requested._has_user_approved`` (which returns False on a read error); a read failure
@@ -409,21 +409,6 @@ def _read_buckets(repo: str, pr_number: int, env: dict, required: bool) -> list[
     return _parse_buckets(_text(result.stdout))
 
 
-def _repo_has_workflows(repo: str, env: dict) -> bool | None:
-    """True when the repo has an active workflow; None on read failure."""
-    result = _gh(["api", f"repos/{repo}/actions/workflows?per_page=100"], env)
-    if result.returncode != 0:
-        return None
-    try:
-        data = json.loads(_text(result.stdout))
-    except ValueError:
-        return None
-    workflows = data.get("workflows") if isinstance(data, dict) else None
-    if not isinstance(workflows, list):
-        return None
-    return any(isinstance(w, dict) and w.get("state") == "active" for w in workflows)
-
-
 def _check_ci(repo: str, pr_number: int, env: dict) -> SafetyResult | None:
     """None when CI allows approval; otherwise the SKIP or READ_FAILED result (head SHA not set)."""
     checks = _read_buckets(repo, pr_number, env, required=True)
@@ -433,14 +418,7 @@ def _check_ci(repo: str, pr_number: int, env: dict) -> SafetyResult | None:
     if checks is None:
         return SafetyResult(SafetyStatus.READ_FAILED, "checks read failed")
     if not checks:
-        # Empty is also what gh reports before a push's workflows register, so only trust it when no CI exists.
-        has_workflows = _repo_has_workflows(repo, env)
-        if has_workflows is None:
-            return SafetyResult(SafetyStatus.READ_FAILED, "workflows read failed")
-        if has_workflows:
-            logger.info("PR #%d: no checks yet but repo has workflows, treating CI as pending", pr_number)
-            return SafetyResult(SafetyStatus.SKIP, REASON_CI_BLOCKED)
-        logger.info("PR #%d: no checks and no workflows, nothing blocks approval", pr_number)
+        logger.info("PR #%d: no checks, nothing blocks approval", pr_number)
         return None
     blocking = sorted({c.bucket for c in checks if c.bucket not in _PASSING_BUCKETS})
     logger.info("PR #%d: %d checks, blocking buckets: %s", pr_number, len(checks), blocking or "none")

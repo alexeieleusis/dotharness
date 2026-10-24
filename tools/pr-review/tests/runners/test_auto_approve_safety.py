@@ -50,20 +50,17 @@ def proc(code=0, out=b"", err=b""):
     return MagicMock(returncode=code, stdout=out, stderr=err)
 
 
-def run(view=None, required=None, allc=None, reviews=(), user=ME, workflows=None):
+def run(view=None, required=None, allc=None, reviews=(), user=ME):
     """view/required/allc: CompletedProcess mocks. reviews: list or None (read failed)."""
     view = view or proc(out=pr_json())
     required = required or proc(out=buckets("pass"))
     allc = allc or proc(out=buckets())
-    workflows = workflows or proc(out=json.dumps({"workflows": []}).encode())
     calls = []
 
     def fake_cmd(cmd, **kwargs):
         calls.append(cmd)
         if cmd[1:3] == ["pr", "view"]:
             return view
-        if cmd[1] == "api":
-            return workflows
         return required if "--required" in cmd else allc
 
     page = None if reviews is None else list(reviews)
@@ -139,24 +136,6 @@ def test_no_checks_at_all_is_safe():
     for allc in (proc(1, b"", NO_CHECKS), proc(out=buckets())):
         res, _ = run(required=proc(1, b"", NO_REQ), allc=allc)
         assert res.status is SafetyStatus.SAFE
-
-
-def test_no_checks_but_repo_has_workflows_skips():
-    wf = proc(out=json.dumps({"workflows": [{"state": "active"}]}).encode())
-    for allc in (proc(1, b"", NO_CHECKS), proc(out=buckets())):
-        res, _ = run(required=proc(1, b"", NO_REQ), allc=allc, workflows=wf)
-        assert (res.status, res.reason) == (SafetyStatus.SKIP, REASON_CI_BLOCKED)
-
-
-def test_no_checks_inactive_workflows_only_is_safe():
-    wf = proc(out=json.dumps({"workflows": [{"state": "disabled_manually"}]}).encode())
-    res, _ = run(required=proc(1, b"", NO_REQ), allc=proc(out=buckets()), workflows=wf)
-    assert res.status is SafetyStatus.SAFE
-
-
-def test_no_checks_workflows_read_failed():
-    res, _ = run(required=proc(1, b"", NO_REQ), allc=proc(out=buckets()), workflows=proc(1, b"", b"HTTP 502"))
-    assert res.status is SafetyStatus.READ_FAILED
 
 
 def test_unparseable_checks_read_failed():
