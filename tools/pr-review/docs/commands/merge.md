@@ -23,7 +23,7 @@ A PR is merged only when all of these hold. They are checked in this order. The 
 
 1. The PR was authored by the acting user (a literal login comparison. A blank acting user never matches.)
 2. The PR is open, not a draft, has no conflict, and has no auto-merge request.
-3. Required checks pass (or all checks when none are required). For a stacked PR the required checks are those of the stack root, as in [auto-approve](auto-approve.md#safety-conditions); a required check with no run on the PR does not pass. Only the latest run of each check counts, as in [auto-approve](auto-approve.md#safety-conditions). A PR with no checks passes.
+3. Required checks pass (or all checks when none are required). For a stacked PR the required checks are those of the stack root, as in [auto-approve](auto-approve.md#safety-conditions); a required check with no run on the PR does not pass. Only the latest run of each check counts, as in [auto-approve](auto-approve.md#safety-conditions). A PR with no checks passes only when the repo has no active workflows.
 4. The gate record exists and its head SHA equals the PR's current head SHA.
 5. Changed lines (additions plus deletions, from `gh pr view --json additions,deletions`) are at most `max_changed_lines`.
 6. When `require_all_files_viewed`: the file list is non-empty and every file is marked viewed. Viewed state is read fresh on every run and never cached. A push after the last viewed mark clears it on GitHub.
