@@ -148,7 +148,7 @@ def test_unknown_key_in_each_section(tmp_path: Path, section: str) -> None:
         load_config(write(tmp_path, text))
 
 
-@pytest.mark.parametrize("other", ["linear", "github"])
+@pytest.mark.parametrize("other", ["linear", "github", "file"])
 def test_two_trackers(tmp_path: Path, other: str) -> None:
     text = MIN + f'[source.work_item]\nkind = "linear"\n[source.{other}]\nteam = "x"\n'
     with pytest.raises(ConfigError, match="two trackers"):
@@ -170,6 +170,47 @@ def test_cross_kind_keys(tmp_path: Path) -> None:
         load_config(write(tmp_path, MIN + '[source.work_item]\nkind = "github"\npick_state = "Todo"\n'))
     with pytest.raises(ConfigError, match="pick_label"):
         load_config(write(tmp_path, MIN + '[source.work_item]\nkind = "linear"\npick_label = "x"\n'))
+
+
+def test_file_kind(tmp_path: Path) -> None:
+    text = MIN + '[source.work_item]\nkind = "file"\ndir = "~/.sisyphus/inbox"\n'
+    wi = load_config(write(tmp_path, text)).source.work_item
+    assert wi is not None
+    assert wi.kind == "file"
+    assert wi.dir == "~/.sisyphus/inbox"
+    assert wi.assignee is None
+    assert wi.pick_state is None
+    assert wi.pick_label is None
+
+
+def test_file_kind_producer_keys(tmp_path: Path) -> None:
+    text = MIN + '[source.work_item]\nkind = "file"\ndir = "inbox"\nassignee = "a@b.c"\n'
+    text += 'pick_state = "Todo"\npick_label = "sisyphus"\n'
+    wi = load_config(write(tmp_path, text)).source.work_item
+    assert wi is not None
+    assert (wi.assignee, wi.pick_state, wi.pick_label) == ("a@b.c", "Todo", "sisyphus")
+
+
+def test_file_kind_requires_dir(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="dir"):
+        load_config(write(tmp_path, MIN + '[source.work_item]\nkind = "file"\n'))
+
+
+@pytest.mark.parametrize("kind", ["linear", "github"])
+def test_dir_rejected_for_other_kinds(tmp_path: Path, kind: str) -> None:
+    with pytest.raises(ConfigError, match="dir"):
+        load_config(write(tmp_path, MIN + f'[source.work_item]\nkind = "{kind}"\ndir = "x"\n'))
+
+
+def test_dir_must_be_string(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="dir must be a string"):
+        load_config(write(tmp_path, MIN + '[source.work_item]\nkind = "file"\ndir = 1\n'))
+
+
+def test_file_kind_no_default_label(tmp_path: Path) -> None:
+    wi = load_config(write(tmp_path, MIN + '[source.work_item]\nkind = "file"\ndir = "x"\n')).source.work_item
+    assert wi is not None
+    assert wi.pick_label is None
 
 
 def test_relative_paths_verbatim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
