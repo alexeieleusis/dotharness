@@ -141,17 +141,12 @@ class LimitTracker:
         self._start = clock()
         self.tickets = 0
         self.leaves = 0
-        self.fix_attempts: dict[str, int] = {}
 
     def record_ticket(self) -> None:
         self.tickets += 1
 
     def record_leaf(self) -> None:
         self.leaves += 1
-
-    def record_fix_attempt(self, pr: str) -> int:
-        self.fix_attempts[pr] = self.fix_attempts.get(pr, 0) + 1
-        return self.fix_attempts[pr]
 
     def elapsed_minutes(self) -> float:
         return (self._clock() - self._start) / 60
@@ -165,8 +160,6 @@ class LimitTracker:
             reached.append("max_tickets_per_run")
         if self.leaves >= lim.max_leaves_per_run:
             reached.append("max_leaves_per_run")
-        if any(n >= lim.max_fix_attempts_per_pr for n in self.fix_attempts.values()):
-            reached.append("max_fix_attempts_per_pr")
         return LimitStatus(tuple(reached), Checkpoint.C6 if reached else None)
 
 
