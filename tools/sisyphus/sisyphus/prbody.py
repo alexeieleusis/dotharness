@@ -216,6 +216,19 @@ def _is_none(text: str) -> bool:
     return text.strip().rstrip(".!;:,").strip().lower() == "none"
 
 
+def _handoff_deviation(stem: str, path: Path) -> tuple[str | None, str | None]:
+    """``(entry, note)`` for one handoff file; at most one of them is set."""
+    try:
+        text = _deviation_text(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, f"Note: cannot read handoff {path.name}."
+    if text is None:
+        return None, f"Note: no deviations bullet found in handoff {path.name}."
+    if text and not _is_none(text):
+        return f"- {stem}: {text}", None
+    return None, None
+
+
 def extract_deviations(handoff_dir: Path, stems: Sequence[str]) -> str:
     """Deviations from each leaf's handoff(s); notes for missing handoffs or bullets."""
     try:
@@ -228,17 +241,12 @@ def extract_deviations(handoff_dir: Path, stems: Sequence[str]) -> str:
         files = by_stem[stem]
         if not files:
             notes.append(f"Note: no handoff found for {stem}.")
-            continue
         for path in files:
-            try:
-                text = _deviation_text(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                notes.append(f"Note: cannot read handoff {path.name}.")
-                continue
-            if text is None:
-                notes.append(f"Note: no deviations bullet found in handoff {path.name}.")
-            elif text and not _is_none(text):
-                entries.append(f"- {stem}: {text}")
+            entry, note = _handoff_deviation(stem, path)
+            if entry:
+                entries.append(entry)
+            if note:
+                notes.append(note)
     if not entries and not notes:
         return "None reported."
     parts = list(entries)
