@@ -387,9 +387,7 @@ def test_prompts_carry_resolved_paths(world: World) -> None:
         assert str(knowledge_file("spec-prism-flow/plan-generation-prompt.md", world.tmp / "nohome", root)) in prompt
         assert str(knowledge_file("spec-prism-flow/build-execution-prompt.md", world.tmp / "nohome", root)) in prompt
         assert f"Target branch (already checked out in that checkout): {branch_name(ITEM)}" in prompt
-        assert not re.search(
-            r"<(stage|brief path|workspace dir|target repo dir|target branch|stop report path)>", prompt
-        )
+        assert not re.search(r"<(stage|brief path|handoff dir|target repo dir|target branch|stop report path)>", prompt)
 
 
 # ---------------------------------------------------------------- AC2: checkpoints
@@ -1041,7 +1039,7 @@ PARAMS = [
     "stage",
     "work-item reference",
     "brief path",
-    "workspace dir",
+    "handoff dir",
     "target repo dir",
     "target branch",
     "phase config path",
