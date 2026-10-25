@@ -1153,8 +1153,23 @@ def test_prompt_references_but_does_not_restate() -> None:
 
 def test_prompt_states_the_required_behaviours() -> None:
     text = " ".join(PROMPT.read_text().split())
-    for needle in ("handoffs/NN-<leaf name>.md", "one after the other", "never in parallel", "C3", "C4", "C5", "C2"):
+    for needle in (
+        "`NN-<leaf name>.md` directly inside the handoff directory",
+        "one after the other",
+        "never in parallel",
+        "C3",
+        "C4",
+        "C5",
+        "C2",
+    ):
         assert needle in text
+
+
+def test_prompt_does_not_nest_handoffs_inside_the_handoff_dir() -> None:
+    # <handoff dir> is already <plan_dir>/handoffs; a "handoffs/" prefix would write to handoffs/handoffs/,
+    # where prbody.select_handoffs (top level only) would miss the summaries
+    text = " ".join(PROMPT.read_text().split())
+    assert "`handoffs/NN-" not in text
 
 
 # ------------------------------------------------- follow-up 18: stop record and resume

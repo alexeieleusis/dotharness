@@ -43,7 +43,7 @@ The build sub-agent launches one sub-agent per leaf, strictly one after the othe
 parallel. For each leaf:
 
 - require a handoff summary in the template the build prompt gives.
-- save it to `handoffs/NN-<leaf name>.md` inside the handoff directory.
+- save it as `NN-<leaf name>.md` directly inside the handoff directory (the directory already is the `handoffs` folder, so add no `handoffs/` prefix).
 - give the paths of every earlier summary to the next leaf's sub-agent.
 
 Commit only to the target branch. Never do any of the following:
