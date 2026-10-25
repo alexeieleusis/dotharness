@@ -11,7 +11,7 @@ import contextlib
 import json
 import re
 import tomllib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from sisyphus.intake import parse_resolved_decisions, split_resolved_decision
@@ -124,16 +124,21 @@ def _numbered_section(text: str, n: int) -> str | None:
     return "\n".join(lines[start:end]).strip()
 
 
-def extract_summary(plan_dir: Path) -> str:
-    """Sections ``## 1.`` to ``## 4.`` of ``requirements.md``; absent sections are skipped."""
-    try:
-        text = (plan_dir / "requirements.md").read_text(encoding="utf-8")
-    except (OSError, ValueError) as exc:
-        return f"Note: Summary unavailable: cannot read requirements.md ({type(exc).__name__})."
+def summary_from_text(text: str) -> str:
+    """Sections ``## 1.`` to ``## 4.`` of the requirements text; absent sections are skipped."""
     sections = [s for n in range(1, 5) if (s := _numbered_section(text, n))]
     if not sections:
         return "Note: Summary unavailable: no sections 1-4 found in requirements.md."
     return "\n\n".join(sections)
+
+
+def extract_summary(plan_dir: Path) -> str:
+    """``summary_from_text`` over ``<plan_dir>/requirements.md``; a one-line note when it cannot be read."""
+    try:
+        text = (plan_dir / "requirements.md").read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        return f"Note: Summary unavailable: cannot read requirements.md ({type(exc).__name__})."
+    return summary_from_text(text)
 
 
 # ----------------------------------------------------------------- FR-5 phases
@@ -404,3 +409,53 @@ def compose_body(
     budget = MAX_BODY_CHARS - len(header) - 2 - len(tail)
     body = f"{header}\n\n{_truncate(rest, budget)}{tail}"
     return body[:MAX_BODY_CHARS]
+
+
+# ------------------------------------------------------------------ assembly
+
+
+def build_body(
+    item: str,
+    *,
+    brief_path: Path,
+    plan_dir: Path,
+    phase_dir: Path,
+    base_branch: str,
+    workspace: Path,
+    run_git: Callable[[Sequence[str]], str | None],
+) -> str:
+    """Locate the artifacts, check plan ownership, degrade per section and compose the body (FR-12, D-6).
+
+    ``run_git`` runs ``git`` with the given arguments and returns stdout, or ``None`` when the command fails.
+    Extractors return notes for missing input; this function adds notes only for the cases it detects itself
+    (plan not matched, leaf list unavailable). The caller owns the outer guard against unexpected errors.
+    """
+    decisions = extract_decisions(brief_path)
+    summary = phases = deviations = ""
+    requirements = None
+    if plan_dir_matches_brief(plan_dir, brief_path):
+        requirements = read_requirements(plan_dir)
+        summary = (
+            summary_from_text(requirements)
+            if requirements is not None
+            else "Note: Summary unavailable: cannot read requirements.md."
+        )
+        try:
+            stems = leaf_stems(phase_dir)
+        except (OSError, ValueError) as exc:
+            phases = deviations = f"Note: leaf list unavailable ({type(exc).__name__})."
+        else:
+            phases = list_phases(phase_dir, run_git(commit_log_args(base_branch)))
+            deviations = extract_deviations(workspace / "handoffs", stems)
+    else:
+        summary = PLAN_NOT_MATCHED_NOTE
+    return compose_body(
+        item,
+        summary=summary,
+        phases=phases,
+        decisions=decisions,
+        deviations=deviations,
+        requirements=requirements,
+        workspace=workspace,
+        plan_dir=plan_dir,
+    )

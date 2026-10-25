@@ -758,52 +758,25 @@ class _Run:
             return header
 
     def _assemble_pr_body(self) -> str:
-        brief_path = resolve_brief_path(self.config, self.item)
         plan_dir = prbody.locate_plan_dir(self.spf, self.repo) or self.plan_dir
-        summary = phases = deviations = ""
-        requirements = None
-        decisions = self._pr_section(lambda: prbody.extract_decisions(brief_path), "Decisions")
-        if prbody.plan_dir_matches_brief(plan_dir, brief_path):
-            requirements = prbody.read_requirements(plan_dir)
-            summary = self._pr_section(lambda: prbody.extract_summary(plan_dir), "Summary")
-            phase_dir = self.opt.phase_dir or prbody.locate_phase_dir(self.spf, self.repo) or plan_dir / "phases"
-            phases, deviations = self._pr_phases_and_deviations(phase_dir)
-        else:
-            summary = prbody.PLAN_NOT_MATCHED_NOTE
-        return prbody.compose_body(
+        phase_dir = self.opt.phase_dir or prbody.locate_phase_dir(self.spf, self.repo) or plan_dir / "phases"
+
+        def run_git(args: Sequence[str]) -> str | None:
+            try:
+                res = self.git(*args, ok=False)
+            except OSError:
+                return None
+            return res.stdout if res.returncode == 0 else None
+
+        return prbody.build_body(
             self.item,
-            summary=summary,
-            phases=phases,
-            decisions=decisions,
-            deviations=deviations,
-            requirements=requirements,
-            workspace=self.workspace,
+            brief_path=resolve_brief_path(self.config, self.item),
             plan_dir=plan_dir,
+            phase_dir=phase_dir,
+            base_branch=self.opt.base_branch,
+            workspace=self.workspace,
+            run_git=run_git,
         )
-
-    @staticmethod
-    def _pr_section(extract: Callable[[], str], title: str) -> str:
-        try:
-            return extract()
-        except (OSError, ValueError) as exc:
-            return f"Note: {title} unavailable ({type(exc).__name__})."
-
-    def _pr_phases_and_deviations(self, phase_dir: Path) -> tuple[str, str]:
-        try:
-            stems = prbody.leaf_stems(phase_dir)
-        except (OSError, ValueError) as exc:
-            note = f"Note: leaf list unavailable ({type(exc).__name__})."
-            return note, note
-        log = None
-        try:
-            res = self.git(*prbody.commit_log_args(self.opt.base_branch), ok=False)
-            log = res.stdout if res.returncode == 0 else None
-        except OSError:
-            log = None
-        phases = self._pr_section(lambda: prbody.list_phases(phase_dir, log), "Phases")
-        handoffs = self.workspace / "handoffs"
-        deviations = self._pr_section(lambda: prbody.extract_deviations(handoffs, stems), "Deviations")
-        return phases, deviations
 
     def note(self, text: str) -> None:
         if text not in self.notes:

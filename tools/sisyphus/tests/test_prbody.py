@@ -278,3 +278,30 @@ def test_read_requirements_degrades(tmp_path: Path) -> None:
     assert read_requirements(tmp_path) is None
     (tmp_path / "requirements.md").write_text("ok")
     assert read_requirements(tmp_path) == "ok"
+
+
+def _build(tmp_path: Path, plan: Path, git_out: str | None = "abc\tPhase 01: alpha\n") -> str:
+    return prbody.build_body(
+        "w",
+        brief_path=tmp_path / "b.md",
+        plan_dir=plan,
+        phase_dir=_phase_dir(tmp_path / "phases"),
+        base_branch="main",
+        workspace=tmp_path,
+        run_git=lambda _args: git_out,
+    )
+
+
+def test_build_body_full_and_degraded(tmp_path: Path) -> None:
+    (tmp_path / "phases").mkdir()
+    (tmp_path / "b.md").write_text("x")
+    plan = tmp_path / "plan"
+    plan.mkdir()
+    (plan / "requirements.md").write_text("## 1. Goal\n\nShip it.\n")
+    (plan / "init_manifest.json").write_text(json.dumps({"brief": str(tmp_path / "b.md")}))
+    body = _build(tmp_path, plan)
+    assert "Ship it." in body
+    assert "01-alpha-leaf: abc Phase 01: alpha" in body
+    assert "Phases unavailable: git log failed" in _build(tmp_path, plan, None)
+    (plan / "init_manifest.json").unlink()
+    assert PLAN_NOT_MATCHED_NOTE in _build(tmp_path, plan)
