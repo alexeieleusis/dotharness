@@ -9,7 +9,7 @@ from typing import Any
 from sisyphus.digest import render_digest
 from sisyphus.lock import clone_lock
 from sisyphus.orchestrator import BRANCH_CREATED_KEY, OPEN_PR_STAGE, PullRequest, branch_name
-from sisyphus.pick import find_awaiting_review, is_started
+from sisyphus.pick import is_started
 from sisyphus.resume import is_stopped, list_waiting
 from sisyphus.runrecord import RunRecord
 from sisyphus.stoprecord import (
@@ -156,13 +156,14 @@ def test_run_does_not_repick_or_auto_resume_abandoned(tmp_path: Path, fake_run_i
     assert "Needs you" in env.digest and "OLD-1" not in env.digest.split("## Done")[0]
 
 
-def test_abandoned_pr_does_not_block_picking(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+def test_abandoned_item_is_neither_repicked_nor_resumed(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
     prs = FakePrs({branch_name("OLD-1"): PullRequest(3, "http://pr/3")})
     env, _ = abandon_env(tmp_path, ("NEW-1",), prs=prs)
     rec = stopped(env, "OLD-1", "C7", brief=None, stage=OPEN_PR_STAGE)
     rec.increment_retry(BRANCH_CREATED_KEY)
     abandon(env)
-    assert find_awaiting_review(tmp_path / "ws", prs.find_pr) == []
+    assert is_started(tmp_path / "ws", "OLD-1")
+    assert list_waiting(tmp_path / "ws") == []
     assert run(env).exit_code == 0
     assert items(fake_run_item) == ["NEW-1"]
 

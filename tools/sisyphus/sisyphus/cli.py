@@ -55,7 +55,6 @@ from sisyphus.pick import (
     PickError,
     PullRequestLookup,
     TrackerClient,
-    find_awaiting_review,
     pick_items,
 )
 from sisyphus.rails import PERMISSION_FLAG, LimitTracker
@@ -86,7 +85,6 @@ AGENT_COMMANDS = {
 }
 TOKEN_CMD_TIMEOUT = 30
 DEFAULT_BASE_BRANCH = "main"
-AWAITING_REVIEW = "awaiting-review"
 
 
 class AgentError(Exception):
@@ -372,7 +370,7 @@ def _resume_phase(config: SisyphusConfig, services: Services, state: _RunState, 
 
 
 def _pick_phase(config: SisyphusConfig, services: Services, state: _RunState) -> list[Candidate]:
-    """Auto-resume cleared items, then (unless a PR awaits review) pick new ones. The caller holds the clone lock.
+    """Auto-resume cleared items, then pick new ones. The caller holds the clone lock.
 
     Items waiting at a checkpoint never stop picking. Resumed and new items share ``max_tickets_per_run``.
     """
@@ -380,18 +378,6 @@ def _pick_phase(config: SisyphusConfig, services: Services, state: _RunState) ->
     workspace = Path(config.project.workspace_dir).expanduser()
     limit = config.limits.max_tickets_per_run
     resumed = _resume_phase(config, services, state, limit)
-    awaiting = find_awaiting_review(workspace, services.pr_client.find_pr)
-    for a in awaiting:
-        state.needs.append(
-            NeedsYou(
-                a.item,
-                AWAITING_REVIEW,
-                f"PR #{a.pr.number} {a.pr.url} from an earlier run still awaits review, so no new item "
-                "was picked. Review or merge it.",
-            )
-        )
-    if awaiting:
-        return resumed
     new = pick_items(
         config.source.work_item,
         services.tracker,
@@ -528,7 +514,7 @@ def run_command(factory: ServicesFactory | None, config_path: str, base: str | N
         picked = _pick_phase(config, services, state)
         _run_phase(picked, config, services, base, state, config_path)
 
-    # One non-blocking lock for the whole invocation: awaiting-review check, pick, every item, digest.
+    # One non-blocking lock for the whole invocation: pick, every item, digest.
     _run_locked(config, services, state, phase)
 
 
@@ -736,12 +722,6 @@ def status_command(factory: ServicesFactory | None, work_item_ref: str | None, c
     if not records:
         click.echo("no items")
         return
-    try:
-        reviews: set[str] | None = {
-            a.item for a in find_awaiting_review(workspace, _services(factory, config).pr_client.find_pr)
-        }
-    except Exception:
-        reviews = None
     for rec in records:
         if rec.checkpoint is not None:
             awaiting = "you"
@@ -749,10 +729,8 @@ def status_command(factory: ServicesFactory | None, work_item_ref: str | None, c
             awaiting = "none"
         elif stop is not None:
             awaiting = "error"
-        elif reviews is None:
-            awaiting = "unknown (PR lookup failed)"
         else:
-            awaiting = "review" if rec.item in reviews else "none"
+            awaiting = "none"
         click.echo("\n".join(_status_block(rec, awaiting, config, config_path)))
 
 

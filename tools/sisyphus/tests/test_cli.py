@@ -218,7 +218,7 @@ def test_max_run_minutes_stops_before_next_item(tmp_path: Path, fake_run_item: d
     assert "max_run_minutes (1) reached before starting A-2" in env.digest
 
 
-def test_earlier_pr_awaiting_review_skips_pick_and_is_in_digest(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+def test_open_pr_of_earlier_item_does_not_block_pick(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
     prs = FakePrs({branch_name("OLD-1"): PullRequest(3, "http://pr/3")})
     env = make_env(tmp_path, ["NEW-1"], prs=prs)
     rec = RunRecord.open(tmp_path / "ws", "OLD-1")
@@ -226,10 +226,27 @@ def test_earlier_pr_awaiting_review_skips_pick_and_is_in_digest(tmp_path: Path, 
     rec.increment_retry(BRANCH_CREATED_KEY)
     result = env.invoke("run", "--config", str(env.config), "--base", "b")
     assert result.exit_code == 0
-    assert fake_run_item["calls"] == []
-    assert "OLD-1" in env.digest
-    assert "PR #3" in env.digest
-    assert "awaits review" in env.digest
+    assert items(fake_run_item) == ["NEW-1"]
+    assert "awaiting-review" not in env.digest
+    assert "awaits review" not in env.digest
+
+
+def test_status_of_finished_item_with_open_pr_is_none_without_pr_lookup(tmp_path: Path) -> None:
+    looked_up: list[str] = []
+
+    class SpyPrs(FakePrs):
+        def find_pr(self, branch: str) -> PullRequest | None:
+            looked_up.append(branch)
+            return super().find_pr(branch)
+
+    env = make_env(tmp_path, prs=SpyPrs({branch_name("OLD-1"): PullRequest(3, "http://pr/3")}))
+    rec = RunRecord.open(tmp_path / "ws", "OLD-1")
+    rec.mark_stage(OPEN_PR_STAGE, "complete")
+    rec.increment_retry(BRANCH_CREATED_KEY)
+    result = env.invoke("status", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    assert "awaiting: none" in result.output
+    assert looked_up == []
 
 
 def test_lock_held_exits_zero_and_orchestrator_not_called(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
@@ -251,12 +268,8 @@ def _is_locked(tmp_path: Path) -> bool:
 
 def test_lock_held_for_whole_invocation_with_no_gap(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
     env = make_env(tmp_path, ["ENG-1", "ENG-2", "ENG-3"], extra="\n[limits]\nmax_tickets_per_run = 3\n")
-    seen: dict[str, list[bool]] = {"awaiting": [], "pick": [], "items": []}
-    real_pick, real_find = cli.pick_items, cli.find_awaiting_review
-
-    def find(*a: Any, **k: Any) -> Any:
-        seen["awaiting"].append(_is_locked(tmp_path))
-        return real_find(*a, **k)
+    seen: dict[str, list[bool]] = {"pick": [], "items": []}
+    real_pick = cli.pick_items
 
     def pick(*a: Any, **k: Any) -> Any:
         seen["pick"].append(_is_locked(tmp_path))
@@ -264,12 +277,11 @@ def test_lock_held_for_whole_invocation_with_no_gap(tmp_path: Path, fake_run_ite
 
     fake_run_item["hook"] = lambda _c, _o: seen["items"].append(_is_locked(tmp_path))
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(cli, "find_awaiting_review", find)
         mp.setattr(cli, "pick_items", pick)
         result = env.invoke("run", "--config", str(env.config), "--base", "b")
     assert result.exit_code == 0, result.output
     assert items(fake_run_item) == ["ENG-1", "ENG-2", "ENG-3"]
-    assert seen == {"awaiting": [True], "pick": [True], "items": [True, True, True]}
+    assert seen == {"pick": [True], "items": [True, True, True]}
     assert all(c[2]["lock_held"] is True for c in fake_run_item["calls"])
     assert not _is_locked(tmp_path)
 
@@ -303,12 +315,11 @@ def test_lock_released_after_success(tmp_path: Path, fake_run_item: dict[str, An
     assert not _is_locked(tmp_path)
 
 
-def test_lock_held_means_no_pick_or_awaiting_check(
+def test_lock_held_means_no_pick_or_run(
     tmp_path: Path, fake_run_item: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     env = make_env(tmp_path, ["ENG-1"])
     touched: list[str] = []
-    monkeypatch.setattr(cli, "find_awaiting_review", lambda *a, **k: touched.append("a") or [])
     monkeypatch.setattr(cli, "pick_items", lambda *a, **k: touched.append("p") or [])
     with clone_lock(tmp_path / "repo", tmp_path / "locks"):
         result = env.invoke("run", "--config", str(env.config), "--base", "b")

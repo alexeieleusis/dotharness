@@ -11,7 +11,6 @@ import pytest
 
 from sisyphus import pick
 from sisyphus.config import WorkItemSource
-from sisyphus.orchestrator import BRANCH_CREATED_KEY, CI_FIX_STAGE, MERGE_STAGE, OPEN_PR_STAGE, PullRequest, branch_name
 from sisyphus.pick import (
     Candidate,
     ExecResult,
@@ -22,7 +21,6 @@ from sisyphus.pick import (
     LinkedPr,
     PickError,
     default_open_pr_check,
-    find_awaiting_review,
     mentions_issue,
     pick_items,
 )
@@ -132,60 +130,6 @@ def test_github_without_lookup_and_bad_source(tmp_path: Path) -> None:
     for bad in (None, WorkItemSource(), WorkItemSource(kind="github"), WorkItemSource(kind="linear", assignee="a")):
         with pytest.raises(PickError):
             pick_items(bad, FakeTracker([]), FakeLookup(), workspace_dir=tmp_path, limit=1)
-
-
-# ------------------------------------------------------- awaiting review
-
-
-def _record(ws: Path, item: str, stage: str, created: bool = True) -> None:
-    rec = RunRecord.open(ws, item)
-    rec.mark_stage(stage, "complete")
-    if created:
-        rec.increment_retry(BRANCH_CREATED_KEY)
-
-
-def test_awaiting_review_found_for_open_pr(tmp_path: Path) -> None:
-    _record(tmp_path, "ENG-1", OPEN_PR_STAGE)
-    _record(tmp_path, "ENG-2", OPEN_PR_STAGE)  # PR merged: no open PR
-    _record(tmp_path, "ENG-3", "build")  # never reached the PR stage
-    _record(tmp_path, "ENG-4", OPEN_PR_STAGE, created=False)
-    (tmp_path / "ENG-1.json.stop.json").write_text("{}")
-    (tmp_path / "junk.json").write_text("not json")
-    (tmp_path / "other.json").write_text(json.dumps({"item": "ENG-9"}))
-    seen: list[str] = []
-
-    def find(branch: str) -> PullRequest | None:
-        seen.append(branch)
-        return PullRequest(5, "u") if branch == branch_name("ENG-1") else None
-
-    got = find_awaiting_review(tmp_path, find)
-    assert [(a.item, a.pr.number) for a in got] == [("ENG-1", 5)]
-    assert sorted(seen) == sorted([branch_name("ENG-1"), branch_name("ENG-2")])
-
-
-def test_awaiting_review_excludes_checkpointed_record_without_lookup(tmp_path: Path) -> None:
-    _record(tmp_path, "ENG-1", OPEN_PR_STAGE)
-    rec = RunRecord.open(tmp_path, "ENG-1")
-    rec.set_checkpoint("C7")
-    seen: list[str] = []
-
-    def find(branch: str) -> PullRequest | None:
-        seen.append(branch)
-        return PullRequest(5, "u")
-
-    assert find_awaiting_review(tmp_path, find) == []
-    assert seen == []
-
-
-@pytest.mark.parametrize("stage", [CI_FIX_STAGE, MERGE_STAGE])
-def test_awaiting_review_includes_later_pr_stages(tmp_path: Path, stage: str) -> None:
-    _record(tmp_path, "ENG-1", stage)
-    got = find_awaiting_review(tmp_path, lambda _b: PullRequest(5, "u"))
-    assert [(a.item, a.pr.number) for a in got] == [("ENG-1", 5)]
-
-
-def test_awaiting_review_missing_workspace(tmp_path: Path) -> None:
-    assert find_awaiting_review(tmp_path / "nope", lambda _b: None) == []
 
 
 # --------------------------------------------------------- real clients (fakes)
