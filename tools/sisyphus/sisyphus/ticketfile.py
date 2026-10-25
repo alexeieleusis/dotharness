@@ -24,7 +24,9 @@ def valid_file_ref(ref: str) -> bool:
 
 
 def ticket_dir(source: WorkItemSource) -> Path:
-    """The ``~``-expanded ticket directory of a ``file`` source."""
+    """The ``~``-expanded ticket directory of a ``file`` source. Raises ``ValueError`` if ``dir`` is not set."""
+    if not source.dir:
+        raise ValueError("[source.work_item].dir is not set")
     return Path(source.dir).expanduser()
 
 
