@@ -230,8 +230,11 @@ def test_source_ci_does_not_change_config(tmp_path: Path) -> None:
     assert not hasattr(with_ci.source, "ci")
 
 
-def test_repo_sisyphus_toml_loads() -> None:
-    load_config(Path(__file__).resolve().parents[3] / DEFAULT_CONFIG_FILE)
+def test_representative_config_with_source_ci_loads(tmp_path: Path) -> None:
+    text = MIN + '[source.ci]\nkind = "github"\n[limits]\nmax_run_minutes = 5\n[merge]\nenabled = true\n'
+    cfg = load_config(write(tmp_path, text))
+    assert cfg.limits.max_run_minutes == 5
+    assert not hasattr(cfg.source, "ci")
 
 
 def test_removed_fix_attempts_limit_rejected(tmp_path: Path) -> None:
