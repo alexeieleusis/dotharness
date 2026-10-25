@@ -530,6 +530,17 @@ def test_default_services_builds_clients(tmp_path: Path, monkeypatch: pytest.Mon
     assert services.repo_info is not None
 
 
+def test_default_services_file_kind_builds_file_tracker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LINEAR_API_KEY", raising=False)
+    env = make_env(tmp_path)
+    text = env.config.read_text().replace(
+        'kind = "linear"\nassignee = "me@x.io"\npick_state = "Todo"', f'kind = "file"\ndir = "{tmp_path / "inbox"}"'
+    )
+    env.config.write_text(text)
+    services = cli.default_services(load_config(env.config))
+    assert isinstance(services.tracker, cli.FileTracker)
+
+
 def test_no_harness_or_spec_prism_flow_import() -> None:
     tree = ast.parse(Path(cli.__file__).read_text())
     names = {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}

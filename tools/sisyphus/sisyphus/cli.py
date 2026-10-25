@@ -47,6 +47,7 @@ from sisyphus.orchestrator import (
 )
 from sisyphus.pick import (
     Candidate,
+    FileTracker,
     GhCli,
     GhPullRequestLookup,
     GitHubIssueTracker,
@@ -209,6 +210,8 @@ def default_services(config: SisyphusConfig) -> Services:
     work_item = config.source.work_item
     if work_item is not None and work_item.kind == "linear":
         tracker: TrackerClient = LinearTracker(os.environ.get("LINEAR_API_KEY", ""))
+    elif work_item is not None and work_item.kind == "file":
+        tracker = FileTracker()
     else:
         tracker = GitHubIssueTracker(gh)
     runner = (
