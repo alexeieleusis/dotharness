@@ -102,6 +102,45 @@ def _unparsed(reason: str) -> tuple[OpenDecision, ...]:
     return (OpenDecision(0, f"Open-decisions log could not be parsed ({reason}); resolve it by hand"),)
 
 
+def _section_lines(text: str) -> tuple[bool, list[str]]:
+    """Return ``(found, lines)``: the lines under the open-decisions heading, up to the next heading of equal or higher rank."""
+    lines = iter(text.splitlines())
+    level = 0
+    found = False
+    for line in lines:
+        m = _HEADING.match(line)
+        if m:
+            found = True
+            level = len(m.group(1)) if m.group(1) else 7
+            break
+    section: list[str] = []
+    if not found:
+        return False, section
+    for line in lines:
+        heading = _ANY_HEADING.match(line)
+        if heading and len(heading.group(1)) <= level:
+            break
+        section.append(line)
+    return True, section
+
+
+def _scan_log(text: str) -> tuple[bool, list[list[str]], list[str]]:
+    """Return ``(found, entries, body)`` for the open-decisions section of ``text``."""
+    found, section = _section_lines(text)
+    entries: list[list[str]] = []
+    body: list[str] = []
+    for line in section:
+        stripped = line.strip()
+        if stripped:
+            body.append(stripped)
+        entry = _ENTRY.match(line)
+        if entry:
+            entries.append([entry.group(1) or entry.group(2), entry.group(3).strip()])
+        elif entries and stripped:
+            entries[-1][1] += " " + stripped
+    return found, entries, body
+
+
 def parse_open_decisions(text: str) -> tuple[OpenDecision, ...]:
     """Return the unresolved entries of the brief's open-decisions log, failing closed.
 
@@ -111,32 +150,42 @@ def parse_open_decisions(text: str) -> tuple[OpenDecision, ...]:
     decisions. If the text mentions open decisions but no section parses, or a section has content
     but no entries, a single sentinel decision (number 0) is returned so C1 still blocks.
     """
-    entries: list[list[str]] = []
-    level = 0
-    found = False
-    body: list[str] = []
-    for line in text.splitlines():
-        if not found:
-            m = _HEADING.match(line)
-            if m:
-                found = True
-                level = len(m.group(1)) if m.group(1) else 7
-            continue
-        heading = _ANY_HEADING.match(line)
-        if heading and len(heading.group(1)) <= level:
-            break
-        if line.strip():
-            body.append(line.strip())
-        entry = _ENTRY.match(line)
-        if entry:
-            entries.append([entry.group(1) or entry.group(2), entry.group(3).strip()])
-        elif entries and line.strip():
-            entries[-1][1] += " " + line.strip()
+    found, entries, body = _scan_log(text)
     if not found:
         return _unparsed("no recognisable section") if _MENTION.search(text) else ()
     if not entries and body and not all(_NONE.match(b) for b in body):
         return _unparsed("section has content but no entries")
     return tuple(OpenDecision(int(n), t) for n, t in entries if not _RESOLVED.search(t))
+
+
+_STATUS = re.compile(r"\bstatus:\s*resolved\b[\s\-.\u2013\u2014:]*", re.IGNORECASE)
+
+
+def parse_resolved_decisions(text: str) -> tuple[OpenDecision, ...]:
+    """Return the resolved entries (number and text) of the brief's open-decisions log.
+
+    Uses the same section and entry detection as `parse_open_decisions`. No section, a section
+    that is "None", or one without resolved entries yields an empty tuple.
+    """
+    found, entries, _ = _scan_log(text)
+    if not found:
+        return ()
+    return tuple(OpenDecision(int(n), t) for n, t in entries if _RESOLVED.search(t))
+
+
+def split_resolved_decision(text: str) -> tuple[str, str]:
+    """Split a resolved entry into ``(question, answer)``.
+
+    The question is the text before the ``Status:`` marker, the answer the text after
+    ``Status: resolved`` and any following ``-`` or ``.``. An entry that begins with "Resolved"
+    has no separate question: it is returned whole as the answer, with an empty question.
+    """
+    if re.match(r"^\W*resolved\b", text, re.IGNORECASE):
+        return "", text.strip()
+    m = _STATUS.search(text)
+    if not m:
+        return text.strip(), ""
+    return text[: m.start()].strip(), text[m.end() :].strip()
 
 
 # ----------------------------------------------------------- git boundary

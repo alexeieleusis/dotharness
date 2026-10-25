@@ -17,12 +17,26 @@ runs (`RunRecord.stage_scope`). A stage that stops at a checkpoint stays `in_pro
 | `plan` | One orchestration agent run with `knowledge/sisyphus/orchestration-prompt.md`, stage `plan`. Then the orchestrator counts the leaf files in the phase directory. |
 | `build` | Run `git fetch origin <base>`, create the Sisyphus branch from `origin/<base>` (or reuse it if Sisyphus created it), run one orchestration agent with stage `build`, then check that the checkout is on the branch and has commits. |
 | `push` | `git push origin <branch>` through `rails.push_guard`: no force, no history rewrite, never the base or default branch, only a branch Sisyphus created. |
-| `open-pr` | Reuse the open PR for the branch or open exactly one, then run the gate commands and write the gate record. |
+| `open-pr` | Reuse the open PR for the branch (its body is left as is) or open exactly one, then run the gate commands and write the gate record. A new PR gets a body built by `sisyphus.prbody`: the header, then Summary, Phases, Decisions, Deviations and the full `requirements.md` in a `<details>` block. See below. |
 | `ci-fix` (optional, `options.ci_fix`) | Run `harness run ci-fix --pr N` up to `max_fix_attempts_per_pr` times. The orchestrator re-gates each push. |
 | `merge` (only when `[merge].enabled`) | `harness run merge --pr N`. The orchestrator never approves. |
 
 The branch is `sisyphus/<slug>-<8 hex of sha256(item)>` (`branch_name`). The base branch is `options.base_branch`
 (a parameter, never a constant here). The CLI resolves `--base`, then `[project].base_branch`, then `main`. `options.default_branch` is an extra branch that is never pushed to.
+
+### Pull-request body
+
+Only on the create path, `stage_open_pr` builds the body with the pure functions in `sisyphus.prbody` and passes it
+to `open_pr`. The header (`Work item: <item>`, a blank line, `Opened by Sisyphus. Review required; this PR is not
+approved.`) is unchanged and always first. The sections come from `requirements.md` sections 1-4, the leaf files
+with their commits (`git log origin/<base>..HEAD`), the brief's resolved open decisions and the Deviations bullets of
+the per-leaf handoffs. The plan directory is used only when its `init_manifest.json` names this item's brief.
+
+Embedded text is sanitised: `@mentions` and `#N` references are neutralised and absolute workspace, plan
+directory and home paths are removed. The body never exceeds 60,000 characters: the `<details>` block is dropped
+first, then the rest is truncated with a note. A missing or unreadable artifact removes only its section (a
+one-line note is left in the body); the PR is still opened and no digest note is added. A `GitHubError` from
+`open_pr` still stops the run at C8.
 
 ## Checkpoints
 

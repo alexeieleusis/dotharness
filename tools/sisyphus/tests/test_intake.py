@@ -15,10 +15,12 @@ from sisyphus.intake import (
     IntakeError,
     build_prompt,
     parse_open_decisions,
+    parse_resolved_decisions,
     repo_unchanged,
     resolve_brief_path,
     run_intake,
     snapshot_git_status,
+    split_resolved_decision,
 )
 from sisyphus.paths import find_checkout_root, knowledge_file
 from sisyphus.rails import Checkpoint
@@ -117,6 +119,34 @@ def test_parse_open_decisions() -> None:
     assert "Context line." in decisions[0].text
     assert parse_open_decisions(BRIEF_NONE) == ()
     assert parse_open_decisions("# No such section\n1. x\n") == ()
+
+
+BRIEF_RESOLVED = (
+    "# Brief\n\n## Open decisions log\n\n- D-1: Who owns the dir? Status: resolved - the item. Done.\n"
+    "- D-2: Resolved: use GitHub.\n- D-3: Still open?\n\n## Next\n\n- D-9: not here. Status: resolved\n"
+)
+
+
+def test_parse_resolved_decisions() -> None:
+    resolved = parse_resolved_decisions(BRIEF_RESOLVED)
+    assert [d.number for d in resolved] == [1, 2]
+    assert [d.number for d in parse_open_decisions(BRIEF_RESOLVED)] == [3]
+    assert [d.number for d in parse_resolved_decisions(BRIEF_OPEN)] == [2]
+
+
+@pytest.mark.parametrize("text", [BRIEF_NONE, "# No such section\n1. x\n", "## Open decisions\n1. Q?\n", ""])
+def test_parse_resolved_decisions_empty(text: str) -> None:
+    assert parse_resolved_decisions(text) == ()
+
+
+def test_split_resolved_decision() -> None:
+    q, a = split_resolved_decision("Who owns it? Status: resolved - the item. Done.")
+    assert q == "Who owns it?"
+    assert a == "the item. Done."
+    assert split_resolved_decision("Q? status: RESOLVED. Answer") == ("Q?", "Answer")
+    assert split_resolved_decision("Resolved: use GitHub.") == ("", "Resolved: use GitHub.")
+    assert split_resolved_decision("**Resolved** x") == ("", "**Resolved** x")
+    assert split_resolved_decision("Q? Status: resolved") == ("Q?", "")
 
 
 @pytest.mark.parametrize(
