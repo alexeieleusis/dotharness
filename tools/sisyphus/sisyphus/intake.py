@@ -102,15 +102,8 @@ def _unparsed(reason: str) -> tuple[OpenDecision, ...]:
     return (OpenDecision(0, f"Open-decisions log could not be parsed ({reason}); resolve it by hand"),)
 
 
-def parse_open_decisions(text: str) -> tuple[OpenDecision, ...]:
-    """Return the unresolved entries of the brief's open-decisions log, failing closed.
-
-    The log is the section under a heading (or a bold line) named "Open decisions"; entries are
-    numbered items or ``- D-n:`` bullets. An entry starting with "resolved" (after any markup) or
-    containing "status: resolved" is not blocking. A section that is explicitly "None" yields no
-    decisions. If the text mentions open decisions but no section parses, or a section has content
-    but no entries, a single sentinel decision (number 0) is returned so C1 still blocks.
-    """
+def _scan_log(text: str) -> tuple[bool, list[list[str]], list[str]]:
+    """Return ``(found, entries, body)`` for the open-decisions section of ``text``."""
     entries: list[list[str]] = []
     level = 0
     found = False
@@ -132,11 +125,54 @@ def parse_open_decisions(text: str) -> tuple[OpenDecision, ...]:
             entries.append([entry.group(1) or entry.group(2), entry.group(3).strip()])
         elif entries and line.strip():
             entries[-1][1] += " " + line.strip()
+    return found, entries, body
+
+
+def parse_open_decisions(text: str) -> tuple[OpenDecision, ...]:
+    """Return the unresolved entries of the brief's open-decisions log, failing closed.
+
+    The log is the section under a heading (or a bold line) named "Open decisions"; entries are
+    numbered items or ``- D-n:`` bullets. An entry starting with "resolved" (after any markup) or
+    containing "status: resolved" is not blocking. A section that is explicitly "None" yields no
+    decisions. If the text mentions open decisions but no section parses, or a section has content
+    but no entries, a single sentinel decision (number 0) is returned so C1 still blocks.
+    """
+    found, entries, body = _scan_log(text)
     if not found:
         return _unparsed("no recognisable section") if _MENTION.search(text) else ()
     if not entries and body and not all(_NONE.match(b) for b in body):
         return _unparsed("section has content but no entries")
     return tuple(OpenDecision(int(n), t) for n, t in entries if not _RESOLVED.search(t))
+
+
+_STATUS = re.compile(r"\bstatus:\s*resolved\b[\s\-.\u2013\u2014:]*", re.IGNORECASE)
+
+
+def parse_resolved_decisions(text: str) -> tuple[OpenDecision, ...]:
+    """Return the resolved entries (number and text) of the brief's open-decisions log.
+
+    Uses the same section and entry detection as `parse_open_decisions`. No section, a section
+    that is "None", or one without resolved entries yields an empty tuple.
+    """
+    found, entries, _ = _scan_log(text)
+    if not found:
+        return ()
+    return tuple(OpenDecision(int(n), t) for n, t in entries if _RESOLVED.search(t))
+
+
+def split_resolved_decision(text: str) -> tuple[str, str]:
+    """Split a resolved entry into ``(question, answer)``.
+
+    The question is the text before the ``Status:`` marker, the answer the text after
+    ``Status: resolved`` and any following ``-`` or ``.``. An entry that begins with "Resolved"
+    has no separate question: it is returned whole as the answer, with an empty question.
+    """
+    if re.match(r"^\W*resolved\b", text, re.IGNORECASE):
+        return "", text.strip()
+    m = _STATUS.search(text)
+    if not m:
+        return text.strip(), ""
+    return text[: m.start()].strip(), text[m.end() :].strip()
 
 
 # ----------------------------------------------------------- git boundary
