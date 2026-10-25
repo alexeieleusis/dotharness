@@ -1,10 +1,10 @@
 # Orchestrator
 
 `sisyphus.orchestrator.run_item(item, config, options, *, agent_runner, subprocess_runner, pr_client, clock=..., today=None, write_digest_file=True, lock_held=False)`
-runs one work item through intake, plan, build, push, open PR and, optionally, ci-fix and merge. It never
+runs one work item through intake, plan, build, push, open PR. A finished item is "PR open, handed to review": nothing runs after the PR opens. It never
 imports `harness` or `spec_prism_flow`. It reaches those tools only through the injected subprocess runner.
-It returns a `RunResult` with `checkpoint`, `detail`, `stages_run`, `stages_skipped`, `branch`, `pr`, `head_sha`,
-`gate_recorded`, `digest_path`, `record` and `report`. `completed` is true when no checkpoint stopped the run.
+It returns a `RunResult` with `checkpoint`, `detail`, `stages_run`, `stages_skipped`, `branch`, `pr`,
+`digest_path`, `record` and `report`. `completed` is true when no checkpoint stopped the run.
 
 ## Stages
 
@@ -17,9 +17,7 @@ runs (`RunRecord.stage_scope`). A stage that stops at a checkpoint stays `in_pro
 | `plan` | One orchestration agent run with `knowledge/sisyphus/orchestration-prompt.md`, stage `plan`. Then the orchestrator counts the leaf files in the phase directory. |
 | `build` | Run `git fetch origin <base>`, create the Sisyphus branch from `origin/<base>` (or reuse it if Sisyphus created it), run one orchestration agent with stage `build`, then check that the checkout is on the branch and has commits. |
 | `push` | `git push origin <branch>` through `rails.push_guard`: no force, no history rewrite, never the base or default branch, only a branch Sisyphus created. |
-| `open-pr` | Reuse the open PR for the branch (its body is left as is) or open exactly one, then run the gate commands and write the gate record. A new PR gets a body built by `sisyphus.prbody`: the header, then Summary, Phases, Decisions, Deviations and the full `requirements.md` in a `<details>` block. See below. |
-| `ci-fix` (optional, `options.ci_fix`) | Run `harness run ci-fix --pr N` up to `max_fix_attempts_per_pr` times. The orchestrator re-gates each push. |
-| `merge` (only when `[merge].enabled`) | `harness run merge --pr N`. The orchestrator never approves. |
+| `open-pr` | Reuse the open PR for the branch (its body is left as is) or open exactly one, then run the gate commands. A new PR gets a body built by `sisyphus.prbody`: the header, then Summary, Phases, Decisions, Deviations and the full `requirements.md` in a `<details>` block. See below. |
 
 The branch is `sisyphus/<slug>-<8 hex of sha256(item)>` (`branch_name`). The base branch is `options.base_branch`
 (a parameter, never a constant here). The CLI resolves `--base`, then `[project].base_branch`, then `main`. `options.default_branch` is an extra branch that is never pushed to.
@@ -49,10 +47,10 @@ runs no later stage. Run again to resume: the run starts at the stage that stopp
 | C2 | The plan agent writes a stop report with `C2` (`OPEN_QUESTIONS.md` has entries it cannot resolve from the repository). |
 | C3 | The build agent writes a stop report with `C3` (a leaf reports an open question). |
 | C4 | The build agent writes a stop report with `C4` (a deviation changes a later leaf, or it cannot tell). |
-| C5 | The build agent writes a stop report with `C5` (a leaf exhausted its retries or left its scope). A gate command failed (no gate record is written). Intake changed the target repository. The build was already stopped by C5 three times (`RetryBound`), so it is not launched again. |
-| C6 | The plan has more than `max_leaves_per_run` leaves. `max_run_minutes` elapsed (checked before each stage). All `max_fix_attempts_per_pr` ci-fix attempts pushed a new head. A rerun after the leaf-limit C6 does not run the plan agent again. |
-| C7 | The branch needs a rebase or force-push (remote branch not an ancestor of HEAD, or the clone cannot fast-forward after ci-fix). |
-| C8 | `GitHubError` from the PR client, a failed fetch, ls-remote or push, or a non-zero `harness run ci-fix` or `harness run merge`. |
+| C5 | The build agent writes a stop report with `C5` (a leaf exhausted its retries or left its scope). A gate command failed. Intake changed the target repository. The build was already stopped by C5 three times (`RetryBound`), so it is not launched again. |
+| C6 | The plan has more than `max_leaves_per_run` leaves. `max_run_minutes` elapsed (checked before each stage). A rerun after the leaf-limit C6 does not run the plan agent again. |
+| C7 | The branch needs a rebase or force-push (remote branch not an ancestor of HEAD). Sisyphus never rebases or force-pushes. |
+| C8 | `GitHubError` from the PR client, a failed fetch, ls-remote or push. |
 
 Other failures (an agent runner that raises, `IntakeError`, `RunRecordError`, `OrchestratorError`) are not
 checkpoints. They propagate. The stage stays `in_progress`. The orchestrator still writes the digest.
@@ -65,24 +63,16 @@ Any other code or an unreadable file raises `OrchestratorError`. The orchestrato
 agent run. No file means the
 stage finished.
 
-## Gate record and gate commands
+## Gate commands
 
-After the PR exists, and again after every ci-fix push, the orchestrator reads `build.commands` read-only from the
+After the PR exists, the orchestrator reads `build.commands` read-only from the
 item's `.spec-prism-flow.toml` (see below), a copy of `options.spf_config_path` (default
 `<repo_dir>/.spec-prism-flow.toml`). The orchestrator reads it with stdlib `tomllib`. It runs each command in each
 package directory the change touched, using the injected subprocess runner at the pushed head. A package directory is the nearest ancestor of a changed file (from
 `git diff --name-only origin/<base>...HEAD`) that holds `Makefile`, `pyproject.toml`, `package.json`, `Cargo.toml` or
-`go.mod`. If no such ancestor holds one, the package directory is the repository root. If every command exits 0, it
-writes `gaterecord.write_gate_record` with the exact `git rev-parse HEAD` that was tested. If one fails, it writes
-nothing and raises C5. If the file or `build.commands` is absent, it writes nothing, and the digest "Deviations"
-section says so. Commands are never guessed.
-
-`gaterecord.py` is stdlib only: `gate_record_path(repo_slug, pr_number, state_dir=None)`,
-`write_gate_record(repo_slug, pr_number, head_sha, state_dir=None, commands=None)` (atomic: temp file, fsync,
-`os.replace`), `read_gate_record`, plus the slug helpers `repo_slug_from_name` and `fallback_repo_slug`. The path is
-`~/.local/share/dotharness/state/<owner-repo>/build_gate_<PR>.json` with content `{"head_sha": ..., "commands": [...],
-"passed_at": ...}`. This is the file `harness/runners/merge.py` reads (it uses only `head_sha`). `state_dir` replaces
-`~/.local/share/dotharness/state`.
+`go.mod`. If no such ancestor holds one, the package directory is the repository root. If a command fails, the run
+stops at C5. If the file or `build.commands` is absent, the gate is not run, and the digest "Deviations"
+section says so. Commands are never guessed. The Done entry's evidence says `gate passed` or `gate not run`.
 
 ## Injected interfaces
 
@@ -95,8 +85,8 @@ section says so. Commands are never guessed.
   `open_pr(branch, base, title, body) -> PullRequest`. Raise `GitHubError` for an unrecoverable failure (C8).
 - `clock: Callable[[], float]` (default `time.monotonic`) feeds `LimitTracker`.
 
-`OrchestratorOptions` carries `base_branch`, `repo_slug`, `default_branch`, `ci_fix`, `spf_config_path`, `phase_dir`,
-`state_dir`, `lock_dir`, `home` and `checkout_root`. `phase_dir` defaults to `<workspace_dir>/plan-<n>/phases`.
+`OrchestratorOptions` carries `base_branch`, `default_branch`, `spf_config_path`, `phase_dir`,
+`lock_dir`, `home`, `checkout_root` and `resume_command`. `phase_dir` defaults to `<workspace_dir>/plan-<n>/phases`.
 
 ### Per-item spec-prism-flow config
 

@@ -14,22 +14,22 @@ sisyphus resume <work-item-ref> --config <file> [--base <branch>]
 
 1. Loads the config (`.sisyphus.toml`, see [configuration](configuration.md)).
 2. Takes the per-clone lock for `[project].repo_dir` without blocking, and holds it for the whole
-   invocation (awaiting-review check, pick, every item, digest write). If another run holds it, exits 0
+   invocation (pick, every item, digest write). If another run holds it, exits 0
    quietly before doing anything else.
 3. Auto-resumes stopped items whose blocker is cleared (see "Stopped items and resume"), oldest stop first.
    Items still waiting for you never stop the loop. They are listed under "Needs you" as "Awaiting you".
-4. If an earlier Sisyphus PR (a run record that reached the PR stage, not stopped at a checkpoint, whose branch
-   still has an open PR) awaits review, skips picking and reports it under "Needs you" in the digest.
-   Otherwise picks as many new items as are left of `[limits].max_tickets_per_run` (default 1. Resumed and new
+4. Picks as many new items as are left of `[limits].max_tickets_per_run` (default 1. Resumed and new
    items share it) that the tracker offers and Sisyphus has not started (no run record):
    - Linear: assigned to `assignee`, in `pick_state`, in Linear's priority order (urgent first, no priority
      last).
    - GitHub: open, assigned to `assignee`, labelled `pick_label` (default `sisyphus`), oldest first. An issue
      with an open linked PR, or one mentioned as `#N` in an open PR body, is skipped. Merged or closed PRs do
      not exclude an issue.
-5. Runs each item through the orchestrator (intake, plan, build, push, open PR, optional ci-fix and merge) and
+5. Runs each item through the orchestrator (intake, plan, build, push, open PR) and
    stops at the first checkpoint (C1..C8). Before starting each further item it checks `max_run_minutes`. Once
    exceeded it starts nothing else and notes it under "Limits hit" (exit 0).
+   An item is finished when its PR is open: "PR open, handed to review". Nothing runs after that. After the PR
+   opens, pr-review (and possibly vibe-heal) take over.
 6. Writes one merged digest to `[digest].path_template`. It never overwrites an existing file: a second run
    on the same day writes `digest-<date>-2.md`, then `-3`, and so on.
 
@@ -91,7 +91,7 @@ or a resume.
 answer in files under `workspace_dir` (outside the repo): the brief, or an answer file. Each item has its own
 branch `sisyphus/<slug>-<8 hex>`, so partial work stays on its branch while another item runs. The clone must
 be clean between items: a new item, and a build checkout, refuse to start on a dirty clone (checkpoint C8 plus a
-digest entry). Sisyphus never stashes, resets or discards anything. A resume at push, PR, ci-fix or merge checks
+digest entry). Sisyphus never stashes, resets or discards anything. A resume at push or PR checks
 out the item's own branch first (or, if it was already deleted after a clean finish, works from `origin/<branch>`
 detached). Committed work is never redone.
 
@@ -106,8 +106,7 @@ and deleted with `git branch -D`, which is used on that path only (never `--forc
 the last resort). When nothing is proven the note lists each proof tried and why it failed.
 Never a remote branch or PR change. A deletion is shown under Done and names the proof used. For proof (3) it gives
 the full head SHA, the PR number and `git fetch origin pull/<N>/head`, which recovers the commit from GitHub. Rerunning after the branch is gone
-is a silent no-op. `harness run ci-fix` and `merge` do not need the local branch (ci-fix does
-`checkout -B <branch> origin/<branch>` itself. Merge uses no checkout). The run record, digest, stop and answer
+is a silent no-op. The run record, digest, stop and answer
 files and `<brief>.intake.json` are never deleted.
 
 **Answering.** C1: edit the brief and mark each open decision resolved. C2, C3, C4: write your answer to
@@ -128,8 +127,8 @@ run record or the item is not stopped, and exits 0 quietly if another invocation
 | C3 | a leaf has an open question | write the answer file | automatic (answer file) | re-runs build with your answer. The build prompt continues from the stopped leaf |
 | C4 | a leaf deviation may change later leaves | write the answer file (accept or redirect) | automatic (answer file) | same as C3 |
 | C5 | retries exhausted, scope violation or a failed gate | decide: change the leaf or config, or fix the cause. To give the build another budget, run `sisyphus resume REF --config F --reset-retries` | explicit | re-runs the stage. The build retry budget (3) is kept, so an exhausted budget stops again at C5 without a new agent run, unless you pass `--reset-retries` (below), which gives the build a fresh budget of 3 (it does not skip the build) |
-| C6 | a limit was hit | raise the limit in `.sisyphus.toml` (`max_run_minutes` needs nothing: the clock is per invocation) | explicit | leaf limit: re-counts the leaves, no re-plan. Fix attempts: counter kept. Time limit: continues at the next stage |
-| C7 | branch cannot be updated without rebase | no automatic way out: run `sisyphus abandon REF --config F` (the branch and any PR stay as they are for you to handle) | explicit | after you fixed the branch outside Sisyphus: re-runs the push or ci-fix stage on the same branch and PR |
+| C6 | a limit was hit | raise the limit in `.sisyphus.toml` (`max_run_minutes` needs nothing: the clock is per invocation) | explicit | leaf limit: re-counts the leaves, no re-plan. Time limit: continues at the next stage |
+| C7 | branch cannot be updated without rebase | no automatic way out: run `sisyphus abandon REF --config F` (the branch and any PR stay as they are for you to handle) | explicit | after you fixed the branch outside Sisyphus: re-runs the push stage on the same branch and PR |
 | C8 | gh, Linear, git network call failed, or a dirty clone | fix access. For a dirty clone, clean it yourself | automatic retry after 30 minutes, 3 times, then explicit | retries the failed call in the same stage |
 | error | unexpected exception | fix the cause shown | explicit | re-runs the in-progress stage |
 
@@ -146,9 +145,8 @@ It resets the counters of the stage recorded in the item's run record, nothing e
 
 | recorded stage | counters set to 0 | never touched |
 |---|---|---|
-| intake, plan, push, open-pr, merge | `auto-retry` | `build:retry-cycles`, `ci-fix:attempts`, `plan:leaf-limit`, `branch-created` |
-| build | `build:retry-cycles`, `auto-retry` | `ci-fix:attempts`, `plan:leaf-limit`, `branch-created` |
-| ci-fix | `ci-fix:attempts`, `auto-retry` | `build:retry-cycles`, `plan:leaf-limit`, `branch-created` |
+| intake, plan, push, open-pr | `auto-retry` | `build:retry-cycles`, `plan:leaf-limit`, `branch-created` |
+| build | `build:retry-cycles`, `auto-retry` | `plan:leaf-limit`, `branch-created` |
 
 `auto-retry` is the C8 automatic-resume count (stage independent). `branch-created` is not a retry counter (it
 records that Sisyphus made the branch, which the push guard relies on) and `plan:leaf-limit` is a marker that
@@ -169,8 +167,7 @@ message otherwise) and then:
 
 - marks the item abandoned: the stop record becomes `kind: "abandoned"` with the time in `stopped_at`, and the
   run record's checkpoint is cleared. The run record, the local branch, the digest and the answer/brief files stay.
-- removes the waiting state: the item is no longer "awaiting you", is never auto-resumed, and its open PR (if any)
-  no longer makes `run` skip picking. It is never re-picked either (any run record makes an item non-pickable).
+- removes the waiting state: the item is no longer "awaiting you", and is never auto-resumed. It is never re-picked either (any run record makes an item non-pickable).
 - never touches the remote branch or any PR, never rewrites history or force-pushes. What happens to them is for
   you to decide by hand.
 
@@ -185,8 +182,7 @@ flag says "I know I abandoned this".
 ## `sisyphus status`
 
 `sisyphus status [REF] --config F` is read-only (no lock, no agent). For each item (all items without REF) it
-prints stage, stage_status, checkpoint (`state: abandoned` plus `abandoned_at` and `re-enable` for an abandoned item), `awaiting` (`you` for a checkpoint, `error`, `review` for an open PR,
-`none`), and for a stopped item the question, action, resume command and auto-resume rule (with whether it is
+prints stage, stage_status, checkpoint (`state: abandoned` plus `abandoned_at` and `re-enable` for an abandoned item), `awaiting` (`you` for a checkpoint, `error`, `none` otherwise (including an abandoned item). `status` needs no network), and for a stopped item the question, action, resume command and auto-resume rule (with whether it is
 cleared now) and every recorded `Retry reset:` line. No items prints `no items`. An unknown REF exits 1.
 
 ## Exit codes

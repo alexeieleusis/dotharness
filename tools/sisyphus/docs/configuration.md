@@ -50,13 +50,6 @@ A `[source.linear]` or `[source.github]` table is rejected (as "two trackers" wh
 also present). `pick_state` with `kind = "github"` and `pick_label` with `kind = "linear"` are rejected as
 mixed-tracker keys.
 
-### `[source.ci]`
-
-| Key | Type | Default |
-|---|---|---|
-| `kind` | string, `github` only | none |
-| `max_fix_attempts` | positive integer | none |
-
 ### `[source.host]`
 
 | Key | Type | Default |
@@ -77,18 +70,12 @@ All values are positive integers.
 |---|---|---|
 | `max_run_minutes` | integer | 180 |
 | `max_tickets_per_run` | integer | 1 |
-| `max_fix_attempts_per_pr` | integer | 3 |
 | `max_leaves_per_run` | integer | 4 |
 
-### `[merge]`
+### Ignored sections
 
-Parsed and validated only. The merge runner is separate.
-
-| Key | Type | Default |
-|---|---|---|
-| `enabled` | boolean | `false` |
-| `require_all_files_viewed` | boolean | none |
-| `max_changed_lines` | positive integer | none |
+`[source.ci]` and `[merge]` are read by harness (pr-review) and ignored by Sisyphus. They are accepted
+in the file and have no effect.
 
 ### `[digest]`
 
@@ -110,9 +97,6 @@ Parsed and validated only. The merge runner is separate.
 repo_dir = "."
 
 [source.work_item]
-kind = "github"
-
-[source.ci]
 kind = "github"
 
 [limits]

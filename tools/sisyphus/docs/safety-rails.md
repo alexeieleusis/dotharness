@@ -9,7 +9,7 @@ the network, a subprocess, or the harness.
 | Rail | Inputs | Result | Checkpoint |
 | --- | --- | --- | --- |
 | Push guard (`push_guard`) | `PushRequest(remote, refspec, flags, history_rewrite, needs_rebase)`, default branch, set of Sisyphus-created branch names | `PushDecision(allowed, reason, checkpoint)` | C7 when the branch needs a rebase or force-push. Plain rejections (force flag, `+refspec`, history rewrite or deletion, default branch, uncreated branch) carry no checkpoint. They are caller bugs |
-| Limit tracker (`LimitTracker`) | `[limits]` values, injectable clock. `record_ticket`, `record_leaf`, `record_fix_attempt(pr)` | `LimitStatus(reached, checkpoint)` | C6 when any limit is reached. At count == limit, the limit is reached |
+| Limit tracker (`LimitTracker`) | `[limits]` values, injectable clock. `record_ticket`, `record_leaf` | `LimitStatus(reached, checkpoint)` | C6 when any limit is reached. At count == limit, the limit is reached |
 | Bounded retries (`RetryBound`) | `max_retry_cycles` (default 3) | `RetryResult(attempts, escalate, checkpoint)` | C5 once attempts reach the cap |
 | Scope violation (`ScopeViolationResult`) | files, detail reported by the caller | result type only | C5 |
 | Merge-gate failure (`MergeGateFailureResult`) | gate name, detail reported by the caller | result type only | C5 |
