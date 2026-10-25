@@ -356,6 +356,7 @@ class _Run:
         self.branch = branch_name(item)
         self.base_spf = options.spf_config_path or self.repo / SPF_CONFIG_NAME
         self.plan_dir = self.workspace / plan_dir_name(item)
+        self.handoff_dir = self.plan_dir / "handoffs"
         self.spf = self.plan_dir / SPF_CONFIG_NAME  # per-item copy of base_spf; see write_item_config
         self.tracker = LimitTracker(config.limits, clock)
         self.rec = RunRecord.open(self.workspace, item)
@@ -583,7 +584,7 @@ class _Run:
             "stage": stage,
             "work-item reference": self.item,
             "brief path": str(resolve_brief_path(self.config, self.item)),
-            "handoff dir": str(self.plan_dir / "handoffs"),
+            "handoff dir": str(self.handoff_dir),
             "target repo dir": str(self.repo),
             "target branch": self.branch,
             "phase config path": str(self.spf),
@@ -611,7 +612,7 @@ class _Run:
     def run_agent_stage(self, stage: str) -> None:
         self.write_item_config()
         if stage == BUILD_STAGE:
-            (self.plan_dir / "handoffs").mkdir(parents=True, exist_ok=True)
+            self.handoff_dir.mkdir(parents=True, exist_ok=True)
         template = knowledge_file(PROMPT_FILE, self.opt.home, self.opt.checkout_root).read_text(encoding="utf-8")
         prompt = build_orchestration_prompt(template, self.prompt_values(stage))
         stop_file = stop_report_path(self.rec)
