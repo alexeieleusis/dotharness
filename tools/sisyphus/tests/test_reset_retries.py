@@ -44,7 +44,6 @@ def resume(env: Any, *extra: str, ref: str = "OLD-1"):
 
 def test_mapping_matches_orchestrator_constants_and_never_lists_branch_created() -> None:
     assert RESET_KEYS["build"][0] == orchestrator.BUILD_RETRY_KEY
-    assert RESET_KEYS["ci-fix"][0] == orchestrator.CI_FIX_ATTEMPTS_KEY
     assert set(RESET_KEYS) == set(orchestrator.STAGE_ORDER)
     everything = {k for keys in RESET_KEYS.values() for k in keys}
     assert orchestrator.BRANCH_CREATED_KEY not in everything
@@ -104,7 +103,6 @@ def test_build_stage_resets_build_and_auto_retry_only(tmp_path: Path) -> None:
         AUTO_RETRY_KEY: 2,
         "branch-created": 1,
         "plan:leaf-limit": 1,
-        "ci-fix:attempts": 2,
     })
     rec.save()
     assert reset_stage_retries(rec, AT) == {"build:retry-cycles": 3, AUTO_RETRY_KEY: 2}
@@ -113,25 +111,14 @@ def test_build_stage_resets_build_and_auto_retry_only(tmp_path: Path) -> None:
         AUTO_RETRY_KEY: 0,
         "branch-created": 1,
         "plan:leaf-limit": 1,
-        "ci-fix:attempts": 2,
     }
 
 
-def test_ci_fix_stage_resets_ci_fix_attempts_not_build(tmp_path: Path) -> None:
-    rec = RunRecord.open(tmp_path, "X-1")
-    rec.mark_stage("ci-fix")
-    rec.retries.update({"ci-fix:attempts": 3, "build:retry-cycles": 2, "branch-created": 1})
-    rec.save()
-    assert reset_stage_retries(rec, AT) == {"ci-fix:attempts": 3}
-    assert RunRecord.open(tmp_path, "X-1").retries["build:retry-cycles"] == 2
-    assert RunRecord.open(tmp_path, "X-1").retries["branch-created"] == 1
-
-
-@pytest.mark.parametrize("stage", ["intake", "plan", "push", "open-pr", "merge"])
+@pytest.mark.parametrize("stage", ["intake", "plan", "push", "open-pr"])
 def test_stages_without_a_counter_reset_only_auto_retry(tmp_path: Path, stage: str) -> None:
     rec = RunRecord.open(tmp_path, "X-1")
     rec.mark_stage(stage)
-    rec.retries.update({"build:retry-cycles": 3, "ci-fix:attempts": 1, "branch-created": 1, AUTO_RETRY_KEY: 1})
+    rec.retries.update({"build:retry-cycles": 3, "branch-created": 1, AUTO_RETRY_KEY: 1})
     rec.save()
     assert reset_stage_retries(rec, AT) == {AUTO_RETRY_KEY: 1}
     assert RunRecord.open(tmp_path, "X-1").retries["build:retry-cycles"] == 3
@@ -143,13 +130,13 @@ def test_stages_without_a_counter_reset_only_auto_retry(tmp_path: Path, stage: s
 def test_resume_reset_retries_resets_records_and_continues(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
     env = make_env(tmp_path)
     env.services.now = lambda: AT
-    build_stopped(env, **{"ci-fix:attempts": 1})
+    build_stopped(env)
     result = resume(env, "--reset-retries")
     assert result.exit_code == 0, result.output
     assert "reset retries at stage build: build:retry-cycles 3->0" in result.output
     assert items(fake_run_item) == ["OLD-1"]
     rec = RunRecord.open(tmp_path / "ws", "OLD-1")
-    assert rec.retries == {"build:retry-cycles": 0, "branch-created": 1, "plan:leaf-limit": 1, "ci-fix:attempts": 1}
+    assert rec.retries == {"build:retry-cycles": 0, "branch-created": 1, "plan:leaf-limit": 1}
     assert rec.resets[0]["at"] == AT.isoformat() and rec.resets[0]["stage"] == "build"
     assert "Retry reset: OLD-1 at stage build on 2026-03-04T05:06:00+00:00: build:retry-cycles 3->0" in env.digest
     assert "## Deviations\n\n- Retry reset" in env.digest

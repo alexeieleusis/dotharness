@@ -158,7 +158,6 @@ def test_picks_and_runs_item_with_base_and_writes_digest(tmp_path: Path, fake_ru
     assert item == "ENG-1"
     assert options.base_branch == "feature-base"
     assert (options.repo_slug, options.default_branch) == ("owner-repo", "main")
-    assert options.ci_fix is False
     assert options.lock_dir == tmp_path / "locks"
     assert kwargs["write_digest_file"] is False
     assert kwargs["pr_client"] is env.services.pr_client
@@ -383,12 +382,6 @@ def test_missing_backend_when_work_exists(tmp_path: Path, fake_run_item: dict[st
     assert result.exit_code == 1
     assert "backend is not set" in result.output
     assert fake_run_item["calls"] == []
-
-
-def test_ci_fix_option_follows_source_ci(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
-    env = make_env(tmp_path, ["ENG-1"], extra='\n[source.ci]\nkind = "github"\n')
-    env.invoke("run", "--config", str(env.config), "--base", "b")
-    assert fake_run_item["calls"][0][1].ci_fix is True
 
 
 # ----------------------------------------------------------------- intake

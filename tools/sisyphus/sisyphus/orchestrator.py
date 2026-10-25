@@ -1,4 +1,4 @@
-"""Orchestrator: run one work item through intake, plan, build, push, PR and optional ci-fix.
+"""Orchestrator: run one work item through intake, plan, build, then push and open the PR.
 
 Everything that touches the outside world is injected: the agent runner (prompt in, nothing out),
 the subprocess runner (argv and cwd in, :class:`CommandResult` out; used for ``git``, the gate
@@ -55,11 +55,8 @@ from sisyphus.runrecord import STAGE_COMPLETE, RunRecord
 from sisyphus.stages import (
     BUILD_RETRY_KEY,
     BUILD_STAGE,
-    CI_FIX_ATTEMPTS_KEY,
-    CI_FIX_STAGE,
     INTAKE_STAGE,
     LEAF_LIMIT_KEY,
-    MERGE_STAGE,
     OPEN_PR_STAGE,
     PLAN_STAGE,
     PUSH_STAGE,
@@ -147,7 +144,6 @@ class OrchestratorOptions:
     base_branch: str
     repo_slug: str
     default_branch: str | None = None
-    ci_fix: bool = False
     spf_config_path: Path | None = None
     phase_dir: Path | None = None
     state_dir: Path | None = None
@@ -393,12 +389,7 @@ class _Run:
     # -- stage driver
 
     def stages(self) -> list[str]:
-        wanted = [INTAKE_STAGE, PLAN_STAGE, BUILD_STAGE, PUSH_STAGE, OPEN_PR_STAGE]
-        if self.opt.ci_fix:
-            wanted.append(CI_FIX_STAGE)
-        if self.config.merge.enabled:
-            wanted.append(MERGE_STAGE)
-        return wanted
+        return [INTAKE_STAGE, PLAN_STAGE, BUILD_STAGE, PUSH_STAGE, OPEN_PR_STAGE]
 
     def start_index(self) -> int:
         """Index into ``STAGE_ORDER`` of the first stage that must still run."""
@@ -424,8 +415,6 @@ class _Run:
             BUILD_STAGE: self.stage_build,
             PUSH_STAGE: self.stage_push,
             OPEN_PR_STAGE: self.stage_open_pr,
-            CI_FIX_STAGE: self.stage_ci_fix,
-            MERGE_STAGE: self.stage_merge,
         }
         try:
             self.prepare_clone(start)
@@ -806,59 +795,6 @@ class _Run:
         gaterecord.write_gate_record(self.opt.repo_slug, number, sha, self.opt.state_dir, commands)
         self.head_sha = sha
         self.gate_recorded = True
-
-    # -- ci-fix and merge
-
-    def sync_head(self) -> bool:
-        """Fast-forward the clone to the remote branch; True when the head moved."""
-        before = self.rev_parse_head()
-        self.git("fetch", "origin", self.branch, network=True)
-        remote = self.git("rev-parse", "FETCH_HEAD").stdout.strip()
-        if remote != before and self.git("merge", "--ff-only", "FETCH_HEAD", ok=False).returncode != 0:
-            raise _Stop(Checkpoint.C7, f"{self.branch} cannot be updated without a rebase or force-push")
-        return self.rev_parse_head() != before
-
-    def stage_ci_fix(self) -> None:
-        number = self.pr_number()
-        cap = self.config.limits.max_fix_attempts_per_pr
-        with self.rec.stage_scope(CI_FIX_STAGE):
-            attempts = self.rec.retries.get(CI_FIX_ATTEMPTS_KEY, 0)
-            settled = False
-            while attempts < cap:
-                res = self.sh(["harness", "run", "ci-fix", "--pr", str(number)], self.repo)
-                attempts = self.rec.increment_retry(CI_FIX_ATTEMPTS_KEY)
-                if res.returncode != 0:
-                    raise _Stop(
-                        Checkpoint.C8, f"harness run ci-fix failed (exit {res.returncode}): {_tail(res.stderr)}"
-                    )
-                if not self.sync_head():
-                    settled = True
-                    break
-                self.gate()  # a new head SHA makes the old record stale
-            if not settled:
-                raise _Stop(Checkpoint.C6, f"max_fix_attempts_per_pr ({cap}) reached for PR #{number}")
-            if gaterecord.read_gate_record(self.opt.repo_slug, number, self.opt.state_dir) != self.rev_parse_head():
-                self.gate()
-
-    def stage_merge(self) -> None:
-        number = self.pr_number()
-        with self.rec.stage_scope(MERGE_STAGE):
-            res = self.sh(["harness", "run", "merge", "--pr", str(number)], self.repo)
-            if res.returncode != 0:
-                raise _Stop(Checkpoint.C8, f"harness run merge failed (exit {res.returncode}): {_tail(res.stderr)}")
-            # `harness run merge` exits 0 for every skip (checks pending, unviewed files, stale gate record...):
-            # only the PR's own state proves the merge happened.
-            try:
-                info = self.gh.pr_state(str(number))
-            except GitHubError as exc:
-                raise _Stop(Checkpoint.C8, str(exc)) from exc
-            if info is None or info.state.upper() != "MERGED":
-                state = info.state if info else "unknown"
-                raise _Stop(
-                    Checkpoint.C8,
-                    f"harness run merge exited 0 but PR #{number} is not merged (state {state}); "
-                    "the merge runner skipped it. Resolve the skip reason and resume to retry the merge",
-                )
 
 
 def run_item(

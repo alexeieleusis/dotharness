@@ -58,21 +58,6 @@ def test_empty_run_still_renders() -> None:
     assert text.count("\nNone\n") == 6
 
 
-def test_ci_fix_and_merge_outcomes_from_records(tmp_path: Path) -> None:
-    ci = RunRecord.open(tmp_path / "ws", "PR-7")
-    ci.mark_stage("ci-fix", "complete")
-    ci.increment_retry("ci-fix:7")
-    merge = RunRecord.open(tmp_path / "ws", "PR-8")
-    merge.mark_stage("merge", "in_progress")
-    text = render_digest([ci, merge])
-    assert "PR-7: ci-fix complete (retries: ci-fix:7=1)" in text
-    assert "PR-8: merge in_progress and did not finish" in text
-    done = text.split("## Done")[1].split("## Declined")[0]
-    declined = text.split("## Declined")[1].split("## Deviations")[0]
-    assert "PR-7" in done
-    assert "PR-8" in declined
-
-
 def test_report_entries_and_limits(tmp_path: Path) -> None:
     rec = RunRecord.open(tmp_path / "ws", "ENG-3")
     rec.set_checkpoint("C6")
@@ -142,12 +127,3 @@ def test_no_harness_imports() -> None:
     mods = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
     mods |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     assert not {m for m in mods if m.split(".")[0] in ("harness", "spec_prism_flow")}
-
-
-def test_retry_note_matches_exact_stage_or_stage_colon_keys_only(tmp_path: Path) -> None:
-    rec = RunRecord.open(tmp_path / "ws", "PR-9")
-    rec.mark_stage("merge", "in_progress")
-    for key in ("merge", "merge:attempts", "merged-elsewhere", "merge-queue:1", "build:retry-cycles", "auto-retry"):
-        rec.increment_retry(key)
-    text = render_digest([rec])
-    assert "PR-9: merge in_progress (retries: merge=1 merge:attempts=1) and did not finish" in text

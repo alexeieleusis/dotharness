@@ -307,7 +307,6 @@ def _resolve_options(
         base_branch=base,
         repo_slug=slug,
         default_branch=default_branch,
-        ci_fix=config.source.ci is not None,
         state_dir=services.state_dir,
         lock_dir=services.lock_dir,
         resume_command=_resume_template(config_path, base) if config_path else None,

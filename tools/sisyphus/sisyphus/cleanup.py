@@ -15,7 +15,7 @@ not evaluated once an earlier one holds, so ``gh`` is only asked when git alone 
    once the remote branch is gone);
 3. ``gh pr view`` reports the PR MERGED with ``headRefOid`` equal to the local head (squash merges).
 
-A detached HEAD (left by ``harness run ci-fix``) must itself be on the branch, ``origin/<branch>`` or
+A detached HEAD must itself be on the branch, ``origin/<branch>`` or
 ``origin/<base>`` so leaving it loses nothing. The clone is then switched to the base branch and fast-forwarded
 from ``origin/<base>`` (``--ff-only`` only) and ``git branch -d`` is run (never ``-D``/``--force``): after proof
 (1) the verified remote branch is first made the upstream (``--set-upstream-to``) because an unmerged PR branch

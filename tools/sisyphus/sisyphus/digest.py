@@ -21,8 +21,7 @@ from pathlib import Path
 
 from sisyphus.config import SisyphusConfig
 from sisyphus.rails import Checkpoint
-from sisyphus.runrecord import STAGE_COMPLETE, RunRecord
-from sisyphus.stages import CI_FIX_STAGE, MERGE_STAGE
+from sisyphus.runrecord import RunRecord
 from sisyphus.stoprecord import StopRecord, read_stop_record
 
 SECTIONS = ("Needs you", "Done", "Declined", "Deviations", "Limits hit", "Cost and time")
@@ -182,36 +181,16 @@ def _resets(records: Sequence[RunRecord]) -> list[str]:
     return [describe_reset(rec.item, e) for rec in records for e in rec.resets]
 
 
-def _retry_note(rec: RunRecord, stage: str) -> str:
-    counts = {k: v for k, v in sorted(rec.retries.items()) if k == stage or k.startswith(f"{stage}:")}
-    return " ".join(f"{k}={v}" for k, v in counts.items())
-
-
-def _outcome_line(rec: RunRecord, stage: str) -> str:
-    note = _retry_note(rec, stage)
-    return f"{rec.item}: {stage} {rec.stage_status}" + (f" (retries: {note})" if note else "")
-
-
 def _done(records: Sequence[RunRecord], report: DigestReport) -> list[str]:
     lines: list[str] = []
     for entry in report.done:
         evidence = "; ".join(entry.evidence) if entry.evidence else "no evidence supplied"
         lines.append(f"{entry.summary} (evidence: {evidence})")
-    lines.extend(
-        _outcome_line(rec, rec.stage)
-        for rec in records
-        if rec.stage in (CI_FIX_STAGE, MERGE_STAGE) and rec.stage_status == STAGE_COMPLETE
-    )
     return lines
 
 
 def _declined(records: Sequence[RunRecord], report: DigestReport) -> list[str]:
     lines = [f"{d.summary} (why: {d.reason})" for d in report.declined]
-    lines.extend(
-        _outcome_line(rec, rec.stage) + " and did not finish"
-        for rec in records
-        if rec.stage in (CI_FIX_STAGE, MERGE_STAGE) and rec.stage_status != STAGE_COMPLETE
-    )
     return lines
 
 
