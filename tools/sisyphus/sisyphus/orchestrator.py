@@ -718,13 +718,25 @@ class _Run:
                 self.pr = self.gh.find_pr(self.branch)
                 if self.pr is None:
                     body = self.build_pr_body()
-                    self.pr = self.gh.open_pr(self.branch, self.opt.base_branch, f"Sisyphus: {self.item}", body)
+                    self.pr = self.gh.open_pr(self.branch, self.opt.base_branch, self.build_pr_title(), body)
             except GitHubError as exc:
                 raise _Stop(Checkpoint.C8, str(exc)) from exc
             if self.rec.retries.get(PR_NUMBER_KEY) != self.pr.number:
                 self.rec.retries[PR_NUMBER_KEY] = self.pr.number
                 self.rec.save()
             self.gate()
+
+    def build_pr_title(self) -> str:
+        """Derive the PR title from the requirements or brief H1; never raises (FR-13).
+
+        Any failure falls back to ``Sisyphus: <item>``. Only local files are read (FR-16).
+        """
+        try:
+            plan_dir = prbody.locate_plan_dir(self.spf, self.repo) or self.plan_dir
+            brief = resolve_brief_path(self.config, self.item)
+            return prbody.derive_title(brief, plan_dir, self.workspace) or prbody.fallback_title(self.item)
+        except Exception:  # title derivation must never stop the run: fall back to the plain title
+            return prbody.fallback_title(self.item)
 
     def build_pr_body(self) -> str:
         """Assemble the PR description from the workspace artifacts; never raises (FR-12, D-6).
