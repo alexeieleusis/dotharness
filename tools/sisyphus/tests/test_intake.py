@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from sisyphus import intake
-from sisyphus.config import ProjectConfig, SisyphusConfig
+from sisyphus.config import ProjectConfig, SisyphusConfig, SourceConfig, WorkItemSource
 from sisyphus.intake import (
     BoundaryViolation,
     IntakeError,
@@ -18,6 +18,7 @@ from sisyphus.intake import (
     parse_resolved_decisions,
     repo_unchanged,
     resolve_brief_path,
+    resolve_ticket_path,
     run_intake,
     snapshot_git_status,
     split_resolved_decision,
@@ -104,6 +105,61 @@ def test_build_prompt_unit() -> None:
     out = build_prompt("A <work-item reference> B <brief path>", "X-1", "/p/b.md", "/k/d.md")
     assert out.startswith("A X-1 B /p/b.md")
     assert out.rstrip().endswith("/k/d.md")
+
+
+def _file_config(config: SisyphusConfig, inbox: Path, kind: str = "file") -> SisyphusConfig:
+    work_item = WorkItemSource(kind=kind, dir=str(inbox)) if kind == "file" else WorkItemSource(kind=kind)
+    return SisyphusConfig(project=config.project, source=SourceConfig(work_item=work_item))
+
+
+def test_file_item_prompt_has_ticket_trailer(config: SisyphusConfig, tmp_path: Path) -> None:
+    cfg = _file_config(config, tmp_path / "inbox")
+    runner = FakeRunner()
+    run_intake("t-1", cfg, runner)
+    (prompt,) = runner.prompts
+    assert f"The ticket file for this work item is at {tmp_path / 'inbox' / 't-1.md'}" in prompt
+    for phrase in (
+        "overrides the instruction",
+        "untrusted data",
+        "whole ticket",
+        "re-fetch through MCP",
+        "outside the repository",
+    ):
+        assert phrase in prompt
+
+
+def test_file_item_expands_tilde(config: SisyphusConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg = SisyphusConfig(
+        project=config.project, source=SourceConfig(work_item=WorkItemSource(kind="file", dir="~/inbox"))
+    )
+    assert resolve_ticket_path(cfg, "a.b-c_1") == tmp_path / "inbox" / "a.b-c_1.md"
+
+
+@pytest.mark.parametrize("kind", ["linear", "github"])
+def test_other_kinds_prompt_unchanged(config: SisyphusConfig, tmp_path: Path, kind: str) -> None:
+    runner = FakeRunner()
+    cfg = _file_config(config, tmp_path, kind)
+    run_intake("ENG-1", cfg, runner)
+    (prompt,) = runner.prompts
+    drafting = knowledge_file(intake.DRAFTING_PROMPT_FILE, checkout_root=find_checkout_root())
+    template = knowledge_file(intake.PROMPT_FILE, checkout_root=find_checkout_root()).read_text()
+    assert prompt == build_prompt(template, "ENG-1", resolve_brief_path(cfg, "ENG-1"), drafting)
+    assert "ticket file" not in runner.prompts[0]
+    assert resolve_ticket_path(cfg, "../x") is None
+
+
+@pytest.mark.parametrize("ref", ["../x", "a/b", "..", "", "a b", "/etc/passwd"])
+def test_file_item_invalid_ref_fails(config: SisyphusConfig, tmp_path: Path, ref: str) -> None:
+    runner = FakeRunner()
+    with pytest.raises(IntakeError, match="invalid ticket reference"):
+        run_intake(ref, _file_config(config, tmp_path), runner)
+    assert runner.prompts == []
+
+
+def test_build_prompt_without_ticket_is_unchanged() -> None:
+    out = build_prompt("A <work-item reference> <brief path>", "X", "/b", "/d")
+    assert out == "A X /b\n\nrequirements-doc-drafting-prompt.md is at /d\n"
 
 
 def test_resolve_brief_path_errors(tmp_path: Path) -> None:
