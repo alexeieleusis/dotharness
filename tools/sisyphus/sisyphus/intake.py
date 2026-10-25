@@ -102,29 +102,42 @@ def _unparsed(reason: str) -> tuple[OpenDecision, ...]:
     return (OpenDecision(0, f"Open-decisions log could not be parsed ({reason}); resolve it by hand"),)
 
 
-def _scan_log(text: str) -> tuple[bool, list[list[str]], list[str]]:
-    """Return ``(found, entries, body)`` for the open-decisions section of ``text``."""
-    entries: list[list[str]] = []
+def _section_lines(text: str) -> tuple[bool, list[str]]:
+    """Return ``(found, lines)``: the lines under the open-decisions heading, up to the next heading of equal or higher rank."""
+    lines = iter(text.splitlines())
     level = 0
     found = False
-    body: list[str] = []
-    for line in text.splitlines():
-        if not found:
-            m = _HEADING.match(line)
-            if m:
-                found = True
-                level = len(m.group(1)) if m.group(1) else 7
-            continue
+    for line in lines:
+        m = _HEADING.match(line)
+        if m:
+            found = True
+            level = len(m.group(1)) if m.group(1) else 7
+            break
+    section: list[str] = []
+    if not found:
+        return False, section
+    for line in lines:
         heading = _ANY_HEADING.match(line)
         if heading and len(heading.group(1)) <= level:
             break
-        if line.strip():
-            body.append(line.strip())
+        section.append(line)
+    return True, section
+
+
+def _scan_log(text: str) -> tuple[bool, list[list[str]], list[str]]:
+    """Return ``(found, entries, body)`` for the open-decisions section of ``text``."""
+    found, section = _section_lines(text)
+    entries: list[list[str]] = []
+    body: list[str] = []
+    for line in section:
+        stripped = line.strip()
+        if stripped:
+            body.append(stripped)
         entry = _ENTRY.match(line)
         if entry:
             entries.append([entry.group(1) or entry.group(2), entry.group(3).strip()])
-        elif entries and line.strip():
-            entries[-1][1] += " " + line.strip()
+        elif entries and stripped:
+            entries[-1][1] += " " + stripped
     return found, entries, body
 
 
