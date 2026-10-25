@@ -238,26 +238,17 @@ def test_checkpoint_item_with_open_pr_does_not_trigger_the_review_rule(
     assert items(fake_run_item) == ["NEW-1"]
 
 
-def test_pr_awaiting_review_still_skips_picking_new_items(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+def test_open_pr_of_earlier_item_does_not_stop_resume_or_new_picks(
+    tmp_path: Path, fake_run_item: dict[str, Any]
+) -> None:
     prs = FakePrs({branch_name("OLD-1"): PullRequest(3, "http://pr/3")})
-    env = make_env(tmp_path, ["NEW-1"], prs=prs)
-    rec = RunRecord.open(tmp_path / "ws", "OLD-1")
-    rec.mark_stage(OPEN_PR_STAGE, "complete")
-    rec.increment_retry(BRANCH_CREATED_KEY)
-    run(env)
-    assert fake_run_item["calls"] == []
-    assert "awaits review" in env.digest
-
-
-def test_pr_rule_still_allows_resuming_cleared_items(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
-    prs = FakePrs({branch_name("OLD-1"): PullRequest(3, "http://pr/3")})
-    env = make_env(tmp_path, ["NEW-1"], prs=prs)
+    env = make_env(tmp_path, ["NEW-1"], prs=prs, extra="\n[limits]\nmax_tickets_per_run = 2\n")
     rec = RunRecord.open(tmp_path / "ws", "OLD-1")
     rec.mark_stage(OPEN_PR_STAGE, "complete")
     rec.increment_retry(BRANCH_CREATED_KEY)
     stopped(env, "RES-1", "C1", brief=CLEAR)
     run(env)
-    assert items(fake_run_item) == ["RES-1"]
+    assert items(fake_run_item) == ["RES-1", "NEW-1"]
 
 
 # ----------------------------------------------------------------- resume command
@@ -367,13 +358,9 @@ def test_status_one_item_shows_everything(tmp_path: Path) -> None:
         assert text in result.output
 
 
-def test_status_all_items_and_review_state(tmp_path: Path) -> None:
-    prs = FakePrs({branch_name("REV-1"): PullRequest(3, "http://pr/3")})
-    env = make_env(tmp_path, prs=prs)
+def test_status_all_items_states(tmp_path: Path) -> None:
+    env = make_env(tmp_path)
     stopped(env, "OLD-1", "C5", brief=None)
-    rec = RunRecord.open(tmp_path / "ws", "REV-1")
-    rec.mark_stage(OPEN_PR_STAGE, "complete")
-    rec.increment_retry(BRANCH_CREATED_KEY)
     RunRecord.open(tmp_path / "ws", "IDLE-1")
     err = RunRecord.open(tmp_path / "ws", "ERR-1")
     write_stop_record(
@@ -385,7 +372,6 @@ def test_status_all_items_and_review_state(tmp_path: Path) -> None:
     out = env.invoke("status", "--config", str(env.config)).output
     assert "OLD-1" in out
     assert out.count("awaiting: you") == 1
-    assert out.count("awaiting: review") == 1
     assert out.count("awaiting: error") == 1
     assert out.count("awaiting: none") == 1
     assert "auto-resume: explicit" in out

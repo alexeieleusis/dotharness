@@ -30,7 +30,6 @@ from typing import Any
 
 import click
 
-from sisyphus import gaterecord
 from sisyphus.cleanup import PrInfo
 from sisyphus.config import ConfigError, SisyphusConfig, load_config
 from sisyphus.digest import DigestReport, DigestWriteError, NeedsYou, describe_reset, needs_from_record, write_digest
@@ -55,7 +54,6 @@ from sisyphus.pick import (
     PickError,
     PullRequestLookup,
     TrackerClient,
-    find_awaiting_review,
     pick_items,
 )
 from sisyphus.rails import PERMISSION_FLAG, LimitTracker
@@ -86,7 +84,6 @@ AGENT_COMMANDS = {
 }
 TOKEN_CMD_TIMEOUT = 30
 DEFAULT_BASE_BRANCH = "main"
-AWAITING_REVIEW = "awaiting-review"
 
 
 class AgentError(Exception):
@@ -192,10 +189,9 @@ class Services:
     subprocess_runner: SubprocessRunner = default_subprocess_runner
     clock: Callable[[], float] = time.monotonic
     lock_dir: Path | None = None
-    state_dir: Path | None = None
     today: datetime | None = None
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
-    repo_info: Callable[[], tuple[str, str | None]] | None = field(default=None)
+    repo_info: Callable[[], str | None] | None = field(default=None)
 
 
 ServicesFactory = Callable[[SisyphusConfig], Services]
@@ -221,15 +217,13 @@ def default_services(config: SisyphusConfig) -> Services:
         else _no_backend
     )
 
-    def repo_info() -> tuple[str, str | None]:
-        """``(repo_slug, default_branch)`` from ``gh repo view``; falls back to the path-based slug."""
+    def repo_info() -> str | None:
+        """The repository default branch from ``gh repo view``, or ``None`` if it cannot be read."""
         try:
-            data = gh.json("repo", "view", "--json", "nameWithOwner,defaultBranchRef")
-            slug = gaterecord.repo_slug_from_name(data["nameWithOwner"])
-            default = (data.get("defaultBranchRef") or {}).get("name")
-        except (PickError, KeyError, TypeError):
-            return gaterecord.fallback_repo_slug(repo_dir), None
-        return slug, default
+            data = gh.json("repo", "view", "--json", "defaultBranchRef")
+            return (data.get("defaultBranchRef") or {}).get("name")
+        except (PickError, KeyError, TypeError, AttributeError):
+            return None
 
     return Services(
         tracker=tracker,
@@ -300,17 +294,10 @@ def _resolve_options(
     config: SisyphusConfig, services: Services, base: str | None, config_path: str = ""
 ) -> OrchestratorOptions:
     base = base or config.project.base_branch or DEFAULT_BASE_BRANCH
-    slug, default_branch = (
-        services.repo_info()
-        if services.repo_info
-        else (gaterecord.fallback_repo_slug(config.project.repo_dir or "."), None)
-    )
+    default_branch = services.repo_info() if services.repo_info else None
     return OrchestratorOptions(
         base_branch=base,
-        repo_slug=slug,
         default_branch=default_branch,
-        ci_fix=config.source.ci is not None,
-        state_dir=services.state_dir,
         lock_dir=services.lock_dir,
         resume_command=_resume_template(config_path, base) if config_path else None,
     )
@@ -372,7 +359,7 @@ def _resume_phase(config: SisyphusConfig, services: Services, state: _RunState, 
 
 
 def _pick_phase(config: SisyphusConfig, services: Services, state: _RunState) -> list[Candidate]:
-    """Auto-resume cleared items, then (unless a PR awaits review) pick new ones. The caller holds the clone lock.
+    """Auto-resume cleared items, then pick new ones. The caller holds the clone lock.
 
     Items waiting at a checkpoint never stop picking. Resumed and new items share ``max_tickets_per_run``.
     """
@@ -380,18 +367,6 @@ def _pick_phase(config: SisyphusConfig, services: Services, state: _RunState) ->
     workspace = Path(config.project.workspace_dir).expanduser()
     limit = config.limits.max_tickets_per_run
     resumed = _resume_phase(config, services, state, limit)
-    awaiting = find_awaiting_review(workspace, services.pr_client.find_pr)
-    for a in awaiting:
-        state.needs.append(
-            NeedsYou(
-                a.item,
-                AWAITING_REVIEW,
-                f"PR #{a.pr.number} {a.pr.url} from an earlier run still awaits review, so no new item "
-                "was picked. Review or merge it.",
-            )
-        )
-    if awaiting:
-        return resumed
     new = pick_items(
         config.source.work_item,
         services.tracker,
@@ -528,7 +503,7 @@ def run_command(factory: ServicesFactory | None, config_path: str, base: str | N
         picked = _pick_phase(config, services, state)
         _run_phase(picked, config, services, base, state, config_path)
 
-    # One non-blocking lock for the whole invocation: awaiting-review check, pick, every item, digest.
+    # One non-blocking lock for the whole invocation: pick, every item, digest.
     _run_locked(config, services, state, phase)
 
 
@@ -736,12 +711,6 @@ def status_command(factory: ServicesFactory | None, work_item_ref: str | None, c
     if not records:
         click.echo("no items")
         return
-    try:
-        reviews: set[str] | None = {
-            a.item for a in find_awaiting_review(workspace, _services(factory, config).pr_client.find_pr)
-        }
-    except Exception:
-        reviews = None
     for rec in records:
         if rec.checkpoint is not None:
             awaiting = "you"
@@ -749,10 +718,8 @@ def status_command(factory: ServicesFactory | None, work_item_ref: str | None, c
             awaiting = "none"
         elif stop is not None:
             awaiting = "error"
-        elif reviews is None:
-            awaiting = "unknown (PR lookup failed)"
         else:
-            awaiting = "review" if rec.item in reviews else "none"
+            awaiting = "none"
         click.echo("\n".join(_status_block(rec, awaiting, config, config_path)))
 
 

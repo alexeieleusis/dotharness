@@ -1,4 +1,4 @@
-"""Orchestrator: run one work item through intake, plan, build, push, PR and optional ci-fix.
+"""Orchestrator: run one work item through intake, plan, build, then push and open the PR.
 
 Everything that touches the outside world is injected: the agent runner (prompt in, nothing out),
 the subprocess runner (argv and cwd in, :class:`CommandResult` out; used for ``git``, the gate
@@ -26,7 +26,7 @@ from datetime import time as dtime
 from pathlib import Path
 from typing import Any, Protocol
 
-from sisyphus import gaterecord, prbody
+from sisyphus import prbody
 from sisyphus.cleanup import DELETED, KEPT, PrInfo, cleanup_branch
 from sisyphus.config import SisyphusConfig
 from sisyphus.digest import (
@@ -55,11 +55,8 @@ from sisyphus.runrecord import STAGE_COMPLETE, RunRecord
 from sisyphus.stages import (
     BUILD_RETRY_KEY,
     BUILD_STAGE,
-    CI_FIX_ATTEMPTS_KEY,
-    CI_FIX_STAGE,
     INTAKE_STAGE,
     LEAF_LIMIT_KEY,
-    MERGE_STAGE,
     OPEN_PR_STAGE,
     PLAN_STAGE,
     PUSH_STAGE,
@@ -134,8 +131,7 @@ class OrchestratorOptions:
     """Per-run inputs that are not in ``.sisyphus.toml``.
 
     ``base_branch`` is the PR base, a required parameter with no default here (the CLI resolves
-    ``--base`` > ``[project].base_branch`` > ``main`` and passes the result in). ``repo_slug`` is the
-    hyphenated ``owner-repo`` slug the gate record is filed under. ``default_branch`` is the
+    ``--base`` > ``[project].base_branch`` > ``main`` and passes the result in). ``default_branch`` is the
     repository default branch when it differs from ``base_branch``; both are never pushed to.
     ``spf_config_path`` defaults to ``<repo_dir>/.spec-prism-flow.toml``: the base each item's own config
     (``<workspace_dir>/plan-<n>/.spec-prism-flow.toml``) is copied from, with ``plan.workspace_dir`` and
@@ -145,12 +141,9 @@ class OrchestratorOptions:
     """
 
     base_branch: str
-    repo_slug: str
     default_branch: str | None = None
-    ci_fix: bool = False
     spf_config_path: Path | None = None
     phase_dir: Path | None = None
-    state_dir: Path | None = None
     lock_dir: Path | None = None
     home: Path | None = None
     checkout_root: Path | None = None
@@ -166,8 +159,6 @@ class RunResult:
     stages_skipped: tuple[str, ...]
     branch: str
     pr: PullRequest | None
-    head_sha: str | None
-    gate_recorded: bool
     digest_path: Path | None
     record: RunRecord
     report: DigestReport
@@ -343,7 +334,6 @@ class _Run:
             raise OrchestratorError("[project].workspace_dir is not set")
         if not options.base_branch:
             raise OrchestratorError("base_branch must be set (config or CLI input)")
-        gaterecord.validate_repo_slug(options.repo_slug)
         self.item = item
         self.config = config
         self.opt = options
@@ -362,8 +352,7 @@ class _Run:
         self.rec = RunRecord.open(self.workspace, item)
         self.prior_cp = self.rec.checkpoint
         self.pr: PullRequest | None = None
-        self.head_sha: str | None = None
-        self.gate_recorded = False
+        self.gated = False
         self.notes: list[str] = []
         self.done_stages: list[str] = []
         self.skipped: list[str] = []
@@ -393,12 +382,7 @@ class _Run:
     # -- stage driver
 
     def stages(self) -> list[str]:
-        wanted = [INTAKE_STAGE, PLAN_STAGE, BUILD_STAGE, PUSH_STAGE, OPEN_PR_STAGE]
-        if self.opt.ci_fix:
-            wanted.append(CI_FIX_STAGE)
-        if self.config.merge.enabled:
-            wanted.append(MERGE_STAGE)
-        return wanted
+        return [INTAKE_STAGE, PLAN_STAGE, BUILD_STAGE, PUSH_STAGE, OPEN_PR_STAGE]
 
     def start_index(self) -> int:
         """Index into ``STAGE_ORDER`` of the first stage that must still run."""
@@ -424,8 +408,6 @@ class _Run:
             BUILD_STAGE: self.stage_build,
             PUSH_STAGE: self.stage_push,
             OPEN_PR_STAGE: self.stage_open_pr,
-            CI_FIX_STAGE: self.stage_ci_fix,
-            MERGE_STAGE: self.stage_merge,
         }
         try:
             self.prepare_clone(start)
@@ -781,18 +763,20 @@ class _Run:
             self.notes.append(text)
 
     def gate(self) -> None:
-        """Run the gate commands at HEAD and write the gate record only if every command exits 0."""
+        """Run ``build.commands`` in each touched package dir at HEAD; raise C5 on the first failure.
+
+        When there are no ``build.commands`` or no changed files, note that the gate was not run and return.
+        """
         number = self.pr_number()
         self.write_item_config()
         commands = read_build_commands(self.spf)
         if commands is None:
-            self.note(f"no gate record for PR #{number}: no build.commands in {self.spf}")
+            self.note(f"gate not run for PR #{number}: no build.commands in {self.spf}")
             return
-        sha = self.rev_parse_head()
         changed = self.git("diff", "--name-only", f"origin/{self.opt.base_branch}...HEAD").stdout.split("\n")
         dirs = package_dirs(self.repo, [c for c in changed if c.strip()])
         if not dirs:
-            self.note(f"no gate record for PR #{number}: no changed files to gate")
+            self.note(f"gate not run for PR #{number}: no changed files to gate")
             return
         for directory in dirs:
             for command in commands:
@@ -803,62 +787,7 @@ class _Run:
                         f"gate command '{command}' failed in {directory} (exit {res.returncode}): "
                         f"{_tail(res.stderr or res.stdout)}",
                     )
-        gaterecord.write_gate_record(self.opt.repo_slug, number, sha, self.opt.state_dir, commands)
-        self.head_sha = sha
-        self.gate_recorded = True
-
-    # -- ci-fix and merge
-
-    def sync_head(self) -> bool:
-        """Fast-forward the clone to the remote branch; True when the head moved."""
-        before = self.rev_parse_head()
-        self.git("fetch", "origin", self.branch, network=True)
-        remote = self.git("rev-parse", "FETCH_HEAD").stdout.strip()
-        if remote != before and self.git("merge", "--ff-only", "FETCH_HEAD", ok=False).returncode != 0:
-            raise _Stop(Checkpoint.C7, f"{self.branch} cannot be updated without a rebase or force-push")
-        return self.rev_parse_head() != before
-
-    def stage_ci_fix(self) -> None:
-        number = self.pr_number()
-        cap = self.config.limits.max_fix_attempts_per_pr
-        with self.rec.stage_scope(CI_FIX_STAGE):
-            attempts = self.rec.retries.get(CI_FIX_ATTEMPTS_KEY, 0)
-            settled = False
-            while attempts < cap:
-                res = self.sh(["harness", "run", "ci-fix", "--pr", str(number)], self.repo)
-                attempts = self.rec.increment_retry(CI_FIX_ATTEMPTS_KEY)
-                if res.returncode != 0:
-                    raise _Stop(
-                        Checkpoint.C8, f"harness run ci-fix failed (exit {res.returncode}): {_tail(res.stderr)}"
-                    )
-                if not self.sync_head():
-                    settled = True
-                    break
-                self.gate()  # a new head SHA makes the old record stale
-            if not settled:
-                raise _Stop(Checkpoint.C6, f"max_fix_attempts_per_pr ({cap}) reached for PR #{number}")
-            if gaterecord.read_gate_record(self.opt.repo_slug, number, self.opt.state_dir) != self.rev_parse_head():
-                self.gate()
-
-    def stage_merge(self) -> None:
-        number = self.pr_number()
-        with self.rec.stage_scope(MERGE_STAGE):
-            res = self.sh(["harness", "run", "merge", "--pr", str(number)], self.repo)
-            if res.returncode != 0:
-                raise _Stop(Checkpoint.C8, f"harness run merge failed (exit {res.returncode}): {_tail(res.stderr)}")
-            # `harness run merge` exits 0 for every skip (checks pending, unviewed files, stale gate record...):
-            # only the PR's own state proves the merge happened.
-            try:
-                info = self.gh.pr_state(str(number))
-            except GitHubError as exc:
-                raise _Stop(Checkpoint.C8, str(exc)) from exc
-            if info is None or info.state.upper() != "MERGED":
-                state = info.state if info else "unknown"
-                raise _Stop(
-                    Checkpoint.C8,
-                    f"harness run merge exited 0 but PR #{number} is not merged (state {state}); "
-                    "the merge runner skipped it. Resolve the skip reason and resume to retry the merge",
-                )
+        self.gated = True
 
 
 def run_item(
@@ -915,8 +844,6 @@ def run_item(
             stages_skipped=tuple(run.skipped),
             branch=run.branch,
             pr=run.pr,
-            head_sha=run.head_sha,
-            gate_recorded=run.gate_recorded,
             digest_path=digest_path,
             record=run.rec,
             report=report,
@@ -933,7 +860,7 @@ def _report(run: _Run) -> DigestReport:
     done: tuple[DoneEntry, ...] = ()
     if run.pr is not None:
         evidence = [run.pr.url or f"PR #{run.pr.number}", f"branch {run.branch}"]
-        evidence.append(f"gate record written for {run.head_sha}" if run.gate_recorded else "no gate record written")
+        evidence.append("gate passed" if run.gated else "gate not run")
         if run.cleanup_done:
             evidence.append(run.cleanup_done)
         done = (DoneEntry(f"{run.item}: PR #{run.pr.number} open", tuple(evidence)),)

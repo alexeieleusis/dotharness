@@ -82,13 +82,13 @@ def test_checkpoint_set_and_clear(tmp_path: Path) -> None:
 
 def test_retries_survive_reload(tmp_path: Path) -> None:
     rec = RunRecord.open(tmp_path, "X")
-    assert rec.increment_retry("ci-fix") == 1
-    assert rec.increment_retry("ci-fix") == 2
+    assert rec.increment_retry("build:retry-cycles") == 1
+    assert rec.increment_retry("build:retry-cycles") == 2
     again = RunRecord.open(tmp_path, "X")
-    assert again.retries == {"ci-fix": 2}
-    assert again.increment_retry("ci-fix") == 3
+    assert again.retries == {"build:retry-cycles": 2}
+    assert again.increment_retry("build:retry-cycles") == 3
     again.mark_stage("s", STAGE_COMPLETE)
-    assert RunRecord.open(tmp_path, "X").retries == {"ci-fix": 3}
+    assert RunRecord.open(tmp_path, "X").retries == {"build:retry-cycles": 3}
 
 
 def test_interrupted_write_keeps_previous_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

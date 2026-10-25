@@ -129,16 +129,6 @@ def test_leaf_limit_boundary() -> None:
     assert s.checkpoint is Checkpoint.C6
 
 
-def test_fix_attempt_limit_boundary_per_pr() -> None:
-    tr = LimitTracker(clock=Clock())
-    tr.record_fix_attempt("1")
-    tr.record_fix_attempt("1")
-    tr.record_fix_attempt("2")
-    assert not tr.status().tripped
-    assert tr.record_fix_attempt("1") == 3
-    assert tr.status().reached == ("max_fix_attempts_per_pr",)
-
-
 def test_retry_bound_escalates() -> None:
     rb = RetryBound()
     assert not rb.result().escalate

@@ -47,7 +47,7 @@ def _written_retry_keys() -> set[str]:
 
 def test_every_reset_key_is_written_by_sisyphus() -> None:
     written = _written_retry_keys()
-    assert {"build:retry-cycles", "ci-fix:attempts", "auto-retry"} <= written
+    assert {"build:retry-cycles", "auto-retry"} <= written
     unused = {k for keys in RESET_KEYS.values() for k in keys} - written
     assert not unused
 

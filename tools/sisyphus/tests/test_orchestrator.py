@@ -22,9 +22,8 @@ import pytest
 
 from sisyphus import orchestrator, pick
 from sisyphus.cleanup import PrInfo
-from sisyphus.config import DigestConfig, LimitsConfig, MergeConfig, ProjectConfig, SisyphusConfig
+from sisyphus.config import DigestConfig, LimitsConfig, ProjectConfig, SisyphusConfig
 from sisyphus.digest import DigestWriteError
-from sisyphus.gaterecord import gate_record_path, read_gate_record
 from sisyphus.intake import resolve_brief_path
 from sisyphus.lock import LockHeld, clone_lock
 from sisyphus.orchestrator import (
@@ -52,7 +51,6 @@ ITEM = "ENG-1"
 SHA1 = "1" * 40
 SHA2 = "2" * 40
 SHA3 = "3" * 40
-SHA4 = "4" * 40
 BRIEF_NONE = "# Brief\n\n## Open decisions log\n\nNone\n"
 BRIEF_OPEN = "# Brief\n\n## Open decisions log\n\n1. Which tracker?\n"
 TODAY = datetime(2026, 1, 2, tzinfo=UTC)
@@ -87,7 +85,6 @@ class World:
         _git(self.repo, "commit", "-q", "-m", "init")
         self.phases = tmp_path / "phases"
         self.phases.mkdir()
-        self.state = tmp_path / "state"
         self.clock = Clock()
         self.events: list[str] = []
         self.shell_calls: list[tuple[tuple[str, ...], Path | None]] = []
@@ -120,9 +117,6 @@ class World:
         self.checkouts: list[str] = []
         self.branch_present_after_pr = False  # the local branch is still there when the cleanup probes for it
         self.branch_cmds: list[list[str]] = []
-        self.ci_fix_pushes: list[str] = []  # new head per ci-fix call; exhausted -> no push
-        self.ci_fix_rc = 0
-        self.merge_rc = 0
         # PR client behaviour
         self.existing_pr: PullRequest | None = None
         self.opened: list[tuple[str, str, str, str]] = []
@@ -133,7 +127,6 @@ class World:
         self.find_calls = 0
         # config
         self.limits = LimitsConfig()
-        self.merge_enabled = False
         (self.repo / ".spec-prism-flow.toml").write_text('[build]\ncommands = ["make check", "make test"]\n')
 
     # ---- config / options
@@ -145,16 +138,13 @@ class World:
                 brief_path_template="<workspace_dir>/<item-id>/brief.md",
             ),
             limits=self.limits,
-            merge=MergeConfig(enabled=self.merge_enabled),
             digest=DigestConfig(path_template=str(self.tmp / "digest-<date>.md")),
         )
 
     def options(self, **kw: object) -> OrchestratorOptions:
         base = OrchestratorOptions(
             base_branch="base-branch",
-            repo_slug="owner-repo",
             phase_dir=self.phases,
-            state_dir=self.state,
             lock_dir=self.tmp / "locks",
             home=self.tmp / "nohome",
         )
@@ -197,14 +187,6 @@ class World:
         self.shell_calls.append((tuple(a), cwd))
         if a[0] == "git":
             return self._git(a[1:])
-        if a[:3] == ["harness", "run", "ci-fix"]:
-            self.events.append("ci-fix")
-            if self.ci_fix_pushes:
-                self.remote_head = self.ci_fix_pushes.pop(0)
-            return CommandResult(self.ci_fix_rc)
-        if a[:3] == ["harness", "run", "merge"]:
-            self.events.append("merge")
-            return CommandResult(self.merge_rc)
         if a[0] == "make":
             self.events.append(f"gate:{' '.join(a)}@{cwd.name if cwd else None}")
             return CommandResult(self.gate_rc, "", "gate failed" if self.gate_rc else "")
@@ -358,13 +340,11 @@ def test_happy_path_pr_gate_and_digest(world: World) -> None:
     result = world.run()
     assert world.opened == [(branch_name(ITEM), "base-branch", "Sisyphus: ENG-1", world.opened[0][3])]
     assert result.pr == PullRequest(42, "https://example.test/pr/42")
-    assert result.gate_recorded
-    assert read_gate_record("owner-repo", 42, world.state) == SHA1
-    data = json.loads(gate_record_path("owner-repo", 42, world.state).read_text())
-    assert data["commands"] == ["make check", "make test"]
     digest = world.digest_text()
     assert "PR #42 open" in digest
-    assert f"gate record written for {SHA1}" in digest
+    assert "gate passed" in digest
+    assert "gate record" not in digest
+    assert not list(world.tmp.rglob("build_gate_*.json"))
     assert any(c[0] == ("git", "checkout", "-b", branch_name(ITEM), "origin/base-branch") for c in world.shell_calls)
     assert RunRecord.open(world.tmp / "ws", ITEM).retries.get("branch-created") == 1
 
@@ -485,14 +465,13 @@ def test_c5_leaf_scope_violation_from_agent(world: World) -> None:
     assert world.find_calls == 0
 
 
-def test_c5_gate_command_failure_writes_no_record(world: World) -> None:
+def test_c5_gate_command_failure_raises_c5(world: World) -> None:
     world.gate_rc = 2
     result = world.run()
     _assert_stop(world, result, Checkpoint.C5)
     assert result.pr is not None  # PR is open, but not gated
-    assert not result.gate_recorded
-    assert read_gate_record("owner-repo", 42, world.state) is None
-    assert not gate_record_path("owner-repo", 42, world.state).exists()
+    assert not list(world.tmp.rglob("build_gate_*.json"))
+    assert "gate passed" not in world.digest_text()
     assert world.events.count("gate:make check@pkg") == 1  # stopped at first failure
 
 
@@ -661,7 +640,6 @@ def test_rerun_after_gate_failure_reuses_existing_pr(world: World) -> None:
     result = world.run()
     assert result.completed
     assert len(world.opened) == 1  # find_pr found the PR; no second PR
-    assert read_gate_record("owner-repo", 42, world.state) == SHA1
     assert world.events.count("agent:build") == 1  # earlier stages not repeated
     assert world.events.count("agent:plan") == 1
 
@@ -702,142 +680,40 @@ def test_push_argv_is_plain_non_force(world: World) -> None:
     assert pushes == [("git", "push", "origin", branch_name(ITEM))]
 
 
-# ------------------------------------------------------------- AC6: ci-fix and merge
-
-
-def test_ci_fix_argv_and_attempt_cap(world: World) -> None:
-    world.limits = LimitsConfig(max_fix_attempts_per_pr=2)
-    world.ci_fix_pushes = [SHA2, SHA3, SHA4]
-    result = world.run(ci_fix=True)
-    argvs = [c[0] for c in world.shell_calls if c[0][0] == "harness"]
-    assert argvs == [("harness", "run", "ci-fix", "--pr", "42")] * 2
-    assert list(argvs[0]) == ["harness", "run", "ci-fix", "--pr", "42"]
-    _assert_stop(world, result, Checkpoint.C6)
-    assert RunRecord.open(world.tmp / "ws", ITEM).retries["ci-fix:attempts"] == 2
-    # every ci-fix push re-gated the PR at the new head
-    assert read_gate_record("owner-repo", 42, world.state) == SHA3
-    assert world.events.count("gate:make check@pkg") == 3
-
-
-def test_ci_fix_cap_not_exceeded_on_rerun(world: World) -> None:
-    world.limits = LimitsConfig(max_fix_attempts_per_pr=1)
-    world.ci_fix_pushes = [SHA2, SHA3]
-    world.run(ci_fix=True)
-    result = world.run(ci_fix=True)
-    assert result.checkpoint is Checkpoint.C6
-    assert sum(1 for c in world.shell_calls if c[0][:3] == ("harness", "run", "ci-fix")) == 1
-
-
-def test_ci_fix_with_nothing_to_fix_settles_after_one_call(world: World) -> None:
-    result = world.run(ci_fix=True)
-    assert result.completed
-    assert sum(1 for c in world.shell_calls if c[0][:3] == ("harness", "run", "ci-fix")) == 1
-    assert read_gate_record("owner-repo", 42, world.state) == SHA1
-    assert world.events.count("gate:make check@pkg") == 1  # no new head, no re-gate
-
-
-def test_ci_fix_that_pushes_once_then_settles_regates(world: World) -> None:
-    world.ci_fix_pushes = [SHA2]
-    result = world.run(ci_fix=True)
-    assert result.completed
-    assert read_gate_record("owner-repo", 42, world.state) == SHA2
-    assert result.stages_run[-1] == "ci-fix"
-
-
-def test_ci_fix_failed_gate_after_fix_writes_no_new_record(world: World) -> None:
-    world.ci_fix_pushes = [SHA2]
-    original_shell = world.shell
-    state = {"made": 0}
-
-    def shell(argv: Sequence[str], cwd: Path | None) -> CommandResult:
-        a = list(argv)
-        if a[0] == "make":
-            state["made"] += 1
-            if state["made"] > 2:
-                world.gate_rc = 1
-        return original_shell(argv, cwd)
-
-    result = run_item(
-        ITEM,
-        world.config(),
-        world.options(ci_fix=True),
-        agent_runner=world.agent,
-        subprocess_runner=shell,
-        pr_client=world,
-        clock=world.clock,
-        today=TODAY,
-    )
-    _assert_stop(world, result, Checkpoint.C5)
-    assert read_gate_record("owner-repo", 42, world.state) == SHA1  # stale for SHA2: the merge runner refuses
-
-
-def test_ci_fix_ff_failure_is_c7(world: World) -> None:
-    world.ci_fix_pushes = [SHA2]
-    world.ff_rc = 1
-    result = world.run(ci_fix=True)
-    _assert_stop(world, result, Checkpoint.C7)
-
-
-def test_ci_fix_command_failure_is_c8(world: World) -> None:
-    world.ci_fix_rc = 1
-    result = world.run(ci_fix=True)
-    _assert_stop(world, result, Checkpoint.C8)
-
-
-def test_ci_fix_disabled_by_default(world: World) -> None:
-    world.run()
-    assert not any(c[0][0] == "harness" for c in world.shell_calls)
-
-
-def test_merge_runner_invoked_only_via_harness_cli_when_enabled(world: World) -> None:
-    world.merge_enabled = True
-    world.pr_info = PrInfo(42, "MERGED", SHA1)
-    result = world.run()
-    assert result.completed
-    merges = [c[0] for c in world.shell_calls if c[0][:3] == ("harness", "run", "merge")]
-    assert merges == [("harness", "run", "merge", "--pr", "42")]
-    assert result.stages_run[-1] == "merge"
-
-
-def test_merge_not_run_when_disabled(world: World) -> None:
-    world.run()
-    assert not any("merge" in c[0] and c[0][0] == "harness" for c in world.shell_calls)
+# ------------------------------------------------------------- AC6: Sisyphus stops at open-pr
 
 
 def test_nothing_ever_approves(world: World) -> None:
-    world.merge_enabled = True
-    world.pr_info = PrInfo(42, "MERGED", SHA1)
-    world.run(ci_fix=True)
+    world.run()
     for argv, _ in world.shell_calls:
         assert "approve" not in " ".join(argv)
 
 
-def test_merge_command_failure_is_c8(world: World) -> None:
-    world.merge_enabled = True
-    world.merge_rc = 1
-    _assert_stop(world, world.run(), Checkpoint.C8)
-
-
-def test_merge_skipped_with_exit_zero_is_not_a_completed_merge(world: World) -> None:
-    world.merge_enabled = True
-    world.pr_info = PrInfo(42, "OPEN", SHA1)  # the runner exited 0 but skipped the merge
+def test_run_is_complete_once_the_pr_is_open_and_frees_the_clone(world: World) -> None:
+    _cleanup_ready(world)  # proof (1): the pushed head is an ancestor of origin/<branch>
     result = world.run()
-    _assert_stop(world, result, Checkpoint.C8)
-    assert "not merged" in result.detail
-    assert "merge" not in result.stages_run
-    assert not world.branch_cmds  # the branch is not cleaned up
+    assert result.completed
+    assert result.stages_run[-1] == "open-pr"
+    for stage in ("ci-fix", "merge"):
+        assert stage not in result.stages_run
+        assert stage not in result.stages_skipped
+    # the clone is back on the base with the item's local branch deleted by `-d` only
+    assert world.current_branch == "base-branch"
+    assert ["branch", "-d", branch_name(ITEM)] in world.branch_cmds
+    assert not any("-D" in cmd for cmd in world.branch_cmds)
+    assert not any(c[0][:3] in {("harness", "run", "ci-fix"), ("harness", "run", "merge")} for c in world.shell_calls)
 
 
 # ---------------------------------------------------------- gate commands (FR-3.3.10)
 
 
-def test_no_build_commands_writes_no_record_and_reports_in_digest(world: World) -> None:
+def test_no_build_commands_skips_gate_and_reports_in_digest(world: World) -> None:
     (world.repo / ".spec-prism-flow.toml").write_text('[plan]\nphase_dir = "x"\n')
     result = world.run()
     assert result.completed
-    assert not result.gate_recorded
-    assert not gate_record_path("owner-repo", 42, world.state).exists()
-    assert "no build.commands" in world.digest_text().split("## Deviations")[1]
+    assert result.checkpoint is None
+    assert "gate not run for PR #42: no build.commands" in world.digest_text().split("## Deviations")[1]
+    assert "gate not run" in world.digest_text().split("## Done")[1].split("## Deviations")[0]
     assert not any(e.startswith("gate") for e in world.events)
 
 
@@ -887,12 +763,20 @@ def test_dump_spf_config_round_trips_nested_tables_quoted_keys_and_datetimes() -
     assert tomllib.loads(dump_spf_config(data)) == data
 
 
-def test_missing_spf_config_writes_no_record(world: World) -> None:
+def test_missing_spf_config_skips_gate(world: World) -> None:
     (world.repo / ".spec-prism-flow.toml").unlink()
     result = world.run()
     assert result.completed
-    assert not gate_record_path("owner-repo", 42, world.state).exists()
-    assert "no build.commands" in world.digest_text()
+    assert "gate not run for PR #42: no build.commands" in world.digest_text()
+
+
+def test_no_changed_files_skips_gate_without_checkpoint(world: World) -> None:
+    world.changed = ""
+    result = world.run()
+    assert result.completed
+    assert result.checkpoint is None
+    assert not any(e.startswith("gate") for e in world.events)
+    assert "gate not run for PR #42: no changed files to gate" in world.digest_text()
 
 
 def test_gate_runs_in_each_touched_package_dir(world: World) -> None:
@@ -907,12 +791,6 @@ def test_gate_runs_in_each_touched_package_dir(world: World) -> None:
         (("make", "check"), "other"),
         (("make", "test"), "other"),
     }
-
-
-def test_gate_record_records_exact_tested_head(world: World) -> None:
-    world.head = SHA4
-    world.run()
-    assert read_gate_record("owner-repo", 42, world.state) == SHA4
 
 
 def test_package_dirs(tmp_path: Path) -> None:
@@ -1075,9 +953,7 @@ def test_orchestrator_does_not_import_harness_or_spec_prism_flow() -> None:
 
 
 def test_tests_never_invoke_real_tools(world: World) -> None:
-    world.merge_enabled = True
-    world.pr_info = PrInfo(42, "MERGED", SHA1)
-    world.run(ci_fix=True)
+    world.run()
     for argv, _ in world.shell_calls:
         assert argv[0] in {"git", "harness", "make"}  # all through the fake, none executed for real
     assert world.events  # the fake saw every call
@@ -1583,30 +1459,6 @@ def test_abandoned_item_keeps_its_branch(world: World) -> None:
     _cleanup_ready(world)
     world.run()
     assert world.branch_cmds == []
-
-
-def test_ci_fix_after_branch_deleted_works_from_the_remote_head(world: World) -> None:
-    _cleanup_ready(world)
-    world.run()
-    assert world.branch_present_after_pr is False
-    before = len(world.shell_calls)
-    result = world.run(ci_fix=True)
-    assert result.completed
-    assert result.stages_run == ("ci-fix",)
-    new = [c[0] for c in world.shell_calls[before:]]
-    assert ("git", "checkout", "--detach", "FETCH_HEAD") in new
-    assert ("harness", "run", "ci-fix", "--pr", "42") in new
-    assert not any(c[:3] == ("git", "checkout", branch_name(ITEM)) for c in new)
-
-
-def test_merge_after_branch_deleted_works_from_the_remote_head(world: World) -> None:
-    _cleanup_ready(world)
-    world.run()
-    world.merge_enabled = True
-    world.pr_info = PrInfo(42, "MERGED", SHA1)
-    result = world.run()
-    assert result.completed
-    assert result.stages_run == ("merge",)
 
 
 def test_resume_before_the_pr_stage_still_needs_the_local_branch(world: World) -> None:

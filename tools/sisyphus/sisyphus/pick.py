@@ -24,17 +24,11 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from sisyphus.config import WorkItemSource
-from sisyphus.orchestrator import BRANCH_CREATED_KEY, PullRequest, branch_name
-from sisyphus.resume import iter_records
 from sisyphus.runrecord import record_path
-from sisyphus.stages import CI_FIX_STAGE, MERGE_STAGE, OPEN_PR_STAGE
-from sisyphus.stoprecord import is_abandoned
 from sisyphus.subproc import CommandResult, run_command
 
 LINEAR_API_URL = "https://api.linear.app/graphql"
 GITHUB_OPEN_STATE = "OPEN"
-# Stages at or after "open-pr": an earlier run may have left a PR open.
-_PR_STAGES = (OPEN_PR_STAGE, CI_FIX_STAGE, MERGE_STAGE)
 
 
 class PickError(Exception):
@@ -183,45 +177,6 @@ def _take_unstarted(
         if len(picked) >= limit:
             break
     return picked
-
-
-# ------------------------------------------------- earlier PR awaiting review
-
-
-@dataclass(frozen=True)
-class AwaitingReview:
-    """An earlier Sisyphus item whose PR is still open (FR-9 step 4)."""
-
-    item: str
-    branch: str
-    pr: PullRequest
-
-
-def find_awaiting_review(
-    workspace_dir: str | Path, find_open_pr: Callable[[str], PullRequest | None]
-) -> list[AwaitingReview]:
-    """Items with a run record that reached the PR stage and whose Sisyphus branch has an open PR.
-
-    ``find_open_pr(branch)`` returns the open PR with that head branch, or ``None``. Records are read
-    only; files that are not run records (stop reports, intake sidecars, anything else) are ignored.
-    """
-    ws = Path(workspace_dir).expanduser()
-    found: list[AwaitingReview] = []
-    for rec in iter_records(ws):
-        # An item stopped at a checkpoint waits for an answer, not a review; it never blocks picking.
-        # An abandoned item never blocks picking either (its PR, if any, is the human's to handle).
-        if (
-            is_abandoned(rec.path)
-            or rec.checkpoint is not None
-            or not rec.retries.get(BRANCH_CREATED_KEY)
-            or rec.stage not in _PR_STAGES
-        ):
-            continue
-        branch = branch_name(rec.item)
-        pr = find_open_pr(branch)
-        if pr is not None:
-            found.append(AwaitingReview(rec.item, branch, pr))
-    return found
 
 
 # --------------------------------------------------------------- real clients

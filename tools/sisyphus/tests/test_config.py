@@ -25,8 +25,7 @@ def test_minimal_defaults(tmp_path: Path) -> None:
     assert cfg.limits.max_tickets_per_run == 1
     assert cfg.limits.max_leaves_per_run == 4
     assert cfg.limits.max_run_minutes == 180
-    assert cfg.limits.max_fix_attempts_per_pr == 3
-    assert cfg.merge.enabled is False
+    assert not hasattr(cfg, "merge")
     assert cfg.project.repo_dir is None
     assert cfg.source.work_item is None
     assert cfg.agent.backend is None
@@ -86,12 +85,12 @@ conventions_path = "c"
     cfg = load_config(write(tmp_path, text))
     assert cfg.project.brief_path_template == "b/{id}.md"
     assert cfg.project.base_branch is None
-    assert cfg.source.ci is not None
+    assert not hasattr(cfg.source, "ci")
     assert cfg.source.host is not None
     assert cfg.source.host.token_cmd == "gh auth token"  # noqa: S105
     assert cfg.agent.backend == "opencode"
     assert cfg.limits.max_run_minutes == 10
-    assert cfg.merge.enabled is True
+    assert not hasattr(cfg, "merge")
     assert cfg.knowledge.conventions_path == "c"
 
 
@@ -115,9 +114,9 @@ def test_bad_work_item_kind(tmp_path: Path) -> None:
         load_config(write(tmp_path, MIN + '[source.work_item]\nkind = "jira"\n'))
 
 
-def test_bad_ci_kind(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="kind"):
-        load_config(write(tmp_path, MIN + '[source.ci]\nkind = "gitlab"\n'))
+def test_source_ci_must_be_table(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="must be a table"):
+        load_config(write(tmp_path, MIN + "[source]\nci = 1\n"))
 
 
 def test_bad_backend(tmp_path: Path) -> None:
@@ -199,7 +198,6 @@ def test_relative_paths_verbatim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         ('[project]\n[limits]\nmax_run_minutes = "x"\n', "max_run_minutes"),
         ("[project]\n[limits]\nmax_run_minutes = 1.5\n", "max_run_minutes"),
         ("[project]\n[limits]\nmax_run_minutes = true\n", "max_run_minutes"),
-        ('[project]\n[merge]\nenabled = "yes"\n', "enabled"),
         ("[project]\nsource = 1\n", "source"),
         ("project = 1\n", "project"),
     ],
@@ -209,9 +207,7 @@ def test_wrong_types(tmp_path: Path, text: str, key: str) -> None:
         load_config(write(tmp_path, text))
 
 
-@pytest.mark.parametrize(
-    "key", ["max_run_minutes", "max_tickets_per_run", "max_fix_attempts_per_pr", "max_leaves_per_run"]
-)
+@pytest.mark.parametrize("key", ["max_run_minutes", "max_tickets_per_run", "max_leaves_per_run"])
 @pytest.mark.parametrize("value", [0, -1])
 def test_limits_positive(tmp_path: Path, key: str, value: int) -> None:
     with pytest.raises(ConfigError, match=key):
@@ -221,8 +217,37 @@ def test_limits_positive(tmp_path: Path, key: str, value: int) -> None:
 def test_harness_owned_keys_pass_through(tmp_path: Path) -> None:
     text = MIN + "[merge]\nmax_changed_lines = 0\nfuture_key = 1\n[source.ci]\nmax_fix_attempts = -2\nfuture = 1\n"
     cfg = load_config(write(tmp_path, text))
-    assert cfg.merge.enabled is False
-    assert cfg.source.ci is not None
+    assert not hasattr(cfg, "merge")
+    assert not hasattr(cfg.source, "ci")
+    cfg = load_config(write(tmp_path, MIN + '[source.ci]\nkind = "gitlab"\n'))
+    assert not hasattr(cfg.source, "ci")
+
+
+def test_source_ci_does_not_change_config(tmp_path: Path) -> None:
+    without = load_config(write(tmp_path, MIN, "a.toml"))
+    with_ci = load_config(write(tmp_path, MIN + '[source.ci]\nkind = "github"\n', "b.toml"))
+    assert with_ci.source == without.source
+    assert not hasattr(with_ci.source, "ci")
+
+
+def test_representative_config_with_source_ci_loads(tmp_path: Path) -> None:
+    text = MIN + '[source.ci]\nkind = "github"\n[limits]\nmax_run_minutes = 5\n[merge]\nenabled = true\n'
+    cfg = load_config(write(tmp_path, text))
+    assert cfg.limits.max_run_minutes == 5
+    assert not hasattr(cfg.source, "ci")
+
+
+def test_removed_fix_attempts_limit_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="unknown key 'max_fix_attempts_per_pr'"):
+        load_config(write(tmp_path, MIN + "[limits]\nmax_fix_attempts_per_pr = 3\n"))
+
+
+def test_merge_table_ignored_and_limits_still_parse(tmp_path: Path) -> None:
+    text = MIN + '[merge]\nenabled = "yes"\nfuture = [1]\n'
+    text += "[limits]\nmax_run_minutes = 5\nmax_tickets_per_run = 2\nmax_leaves_per_run = 3\n"
+    cfg = load_config(write(tmp_path, text))
+    assert not hasattr(cfg, "merge")
+    assert (cfg.limits.max_run_minutes, cfg.limits.max_tickets_per_run, cfg.limits.max_leaves_per_run) == (5, 2, 3)
 
 
 def test_invalid_toml(tmp_path: Path) -> None:
