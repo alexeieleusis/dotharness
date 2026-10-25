@@ -16,7 +16,7 @@ from typing import Any
 
 DEFAULT_CONFIG_FILE = ".sisyphus.toml"
 
-TRACKER_KINDS = ("linear", "github")
+TRACKER_KINDS = ("linear", "github", "file")
 AGENT_BACKENDS = ("claude", "opencode")
 DEFAULT_PICK_LABEL = "sisyphus"
 
@@ -40,6 +40,7 @@ class WorkItemSource:
     assignee: str | None = None
     pick_state: str | None = None
     pick_label: str | None = None
+    dir: str | None = None
 
 
 @dataclass(frozen=True)
@@ -128,7 +129,7 @@ def _choice(value: str | None, section: str, key: str, allowed: tuple[str, ...])
 
 def _parse_work_item(raw: Any) -> WorkItemSource:
     section = "source.work_item"
-    t = _table(raw, section, ("kind", "instruction", "assignee", "pick_state", "pick_label"))
+    t = _table(raw, section, ("kind", "instruction", "assignee", "pick_state", "pick_label", "dir"))
     kind = _choice(_str(t, section, "kind"), section, "kind", TRACKER_KINDS)
     pick_state = _str(t, section, "pick_state")
     pick_label = _str(t, section, "pick_label")
@@ -140,6 +141,11 @@ def _parse_work_item(raw: Any) -> WorkItemSource:
         raise ConfigError(
             f'[{section}] pick_label is a github key and cannot be used with kind = "linear" (mixed tracker)'
         )
+    dir_ = _str(t, section, "dir")
+    if kind == "file" and dir_ is None:
+        raise ConfigError(f'[{section}] dir is required when kind = "file"')
+    if kind != "file" and dir_ is not None:
+        raise ConfigError(f'[{section}] dir is a file-tracker key and requires kind = "file"')
     if kind == "github" and pick_label is None:
         pick_label = DEFAULT_PICK_LABEL
     return WorkItemSource(
@@ -148,6 +154,7 @@ def _parse_work_item(raw: Any) -> WorkItemSource:
         assignee=_str(t, section, "assignee"),
         pick_state=pick_state,
         pick_label=pick_label,
+        dir=dir_,
     )
 
 

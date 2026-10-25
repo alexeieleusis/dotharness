@@ -17,15 +17,18 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from sisyphus.config import WorkItemSource
 from sisyphus.runrecord import record_path
 from sisyphus.subproc import CommandResult, run_command
+from sisyphus.ticketfile import TICKET_SUFFIX, parse_front_matter, ref_from_filename, ticket_dir, valid_file_ref
 
 LINEAR_API_URL = "https://api.linear.app/graphql"
 GITHUB_OPEN_STATE = "OPEN"
@@ -111,6 +114,8 @@ def _same(a: str, b: str) -> bool:
 
 
 def _eligible(candidate: Candidate, source: WorkItemSource) -> bool:
+    if source.kind == "file":
+        return True
     assert source.assignee is not None  # noqa: S101
     if not any(_same(a, source.assignee) for a in candidate.assignees):
         return False
@@ -123,6 +128,10 @@ def _eligible(candidate: Candidate, source: WorkItemSource) -> bool:
 def _validate(source: WorkItemSource | None) -> WorkItemSource:
     if source is None or source.kind is None:
         raise PickError("[source.work_item] with a kind is required to pick work")
+    if source.kind == "file":
+        if not source.dir:
+            raise PickError('[source.work_item] dir is required for kind = "file"')
+        return source
     if not source.assignee:
         raise PickError("[source.work_item] assignee is required to pick work")
     if source.kind == "linear" and not source.pick_state:
@@ -141,7 +150,7 @@ def pick_items(
 ) -> list[Candidate]:
     """Return up to ``limit`` unstarted candidates in pick order (FR-9 step 1).
 
-    Linear keeps the tracker's order. GitHub issues sort oldest first, then by number ascending (P4)
+    Linear and file trackers keep their own order. GitHub issues sort oldest first, then by number ascending (P4)
     and those with an open PR (see :func:`default_open_pr_check`) are skipped; ``lookup`` is required
     for GitHub. Items with a run record are skipped for both trackers.
     """
@@ -325,3 +334,56 @@ class LinearTracker:
             )
             for n in nodes
         ]
+
+
+def _parse_priority(raw: str | None) -> int:
+    """Linear priority 1 to 4; anything else (missing, non-integer, out of range) is 0 (none)."""
+    try:
+        value = int((raw or "").strip())
+    except ValueError:
+        return 0
+    return value if 1 <= value <= 4 else 0
+
+
+class FileTracker:
+    """Ticket files ``<dir>/<ref>.md`` written by a producer; no credentials and no network.
+
+    Order: Linear priority 1 to 4 first (0 or missing last), then file mtime ascending, then ``ref``.
+    Invalid files are skipped with one line on stderr naming the file and the reason.
+    """
+
+    def list_candidates(self, source: WorkItemSource) -> Sequence[Candidate]:
+        if not source.dir:
+            return []
+        inbox = ticket_dir(source)
+        if not inbox.exists():
+            return []
+        try:
+            paths = sorted(p for p in inbox.iterdir() if p.name.endswith(TICKET_SUFFIX) and p.is_file())
+        except OSError as exc:
+            raise PickError(f"cannot read ticket directory {inbox}: {exc}") from exc
+        rows: list[tuple[int, int, str, Candidate]] = []
+        for path in paths:
+            try:
+                row = self._read(path)
+            except (ValueError, OSError) as exc:
+                print(f"sisyphus: skipping ticket file {path}: {exc}", file=sys.stderr)
+                continue
+            rows.append(row)
+        rows.sort(key=lambda r: (r[0] or 5, r[1], r[2]))
+        return [r[3] for r in rows]
+
+    @staticmethod
+    def _read(path: Path) -> tuple[int, int, str, Candidate]:
+        fields = parse_front_matter(path.read_text(encoding="utf-8"))
+        ref = fields.get("ref", "")
+        if not ref:
+            raise ValueError("missing ref")
+        if not valid_file_ref(ref):
+            raise ValueError(f"invalid ref {ref!r}")
+        if ref != ref_from_filename(path.name):
+            raise ValueError(f"ref {ref!r} does not match the file name")
+        mtime_ns = path.stat().st_mtime_ns
+        stamp = datetime.fromtimestamp(mtime_ns / 1e9, UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        cand = Candidate(ref=ref, title=fields.get("title") or ref, created_at=stamp)
+        return _parse_priority(fields.get("priority")), mtime_ns, ref, cand
