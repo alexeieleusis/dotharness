@@ -390,6 +390,57 @@ def test_prompts_carry_resolved_paths(world: World) -> None:
         assert not re.search(r"<(stage|brief path|handoff dir|target repo dir|target branch|stop report path)>", prompt)
 
 
+def test_build_prompt_handoff_dir_is_the_items_plan_dir_not_the_workspace_root(world: World) -> None:
+    world.run()
+    build = world.agent_prompts[2]
+    workspace_root = world.tmp / "ws"
+    plan_dir = workspace_root / plan_dir_name(ITEM)
+    assert str(plan_dir / "handoffs") in build
+    # the shared root's handoffs dir must not appear as a path (anchored so it is not a prefix of something else)
+    assert not re.search(re.escape(str(workspace_root / "handoffs")) + r"(?![\w.-])", build)
+
+
+def test_two_items_get_distinct_handoff_dirs(world: World) -> None:
+    other = "ENG-2"
+    assert plan_dir_name(other) != plan_dir_name(ITEM)
+    world.run()
+    first_prompt = world.agent_prompts[2]
+    world.agent_prompts.clear()
+    # second item against the same workspace root, through the real run_item with the same fakes
+    run_item(
+        other,
+        world.config(),
+        world.options(),
+        lock_held=False,
+        agent_runner=world.agent,
+        subprocess_runner=world.shell,
+        pr_client=world,
+        clock=world.clock,
+        today=TODAY,
+    )
+    build_prompts = [p for p in world.agent_prompts if "Stage to run now: `build`" in p]
+    assert build_prompts
+    workspace_root = world.tmp / "ws"
+    first = workspace_root / plan_dir_name(ITEM) / "handoffs"
+    second = workspace_root / plan_dir_name(other) / "handoffs"
+    assert first != second
+    assert str(first) in first_prompt
+    assert str(second) not in first_prompt
+    assert str(second) in build_prompts[0]
+    assert str(first) not in build_prompts[0]
+
+
+def test_build_stage_creates_handoff_dir_without_asking_the_agent_to_(world: World) -> None:
+    world.run()
+    plan_dir = world.tmp / "ws" / plan_dir_name(ITEM)
+    assert (plan_dir / "handoffs").is_dir()
+    build = world.agent_prompts[2]
+    assert not re.search(r"mkdir", build, re.IGNORECASE)
+    for sentence in re.split(r"(?<=[.!?])\s+|\n", build):
+        if re.search(r"handoff", sentence, re.IGNORECASE):
+            assert not re.search(r"\bcreate\b", sentence, re.IGNORECASE), sentence
+
+
 # ---------------------------------------------------------------- AC2: checkpoints
 
 
