@@ -10,7 +10,11 @@ the next run, because approving on partial information is the unsafe direction; 
 CONFLICTING is named by D-16 but UNKNOWN is not a positive "no conflicts" signal. OD-2 an
 APPROVED review by the acting account on ANY commit counts as "already approved" (FR-6.4,
 D-14): re-approval after a later push is manual.
-OD-3 any bucket other than pass/skipping blocks with the single reason "CI blocked".
+OD-3 any bucket other than pass/skipping blocks with the single reason "CI blocked", judged on the
+latest run of each check only. Reading the checks (latest run per check, the Phase 3b stack-root rule and its
+fail-closed cases) lives in ``ci_checks``; ``_check_ci`` is only the approval policy on top of ``read_checks``. A PR
+with no checks passes only when the repo has no active workflow (empty is also what gh reports before a push's
+workflows register).
 
 FR-6.4: approval idempotency uses a new tri-state read (``_read_approval_state``) instead of
 ``review_requested._has_user_approved`` (which returns False on a read error); a read failure
@@ -40,6 +44,7 @@ from datetime import datetime
 from enum import Enum
 
 from harness.runners.auto_approve_size import SizeEvaluation
+from harness.runners.ci_checks import PASSING_BUCKETS, Check, gh, parse_ts, read_checks, repo_has_workflows, text
 from harness.runners.common import (
     TIMEOUT_GH,
     fetch_all_pages,
@@ -66,15 +71,6 @@ class GateStatus(Enum):
 class GateResult:
     status: GateStatus
     reason: str
-
-
-def _parse_ts(value: object) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
 
 
 def _login(item: dict) -> str:
@@ -111,7 +107,7 @@ def _fetch_pr_commits(repo: str, pr_number: int, env: dict) -> list[dict] | None
 def _author_commit_after(commits: list[dict], pr_author: str, t: datetime) -> bool:
     for commit in commits:
         logins = {(a.get("login") or "").lower() for a in commit.get("authors") or []}
-        date = _parse_ts(commit.get("committedDate"))
+        date = parse_ts(commit.get("committedDate"))
         if pr_author in logins and date is not None and date > t:
             return True
     return False
@@ -140,7 +136,7 @@ def _scan_issue_comments(issue_comments: list[dict], acting: str) -> tuple[bool,
         is_trace = is_traceability_review_comment(body)
         if not (is_summary or is_design or is_trace):
             continue
-        ts = _parse_ts(comment.get("created_at"))
+        ts = parse_ts(comment.get("created_at"))
         if ts is None:
             return "qualifying comment has no valid created_at"
         qualifying.append(ts)
@@ -160,7 +156,7 @@ def _scan_inline_comments(review_comments: list[dict], acting: str) -> list[date
     qualifying: list[datetime] = []
     for comment in review_comments:
         if _login(comment) == acting and _is_review_inline_comment(comment.get("body") or ""):
-            ts = _parse_ts(comment.get("created_at"))
+            ts = parse_ts(comment.get("created_at"))
             if ts is None:
                 return "inline comment has no valid created_at"
             qualifying.append(ts)
@@ -189,11 +185,11 @@ def _has_activity_after(
     comments: list[dict], review_comments: list[dict], reviews: list[dict], t: datetime, author: str, acting: str
 ) -> bool:
     for item in (*comments, *review_comments):
-        ts = _parse_ts(item.get("created_at"))
+        ts = parse_ts(item.get("created_at"))
         if ts is not None and ts > t and _is_author_activity(item, author, acting):
             return True
     for review in reviews:
-        ts = _parse_ts(review.get("submitted_at"))  # submitted_at, not created_at; None while PENDING
+        ts = parse_ts(review.get("submitted_at"))  # submitted_at, not created_at; None while PENDING
         if ts is not None and ts > t and _is_author_activity(review, author, acting):
             return True
     return False
@@ -257,9 +253,7 @@ REASON_AUTO_MERGE = "auto-merge"
 REASON_CI_BLOCKED = "ci-blocked"
 REASON_ALREADY_APPROVED = "already-approved"
 
-_NO_REQUIRED_CHECKS_TEXT = "no required checks reported"
-_NO_CHECKS_TEXT = "no checks reported"
-_PASSING_BUCKETS = frozenset({"pass", "skipping"})
+_MAX_NAMED_CHECKS = 10
 
 
 @dataclass(frozen=True)
@@ -269,35 +263,25 @@ class SafetyResult:
     head_sha: str = ""
 
 
-def _gh(args: list[str], env: dict) -> subprocess.CompletedProcess:
-    return run_cmd(["gh", *args], cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
-
-
-def _text(data: bytes | str | None) -> str:
-    if isinstance(data, bytes):
-        return data.decode("utf-8", errors="replace")
-    return data or ""
-
-
 def list_own_open_prs(
-    repo: str, only_pr: int | None, env: dict, failures: list[str], fields: str, gh: Callable = _gh
+    repo: str, only_pr: int | None, env: dict, failures: list[str], fields: str, run_gh: Callable = gh
 ) -> list[dict]:
     """Open PRs authored by the acting user (``gh``'s ``@me``), or just ``only_pr``, sorted by number.
 
     Any problem (gh failure, non-JSON output, not a list of PR objects) is appended to ``failures``
-    and yields ``[]``. ``gh`` lets a caller pass its own module's ``_gh``.
+    and yields ``[]``. ``run_gh`` lets a caller pass its own module's ``gh``.
     """
     if only_pr is None:
         args = ["pr", "list", "--repo", repo, "--state", "open", "--author", "@me", "--json", fields]
         args += ["--limit", "500"]
     else:
         args = ["pr", "view", str(only_pr), "--repo", repo, "--json", fields]
-    result = gh(args, env)
+    result = run_gh(args, env)
     if result.returncode != 0:
         failures.append(f"gh pr {'list' if only_pr is None else 'view'} failed (exit {result.returncode})")
         return []
     try:
-        data = json.loads(_text(result.stdout))
+        data = json.loads(text(result.stdout))
     except ValueError:
         failures.append("gh pr output was not JSON")
         return []
@@ -308,82 +292,58 @@ def list_own_open_prs(
     return sorted(prs, key=lambda p: p["number"])
 
 
-def _parse_buckets(stdout: str) -> list[str] | None:
-    """Return the bucket of every check, or None when the output is not a list of check objects."""
-    try:
-        checks = json.loads(stdout)
-    except ValueError:
-        return None
-    if not isinstance(checks, list):
-        return None
-    buckets = []
-    for check in checks:
-        bucket = check.get("bucket") if isinstance(check, dict) else None
-        if not isinstance(bucket, str):
-            return None
-        buckets.append(bucket)
-    return buckets
+def _check_ci(repo: str, pr_number: int, base_branch: str, env: dict) -> SafetyResult | None:
+    """None when CI allows approval; otherwise the SKIP or READ_FAILED result (head SHA not set).
 
-
-def _read_buckets(repo: str, pr_number: int, env: dict, required: bool) -> list[str] | None:
-    """Buckets for the PR's checks. None = read failure; [] with required=True = no required checks."""
-    args = ["pr", "checks", str(pr_number), "--repo", repo, "--json", "bucket"]
-    result = _gh([*args, "--required"] if required else args, env)
-    stderr = _text(result.stderr)
-    if required and result.returncode == 1 and _NO_REQUIRED_CHECKS_TEXT in stderr:
-        return []
-    if not required and result.returncode == 1 and _NO_CHECKS_TEXT in stderr:
-        return []
-    if result.returncode == 8 and not _text(result.stdout).strip():
-        return None  # pending exit without JSON: cannot decide from buckets
-    if result.returncode not in (0, 8):
-        logger.error("PR #%d: gh pr checks failed (exit %d): %s", pr_number, result.returncode, stderr.strip())
-        return None
-    return _parse_buckets(_text(result.stdout))
-
-
-def _repo_has_workflows(repo: str, env: dict) -> bool | None:
-    """True when the repo has an active workflow; None on read failure."""
-    result = _gh(["api", f"repos/{repo}/actions/workflows?per_page=100"], env)
-    if result.returncode != 0:
-        return None
-    try:
-        data = json.loads(_text(result.stdout))
-    except ValueError:
-        return None
-    workflows = data.get("workflows") if isinstance(data, dict) else None
-    if not isinstance(workflows, list):
-        return None
-    return any(isinstance(w, dict) and w.get("state") == "active" for w in workflows)
-
-
-def _check_ci(repo: str, pr_number: int, env: dict) -> SafetyResult | None:
-    """None when CI allows approval; otherwise the SKIP or READ_FAILED result (head SHA not set)."""
-    buckets = _read_buckets(repo, pr_number, env, required=True)
-    if buckets is not None and not buckets:
-        logger.info("PR #%d: no required checks, falling back to all checks", pr_number)
-        buckets = _read_buckets(repo, pr_number, env, required=False)
-    if buckets is None:
+    ``base_branch`` is the PR's base (``baseRefName``). The checks come from ``read_checks`` with the stack-root
+    rule (see ``ci_checks``); an unreadable result is READ_FAILED.
+    """
+    read = read_checks(repo, pr_number, base_branch, env)
+    if read is None:
         return SafetyResult(SafetyStatus.READ_FAILED, "checks read failed")
-    if not buckets:
-        # Empty is also what gh reports before a push's workflows register, so only trust it when no CI exists.
-        has_workflows = _repo_has_workflows(repo, env)
-        if has_workflows is None:
-            return SafetyResult(SafetyStatus.READ_FAILED, "workflows read failed")
-        if has_workflows:
-            logger.info("PR #%d: no checks yet but repo has workflows, treating CI as pending", pr_number)
-            return SafetyResult(SafetyStatus.SKIP, REASON_CI_BLOCKED)
-        logger.info("PR #%d: no checks and no workflows, nothing blocks approval", pr_number)
-        return None
-    blocking = sorted({b for b in buckets if b not in _PASSING_BUCKETS})
-    logger.info("PR #%d: %d checks, blocking buckets: %s", pr_number, len(buckets), blocking or "none")
+    checks, missing = read
+    if missing:
+        logger.info("PR #%d: required checks with no run: %s", pr_number, ", ".join(missing))
+        return SafetyResult(SafetyStatus.SKIP, REASON_CI_BLOCKED)
+    if not checks:
+        return _check_no_checks(repo, pr_number, env)
+    blocking = sorted({c.bucket for c in checks if c.bucket not in PASSING_BUCKETS})
+    logger.info("PR #%d: %d checks, blocking buckets: %s", pr_number, len(checks), blocking or "none")
     if blocking:
+        _log_failing_checks(pr_number, checks)
         return SafetyResult(SafetyStatus.SKIP, REASON_CI_BLOCKED)
     return None
 
 
+def _check_no_checks(repo: str, pr_number: int, env: dict) -> SafetyResult | None:
+    # Empty is also what gh reports before a push's workflows register, so only trust it when no CI exists.
+    has_workflows = repo_has_workflows(repo, env)
+    if has_workflows is None:
+        return SafetyResult(SafetyStatus.READ_FAILED, "workflows read failed")
+    if has_workflows:
+        logger.info("PR #%d: no checks yet but repo has workflows, treating CI as pending", pr_number)
+        return SafetyResult(SafetyStatus.SKIP, REASON_CI_BLOCKED)
+    logger.info("PR #%d: no checks and no workflows, nothing blocks approval", pr_number)
+    return None
+
+
+def _log_failing_checks(pr_number: int, checks: list[Check]) -> None:
+    """Name the failing checks (``fail`` bucket), capped at ``_MAX_NAMED_CHECKS``, and log how many were omitted.
+
+    Pending, cancelled and unrecognised buckets still block but are not named: they appear only in the
+    "blocking buckets" line.
+    """
+    failing = sorted(f"{c.name}({c.bucket})" for c in checks if c.bucket == "fail")
+    if not failing:
+        return
+    named = ", ".join(failing[:_MAX_NAMED_CHECKS])
+    omitted = len(failing) - _MAX_NAMED_CHECKS
+    suffix = f" (+{omitted} more omitted)" if omitted > 0 else ""
+    logger.info("PR #%d: failing checks: %s%s", pr_number, named, suffix)
+
+
 def _read_pr_state(repo: str, pr_number: int, env: dict) -> dict | None:
-    result = _gh(
+    result = gh(
         [
             "pr",
             "view",
@@ -391,14 +351,14 @@ def _read_pr_state(repo: str, pr_number: int, env: dict) -> dict | None:
             "--repo",
             repo,
             "--json",
-            "mergeable,autoMergeRequest,isDraft,state,headRefOid",
+            "mergeable,autoMergeRequest,isDraft,state,headRefOid,baseRefName",
         ],
         env,
     )
     if result.returncode != 0:
         return None
     try:
-        data = json.loads(_text(result.stdout))
+        data = json.loads(text(result.stdout))
     except ValueError:
         return None
     if not isinstance(data, dict) or not data.get("headRefOid") or "state" not in data:
@@ -464,7 +424,7 @@ def _check_approval_safety(repo: str, pr_number: int, current_user: str, env: di
     if _already_approved(reviews, acting):
         return SafetyResult(SafetyStatus.SKIP, REASON_ALREADY_APPROVED, head)
 
-    blocked = _check_ci(repo, pr_number, env)
+    blocked = _check_ci(repo, pr_number, pr.get("baseRefName", ""), env)
     if blocked is not None:
         return SafetyResult(blocked.status, blocked.reason, head)
     return SafetyResult(SafetyStatus.SAFE, "all safety checks passed", head)
@@ -547,12 +507,12 @@ def _read_files_page(owner: str, name: str, pr_number: int, cursor: str | None, 
     args += ["-F", f"number={pr_number}"]
     if cursor:
         args += ["-f", f"cursor={cursor}"]
-    result = _gh(args, env)
+    result = gh(args, env)
     if result.returncode != 0:
         logger.error("PR #%d: files GraphQL read failed (exit %d)", pr_number, result.returncode)
         return None
     try:
-        data = json.loads(_text(result.stdout))
+        data = json.loads(text(result.stdout))
         pr = data["data"]["repository"]["pullRequest"]
         files = pr["files"]
         if not pr.get("id") or not isinstance(files["nodes"], list) or "hasNextPage" not in files["pageInfo"]:
@@ -589,7 +549,7 @@ def read_viewed_states(repo: str, pr_number: int, env: dict) -> tuple[str, dict[
 
 
 def _mark_one(node_id: str, path: str, pr_number: int, env: dict) -> bool:
-    result = _gh(
+    result = gh(
         [
             "api",
             "graphql",
@@ -606,7 +566,7 @@ def _mark_one(node_id: str, path: str, pr_number: int, env: dict) -> bool:
         logger.error("PR #%d: markFileAsViewed failed for %s (exit %d)", pr_number, path, result.returncode)
         return False
     try:
-        return not json.loads(_text(result.stdout)).get("errors")
+        return not json.loads(text(result.stdout)).get("errors")
     except (ValueError, AttributeError):
         return False
 
@@ -691,7 +651,7 @@ def _approval_precheck(
 
 
 def _post_approval(repo: str, pr_number: int, head_sha: str, env: dict) -> bool:
-    result = _gh(
+    result = gh(
         [
             "api",
             "--method",
@@ -708,7 +668,7 @@ def _post_approval(repo: str, pr_number: int, head_sha: str, env: dict) -> bool:
     )
     if result.returncode != 0:
         logger.error(
-            "PR #%d: approval POST failed (exit %d): %s", pr_number, result.returncode, _text(result.stderr).strip()
+            "PR #%d: approval POST failed (exit %d): %s", pr_number, result.returncode, text(result.stderr).strip()
         )
         return False
     return True

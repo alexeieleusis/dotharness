@@ -35,12 +35,13 @@ from harness.runners.auto_approve_github import (
     REASON_DRAFT,
     REASON_NOT_OPEN,
     _check_ci,
-    _gh,
     _read_pr_state,
     _state_skip_reason,
-    _text,
     list_own_open_prs,
 )
+from harness.runners.ci_checks import gh as _gh
+from harness.runners.ci_checks import read_checks
+from harness.runners.ci_checks import text as _text
 from harness.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
@@ -225,30 +226,25 @@ def _prune_counters(repo_slug: str, open_pr_numbers: set[int]) -> None:
 
 
 def _read_failing_checks(repo: str, pr_number: int, env: dict) -> list[_Check] | None:
-    """Failing required checks (all checks when the PR has none required). None = unreadable output."""
-    base = ["pr", "checks", str(pr_number), "--repo", repo, "--json", "name,bucket,link,workflow"]
-    result = _gh([*base, "--required"], env)
-    if result.returncode == 1 and "no required checks" in _text(result.stderr):
-        result = _gh(base, env)
-    if result.returncode == 8 and not _text(result.stdout).strip():
-        return None
-    if result.returncode not in (0, 8):
-        logger.error("PR #%d: gh pr checks failed (exit %d): %s", pr_number, result.returncode, _text(result.stderr))
-        return None
-    try:
-        checks = json.loads(_text(result.stdout))
-    except ValueError:
-        return None
-    if not isinstance(checks, list) or not all(isinstance(c, dict) for c in checks):
+    """Failing required checks (all checks when the PR has none required). None = unreadable output.
+
+    Only the latest run of each check counts (``read_checks``, the same reader as ``_check_ci``), so a failed
+    run followed by a passing rerun is not returned.
+
+    OD-B: deliberately NOT aligned with the stack-root rule of ``_check_ci`` (``stack_root=False``). For a stacked
+    PR whose base has no required checks this still falls back to all checks, so it may try to fix a non-required
+    failure. That is harmless: ci-fix only runs after ``_check_ci`` blocked, and fixing a real failing check
+    on the PR is still a valid fix. Aligning would add a stack walk and a default-branch lookup here.
+    """
+    read = read_checks(repo, pr_number, "", env, stack_root=False)
+    if read is None:
         return None
     failing = []
-    for c in checks:
-        if c.get("bucket") == "fail":
-            name, link = c.get("name"), c.get("link")
-            if not isinstance(name, str) or not isinstance(link, str):
+    for c in read.checks:
+        if c.bucket == "fail":
+            if c.link is None:
                 return None
-            workflow = c.get("workflow")
-            failing.append(_Check(name, link, workflow if isinstance(workflow, str) else ""))
+            failing.append(_Check(c.name, c.link, c.workflow))
     return failing
 
 
@@ -416,7 +412,7 @@ def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, prompt: s
     repo = config.repo.name
     logger.info("PR #%d: starting%s", number, " (dry-run)" if dry_run else "")
 
-    blocked = _check_ci(repo, number, env)
+    blocked = _check_ci(repo, number, pr.get("baseRefName", ""), env)
     if blocked is None:
         logger.info("PR #%d: CI is green, nothing to fix", number)
         return

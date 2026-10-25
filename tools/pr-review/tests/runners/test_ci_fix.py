@@ -247,6 +247,7 @@ def test_ac7_pr_option_processes_only_that_pr(tmp_path):
         ci_fix.run(_cfg(tmp_path), pr=7)
     assert m.gh.call_args.args[0][:3] == ["pr", "view", "7"]
     assert m.check_ci.call_args.args[1] == 7
+    assert m.check_ci.call_args.args[2] == "main"
     assert m.pushes == [["git", "push", "origin", "seven"]]
 
 
@@ -423,10 +424,33 @@ def test_find_step_command_picks_the_workflow_the_check_belongs_to(tmp_path):
 
 def test_read_failing_checks_carries_the_workflow():
     out = b'[{"name":"t (3.12)","bucket":"fail","link":"https://x/actions/runs/1/job/2","workflow":"Beta"}]'
-    with patch(P + "_gh", return_value=_proc(0, out)):
+    with patch("harness.runners.ci_checks.gh", return_value=_proc(0, out)):
         assert ci_fix._read_failing_checks("o/r", 1, {}) == [
             _Check("t (3.12)", "https://x/actions/runs/1/job/2", "Beta")
         ]
+
+
+def test_read_failing_checks_ignores_superseded_failed_run():
+    out = (
+        b'[{"name":"t","bucket":"fail","link":"https://x/actions/runs/1/job/2","workflow":"W",'
+        b'"startedAt":"2026-01-01T10:00:00Z","completedAt":"2026-01-01T10:05:00Z"},'
+        b'{"name":"t","bucket":"pass","link":"https://x/actions/runs/3/job/4","workflow":"W",'
+        b'"startedAt":"2026-01-01T11:00:00Z","completedAt":"2026-01-01T11:05:00Z"}]'
+    )
+    with patch("harness.runners.ci_checks.gh", return_value=_proc(0, out)):
+        assert ci_fix._read_failing_checks("o/r", 1, {}) == []
+
+
+def test_read_failing_checks_keeps_latest_failed_run_and_fails_closed_without_timestamps():
+    base = '{"name":"t","bucket":"%s","link":"https://x/actions/runs/%d/job/2","workflow":"W"%s}'
+    ts = lambda a, b: f',"startedAt":"{a}","completedAt":"{b}"'
+    newer_fail = f"[{base % ('pass', 1, ts('2026-01-01T10:00:00Z', '2026-01-01T10:05:00Z'))},"
+    newer_fail += f"{base % ('fail', 3, ts('2026-01-01T11:00:00Z', '2026-01-01T11:05:00Z'))}]"
+    with patch("harness.runners.ci_checks.gh", return_value=_proc(0, newer_fail.encode())):
+        assert ci_fix._read_failing_checks("o/r", 1, {}) == [_Check("t", "https://x/actions/runs/3/job/2", "W")]
+    no_ts = f"[{base % ('fail', 1, '')},{base % ('pass', 3, '')}]"
+    with patch("harness.runners.ci_checks.gh", return_value=_proc(0, no_ts.encode())):
+        assert ci_fix._read_failing_checks("o/r", 1, {}) is None
 
 
 def test_failed_step_name_from_log():

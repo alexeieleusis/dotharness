@@ -65,9 +65,25 @@ Before approving, on the PR's current head commit, the command requires:
 
 - the PR is open, not a draft, and has no merge conflicts;
 - auto-merge is not enabled on it;
-- CI is green. Required checks are used when the repo has them, otherwise all
-  checks. A pending or failing check blocks approval. A PR with no checks at
-  all passes this condition;
+- CI is green. Required checks of the PR's base branch are used when it has
+  them, and nothing else is read. A stacked PR's base is another open PR's
+  branch, which has no required checks. For such a PR the command walks up the
+  stack: it finds the open PR whose head branch is the base (matched by branch
+  name only, no forks), then that PR's base, and so on until the base is the
+  default branch or no open PR has it as head. Only the checks required at that
+  stack root are judged on this PR, so a failing check that is not required
+  does not block it. A required name with no run on the PR does not pass. If
+  the root has no required checks, or there is no stack, all checks are used.
+  The walk stops at 10 levels; a deeper stack, two open PRs with the same head
+  branch, a failed or unreadable lookup, or pending required checks on the root
+  count as unreadable and nothing is approved. Only the latest run of each check counts: runs are matched by
+  workflow and check name, and the one with the latest completion time (or
+  start time when it has not completed) decides. A failed run followed by a
+  passing rerun does not block. A pending, failing or not-yet-completed latest
+  run blocks approval. If a repeated check has a run with no usable timestamp,
+  the checks count as unreadable. A PR with no checks at all passes this
+  condition only when the repo has no active workflows (otherwise checks may not have
+  registered yet and the PR is skipped);
 - the account has not already approved the PR.
 
 If any condition does not hold, no approval is posted and the PR is checked

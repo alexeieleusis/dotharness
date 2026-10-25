@@ -40,7 +40,7 @@ def run(reads, mark=None, gate=True, dry_run=False, counts=COUNTS):
             return mark(path) if callable(mark) else (mark or proc(out=b'{"data":{}}'))
         return reads.pop(0)
 
-    with patch("harness.runners.auto_approve_github.run_cmd", side_effect=fake):
+    with patch("harness.runners.ci_checks.run_cmd", side_effect=fake):
         result = mark_files_viewed("o/r", 5, counts, 75, gate, {}, dry_run)
     writes = [c for c in calls if any("markFileAsViewed" in a for a in c)]
     return result, calls, writes
