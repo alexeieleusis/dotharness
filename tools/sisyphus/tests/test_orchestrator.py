@@ -1148,8 +1148,23 @@ def test_prompt_references_but_does_not_restate() -> None:
 
 def test_prompt_states_the_required_behaviours() -> None:
     text = " ".join(PROMPT.read_text().split())
-    for needle in ("handoffs/NN-<leaf name>.md", "one after the other", "never in parallel", "C3", "C4", "C5", "C2"):
+    for needle in (
+        "`NN-<leaf name>.md` inside the handoff directory",
+        "one after the other",
+        "never in parallel",
+        "C3",
+        "C4",
+        "C5",
+        "C2",
+    ):
         assert needle in text
+
+
+def test_build_prompt_resolved_handoff_path_is_not_nested_twice(world: World) -> None:
+    world.run()
+    build = world.agent_prompts[2]
+    assert "handoffs/handoffs" not in build
+    assert "handoffs/NN-" not in build
 
 
 # ------------------------------------------------- follow-up 18: stop record and resume
