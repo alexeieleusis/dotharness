@@ -7,6 +7,7 @@ saying why it is missing (degradation). Sanitising, size limits and composition 
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import tomllib
@@ -16,7 +17,9 @@ from pathlib import Path
 from sisyphus.intake import parse_resolved_decisions, split_resolved_decision
 
 LEAF_GLOB = "*-leaf.md"
-PLAN_NOT_MATCHED_NOTE = "Note: the plan directory could not be matched to this work item; plan-derived sections omitted."
+PLAN_NOT_MATCHED_NOTE = (
+    "Note: the plan directory could not be matched to this work item; plan-derived sections omitted."
+)
 
 # ``git log`` arguments (after ``git``) producing the lines ``parse_commits`` reads.
 COMMIT_LOG_FORMAT = "--format=%h%x09%s"
@@ -79,7 +82,7 @@ def leaf_stems(phase_dir: Path) -> list[str]:
         pass
     stems = sorted(p.stem for p in phase_dir.glob(LEAF_GLOB))
     if not stems:
-        raise ValueError(f"no leaves found in {phase_dir}")
+        raise ValueError(f"no leaves found in {phase_dir}")  # noqa: TRY003
     return stems
 
 
@@ -267,3 +270,129 @@ def extract_decisions(brief_path: Path) -> str:
     except (OSError, ValueError) as exc:
         return f"Note: Decisions unavailable: cannot read the brief ({type(exc).__name__})."
     return format_decisions(text)
+
+
+# ------------------------------------------------- sanitise, redact, compose
+
+MAX_BODY_CHARS = 60000
+HEADER_NOTICE = "Opened by Sisyphus. Review required; this PR is not approved."
+ZWSP = "​"
+FULL_FILE_NOTE = (
+    "Note: the full requirements are in `requirements.md` in the plan directory "
+    "(`<plan-dir>/requirements.md`) on the machine that ran Sisyphus."
+)
+TRUNCATED_NOTE = (
+    "Note: this description was truncated; the full requirements are in `requirements.md` in the plan "
+    "directory (`<plan-dir>/requirements.md`) on the machine that ran Sisyphus."
+)
+
+_MENTION = re.compile(r"@(?=[A-Za-z0-9])")
+_ISSUE_REF = re.compile(r"#(?=\d)")
+_DETAILS_CLOSE = re.compile(r"</(?=details)", re.IGNORECASE)
+
+
+def sanitise(text: str) -> str:
+    """Neutralise mentions, ``#N`` references and ``</details>`` in embedded text (FR-10, FR-8)."""
+    text = _MENTION.sub("@" + ZWSP, text)
+    text = _ISSUE_REF.sub("#" + ZWSP, text)
+    return _DETAILS_CLOSE.sub("&lt;/", text)
+
+
+def redact_paths(text: str, workspace: Path, plan_dir: Path | None, home: Path | None = None) -> str:
+    """Replace workspace, plan dir and home-directory paths with placeholders, longest first (FR-11)."""
+    pairs: list[tuple[str, str]] = []
+
+    def add(path: Path, placeholder: str) -> None:
+        forms = {str(path)}
+        with contextlib.suppress(OSError):
+            forms.add(str(path.resolve()))
+        pairs.extend((form, placeholder) for form in forms if form.rstrip("/"))
+
+    add(workspace, "<workspace>")
+    if plan_dir is not None:
+        add(plan_dir, "<plan-dir>")
+    add(home if home is not None else Path.home(), "~")
+    for form in ("${HOME}", "$HOME"):
+        pairs.append((form, "~"))
+    for form, placeholder in sorted(pairs, key=lambda p: len(p[0]), reverse=True):
+        text = re.sub(re.escape(form.rstrip("/")) + r"(?![\w-])", lambda _m, p=placeholder: p, text)
+    return text
+
+
+def embed(text: str, workspace: Path, plan_dir: Path | None, home: Path | None = None) -> str:
+    """Redact paths, then sanitise: the treatment every embedded text receives."""
+    return sanitise(redact_paths(text, workspace, plan_dir, home))
+
+
+def requirements_block(requirements: str) -> str:
+    """The ``<details>`` block holding the (already embedded) requirements text (FR-8)."""
+    return f"<details><summary>Full requirements</summary>\n\n{requirements.strip()}\n\n</details>"
+
+
+def read_requirements(plan_dir: Path | None) -> str | None:
+    """Text of ``<plan_dir>/requirements.md`` or ``None`` when missing or unreadable."""
+    if plan_dir is None:
+        return None
+    try:
+        return (plan_dir / "requirements.md").read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return None
+
+
+def _truncate(text: str, limit: int) -> str:
+    cut = text[: max(limit, 0)]
+    if cut.count("```") % 2:
+        cut = cut[: max(limit - 4, 0)]
+        if cut.count("```") % 2:
+            cut += "\n```"
+    return cut
+
+
+def compose_body(
+    item: str,
+    *,
+    summary: str = "",
+    phases: str = "",
+    decisions: str = "",
+    deviations: str = "",
+    requirements: str | None = None,
+    workspace: Path,
+    plan_dir: Path | None = None,
+    home: Path | None = None,
+) -> str:
+    """Assemble the pull-request body from already-extracted section strings (FR-1, G2, FR-9, FR-12).
+
+    Never raises for missing content: empty sections are omitted, ``requirements=None`` becomes a one-line note.
+    ``len(result) <= MAX_BODY_CHARS`` always holds; the header is never truncated.
+    """
+    header = f"Work item: {item}\n\n{HEADER_NOTICE}"
+
+    def emb(text: str) -> str:
+        return embed(text, workspace, plan_dir, home).strip()
+
+    parts: list[str] = []
+    for title, text in (("Summary", summary), ("Phases", phases), ("Decisions", decisions), ("Deviations", deviations)):
+        if text.strip():
+            parts.append(f"## {title}\n\n{emb(text)}")
+
+    details: str | None = None
+    if requirements is None:
+        parts.append("Note: `requirements.md` is missing or unreadable; full requirements omitted.")
+    elif requirements.strip():
+        details = requirements_block(emb(requirements))
+
+    def assemble(extra: list[str]) -> str:
+        return "\n\n".join([header, *parts, *extra])
+
+    body = assemble([details] if details else [])
+    if len(body) <= MAX_BODY_CHARS:
+        return body
+    if details:
+        body = assemble([FULL_FILE_NOTE])
+        if len(body) <= MAX_BODY_CHARS:
+            return body
+    rest = "\n\n".join(parts)
+    tail = "\n\n" + TRUNCATED_NOTE
+    budget = MAX_BODY_CHARS - len(header) - 2 - len(tail)
+    body = f"{header}\n\n{_truncate(rest, budget)}{tail}"
+    return body[:MAX_BODY_CHARS]

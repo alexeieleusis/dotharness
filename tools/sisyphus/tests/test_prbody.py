@@ -5,9 +5,13 @@ import json
 from pathlib import Path
 
 from sisyphus import prbody
+from sisyphus.pick import mentions_issue
 from sisyphus.prbody import (
+    HEADER_NOTICE,
+    MAX_BODY_CHARS,
     PLAN_NOT_MATCHED_NOTE,
     commit_log_args,
+    compose_body,
     extract_decisions,
     extract_deviations,
     extract_summary,
@@ -18,6 +22,9 @@ from sisyphus.prbody import (
     locate_plan_dir,
     parse_commits,
     plan_dir_matches_brief,
+    read_requirements,
+    redact_paths,
+    sanitise,
     select_handoffs,
 )
 
@@ -181,3 +188,93 @@ def test_extract_decisions(tmp_path: Path) -> None:
     brief.write_text(BRIEF)
     assert "Who owns it?" in extract_decisions(brief)
     assert extract_decisions(tmp_path / "missing.md").startswith("Note:")
+
+
+# ------------------------------------------------------ sanitise and compose
+
+
+def test_sanitise_blocks_mentions_and_issue_refs() -> None:
+    text = "#5 start\nsee (#6), x:#7. @alice and @bob-x\n```\n#8 @carol\n```\nowner/repo#9 a@b"
+    out = sanitise(text)
+    for n in (5, 6, 7, 8, 9):
+        assert not mentions_issue(out, n)
+    assert "@alice" not in out and "@carol" not in out and "@bob" not in out
+    assert "a@\u200bb" in out
+    assert "</details>" not in sanitise("x </DETAILS> y </details>")
+
+
+def test_redact_paths_each_form_longest_first(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    ws = home / "ws"
+    plan = ws / "plan-1"
+    text = f"{plan}/requirements.md {ws}/handoffs {home}/x $HOME/y ${{HOME}}/z ~/ok"
+    out = redact_paths(text, ws, plan, home)
+    assert out == "<plan-dir>/requirements.md <workspace>/handoffs ~/x ~/y ~/z ~/ok"
+
+
+def _compose(
+    tmp_path: Path,
+    *,
+    summary: str = "",
+    phases: str = "",
+    decisions: str = "",
+    deviations: str = "",
+    requirements: str | None = None,
+) -> str:
+    ws = tmp_path / "ws"
+    return compose_body(
+        "o/r#109",
+        summary=summary,
+        phases=phases,
+        decisions=decisions,
+        deviations=deviations,
+        requirements=requirements,
+        workspace=ws,
+        plan_dir=ws / "plan",
+        home=tmp_path,
+    )
+
+
+def test_compose_order_and_header(tmp_path: Path) -> None:
+    body = _compose(
+        tmp_path,
+        summary="S #109 @bob",
+        phases="P",
+        decisions="D",
+        deviations="V",
+        requirements=f"# Req {tmp_path}/ws/x\n</details>\n#12",
+    )
+    assert body.startswith(f"Work item: o/r#109\n\n{HEADER_NOTICE}\n\n## Summary")
+    idx = [body.index(m) for m in ("## Summary", "## Phases", "## Decisions", "## Deviations", "<details>")]
+    assert idx == sorted(idx)
+    assert body.count("</details>") == 1 and body.endswith("</details>")
+    assert str(tmp_path) not in body
+    assert "<summary>Full requirements</summary>\n\n# Req" in body
+    assert not mentions_issue(body, 109) and not mentions_issue(body, 12)
+    assert (
+        compose_body("o/r#109", workspace=tmp_path)
+        == f"Work item: o/r#109\n\n{HEADER_NOTICE}\n\nNote: `requirements.md` is missing or unreadable; full requirements omitted."
+    )
+
+
+def test_compose_oversize_drops_details_first(tmp_path: Path) -> None:
+    body = _compose(tmp_path, summary="short", requirements="x" * (MAX_BODY_CHARS + 10))
+    assert "<details>" not in body and "short" in body
+    assert "<plan-dir>/requirements.md" in body and len(body) <= MAX_BODY_CHARS
+
+
+def test_compose_oversize_truncates_remaining(tmp_path: Path) -> None:
+    body = _compose(tmp_path, summary="```\n" + "y" * (MAX_BODY_CHARS * 2), phases="late", requirements="r")
+    assert len(body) <= MAX_BODY_CHARS
+    assert body.startswith(f"Work item: o/r#109\n\n{HEADER_NOTICE}")
+    assert "late" not in body and "truncated" in body and "<plan-dir>/requirements.md" in body
+    assert body.count("```") % 2 == 0
+
+
+def test_read_requirements_degrades(tmp_path: Path) -> None:
+    assert read_requirements(None) is None
+    assert read_requirements(tmp_path) is None
+    (tmp_path / "requirements.md").write_bytes(b"\xff\xfe")
+    assert read_requirements(tmp_path) is None
+    (tmp_path / "requirements.md").write_text("ok")
+    assert read_requirements(tmp_path) == "ok"
