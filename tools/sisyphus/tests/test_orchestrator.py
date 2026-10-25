@@ -338,7 +338,7 @@ def test_stage_order_and_record_writes(world: World, monkeypatch: pytest.MonkeyP
 
 def test_happy_path_pr_gate_and_digest(world: World) -> None:
     result = world.run()
-    assert world.opened == [(branch_name(ITEM), "base-branch", "Sisyphus: ENG-1", world.opened[0][3])]
+    assert world.opened == [(branch_name(ITEM), "base-branch", "Brief", world.opened[0][3])]  # no owned plan: brief H1
     assert result.pr == PullRequest(42, "https://example.test/pr/42")
     digest = world.digest_text()
     assert "PR #42 open" in digest
@@ -1536,3 +1536,36 @@ def test_existing_pr_does_not_assemble_a_body(world: World, monkeypatch: pytest.
     assert world.opened == []
     assert calls == []
     assert world.log_calls == []
+
+
+def test_open_pr_title_is_the_requirements_h1(world: World) -> None:
+    world.requirements = "# Descriptive requirements title\n\n### 1. Overview\n\nText.\n"
+    result = world.run()
+    assert result.completed
+    assert world.opened[0][2] == "Descriptive requirements title"
+
+
+def test_open_pr_title_missing_artifacts_is_the_fallback(world: World) -> None:
+    world.brief_text = "## Open decisions log\n\nNone\n"  # no H1 anywhere
+    result = world.run()
+    assert result.completed
+    assert world.opened[0][2] == "Sisyphus: ENG-1"
+
+
+def test_title_failure_does_not_stop_the_run(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_a: object, **_k: object) -> str:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(orchestrator.prbody, "derive_title", boom)
+    result = world.run()
+    assert result.completed
+    assert world.opened[0][2] == "Sisyphus: ENG-1"
+
+
+def test_existing_pr_does_not_open_or_retitle(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    world.existing_pr = PullRequest(42, "https://example.test/pr/42")
+    calls: list[str] = []
+    monkeypatch.setattr(orchestrator.prbody, "derive_title", lambda *a, **k: calls.append("x") or "t")
+    world.run()
+    assert world.opened == []
+    assert calls == []

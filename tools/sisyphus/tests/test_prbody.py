@@ -9,12 +9,16 @@ from sisyphus.pick import mentions_issue
 from sisyphus.prbody import (
     HEADER_NOTICE,
     MAX_BODY_CHARS,
+    MAX_TITLE_CHARS,
     PLAN_NOT_MATCHED_NOTE,
+    clean_title,
     commit_log_args,
     compose_body,
+    derive_title,
     extract_decisions,
     extract_deviations,
     extract_summary,
+    fallback_title,
     format_decisions,
     leaf_stems,
     list_phases,
@@ -305,3 +309,103 @@ def test_build_body_full_and_degraded(tmp_path: Path) -> None:
     assert "Phases unavailable: git log failed" in _build(tmp_path, plan, None)
     (plan / "init_manifest.json").unlink()
     assert PLAN_NOT_MATCHED_NOTE in _build(tmp_path, plan)
+
+
+# ---------------------------------------------------------------- title
+
+
+def _owned_plan(tmp_path: Path, requirements: str | None, brief_text: str = "") -> tuple[Path, Path]:
+    brief = tmp_path / "brief.md"
+    brief.write_text(brief_text)
+    plan = tmp_path / "plan"
+    plan.mkdir()
+    (plan / "init_manifest.json").write_text(json.dumps({"brief": str(brief)}))
+    if requirements is not None:
+        (plan / "requirements.md").write_text(requirements)
+    return brief, plan
+
+
+def test_title_requirements_h1_wins_over_brief(tmp_path: Path) -> None:
+    brief, plan = _owned_plan(tmp_path, "# Requirements: from reqs (#1)\n", "# Brief: from brief (#2)\n")
+    assert derive_title(brief, plan, tmp_path) == "from reqs (#1)"
+
+
+def test_title_brief_when_plan_not_owned(tmp_path: Path) -> None:
+    brief, plan = _owned_plan(tmp_path, "# Requirements: from reqs\n", "# Brief: from brief (#2)\n")
+    (plan / "init_manifest.json").write_text(json.dumps({"brief": str(tmp_path / "other.md")}))
+    assert derive_title(brief, plan, tmp_path) == "from brief (#2)"
+    assert derive_title(brief, None, tmp_path) == "from brief (#2)"
+
+
+def test_title_brief_when_requirements_missing_or_headless(tmp_path: Path) -> None:
+    brief, plan = _owned_plan(tmp_path, None, "# Brief: from brief\n")
+    assert derive_title(brief, plan, tmp_path) == "from brief"
+    (plan / "requirements.md").write_text("no heading\n## Sub\n")
+    assert derive_title(brief, plan, tmp_path) == "from brief"
+    (plan / "requirements.md").write_text("# Requirements:   \n")
+    assert derive_title(brief, plan, tmp_path) == "from brief"
+
+
+def test_title_none_without_h1_or_with_empty_h1(tmp_path: Path) -> None:
+    brief, plan = _owned_plan(tmp_path, "## only sub\n", "#\n# Brief:\n## x\n")
+    assert derive_title(brief, plan, tmp_path) is None
+    assert derive_title(tmp_path / "missing.md", None, tmp_path) is None
+
+
+def test_title_prefix_stripping(tmp_path: Path) -> None:
+    for heading, expected in [
+        ("# Requirements: auto-approve CI check (dotharness #118)", "auto-approve CI check (dotharness #118)"),
+        ("# Brief: Sisyphus is done (#124)", "Sisyphus is done (#124)"),
+        ("# requirements:\tlower case", "lower case"),
+        ("# BRIEF:x", "x"),
+        ("# Plain heading", "Plain heading"),
+        ("# Requirements: Brief: twice", "Brief: twice"),
+    ]:
+        brief = tmp_path / "b.md"
+        brief.write_text(heading + "\n")
+        assert derive_title(brief, None, tmp_path) == expected
+
+
+def test_title_h1_outside_fences_only_first_counts(tmp_path: Path) -> None:
+    brief = tmp_path / "b.md"
+    brief.write_text("## sub\n```\n# in fence\n```\n~~~\n# tilde fence\n~~~\n# Real one\n# Second\n")
+    assert derive_title(brief, None, tmp_path) == "Real one"
+
+
+def test_title_mentions_neutralised_issue_refs_untouched(tmp_path: Path) -> None:
+    brief = tmp_path / "b.md"
+    brief.write_text("# Brief: ping @alice about #12 and a@b\n")
+    title = derive_title(brief, None, tmp_path)
+    assert title == "ping @​alice about #12 and a@​b"
+
+
+def test_title_single_line() -> None:
+    assert clean_title("a\r\nb\t\tc \n d", Path("/ws"), None, Path("/nohome")) == "a b c d"
+
+
+def test_title_cap_with_ellipsis() -> None:
+    ws = Path("/ws")
+    for n, expected_len in [(255, 255), (256, 256), (257, 256), (1000, 256)]:
+        out = clean_title("x" * n, ws, None, Path("/nohome"))
+        assert len(out) == expected_len
+    assert clean_title("x" * 256, ws, None, Path("/nohome")) == "x" * 256
+    long = clean_title("x" * 257, ws, None, Path("/nohome"))
+    assert long == "x" * 253 + "..."
+    assert MAX_TITLE_CHARS == 256
+
+
+def test_title_paths_redacted(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    plan = ws / "plan"
+    brief = tmp_path / "b.md"
+    brief.write_text(f"# Brief: fix {plan} and {ws} in\n")
+    assert derive_title(brief, None, ws, tmp_path / "nohome") == "fix <workspace>/plan and <workspace> in"
+    assert derive_title(brief, plan, ws, tmp_path / "nohome") == "fix <plan-dir> and <workspace> in"
+
+
+def test_fallback_title_and_cap() -> None:
+    assert fallback_title("item 7") == "Sisyphus: item 7"
+    out = fallback_title("y" * 400)
+    assert len(out) == 256
+    assert out.startswith("Sisyphus: yyy")
+    assert out.endswith("...")

@@ -443,3 +443,68 @@ def build_body(
         workspace=workspace,
         plan_dir=plan_dir,
     )
+
+
+# ---------------------------------------------------------------- pull-request title
+
+MAX_TITLE_CHARS = 256
+_TITLE_ELLIPSIS = "..."
+_TITLE_LABEL = re.compile(r"(?:Requirements|Brief):\s*", re.IGNORECASE)
+_FENCE = re.compile(r"^\s*(?:```|~~~)")
+
+
+def fallback_title(item: str) -> str:
+    """``Sisyphus: <item>``, capped like every title (FR-9, FR-11)."""
+    return _cap_title(f"Sisyphus: {item}")
+
+
+def _cap_title(text: str) -> str:
+    if len(text) <= MAX_TITLE_CHARS:
+        return text
+    return text[: MAX_TITLE_CHARS - len(_TITLE_ELLIPSIS)] + _TITLE_ELLIPSIS
+
+
+def _first_h1(text: str) -> str | None:
+    """Text of the first ``# `` line outside fenced code blocks, or ``None`` (FR-4)."""
+    in_fence = False
+    for line in text.splitlines():
+        if _FENCE.match(line):
+            in_fence = not in_fence
+        elif not in_fence and line.startswith("# "):
+            return line[2:]
+    return None
+
+
+def _title_text(markdown: str | None) -> str | None:
+    """First H1 without its ``Requirements:`` / ``Brief:`` label, or ``None`` when absent or empty (FR-5, FR-6)."""
+    if markdown is None:
+        return None
+    heading = _first_h1(markdown)
+    if heading is None:
+        return None
+    cleaned = _TITLE_LABEL.sub("", heading.strip(), count=1).strip()
+    return cleaned or None
+
+
+def clean_title(text: str, workspace: Path, plan_dir: Path | None, home: Path | None = None) -> str:
+    """Redact paths, collapse whitespace to single spaces, neutralise mentions (not ``#N``), cap the length."""
+    text = " ".join(redact_paths(text, workspace, plan_dir, home).split())
+    return _cap_title(_MENTION.sub("@" + ZWSP, text))
+
+
+def derive_title(brief_path: Path, plan_dir: Path | None, workspace: Path, home: Path | None = None) -> str | None:
+    """Descriptive PR title from the requirements H1 (owned plan) else the brief H1; ``None`` when neither yields one.
+
+    The caller uses ``fallback_title`` on ``None`` (FR-1 to FR-3).
+    """
+    title = None
+    if plan_dir is not None and plan_dir_matches_brief(plan_dir, brief_path):
+        title = _title_text(read_requirements(plan_dir))
+    if title is None:
+        try:
+            title = _title_text(brief_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            title = None
+    if title is None:
+        return None
+    return clean_title(title, workspace, plan_dir, home) or None
