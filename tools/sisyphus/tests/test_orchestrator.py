@@ -390,6 +390,52 @@ def test_prompts_carry_resolved_paths(world: World) -> None:
         assert not re.search(r"<(stage|brief path|handoff dir|target repo dir|target branch|stop report path)>", prompt)
 
 
+def test_build_prompt_handoff_dir_is_the_items_plan_dir_not_the_workspace_root(world: World) -> None:
+    world.run()
+    workspace = world.tmp / "ws"
+    handoffs = workspace / plan_dir_name(ITEM) / "handoffs"
+    build = world.agent_prompts[2]
+    assert str(handoffs) in build
+    assert str(workspace / "handoffs") not in build
+
+
+def test_two_items_get_distinct_handoff_dirs(world: World) -> None:
+    other = "ENG-2"
+    assert plan_dir_name(other) != plan_dir_name(ITEM)
+    world.run()
+    first_build = world.agent_prompts[2]
+    seen = len(world.agent_prompts)
+    result = run_item(
+        other,
+        world.config(),
+        world.options(),
+        agent_runner=world.agent,
+        subprocess_runner=world.shell,
+        pr_client=world,
+        clock=world.clock,
+        today=TODAY,
+    )
+    assert result.completed
+    second_build = next(p for p in world.agent_prompts[seen:] if "Stage to run now: `build`" in p)
+    workspace = world.tmp / "ws"
+    first = workspace / plan_dir_name(ITEM) / "handoffs"
+    second = workspace / plan_dir_name(other) / "handoffs"
+    assert first != second
+    assert str(first) in first_build
+    assert str(second) in second_build
+    assert str(second) not in first_build
+    assert str(first) not in second_build
+
+
+def test_handoff_dir_exists_after_build_and_prompt_does_not_ask_for_it(world: World) -> None:
+    world.run()
+    assert (world.tmp / "ws" / plan_dir_name(ITEM) / "handoffs").is_dir()
+    build = world.agent_prompts[2].replace(str(world.tmp), "<tmp>")  # tmp path embeds the test name
+    assert not re.search(r"mkdir", build, re.IGNORECASE)
+    sentences = re.split(r"(?<=[.!?])\s+|\n", build)
+    assert not [s for s in sentences if re.search(r"create", s, re.I) and re.search(r"handoff", s, re.I)]
+
+
 # ---------------------------------------------------------------- AC2: checkpoints
 
 
