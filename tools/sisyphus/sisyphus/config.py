@@ -70,13 +70,7 @@ class AgentConfig:
 class LimitsConfig:
     max_run_minutes: int = 180
     max_tickets_per_run: int = 1
-    max_fix_attempts_per_pr: int = 3
     max_leaves_per_run: int = 4
-
-
-@dataclass(frozen=True)
-class MergeConfig:
-    enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -96,7 +90,6 @@ class SisyphusConfig:
     source: SourceConfig = field(default_factory=SourceConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
-    merge: MergeConfig = field(default_factory=MergeConfig)
     digest: DigestConfig = field(default_factory=DigestConfig)
     knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
 
@@ -115,13 +108,6 @@ def _str(table: dict[str, Any], section: str, key: str) -> str | None:
     value = table.get(key)
     if value is not None and not isinstance(value, str):
         raise ConfigError(f"[{section}] {key} must be a string, got {type(value).__name__}")
-    return value
-
-
-def _bool(table: dict[str, Any], section: str, key: str, default: bool | None) -> bool | None:
-    value = table.get(key, default)
-    if value is not None and not isinstance(value, bool):
-        raise ConfigError(f"[{section}] {key} must be a boolean, got {type(value).__name__}")
     return value
 
 
@@ -224,21 +210,14 @@ def _parse(data: dict[str, Any]) -> SisyphusConfig:
 
     limits = LimitsConfig()
     if "limits" in data:
-        keys = ("max_run_minutes", "max_tickets_per_run", "max_fix_attempts_per_pr", "max_leaves_per_run")
+        keys = ("max_run_minutes", "max_tickets_per_run", "max_leaves_per_run")
         t = _table(data["limits"], "limits", keys)
         d = LimitsConfig()
         limits = LimitsConfig(
             max_run_minutes=_limit(t, "max_run_minutes", d.max_run_minutes),
             max_tickets_per_run=_limit(t, "max_tickets_per_run", d.max_tickets_per_run),
-            max_fix_attempts_per_pr=_limit(t, "max_fix_attempts_per_pr", d.max_fix_attempts_per_pr),
             max_leaves_per_run=_limit(t, "max_leaves_per_run", d.max_leaves_per_run),
         )
-
-    merge = MergeConfig()
-    if "merge" in data:
-        # Only ``enabled`` is read here; the remaining keys are harness-owned and validated there.
-        t = _table(data["merge"], "merge", ("enabled",), passthrough=True)
-        merge = MergeConfig(enabled=bool(_bool(t, "merge", "enabled", False)))
 
     digest = DigestConfig()
     if "digest" in data:
@@ -254,7 +233,7 @@ def _parse(data: dict[str, Any]) -> SisyphusConfig:
         )
 
     return SisyphusConfig(
-        project=project, source=source, agent=agent, limits=limits, merge=merge, digest=digest, knowledge=knowledge
+        project=project, source=source, agent=agent, limits=limits, digest=digest, knowledge=knowledge
     )
 
 

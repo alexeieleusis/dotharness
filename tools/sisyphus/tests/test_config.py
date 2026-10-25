@@ -25,8 +25,7 @@ def test_minimal_defaults(tmp_path: Path) -> None:
     assert cfg.limits.max_tickets_per_run == 1
     assert cfg.limits.max_leaves_per_run == 4
     assert cfg.limits.max_run_minutes == 180
-    assert cfg.limits.max_fix_attempts_per_pr == 3
-    assert cfg.merge.enabled is False
+    assert not hasattr(cfg, "merge")
     assert cfg.project.repo_dir is None
     assert cfg.source.work_item is None
     assert cfg.agent.backend is None
@@ -91,7 +90,7 @@ conventions_path = "c"
     assert cfg.source.host.token_cmd == "gh auth token"  # noqa: S105
     assert cfg.agent.backend == "opencode"
     assert cfg.limits.max_run_minutes == 10
-    assert cfg.merge.enabled is True
+    assert not hasattr(cfg, "merge")
     assert cfg.knowledge.conventions_path == "c"
 
 
@@ -199,7 +198,6 @@ def test_relative_paths_verbatim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         ('[project]\n[limits]\nmax_run_minutes = "x"\n', "max_run_minutes"),
         ("[project]\n[limits]\nmax_run_minutes = 1.5\n", "max_run_minutes"),
         ("[project]\n[limits]\nmax_run_minutes = true\n", "max_run_minutes"),
-        ('[project]\n[merge]\nenabled = "yes"\n', "enabled"),
         ("[project]\nsource = 1\n", "source"),
         ("project = 1\n", "project"),
     ],
@@ -209,9 +207,7 @@ def test_wrong_types(tmp_path: Path, text: str, key: str) -> None:
         load_config(write(tmp_path, text))
 
 
-@pytest.mark.parametrize(
-    "key", ["max_run_minutes", "max_tickets_per_run", "max_fix_attempts_per_pr", "max_leaves_per_run"]
-)
+@pytest.mark.parametrize("key", ["max_run_minutes", "max_tickets_per_run", "max_leaves_per_run"])
 @pytest.mark.parametrize("value", [0, -1])
 def test_limits_positive(tmp_path: Path, key: str, value: int) -> None:
     with pytest.raises(ConfigError, match=key):
@@ -221,8 +217,21 @@ def test_limits_positive(tmp_path: Path, key: str, value: int) -> None:
 def test_harness_owned_keys_pass_through(tmp_path: Path) -> None:
     text = MIN + "[merge]\nmax_changed_lines = 0\nfuture_key = 1\n[source.ci]\nmax_fix_attempts = -2\nfuture = 1\n"
     cfg = load_config(write(tmp_path, text))
-    assert cfg.merge.enabled is False
+    assert not hasattr(cfg, "merge")
     assert cfg.source.ci is not None
+
+
+def test_removed_fix_attempts_limit_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="unknown key 'max_fix_attempts_per_pr'"):
+        load_config(write(tmp_path, MIN + "[limits]\nmax_fix_attempts_per_pr = 3\n"))
+
+
+def test_merge_table_ignored_and_limits_still_parse(tmp_path: Path) -> None:
+    text = MIN + '[merge]\nenabled = "yes"\nfuture = [1]\n'
+    text += "[limits]\nmax_run_minutes = 5\nmax_tickets_per_run = 2\nmax_leaves_per_run = 3\n"
+    cfg = load_config(write(tmp_path, text))
+    assert not hasattr(cfg, "merge")
+    assert (cfg.limits.max_run_minutes, cfg.limits.max_tickets_per_run, cfg.limits.max_leaves_per_run) == (5, 2, 3)
 
 
 def test_invalid_toml(tmp_path: Path) -> None:
