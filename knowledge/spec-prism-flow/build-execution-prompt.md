@@ -86,7 +86,7 @@ For each phase, in order:
 Sub-agents run one after another. Each starts with a clean context. The summary is the only
 thing that carries context forward. Each sub-agent must end its report with one. Keep it
 short and concrete. Save each summary yourself as `handoffs/NN-<leaf name>.md` in the
-project's workspace directory, right after the phase's commit. Give the next sub-agent the
+workspace directory (`plan.workspace_dir`), which is per item, right after the phase's commit. Give the next sub-agent the
 paths of all earlier summary files, in phase order, and tell it to read them. If the session
 dies, or you stop on an open question, the saved files let a new session resume without
 losing context.
