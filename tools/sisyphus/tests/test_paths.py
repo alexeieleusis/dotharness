@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -75,3 +76,16 @@ def test_real_checkout_resolves(tmp_path: Path) -> None:
     root = find_checkout_root()
     assert root is not None
     assert knowledge_dir(tmp_path, root) == (root / "knowledge").resolve()
+
+
+def test_linear_feed_prompt_resolves_with_one_placeholder(tmp_path: Path) -> None:
+    root = find_checkout_root()
+    assert root is not None
+    path = knowledge_file("sisyphus/linear-feed-prompt.md", tmp_path, root)
+    assert path == (root / "knowledge/sisyphus/linear-feed-prompt.md").resolve()
+    text = path.read_text()
+    assert text.count("<config path>") == 1
+    assert re.findall(r"<[^>\n]+>", text) == ["<config path>"]
+    for name in ("dir", "assignee", "pick_state", "pick_label"):
+        assert f"`{name}`" in text
+    assert "[source.work_item]" in text

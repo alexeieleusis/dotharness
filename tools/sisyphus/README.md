@@ -45,6 +45,23 @@ uv run sisyphus resume <work-item-ref> --config .sisyphus.toml
 uv run sisyphus abandon <work-item-ref> --config .sisyphus.toml
 ```
 
+To feed Sisyphus from local ticket files instead of a tracker, use the `file` kind. It picks the next
+unstarted `<dir>/<ref>.md` ticket file and needs no `assignee`, API key or network:
+
+```toml
+[project]
+repo_dir = "/path/to/dedicated/clone"
+workspace_dir = "/path/to/workspace"
+brief_path_template = "<workspace_dir>/<item-id>.brief.md"
+
+[source.work_item]
+kind = "file"
+dir = "/path/to/tickets"
+```
+
+Sisyphus substitutes `<workspace_dir>` and `<item-id>` in `brief_path_template`. A producer prompt (`knowledge/sisyphus/linear-feed-prompt.md`) can export Linear tickets into `dir`. See
+[usage](https://alexeieleusis.github.io/dotharness/sisyphus/usage/).
+
 Sisyphus never pushes to the base branch: each item gets its own `sisyphus/<slug>-<8 hex>` branch and a PR.
 
 > **Caveat:** the real `claude`/`opencode`, `gh`, Linear and `git push` paths are covered by tests with fakes only. They have not been exercised against the

@@ -25,6 +25,11 @@ sisyphus resume <work-item-ref> --config <file> [--base <branch>]
    - GitHub: open, assigned to `assignee`, labelled `pick_label` (default `sisyphus`), oldest first. An issue
      with an open linked PR, or one mentioned as `#N` in an open PR body, is skipped. Merged or closed PRs do
      not exclude an issue.
+   - File: the `*.md` ticket files in `[source.work_item].dir`, in Linear priority order (1 to 4 first, none
+     last), then oldest modification time first, then `ref`. No `assignee` is needed and no PR lookup runs. A file
+     whose front matter is invalid (see "Ticket files and the producer") is skipped with a one-line note on
+     stderr. Finished ticket files stay in place: they are skipped because the item has a run record, not
+     because the file is removed.
 5. Runs each item through the orchestrator (intake, plan, build, push, open PR) and
    stops at the first checkpoint (C1..C8). Before starting each further item it checks `max_run_minutes`. Once
    exceeded it starts nothing else and notes it under "Limits hit" (exit 0).
@@ -48,7 +53,8 @@ The CLI takes the clone lock once, at the start of `run` and `intake`, and relea
 
 Credentials come only from the inherited environment and `[source.host].token_cmd` (no shell. Its stdout is
 the token, passed to `gh` as `GH_TOKEN` only). Linear always reads its API key from `LINEAR_API_KEY` in the
-environment. `token_cmd` is never sent to Linear. `gh` must be installed and able to reach the repository.
+environment. `token_cmd` is never sent to Linear. `gh` must be installed and able to reach the repository. The `file` kind needs no API key and makes no network
+call to pick an item.
 
 `[agent].backend` selects the agent command, run inside `repo_dir`:
 
@@ -78,6 +84,48 @@ only. They have not been exercised against the real services.
 Runs only the intake stage for one work item reference: the agent drafts the brief at the path from
 `brief_path_template`. Prints `brief: <path>` and any open decisions (checkpoint C1). Needs
 `[project].repo_dir`, `workspace_dir` and `brief_path_template`. Takes the same lock. Exits 0 quietly if held.
+
+## Ticket files and the producer
+
+With `kind = "file"` Sisyphus reads tickets from `<dir>/<ref>.md`. Each file is a front-matter block, then the
+ticket body:
+
+```markdown
+---
+ref: ENG-123
+title: Rate-limit the export endpoint
+url: https://linear.app/acme/issue/ENG-123
+priority: 2
+---
+
+<description, acceptance criteria and relevant comments>
+```
+
+`ref` must equal the file-name stem and use only letters, digits, `.`, `_` and `-` (a name made only of dots is
+rejected). `title`, `url` and `priority` (integer 0 to 4, 0 meaning none) are optional. A bad `priority` counts as
+0 and a missing `title` falls back to `ref`. The body is untrusted ticket content and is not parsed. An invalid
+file (missing `---` line, missing `ref`, bad `ref`) is skipped and one line naming the file and the reason goes
+to stderr. A missing or empty `dir` picks nothing. Finished ticket files stay in place.
+
+### Producer: exporting Linear tickets
+
+`knowledge/sisyphus/linear-feed-prompt.md` is a prompt that exports one Linear ticket into `dir`. Its only
+parameter is `<config path>`. It reads `dir`, `assignee`, `pick_state` and the optional `pick_label` from
+`[source.work_item]`, lists matching tickets through the Linear MCP in priority order, takes the first one with
+no file in `dir` yet, writes `<dir>/<ref>.md` and stops. It never overwrites a file and only reads Linear. There
+is no `sisyphus` subcommand for it. Run it with the agent CLI, with the parameter substituted:
+
+```
+claude -p "<prompt with <config path> replaced by /path/to/.sisyphus.toml>" --dangerously-skip-permissions
+```
+
+As for the backends above, `--dangerously-skip-permissions` grants the invoking user's full access, and Linear text
+is untrusted input. Prerequisites: the Linear MCP connector is authorised for the user who runs it, and `dir`
+exists and is writable from where the producer runs.
+
+The producer is safe to repeat. A ticket Sisyphus finished stays in Linear status `pick_state`, but its file is
+still present (never re-written) and it has a run record (never re-picked). If you delete a ticket file by hand,
+the producer writes it again and Sisyphus still skips it because of the run record.
 
 ## Stopped items and resume
 
