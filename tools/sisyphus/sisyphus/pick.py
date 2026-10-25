@@ -28,6 +28,7 @@ from typing import Any, Protocol
 from sisyphus.config import WorkItemSource
 from sisyphus.runrecord import record_path
 from sisyphus.subproc import CommandResult, run_command
+from sisyphus.ticketfile import TICKET_SUFFIX, parse_front_matter, ref_from_filename, ticket_dir, valid_file_ref
 
 LINEAR_API_URL = "https://api.linear.app/graphql"
 GITHUB_OPEN_STATE = "OPEN"
@@ -335,33 +336,6 @@ class LinearTracker:
         ]
 
 
-_FILE_REF_RE = re.compile(r"[A-Za-z0-9._-]+")
-_FRONT_MATTER_FENCE = "---"
-
-
-def valid_file_ref(ref: str) -> bool:
-    """True if ``ref`` is a safe ticket-file stem: ``[A-Za-z0-9._-]+`` and not made only of dots."""
-    return _FILE_REF_RE.fullmatch(ref) is not None and ref.strip(".") != ""
-
-
-def _parse_front_matter(text: str) -> dict[str, str]:
-    """Key/value pairs of the leading ``---`` block (each line split on its first ``:``).
-
-    Raises ``ValueError`` for a missing opening or closing fence. The body below the block is never read.
-    """
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != _FRONT_MATTER_FENCE:
-        raise ValueError("missing opening ---")
-    fields: dict[str, str] = {}
-    for line in lines[1:]:
-        if line.strip() == _FRONT_MATTER_FENCE:
-            return fields
-        key, sep, value = line.partition(":")
-        if sep and key.strip():
-            fields[key.strip()] = value.strip()
-    raise ValueError("missing closing ---")
-
-
 def _parse_priority(raw: str | None) -> int:
     """Linear priority 1 to 4; anything else (missing, non-integer, out of range) is 0 (none)."""
     try:
@@ -381,11 +355,11 @@ class FileTracker:
     def list_candidates(self, source: WorkItemSource) -> Sequence[Candidate]:
         if not source.dir:
             return []
-        inbox = Path(source.dir).expanduser()
+        inbox = ticket_dir(source)
         if not inbox.exists():
             return []
         try:
-            paths = sorted(p for p in inbox.iterdir() if p.name.endswith(".md") and p.is_file())
+            paths = sorted(p for p in inbox.iterdir() if p.name.endswith(TICKET_SUFFIX) and p.is_file())
         except OSError as exc:
             raise PickError(f"cannot read ticket directory {inbox}: {exc}") from exc
         rows: list[tuple[int, int, str, Candidate]] = []
@@ -401,13 +375,13 @@ class FileTracker:
 
     @staticmethod
     def _read(path: Path) -> tuple[int, int, str, Candidate]:
-        fields = _parse_front_matter(path.read_text(encoding="utf-8"))
+        fields = parse_front_matter(path.read_text(encoding="utf-8"))
         ref = fields.get("ref", "")
         if not ref:
             raise ValueError("missing ref")
         if not valid_file_ref(ref):
             raise ValueError(f"invalid ref {ref!r}")
-        if ref != path.name.removesuffix(".md"):
+        if ref != ref_from_filename(path.name):
             raise ValueError(f"ref {ref!r} does not match the file name")
         mtime_ns = path.stat().st_mtime_ns
         stamp = datetime.fromtimestamp(mtime_ns / 1e9, UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")

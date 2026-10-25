@@ -20,10 +20,10 @@ from pathlib import Path
 
 from sisyphus.config import SisyphusConfig
 from sisyphus.paths import knowledge_file
-from sisyphus.pick import valid_file_ref
 from sisyphus.rails import Checkpoint
 from sisyphus.runrecord import RunRecord, encode_item
 from sisyphus.stages import INTAKE_STAGE
+from sisyphus.ticketfile import ticket_path, valid_file_ref
 
 PROMPT_FILE = "sisyphus/intake-prompt.md"
 DRAFTING_PROMPT_FILE = "spec-prism-flow/requirements-doc-drafting-prompt.md"
@@ -108,7 +108,7 @@ def resolve_ticket_path(config: SisyphusConfig, item: str) -> Path | None:
         raise IntakeError(f"invalid ticket reference {item!r}: use only letters, digits, '.', '_' and '-'")
     if not source.dir:
         raise IntakeError('[source.work_item].dir is not set (kind = "file")')
-    return Path(source.dir).expanduser() / f"{item}.md"
+    return ticket_path(source, item)
 
 
 def resolve_brief_path(config: SisyphusConfig, item: str) -> Path:
