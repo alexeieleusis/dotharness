@@ -105,7 +105,8 @@ belong to whichever item ran last. Before each agent stage, the leaf count and t
 writes `<workspace_dir>/plan-<n>/.spec-prism-flow.toml`: the repository's file (`spf_config_path`) with `plan.workspace_dir`
 set to `<workspace_dir>/plan-<n>` and `plan.phase_dir` set to `phase_dir` or `<workspace_dir>/plan-<n>/phases`. The agents
 receive this path as `phase config path`, and the orchestrator reads `build.commands` and counts leaves from it. The
-repository's file is never modified.
+repository's file is never modified. Build-stage handoff summaries are saved as
+`<workspace_dir>/plan-<n>/handoffs/NN-<leaf name>.md`, and the orchestrator creates the `handoffs/` directory before the build stage.
 
 ## Locking, digest and reruns
 

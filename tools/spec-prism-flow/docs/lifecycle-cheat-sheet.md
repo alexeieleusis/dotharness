@@ -71,7 +71,7 @@ sub-agent its prompt file and the project's config or `BRIEF.md`.
 - **Context between phases.** Each phase sub-agent ends its report with a handoff summary.
   The summary states what the sub-agent did, its deviations from the plan, context for later
   phases, and open questions. The build sub-agent saves each one to
-  `handoffs/NN-<leaf name>.md` in the workspace directory and gives the paths of all earlier
+  `handoffs/NN-<leaf name>.md` in the workspace directory (`plan.workspace_dir`), which is per item, and gives the paths of all earlier
   summaries to the next phase sub-agent. The template is in `build-execution-prompt.md`,
   under "Handoff summary". Tell the build sub-agent to require it.
 - **Open questions.** A phase can raise an open question. A phase can also raise a deviation
