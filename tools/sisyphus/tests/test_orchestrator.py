@@ -24,7 +24,6 @@ from sisyphus import orchestrator, pick
 from sisyphus.cleanup import PrInfo
 from sisyphus.config import DigestConfig, LimitsConfig, ProjectConfig, SisyphusConfig
 from sisyphus.digest import DigestWriteError
-from sisyphus.gaterecord import gate_record_path, read_gate_record
 from sisyphus.intake import resolve_brief_path
 from sisyphus.lock import LockHeld, clone_lock
 from sisyphus.orchestrator import (
@@ -52,7 +51,6 @@ ITEM = "ENG-1"
 SHA1 = "1" * 40
 SHA2 = "2" * 40
 SHA3 = "3" * 40
-SHA4 = "4" * 40
 BRIEF_NONE = "# Brief\n\n## Open decisions log\n\nNone\n"
 BRIEF_OPEN = "# Brief\n\n## Open decisions log\n\n1. Which tracker?\n"
 TODAY = datetime(2026, 1, 2, tzinfo=UTC)
@@ -87,7 +85,6 @@ class World:
         _git(self.repo, "commit", "-q", "-m", "init")
         self.phases = tmp_path / "phases"
         self.phases.mkdir()
-        self.state = tmp_path / "state"
         self.clock = Clock()
         self.events: list[str] = []
         self.shell_calls: list[tuple[tuple[str, ...], Path | None]] = []
@@ -147,9 +144,7 @@ class World:
     def options(self, **kw: object) -> OrchestratorOptions:
         base = OrchestratorOptions(
             base_branch="base-branch",
-            repo_slug="owner-repo",
             phase_dir=self.phases,
-            state_dir=self.state,
             lock_dir=self.tmp / "locks",
             home=self.tmp / "nohome",
         )
@@ -345,13 +340,11 @@ def test_happy_path_pr_gate_and_digest(world: World) -> None:
     result = world.run()
     assert world.opened == [(branch_name(ITEM), "base-branch", "Sisyphus: ENG-1", world.opened[0][3])]
     assert result.pr == PullRequest(42, "https://example.test/pr/42")
-    assert result.gate_recorded
-    assert read_gate_record("owner-repo", 42, world.state) == SHA1
-    data = json.loads(gate_record_path("owner-repo", 42, world.state).read_text())
-    assert data["commands"] == ["make check", "make test"]
     digest = world.digest_text()
     assert "PR #42 open" in digest
-    assert f"gate record written for {SHA1}" in digest
+    assert "gate passed" in digest
+    assert "gate record" not in digest
+    assert not list(world.tmp.rglob("build_gate_*.json"))
     assert any(c[0] == ("git", "checkout", "-b", branch_name(ITEM), "origin/base-branch") for c in world.shell_calls)
     assert RunRecord.open(world.tmp / "ws", ITEM).retries.get("branch-created") == 1
 
@@ -472,14 +465,13 @@ def test_c5_leaf_scope_violation_from_agent(world: World) -> None:
     assert world.find_calls == 0
 
 
-def test_c5_gate_command_failure_writes_no_record(world: World) -> None:
+def test_c5_gate_command_failure_raises_c5(world: World) -> None:
     world.gate_rc = 2
     result = world.run()
     _assert_stop(world, result, Checkpoint.C5)
     assert result.pr is not None  # PR is open, but not gated
-    assert not result.gate_recorded
-    assert read_gate_record("owner-repo", 42, world.state) is None
-    assert not gate_record_path("owner-repo", 42, world.state).exists()
+    assert not list(world.tmp.rglob("build_gate_*.json"))
+    assert "gate passed" not in world.digest_text()
     assert world.events.count("gate:make check@pkg") == 1  # stopped at first failure
 
 
@@ -648,7 +640,6 @@ def test_rerun_after_gate_failure_reuses_existing_pr(world: World) -> None:
     result = world.run()
     assert result.completed
     assert len(world.opened) == 1  # find_pr found the PR; no second PR
-    assert read_gate_record("owner-repo", 42, world.state) == SHA1
     assert world.events.count("agent:build") == 1  # earlier stages not repeated
     assert world.events.count("agent:plan") == 1
 
@@ -716,13 +707,13 @@ def test_run_is_complete_once_the_pr_is_open_and_frees_the_clone(world: World) -
 # ---------------------------------------------------------- gate commands (FR-3.3.10)
 
 
-def test_no_build_commands_writes_no_record_and_reports_in_digest(world: World) -> None:
+def test_no_build_commands_skips_gate_and_reports_in_digest(world: World) -> None:
     (world.repo / ".spec-prism-flow.toml").write_text('[plan]\nphase_dir = "x"\n')
     result = world.run()
     assert result.completed
-    assert not result.gate_recorded
-    assert not gate_record_path("owner-repo", 42, world.state).exists()
-    assert "no build.commands" in world.digest_text().split("## Deviations")[1]
+    assert result.checkpoint is None
+    assert "gate not run for PR #42: no build.commands" in world.digest_text().split("## Deviations")[1]
+    assert "gate not run" in world.digest_text().split("## Done")[1].split("## Deviations")[0]
     assert not any(e.startswith("gate") for e in world.events)
 
 
@@ -772,12 +763,20 @@ def test_dump_spf_config_round_trips_nested_tables_quoted_keys_and_datetimes() -
     assert tomllib.loads(dump_spf_config(data)) == data
 
 
-def test_missing_spf_config_writes_no_record(world: World) -> None:
+def test_missing_spf_config_skips_gate(world: World) -> None:
     (world.repo / ".spec-prism-flow.toml").unlink()
     result = world.run()
     assert result.completed
-    assert not gate_record_path("owner-repo", 42, world.state).exists()
-    assert "no build.commands" in world.digest_text()
+    assert "gate not run for PR #42: no build.commands" in world.digest_text()
+
+
+def test_no_changed_files_skips_gate_without_checkpoint(world: World) -> None:
+    world.changed = ""
+    result = world.run()
+    assert result.completed
+    assert result.checkpoint is None
+    assert not any(e.startswith("gate") for e in world.events)
+    assert "gate not run for PR #42: no changed files to gate" in world.digest_text()
 
 
 def test_gate_runs_in_each_touched_package_dir(world: World) -> None:
@@ -792,12 +791,6 @@ def test_gate_runs_in_each_touched_package_dir(world: World) -> None:
         (("make", "check"), "other"),
         (("make", "test"), "other"),
     }
-
-
-def test_gate_record_records_exact_tested_head(world: World) -> None:
-    world.head = SHA4
-    world.run()
-    assert read_gate_record("owner-repo", 42, world.state) == SHA4
 
 
 def test_package_dirs(tmp_path: Path) -> None:

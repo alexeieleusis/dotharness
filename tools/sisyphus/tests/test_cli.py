@@ -118,9 +118,8 @@ pick_state = "Todo"
         pr_client=prs or FakePrs(),
         agent_runner=lambda _p: None,
         lock_dir=tmp_path / "locks",
-        state_dir=tmp_path / "state",
         today=TODAY,
-        repo_info=lambda: ("owner-repo", "main"),
+        repo_info=lambda: "main",
     )
     return Env(tmp_path, cfg, services)
 
@@ -157,7 +156,7 @@ def test_picks_and_runs_item_with_base_and_writes_digest(tmp_path: Path, fake_ru
     ((item, options, kwargs),) = fake_run_item["calls"]
     assert item == "ENG-1"
     assert options.base_branch == "feature-base"
-    assert (options.repo_slug, options.default_branch) == ("owner-repo", "main")
+    assert options.default_branch == "main"
     assert options.lock_dir == tmp_path / "locks"
     assert kwargs["write_digest_file"] is False
     assert kwargs["pr_client"] is env.services.pr_client

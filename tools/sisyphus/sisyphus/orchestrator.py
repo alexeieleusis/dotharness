@@ -26,7 +26,7 @@ from datetime import time as dtime
 from pathlib import Path
 from typing import Any, Protocol
 
-from sisyphus import gaterecord, prbody
+from sisyphus import prbody
 from sisyphus.cleanup import DELETED, KEPT, PrInfo, cleanup_branch
 from sisyphus.config import SisyphusConfig
 from sisyphus.digest import (
@@ -131,8 +131,7 @@ class OrchestratorOptions:
     """Per-run inputs that are not in ``.sisyphus.toml``.
 
     ``base_branch`` is the PR base, a required parameter with no default here (the CLI resolves
-    ``--base`` > ``[project].base_branch`` > ``main`` and passes the result in). ``repo_slug`` is the
-    hyphenated ``owner-repo`` slug the gate record is filed under. ``default_branch`` is the
+    ``--base`` > ``[project].base_branch`` > ``main`` and passes the result in). ``default_branch`` is the
     repository default branch when it differs from ``base_branch``; both are never pushed to.
     ``spf_config_path`` defaults to ``<repo_dir>/.spec-prism-flow.toml``: the base each item's own config
     (``<workspace_dir>/plan-<n>/.spec-prism-flow.toml``) is copied from, with ``plan.workspace_dir`` and
@@ -142,11 +141,9 @@ class OrchestratorOptions:
     """
 
     base_branch: str
-    repo_slug: str
     default_branch: str | None = None
     spf_config_path: Path | None = None
     phase_dir: Path | None = None
-    state_dir: Path | None = None
     lock_dir: Path | None = None
     home: Path | None = None
     checkout_root: Path | None = None
@@ -162,8 +159,6 @@ class RunResult:
     stages_skipped: tuple[str, ...]
     branch: str
     pr: PullRequest | None
-    head_sha: str | None
-    gate_recorded: bool
     digest_path: Path | None
     record: RunRecord
     report: DigestReport
@@ -339,7 +334,6 @@ class _Run:
             raise OrchestratorError("[project].workspace_dir is not set")
         if not options.base_branch:
             raise OrchestratorError("base_branch must be set (config or CLI input)")
-        gaterecord.validate_repo_slug(options.repo_slug)
         self.item = item
         self.config = config
         self.opt = options
@@ -358,8 +352,7 @@ class _Run:
         self.rec = RunRecord.open(self.workspace, item)
         self.prior_cp = self.rec.checkpoint
         self.pr: PullRequest | None = None
-        self.head_sha: str | None = None
-        self.gate_recorded = False
+        self.gated = False
         self.notes: list[str] = []
         self.done_stages: list[str] = []
         self.skipped: list[str] = []
@@ -770,18 +763,20 @@ class _Run:
             self.notes.append(text)
 
     def gate(self) -> None:
-        """Run the gate commands at HEAD and write the gate record only if every command exits 0."""
+        """Run ``build.commands`` in each touched package dir at HEAD; raise C5 on the first failure.
+
+        When there are no ``build.commands`` or no changed files, note that the gate was not run and return.
+        """
         number = self.pr_number()
         self.write_item_config()
         commands = read_build_commands(self.spf)
         if commands is None:
-            self.note(f"no gate record for PR #{number}: no build.commands in {self.spf}")
+            self.note(f"gate not run for PR #{number}: no build.commands in {self.spf}")
             return
-        sha = self.rev_parse_head()
         changed = self.git("diff", "--name-only", f"origin/{self.opt.base_branch}...HEAD").stdout.split("\n")
         dirs = package_dirs(self.repo, [c for c in changed if c.strip()])
         if not dirs:
-            self.note(f"no gate record for PR #{number}: no changed files to gate")
+            self.note(f"gate not run for PR #{number}: no changed files to gate")
             return
         for directory in dirs:
             for command in commands:
@@ -792,9 +787,7 @@ class _Run:
                         f"gate command '{command}' failed in {directory} (exit {res.returncode}): "
                         f"{_tail(res.stderr or res.stdout)}",
                     )
-        gaterecord.write_gate_record(self.opt.repo_slug, number, sha, self.opt.state_dir, commands)
-        self.head_sha = sha
-        self.gate_recorded = True
+        self.gated = True
 
 
 def run_item(
@@ -851,8 +844,6 @@ def run_item(
             stages_skipped=tuple(run.skipped),
             branch=run.branch,
             pr=run.pr,
-            head_sha=run.head_sha,
-            gate_recorded=run.gate_recorded,
             digest_path=digest_path,
             record=run.rec,
             report=report,
@@ -869,7 +860,7 @@ def _report(run: _Run) -> DigestReport:
     done: tuple[DoneEntry, ...] = ()
     if run.pr is not None:
         evidence = [run.pr.url or f"PR #{run.pr.number}", f"branch {run.branch}"]
-        evidence.append(f"gate record written for {run.head_sha}" if run.gate_recorded else "no gate record written")
+        evidence.append("gate passed" if run.gated else "gate not run")
         if run.cleanup_done:
             evidence.append(run.cleanup_done)
         done = (DoneEntry(f"{run.item}: PR #{run.pr.number} open", tuple(evidence)),)

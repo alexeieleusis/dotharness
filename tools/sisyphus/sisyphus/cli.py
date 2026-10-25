@@ -30,7 +30,6 @@ from typing import Any
 
 import click
 
-from sisyphus import gaterecord
 from sisyphus.cleanup import PrInfo
 from sisyphus.config import ConfigError, SisyphusConfig, load_config
 from sisyphus.digest import DigestReport, DigestWriteError, NeedsYou, describe_reset, needs_from_record, write_digest
@@ -190,10 +189,9 @@ class Services:
     subprocess_runner: SubprocessRunner = default_subprocess_runner
     clock: Callable[[], float] = time.monotonic
     lock_dir: Path | None = None
-    state_dir: Path | None = None
     today: datetime | None = None
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
-    repo_info: Callable[[], tuple[str, str | None]] | None = field(default=None)
+    repo_info: Callable[[], str | None] | None = field(default=None)
 
 
 ServicesFactory = Callable[[SisyphusConfig], Services]
@@ -219,15 +217,13 @@ def default_services(config: SisyphusConfig) -> Services:
         else _no_backend
     )
 
-    def repo_info() -> tuple[str, str | None]:
-        """``(repo_slug, default_branch)`` from ``gh repo view``; falls back to the path-based slug."""
+    def repo_info() -> str | None:
+        """The repository default branch from ``gh repo view``, or ``None`` if it cannot be read."""
         try:
-            data = gh.json("repo", "view", "--json", "nameWithOwner,defaultBranchRef")
-            slug = gaterecord.repo_slug_from_name(data["nameWithOwner"])
-            default = (data.get("defaultBranchRef") or {}).get("name")
-        except (PickError, KeyError, TypeError):
-            return gaterecord.fallback_repo_slug(repo_dir), None
-        return slug, default
+            data = gh.json("repo", "view", "--json", "defaultBranchRef")
+            return (data.get("defaultBranchRef") or {}).get("name")
+        except (PickError, KeyError, TypeError, AttributeError):
+            return None
 
     return Services(
         tracker=tracker,
@@ -298,16 +294,10 @@ def _resolve_options(
     config: SisyphusConfig, services: Services, base: str | None, config_path: str = ""
 ) -> OrchestratorOptions:
     base = base or config.project.base_branch or DEFAULT_BASE_BRANCH
-    slug, default_branch = (
-        services.repo_info()
-        if services.repo_info
-        else (gaterecord.fallback_repo_slug(config.project.repo_dir or "."), None)
-    )
+    default_branch = services.repo_info() if services.repo_info else None
     return OrchestratorOptions(
         base_branch=base,
-        repo_slug=slug,
         default_branch=default_branch,
-        state_dir=services.state_dir,
         lock_dir=services.lock_dir,
         resume_command=_resume_template(config_path, base) if config_path else None,
     )
