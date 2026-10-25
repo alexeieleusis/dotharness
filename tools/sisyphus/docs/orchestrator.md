@@ -17,7 +17,7 @@ runs (`RunRecord.stage_scope`). A stage that stops at a checkpoint stays `in_pro
 | `plan` | One orchestration agent run with `knowledge/sisyphus/orchestration-prompt.md`, stage `plan`. Then the orchestrator counts the leaf files in the phase directory. |
 | `build` | Run `git fetch origin <base>`, create the Sisyphus branch from `origin/<base>` (or reuse it if Sisyphus created it), run one orchestration agent with stage `build`, then check that the checkout is on the branch and has commits. |
 | `push` | `git push origin <branch>` through `rails.push_guard`: no force, no history rewrite, never the base or default branch, only a branch Sisyphus created. |
-| `open-pr` | Reuse the open PR for the branch (its body is left as is) or open exactly one, then run the gate commands. A new PR gets a body built by `sisyphus.prbody`: the header, then Summary, Phases, Decisions, Deviations and the full `requirements.md` in a `<details>` block. See below. |
+| `open-pr` | Reuse the open PR for the branch (its title and body are left as is) or open exactly one, then run the gate commands. A new PR gets a title derived from the artifacts and a body built by `sisyphus.prbody`: the header, then Summary, Phases, Decisions, Deviations and the full `requirements.md` in a `<details>` block. See below. |
 
 The branch is `sisyphus/<slug>-<8 hex of sha256(item)>` (`branch_name`). The base branch is `options.base_branch`
 (a parameter, never a constant here). The CLI resolves `--base`, then `[project].base_branch`, then `main`. `options.default_branch` is an extra branch that is never pushed to.
@@ -35,6 +35,21 @@ directory and home paths are removed. The body never exceeds 60,000 characters: 
 first, then the rest is truncated with a note. A missing or unreadable artifact removes only its section (a
 one-line note is left in the body); the PR is still opened and no digest note is added. A `GitHubError` from
 `open_pr` still stops the run at C8.
+
+### Pull-request title
+
+Only on the create path, `stage_open_pr` also derives the title (`Orchestrator.build_pr_title`, using
+`prbody.derive_title` and `prbody.fallback_title`) from the same artifacts as the body. The source order is:
+
+1. The first `# ` heading of `requirements.md`, when the plan's `init_manifest.json` names this item's brief.
+2. Otherwise the first `# ` heading of the brief.
+3. Otherwise the fallback `Sisyphus: <item>`.
+
+The `Requirements:` / `Brief:` label is stripped from the heading, the trailing `(#N)` is kept and no `Sisyphus:`
+prefix is added. The title is one line and at most 256 characters; a longer one is cut and ends with `...`.
+`@mentions` are neutralised and absolute workspace, plan directory and home paths are removed, but `#N` is left
+intact so the title links to the ticket. Any failure or missing artifact gives the fallback title and never stops
+the run. The title of an already-open PR is never edited.
 
 ## Checkpoints
 
