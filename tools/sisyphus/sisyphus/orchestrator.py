@@ -40,6 +40,8 @@ from sisyphus.digest import (
 from sisyphus.intake import AgentRunner, BoundaryViolation, resolve_brief_path, run_intake
 from sisyphus.lock import clone_lock
 from sisyphus.paths import knowledge_file, tool_dir
+from sisyphus.plan import leaf_stems, plan_path
+from sisyphus.plan import read_spf_config as _read_spf_config
 from sisyphus.rails import (
     DEFAULT_MAX_RETRY_CYCLES,
     Checkpoint,
@@ -80,7 +82,6 @@ PLAN_PROMPT_FILE = "spec-prism-flow/plan-generation-prompt.md"
 BUILD_PROMPT_FILE = "spec-prism-flow/build-execution-prompt.md"
 SPF_CONFIG_NAME = ".spec-prism-flow.toml"
 STOP_SUFFIX = ".stop.json"
-LEAF_GLOB = "*-leaf.md"
 BRANCH_PREFIX = "sisyphus/"
 PACKAGE_MARKERS = ("Makefile", "pyproject.toml", "package.json", "Cargo.toml", "go.mod")
 
@@ -274,10 +275,8 @@ def stop_report_path(record: RunRecord) -> Path:
 
 def read_spf_config(path: Path) -> dict[str, Any] | None:
     """Read ``.spec-prism-flow.toml`` with ``tomllib``; ``None`` when the file is absent."""
-    if not path.is_file():
-        return None
     try:
-        return tomllib.loads(path.read_text(encoding="utf-8"))
+        return _read_spf_config(path)
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise OrchestratorError(f"cannot read {path}: {exc}") from exc
 
@@ -655,18 +654,14 @@ class _Run:
         self.write_item_config()
         phase_dir = self.opt.phase_dir
         if phase_dir is None:
-            data = read_spf_config(self.spf)
-            raw = data.get("plan", {}).get("phase_dir") if data else None
-            if not isinstance(raw, str) or not raw:
+            phase_dir = plan_path(read_spf_config(self.spf), self.repo, "phase_dir")
+            if phase_dir is None:
                 raise OrchestratorError(
                     f"cannot find the leaf files: set plan.phase_dir in {self.spf} or pass phase_dir"
                 )
-            phase_dir = Path(raw).expanduser()
-            if not phase_dir.is_absolute():
-                phase_dir = self.repo / phase_dir
         if not phase_dir.is_dir():
             raise OrchestratorError(f"phase directory {phase_dir} does not exist after the plan stage")
-        return len(list(phase_dir.glob(LEAF_GLOB)))
+        return len(leaf_stems(phase_dir))
 
     def prepare_branch(self) -> None:
         base = self.opt.base_branch

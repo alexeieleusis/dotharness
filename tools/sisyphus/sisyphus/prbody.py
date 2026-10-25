@@ -10,13 +10,13 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from sisyphus.intake import parse_resolved_decisions, split_resolved_decision
+from sisyphus.plan import leaf_stems as _plan_leaf_stems
+from sisyphus.plan import plan_path, read_spf_config
 
-LEAF_GLOB = "*-leaf.md"
 PLAN_NOT_MATCHED_NOTE = (
     "Note: the plan directory could not be matched to this work item; plan-derived sections omitted."
 )
@@ -33,27 +33,21 @@ def commit_log_args(base: str) -> list[str]:
 # --------------------------------------------------------------- FR-3 locating
 
 
-def _plan_path(spf: Path, repo: Path, key: str) -> Path | None:
+def _locate(spf: Path, repo: Path, key: str) -> Path | None:
     try:
-        data = tomllib.loads(spf.read_text(encoding="utf-8"))
+        return plan_path(read_spf_config(spf), repo, key)
     except (OSError, ValueError):
         return None
-    plan = data.get("plan")
-    raw = plan.get(key) if isinstance(plan, dict) else None
-    if not isinstance(raw, str) or not raw:
-        return None
-    path = Path(raw).expanduser()
-    return path if path.is_absolute() else repo / path
 
 
 def locate_plan_dir(spf: Path, repo: Path) -> Path | None:
     """``plan.workspace_dir`` from the spec-prism-flow TOML (relative values resolve against ``repo``), or ``None``."""
-    return _plan_path(spf, repo, "workspace_dir")
+    return _locate(spf, repo, "workspace_dir")
 
 
 def locate_phase_dir(spf: Path, repo: Path) -> Path | None:
     """``plan.phase_dir`` from the TOML (relative values resolve against ``repo``), or ``None``."""
-    return _plan_path(spf, repo, "phase_dir")
+    return _locate(spf, repo, "phase_dir")
 
 
 def plan_dir_matches_brief(plan_dir: Path, brief_path: Path) -> bool:
@@ -69,18 +63,8 @@ def plan_dir_matches_brief(plan_dir: Path, brief_path: Path) -> bool:
 
 
 def leaf_stems(phase_dir: Path) -> list[str]:
-    """Leaf stems from ``<phase_dir>/graph.json`` ``nodes``, else the sorted ``*-leaf.md`` stems.
-
-    Raises ``OSError``/``ValueError`` only when neither source is usable; callers turn that into a note.
-    """
-    graph = phase_dir / "graph.json"
-    try:
-        nodes = json.loads(graph.read_text(encoding="utf-8")).get("nodes")
-        if isinstance(nodes, list) and nodes and all(isinstance(n, str) and n for n in nodes):
-            return list(nodes)
-    except (OSError, ValueError, AttributeError):
-        pass
-    stems = sorted(p.stem for p in phase_dir.glob(LEAF_GLOB))
+    """The shared leaf list (``plan.leaf_stems``); raises ``ValueError`` when empty, callers turn that into a note."""
+    stems = _plan_leaf_stems(phase_dir)
     if not stems:
         raise ValueError(f"no leaves found in {phase_dir}")  # noqa: TRY003
     return stems
