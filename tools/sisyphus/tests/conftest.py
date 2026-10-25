@@ -28,9 +28,9 @@ def fake_run_item(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         if cp:
             rec.set_checkpoint(cp.value)
             report = DigestReport(needs_you=(NeedsYou(item, cp.value, f"stopped {cp.value}"),))
-            return RunResult(item, cp, "why", ("intake",), (), "b", None, None, False, None, rec, report)
+            return RunResult(item, cp, "why", ("intake",), (), "b", None, None, rec, report)
         pr = PullRequest(7, "http://pr/7")
-        return RunResult(item, None, "", ("intake",), (), "b", pr, "s", True, None, rec, DigestReport())
+        return RunResult(item, None, "", ("intake",), (), "b", pr, None, rec, DigestReport())
 
     monkeypatch.setattr(cli, "run_item", fake)
     return state
