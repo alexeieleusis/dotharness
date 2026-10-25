@@ -22,7 +22,8 @@ backend is the caller's job. Tests use fakes. Nothing here launches an agent.
 The result is `IntakeResult(brief_path, skipped, open_decisions)` with `blocked` and `checkpoint` (`Checkpoint.C1` when
 blocking decisions exist, else `None`). Blocking decisions are the unresolved top-level numbered entries under
 the brief's "Open decisions log" heading. An entry starting with "resolved" or containing "status: resolved" is
-not blocking. The orchestrator decides what to do. It must never run `plan init` on a blocked brief. Intake
+not blocking. `parse_resolved_decisions(text)` returns those resolved entries and `split_resolved_decision(text)`
+splits one into question and answer; the PR body (see [orchestrator](orchestrator.md)) uses them. The orchestrator decides what to do. It must never run `plan init` on a blocked brief. Intake
 also sets checkpoint `C1` on the run record. It clears the checkpoint if it was `C1` and nothing blocks any more.
 
 ## Git-status boundary

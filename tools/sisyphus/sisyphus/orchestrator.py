@@ -26,7 +26,7 @@ from datetime import time as dtime
 from pathlib import Path
 from typing import Any, Protocol
 
-from sisyphus import gaterecord
+from sisyphus import gaterecord, prbody
 from sisyphus.cleanup import DELETED, KEPT, PrInfo, cleanup_branch
 from sisyphus.config import SisyphusConfig
 from sisyphus.digest import (
@@ -737,7 +737,7 @@ class _Run:
             try:
                 self.pr = self.gh.find_pr(self.branch)
                 if self.pr is None:
-                    body = f"Work item: {self.item}\n\nOpened by Sisyphus. Review required; this PR is not approved."
+                    body = self.build_pr_body()
                     self.pr = self.gh.open_pr(self.branch, self.opt.base_branch, f"Sisyphus: {self.item}", body)
             except GitHubError as exc:
                 raise _Stop(Checkpoint.C8, str(exc)) from exc
@@ -745,6 +745,65 @@ class _Run:
                 self.rec.retries[PR_NUMBER_KEY] = self.pr.number
                 self.rec.save()
             self.gate()
+
+    def build_pr_body(self) -> str:
+        """Assemble the PR description from the workspace artifacts; never raises (FR-12, D-6).
+
+        Any failure removes only the affected section; if assembly itself fails the plain header is used.
+        """
+        header = f"Work item: {self.item}\n\n{prbody.HEADER_NOTICE}"
+        try:
+            return self._assemble_pr_body()
+        except Exception:  # assembly must never stop the run: fall back to the header alone
+            return header
+
+    def _assemble_pr_body(self) -> str:
+        brief_path = resolve_brief_path(self.config, self.item)
+        plan_dir = prbody.locate_plan_dir(self.spf, self.repo) or self.plan_dir
+        summary = phases = deviations = ""
+        requirements = None
+        decisions = self._pr_section(lambda: prbody.extract_decisions(brief_path), "Decisions")
+        if prbody.plan_dir_matches_brief(plan_dir, brief_path):
+            requirements = prbody.read_requirements(plan_dir)
+            summary = self._pr_section(lambda: prbody.extract_summary(plan_dir), "Summary")
+            phase_dir = self.opt.phase_dir or prbody.locate_phase_dir(self.spf, self.repo) or plan_dir / "phases"
+            phases, deviations = self._pr_phases_and_deviations(phase_dir)
+        else:
+            summary = prbody.PLAN_NOT_MATCHED_NOTE
+        return prbody.compose_body(
+            self.item,
+            summary=summary,
+            phases=phases,
+            decisions=decisions,
+            deviations=deviations,
+            requirements=requirements,
+            workspace=self.workspace,
+            plan_dir=plan_dir,
+        )
+
+    @staticmethod
+    def _pr_section(extract: Callable[[], str], title: str) -> str:
+        try:
+            return extract()
+        except (OSError, ValueError) as exc:
+            return f"Note: {title} unavailable ({type(exc).__name__})."
+
+    def _pr_phases_and_deviations(self, phase_dir: Path) -> tuple[str, str]:
+        try:
+            stems = prbody.leaf_stems(phase_dir)
+        except (OSError, ValueError) as exc:
+            note = f"Note: leaf list unavailable ({type(exc).__name__})."
+            return note, note
+        log = None
+        try:
+            res = self.git(*prbody.commit_log_args(self.opt.base_branch), ok=False)
+            log = res.stdout if res.returncode == 0 else None
+        except OSError:
+            log = None
+        phases = self._pr_section(lambda: prbody.list_phases(phase_dir, log), "Phases")
+        handoffs = self.workspace / "handoffs"
+        deviations = self._pr_section(lambda: prbody.extract_deviations(handoffs, stems), "Deviations")
+        return phases, deviations
 
     def note(self, text: str) -> None:
         if text not in self.notes:

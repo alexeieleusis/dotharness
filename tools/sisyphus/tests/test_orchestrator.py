@@ -20,11 +20,12 @@ from pathlib import Path
 
 import pytest
 
-from sisyphus import orchestrator
+from sisyphus import orchestrator, pick
 from sisyphus.cleanup import PrInfo
 from sisyphus.config import DigestConfig, LimitsConfig, MergeConfig, ProjectConfig, SisyphusConfig
 from sisyphus.digest import DigestWriteError
 from sisyphus.gaterecord import gate_record_path, read_gate_record
+from sisyphus.intake import resolve_brief_path
 from sisyphus.lock import LockHeld, clone_lock
 from sisyphus.orchestrator import (
     CommandResult,
@@ -97,6 +98,10 @@ class World:
         self.build_stops: list[dict | None] = []
         self.agent_prompts: list[str] = []
         self.touch_repo_in_intake = False
+        self.requirements: str | None = None  # written to the plan dir (with a matching manifest) when set
+        self.git_log = ""
+        self.git_log_rc = 0
+        self.log_calls: list[list[str]] = []
         # git behaviour
         self.head = SHA1
         self.remote_head = SHA1
@@ -174,6 +179,12 @@ class World:
             self.clock.now += 0
             for i in range(self.leaves):
                 (self.phases / f"{i:02d}-leaf{i}-leaf.md").write_text("x")
+            if self.requirements is not None:
+                plan_dir = self.tmp / "ws" / orchestrator.plan_dir_name(ITEM)
+                plan_dir.mkdir(parents=True, exist_ok=True)
+                (plan_dir / "requirements.md").write_text(self.requirements)
+                manifest = {"brief": str(resolve_brief_path(self.config(), ITEM))}
+                (plan_dir / "init_manifest.json").write_text(json.dumps(manifest))
             if self.plan_stop:
                 stop_path.write_text(json.dumps(self.plan_stop))
         else:
@@ -215,6 +226,9 @@ class World:
             return CommandResult(0)
         if sub == "status":
             return CommandResult(0, self.dirty)
+        if sub == "log":
+            self.log_calls.append(a)
+            return CommandResult(self.git_log_rc, self.git_log, "boom" if self.git_log_rc else "")
         if sub == "checkout":
             self.checkouts.append(a[-1])
             if a[1] == "-b":
@@ -1538,3 +1552,71 @@ def test_resume_before_the_pr_stage_still_needs_the_local_branch(world: World) -
     world.current_branch = "base-branch"
     with pytest.raises(OrchestratorError, match="does not exist"):
         world.run()
+
+
+REQUIREMENTS = (
+    "# Requirements\n\n### 1. Overview\n\nCC @someone about #7 in {ws}.\n\n### 5. Glossary\n\nGlossary text.\n"
+)
+
+
+def _header(item: str = ITEM) -> str:
+    return f"Work item: {item}\n\nOpened by Sisyphus. Review required; this PR is not approved."
+
+
+def test_open_pr_body_is_assembled(world: World) -> None:
+    world.requirements = REQUIREMENTS.replace("{ws}", str(world.tmp / "ws"))
+    world.git_log = "abc1234\t00-leaf0-leaf done\n"
+    handoffs = world.tmp / "ws" / "handoffs"
+    handoffs.mkdir(parents=True)
+    (handoffs / "00-leaf0-leaf.md").write_text("### Handoff\n- Deviations from the plan: Used a ZIP.\n")
+    result = world.run()
+    assert result.completed
+    body = world.opened[0][3]
+    assert body.startswith(_header())
+    order = [body.index(t) for t in ("## Summary", "## Phases", "## Deviations", "<details>")]
+    assert order == sorted(order)
+    assert "abc1234" in body
+    assert "Used a ZIP" in body
+    assert "Glossary text." in body
+    assert str(world.tmp) not in body
+    assert not pick.mentions_issue(body, 7)
+    assert "@someone" not in body
+    assert world.log_calls == [["log", "--reverse", "--format=%h%x09%s", "origin/base-branch..HEAD"]]
+
+
+def test_open_pr_body_missing_artifacts_still_opens(world: World) -> None:
+    world.git_log_rc = 1
+    result = world.run()
+    assert result.completed
+    assert result.pr == PullRequest(42, "https://example.test/pr/42")
+    body = world.opened[0][3]
+    assert body.startswith(_header())
+    assert "requirements.md" in body  # one-line note instead of the file
+
+
+def test_open_pr_body_oversize_is_capped(world: World) -> None:
+    world.requirements = "# Requirements\n\n### 1. Overview\n\n" + "word " * 20000
+    world.run()
+    body = world.opened[0][3]
+    assert len(body) <= 60000
+    assert body.startswith(_header())
+
+
+def test_assembly_failure_does_not_stop_the_run(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_a: object, **_k: object) -> str:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(orchestrator.prbody, "compose_body", boom)
+    result = world.run()
+    assert result.completed
+    assert world.opened[0][3] == _header()
+
+
+def test_existing_pr_does_not_assemble_a_body(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    world.existing_pr = PullRequest(42, "https://example.test/pr/42")
+    calls: list[str] = []
+    monkeypatch.setattr(orchestrator.prbody, "compose_body", lambda *a, **k: calls.append("x") or "")
+    world.run()
+    assert world.opened == []
+    assert calls == []
+    assert world.log_calls == []
