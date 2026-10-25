@@ -17,10 +17,8 @@ from typing import Any
 DEFAULT_CONFIG_FILE = ".sisyphus.toml"
 
 TRACKER_KINDS = ("linear", "github")
-CI_KINDS = ("github",)
 AGENT_BACKENDS = ("claude", "opencode")
 DEFAULT_PICK_LABEL = "sisyphus"
-_CI_SECTION = "source.ci"
 
 
 class ConfigError(Exception):
@@ -45,11 +43,6 @@ class WorkItemSource:
 
 
 @dataclass(frozen=True)
-class CiSource:
-    kind: str | None = None
-
-
-@dataclass(frozen=True)
 class HostSource:
     token_cmd: str | None = None
 
@@ -57,7 +50,6 @@ class HostSource:
 @dataclass(frozen=True)
 class SourceConfig:
     work_item: WorkItemSource | None = None
-    ci: CiSource | None = None
     host: HostSource | None = None
 
 
@@ -174,16 +166,14 @@ def _parse_source(raw: Any) -> SourceConfig:
         if key not in ("work_item", "ci", "host"):
             raise ConfigError(f"unknown key '{key}' in [source] (allowed: work_item, ci, host)")
     work_item = _parse_work_item(raw["work_item"]) if "work_item" in raw else None
-    ci = None
     if "ci" in raw:
-        # Other keys (e.g. max_fix_attempts) belong to harness, which validates them.
-        t = _table(raw["ci"], _CI_SECTION, ("kind",), passthrough=True)
-        ci = CiSource(kind=_choice(_str(t, _CI_SECTION, "kind"), _CI_SECTION, "kind", CI_KINDS))
+        # [source.ci] is accepted and ignored; its keys belong to harness.
+        _table(raw["ci"], "source.ci", (), passthrough=True)
     host = None
     if "host" in raw:
         t = _table(raw["host"], "source.host", ("token_cmd",))
         host = HostSource(token_cmd=_str(t, "source.host", "token_cmd"))
-    return SourceConfig(work_item=work_item, ci=ci, host=host)
+    return SourceConfig(work_item=work_item, host=host)
 
 
 def _parse(data: dict[str, Any]) -> SisyphusConfig:

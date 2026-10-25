@@ -85,7 +85,7 @@ conventions_path = "c"
     cfg = load_config(write(tmp_path, text))
     assert cfg.project.brief_path_template == "b/{id}.md"
     assert cfg.project.base_branch is None
-    assert cfg.source.ci is not None
+    assert not hasattr(cfg.source, "ci")
     assert cfg.source.host is not None
     assert cfg.source.host.token_cmd == "gh auth token"  # noqa: S105
     assert cfg.agent.backend == "opencode"
@@ -114,9 +114,9 @@ def test_bad_work_item_kind(tmp_path: Path) -> None:
         load_config(write(tmp_path, MIN + '[source.work_item]\nkind = "jira"\n'))
 
 
-def test_bad_ci_kind(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="kind"):
-        load_config(write(tmp_path, MIN + '[source.ci]\nkind = "gitlab"\n'))
+def test_source_ci_must_be_table(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="must be a table"):
+        load_config(write(tmp_path, MIN + "[source]\nci = 1\n"))
 
 
 def test_bad_backend(tmp_path: Path) -> None:
@@ -218,7 +218,20 @@ def test_harness_owned_keys_pass_through(tmp_path: Path) -> None:
     text = MIN + "[merge]\nmax_changed_lines = 0\nfuture_key = 1\n[source.ci]\nmax_fix_attempts = -2\nfuture = 1\n"
     cfg = load_config(write(tmp_path, text))
     assert not hasattr(cfg, "merge")
-    assert cfg.source.ci is not None
+    assert not hasattr(cfg.source, "ci")
+    cfg = load_config(write(tmp_path, MIN + '[source.ci]\nkind = "gitlab"\n'))
+    assert not hasattr(cfg.source, "ci")
+
+
+def test_source_ci_does_not_change_config(tmp_path: Path) -> None:
+    without = load_config(write(tmp_path, MIN, "a.toml"))
+    with_ci = load_config(write(tmp_path, MIN + '[source.ci]\nkind = "github"\n', "b.toml"))
+    assert with_ci.source == without.source
+    assert not hasattr(with_ci.source, "ci")
+
+
+def test_repo_sisyphus_toml_loads() -> None:
+    load_config(Path(__file__).resolve().parents[3] / DEFAULT_CONFIG_FILE)
 
 
 def test_removed_fix_attempts_limit_rejected(tmp_path: Path) -> None:
