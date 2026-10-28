@@ -164,7 +164,11 @@ def run_review_prs(ctx, pr_url):
     """Run vibe_heal static analysis review over open PRs (or a single PR with --pr)."""
     _setup_logging("review-prs", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
-    review_prs.run(cfg, pr_url=pr_url)
+    try:
+        review_prs.run(cfg, pr_url=pr_url)
+    except review_prs.BaseAnalysisError as exc:
+        logging.getLogger(__name__).error("Runner %s failed: %s", "review_prs", exc)  # noqa: TRY400
+        sys.exit(1)
 
 
 @cmd_run.command("focused-review")
@@ -319,6 +323,9 @@ def run_all(ctx):
     for name, fn in runners:
         try:
             fn()
+        except review_prs.BaseAnalysisError as exc:
+            log.error("Runner %s failed: %s", name, exc)  # noqa: TRY400
+            failed.append(name)
         except Exception as exc:
             log.error("Runner %s failed: %s", name, exc, exc_info=True)
             failed.append(name)
