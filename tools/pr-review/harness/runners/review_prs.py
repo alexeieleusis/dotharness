@@ -28,6 +28,13 @@ from harness.runners.common import (
 logger = logging.getLogger(__name__)
 
 
+class BaseAnalysisError(RuntimeError):
+    """A git step of the base analysis failed or timed out; the run must skip PR review."""
+
+    def __init__(self, cmd_name: str, reason: str) -> None:
+        super().__init__(f"git {cmd_name} {reason}")
+
+
 def run(config: HarnessConfig, pr_url: str | None = None) -> None:
     with acquire_lock(config.lock_key):
         _run_locked(config, pr_url)
@@ -241,23 +248,28 @@ def _run_base_subdir(subdir, config: HarnessConfig, env: dict) -> bool:
     return _run_vh_command(vh_cmd, "vibe_heal base analysis", subdir_path, config.vibe_heal.vibe_heal_timeout, env)
 
 
+def _run_base_git(cmd_name: str, cmd: list[str], wdir: str, env: dict) -> subprocess.CompletedProcess:
+    """Run one base-analysis git step; timeout or non-zero exit raises BaseAnalysisError."""
+    try:
+        result = run_cmd(cmd, cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
+    except subprocess.TimeoutExpired as exc:
+        logger.warning("Base analysis: git %s timed out after %ds", cmd_name, TIMEOUT_GIT)
+        raise BaseAnalysisError(cmd_name, f"timed out after {TIMEOUT_GIT}s") from exc
+    if result.returncode != 0:
+        logger.warning("Base analysis: git %s failed: %s", cmd_name, result.stderr.decode("utf-8", errors="replace"))
+        raise BaseAnalysisError(cmd_name, "failed")
+    return result
+
+
 def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:
     """Analyze origin/main once per new SHA (gated on state.last_main_sha) so vibe_heal has
     a baseline to diff PRs against. Always restores the working dir to where it started,
-    regardless of outcome."""
+    regardless of outcome. Raises BaseAnalysisError on a git timeout or non-zero exit."""
     wdir = str(config.repo.working_dir)
 
-    result = run_cmd(
-        ["git", "fetch", "--recurse-submodules", "origin", "main"], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False
-    )
-    if result.returncode != 0:
-        logger.warning("Base analysis: git fetch failed: %s", result.stderr.decode("utf-8", errors="replace"))
-        return False
+    _run_base_git("fetch", ["git", "fetch", "--recurse-submodules", "origin", "main"], wdir, env)
 
-    result = run_cmd(["git", "rev-parse", "origin/main"], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
-    if result.returncode != 0:
-        logger.warning("Base analysis: git rev-parse failed: %s", result.stderr.decode("utf-8", errors="replace"))
-        return False
+    result = _run_base_git("rev-parse", ["git", "rev-parse", "origin/main"], wdir, env)
     main_sha = result.stdout.decode("utf-8").strip()
 
     vh_state = state.read_vibe_heal_state(config.repo_slug)
@@ -269,16 +281,7 @@ def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:
     try:
         original_sha = git_detach_and_record(wdir, env)
 
-        result = run_cmd(
-            ["git", "checkout", "--recurse-submodules", "--detach", main_sha],
-            cwd=wdir,
-            env=env,
-            timeout=TIMEOUT_GIT,
-            check=False,
-        )
-        if result.returncode != 0:
-            logger.warning("Base analysis: checkout failed: %s", result.stderr.decode("utf-8", errors="replace"))
-            return False
+        _run_base_git("checkout", ["git", "checkout", "--recurse-submodules", "--detach", main_sha], wdir, env)
 
         success = all(_run_base_subdir(s, config, env) for s in config.repo.subdirs)
         if success:
