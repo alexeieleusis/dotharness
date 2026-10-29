@@ -53,12 +53,14 @@ harness run [--config PATH] [--verbose] review-prs [--pr PR_URL]
 3b. **Baseline analysis** (`_run_base_analysis`): fetches `origin/main`, resolves its SHA, and checks the
    stored `last_main_sha` in the `vibe_heal.json` state file. If the SHA has changed since the last run,
    detaches HEAD, checks out `origin/main` (`--recurse-submodules`), and runs
-   `vibe_heal review --baseline` in every `repo.subdir`. On success, persists the new `last_main_sha`. On
-   any failure — fetch error, checkout error, or a failing subdir — the function returns `False`. The
-   *entire* run aborts with only a log line (`"Base analysis failed; skipping PR review for this run"`). No
-   PR comments are posted, so both batch and `--pr` invocations can silently do nothing if the baseline
-   step fails. The `vibe_heal.vibe_heal_timeout` config value is reused as the timeout for each
-   `--baseline` invocation. After the step completes (success or failure), the working directory is
+   `vibe_heal review --baseline` in every `repo.subdir`. On success, persists the new `last_main_sha`. A
+   timeout (60 s) or non-zero exit of the fetch, rev-parse or checkout call logs a warning, skips PR review
+   for the run and ends it with exit code 1 and no traceback (both `harness run all` and
+   `harness run review-prs`, with or without `--pr`). A failing `vibe_heal --baseline` subdir or a fatal git
+   error still returns `False`, still skips PR review and still exits 0. The warning texts are
+   `Base analysis: git <cmd> timed out after <N>s` and `Base analysis: git <cmd> failed: <stderr>`. No PR
+   comments are posted when the step fails. The `vibe_heal.vibe_heal_timeout` config value is reused as the
+   timeout for each `--baseline` invocation. After the step completes (success or failure), the working directory is
    restored to its original state.
 4. Looks up the current `gh` user's login.
 5. Builds the list of PRs to process:

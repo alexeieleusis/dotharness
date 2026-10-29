@@ -638,7 +638,7 @@ def test_run_base_analysis_does_not_persist_sha_when_subdir_fails(tmp_xdg, tmp_p
     mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
 
 
-def test_run_base_analysis_returns_false_on_git_fetch_failure(tmp_xdg, tmp_path):
+def test_run_base_analysis_raises_on_git_fetch_failure(tmp_xdg, tmp_path, caplog):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     with patch.object(type(cfg), "repo_slug", "acme-frontend"):
         state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
@@ -651,14 +651,16 @@ def test_run_base_analysis_returns_false_on_git_fetch_failure(tmp_xdg, tmp_path)
     with (
         patch.object(type(cfg), "repo_slug", "acme-frontend"),
         patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd) as mock_run,
+        caplog.at_level("WARNING"),
+        pytest.raises(review_prs.BaseAnalysisError),
     ):
-        result = review_prs._run_base_analysis(cfg, {})
-    assert result is False
+        review_prs._run_base_analysis(cfg, {})
+    assert "Base analysis: git fetch failed: fetch error" in caplog.text
     assert mock_run.call_count == 1
     assert "fetch" in str(mock_run.call_args_list[0])
 
 
-def test_run_base_analysis_returns_false_on_rev_parse_failure(tmp_xdg, tmp_path):
+def test_run_base_analysis_raises_on_rev_parse_failure(tmp_xdg, tmp_path, caplog):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     with patch.object(type(cfg), "repo_slug", "acme-frontend"):
         state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
@@ -673,13 +675,15 @@ def test_run_base_analysis_returns_false_on_rev_parse_failure(tmp_xdg, tmp_path)
     with (
         patch.object(type(cfg), "repo_slug", "acme-frontend"),
         patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd) as mock_run,
+        caplog.at_level("WARNING"),
+        pytest.raises(review_prs.BaseAnalysisError),
     ):
-        result = review_prs._run_base_analysis(cfg, {})
-    assert result is False
+        review_prs._run_base_analysis(cfg, {})
+    assert "Base analysis: git rev-parse failed: rev-parse error" in caplog.text
     assert mock_run.call_count == 2
 
 
-def test_run_base_analysis_returns_false_on_checkout_failure(tmp_xdg, tmp_path):
+def test_run_base_analysis_raises_on_checkout_failure(tmp_xdg, tmp_path, caplog):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     with patch.object(type(cfg), "repo_slug", "acme-frontend"):
         state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
@@ -698,10 +702,68 @@ def test_run_base_analysis_returns_false_on_checkout_failure(tmp_xdg, tmp_path):
         patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd),
         patch("harness.runners.review_prs.git_detach_and_record", return_value="original-sha"),
         patch("harness.runners.review_prs.git_restore") as mock_restore,
+        caplog.at_level("WARNING"),
+        pytest.raises(review_prs.BaseAnalysisError),
     ):
-        result = review_prs._run_base_analysis(cfg, {})
-    assert result is False
+        review_prs._run_base_analysis(cfg, {})
+    assert "Base analysis: git checkout failed: checkout error" in caplog.text
     mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
+
+
+@pytest.mark.parametrize("step", ["fetch", "rev-parse", "checkout"])
+def test_run_base_analysis_raises_on_git_timeout(tmp_xdg, tmp_path, caplog, step):
+    state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    seen = []
+    raised = []
+
+    def fake_run_cmd(cmd, **kwargs):
+        seen.append(cmd[1])
+        if cmd[1] == step:
+            raised.append(subprocess.TimeoutExpired(cmd, 60))
+            raise raised[0]
+        return MagicMock(returncode=0, stdout=b"new-sha\n", stderr=b"")
+
+    with (
+        patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd),
+        patch("harness.runners.review_prs.git_detach_and_record", return_value="original-sha"),
+        patch("harness.runners.review_prs.git_restore") as mock_restore,
+        caplog.at_level("WARNING"),
+        pytest.raises(review_prs.BaseAnalysisError) as info,
+    ):
+        review_prs._run_base_analysis(cfg, {})
+    assert info.value.__cause__ is raised[0]
+    assert not isinstance(info.value, review_prs.FatalGitError)
+    order = ["fetch", "rev-parse", "checkout"]
+    assert seen == order[: order.index(step) + 1]
+    records = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(records) == 1
+    assert records[0].getMessage() == f"Base analysis: git {step} timed out after 60s"
+    assert not records[0].exc_info
+    assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == "old-sha"
+    if step == "checkout":
+        mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
+    else:
+        mock_restore.assert_not_called()
+
+
+def test_run_locked_propagates_base_analysis_timeout_without_processing_prs(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+
+    def fake_run_cmd(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, 60)
+
+    with (
+        patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_prs.prune_projects.run"),
+        patch("harness.runners.review_prs.run_cmd", side_effect=fake_run_cmd),
+        patch("harness.runners.review_prs.list_open_prs_matching_authors") as mock_list,
+        patch("harness.runners.review_prs.pr_from_url") as mock_from_url,
+        pytest.raises(review_prs.BaseAnalysisError),
+    ):
+        review_prs._run_locked(cfg)
+    mock_list.assert_not_called()
+    mock_from_url.assert_not_called()
 
 
 def test_run_locked_calls_prune_projects_before_base_analysis(tmp_xdg, tmp_path):

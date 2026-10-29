@@ -1,3 +1,5 @@
+import contextlib
+import logging
 import tomllib
 from unittest.mock import patch
 
@@ -5,6 +7,7 @@ import pytest
 from click.testing import CliRunner
 
 from harness.cli import TEMPLATE, cli
+from harness.runners.review_prs import BaseAnalysisError
 
 
 def test_run_review_prs_dispatches(minimal_toml, tmp_xdg):
@@ -332,3 +335,71 @@ def test_run_all_calls_ci_fix_then_merge_last(minimal_toml, tmp_xdg):
         result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "all"])
     assert result.exit_code == 0, result.output
     assert call_order == names
+
+
+_ALL_RUNNERS = ("focused_review", "self_review", "review_requested", "address_comments", "auto_approve")
+
+
+def _invoke_all_with_review_prs_error(minimal_toml, exc):
+    _enable_auto_approve(minimal_toml)
+    call_order = []
+
+    def make_side_effect(name):
+        def _fn(*args, **kwargs):
+            call_order.append(name)
+
+        return _fn
+
+    def _boom(*args, **kwargs):
+        call_order.append("review_prs")
+        raise exc
+
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch("harness.runners.review_prs.run", side_effect=_boom))
+        for name in _ALL_RUNNERS:
+            stack.enter_context(patch(f"harness.runners.{name}.run", side_effect=make_side_effect(name)))
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "all"])
+    return result, call_order
+
+
+def _failure_records(caplog):
+    return [r for r in caplog.records if r.getMessage().startswith("Runner review_prs failed")]
+
+
+def test_run_all_base_analysis_error_exits_1_without_traceback(minimal_toml, tmp_xdg, caplog):
+    caplog.set_level(logging.ERROR)
+    result, call_order = _invoke_all_with_review_prs_error(minimal_toml, BaseAnalysisError("fetch", "failed"))
+
+    assert result.exit_code == 1
+    assert call_order[0] == "review_prs"
+    assert "focused_review" in call_order
+    records = _failure_records(caplog)
+    assert len(records) == 1
+    assert not records[0].exc_info
+    assert "git fetch failed" in records[0].getMessage()
+    assert "Traceback" not in result.output
+
+
+def test_run_all_generic_exception_still_logs_exc_info(minimal_toml, tmp_xdg, caplog):
+    caplog.set_level(logging.ERROR)
+    result, call_order = _invoke_all_with_review_prs_error(minimal_toml, RuntimeError("boom"))
+
+    assert result.exit_code == 1
+    assert "focused_review" in call_order
+    records = _failure_records(caplog)
+    assert len(records) == 1
+    assert records[0].exc_info
+
+
+@pytest.mark.parametrize("extra", [[], ["--pr", "https://github.com/acme/frontend/pull/1"]])
+def test_run_review_prs_base_analysis_error_exits_1(minimal_toml, tmp_xdg, caplog, extra):
+    caplog.set_level(logging.ERROR)
+    with patch("harness.runners.review_prs.run", side_effect=BaseAnalysisError("checkout", "failed")):
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "review-prs", *extra])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    records = _failure_records(caplog)
+    assert len(records) == 1
+    assert not records[0].exc_info
+    assert "git checkout failed" in records[0].getMessage()
