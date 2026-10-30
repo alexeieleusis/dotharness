@@ -6,7 +6,7 @@ There is no daemon, no loop and no scheduler installer. Run it from cron or laun
 ```
 sisyphus run --config <file> [--base <branch>]
 sisyphus intake <work-item-ref> --config <file>
-sisyphus status [<work-item-ref>] --config <file>
+sisyphus status [--all] [<work-item-ref>] --config <file>
 sisyphus resume <work-item-ref> --config <file> [--base <branch>]
 ```
 
@@ -234,7 +234,13 @@ flag says "I know I abandoned this".
 
 `sisyphus status [REF] --config F` is read-only (no lock, no agent). For each item (all items without REF) it
 prints stage, stage_status, checkpoint (`state: abandoned` plus `abandoned_at` and `re-enable` for an abandoned item), `awaiting` (`you` for a checkpoint, `error`, `none` otherwise (including an abandoned item). `status` needs no network), and for a stopped item the question, action, resume command and auto-resume rule (with whether it is
-cleared now) and every recorded `Retry reset:` line. No items prints `no items`. An unknown REF exits 1.
+cleared now) and every recorded `Retry reset:` line. Output order is unchanged (file-name order), and `status` stays read-only: no lock, no agent, no network, no PR lookup.
+
+By default `sisyphus status` hides settled items: abandoned items, and finished items (stage `open-pr` with `stage_status` `complete`, i.e. a draft PR is open and the item is handed to the human) that have no checkpoint and no non-abandoned stop record. These are never hidden by default: any item with a checkpoint set (`awaiting: you`) or a non-abandoned stop record (`awaiting: error`), and any item with `stage_status: in_progress`, no checkpoint and no stop record, because it may be running now or be a hard crash. `in_progress` is a per-stage status, not an item state: a stage stopped at a checkpoint or on a runner error stays `in_progress`.
+
+`--all` is a boolean flag that shows every item; the output is identical to the previous behavior. An explicit REF always prints that item, even if settled, without `--all`. An unknown REF exits 1 with `no run record for <ref>`.
+
+When records exist but every one is hidden, `status` prints `no items needing attention (N hidden; use --all)` and exits 0, where N is the number of hidden records. `no items` is kept for an empty or missing workspace. When only some items are hidden, only the shown blocks print, with no "N hidden" trailer.
 
 ## Exit codes
 

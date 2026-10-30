@@ -66,8 +66,8 @@ from sisyphus.resume import (
     list_waiting,
     reset_stage_retries,
 )
-from sisyphus.runrecord import RunRecord, record_path
-from sisyphus.stages import INTAKE_STAGE
+from sisyphus.runrecord import STAGE_COMPLETE, RunRecord, record_path
+from sisyphus.stages import INTAKE_STAGE, OPEN_PR_STAGE
 from sisyphus.stoprecord import (
     CLEARS_BY,
     build_abandoned_record,
@@ -698,12 +698,32 @@ def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_
     return lines
 
 
+def _is_settled(rec: RunRecord, stop: Any) -> bool:
+    """Settled: abandoned (no checkpoint), or finished (``open-pr`` complete) and not stopped."""
+    if rec.checkpoint is not None:
+        return False
+    if is_abandoned(stop):
+        return True
+    return rec.stage == OPEN_PR_STAGE and rec.stage_status == STAGE_COMPLETE and not is_stopped(rec, stop)
+
+
 @main.command("status")
 @click.argument("work_item_ref", required=False)
+@click.option(
+    "--all",
+    "show_all",
+    is_flag=True,
+    help="Show every item. By default settled items (abandoned, finished) are hidden.",
+)
 @config_option
 @click.pass_obj
-def status_command(factory: ServicesFactory | None, work_item_ref: str | None, config_path: str) -> None:
-    """Show stage, checkpoint, question, action and resume command per item (read-only; no lock, no agent)."""
+def status_command(
+    factory: ServicesFactory | None, work_item_ref: str | None, show_all: bool, config_path: str
+) -> None:
+    """Show stage, checkpoint, question, action and resume command per item (read-only; no lock, no agent).
+
+    Settled items (abandoned, or finished with no stop) are hidden unless --all or a WORK_ITEM_REF is given.
+    """
     config = _load(config_path)
     _require(config, "workspace_dir")
     assert config.project.workspace_dir  # noqa: S101
@@ -714,16 +734,23 @@ def status_command(factory: ServicesFactory | None, work_item_ref: str | None, c
     if not records:
         click.echo("no items")
         return
+    hidden = 0
     for rec in records:
+        stop = read_stop_record(rec.path)
+        if not show_all and work_item_ref is None and _is_settled(rec, stop):
+            hidden += 1
+            continue
         if rec.checkpoint is not None:
             awaiting = "you"
-        elif is_abandoned(stop := read_stop_record(rec.path)):
+        elif is_abandoned(stop):
             awaiting = "none"
         elif stop is not None:
             awaiting = "error"
         else:
             awaiting = "none"
         click.echo("\n".join(_status_block(rec, awaiting, config, config_path)))
+    if hidden == len(records):
+        click.echo(f"no items needing attention ({hidden} hidden; use --all)")
 
 
 __all__ = ["Services", "default_services", "main", "make_agent_runner"]

@@ -34,6 +34,7 @@ from sisyphus.orchestrator import (
 from sisyphus.pick import Candidate, ExecResult, GhCli, GhPullRequestLookup, LinkedPr
 from sisyphus.rails import Checkpoint
 from sisyphus.runrecord import RunRecord
+from sisyphus.stoprecord import build_abandoned_record, build_stop_record, write_stop_record
 
 TODAY = datetime(2026, 1, 2, tzinfo=UTC)
 
@@ -241,10 +242,137 @@ def test_status_of_finished_item_with_open_pr_is_none_without_pr_lookup(tmp_path
     rec = RunRecord.open(tmp_path / "ws", "OLD-1")
     rec.mark_stage(OPEN_PR_STAGE, "complete")
     rec.increment_retry(BRANCH_CREATED_KEY)
-    result = env.invoke("status", "--config", str(env.config))
+    result = env.invoke("status", "--all", "--config", str(env.config))
     assert result.exit_code == 0, result.output
     assert "awaiting: none" in result.output
     assert looked_up == []
+
+
+def _status_workspace(tmp_path: Path) -> Any:
+    """An env with one record per status case: abandoned, finished, checkpoint, error stop, in progress."""
+    env = make_env(tmp_path)
+    ws = tmp_path / "ws"
+    abandoned = RunRecord.open(ws, "AB-1")
+    abandoned.mark_stage("build")
+    write_stop_record(
+        abandoned.path,
+        build_abandoned_record(
+            "AB-1", stage="build", stage_status="in_progress", prior_label="l", reenable_command="r"
+        ),
+    )
+    RunRecord.open(ws, "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
+    fin_err = RunRecord.open(ws, "FIN-ERR-1")
+    fin_err.mark_stage(OPEN_PR_STAGE, "complete")
+    write_stop_record(
+        fin_err.path,
+        build_stop_record(
+            "FIN-ERR-1",
+            checkpoint=None,
+            stage=OPEN_PR_STAGE,
+            stage_status="complete",
+            detail="x",
+            resume_command="r",
+        ),
+    )
+    fin_cp = RunRecord.open(ws, "FIN-CP-1")
+    fin_cp.mark_stage(OPEN_PR_STAGE, "complete")
+    fin_cp.set_checkpoint("C1")
+    # Not reachable through normal operation (abandoning clears the checkpoint); built directly to pin 7.3's
+    # checkpoint-first precedence in `_is_settled` and the awaiting label.
+    ab_cp = RunRecord.open(ws, "AB-CP-1")
+    ab_cp.mark_stage("build")
+    ab_cp.set_checkpoint("C1")
+    write_stop_record(
+        ab_cp.path,
+        build_abandoned_record(
+            "AB-CP-1", stage="build", stage_status="in_progress", prior_label="l", reenable_command="r"
+        ),
+    )
+    cp = RunRecord.open(ws, "CP-1")
+    cp.mark_stage("plan")
+    cp.set_checkpoint("C1")
+    err = RunRecord.open(ws, "ERR-1")
+    err.mark_stage("build")
+    write_stop_record(
+        err.path,
+        build_stop_record(
+            "ERR-1", checkpoint=None, stage="build", stage_status="in_progress", detail="x", resume_command="r"
+        ),
+    )
+    RunRecord.open(ws, "RUN-1").mark_stage("build", "in_progress")
+    return env
+
+
+def _shown(output: str) -> list[str]:
+    return [line for line in output.splitlines() if line and not line.startswith((" ", "no items"))]
+
+
+def _awaiting(output: str) -> dict[str, str]:
+    found: dict[str, str] = {}
+    item = ""
+    for line in output.splitlines():
+        if line and not line.startswith(" "):
+            item = line
+        elif line.strip().startswith("awaiting: "):
+            found[item] = line.strip().removeprefix("awaiting: ")
+    return found
+
+
+def test_status_hides_settled_items_by_default(tmp_path: Path) -> None:
+    env = _status_workspace(tmp_path)
+    result = env.invoke("status", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    assert sorted(_shown(result.output)) == ["AB-CP-1", "CP-1", "ERR-1", "FIN-CP-1", "FIN-ERR-1", "RUN-1"]
+    assert _awaiting(result.output) == {
+        "AB-CP-1": "you",
+        "CP-1": "you",
+        "ERR-1": "error",
+        "FIN-CP-1": "you",
+        "FIN-ERR-1": "error",
+        "RUN-1": "none",
+    }
+    assert "no items needing attention" not in result.output
+
+
+def test_status_all_shows_every_item(tmp_path: Path) -> None:
+    env = _status_workspace(tmp_path)
+    result = env.invoke("status", "--all", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    assert sorted(_shown(result.output)) == [
+        "AB-1",
+        "AB-CP-1",
+        "CP-1",
+        "ERR-1",
+        "FIN-1",
+        "FIN-CP-1",
+        "FIN-ERR-1",
+        "RUN-1",
+    ]
+    awaiting = _awaiting(result.output)
+    assert (awaiting["FIN-ERR-1"], awaiting["FIN-CP-1"], awaiting["AB-CP-1"]) == ("error", "you", "you")
+
+
+def test_status_explicit_ref_shows_settled_item_without_all(tmp_path: Path) -> None:
+    env = _status_workspace(tmp_path)
+    for ref in ("AB-1", "FIN-1"):
+        result = env.invoke("status", ref, "--config", str(env.config))
+        assert result.exit_code == 0, result.output
+        assert _shown(result.output) == [ref]
+    missing = env.invoke("status", "NOPE-1", "--config", str(env.config))
+    assert missing.exit_code == 1
+    assert "no run record for NOPE-1" in missing.output
+
+
+def test_status_all_hidden_reports_count_and_empty_says_no_items(tmp_path: Path) -> None:
+    env = make_env(tmp_path)
+    empty = env.invoke("status", "--config", str(env.config))
+    assert (empty.exit_code, empty.output.strip()) == (0, "no items")
+    ws = tmp_path / "ws"
+    RunRecord.open(ws, "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
+    RunRecord.open(ws, "FIN-2").mark_stage(OPEN_PR_STAGE, "complete")
+    result = env.invoke("status", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "no items needing attention (2 hidden; use --all)"
 
 
 def test_lock_held_exits_zero_and_orchestrator_not_called(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
