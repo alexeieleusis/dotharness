@@ -2,7 +2,7 @@ import logging
 import subprocess
 
 from harness.config import HarnessConfig, SubDir
-from harness.runners.common import env_file_args, log_called_process_output, resolve_env_file, run_cmd
+from harness.runners.common import env_file_args, env_file_error, log_called_process_output, run_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -25,17 +25,6 @@ def run(config: HarnessConfig, env: dict) -> None:
 
     for subdir in config.repo.subdirs:
         _prune_subdir(subdir, config, env)
-
-
-def env_file_error(config: HarnessConfig, subdir: SubDir) -> str | None:
-    """Return an error message when the subdir's configured env_file is not an existing regular file.
-
-    None when env_file is unset or the file exists. Only the path is checked; the file is never opened.
-    """
-    resolved = resolve_env_file(config.repo, subdir)
-    if resolved is None or resolved.is_file():
-        return None
-    return f"env_file for subdir {subdir.path} is not an existing regular file: {resolved}"
 
 
 def _prune_subdir(subdir: SubDir, config: HarnessConfig, env: dict) -> None:
