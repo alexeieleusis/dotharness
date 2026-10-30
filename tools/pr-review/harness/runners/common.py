@@ -29,7 +29,7 @@ def resolve_env_file(repo: RepoConfig, subdir: SubDir) -> Path | None:
     """
     if subdir.env_file is None:
         return None
-    return repo.working_dir / subdir.env_file
+    return repo.working_dir.absolute() / subdir.env_file
 
 
 def env_file_args(repo: RepoConfig, subdir: SubDir) -> list[str]:

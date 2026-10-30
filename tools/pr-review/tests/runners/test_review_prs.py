@@ -1016,6 +1016,20 @@ def test_resolve_env_file_relative_resolves_against_working_dir_not_cwd(tmp_path
     assert resolved.is_absolute()
 
 
+def test_resolve_env_file_relative_working_dir_yields_absolute(tmp_path, monkeypatch):
+    import dataclasses
+    from pathlib import Path
+
+    from harness.runners.common import resolve_env_file
+
+    monkeypatch.chdir(tmp_path)
+    cfg = _make_config(tmp_path)
+    repo = dataclasses.replace(cfg.repo, working_dir=Path("rel/repo"))
+    resolved = resolve_env_file(repo, SubDir(path=".", env_file="x.env"))
+    assert resolved.is_absolute()
+    assert resolved == tmp_path / "rel" / "repo" / "x.env"
+
+
 def test_resolve_env_file_tilde_expanded_outside_working_dir_no_containment_error(tmp_path):
     from pathlib import Path
 
