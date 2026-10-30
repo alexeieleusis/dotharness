@@ -118,7 +118,7 @@ class PullRequestClient(Protocol):
         ...
 
     def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
-        """Open one PR from ``branch`` into ``base``."""
+        """Open one draft PR from ``branch`` into ``base``; a human marks it ready."""
         ...
 
     def pr_state(self, ref: str) -> PrInfo | None:
@@ -875,7 +875,7 @@ def _report(run: _Run) -> DigestReport:
         evidence.append("gate passed" if run.gated else "gate not run")
         if run.cleanup_done:
             evidence.append(run.cleanup_done)
-        done = (DoneEntry(f"{run.item}: PR #{run.pr.number} open", tuple(evidence)),)
+        done = (DoneEntry(f"{run.item}: draft PR #{run.pr.number} opened", tuple(evidence)),)
     elif run.cleanup_done:
         done = (DoneEntry(f"{run.item}: local branch removed", (run.cleanup_done,)),)
     return DigestReport(

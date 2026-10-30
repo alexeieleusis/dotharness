@@ -163,7 +163,7 @@ class GhPullRequestClient:
         return _pr_info(row) if isinstance(row, dict) else None
 
     def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
-        res = self.gh.run("pr", "create", "--head", branch, "--base", base, "--title", title, "--body", body)
+        res = self.gh.run("pr", "create", "--draft", "--head", branch, "--base", base, "--title", title, "--body", body)
         match = _PR_URL.search(res.stdout)
         if res.returncode != 0 or not match:
             raise GitHubError(
@@ -280,7 +280,7 @@ def _summarise(result: RunResult) -> str:
     if result.checkpoint is not None:
         return f"{result.item}: stopped at {result.checkpoint.value}: {result.detail}"
     if result.pr is not None:
-        return f"{result.item}: PR #{result.pr.number} {result.pr.url}".rstrip()
+        return f"{result.item}: draft PR #{result.pr.number} {result.pr.url}".rstrip()
     return f"{result.item}: done"
 
 
