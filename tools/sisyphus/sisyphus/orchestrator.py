@@ -83,6 +83,7 @@ BRANCH_PREFIX = "sisyphus/"
 PACKAGE_MARKERS = ("Makefile", "pyproject.toml", "package.json", "Cargo.toml", "go.mod")
 
 BRANCH_CREATED_KEY = "branch-created"
+GATE_FAILED_KEY = "gate-failed"  # additive: 1 once a gate command failed, so status and reruns still see it
 PR_NUMBER_KEY = "pr-number"  # additive: the PR number, so the branch cleanup can ask gh about it by number
 
 _STOP_CHECKPOINTS = {PLAN_STAGE: {"C2"}, BUILD_STAGE: {"C3", "C4", "C5"}}
@@ -498,6 +499,7 @@ class _Run:
         return (
             self.stop is None
             and self.gate_failure is None
+            and not self.rec.retries.get(GATE_FAILED_KEY)
             and not self.was_abandoned
             and self.rec.checkpoint is None
             and read_stop_record(self.rec.path) is None
@@ -872,9 +874,14 @@ class _Run:
             if res.returncode != 0:
                 tail = _tail(res.stderr or res.stdout)
                 self.gate_failure = GateFailure(command, directory, res.returncode, tail)
+                self.rec.retries[GATE_FAILED_KEY] = 1
+                self.rec.save()
                 self.note(f"gate command '{command}' failed in {directory} (exit {res.returncode}): {tail}")
                 return
         self.gated = True
+        if self.rec.retries.get(GATE_FAILED_KEY):
+            self.rec.retries[GATE_FAILED_KEY] = 0
+            self.rec.save()
 
 
 def run_item(
@@ -950,6 +957,8 @@ def _report(run: _Run) -> DigestReport:
         if run.gate_failure is not None:
             f = run.gate_failure
             evidence.append(f"gate failed: {f.command} in {f.directory} (exit {f.returncode})")
+        elif run.rec.retries.get(GATE_FAILED_KEY):
+            evidence.append("gate failed in an earlier run")
         else:
             evidence.append("gate passed" if run.gated else "gate not run")
         if run.cleanup_done:
@@ -957,10 +966,13 @@ def _report(run: _Run) -> DigestReport:
         done = (DoneEntry(f"{run.item}: draft PR #{run.pr.number} opened", tuple(evidence)),)
     elif run.cleanup_done:
         done = (DoneEntry(f"{run.item}: local branch removed", (run.cleanup_done,)),)
+    deviations = list(run.notes)
+    if run.gate_failure is None and run.rec.retries.get(GATE_FAILED_KEY) and not run.gated:
+        deviations.append(f"{run.item}: gate failed in an earlier run and was not rerun")
     return DigestReport(
         needs_you=needs,
         done=done,
-        deviations=tuple(run.notes),
+        deviations=tuple(deviations),
         limits_hit=limits,
         timings=tuple(run.timings),
     )

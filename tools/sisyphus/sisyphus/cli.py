@@ -36,6 +36,7 @@ from sisyphus.digest import DigestReport, DigestWriteError, NeedsYou, describe_r
 from sisyphus.intake import AgentRunner, run_intake
 from sisyphus.lock import LockHeld, clone_lock
 from sisyphus.orchestrator import (
+    GATE_FAILED_KEY,
     PR_NUMBER_KEY,
     GitHubError,
     OrchestratorOptions,
@@ -731,6 +732,8 @@ def _is_settled(rec: RunRecord, stop: Any) -> bool:
     """Settled: abandoned (no checkpoint), or finished (``open-pr`` or legacy ``ci-fix`` complete) and not stopped."""
     if rec.checkpoint is not None:
         return False
+    if rec.retries.get(GATE_FAILED_KEY) and not is_abandoned(stop):
+        return False  # a failed gate leaves no checkpoint; keep the item visible
     if is_abandoned(stop):
         return True
     finished_stage = rec.stage in (OPEN_PR_STAGE, LEGACY_FINISHED_STAGE)

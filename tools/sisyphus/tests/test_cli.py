@@ -26,6 +26,7 @@ from sisyphus.intake import IntakeResult, OpenDecision
 from sisyphus.lock import LockHeld, clone_lock
 from sisyphus.orchestrator import (
     BRANCH_CREATED_KEY,
+    GATE_FAILED_KEY,
     OPEN_PR_STAGE,
     PR_NUMBER_KEY,
     GitHubError,
@@ -490,6 +491,19 @@ def test_status_explicit_ref_shows_settled_item_without_all(tmp_path: Path) -> N
     missing = env.invoke("status", "NOPE-1", "--config", str(env.config))
     assert missing.exit_code == 1
     assert "no run record for NOPE-1" in missing.output
+
+
+def test_status_shows_finished_item_with_failed_gate(tmp_path: Path) -> None:
+    env = make_env(tmp_path)
+    ws = tmp_path / "ws"
+    failed = RunRecord.open(ws, "GATE-1")
+    failed.mark_stage(OPEN_PR_STAGE, "complete")
+    failed.retries[GATE_FAILED_KEY] = 1
+    failed.save()
+    RunRecord.open(ws, "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
+    result = env.invoke("status", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    assert _shown(result.output) == ["GATE-1"]
 
 
 def test_status_all_hidden_reports_count_and_empty_says_no_items(tmp_path: Path) -> None:

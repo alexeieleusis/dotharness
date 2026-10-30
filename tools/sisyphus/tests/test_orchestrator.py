@@ -650,6 +650,9 @@ def test_rerun_after_gate_failure_skips_every_stage(world: World) -> None:
     assert world.events.count("agent:build") == 1
     assert world.events.count("agent:plan") == 1
     assert world.events.count("gate:make check@pkg") == 1  # the gate is not rerun
+    assert RunRecord.open(world.tmp / "ws", ITEM).retries["gate-failed"] == 1  # persisted, survives the skip
+    assert "gate failed in an earlier run and was not rerun" in world.digest_text()
+    assert "gate not run" not in world.digest_text()
 
 
 def test_rerun_after_c1_unchanged_brief_makes_no_agent_call(world: World) -> None:
