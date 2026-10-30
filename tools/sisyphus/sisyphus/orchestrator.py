@@ -359,6 +359,16 @@ def build_orchestration_prompt(template: str, values: dict[str, str]) -> str:
     return template
 
 
+@dataclass(frozen=True)
+class GateFailure:
+    """The first failing gate command: what ran, where, its exit code and the output tail."""
+
+    command: str
+    directory: Path
+    returncode: int
+    tail: str
+
+
 def _tail(text: str, n: int = 400) -> str:
     text = text.strip()
     return text[-n:]
@@ -403,6 +413,7 @@ class _Run:
         self.prior_cp = self.rec.checkpoint
         self.pr: PullRequest | None = None
         self.gated = False
+        self.gate_failure: GateFailure | None = None
         self.notes: list[str] = []
         self.done_stages: list[str] = []
         self.skipped: list[str] = []
@@ -486,6 +497,7 @@ class _Run:
         wanted = [STAGE_ORDER.index(s) for s in self.stages()]
         return (
             self.stop is None
+            and self.gate_failure is None
             and not self.was_abandoned
             and self.rec.checkpoint is None
             and read_stop_record(self.rec.path) is None
@@ -825,13 +837,14 @@ class _Run:
             self.notes.append(text)
 
     def gate(self) -> None:
-        """Run the gate commands in each touched package dir at HEAD; raise C5 on the first failure.
+        """Run the gate commands in each touched package dir at HEAD; record the first failure.
 
         Per directory, the plain ``build.commands`` run first, then the ``[[build.gate]]`` entries that apply
         to it, in file order. An entry with ``packages`` applies only to a touched directory equal to one of
         them; an entry without ``packages`` applies to every touched directory. When neither source exists,
         when there are no changed files, or when only entries exist and none applies, note that the gate was
-        not run and return.
+        not run and return. A failing command is recorded in ``gate_failure`` and noted; the remaining commands
+        are skipped and nothing is raised, so the run still completes.
         """
         number = self.pr_number()
         self.write_item_config()
@@ -857,11 +870,10 @@ class _Run:
         for directory, command in plan:
             res = self.sh(shlex.split(command), directory)
             if res.returncode != 0:
-                raise _Stop(
-                    Checkpoint.C5,
-                    f"gate command '{command}' failed in {directory} (exit {res.returncode}): "
-                    f"{_tail(res.stderr or res.stdout)}",
-                )
+                tail = _tail(res.stderr or res.stdout)
+                self.gate_failure = GateFailure(command, directory, res.returncode, tail)
+                self.note(f"gate command '{command}' failed in {directory} (exit {res.returncode}): {tail}")
+                return
         self.gated = True
 
 
@@ -935,7 +947,11 @@ def _report(run: _Run) -> DigestReport:
     done: tuple[DoneEntry, ...] = ()
     if run.pr is not None:
         evidence = [run.pr.url or f"PR #{run.pr.number}", f"branch {run.branch}"]
-        evidence.append("gate passed" if run.gated else "gate not run")
+        if run.gate_failure is not None:
+            f = run.gate_failure
+            evidence.append(f"gate failed: {f.command} in {f.directory} (exit {f.returncode})")
+        else:
+            evidence.append("gate passed" if run.gated else "gate not run")
         if run.cleanup_done:
             evidence.append(run.cleanup_done)
         done = (DoneEntry(f"{run.item}: draft PR #{run.pr.number} opened", tuple(evidence)),)

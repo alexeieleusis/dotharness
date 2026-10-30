@@ -466,14 +466,20 @@ def test_c5_leaf_scope_violation_from_agent(world: World) -> None:
     assert world.find_calls == 0
 
 
-def test_c5_gate_command_failure_raises_c5(world: World) -> None:
+def test_gate_command_failure_completes_and_reports_in_digest(world: World) -> None:
     world.gate_rc = 2
     result = world.run()
-    _assert_stop(world, result, Checkpoint.C5)
-    assert result.pr is not None  # PR is open, but not gated
-    assert not list(world.tmp.rglob("build_gate_*.json"))
-    assert "gate passed" not in world.digest_text()
-    assert world.events.count("gate:make check@pkg") == 1  # stopped at first failure
+    assert result.completed
+    assert result.checkpoint is None
+    assert result.pr is not None
+    assert _stop(world) is None
+    digest = world.digest_text()
+    assert re.search(r"gate failed: make check in \S+ \(exit 2\)", digest)
+    assert "gate passed" not in digest
+    assert "gate command 'make check' failed in" in digest  # Deviations note: command, dir, exit code, tail
+    assert "(exit 2): gate failed" in digest
+    assert digest.split("## Needs you")[1].lstrip().startswith("None")  # no Needs you entry
+    assert world.events.count("gate:make check@pkg") == 1  # stopped at the first failure
 
 
 def test_c5_intake_boundary_violation(world: World) -> None:
@@ -634,15 +640,16 @@ def test_rerun_with_unchanged_inputs_repeats_nothing(world: World) -> None:
     assert len(world.opened) == 1
 
 
-def test_rerun_after_gate_failure_reuses_existing_pr(world: World) -> None:
+def test_rerun_after_gate_failure_skips_every_stage(world: World) -> None:
     world.gate_rc = 1
     world.run()
     world.gate_rc = 0
     result = world.run()
     assert result.completed
-    assert len(world.opened) == 1  # find_pr found the PR; no second PR
-    assert world.events.count("agent:build") == 1  # earlier stages not repeated
+    assert len(world.opened) == 1  # no second PR
+    assert world.events.count("agent:build") == 1
     assert world.events.count("agent:plan") == 1
+    assert world.events.count("gate:make check@pkg") == 1  # the gate is not rerun
 
 
 def test_rerun_after_c1_unchanged_brief_makes_no_agent_call(world: World) -> None:
@@ -864,11 +871,12 @@ def test_gate_entries_unmatched_with_plain_commands_run_plain_silently(world: Wo
     assert "no [[build.gate]] entry applies" not in world.digest_text()
 
 
-def test_gate_entry_failure_raises_c5(world: World) -> None:
+def test_gate_entry_failure_is_recorded_without_a_checkpoint(world: World) -> None:
     _gate_world(world, '[[build.gate]]\nrun = "make scoped"\n')
     world.gate_rc = 2
     result = world.run()
-    assert result.checkpoint is Checkpoint.C5
+    assert result.completed
+    assert "gate failed: make scoped in" in world.digest_text()
 
 
 def test_gate_entry_unknown_key_raises(world: World) -> None:
@@ -1215,7 +1223,7 @@ def _stop_c4(world: World) -> None:
 
 
 def _stop_c5(world: World) -> None:
-    world.gate_rc = 2
+    world.build_stops = [{"checkpoint": "C5", "leaf": "13-foo", "detail": "out of scope"}]
 
 
 def _stop_c6(world: World) -> None:
@@ -1576,7 +1584,7 @@ def test_failed_base_fast_forward_keeps_the_branch(world: World) -> None:
 def test_stopped_or_failed_item_keeps_its_branch(world: World, fault: str) -> None:
     _cleanup_ready(world)
     if fault == "gate":
-        world.gate_rc = 1
+        world.gate_rc = 1  # finishes (no stop), but the branch is kept
     elif fault == "c1":
         world.brief_text = BRIEF_OPEN
     else:
@@ -1585,7 +1593,7 @@ def test_stopped_or_failed_item_keeps_its_branch(world: World, fault: str) -> No
         with pytest.raises(OrchestratorError):
             world.run()
     else:
-        assert not world.run().completed
+        assert world.run().completed is (fault == "gate")
     assert world.branch_cmds == []
     assert not any(c[0][:2] == ("git", "checkout") and c[0][2] == "base-branch" for c in world.shell_calls)
 
