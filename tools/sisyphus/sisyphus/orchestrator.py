@@ -778,6 +778,10 @@ class _Run:
 
     def stage_open_pr(self) -> None:
         with self.rec.stage_scope(OPEN_PR_STAGE):
+            # Validate the gate config before any PR exists: a malformed entry must not leave a PR with no gate result.
+            self.write_item_config()
+            read_build_commands(self.spf)
+            read_gate_entries(self.spf)
             try:
                 self.pr = self.gh.find_pr(self.branch)
                 if self.pr is None:

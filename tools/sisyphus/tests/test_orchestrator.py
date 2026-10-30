@@ -886,6 +886,7 @@ def test_gate_entry_unknown_key_raises(world: World) -> None:
     _gate_world(world, '[[build.gate]]\nrun = "make x"\ncwd = "a"\n')
     with pytest.raises(OrchestratorError, match=r"build\.gate\[0\] has unknown keys: cwd"):
         world.run()
+    assert not world.opened  # validated before the PR is opened
 
 
 def test_invalid_gate_entry_fails_even_without_changed_files(world: World) -> None:
