@@ -218,6 +218,10 @@ def _run_vh_command(cmd: list, label: str, cwd: str, timeout: int, env: dict) ->
 
 def _process_subdir(pr_number: int, subdir, config: HarnessConfig, env: dict) -> bool:
     subdir_path = str(config.repo.working_dir / subdir.path)
+    env_error = prune_projects.env_file_error(config, subdir)
+    if env_error:
+        logger.error("%s", env_error)
+        return False
     if not _run_pre_commands(subdir, config, env):
         return False
 
@@ -242,6 +246,10 @@ def _process_subdir(pr_number: int, subdir, config: HarnessConfig, env: dict) ->
 
 
 def _run_base_subdir(subdir, config: HarnessConfig, env: dict) -> bool:
+    env_error = prune_projects.env_file_error(config, subdir)
+    if env_error:
+        logger.error("%s", env_error)
+        return False
     if not _run_pre_commands(subdir, config, env):
         return False
 

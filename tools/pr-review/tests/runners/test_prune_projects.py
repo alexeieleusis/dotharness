@@ -1,6 +1,8 @@
 import subprocess
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from harness.config import HarnessConfig, HarnessSection, RepoConfig, SubDir, VibehealConfig
 from harness.runners import prune_projects
 
@@ -86,6 +88,7 @@ def test_os_error_in_one_subdir_does_not_stop_the_next(tmp_path):
 
 
 def test_env_file_passed_only_to_subdir_that_sets_it(tmp_path):
+    (tmp_path / ".env").write_text("X=1\n")
     env_path = str(tmp_path / ".env")
     cfg = _make_config(
         tmp_path,
@@ -98,3 +101,32 @@ def test_env_file_passed_only_to_subdir_that_sets_it(tmp_path):
         prune_projects.run(cfg, {})
     base = ["/venv/bin/python3", "-m", "vibe_heal", "prune-projects", "--yes", "--older-than", "90"]
     assert [c.args[0] for c in mock_run.call_args_list] == [[*base, "--env-file", env_path], base]
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory"])
+def test_bad_env_file_warns_skips_subdir_and_continues(tmp_path, caplog, kind):
+    bad = tmp_path / "envs" / ".env"
+    if kind == "directory":
+        bad.mkdir(parents=True)
+    cfg = _make_config(
+        tmp_path,
+        [SubDir(path="a", env_file=str(bad)), SubDir(path="b")],
+        prune_projects_enabled=True,
+    )
+    with patch("harness.runners.prune_projects.run_cmd") as mock_run, caplog.at_level("DEBUG"):
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        prune_projects.run(cfg, {})
+    assert mock_run.call_count == 1
+    assert mock_run.call_args.kwargs["cwd"] == str(tmp_path / "b")
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "a" in warnings[0] and str(bad) in warnings[0]
+
+
+def test_unset_env_file_logs_no_env_file_message(tmp_path, caplog):
+    cfg = _make_config(tmp_path, [SubDir(path="a")], prune_projects_enabled=True)
+    with patch("harness.runners.prune_projects.run_cmd") as mock_run, caplog.at_level("DEBUG"):
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        prune_projects.run(cfg, {})
+    assert mock_run.call_count == 1
+    assert not [r for r in caplog.records if "regular file" in r.getMessage()]

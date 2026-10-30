@@ -1037,6 +1037,7 @@ def test_env_file_args(tmp_path):
 
 def test_base_subdir_argv_with_and_without_env_file(tmp_path):
     cfg = _make_config(tmp_path)
+    (tmp_path / ".env").write_text("X=1\n")
     p = str(tmp_path / ".env")
     with patch("harness.runners.review_prs.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=b"")
@@ -1051,6 +1052,7 @@ def test_base_subdir_argv_with_and_without_env_file(tmp_path):
 @pytest.mark.parametrize("coverage", [True, False])
 def test_process_subdir_argv_with_and_without_env_file(tmp_path, coverage):
     cfg = _make_config(tmp_path)
+    (tmp_path / ".env").write_text("X=1\n")
     p = str(tmp_path / ".env")
     with patch("harness.runners.review_prs.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=b"")
@@ -1063,3 +1065,86 @@ def test_process_subdir_argv_with_and_without_env_file(tmp_path, coverage):
     assert post_a == [*py, "review", "--post", "--pr", "7", "--env-file", p]
     assert review_b == [*py, "review", "--pr", "7", *cov]
     assert post_b == [*py, "review", "--post", "--pr", "7"]
+
+
+# --- env_file existence check (A.3) ---
+
+
+def _bad_env_file(tmp_path, kind):
+    """Return a path that is not a regular file: missing, or a directory."""
+    p = tmp_path / "envs" / ".env"
+    if kind == "directory":
+        p.mkdir(parents=True)
+    return str(p)
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory"])
+def test_base_subdir_fails_fast_on_bad_env_file(tmp_path, caplog, kind):
+    cfg = _make_config(tmp_path)
+    bad = _bad_env_file(tmp_path, kind)
+    subdir = SubDir(path="a", env_file=bad, pre_commands=[PreCommand(cmd="echo hi")])
+    with patch("harness.runners.review_prs.run_cmd") as mock_run, caplog.at_level("DEBUG"):
+        assert review_prs._run_base_subdir(subdir, cfg, {}) is False
+    mock_run.assert_not_called()
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1
+    assert "a" in errors[0].getMessage() and bad in errors[0].getMessage()
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory"])
+def test_process_subdir_fails_fast_on_bad_env_file(tmp_path, caplog, kind):
+    cfg = _make_config(tmp_path)
+    bad = _bad_env_file(tmp_path, kind)
+    subdir = SubDir(path="a", env_file=bad, pre_commands=[PreCommand(cmd="echo hi")])
+    with patch("harness.runners.review_prs.run_cmd") as mock_run, caplog.at_level("DEBUG"):
+        assert review_prs._process_subdir(7, subdir, cfg, {}) is False
+    mock_run.assert_not_called()
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1
+    assert "a" in errors[0].getMessage() and bad in errors[0].getMessage()
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory"])
+def test_run_base_analysis_does_not_persist_sha_on_bad_env_file(tmp_xdg, tmp_path, kind):
+    state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
+    bad = _bad_env_file(tmp_path, kind)
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30, env_file=bad)])
+    with (
+        patch("harness.runners.review_prs.run_cmd") as mock_run,
+        patch("harness.runners.review_prs.git_detach_and_record", return_value="original-sha"),
+        patch("harness.runners.review_prs.git_restore"),
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"new-sha\n", stderr=b"")
+        assert review_prs._run_base_analysis(cfg, {}) is False
+    assert not [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
+    assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == "old-sha"
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory"])
+def test_process_pr_does_not_record_reviewed_sha_on_bad_env_file(tmp_xdg, tmp_path, kind):
+    bad = _bad_env_file(tmp_path, kind)
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30, env_file=bad)])
+    prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha7"}]
+    with (
+        patch("harness.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("harness.runners.review_prs.get_current_user", return_value="alice"),
+        patch("harness.runners.common.was_review_requested", return_value=False),
+        patch("harness.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("harness.runners.review_prs._run_base_analysis", return_value=True),
+        patch("harness.runners.review_prs.run_cmd") as mock_run,
+        patch("harness.runners.review_prs.git_detach_and_record", return_value="sha"),
+        patch("harness.runners.review_prs.git_restore"),
+        patch("harness.runners.review_prs.git_fetch_and_checkout"),
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"[]", stderr=b"")
+        review_prs._run_locked(cfg)
+    assert not [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
+    assert state.get_reviewed_sha("acme-frontend", 7) is None
+
+
+def test_unset_env_file_logs_no_env_file_message(tmp_path, caplog):
+    cfg = _make_config(tmp_path)
+    with patch("harness.runners.review_prs.run_cmd") as mock_run, caplog.at_level("DEBUG"):
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"")
+        assert review_prs._run_base_subdir(SubDir(path="a"), cfg, {}) is True
+    assert not [r for r in caplog.records if "regular file" in r.getMessage()]
