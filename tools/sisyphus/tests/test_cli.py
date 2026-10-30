@@ -261,6 +261,33 @@ def _status_workspace(tmp_path: Path) -> Any:
         ),
     )
     RunRecord.open(ws, "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
+    fin_err = RunRecord.open(ws, "FIN-ERR-1")
+    fin_err.mark_stage(OPEN_PR_STAGE, "complete")
+    write_stop_record(
+        fin_err.path,
+        build_stop_record(
+            "FIN-ERR-1",
+            checkpoint=None,
+            stage=OPEN_PR_STAGE,
+            stage_status="complete",
+            detail="x",
+            resume_command="r",
+        ),
+    )
+    fin_cp = RunRecord.open(ws, "FIN-CP-1")
+    fin_cp.mark_stage(OPEN_PR_STAGE, "complete")
+    fin_cp.set_checkpoint("C1")
+    # Not reachable through normal operation (abandoning clears the checkpoint); built directly to pin 7.3's
+    # checkpoint-first precedence in `_is_settled` and the awaiting label.
+    ab_cp = RunRecord.open(ws, "AB-CP-1")
+    ab_cp.mark_stage("build")
+    ab_cp.set_checkpoint("C1")
+    write_stop_record(
+        ab_cp.path,
+        build_abandoned_record(
+            "AB-CP-1", stage="build", stage_status="in_progress", prior_label="l", reenable_command="r"
+        ),
+    )
     cp = RunRecord.open(ws, "CP-1")
     cp.mark_stage("plan")
     cp.set_checkpoint("C1")
@@ -280,11 +307,30 @@ def _shown(output: str) -> list[str]:
     return [line for line in output.splitlines() if line and not line.startswith((" ", "no items"))]
 
 
+def _awaiting(output: str) -> dict[str, str]:
+    found: dict[str, str] = {}
+    item = ""
+    for line in output.splitlines():
+        if line and not line.startswith(" "):
+            item = line
+        elif line.strip().startswith("awaiting: "):
+            found[item] = line.strip().removeprefix("awaiting: ")
+    return found
+
+
 def test_status_hides_settled_items_by_default(tmp_path: Path) -> None:
     env = _status_workspace(tmp_path)
     result = env.invoke("status", "--config", str(env.config))
     assert result.exit_code == 0, result.output
-    assert sorted(_shown(result.output)) == ["CP-1", "ERR-1", "RUN-1"]
+    assert sorted(_shown(result.output)) == ["AB-CP-1", "CP-1", "ERR-1", "FIN-CP-1", "FIN-ERR-1", "RUN-1"]
+    assert _awaiting(result.output) == {
+        "AB-CP-1": "you",
+        "CP-1": "you",
+        "ERR-1": "error",
+        "FIN-CP-1": "you",
+        "FIN-ERR-1": "error",
+        "RUN-1": "none",
+    }
     assert "no items needing attention" not in result.output
 
 
@@ -292,7 +338,18 @@ def test_status_all_shows_every_item(tmp_path: Path) -> None:
     env = _status_workspace(tmp_path)
     result = env.invoke("status", "--all", "--config", str(env.config))
     assert result.exit_code == 0, result.output
-    assert sorted(_shown(result.output)) == ["AB-1", "CP-1", "ERR-1", "FIN-1", "RUN-1"]
+    assert sorted(_shown(result.output)) == [
+        "AB-1",
+        "AB-CP-1",
+        "CP-1",
+        "ERR-1",
+        "FIN-1",
+        "FIN-CP-1",
+        "FIN-ERR-1",
+        "RUN-1",
+    ]
+    awaiting = _awaiting(result.output)
+    assert (awaiting["FIN-ERR-1"], awaiting["FIN-CP-1"], awaiting["AB-CP-1"]) == ("error", "you", "you")
 
 
 def test_status_explicit_ref_shows_settled_item_without_all(tmp_path: Path) -> None:
