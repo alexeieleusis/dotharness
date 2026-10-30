@@ -80,14 +80,30 @@ stage finished.
 
 ## Gate commands
 
-After the PR exists, the orchestrator reads `build.commands` read-only from the
+After the PR exists, the orchestrator reads `build.commands` and `[[build.gate]]` read-only from the
 item's `.spec-prism-flow.toml` (see below), a copy of `options.spf_config_path` (default
-`<repo_dir>/.spec-prism-flow.toml`). The orchestrator reads it with stdlib `tomllib`. It runs each command in each
-package directory the change touched, using the injected subprocess runner at the pushed head. A package directory is the nearest ancestor of a changed file (from
+`<repo_dir>/.spec-prism-flow.toml`). The orchestrator reads it with stdlib `tomllib`. It runs the commands in the
+package directories the change touched, using the injected subprocess runner at the pushed head. A package directory is the nearest ancestor of a changed file (from
 `git diff --name-only origin/<base>...HEAD`) that holds `Makefile`, `pyproject.toml`, `package.json`, `Cargo.toml` or
-`go.mod`. If no such ancestor holds one, the package directory is the repository root. If a command fails, the run
-stops at C5. If the file or `build.commands` is absent, the gate is not run, and the digest "Deviations"
-section says so. Commands are never guessed. The Done entry's evidence says `gate passed` or `gate not run`.
+`go.mod`. If no such ancestor holds one, the package directory is the repository root.
+
+Plain `build.commands` strings run in every touched package directory. The optional scoped form is an array of tables:
+
+```toml
+[[build.gate]]
+run = "make test"
+packages = ["tools/pr-review"]
+```
+
+`run` is a required non-empty string, split with `shlex`. `packages` is an optional list of repo-relative directories
+(no absolute path, no `..` segment; `"."` is the repository root). An entry with `packages` runs only in a touched
+package directory that equals one of them (equality, not prefix); an entry without `packages` runs in every touched
+package directory. Unknown keys or invalid values are an `OrchestratorError`. spec-prism-flow ignores `[[build.gate]]`.
+Per directory, the `build.commands` run first, then the applicable entries in file order; directories run in sorted
+order. If a command fails, the run stops at C5. If neither `build.commands` nor `[[build.gate]]` exists, the gate is not
+run, and the digest "Deviations" section says so. If only entries exist and none applies to a touched directory, the
+gate is not run and the note says `no [[build.gate]] entry applies to the touched package directories`. Commands are
+never guessed. The Done entry's evidence says `gate passed` or `gate not run`.
 
 ## Injected interfaces
 

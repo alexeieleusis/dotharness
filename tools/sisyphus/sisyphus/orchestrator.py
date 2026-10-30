@@ -283,6 +283,56 @@ def read_build_commands(path: Path) -> list[str] | None:
     return list(cmds) or None
 
 
+@dataclass(frozen=True)
+class GateEntry:
+    """One ``[[build.gate]]`` table: a command and, optionally, the repo-relative package dirs it applies to."""
+
+    run: str
+    packages: tuple[str, ...] | None = None
+
+
+_GATE_KEYS = frozenset({"run", "packages"})
+
+
+def _gate_entry(path: Path, index: int, raw: object) -> GateEntry:
+    where = f"{path}: build.gate[{index}]"
+    if not isinstance(raw, dict):
+        raise OrchestratorError(f"{where} must be a table")
+    unknown = sorted(set(raw) - _GATE_KEYS)
+    if unknown:
+        raise OrchestratorError(f"{where} has unknown keys: {', '.join(map(str, unknown))}")
+    run = raw.get("run")
+    if not isinstance(run, str) or not run.strip():
+        raise OrchestratorError(f"{where}.run must be a non-empty string")
+    packages = raw.get("packages")
+    if packages is None:
+        return GateEntry(run)
+    if not isinstance(packages, list) or not all(isinstance(p, str) and p.strip() for p in packages):
+        raise OrchestratorError(f"{where}.packages must be a list of non-empty strings")
+    for pkg in packages:
+        pure = Path(pkg)
+        if pure.is_absolute() or ".." in pure.parts:
+            raise OrchestratorError(f"{where}.packages: {pkg!r} must be repo-relative with no '..' segment")
+    return GateEntry(run, tuple(packages))
+
+
+def read_gate_entries(path: Path) -> list[GateEntry] | None:
+    """``[[build.gate]]`` entries, validated; ``None`` when the file, the table or the key is absent or empty."""
+    data = read_spf_config(path)
+    build = data.get("build") if data else None
+    raw = build.get("gate") if isinstance(build, dict) else None
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not all(isinstance(e, dict) for e in raw):
+        raise OrchestratorError(f"{path}: build.gate must be an array of tables")
+    return [_gate_entry(path, i, e) for i, e in enumerate(raw)] or None
+
+
+def _gate_applies(entry: GateEntry, repo_dir: Path, directory: Path) -> bool:
+    """An entry without ``packages`` applies everywhere; otherwise only to a listed directory (equality)."""
+    return entry.packages is None or any((repo_dir / pkg).resolve() == directory.resolve() for pkg in entry.packages)
+
+
 def package_dirs(repo_dir: Path, changed_files: Sequence[str]) -> list[Path]:
     """Nearest ancestor directory (below or at ``repo_dir``) of each changed file holding a package marker.
 
@@ -775,14 +825,19 @@ class _Run:
             self.notes.append(text)
 
     def gate(self) -> None:
-        """Run ``build.commands`` in each touched package dir at HEAD; raise C5 on the first failure.
+        """Run the gate commands in each touched package dir at HEAD; raise C5 on the first failure.
 
-        When there are no ``build.commands`` or no changed files, note that the gate was not run and return.
+        Per directory, the plain ``build.commands`` run first, then the ``[[build.gate]]`` entries that apply
+        to it, in file order. An entry with ``packages`` applies only to a touched directory equal to one of
+        them; an entry without ``packages`` applies to every touched directory. When neither source exists,
+        when there are no changed files, or when only entries exist and none applies, note that the gate was
+        not run and return.
         """
         number = self.pr_number()
         self.write_item_config()
         commands = read_build_commands(self.spf)
-        if commands is None:
+        entries = read_gate_entries(self.spf)
+        if commands is None and entries is None:
             self.note(f"gate not run for PR #{number}: no build.commands in {self.spf}")
             return
         changed = self.git("diff", "--name-only", f"origin/{self.opt.base_branch}...HEAD").stdout.split("\n")
@@ -790,15 +845,23 @@ class _Run:
         if not dirs:
             self.note(f"gate not run for PR #{number}: no changed files to gate")
             return
+        plan: list[tuple[Path, str]] = []
         for directory in dirs:
-            for command in commands:
-                res = self.sh(shlex.split(command), directory)
-                if res.returncode != 0:
-                    raise _Stop(
-                        Checkpoint.C5,
-                        f"gate command '{command}' failed in {directory} (exit {res.returncode}): "
-                        f"{_tail(res.stderr or res.stdout)}",
-                    )
+            plan.extend((directory, c) for c in commands or [])
+            plan.extend((directory, e.run) for e in entries or [] if _gate_applies(e, self.repo, directory))
+        if not plan:
+            self.note(
+                f"gate not run for PR #{number}: no [[build.gate]] entry applies to the touched package directories"
+            )
+            return
+        for directory, command in plan:
+            res = self.sh(shlex.split(command), directory)
+            if res.returncode != 0:
+                raise _Stop(
+                    Checkpoint.C5,
+                    f"gate command '{command}' failed in {directory} (exit {res.returncode}): "
+                    f"{_tail(res.stderr or res.stdout)}",
+                )
         self.gated = True
 
 
