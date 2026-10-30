@@ -25,8 +25,8 @@ The branch is `sisyphus/<slug>-<8 hex of sha256(item)>` (`branch_name`). The bas
 ### Pull-request body
 
 Only on the create path, `stage_open_pr` builds the body with the pure functions in `sisyphus.prbody` and passes it
-to `open_pr`. The header (`Work item: <item>`, a blank line, `Opened by Sisyphus. Review required; this PR is not
-approved.`) is unchanged and always first. The sections come from `requirements.md` sections 1-4, the leaf files
+to `open_pr`. The header is the single line `Work item: <item>`, always first and never
+truncated. The sections come from `requirements.md` sections 1-4, the leaf files
 with their commits (`git log origin/<base>..HEAD`), the brief's resolved open decisions and the Deviations bullets of
 the per-leaf handoffs. The plan directory is used only when its `init_manifest.json` names this item's brief.
 

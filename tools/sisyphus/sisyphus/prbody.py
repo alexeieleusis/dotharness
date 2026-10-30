@@ -272,7 +272,6 @@ def extract_decisions(brief_path: Path) -> str:
 # ------------------------------------------------- sanitise, redact, compose
 
 MAX_BODY_CHARS = 60000
-HEADER_NOTICE = "Opened by Sisyphus. Review required; this PR is not approved."
 ZWSP = "​"
 FULL_FILE_NOTE = (
     "Note: the full requirements are in `requirements.md` in the plan directory "
@@ -362,7 +361,7 @@ def compose_body(
     Never raises for missing content: empty sections are omitted, ``requirements=None`` becomes a one-line note.
     ``len(result) <= MAX_BODY_CHARS`` always holds; the header is never truncated.
     """
-    header = f"Work item: {item}\n\n{HEADER_NOTICE}"
+    header = f"Work item: {item}"
 
     def emb(text: str) -> str:
         return embed(text, workspace, plan_dir, home).strip()
