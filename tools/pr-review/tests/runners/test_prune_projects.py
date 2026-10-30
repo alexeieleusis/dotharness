@@ -83,3 +83,18 @@ def test_os_error_in_one_subdir_does_not_stop_the_next(tmp_path):
         ]
         prune_projects.run(cfg, {})
     assert mock_run.call_count == 2
+
+
+def test_env_file_passed_only_to_subdir_that_sets_it(tmp_path):
+    env_path = str(tmp_path / ".env")
+    cfg = _make_config(
+        tmp_path,
+        [SubDir(path="a", env_file=env_path), SubDir(path="b")],
+        prune_projects_enabled=True,
+        prune_older_than_minutes=90,
+    )
+    with patch("harness.runners.prune_projects.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        prune_projects.run(cfg, {})
+    base = ["/venv/bin/python3", "-m", "vibe_heal", "prune-projects", "--yes", "--older-than", "90"]
+    assert [c.args[0] for c in mock_run.call_args_list] == [[*base, "--env-file", env_path], base]

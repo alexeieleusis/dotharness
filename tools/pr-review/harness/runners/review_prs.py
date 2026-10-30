@@ -11,6 +11,7 @@ from harness.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
     build_subprocess_env,
+    env_file_args,
     get_changed_files,
     get_current_user,
     get_gh_token,
@@ -223,6 +224,7 @@ def _process_subdir(pr_number: int, subdir, config: HarnessConfig, env: dict) ->
     vh_cmd = [config.vibe_heal.python, "-m", "vibe_heal", "review", "--pr", str(pr_number)]
     if subdir.coverage:
         vh_cmd.append("--coverage")
+    vh_cmd += env_file_args(config.repo, subdir)
     logger.info("Running vibe_heal review in %s for PR #%d", subdir_path, pr_number)
     if not _run_vh_command(vh_cmd, "vibe_heal review", subdir_path, config.vibe_heal.vibe_heal_timeout, env):
         return False
@@ -232,6 +234,7 @@ def _process_subdir(pr_number: int, subdir, config: HarnessConfig, env: dict) ->
         return False
 
     vh_post = [config.vibe_heal.python, "-m", "vibe_heal", "review", "--post", "--pr", str(pr_number)]
+    vh_post += env_file_args(config.repo, subdir)
     logger.info("Running vibe_heal review --post in %s for PR #%d", subdir_path, pr_number)
     return _run_vh_command(
         vh_post, "vibe_heal review --post", subdir_path, config.vibe_heal.vibe_heal_post_timeout, env
@@ -244,6 +247,7 @@ def _run_base_subdir(subdir, config: HarnessConfig, env: dict) -> bool:
 
     subdir_path = str(config.repo.working_dir / subdir.path)
     vh_cmd = [config.vibe_heal.python, "-m", "vibe_heal", "review", "--baseline"]
+    vh_cmd += env_file_args(config.repo, subdir)
     logger.info("Running vibe_heal base analysis in %s", subdir_path)
     return _run_vh_command(vh_cmd, "vibe_heal base analysis", subdir_path, config.vibe_heal.vibe_heal_timeout, env)
 

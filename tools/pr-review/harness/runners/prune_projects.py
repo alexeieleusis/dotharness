@@ -2,7 +2,7 @@ import logging
 import subprocess
 
 from harness.config import HarnessConfig, SubDir
-from harness.runners.common import log_called_process_output, run_cmd
+from harness.runners.common import env_file_args, log_called_process_output, run_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ def _prune_subdir(subdir: SubDir, config: HarnessConfig, env: dict) -> None:
         "--older-than",
         str(config.vibe_heal.prune_older_than_minutes),
     ]
+    cmd += env_file_args(config.repo, subdir)
     logger.info("Running vibe_heal prune-projects in %s", subdir_path)
     try:
         run_cmd(cmd, cwd=subdir_path, env=env, timeout=config.vibe_heal.prune_projects_timeout)

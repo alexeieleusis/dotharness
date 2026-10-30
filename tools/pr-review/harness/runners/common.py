@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from harness.backend import Backend
-from harness.config import SubDir
+from harness.config import RepoConfig, SubDir
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,24 @@ TIMEOUT_GH = 30
 TIMEOUT_GIT = 60
 TIMEOUT_FETCH_COMMENTS = 120
 GRACE_PERIOD_SECONDS = 10
+
+
+def resolve_env_file(repo: RepoConfig, subdir: SubDir) -> Path | None:
+    """Absolute path of the subdir's vibe_heal env file, or None when unset.
+
+    Relative paths resolve against ``repo.working_dir`` (not the subdir path or the process cwd).
+    No containment check and no symlink resolution: the file may live anywhere.
+    """
+    if subdir.env_file is None:
+        return None
+    return repo.working_dir / subdir.env_file
+
+
+def env_file_args(repo: RepoConfig, subdir: SubDir) -> list[str]:
+    """Argv tail ``["--env-file", <path>]`` for vibe_heal, or ``[]`` when the subdir has no env file."""
+    resolved = resolve_env_file(repo, subdir)
+    return [] if resolved is None else ["--env-file", str(resolved)]
+
 
 PR_COMMENTS_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "pr-comments.py"
 

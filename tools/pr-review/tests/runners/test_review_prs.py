@@ -980,3 +980,86 @@ def test_run_locked_calls_git_restore_when_process_pr_raises(tmp_xdg, tmp_path):
     assert call_args[0][0] == "original-sha"
     assert call_args[0][1] == "feat"
     assert call_args[0][2] == str(tmp_path)
+
+
+# --- per-subdir env_file (A.2) ---
+
+
+def _vibe_cmds(mock_run):
+    return [c.args[0] for c in mock_run.call_args_list if "vibe_heal" in c.args[0]]
+
+
+def test_resolve_env_file_none_when_unset(tmp_path):
+    from harness.runners.common import resolve_env_file
+
+    cfg = _make_config(tmp_path)
+    assert resolve_env_file(cfg.repo, SubDir(path=".")) is None
+
+
+def test_resolve_env_file_absolute_returned_unchanged(tmp_path):
+    from harness.runners.common import resolve_env_file
+
+    cfg = _make_config(tmp_path)
+    outside = tmp_path.parent / "elsewhere" / ".env"
+    assert resolve_env_file(cfg.repo, SubDir(path="a", env_file=str(outside))) == outside
+
+
+def test_resolve_env_file_relative_resolves_against_working_dir_not_cwd(tmp_path, monkeypatch):
+    from harness.runners.common import resolve_env_file
+
+    cfg = _make_config(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    resolved = resolve_env_file(cfg.repo, SubDir(path="a", env_file="envs/.env"))
+    assert resolved == tmp_path / "envs" / ".env"
+    assert resolved.is_absolute()
+
+
+def test_resolve_env_file_tilde_expanded_outside_working_dir_no_containment_error(tmp_path):
+    from pathlib import Path
+
+    from harness.runners.common import resolve_env_file
+
+    cfg = _make_config(tmp_path)
+    stored = str(Path("~/secrets/.env").expanduser())
+    assert resolve_env_file(cfg.repo, SubDir(path="a", env_file=stored)) == Path(stored)
+
+
+def test_env_file_args(tmp_path):
+    from harness.runners.common import env_file_args
+
+    cfg = _make_config(tmp_path)
+    assert env_file_args(cfg.repo, SubDir(path=".")) == []
+    p = tmp_path / ".env"
+    assert env_file_args(cfg.repo, SubDir(path=".", env_file=str(p))) == ["--env-file", str(p)]
+
+
+def test_base_subdir_argv_with_and_without_env_file(tmp_path):
+    cfg = _make_config(tmp_path)
+    p = str(tmp_path / ".env")
+    with patch("harness.runners.review_prs.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"")
+        review_prs._run_base_subdir(SubDir(path="a", env_file=p), cfg, {})
+        review_prs._run_base_subdir(SubDir(path="b"), cfg, {})
+    with_env, without = _vibe_cmds(mock_run)
+    base = ["/venv/bin/python3", "-m", "vibe_heal", "review", "--baseline"]
+    assert with_env == [*base, "--env-file", p]
+    assert without == base
+
+
+@pytest.mark.parametrize("coverage", [True, False])
+def test_process_subdir_argv_with_and_without_env_file(tmp_path, coverage):
+    cfg = _make_config(tmp_path)
+    p = str(tmp_path / ".env")
+    with patch("harness.runners.review_prs.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"")
+        review_prs._process_subdir(7, SubDir(path="a", coverage=coverage, env_file=p), cfg, {})
+        review_prs._process_subdir(7, SubDir(path="b", coverage=coverage), cfg, {})
+    review_a, post_a, review_b, post_b = _vibe_cmds(mock_run)
+    py = ["/venv/bin/python3", "-m", "vibe_heal"]
+    cov = ["--coverage"] if coverage else []
+    assert review_a == [*py, "review", "--pr", "7", *cov, "--env-file", p]
+    assert post_a == [*py, "review", "--post", "--pr", "7", "--env-file", p]
+    assert review_b == [*py, "review", "--pr", "7", *cov]
+    assert post_b == [*py, "review", "--post", "--pr", "7"]
