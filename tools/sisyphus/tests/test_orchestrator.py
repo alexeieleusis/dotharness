@@ -1476,7 +1476,7 @@ REQUIREMENTS = (
 
 
 def _header(item: str = ITEM) -> str:
-    return f"Work item: {item}\n\nOpened by Sisyphus. Review required; this PR is not approved."
+    return f"Work item: {item}"
 
 
 def test_open_pr_body_is_assembled(world: World) -> None:
@@ -1489,6 +1489,7 @@ def test_open_pr_body_is_assembled(world: World) -> None:
     assert result.completed
     body = world.opened[0][3]
     assert body.startswith(_header())
+    assert "Opened by Sisyphus. Review required; this PR is not approved." not in body
     order = [body.index(t) for t in ("## Summary", "## Phases", "## Deviations", "<details>")]
     assert order == sorted(order)
     assert "abc1234" in body
