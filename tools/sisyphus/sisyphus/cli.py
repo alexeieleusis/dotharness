@@ -698,13 +698,18 @@ def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_
     return lines
 
 
+# Pre-#129 stage that no longer exists in STAGE_ORDER; old run records still carry it.
+LEGACY_FINISHED_STAGE = "ci-fix"
+
+
 def _is_settled(rec: RunRecord, stop: Any) -> bool:
-    """Settled: abandoned (no checkpoint), or finished (``open-pr`` complete) and not stopped."""
+    """Settled: abandoned (no checkpoint), or finished (``open-pr`` or legacy ``ci-fix`` complete) and not stopped."""
     if rec.checkpoint is not None:
         return False
     if is_abandoned(stop):
         return True
-    return rec.stage == OPEN_PR_STAGE and rec.stage_status == STAGE_COMPLETE and not is_stopped(rec, stop)
+    finished_stage = rec.stage in (OPEN_PR_STAGE, LEGACY_FINISHED_STAGE)
+    return finished_stage and rec.stage_status == STAGE_COMPLETE and not is_stopped(rec, stop)
 
 
 @main.command("status")

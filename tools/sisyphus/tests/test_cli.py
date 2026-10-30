@@ -261,6 +261,27 @@ def _status_workspace(tmp_path: Path) -> Any:
         ),
     )
     RunRecord.open(ws, "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
+    # Legacy `ci-fix` stage (dropped in #129) still loads from old run records.
+    RunRecord.open(ws, "LEG-1").mark_stage("ci-fix", "complete")
+    leg_cp = RunRecord.open(ws, "LEG-CP-1")
+    leg_cp.mark_stage("ci-fix", "complete")
+    leg_cp.set_checkpoint("C1")
+    leg_err = RunRecord.open(ws, "LEG-ERR-1")
+    leg_err.mark_stage("ci-fix", "complete")
+    write_stop_record(
+        leg_err.path,
+        build_stop_record(
+            "LEG-ERR-1", checkpoint=None, stage="ci-fix", stage_status="complete", detail="x", resume_command="r"
+        ),
+    )
+    leg_ab = RunRecord.open(ws, "LEG-AB-1")
+    leg_ab.mark_stage("ci-fix", "complete")
+    write_stop_record(
+        leg_ab.path,
+        build_abandoned_record(
+            "LEG-AB-1", stage="ci-fix", stage_status="complete", prior_label="l", reenable_command="r"
+        ),
+    )
     fin_err = RunRecord.open(ws, "FIN-ERR-1")
     fin_err.mark_stage(OPEN_PR_STAGE, "complete")
     write_stop_record(
@@ -322,13 +343,24 @@ def test_status_hides_settled_items_by_default(tmp_path: Path) -> None:
     env = _status_workspace(tmp_path)
     result = env.invoke("status", "--config", str(env.config))
     assert result.exit_code == 0, result.output
-    assert sorted(_shown(result.output)) == ["AB-CP-1", "CP-1", "ERR-1", "FIN-CP-1", "FIN-ERR-1", "RUN-1"]
+    assert sorted(_shown(result.output)) == [
+        "AB-CP-1",
+        "CP-1",
+        "ERR-1",
+        "FIN-CP-1",
+        "FIN-ERR-1",
+        "LEG-CP-1",
+        "LEG-ERR-1",
+        "RUN-1",
+    ]
     assert _awaiting(result.output) == {
         "AB-CP-1": "you",
         "CP-1": "you",
         "ERR-1": "error",
         "FIN-CP-1": "you",
         "FIN-ERR-1": "error",
+        "LEG-CP-1": "you",
+        "LEG-ERR-1": "error",
         "RUN-1": "none",
     }
     assert "no items needing attention" not in result.output
@@ -346,6 +378,10 @@ def test_status_all_shows_every_item(tmp_path: Path) -> None:
         "FIN-1",
         "FIN-CP-1",
         "FIN-ERR-1",
+        "LEG-1",
+        "LEG-AB-1",
+        "LEG-CP-1",
+        "LEG-ERR-1",
         "RUN-1",
     ]
     awaiting = _awaiting(result.output)
@@ -354,7 +390,7 @@ def test_status_all_shows_every_item(tmp_path: Path) -> None:
 
 def test_status_explicit_ref_shows_settled_item_without_all(tmp_path: Path) -> None:
     env = _status_workspace(tmp_path)
-    for ref in ("AB-1", "FIN-1"):
+    for ref in ("AB-1", "FIN-1", "LEG-1", "LEG-AB-1"):
         result = env.invoke("status", ref, "--config", str(env.config))
         assert result.exit_code == 0, result.output
         assert _shown(result.output) == [ref]
@@ -370,9 +406,10 @@ def test_status_all_hidden_reports_count_and_empty_says_no_items(tmp_path: Path)
     ws = tmp_path / "ws"
     RunRecord.open(ws, "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
     RunRecord.open(ws, "FIN-2").mark_stage(OPEN_PR_STAGE, "complete")
+    RunRecord.open(ws, "LEG-1").mark_stage("ci-fix", "complete")
     result = env.invoke("status", "--config", str(env.config))
     assert result.exit_code == 0, result.output
-    assert result.output.strip() == "no items needing attention (2 hidden; use --all)"
+    assert result.output.strip() == "no items needing attention (3 hidden; use --all)"
 
 
 def test_lock_held_exits_zero_and_orchestrator_not_called(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
