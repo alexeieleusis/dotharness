@@ -33,8 +33,11 @@ sisyphus resume <work-item-ref> --config <file> [--base <branch>]
 5. Runs each item through the orchestrator (intake, plan, build, push, open PR) and
    stops at the first checkpoint (C1..C8). Before starting each further item it checks `max_run_minutes`. Once
    exceeded it starts nothing else and notes it under "Limits hit" (exit 0).
-   An item is finished when its PR is open: "PR open, handed to review". Nothing runs after that. After the PR
-   opens, pr-review (and possibly vibe-heal) take over.
+   An item is finished when its draft PR is open: "draft PR open, handed to the human". Nothing runs after
+   that. Sisyphus always creates the PR as a draft; the human validates it and marks it ready. `review-prs`,
+   `auto-approve` and `ci-fix` skip drafts, so pr-review does not take over until the draft is marked ready. If
+   pr-review is configured, self-review and vibe-heal analyze the draft in the meantime. If a non-draft open PR
+   already exists for the branch, Sisyphus reuses it and neither converts nor edits it.
 6. Writes one merged digest to `[digest].path_template`. It never overwrites an existing file: a second run
    on the same day writes `digest-<date>-2.md`, then `-3`, and so on.
 

@@ -286,6 +286,14 @@ def test_pr_number_from_the_run_record_is_what_gh_is_asked(repo: Repo) -> None:
     assert repo.pr_calls == ["17"]
 
 
+def test_draft_pr_is_open_so_cleanup_keeps_the_branch(repo: Repo) -> None:
+    repo.make_branch(push=False)
+    out = repo.cleanup(PrInfo(5, "OPEN", "x"))  # a draft PR reports state OPEN
+    assert out.status == KEPT
+    assert "PR #5 is OPEN, not MERGED" in out.message
+    assert BRANCH in repo.branches()
+
+
 @pytest.mark.parametrize(
     ("info", "needle"),
     [

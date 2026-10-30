@@ -160,7 +160,7 @@ def test_picks_and_runs_item_with_base_and_writes_digest(tmp_path: Path, fake_ru
     assert options.lock_dir == tmp_path / "locks"
     assert kwargs["write_digest_file"] is False
     assert kwargs["pr_client"] is env.services.pr_client
-    assert "ENG-1: PR #7" in result.output
+    assert "ENG-1: draft PR #7" in result.output
     assert "## Needs you" in env.digest
 
 
@@ -496,11 +496,26 @@ def test_gh_pull_request_client() -> None:
     assert client.find_pr("b") is None
     assert client.open_pr("b", "base", "T", "B") == PullRequest(12, "https://github.com/o/r/pull/12")
     assert calls[2][:3] == ["gh", "pr", "create"]
+    assert "--draft" in calls[2]
     assert "base" in calls[2]
     with pytest.raises(GitHubError):
         client.open_pr("b", "base", "T", "B")
     with pytest.raises(GitHubError):
         client.find_pr("b")
+
+
+def test_draft_pr_is_still_found_and_reported_open() -> None:
+    replies = [
+        ExecResult(0, json.dumps([{"number": 9, "url": "u9", "isDraft": True}])),
+        ExecResult(0, '{"number": 9, "state": "OPEN", "isDraft": true, "headRefOid": "abc"}'),
+    ]
+
+    def ex(_argv: Sequence[str], _cwd: Path | None, _env: Any) -> ExecResult:
+        return replies.pop(0)
+
+    client = cli.GhPullRequestClient(GhCli(None, None, ex))
+    assert client.find_pr("b") == PullRequest(9, "u9")
+    assert client.pr_state("9") == PrInfo(9, "OPEN", "abc")
 
 
 def test_gh_client_pr_state_reads_state_and_head_oid() -> None:

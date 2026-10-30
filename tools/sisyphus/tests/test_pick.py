@@ -96,6 +96,16 @@ def test_open_linked_pr_excludes_but_merged_or_closed_do_not(tmp_path: Path) -> 
     assert refs(run(GH, [issue(1), issue(2), issue(3)], tmp_path, lookup=lookup)) == ["#2", "#3"]
 
 
+def test_draft_linked_pr_is_still_open_for_pick(tmp_path: Path) -> None:
+    ex = FakeExec([
+        ExecResult(0, json.dumps({"closedByPullRequestsReferences": [{"number": 8}]})),
+        ExecResult(0, json.dumps({"number": 8, "state": "OPEN", "isDraft": True})),
+    ])
+    linked = GhPullRequestLookup(GhCli(None, None, ex)).linked_prs(1)
+    assert linked == [LinkedPr(8, "OPEN")]
+    assert refs(run(GH, [issue(1), issue(2)], tmp_path, lookup=FakeLookup({1: linked}))) == ["#2"]
+
+
 def test_hash_n_in_open_pr_body_only_excludes(tmp_path: Path) -> None:
     lookup = FakeLookup(bodies=["Fixes #7 and more", "see #12345", "owner/repo#8"])
     assert refs(run(GH, [issue(7), issue(8), issue(123), issue(12)], tmp_path, lookup=lookup)) == ["#8", "#12", "#123"]

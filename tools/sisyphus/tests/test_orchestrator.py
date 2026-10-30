@@ -341,7 +341,7 @@ def test_happy_path_pr_gate_and_digest(world: World) -> None:
     assert world.opened == [(branch_name(ITEM), "base-branch", "Brief", world.opened[0][3])]  # no owned plan: brief H1
     assert result.pr == PullRequest(42, "https://example.test/pr/42")
     digest = world.digest_text()
-    assert "PR #42 open" in digest
+    assert "draft PR #42 opened" in digest
     assert "gate passed" in digest
     assert "gate record" not in digest
     assert not list(world.tmp.rglob("build_gate_*.json"))

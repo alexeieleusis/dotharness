@@ -1,7 +1,7 @@
 # Orchestrator
 
 `sisyphus.orchestrator.run_item(item, config, options, *, agent_runner, subprocess_runner, pr_client, clock=..., today=None, write_digest_file=True, lock_held=False)`
-runs one work item through intake, plan, build, push, open PR. A finished item is "PR open, handed to review": nothing runs after the PR opens. It never
+runs one work item through intake, plan, build, push, open PR. A finished item is "draft PR open, handed to the human": nothing runs after the draft PR opens. It never
 imports `harness` or `spec_prism_flow`. It reaches those tools only through the injected subprocess runner.
 It returns a `RunResult` with `checkpoint`, `detail`, `stages_run`, `stages_skipped`, `branch`, `pr`,
 `digest_path`, `record` and `report`. `completed` is true when no checkpoint stopped the run.
@@ -97,7 +97,7 @@ section says so. Commands are never guessed. The Done entry's evidence says `gat
   `CommandResult(returncode, stdout, stderr)` out. It is used for every `git` call, the gate commands and the `harness`
   CLI. `default_subprocess_runner` is the real implementation for the CLI.
 - `pr_client: PullRequestClient`: `find_pr(branch) -> PullRequest | None` and
-  `open_pr(branch, base, title, body) -> PullRequest`. Raise `GitHubError` for an unrecoverable failure (C8).
+  `open_pr(branch, base, title, body) -> PullRequest`, which creates a draft PR (the real adapter runs `gh pr create --draft`). Raise `GitHubError` for an unrecoverable failure (C8).
 - `clock: Callable[[], float]` (default `time.monotonic`) feeds `LimitTracker`.
 
 `OrchestratorOptions` carries `base_branch`, `default_branch`, `spf_config_path`, `phase_dir`,
