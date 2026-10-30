@@ -27,11 +27,12 @@ from sisyphus.lock import LockHeld, clone_lock
 from sisyphus.orchestrator import (
     BRANCH_CREATED_KEY,
     OPEN_PR_STAGE,
+    PR_NUMBER_KEY,
     GitHubError,
     PullRequest,
     branch_name,
 )
-from sisyphus.pick import Candidate, ExecResult, GhCli, GhPullRequestLookup, LinkedPr
+from sisyphus.pick import Candidate, ExecResult, GhCli, GhPullRequestLookup, LinkedPr, PickError
 from sisyphus.rails import Checkpoint
 from sisyphus.runrecord import RunRecord
 from sisyphus.stoprecord import build_abandoned_record, build_stop_record, write_stop_record
@@ -321,7 +322,43 @@ def _status_workspace(tmp_path: Path) -> Any:
         ),
     )
     RunRecord.open(ws, "RUN-1").mark_stage("build", "in_progress")
+    # PR-state cases (`--check-prs`): C5-stopped at open-pr with a recorded PR, plus the ones that must stay shown.
+    for ref, number in (("PR-MERGED-1", 11), ("PR-CLOSED-1", 12), ("PR-OPEN-1", 13), ("PR-FAIL-1", 14)):
+        pr_rec = RunRecord.open(ws, ref)
+        pr_rec.mark_stage(OPEN_PR_STAGE, "in_progress")
+        pr_rec.retries[PR_NUMBER_KEY] = number
+        pr_rec.set_checkpoint("C5")
+        write_stop_record(
+            pr_rec.path,
+            build_stop_record(
+                ref, checkpoint="C5", stage=OPEN_PR_STAGE, stage_status="in_progress", detail="x", resume_command="r"
+            ),
+        )
+    pr_unknown = RunRecord.open(ws, "PR-UNKNOWN-1")  # checkpoint, no recorded PR number
+    pr_unknown.mark_stage(OPEN_PR_STAGE, "in_progress")
+    pr_unknown.set_checkpoint("C5")
+    pr_run = RunRecord.open(ws, "PR-RUN-1")  # in progress, no stop record, PR already merged
+    pr_run.mark_stage("build", "in_progress")
+    pr_run.retries[PR_NUMBER_KEY] = 15
+    pr_run.save()
     return env
+
+
+PR_STATES = {11: "MERGED", 12: "CLOSED", 13: "OPEN", 15: "MERGED"}
+PR_SHOWN = ["PR-FAIL-1", "PR-OPEN-1", "PR-RUN-1", "PR-UNKNOWN-1"]
+
+
+def _spy_pr_state(env: Any) -> list[int]:
+    looked_up: list[int] = []
+
+    def pr_state(number: int) -> str:
+        looked_up.append(number)
+        if number not in PR_STATES:
+            raise PickError(f"gh pr view failed (exit 1): no PR {number}")
+        return PR_STATES[number]
+
+    env.services.pr_state = pr_state
+    return looked_up
 
 
 def _shown(output: str) -> list[str]:
@@ -339,8 +376,12 @@ def _awaiting(output: str) -> dict[str, str]:
     return found
 
 
+PR_RECORDS = ["PR-CLOSED-1", "PR-FAIL-1", "PR-MERGED-1", "PR-OPEN-1", "PR-RUN-1", "PR-UNKNOWN-1"]
+
+
 def test_status_hides_settled_items_by_default(tmp_path: Path) -> None:
     env = _status_workspace(tmp_path)
+    looked_up = _spy_pr_state(env)
     result = env.invoke("status", "--config", str(env.config))
     assert result.exit_code == 0, result.output
     assert sorted(_shown(result.output)) == [
@@ -351,6 +392,7 @@ def test_status_hides_settled_items_by_default(tmp_path: Path) -> None:
         "FIN-ERR-1",
         "LEG-CP-1",
         "LEG-ERR-1",
+        *PR_RECORDS,
         "RUN-1",
     ]
     assert _awaiting(result.output) == {
@@ -361,9 +403,59 @@ def test_status_hides_settled_items_by_default(tmp_path: Path) -> None:
         "FIN-ERR-1": "error",
         "LEG-CP-1": "you",
         "LEG-ERR-1": "error",
+        "PR-CLOSED-1": "you",
+        "PR-FAIL-1": "you",
+        "PR-MERGED-1": "you",
+        "PR-OPEN-1": "you",
+        "PR-RUN-1": "none",
+        "PR-UNKNOWN-1": "you",
         "RUN-1": "none",
     }
     assert "no items needing attention" not in result.output
+    assert looked_up == []  # no network without --check-prs
+
+
+def test_status_check_prs_hides_merged_and_closed_and_fails_open(tmp_path: Path) -> None:
+    env = _status_workspace(tmp_path)
+    looked_up = _spy_pr_state(env)
+    result = env.invoke("status", "--check-prs", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    shown = _shown(result.output)
+    assert "PR-MERGED-1" not in shown
+    assert "PR-CLOSED-1" not in shown
+    # open PR, failing lookup, no recorded PR and in-progress-without-stop stay shown
+    assert set(PR_SHOWN) <= set(shown)
+    # one lookup per candidate; the in-progress record without a stop is never looked up
+    assert sorted(looked_up) == [11, 12, 13, 14]
+    assert "cannot check PR #14 for PR-FAIL-1" in result.stderr
+    assert result.stderr.count("warning:") == 1
+
+
+def test_status_check_prs_hidden_count_includes_pr_state_records(tmp_path: Path) -> None:
+    env = make_env(tmp_path)
+    ws = tmp_path / "ws"
+    RunRecord.open(ws, "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
+    for ref, number in (("PR-MERGED-1", 11), ("PR-CLOSED-1", 12)):
+        rec = RunRecord.open(ws, ref)
+        rec.mark_stage(OPEN_PR_STAGE, "in_progress")
+        rec.retries[PR_NUMBER_KEY] = number
+        rec.set_checkpoint("C5")
+    _spy_pr_state(env)
+    result = env.invoke("status", "--check-prs", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "no items needing attention (3 hidden; use --all)"
+
+
+def test_status_check_prs_skipped_for_all_and_explicit_ref(tmp_path: Path) -> None:
+    env = _status_workspace(tmp_path)
+    looked_up = _spy_pr_state(env)
+    all_result = env.invoke("status", "--all", "--check-prs", "--config", str(env.config))
+    assert all_result.exit_code == 0, all_result.output
+    assert {"PR-MERGED-1", "PR-CLOSED-1"} <= set(_shown(all_result.output))
+    ref_result = env.invoke("status", "PR-MERGED-1", "--check-prs", "--config", str(env.config))
+    assert ref_result.exit_code == 0, ref_result.output
+    assert _shown(ref_result.output) == ["PR-MERGED-1"]
+    assert looked_up == []
 
 
 def test_status_all_shows_every_item(tmp_path: Path) -> None:
@@ -382,6 +474,7 @@ def test_status_all_shows_every_item(tmp_path: Path) -> None:
         "LEG-AB-1",
         "LEG-CP-1",
         "LEG-ERR-1",
+        *PR_RECORDS,
         "RUN-1",
     ]
     awaiting = _awaiting(result.output)

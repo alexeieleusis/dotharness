@@ -6,7 +6,7 @@ There is no daemon, no loop and no scheduler installer. Run it from cron or laun
 ```
 sisyphus run --config <file> [--base <branch>]
 sisyphus intake <work-item-ref> --config <file>
-sisyphus status [--all] [<work-item-ref>] --config <file>
+sisyphus status [--all] [--check-prs] [<work-item-ref>] --config <file>
 sisyphus resume <work-item-ref> --config <file> [--base <branch>]
 ```
 
@@ -234,11 +234,15 @@ flag says "I know I abandoned this".
 
 `sisyphus status [REF] --config F` is read-only (no lock, no agent). For each item (all items without REF) it
 prints stage, stage_status, checkpoint (`state: abandoned` plus `abandoned_at` and `re-enable` for an abandoned item), `awaiting` (`you` for a checkpoint, `error`, `none` otherwise (including an abandoned item). `status` needs no network), and for a stopped item the question, action, resume command and auto-resume rule (with whether it is
-cleared now) and every recorded `Retry reset:` line. Output order is unchanged (file-name order), and `status` stays read-only: no lock, no agent, no network, no PR lookup.
+cleared now) and every recorded `Retry reset:` line. Output order is unchanged (file-name order), and `status` stays read-only: no lock, no agent. Without `--check-prs` it makes no network call and no PR lookup.
 
 By default `sisyphus status` hides settled items: abandoned items, and finished items (stage `open-pr` with `stage_status` `complete`, i.e. a draft PR is open and the item is handed to the human) that have no checkpoint and no non-abandoned stop record. Records with the legacy stage `ci-fix` (no longer a stage since #129, but still loaded from old run records), `stage_status` `complete`, no checkpoint and no non-abandoned stop record are hidden too. These are never hidden by default: any item with a checkpoint set (`awaiting: you`) or a non-abandoned stop record (`awaiting: error`), and any item with `stage_status: in_progress`, no checkpoint and no stop record, because it may be running now or be a hard crash. `in_progress` is a per-stage status, not an item state: a stage stopped at a checkpoint or on a runner error stays `in_progress`.
 
 `--all` is a boolean flag that shows every item; the output is identical to the previous behavior. An explicit REF always prints that item, even if settled, without `--all`. An unknown REF exits 1 with `no run record for <ref>`.
+
+`--check-prs` is an opt-in flag (off by default; there is no config-file setting). It queries GitHub for each record that would otherwise be shown and has a recorded PR number (`retries["pr-number"]`), running `gh pr view <n> --json state` once per record with a fixed 10 second timeout, one after another. An item whose PR is `MERGED` or `CLOSED` is hidden, even with a checkpoint or stop record and whatever its stage, and counts in the hidden total N. Items that may need you keep showing: an open PR, a checkpoint with an open or unknown PR, and an `in_progress` item with no checkpoint and no stop record (never looked up). If a lookup fails (offline, `gh` missing, PR deleted, timeout), the item is shown, one `warning:` line goes to stderr and the exit code stays 0. `--all` and an explicit REF skip the lookup. `status` never writes run records or sidecars.
+
+Without `--check-prs`, an item stopped at a checkpoint (for example C5) stays visible even when its PR is already merged. Run `sisyphus abandon <ref>` to hide it, or use `sisyphus status --check-prs`.
 
 When records exist but every one is hidden, `status` prints `no items needing attention (N hidden; use --all)` and exits 0, where N is the number of hidden records. `no items` is kept for an empty or missing workspace. When only some items are hidden, only the shown blocks print, with no "N hidden" trailer.
 
