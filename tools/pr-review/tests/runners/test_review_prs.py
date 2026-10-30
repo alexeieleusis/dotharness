@@ -1013,6 +1013,7 @@ def test_resolve_env_file_relative_resolves_against_working_dir_not_cwd(tmp_path
     monkeypatch.chdir(other)
     resolved = resolve_env_file(cfg.repo, SubDir(path="a", env_file="envs/.env"))
     assert resolved == tmp_path / "envs" / ".env"
+    assert resolved is not None
     assert resolved.is_absolute()
 
 
@@ -1025,6 +1026,7 @@ def test_resolve_env_file_relative_working_dir_yields_absolute(tmp_path, monkeyp
     monkeypatch.chdir(tmp_path)
     repo = RepoConfig(name="acme/frontend", working_dir=Path("rel/repo"))
     resolved = resolve_env_file(repo, SubDir(path=".", env_file="x.env"))
+    assert resolved is not None
     assert resolved.is_absolute()
     assert resolved == tmp_path / "rel" / "repo" / "x.env"
 
