@@ -1,5 +1,6 @@
 import os
 import re
+from pathlib import Path
 
 import pytest
 
@@ -180,6 +181,50 @@ timeout = 300
     assert len(cfg.repo.subdirs) == 1
     assert cfg.repo.subdirs[0].coverage is True
     assert cfg.repo.subdirs[0].pre_commands == [PreCommand(cmd="pnpm install")]
+
+
+def _load_subdir_env_file(tmp_path, line):
+    p = tmp_path / ".harness.toml"
+    p.write_text(f"""
+[harness]
+[repo]
+name = "a/b"
+working_dir = "/tmp"
+
+[[repo.subdir]]
+path = "."
+{line}
+""")
+    return load_config(p).repo.subdirs[0].env_file
+
+
+def test_subdir_env_file_absent(tmp_path):
+    assert _load_subdir_env_file(tmp_path, "") is None
+
+
+def test_subdir_env_file_tilde_expanded(tmp_path):
+    assert _load_subdir_env_file(tmp_path, 'env_file = "~/x.env"') == str(Path("~/x.env").expanduser())
+
+
+def test_subdir_env_file_relative_unchanged(tmp_path):
+    assert _load_subdir_env_file(tmp_path, 'env_file = ".env.local"') == ".env.local"
+
+
+def test_subdir_env_file_absolute_unchanged(tmp_path):
+    assert _load_subdir_env_file(tmp_path, 'env_file = "/abs/x.env"') == "/abs/x.env"
+
+
+def test_subdir_env_file_non_string_rejected(tmp_path):
+    with pytest.raises(ConfigError, match=r"repo\.subdir\[\]\.env_file"):
+        _load_subdir_env_file(tmp_path, "env_file = 5")
+
+
+def test_subdir_env_file_empty_is_none(tmp_path):
+    assert _load_subdir_env_file(tmp_path, 'env_file = ""') is None
+
+
+def test_subdir_env_file_whitespace_is_none(tmp_path):
+    assert _load_subdir_env_file(tmp_path, 'env_file = "   "') is None
 
 
 def test_subdir_pre_commands_table_form(tmp_path):

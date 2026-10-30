@@ -46,6 +46,7 @@ class SubDir:
     pre_commands: list[PreCommand] = field(default_factory=list)
     coverage: bool = False
     timeout: int = 300
+    env_file: str | None = None
 
 
 @dataclass
@@ -154,6 +155,17 @@ class HarnessConfig:
         return working_dir_lock_key(self.repo_slug, self.repo.working_dir)
 
 
+def _parse_env_file(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigError(f"repo.subdir[].env_file must be a string, got {value!r}")  # noqa: TRY003
+    value = value.strip()
+    if not value:
+        return None
+    return str(Path(value).expanduser())
+
+
 def _parse_subdirs(raw_subdirs: list[dict]) -> list[SubDir]:
     subdirs = []
     for s in raw_subdirs:
@@ -165,6 +177,7 @@ def _parse_subdirs(raw_subdirs: list[dict]) -> list[SubDir]:
                 pre_commands=[_parse_pre_command(pc) for pc in s.get("pre_commands", [])],
                 coverage=s.get("coverage", False),
                 timeout=s.get("timeout", 300),
+                env_file=_parse_env_file(s.get("env_file")),
             )
         )
     return subdirs
