@@ -59,11 +59,18 @@ review or pre-commit step.
 | `pre_commands` | list | `[]` | Commands to run before operating on this subdir. Each entry is either a plain string (shorthand for `{ cmd = "...", critical = false }`) or a table `{ cmd = "...", critical = true/false }`. See below for the two forms. |
 | `coverage` | boolean | `false` | Whether this subdir participates in coverage collection. |
 | `timeout` | integer | `300` | Timeout (seconds) for running this subdir's pre-commands. |
+| `env_file` | string | unset | Optional vibe-heal env file for this subdir, passed to vibe-heal as `--env-file`. Relative paths resolve against `repo.working_dir`; `~` is expanded; the file may be outside the repo. Default: unset (vibe-heal's default lookup of `.env.vibeheal` or `.env` in the subdir cwd). With `--env-file`, vibe-heal's file beats process env vars, so `[harness.env]` `SONARQUBE_*` values no longer override a configured `env_file`. See "`env_file` notes" below for a project-key limitation. |
 
 `pre_commands` entries may take either of two forms:
 
 - **Plain string** — `"npm ci"` becomes `PreCommand(cmd="npm ci", critical=False)`.
 - **Table** — `{ cmd = "npm ci", critical = true }` becomes `PreCommand(cmd="npm ci", critical=True)`. `critical` defaults to `false` if omitted from the table form too. A `critical` pre-command that fails is treated as fatal for that subdir. A non-critical pre-command that fails is not treated as fatal.
+
+**`env_file` notes**
+
+- **Precedence.** With `--env-file`, vibe-heal's file beats process env vars; without it, env vars beat `.env.vibeheal`. So `[harness.env]` `SONARQUBE_*` values no longer override a configured `env_file`.
+- **Project-key limitation.** With an `env_file`, vibe_heal's project key comes from that file. `get_vibe_heal_context` (in `common.py`; reads `~/.vibe-heal/reviews/<project_key>/<branch>/review.md`) takes the key from each subdir's `sonar-project.properties`, and is used by `self-review` and `review-requested`. If the two differ, the Static Analysis context in those commands is silently empty. This is a known limitation; the harness does not reconcile the keys.
+- **Validation.** A configured `env_file` that is not an existing regular file fails fast, before pre-commands: baseline and per-PR processing fail that subdir; prune logs a warning and continues. `harness validate` does not check `env_file`; its list (`repo.working_dir`, `harness.knowledge_dir`) is unchanged.
 
 ### `[vibe_heal]`
 
@@ -259,6 +266,7 @@ enabled = false
 # ]
 # coverage = true
 # timeout = 600
+# env_file = "~/secrets/api.env.vibeheal"  # optional; may live outside the repo
 ```
 
 ## Validation

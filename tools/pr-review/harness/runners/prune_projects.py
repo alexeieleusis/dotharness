@@ -2,7 +2,7 @@ import logging
 import subprocess
 
 from harness.config import HarnessConfig, SubDir
-from harness.runners.common import log_called_process_output, run_cmd
+from harness.runners.common import env_file_args, env_file_error, log_called_process_output, run_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +10,10 @@ logger = logging.getLogger(__name__)
 def run(config: HarnessConfig, env: dict) -> None:
     """Delete stale vibe_heal temp SonarQube projects in every configured subdir.
 
-    A subdir's SonarQube project key comes from its own .env.vibeheal file, so this
+    A subdir's SonarQube project key comes from its configured `env_file` (passed to
+    vibe_heal as `--env-file`), otherwise from vibe_heal's default `.env.vibeheal` /
+    `.env` lookup in the subdir. A configured `env_file` that is not an existing
+    regular file logs a warning and skips that subdir. This
     runs `vibe_heal prune-projects` once per subdir rather than once per repo. Disabled
     by default (`vibe_heal.prune_projects_enabled`) since it deletes projects with
     `--yes`, skipping the CLI's own confirmation prompt. A failure in one subdir is
@@ -26,6 +29,10 @@ def run(config: HarnessConfig, env: dict) -> None:
 
 def _prune_subdir(subdir: SubDir, config: HarnessConfig, env: dict) -> None:
     subdir_path = str(config.repo.working_dir / subdir.path)
+    env_error = env_file_error(config, subdir)
+    if env_error:
+        logger.warning("vibe_heal prune-projects skipped: %s", env_error)
+        return
     cmd = [
         config.vibe_heal.python,
         "-m",
@@ -35,6 +42,7 @@ def _prune_subdir(subdir: SubDir, config: HarnessConfig, env: dict) -> None:
         "--older-than",
         str(config.vibe_heal.prune_older_than_minutes),
     ]
+    cmd += env_file_args(config.repo, subdir)
     logger.info("Running vibe_heal prune-projects in %s", subdir_path)
     try:
         run_cmd(cmd, cwd=subdir_path, env=env, timeout=config.vibe_heal.prune_projects_timeout)

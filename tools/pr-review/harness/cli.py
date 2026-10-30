@@ -68,6 +68,7 @@ enabled = false
 # pre_commands = []
 # coverage = false
 # timeout = 300
+# env_file = "~/secrets/api.env.vibeheal"  # optional vibe-heal env file; may live outside the repo
 """
 
 HARNESS_CONFIG = ".harness.toml"
