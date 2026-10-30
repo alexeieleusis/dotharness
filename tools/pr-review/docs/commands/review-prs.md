@@ -40,8 +40,10 @@ harness run [--config PATH] [--verbose] review-prs [--pr PR_URL]
    `harness.path_prepend` / `harness.env`.
 3a. **Prune stale projects** (`prune_projects.run`): if `vibe_heal.prune_projects_enabled` is `true`, runs
    `vibe_heal prune-projects --yes --older-than <vibe_heal.prune_older_than_minutes>` once in each
-   `repo.subdir`. Each subdir supplies its own SonarQube project key via its own `.env.vibeheal` file, so
-   there is no single repo-wide project key to prune against. `--yes` skips vibe_heal's own confirmation
+   `repo.subdir`. Each subdir's SonarQube project key comes from its `env_file` when configured (passed to
+   vibe-heal as `--env-file`), otherwise from vibe-heal's default `.env.vibeheal` / `.env` lookup in the subdir,
+   so there is no single repo-wide project key to prune against. If a subdir's configured `env_file` is not an
+   existing regular file, a warning is logged, that subdir is skipped and pruning continues. `--yes` skips vibe_heal's own confirmation
    prompt. Stale projects that match (temp projects left behind by an interrupted vibe_heal run, with zero
    finished analyses, older than the threshold) are deleted immediately. A failure or timeout in one subdir
    (bounded by `vibe_heal.prune_projects_timeout`) is logged and does not stop pruning in the remaining
@@ -53,7 +55,7 @@ harness run [--config PATH] [--verbose] review-prs [--pr PR_URL]
 3b. **Baseline analysis** (`_run_base_analysis`): fetches `origin/main`, resolves its SHA, and checks the
    stored `last_main_sha` in the `vibe_heal.json` state file. If the SHA has changed since the last run,
    detaches HEAD, checks out `origin/main` (`--recurse-submodules`), and runs
-   `vibe_heal review --baseline` in every `repo.subdir`. On success, persists the new `last_main_sha`. A
+   `vibe_heal review --baseline` in every `repo.subdir` (a subdir whose configured `env_file` is not an existing regular file fails fast, before its pre-commands, and the baseline step fails). On success, persists the new `last_main_sha`. A
    timeout (60 s) or non-zero exit of the fetch, rev-parse or checkout call logs a warning, skips PR review
    for the run and ends it with exit code 1 and no traceback (both `harness run all` and
    `harness run review-prs`, with or without `--pr`). A failing `vibe_heal --baseline` subdir or a fatal git
@@ -86,8 +88,9 @@ harness run [--config PATH] [--verbose] review-prs [--pr PR_URL]
    - Computes the PR's changed files. If every configured `repo.subdir` is the repo root (`.`/`""`), this
      step is skipped and every subdir is treated as changed.
    - For each `repo.subdir`: skips it if it is not the root and none of the changed files fall under its
-     path. Otherwise, runs its `pre_commands`, then `vibe_heal review --pr <N>` (with `--coverage` if the
-     subdir has `coverage = true`), then `vibe_heal review --post --pr <N>`. The `--post` invocation is
+     path. Otherwise, if the subdir has a configured `env_file` that is not an existing regular file, fails
+     that subdir before running pre-commands (see the `repo.subdir[].env_file` row below). Then runs its `pre_commands`, then `vibe_heal review --pr <N>` (with `--coverage` if the
+     subdir has `coverage = true`; `--env-file <path>` is added to each `vibe_heal` call when `env_file` is set), then `vibe_heal review --post --pr <N>`. The `--post` invocation is
      what actually posts the analysis findings as PR comments. A failing (non-critical) pre-command is
      logged and skipped. A failing `critical` pre-command, or a failing `vibe_heal` invocation, stops
      processing for that subdir only. It does not raise, so it does not affect the rest of the PR's
@@ -120,6 +123,7 @@ Only the fields below affect this command. See [`../configuration.md`](../config
 | `repo.subdir[].pre_commands` | Commands run before `vibe_heal` in that subdir. A failing `critical` command aborts that subdir. |
 | `repo.subdir[].coverage` | Adds `--coverage` to the per-PR `vibe_heal review` invocation. |
 | `repo.subdir[].timeout` | Timeout (seconds) for each pre-command in that subdir. |
+| `repo.subdir[].env_file` | Optional vibe-heal env file for that subdir, passed as `--env-file`. Relative paths resolve against `repo.working_dir`; `~` is expanded; the file may be outside the repo. Default: unset (vibe-heal's default lookup of `.env.vibeheal` or `.env` in the subdir cwd). Precedence: with `--env-file`, vibe-heal's file beats process env vars, so `[harness.env]` `SONARQUBE_*` values no longer override it. Limitation: vibe_heal's project key then comes from this file, while `get_vibe_heal_context` (used by `self-review` and `review-requested`) reads the key from the subdir's `sonar-project.properties`; if they differ, the Static Analysis context in those commands is silently empty. A missing or non-regular `env_file` fails the subdir before pre-commands (prune logs a warning and continues); `harness validate` does not check it. |
 | `vibe_heal.enabled` | Master switch — command is a no-op unless `true`. |
 | `vibe_heal.python` | Python interpreter used to invoke `vibe_heal` (`<python> -m vibe_heal ...`). |
 | `vibe_heal.authors` | `"*"` (any author) or a list of GitHub logins. PRs from non-matching authors are filtered out of eligibility in the batch (non-`--pr`) case. |

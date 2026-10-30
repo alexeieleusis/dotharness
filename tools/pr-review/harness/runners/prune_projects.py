@@ -10,7 +10,10 @@ logger = logging.getLogger(__name__)
 def run(config: HarnessConfig, env: dict) -> None:
     """Delete stale vibe_heal temp SonarQube projects in every configured subdir.
 
-    A subdir's SonarQube project key comes from its own .env.vibeheal file, so this
+    A subdir's SonarQube project key comes from its configured `env_file` (passed to
+    vibe_heal as `--env-file`), otherwise from vibe_heal's default `.env.vibeheal` /
+    `.env` lookup in the subdir. A configured `env_file` that is not an existing
+    regular file logs a warning and skips that subdir. This
     runs `vibe_heal prune-projects` once per subdir rather than once per repo. Disabled
     by default (`vibe_heal.prune_projects_enabled`) since it deletes projects with
     `--yes`, skipping the CLI's own confirmation prompt. A failure in one subdir is
