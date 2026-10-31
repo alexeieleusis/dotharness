@@ -32,6 +32,17 @@ also sets checkpoint `C1` on the run record. It clears the checkpoint if it was 
 hash of every non-clean file. It raises `BoundaryViolation` (an `IntakeError`) if the snapshot differs after the
 body. `run_intake` wraps the runner call in the context manager. The code enforces the boundary, not the prompt.
 
+Git-ignored files count, because the snapshot uses `--ignored`. A new `.venv/` or `uv.lock` that `uv run` leaves in
+the repository therefore stops intake. The violation message (and the stop record detail) names the paths: the
+first sentence, then `added: ...`, `removed: ...` and `changed: ...` groups (paths sorted within each group), at most
+10 paths in total followed by `and N more`, and `HEAD changed` or `branch changed` when those moved. The prompt
+tells the agent not to run `uv`, create virtualenvs, or write lockfiles or caches in the repository, and to do scratch
+work outside it. That is advice only; the code guard is the enforcement.
+
+There is no exemption list: no config key, no built-in list of tolerated paths. The intake stop is a `C5`. The fix is
+to remove or revert the listed paths by hand and run `sisyphus resume`. Resuming runs intake again, and no
+`--reset-retries` is needed.
+
 ## Run record and skipping
 
 The stage is marked `intake` with `stage_scope`. It is in progress before the run and complete after it. A runner error or boundary

@@ -487,6 +487,23 @@ def test_c5_intake_boundary_violation(world: World) -> None:
     result = world.run()
     _assert_stop(world, result, Checkpoint.C5)
     assert world.events == ["agent:intake"]
+    assert "tracked.txt" in result.detail
+    assert "tracked.txt" in _stop(world).detail
+    action = _stop(world).action
+    assert "The intake agent changed the target repository" in action
+    assert "sisyphus resume ENG-1" in action
+    assert "retry budget" not in action
+    assert "--reset-retries" not in action
+
+
+def test_c5_intake_resume_after_manual_revert_reruns_intake(world: World) -> None:
+    world.touch_repo_in_intake = True
+    _assert_stop(world, world.run(), Checkpoint.C5)
+    _git(world.repo, "checkout", "--", "tracked.txt")  # the user reverts the offending path by hand
+    world.touch_repo_in_intake = False
+    result = world.run()
+    assert result.checkpoint is not Checkpoint.C5
+    assert world.events.count("agent:intake") == 2
 
 
 def test_c6_five_leaves(world: World) -> None:

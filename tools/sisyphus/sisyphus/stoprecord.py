@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from sisyphus.runrecord import atomic_write_json
+from sisyphus.stages import INTAKE_STAGE
 
 STOP_RECORD_SUFFIX = ".stopped.json"
 KIND_CHECKPOINT = "checkpoint"
@@ -54,6 +55,10 @@ ACTIONS: dict[str, str] = {
     "C8": f"Fix access (auth or network) if needed. The run retries by itself after {AUTO_RETRY_DELAY_MINUTES} "
     f"minutes, at most {AUTO_RETRY_MAX} times; after that run the resume command.",
 }
+INTAKE_C5_ACTION = (
+    "The intake agent changed the target repository. Inspect the paths listed in the detail, remove or revert them "
+    "by hand, then run `{resume}`. No retry reset is needed: resuming runs intake again."
+)
 ABANDONED_ACTION = (
     "Nothing to do. The item is abandoned: it is not picked or resumed again. The remote branch, any PR, the local "
     "branch, the run record and the digest are untouched. To work on it again, run the re-enable command."
@@ -120,10 +125,14 @@ def action_for(
     brief_path: str = "the brief",
     answer_path: str = "the answer file",
     resume_command: str = "sisyphus resume REF --config F",
+    stage: str | None = None,
 ) -> str:
     if checkpoint is None:
         return ERROR_ACTION
-    text = ACTIONS.get(checkpoint, "Resolve the stop described in the detail, then run the resume command.")
+    if checkpoint == "C5" and stage == INTAKE_STAGE:
+        text = INTAKE_C5_ACTION
+    else:
+        text = ACTIONS.get(checkpoint, "Resolve the stop described in the detail, then run the resume command.")
     return text.replace("{brief}", brief_path).replace("{answer}", answer_path).replace("{resume}", resume_command)
 
 
@@ -148,7 +157,7 @@ def build_stop_record(
         checkpoint=checkpoint,
         questions=questions or ((detail,) if detail else ()),
         detail=detail,
-        action=action_for(checkpoint, brief_path, answer_path, resume_command),
+        action=action_for(checkpoint, brief_path, answer_path, resume_command, stage),
         resume_command=resume_command,
         stopped_at=(now or datetime.now(UTC)).isoformat(),
     )

@@ -275,21 +275,62 @@ def snapshot_git_status(
     return b"\0".join(kept), hashes, head, branch
 
 
+MAX_LISTED_PATHS = 10
+
+_Snapshot = tuple[bytes, dict[str, str], bytes, bytes]
+
+
+def _entry_paths(status: bytes) -> list[str]:
+    """Paths of the NUL-separated status entries, verbatim as git reported them (after the 3-character prefix)."""
+    return [e[3:].decode("utf-8", "surrogateescape") for e in status.split(b"\0") if len(e) > 3]
+
+
+def _describe_difference(repo_dir: Path | str, before: _Snapshot, after: _Snapshot) -> str:
+    """The violation message: the fixed first sentence, then the added/removed/changed paths and HEAD/branch markers."""
+    message = f"intake changed the target repository {repo_dir}: git state differs before and after"
+    before_entries = set(before[0].split(b"\0"))
+    after_entries = set(after[0].split(b"\0"))
+    added = _entry_paths(b"\0".join(sorted(after_entries - before_entries)))
+    removed = _entry_paths(b"\0".join(sorted(before_entries - after_entries)))
+    changed = sorted(p for p in before[1].keys() & after[1].keys() if before[1][p] != after[1][p])
+    groups = [("added", added), ("removed", removed), ("changed", changed)]
+    budget = MAX_LISTED_PATHS
+    omitted = 0
+    parts: list[str] = []
+    for label, paths in groups:
+        shown = paths[: max(budget, 0)]
+        budget -= len(shown)
+        omitted += len(paths) - len(shown)
+        if shown:
+            parts.append(f"{label}: {', '.join(shown)}")
+    if omitted:
+        parts.append(f"and {omitted} more")
+    if before[2] != after[2]:
+        parts.append("HEAD changed")
+    if before[3] != after[3]:
+        parts.append("branch changed")
+    return f"{message}; {'; '.join(parts)}" if parts else message
+
+
 @contextmanager
 def repo_unchanged(repo_dir: Path | str, ignore: Iterable[Path | str] = ()) -> Generator[None]:
-    """Fail with :class:`BoundaryViolation` if the git state of ``repo_dir`` differs after the body, even when it raises."""
+    """Fail with :class:`BoundaryViolation` if the git state of ``repo_dir`` differs after the body, even when it raises.
+
+    The message names the added, removed and changed paths (at most ``MAX_LISTED_PATHS``, then a count).
+    """
     ignore = tuple(ignore)
     before = snapshot_git_status(repo_dir, ignore)
-    message = f"intake changed the target repository {repo_dir}: git state differs before and after"
     try:
         yield
     except BaseException as exc:
         # A failing runner may still have modified the repository: report that instead of the bare error.
-        if snapshot_git_status(repo_dir, ignore) != before:
-            raise BoundaryViolation(message) from exc
+        after = snapshot_git_status(repo_dir, ignore)
+        if after != before:
+            raise BoundaryViolation(_describe_difference(repo_dir, before, after)) from exc
         raise
-    if snapshot_git_status(repo_dir, ignore) != before:
-        raise BoundaryViolation(message)
+    after = snapshot_git_status(repo_dir, ignore)
+    if after != before:
+        raise BoundaryViolation(_describe_difference(repo_dir, before, after))
 
 
 # ------------------------------------------------------------------ stage
