@@ -311,7 +311,7 @@ def test_cross_filesystem_interrupted_tree_copy_leaves_no_partial_and_rerun_comp
 
     def flaky_copy2(src: str | Path, dst: str | Path, **kw: object) -> object:
         nonlocal plan_copies
-        if "plan-147" in str(src):
+        if "plan-147" in os.fspath(src):  # copytree passes os.DirEntry objects
             plan_copies += 1
             if plan_copies == 2:
                 raise OSError(errno.ENOSPC, "no space")
