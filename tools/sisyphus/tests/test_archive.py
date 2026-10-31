@@ -6,9 +6,19 @@ from pathlib import Path
 
 import pytest
 
-from sisyphus.archive import archive_item, check_archive_dir, item_files, resolve_archive_dir
+from sisyphus.archive import (
+    LEGACY_FINISHED_STAGE,
+    archive_item,
+    check_archive_dir,
+    is_settled,
+    item_files,
+    resolve_archive_dir,
+)
 from sisyphus.config import ConfigError, SisyphusConfig, load_config
+from sisyphus.orchestrator import GATE_FAILED_KEY
 from sisyphus.runrecord import RunRecord
+from sisyphus.stages import OPEN_PR_STAGE
+from sisyphus.stoprecord import build_abandoned_record, build_stop_record
 
 
 def test_absolute_dir(tmp_path: Path) -> None:
@@ -317,3 +327,42 @@ def test_other_oserror_propagates(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     with pytest.raises(OSError, match="io"):
         archive_item(cfg, rec, tmp_path / "arch")
     assert rec.path.exists()
+
+
+def _rec(tmp_path: Path, stage: str, status: str = "complete") -> RunRecord:
+    rec = RunRecord.open(tmp_path / "ws", "X-1")
+    rec.mark_stage(stage, status)
+    return rec
+
+
+@pytest.mark.parametrize("stage", [OPEN_PR_STAGE, LEGACY_FINISHED_STAGE])
+def test_is_settled_finished(tmp_path: Path, stage: str) -> None:
+    assert is_settled(_rec(tmp_path, stage), None)
+
+
+def test_is_settled_unfinished_stage_or_status(tmp_path: Path) -> None:
+    assert not is_settled(_rec(tmp_path, "build", "in_progress"), None)
+    assert not is_settled(_rec(tmp_path, OPEN_PR_STAGE, "in_progress"), None)
+
+
+def test_is_settled_checkpoint_gate_and_stop(tmp_path: Path) -> None:
+    cp = _rec(tmp_path, OPEN_PR_STAGE)
+    cp.set_checkpoint("C1")
+    assert not is_settled(cp, None)
+    gf = _rec(tmp_path, OPEN_PR_STAGE)
+    gf.set_checkpoint(None)
+    gf.retries[GATE_FAILED_KEY] = 1
+    assert not is_settled(gf, None)
+    stop = build_stop_record(
+        "X-1", checkpoint=None, stage=OPEN_PR_STAGE, stage_status="complete", detail="x", resume_command="r"
+    )
+    assert not is_settled(_rec(tmp_path, OPEN_PR_STAGE), stop)
+
+
+def test_is_settled_abandoned_even_with_gate_failed(tmp_path: Path) -> None:
+    rec = _rec(tmp_path, "build", "in_progress")
+    rec.retries[GATE_FAILED_KEY] = 1
+    stop = build_abandoned_record(
+        "X-1", stage="build", stage_status="in_progress", prior_label="l", reenable_command="r"
+    )
+    assert is_settled(rec, stop)

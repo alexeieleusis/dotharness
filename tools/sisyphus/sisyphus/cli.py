@@ -30,13 +30,13 @@ from typing import Any
 
 import click
 
+from sisyphus.archive import archive_item, check_archive_dir, is_settled, resolve_archive_dir
 from sisyphus.cleanup import PrInfo
 from sisyphus.config import ConfigError, SisyphusConfig, load_config
 from sisyphus.digest import DigestReport, DigestWriteError, NeedsYou, describe_reset, needs_from_record, write_digest
 from sisyphus.intake import AgentRunner, run_intake
 from sisyphus.lock import LockHeld, clone_lock
 from sisyphus.orchestrator import (
-    GATE_FAILED_KEY,
     PR_NUMBER_KEY,
     GitHubError,
     OrchestratorOptions,
@@ -68,8 +68,8 @@ from sisyphus.resume import (
     list_waiting,
     reset_stage_retries,
 )
-from sisyphus.runrecord import STAGE_COMPLETE, STAGE_IN_PROGRESS, RunRecord, record_path
-from sisyphus.stages import INTAKE_STAGE, OPEN_PR_STAGE
+from sisyphus.runrecord import STAGE_IN_PROGRESS, RunRecord, record_path
+from sisyphus.stages import INTAKE_STAGE
 from sisyphus.stoprecord import (
     CLEARS_BY,
     build_abandoned_record,
@@ -401,6 +401,7 @@ def _pick_phase(config: SisyphusConfig, services: Services, state: _RunState) ->
         services.tracker,
         services.lookup,
         workspace_dir=workspace,
+        archive_dir=resolve_archive_dir(config.archive.dir, config.project.workspace_dir),
         limit=limit - len(resumed),
     )
     return [*resumed, *new]
@@ -687,6 +688,61 @@ def abandon_command(factory: ServicesFactory | None, work_item_ref: str, config_
     click.echo(f"{work_item_ref}: abandoned (branch, any PR and the run record left as they are)")
 
 
+def _archive_one(config: SisyphusConfig, rec: RunRecord, archive_dir: Path) -> bool | None:
+    """Archive one settled item. True: moved; False: refused or failed (reported on stderr); None: nothing to move."""
+    try:
+        result = archive_item(config, rec, archive_dir)
+    except OSError as exc:
+        click.echo(f"{rec.item}: not archived: {exc}", err=True)
+        return False
+    for warning in result.warnings:
+        click.echo(f"warning: {warning}", err=True)
+    if result.collision is not None:
+        click.echo(f"{rec.item}: not archived: {result.collision.name} already exists in {archive_dir}", err=True)
+        return False
+    if not result.moved:
+        return None
+    click.echo(f"{rec.item} -> {archive_dir}")
+    return True
+
+
+@main.command("archive")
+@config_option
+@click.pass_obj
+def archive_command(factory: ServicesFactory | None, config_path: str) -> None:
+    """Move every settled item's files out of the workspace into the archive directory ([archive] dir).
+
+    Settled is the same predicate `status` uses to hide items. In-progress, stopped, checkpointed and
+    gate-failed items are never moved. Nothing is deleted and no PR lookup is made. A name that already
+    exists in the archive refuses that item (reported on stderr, exit 1); the other items still move.
+    """
+    config = _load(config_path)
+    _require(config, "repo_dir", "workspace_dir")
+    assert config.project.repo_dir and config.project.workspace_dir  # noqa: S101
+    try:
+        archive_dir = resolve_archive_dir(config.archive.dir, config.project.workspace_dir)
+        check_archive_dir(archive_dir, config.project.workspace_dir)
+    except ConfigError as exc:
+        raise _fail(f"config error: {exc}") from exc
+    services = _services(factory, config)
+    workspace = Path(config.project.workspace_dir).expanduser()
+    archived = 0
+    refused = False
+    try:
+        with clone_lock(config.project.repo_dir, services.lock_dir):
+            for rec in list(iter_records(workspace)):
+                if is_settled(rec, read_stop_record(rec.path)):
+                    outcome = _archive_one(config, rec, archive_dir)
+                    archived += outcome is True
+                    refused = refused or outcome is False
+    except LockHeld:
+        return
+    if archived:
+        click.echo(f"archived {archived} item(s)")
+    if refused:
+        raise click.exceptions.Exit(1)
+
+
 def _need_lines(rec: RunRecord, stop: Any, need: NeedsYou, config: SisyphusConfig, config_path: str) -> list[str]:
     """Question, action, resume command and auto-resume mode for an item that is waiting on someone."""
     lines = [f"  question: {need.question}"]
@@ -722,22 +778,6 @@ def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_
     if need is not None:
         lines.extend(_need_lines(rec, stop, need, config, config_path))
     return lines
-
-
-# Pre-#129 stage that no longer exists in STAGE_ORDER; old run records still carry it.
-LEGACY_FINISHED_STAGE = "ci-fix"
-
-
-def _is_settled(rec: RunRecord, stop: Any) -> bool:
-    """Settled: abandoned (no checkpoint), or finished (``open-pr`` or legacy ``ci-fix`` complete) and not stopped."""
-    if rec.checkpoint is not None:
-        return False
-    if rec.retries.get(GATE_FAILED_KEY) and not is_abandoned(stop):
-        return False  # a failed gate leaves no checkpoint; keep the item visible
-    if is_abandoned(stop):
-        return True
-    finished_stage = rec.stage in (OPEN_PR_STAGE, LEGACY_FINISHED_STAGE)
-    return finished_stage and rec.stage_status == STAGE_COMPLETE and not is_stopped(rec, stop)
 
 
 def _pr_closed(rec: RunRecord, stop: Any, pr_state: Callable[[int], str]) -> bool:
@@ -792,7 +832,7 @@ def status_command(
     pr_state = _services(factory, config).pr_state if check_prs and not show_all and work_item_ref is None else None
     for rec in records:
         stop = read_stop_record(rec.path)
-        if not show_all and work_item_ref is None and _is_settled(rec, stop):
+        if not show_all and work_item_ref is None and is_settled(rec, stop):
             hidden += 1
             continue
         if pr_state is not None and _pr_closed(rec, stop, pr_state):

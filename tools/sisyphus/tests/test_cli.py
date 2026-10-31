@@ -35,7 +35,7 @@ from sisyphus.orchestrator import (
 )
 from sisyphus.pick import Candidate, ExecResult, GhCli, GhPullRequestLookup, LinkedPr, PickError
 from sisyphus.rails import Checkpoint
-from sisyphus.runrecord import RunRecord
+from sisyphus.runrecord import RunRecord, record_path
 from sisyphus.stoprecord import build_abandoned_record, build_stop_record, write_stop_record
 
 TODAY = datetime(2026, 1, 2, tzinfo=UTC)
@@ -853,3 +853,184 @@ def test_agent_runner_timeout(tmp_path: Path) -> None:
     with pytest.raises(cli.AgentError, match="timed out after 2 minutes"):
         cli.make_agent_runner("claude", tmp_path, hung, timeout_minutes=2)("x")
     assert seen["timeout"] == 120
+
+
+# --------------------------------------------------------------------- archive
+
+
+def _archive_records(ws: Path) -> None:
+    RunRecord.open(ws, "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
+    ab = RunRecord.open(ws, "AB-1")
+    ab.mark_stage("build")
+    write_stop_record(
+        ab.path,
+        build_abandoned_record(
+            "AB-1", stage="build", stage_status="in_progress", prior_label="l", reenable_command="r"
+        ),
+    )
+    RunRecord.open(ws, "RUN-1").mark_stage("build", "in_progress")
+    cp = RunRecord.open(ws, "CP-1")
+    cp.mark_stage(OPEN_PR_STAGE, "complete")
+    cp.set_checkpoint("C1")
+    err = RunRecord.open(ws, "ERR-1")
+    err.mark_stage(OPEN_PR_STAGE, "complete")
+    write_stop_record(
+        err.path,
+        build_stop_record(
+            "ERR-1", checkpoint=None, stage=OPEN_PR_STAGE, stage_status="complete", detail="x", resume_command="r"
+        ),
+    )
+    gf = RunRecord.open(ws, "GF-1")
+    gf.mark_stage(OPEN_PR_STAGE, "complete")
+    gf.retries[GATE_FAILED_KEY] = 1
+    gf.save()
+
+
+def _ws_files(ws: Path) -> set[str]:
+    return {p.name for p in ws.iterdir()}
+
+
+def test_archive_moves_only_settled_items(tmp_path: Path) -> None:
+    env = make_env(tmp_path)
+    ws = tmp_path / "ws"
+    _archive_records(ws)
+    result = env.invoke("archive", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    arch = ws / "archive"
+    assert sorted(result.stdout.splitlines()) == sorted([f"AB-1 -> {arch}", f"FIN-1 -> {arch}", "archived 2 item(s)"])
+    for ref in ("AB-1", "FIN-1"):
+        assert not record_path(ws, ref).exists()
+        assert (arch / record_path(ws, ref).name).exists()
+    for ref in ("RUN-1", "CP-1", "ERR-1", "GF-1"):
+        assert record_path(ws, ref).exists()
+        assert not (arch / record_path(ws, ref).name).exists()
+
+
+def test_archive_empty_run_is_quiet(tmp_path: Path) -> None:
+    env = make_env(tmp_path)
+    RunRecord.open(tmp_path / "ws", "RUN-1").mark_stage("build", "in_progress")
+    result = env.invoke("archive", "--config", str(env.config))
+    assert (result.exit_code, result.output) == (0, "")
+    assert not (tmp_path / "ws" / "archive").exists()
+
+
+def test_archive_second_run_is_quiet(tmp_path: Path) -> None:
+    env = make_env(tmp_path)
+    RunRecord.open(tmp_path / "ws", "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
+    assert env.invoke("archive", "--config", str(env.config)).exit_code == 0
+    result = env.invoke("archive", "--config", str(env.config))
+    assert (result.exit_code, result.output) == (0, "")
+
+
+def test_archive_collision_refuses_item_others_continue(tmp_path: Path) -> None:
+    env = make_env(tmp_path)
+    ws = tmp_path / "ws"
+    RunRecord.open(ws, "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
+    RunRecord.open(ws, "FIN-2").mark_stage(OPEN_PR_STAGE, "complete")
+    name = record_path(ws, "FIN-1").name
+    (ws / "archive").mkdir()
+    (ws / "archive" / name).write_text("existing")
+    result = env.invoke("archive", "--config", str(env.config))
+    assert result.exit_code == 1
+    assert f"FIN-1: not archived: {name} already exists in" in result.stderr
+    assert result.stdout.splitlines() == [f"FIN-2 -> {ws / 'archive'}", "archived 1 item(s)"]
+    assert record_path(ws, "FIN-1").exists()
+    assert (ws / "archive" / name).read_text() == "existing"
+    assert not record_path(ws, "FIN-2").exists()
+
+
+def test_archive_oserror_per_item_continues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = make_env(tmp_path)
+    ws = tmp_path / "ws"
+    RunRecord.open(ws, "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
+    RunRecord.open(ws, "FIN-2").mark_stage(OPEN_PR_STAGE, "complete")
+    real = cli.archive_item
+
+    def flaky(config: Any, rec: Any, archive_dir: Path) -> Any:
+        if rec.item == "FIN-1":
+            raise PermissionError("denied")
+        return real(config, rec, archive_dir)
+
+    monkeypatch.setattr(cli, "archive_item", flaky)
+    result = env.invoke("archive", "--config", str(env.config))
+    assert result.exit_code == 1
+    assert "FIN-1: not archived: denied" in result.stderr
+    assert "FIN-2 ->" in result.stdout
+    assert record_path(ws, "FIN-1").exists()
+
+
+def test_archive_lock_held_exits_zero_and_moves_nothing(tmp_path: Path) -> None:
+    env = make_env(tmp_path)
+    ws = tmp_path / "ws"
+    RunRecord.open(ws, "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
+    with clone_lock(tmp_path / "repo", tmp_path / "locks"):
+        result = env.invoke("archive", "--config", str(env.config))
+    assert (result.exit_code, result.output) == (0, "")
+    assert record_path(ws, "FIN-1").exists()
+
+
+def test_archive_makes_no_pr_lookup(tmp_path: Path) -> None:
+    env = make_env(tmp_path)
+    RunRecord.open(tmp_path / "ws", "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
+
+    def boom(_n: int) -> str:
+        raise AssertionError("gh called")
+
+    env.services.pr_state = boom  # type: ignore[assignment]
+    assert env.invoke("archive", "--config", str(env.config)).exit_code == 0
+
+
+@pytest.mark.parametrize("archive_dir", ["{ws}", "{root}", "."])
+def test_archive_dir_equal_or_containing_workspace_fails(tmp_path: Path, archive_dir: str) -> None:
+    ws = tmp_path / "ws"
+    value = archive_dir.format(ws=ws, root=tmp_path)
+    env = make_env(tmp_path, extra=f'\n[archive]\ndir = "{value}"\n')
+    RunRecord.open(ws, "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
+    result = env.invoke("archive", "--config", str(env.config))
+    assert result.exit_code == 1
+    assert "config error" in result.stderr
+    assert record_path(ws, "FIN-1").exists()
+
+
+def test_archive_custom_absolute_dir(tmp_path: Path) -> None:
+    dest = tmp_path / "elsewhere"
+    env = make_env(tmp_path, extra=f'\n[archive]\ndir = "{dest}"\n')
+    ws = tmp_path / "ws"
+    RunRecord.open(ws, "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
+    result = env.invoke("archive", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    assert (dest / record_path(ws, "FIN-1").name).exists()
+
+
+def test_archive_requires_workspace_dir(tmp_path: Path) -> None:
+    env = make_env(tmp_path)
+    env.config.write_text(env.config.read_text().replace(f'workspace_dir = "{tmp_path / "ws"}"\n', ""))
+    result = env.invoke("archive", "--config", str(env.config))
+    assert result.exit_code == 1
+    assert "workspace_dir is required" in result.stderr
+
+
+def test_run_passes_resolved_archive_dir_to_pick(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+    env = make_env(tmp_path, ["ENG-1"])
+    seen: dict[str, Any] = {}
+    real_pick = cli.pick_items
+
+    def pick(*a: Any, **k: Any) -> Any:
+        seen.update(k)
+        return real_pick(*a, **k)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cli, "pick_items", pick)
+        result = env.invoke("run", "--config", str(env.config), "--base", "b")
+    assert result.exit_code == 0, result.output
+    assert seen["archive_dir"] == tmp_path / "ws" / "archive"
+
+
+def test_run_does_not_repick_archived_item(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+    env = make_env(tmp_path, ["ENG-1"])
+    ws = tmp_path / "ws"
+    RunRecord.open(ws, "ENG-1").mark_stage(OPEN_PR_STAGE, "complete")
+    assert env.invoke("archive", "--config", str(env.config)).exit_code == 0
+    result = env.invoke("run", "--config", str(env.config), "--base", "b")
+    assert result.exit_code == 0, result.output
+    assert fake_run_item["calls"] == []
