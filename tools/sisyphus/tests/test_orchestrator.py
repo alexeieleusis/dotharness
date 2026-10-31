@@ -487,6 +487,8 @@ def test_c5_intake_boundary_violation(world: World) -> None:
     result = world.run()
     _assert_stop(world, result, Checkpoint.C5)
     assert world.events == ["agent:intake"]
+    assert "tracked.txt" in result.detail
+    assert "tracked.txt" in _stop(world).detail
 
 
 def test_c6_five_leaves(world: World) -> None:

@@ -385,6 +385,84 @@ def test_boundary_ignores_listed_path(repo: Path) -> None:
         (repo / "brief.md").write_text("b")
 
 
+FIRST_SENTENCE = "git state differs before and after"
+
+
+def test_boundary_message_names_added_path(repo: Path) -> None:
+    with pytest.raises(BoundaryViolation) as info, repo_unchanged(repo):
+        (repo / "new.txt").write_text("x")
+    assert str(info.value).startswith(f"intake changed the target repository {repo}: {FIRST_SENTENCE}")
+    assert "added: new.txt" in str(info.value)
+
+
+def test_boundary_message_names_ignored_added_path(repo: Path) -> None:
+    (repo / ".gitignore").write_text(".venv/\nuv.lock\n")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-q", "-m", "ignore")
+    with pytest.raises(BoundaryViolation) as info, repo_unchanged(repo):
+        (repo / ".venv").mkdir()
+        (repo / ".venv" / "pyvenv.cfg").write_text("x")
+        (repo / "uv.lock").write_text("")
+    assert "added: .venv/pyvenv.cfg, uv.lock" in str(info.value)
+
+
+def test_boundary_message_names_removed_path(repo: Path) -> None:
+    (repo / "scratch.txt").write_text("x")
+    with pytest.raises(BoundaryViolation) as info, repo_unchanged(repo):
+        (repo / "scratch.txt").unlink()
+    assert "removed: scratch.txt" in str(info.value)
+    assert "added:" not in str(info.value)
+
+
+def test_boundary_message_names_changed_path(repo: Path) -> None:
+    (repo / "tracked.txt").write_text("dirty\n")
+    with pytest.raises(BoundaryViolation) as info, repo_unchanged(repo):
+        (repo / "tracked.txt").write_text("dirtier\n")
+    assert "changed: tracked.txt" in str(info.value)
+
+
+def test_boundary_message_notes_status_code_change(repo: Path) -> None:
+    (repo / "a.txt").write_text("x")
+    with pytest.raises(BoundaryViolation) as info, repo_unchanged(repo):
+        _git(repo, "add", "a.txt")
+    assert "a.txt" in str(info.value)
+
+
+def test_boundary_message_notes_head_change(repo: Path) -> None:
+    with pytest.raises(BoundaryViolation) as info, repo_unchanged(repo):
+        _git(repo, "commit", "-q", "--allow-empty", "-m", "agent commit")
+    assert "HEAD changed" in str(info.value)
+    assert "branch changed" not in str(info.value)
+
+
+def test_boundary_message_notes_branch_change(repo: Path) -> None:
+    with pytest.raises(BoundaryViolation) as info, repo_unchanged(repo):
+        _git(repo, "switch", "-q", "-c", "other")
+    assert "branch changed" in str(info.value)
+    assert "HEAD changed" not in str(info.value)
+
+
+def test_boundary_message_truncates_long_lists(repo: Path) -> None:
+    for i in range(13):
+        (repo / f"f{i:02}.txt").write_text("a")
+    with pytest.raises(BoundaryViolation) as info, repo_unchanged(repo):
+        for i in range(13):
+            (repo / f"f{i:02}.txt").write_text("b")
+    message = str(info.value)
+    assert FIRST_SENTENCE in message
+    assert message.count(".txt") == 10
+    assert message.endswith("and 3 more")
+
+
+def test_boundary_message_when_runner_raises_lists_paths(repo: Path) -> None:
+    with pytest.raises(BoundaryViolation) as info, repo_unchanged(repo):
+        (repo / "new.txt").write_text("x")
+        raise RuntimeError
+    assert isinstance(info.value.__cause__, RuntimeError)
+    assert FIRST_SENTENCE in str(info.value)
+    assert "added: new.txt" in str(info.value)
+
+
 def test_git_failure_is_intake_error(tmp_path: Path) -> None:
     with pytest.raises(IntakeError):
         snapshot_git_status(tmp_path / "not-a-repo")
