@@ -78,6 +78,11 @@ class KnowledgeConfig:
 
 
 @dataclass(frozen=True)
+class ArchiveConfig:
+    dir: str = "archive"
+
+
+@dataclass(frozen=True)
 class SisyphusConfig:
     project: ProjectConfig
     source: SourceConfig = field(default_factory=SourceConfig)
@@ -85,6 +90,7 @@ class SisyphusConfig:
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     digest: DigestConfig = field(default_factory=DigestConfig)
     knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
+    archive: ArchiveConfig = field(default_factory=ArchiveConfig)
 
 
 def _table(raw: Any, name: str, allowed: tuple[str, ...], *, passthrough: bool = False) -> dict[str, Any]:
@@ -184,7 +190,7 @@ def _parse_source(raw: Any) -> SourceConfig:
 
 
 def _parse(data: dict[str, Any]) -> SisyphusConfig:
-    top = ("project", "source", "agent", "limits", "merge", "digest", "knowledge")
+    top = ("project", "source", "agent", "limits", "merge", "digest", "knowledge", "archive")
     for key in data:
         if key not in top:
             raise ConfigError(f"unknown top-level key '{key}' (allowed: {', '.join(top)})")
@@ -229,8 +235,21 @@ def _parse(data: dict[str, Any]) -> SisyphusConfig:
             conventions_path=_str(t, "knowledge", "conventions_path"),
         )
 
+    archive = ArchiveConfig()
+    if "archive" in data:
+        t = _table(data["archive"], "archive", ("dir",))
+        archive_dir = _str(t, "archive", "dir")
+        if archive_dir is not None:
+            archive = ArchiveConfig(dir=archive_dir)
+
     return SisyphusConfig(
-        project=project, source=source, agent=agent, limits=limits, digest=digest, knowledge=knowledge
+        project=project,
+        source=source,
+        agent=agent,
+        limits=limits,
+        digest=digest,
+        knowledge=knowledge,
+        archive=archive,
     )
 
 
