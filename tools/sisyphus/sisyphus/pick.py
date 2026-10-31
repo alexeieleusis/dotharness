@@ -104,9 +104,15 @@ def default_open_pr_check(candidate: Candidate, lookup: PullRequestLookup) -> bo
     return any(mentions_issue(body, candidate.number) for body in lookup.open_pr_bodies())
 
 
-def is_started(workspace_dir: str | Path, ref: str) -> bool:
-    """A run record exists for ``ref`` (P3). Reads the file system only; never edits the record."""
-    return record_path(Path(workspace_dir).expanduser(), ref).exists()
+def is_started(workspace_dir: str | Path, ref: str, archive_dir: str | Path | None = None) -> bool:
+    """A run record exists for ``ref`` in the workspace or in ``archive_dir`` (P3, G4).
+
+    Reads the file system only; never edits a record. ``archive_dir=None`` or a missing directory means
+    nothing is archived.
+    """
+    if record_path(Path(workspace_dir).expanduser(), ref).exists():
+        return True
+    return archive_dir is not None and record_path(Path(archive_dir).expanduser(), ref).exists()
 
 
 def _same(a: str, b: str) -> bool:
@@ -147,12 +153,13 @@ def pick_items(
     workspace_dir: str | Path,
     limit: int,
     open_pr_check: OpenPrCheck = default_open_pr_check,
+    archive_dir: str | Path | None = None,
 ) -> list[Candidate]:
     """Return up to ``limit`` unstarted candidates in pick order (FR-9 step 1).
 
     Linear and file trackers keep their own order. GitHub issues sort oldest first, then by number ascending (P4)
     and those with an open PR (see :func:`default_open_pr_check`) are skipped; ``lookup`` is required
-    for GitHub. Items with a run record are skipped for both trackers.
+    for GitHub. Items with a run record are skipped for both trackers, including those whose record sits in ``archive_dir``.
     """
     src = _validate(source)
     if limit <= 0:
@@ -162,7 +169,7 @@ def pick_items(
         if lookup is None:
             raise PickError("a pull-request lookup is required for GitHub issues")
         candidates.sort(key=lambda c: (c.created_at, c.number if c.number is not None else 0))
-    return _take_unstarted(candidates, workspace_dir, limit, src.kind, lookup, open_pr_check)
+    return _take_unstarted(candidates, workspace_dir, limit, src.kind, lookup, open_pr_check, archive_dir)
 
 
 def _take_unstarted(
@@ -172,12 +179,13 @@ def _take_unstarted(
     kind: str | None,
     lookup: PullRequestLookup | None,
     open_pr_check: OpenPrCheck,
+    archive_dir: str | Path | None = None,
 ) -> list[Candidate]:
     """First ``limit`` candidates with no run record (and, for GitHub, no open PR), de-duplicated by ref."""
     picked: list[Candidate] = []
     seen: set[str] = set()
     for cand in candidates:
-        if cand.ref in seen or is_started(workspace_dir, cand.ref):
+        if cand.ref in seen or is_started(workspace_dir, cand.ref, archive_dir):
             continue
         if lookup is not None and kind == "github" and open_pr_check(cand, lookup):
             continue

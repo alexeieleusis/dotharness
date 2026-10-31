@@ -201,7 +201,14 @@ def test_c7_action_points_at_abandon() -> None:
     assert "rebase the branch yourself" not in ACTIONS["C7"].lower()
 
 
-GITHUB_SOURCE = """[source.work_item]
+def test_is_started_archive_dir_is_optional(tmp_path: Path) -> None:
+    assert not is_started(tmp_path / "ws", "OLD-1", tmp_path / "archive")
+    RunRecord.open(tmp_path / "archive", "OLD-1")
+    assert is_started(tmp_path / "ws", "OLD-1", tmp_path / "archive")
+    assert not is_started(tmp_path / "ws", "OLD-1")
+
+
+qGITHUB_SOURCE = """[source.work_item]
 kind = "github"
 assignee = "me"
 pick_label = "sisyphus"
