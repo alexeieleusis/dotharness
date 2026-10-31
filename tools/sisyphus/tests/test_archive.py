@@ -316,6 +316,34 @@ def test_cross_filesystem_delete_failure_warns_and_keeps_source(
     assert (tmp_path / "arch" / f"{ENC}.answer.md").read_text() == "answer"
 
 
+def test_cross_filesystem_delete_failure_rerun_cleans_stale_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _config(tmp_path, brief_template=None)
+    rec = RunRecord.open(tmp_path / "ws", ITEM)
+    answer = tmp_path / "ws" / f"{ENC}.answer.md"
+    answer.write_text("answer")
+    arch = tmp_path / "arch"
+
+    def exdev(src: str | Path, dst: str | Path) -> None:
+        raise OSError(errno.EXDEV, "cross-device")
+
+    def no_unlink(self: Path, missing_ok: bool = False) -> None:
+        raise PermissionError(errno.EACCES, "denied")
+
+    with monkeypatch.context() as mp:
+        mp.setattr(os, "replace", exdev)
+        mp.setattr(Path, "unlink", no_unlink)
+        archive_item(cfg, rec, arch)
+    assert answer.exists()
+    assert rec.path.exists()
+    res = archive_item(cfg, rec, arch)
+    assert not res.refused
+    assert not answer.exists()
+    assert not rec.path.exists()
+    assert (arch / f"{ENC}.answer.md").read_text() == "answer"
+
+
 def test_other_oserror_propagates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _config(tmp_path, brief_template=None)
     rec = RunRecord.open(tmp_path / "ws", ITEM)

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import filecmp
 import os
 import shutil
 from dataclasses import dataclass, field
@@ -145,6 +146,24 @@ def _copy_then_delete(src: Path, dest: Path, warnings: list[str]) -> None:
     except BaseException:
         _remove_path(partial)
         raise
+    _delete_source(src, dest, warnings)
+
+
+def _same_content(src: Path, dest: Path) -> bool:
+    """True if ``dest`` is a complete copy of ``src`` (file, symlink or tree)."""
+    if src.is_symlink() or dest.is_symlink():
+        return src.is_symlink() and dest.is_symlink() and os.readlink(src) == os.readlink(dest)
+    if src.is_dir():
+        if not dest.is_dir():
+            return False
+        cmp = filecmp.dircmp(src, dest)
+        if cmp.left_only or cmp.right_only or cmp.funny_files:
+            return False
+        return all(_same_content(src / n, dest / n) for n in cmp.common)
+    return dest.is_file() and filecmp.cmp(src, dest, shallow=False)
+
+
+def _delete_source(src: Path, dest: Path, warnings: list[str]) -> None:
     try:
         if src.is_dir() and not src.is_symlink():
             shutil.rmtree(src)
@@ -167,7 +186,8 @@ def archive_item(config: SisyphusConfig, rec: RunRecord, archive_dir: Path) -> A
     """Move one item's files flat into ``archive_dir`` under their original names; never overwrites.
 
     Per (source, destination) pair: source absent and destination present means already moved (skipped);
-    source present and destination present is a collision and refuses the whole item before anything moves
+    source present and destination present with identical content is a leftover of a failed delete (the source is
+    removed again); with different content it is a collision and refuses the whole item before anything moves
     (no rollback); source present and destination absent is moved. The run record moves last, so an
     interrupted run leaves the item in the workspace and a rerun completes it. A fully archived item is a no-op.
     Same filesystem uses ``os.replace``; on ``EXDEV`` the file or tree is copied, then the source deleted (a
@@ -179,13 +199,19 @@ def archive_item(config: SisyphusConfig, rec: RunRecord, archive_dir: Path) -> A
     pairs = [(src, archive_dir / src.name) for src in files]
     for _, dest in pairs:
         _remove_path(_partial_path(dest))  # stale leftover of an interrupted cross-filesystem copy
-    for _, dest in pairs:
+    stale: list[tuple[Path, Path]] = []  # identical copy already at dest: a delete failed on an earlier run
+    for src, dest in pairs:
         if dest.exists() or dest.is_symlink():
-            result.collision = dest
-            return result
+            if not _same_content(src, dest):
+                result.collision = dest
+                return result
+            stale.append((src, dest))
     if pairs:
         archive_dir.mkdir(parents=True, exist_ok=True)
     for src, dest in pairs:
+        if (src, dest) in stale:
+            _delete_source(src, dest, result.warnings)
+            continue
         _move(src, dest, result.warnings)
         result.moved.append(dest)
     return result
