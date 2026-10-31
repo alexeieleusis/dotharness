@@ -62,7 +62,7 @@ runs no later stage. Run again to resume: the run starts at the stage that stopp
 | C2 | The plan agent writes a stop report with `C2` (`OPEN_QUESTIONS.md` has entries it cannot resolve from the repository). |
 | C3 | The build agent writes a stop report with `C3` (a leaf reports an open question). |
 | C4 | The build agent writes a stop report with `C4` (a deviation changes a later leaf, or it cannot tell). |
-| C5 | The build agent writes a stop report with `C5` (a leaf exhausted its retries or left its scope). A gate command failed. Intake changed the target repository. The build was already stopped by C5 three times (`RetryBound`), so it is not launched again. |
+| C5 | The build agent writes a stop report with `C5` (a leaf exhausted its retries or left its scope). Intake changed the target repository. The build was already stopped by C5 three times (`RetryBound`), so it is not launched again. |
 | C6 | The plan has more than `max_leaves_per_run` leaves. `max_run_minutes` elapsed (checked before each stage). A rerun after the leaf-limit C6 does not run the plan agent again. |
 | C7 | The branch needs a rebase or force-push (remote branch not an ancestor of HEAD). Sisyphus never rebases or force-pushes. |
 | C8 | `GitHubError` from the PR client, a failed fetch, ls-remote or push. |
@@ -80,14 +80,30 @@ stage finished.
 
 ## Gate commands
 
-After the PR exists, the orchestrator reads `build.commands` read-only from the
+After the PR exists, the orchestrator reads `build.commands` and `[[build.gate]]` read-only from the
 item's `.spec-prism-flow.toml` (see below), a copy of `options.spf_config_path` (default
-`<repo_dir>/.spec-prism-flow.toml`). The orchestrator reads it with stdlib `tomllib`. It runs each command in each
-package directory the change touched, using the injected subprocess runner at the pushed head. A package directory is the nearest ancestor of a changed file (from
+`<repo_dir>/.spec-prism-flow.toml`). The orchestrator reads it with stdlib `tomllib`. It runs the commands in the
+package directories the change touched, using the injected subprocess runner at the pushed head. A package directory is the nearest ancestor of a changed file (from
 `git diff --name-only origin/<base>...HEAD`) that holds `Makefile`, `pyproject.toml`, `package.json`, `Cargo.toml` or
-`go.mod`. If no such ancestor holds one, the package directory is the repository root. If a command fails, the run
-stops at C5. If the file or `build.commands` is absent, the gate is not run, and the digest "Deviations"
-section says so. Commands are never guessed. The Done entry's evidence says `gate passed` or `gate not run`.
+`go.mod`. If no such ancestor holds one, the package directory is the repository root.
+
+Plain `build.commands` strings run in every touched package directory. The optional scoped form is an array of tables:
+
+```toml
+[[build.gate]]
+run = "make test"
+packages = ["tools/pr-review"]
+```
+
+`run` is a required non-empty string, split with `shlex`. `packages` is an optional list of repo-relative directories
+(no absolute path, no `..` segment; `"."` is the repository root). An entry with `packages` runs only in a touched
+package directory that equals one of them (equality, not prefix); an entry without `packages` runs in every touched
+package directory. Unknown keys or invalid values are an `OrchestratorError`. spec-prism-flow ignores `[[build.gate]]`.
+Per directory, the `build.commands` run first, then the applicable entries in file order; directories run in sorted
+order. If a command fails, the run does not stop: the failure is recorded, later gate commands are skipped, a Deviations note carries the command, directory, exit code and output tail, and the run completes. The local branch is kept. If neither `build.commands` nor `[[build.gate]]` exists, the gate is not
+run, and the digest "Deviations" section says so. If only entries exist and none applies to a touched directory, the
+gate is not run and the note says `no [[build.gate]] entry applies to the touched package directories`. Commands are
+never guessed. The Done entry's evidence says `gate passed`, `gate failed: <command> in <dir> (exit N)` or `gate not run`.
 
 ## Injected interfaces
 

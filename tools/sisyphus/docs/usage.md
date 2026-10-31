@@ -6,7 +6,7 @@ There is no daemon, no loop and no scheduler installer. Run it from cron or laun
 ```
 sisyphus run --config <file> [--base <branch>]
 sisyphus intake <work-item-ref> --config <file>
-sisyphus status [--all] [<work-item-ref>] --config <file>
+sisyphus status [--all] [--check-prs] [<work-item-ref>] --config <file>
 sisyphus resume <work-item-ref> --config <file> [--base <branch>]
 ```
 
@@ -177,7 +177,7 @@ run record or the item is not stopped, and exits 0 quietly if another invocation
 | C2 | OPEN_QUESTIONS.md unresolved after draft-overview | write the answer file | automatic (answer file) | re-runs the plan stage with your answer, then build |
 | C3 | a leaf has an open question | write the answer file | automatic (answer file) | re-runs build with your answer. The build prompt continues from the stopped leaf |
 | C4 | a leaf deviation may change later leaves | write the answer file (accept or redirect) | automatic (answer file) | same as C3 |
-| C5 | retries exhausted, scope violation or a failed gate | decide: change the leaf or config, or fix the cause. To give the build another budget, run `sisyphus resume REF --config F --reset-retries` | explicit | re-runs the stage. The build retry budget (3) is kept, so an exhausted budget stops again at C5 without a new agent run, unless you pass `--reset-retries` (below), which gives the build a fresh budget of 3 (it does not skip the build) |
+| C5 | retries exhausted or scope violation | decide: change the leaf or config, or fix the cause. To give the build another budget, run `sisyphus resume REF --config F --reset-retries` | explicit | re-runs the stage. The build retry budget (3) is kept, so an exhausted budget stops again at C5 without a new agent run, unless you pass `--reset-retries` (below), which gives the build a fresh budget of 3 (it does not skip the build) |
 | C6 | a limit was hit | raise the limit in `.sisyphus.toml` (`max_run_minutes` needs nothing: the clock is per invocation) | explicit | leaf limit: re-counts the leaves, no re-plan. Time limit: continues at the next stage |
 | C7 | branch cannot be updated without rebase | no automatic way out: run `sisyphus abandon REF --config F` (the branch and any PR stay as they are for you to handle) | explicit | after you fixed the branch outside Sisyphus: re-runs the push stage on the same branch and PR |
 | C8 | gh, Linear, git network call failed, or a dirty clone | fix access. For a dirty clone, clean it yourself | automatic retry after 30 minutes, 3 times, then explicit | retries the failed call in the same stage |
@@ -234,11 +234,15 @@ flag says "I know I abandoned this".
 
 `sisyphus status [REF] --config F` is read-only (no lock, no agent). For each item (all items without REF) it
 prints stage, stage_status, checkpoint (`state: abandoned` plus `abandoned_at` and `re-enable` for an abandoned item), `awaiting` (`you` for a checkpoint, `error`, `none` otherwise (including an abandoned item). `status` needs no network), and for a stopped item the question, action, resume command and auto-resume rule (with whether it is
-cleared now) and every recorded `Retry reset:` line. Output order is unchanged (file-name order), and `status` stays read-only: no lock, no agent, no network, no PR lookup.
+cleared now) and every recorded `Retry reset:` line. Output order is unchanged (file-name order), and `status` stays read-only: no lock, no agent. Without `--check-prs` it makes no network call and no PR lookup.
 
-By default `sisyphus status` hides settled items: abandoned items, and finished items (stage `open-pr` with `stage_status` `complete`, i.e. a draft PR is open and the item is handed to the human) that have no checkpoint and no non-abandoned stop record. These are never hidden by default: any item with a checkpoint set (`awaiting: you`) or a non-abandoned stop record (`awaiting: error`), and any item with `stage_status: in_progress`, no checkpoint and no stop record, because it may be running now or be a hard crash. `in_progress` is a per-stage status, not an item state: a stage stopped at a checkpoint or on a runner error stays `in_progress`.
+By default `sisyphus status` hides settled items: abandoned items, and finished items (stage `open-pr` with `stage_status` `complete`, i.e. a draft PR is open and the item is handed to the human) that have no checkpoint and no non-abandoned stop record. Records with the legacy stage `ci-fix` (no longer a stage since #129, but still loaded from old run records), `stage_status` `complete`, no checkpoint and no non-abandoned stop record are hidden too. These are never hidden by default: any item with a checkpoint set (`awaiting: you`) or a non-abandoned stop record (`awaiting: error`), and any item with `stage_status: in_progress`, no checkpoint and no stop record, because it may be running now or be a hard crash. `in_progress` is a per-stage status, not an item state: a stage stopped at a checkpoint or on a runner error stays `in_progress`.
 
 `--all` is a boolean flag that shows every item; the output is identical to the previous behavior. An explicit REF always prints that item, even if settled, without `--all`. An unknown REF exits 1 with `no run record for <ref>`.
+
+`--check-prs` is an opt-in flag (off by default; there is no config-file setting). It queries GitHub for each record that would otherwise be shown and has a recorded PR number (`retries["pr-number"]`), running `gh pr view <n> --json state` once per record with a fixed 10 second timeout, one after another. An item whose PR is `MERGED` or `CLOSED` is hidden, even with a checkpoint or stop record and whatever its stage, and counts in the hidden total N. Items that may need you keep showing: an open PR, a checkpoint with an open or unknown PR, and an `in_progress` item with no checkpoint and no stop record (never looked up). If a lookup fails (offline, `gh` missing, PR deleted, timeout), the item is shown, one `warning:` line goes to stderr and the exit code stays 0. `--all` and an explicit REF skip the lookup. `status` never writes run records or sidecars.
+
+Without `--check-prs`, an item stopped at a checkpoint (for example C5) stays visible even when its PR is already merged. Run `sisyphus abandon <ref>` to hide it, or use `sisyphus status --check-prs`.
 
 When records exist but every one is hidden, `status` prints `no items needing attention (N hidden; use --all)` and exits 0, where N is the number of hidden records. `no items` is kept for an empty or missing workspace. When only some items are hidden, only the shown blocks print, with no "N hidden" trailer.
 

@@ -39,6 +39,7 @@ from sisyphus.orchestrator import (
     package_dirs,
     plan_dir_name,
     read_build_commands,
+    read_gate_entries,
     run_item,
     stop_report_path,
 )
@@ -465,14 +466,20 @@ def test_c5_leaf_scope_violation_from_agent(world: World) -> None:
     assert world.find_calls == 0
 
 
-def test_c5_gate_command_failure_raises_c5(world: World) -> None:
+def test_gate_command_failure_completes_and_reports_in_digest(world: World) -> None:
     world.gate_rc = 2
     result = world.run()
-    _assert_stop(world, result, Checkpoint.C5)
-    assert result.pr is not None  # PR is open, but not gated
-    assert not list(world.tmp.rglob("build_gate_*.json"))
-    assert "gate passed" not in world.digest_text()
-    assert world.events.count("gate:make check@pkg") == 1  # stopped at first failure
+    assert result.completed
+    assert result.checkpoint is None
+    assert result.pr is not None
+    assert _stop(world) is None
+    digest = world.digest_text()
+    assert re.search(r"gate failed: make check in \S+ \(exit 2\)", digest)
+    assert "gate passed" not in digest
+    assert "gate command 'make check' failed in" in digest  # Deviations note: command, dir, exit code, tail
+    assert "(exit 2): gate failed" in digest
+    assert digest.split("## Needs you")[1].lstrip().startswith("None")  # no Needs you entry
+    assert world.events.count("gate:make check@pkg") == 1  # stopped at the first failure
 
 
 def test_c5_intake_boundary_violation(world: World) -> None:
@@ -633,15 +640,19 @@ def test_rerun_with_unchanged_inputs_repeats_nothing(world: World) -> None:
     assert len(world.opened) == 1
 
 
-def test_rerun_after_gate_failure_reuses_existing_pr(world: World) -> None:
+def test_rerun_after_gate_failure_skips_every_stage(world: World) -> None:
     world.gate_rc = 1
     world.run()
     world.gate_rc = 0
     result = world.run()
     assert result.completed
-    assert len(world.opened) == 1  # find_pr found the PR; no second PR
-    assert world.events.count("agent:build") == 1  # earlier stages not repeated
+    assert len(world.opened) == 1  # no second PR
+    assert world.events.count("agent:build") == 1
     assert world.events.count("agent:plan") == 1
+    assert world.events.count("gate:make check@pkg") == 1  # the gate is not rerun
+    assert RunRecord.open(world.tmp / "ws", ITEM).retries["gate-failed"] == 1  # persisted, survives the skip
+    assert "gate failed in an earlier run and was not rerun" in world.digest_text()
+    assert "gate not run" not in world.digest_text()
 
 
 def test_rerun_after_c1_unchanged_brief_makes_no_agent_call(world: World) -> None:
@@ -791,6 +802,148 @@ def test_gate_runs_in_each_touched_package_dir(world: World) -> None:
         (("make", "check"), "other"),
         (("make", "test"), "other"),
     }
+
+
+def _gate_world(world: World, spf: str, changed: str = "tools/pkg/a.py\nother/b.py\n") -> None:
+    (world.repo / "other").mkdir()
+    (world.repo / "other" / "Makefile").write_text("x:\n")
+    (world.repo / ".spec-prism-flow.toml").write_text(spf)
+    world.changed = changed
+
+
+def _gates(world: World) -> list[str]:
+    return [e for e in world.events if e.startswith("gate")]
+
+
+def test_gate_entry_runs_only_in_matching_dir(world: World) -> None:
+    _gate_world(world, '[[build.gate]]\nrun = "make scoped"\npackages = ["tools/pkg"]\n')
+    assert world.run().completed
+    assert _gates(world) == ["gate:make scoped@pkg"]
+    assert "gate passed" in world.digest_text()
+
+
+def test_gate_entry_not_matching_any_dir_notes_and_skips(world: World) -> None:
+    _gate_world(world, '[[build.gate]]\nrun = "make scoped"\npackages = ["elsewhere"]\n')
+    assert world.run().completed
+    assert not _gates(world)
+    assert "no [[build.gate]] entry applies" in world.digest_text()
+    assert "gate not run" in world.digest_text().split("## Done")[1].split("## Deviations")[0]
+
+
+def test_gate_entry_without_packages_runs_everywhere(world: World) -> None:
+    _gate_world(world, '[[build.gate]]\nrun = "make all"\n')
+    world.run()
+    assert _gates(world) == ["gate:make all@other", "gate:make all@pkg"]
+
+
+def test_gate_entry_dot_means_repo_root(world: World) -> None:
+    _gate_world(world, '[[build.gate]]\nrun = "make root"\npackages = ["."]\n', "top.md\ntools/pkg/a.py\n")
+    world.run()
+    assert _gates(world) == [f"gate:make root@{world.repo.name}"]
+
+
+def test_gate_entry_matches_normalized_and_not_by_prefix(world: World) -> None:
+    _gate_world(
+        world,
+        '[[build.gate]]\nrun = "make a"\npackages = ["./tools/pkg/"]\n\n[[build.gate]]\nrun = "make b"\npackages = ["tools"]\n',
+    )
+    world.run()
+    assert _gates(world) == ["gate:make a@pkg"]
+
+
+def test_gate_plain_commands_run_before_entries_per_dir(world: World) -> None:
+    _gate_world(
+        world,
+        '[build]\ncommands = ["make plain"]\n\n[[build.gate]]\nrun = "make one"\n\n'
+        '[[build.gate]]\nrun = "make two"\npackages = ["tools/pkg"]\n',
+    )
+    world.run()
+    assert _gates(world) == [
+        "gate:make plain@other",
+        "gate:make one@other",
+        "gate:make plain@pkg",
+        "gate:make one@pkg",
+        "gate:make two@pkg",
+    ]
+
+
+def test_gate_entries_unmatched_with_plain_commands_run_plain_silently(world: World) -> None:
+    _gate_world(world, '[build]\ncommands = ["make plain"]\n\n[[build.gate]]\nrun = "make x"\npackages = ["nope"]\n')
+    assert world.run().completed
+    assert _gates(world) == ["gate:make plain@other", "gate:make plain@pkg"]
+    assert "no [[build.gate]] entry applies" not in world.digest_text()
+
+
+def test_gate_entry_failure_is_recorded_without_a_checkpoint(world: World) -> None:
+    _gate_world(world, '[[build.gate]]\nrun = "make scoped"\n')
+    world.gate_rc = 2
+    result = world.run()
+    assert result.completed
+    assert "gate failed: make scoped in" in world.digest_text()
+
+
+def test_gate_entry_unknown_key_raises(world: World) -> None:
+    _gate_world(world, '[[build.gate]]\nrun = "make x"\ncwd = "a"\n')
+    with pytest.raises(OrchestratorError, match=r"build\.gate\[0\] has unknown keys: cwd"):
+        world.run()
+    assert not world.opened  # validated before the PR is opened
+
+
+def test_invalid_gate_entry_fails_even_without_changed_files(world: World) -> None:
+    _gate_world(world, '[[build.gate]]\nrun = ""\n', changed="")
+    with pytest.raises(OrchestratorError, match="run must be a non-empty string"):
+        world.run()
+
+
+def test_read_gate_entries(tmp_path: Path) -> None:
+    p = tmp_path / "c.toml"
+    assert read_gate_entries(p) is None
+    p.write_text('[build]\ncommands = ["make"]\n')
+    assert read_gate_entries(p) is None
+    p.write_text('[[build.gate]]\nrun = "make x"\n\n[[build.gate]]\nrun = "make y"\npackages = ["a", "."]\n')
+    entries = read_gate_entries(p)
+    assert entries is not None
+    assert [(e.run, e.packages) for e in entries] == [("make x", None), ("make y", ("a", "."))]
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        ("run = 1", r"build\.gate\[0\]\.run must be a non-empty string"),
+        ('packages = ["a"]', r"build\.gate\[0\]\.run must be a non-empty string"),
+        ('run = "  "', "run must be a non-empty string"),
+        ('run = "x"\npackages = "a"', "packages must be a list of non-empty strings"),
+        ('run = "x"\npackages = [1]', "packages must be a list of non-empty strings"),
+        ('run = "x"\npackages = [""]', "packages must be a list of non-empty strings"),
+        ('run = "x"\npackages = ["/abs"]', "repo-relative"),
+        ('run = "x"\npackages = ["a/../b"]', "repo-relative"),
+        ('run = "x"\nbogus = 1', "unknown keys: bogus"),
+    ],
+)
+def test_read_gate_entries_rejects_invalid(tmp_path: Path, body: str, match: str) -> None:
+    p = tmp_path / "c.toml"
+    p.write_text(f"[[build.gate]]\n{body}\n")
+    with pytest.raises(OrchestratorError, match=match):
+        read_gate_entries(p)
+
+
+def test_read_gate_entries_rejects_non_table_array(tmp_path: Path) -> None:
+    p = tmp_path / "c.toml"
+    p.write_text('[build]\ngate = ["make"]\n')
+    with pytest.raises(OrchestratorError, match="array of tables"):
+        read_gate_entries(p)
+
+
+def test_gate_entries_round_trip_through_item_config(world: World) -> None:
+    src = '[build]\ncommands = ["make plain"]\n\n[[build.gate]]\nrun = "make x"\npackages = ["tools/pkg"]\n\n[[build.gate]]\nrun = "make y"\n'
+    _gate_world(world, src)
+    assert tomllib.loads(dump_spf_config(tomllib.loads(src)))["build"]["gate"] == [
+        {"run": "make x", "packages": ["tools/pkg"]},
+        {"run": "make y"},
+    ]
+    world.run()
+    plan_dir = world.tmp / "ws" / plan_dir_name(ITEM)
+    assert tomllib.loads((plan_dir / ".spec-prism-flow.toml").read_text())["build"] == tomllib.loads(src)["build"]
 
 
 def test_package_dirs(tmp_path: Path) -> None:
@@ -1074,7 +1227,7 @@ def _stop_c4(world: World) -> None:
 
 
 def _stop_c5(world: World) -> None:
-    world.gate_rc = 2
+    world.build_stops = [{"checkpoint": "C5", "leaf": "13-foo", "detail": "out of scope"}]
 
 
 def _stop_c6(world: World) -> None:
@@ -1435,7 +1588,7 @@ def test_failed_base_fast_forward_keeps_the_branch(world: World) -> None:
 def test_stopped_or_failed_item_keeps_its_branch(world: World, fault: str) -> None:
     _cleanup_ready(world)
     if fault == "gate":
-        world.gate_rc = 1
+        world.gate_rc = 1  # finishes (no stop), but the branch is kept
     elif fault == "c1":
         world.brief_text = BRIEF_OPEN
     else:
@@ -1444,7 +1597,7 @@ def test_stopped_or_failed_item_keeps_its_branch(world: World, fault: str) -> No
         with pytest.raises(OrchestratorError):
             world.run()
     else:
-        assert not world.run().completed
+        assert world.run().completed is (fault == "gate")
     assert world.branch_cmds == []
     assert not any(c[0][:2] == ("git", "checkout") and c[0][2] == "base-branch" for c in world.shell_calls)
 

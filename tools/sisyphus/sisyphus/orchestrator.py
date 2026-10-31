@@ -83,6 +83,7 @@ BRANCH_PREFIX = "sisyphus/"
 PACKAGE_MARKERS = ("Makefile", "pyproject.toml", "package.json", "Cargo.toml", "go.mod")
 
 BRANCH_CREATED_KEY = "branch-created"
+GATE_FAILED_KEY = "gate-failed"  # additive: 1 once a gate command failed, so status and reruns still see it
 PR_NUMBER_KEY = "pr-number"  # additive: the PR number, so the branch cleanup can ask gh about it by number
 
 _STOP_CHECKPOINTS = {PLAN_STAGE: {"C2"}, BUILD_STAGE: {"C3", "C4", "C5"}}
@@ -283,6 +284,56 @@ def read_build_commands(path: Path) -> list[str] | None:
     return list(cmds) or None
 
 
+@dataclass(frozen=True)
+class GateEntry:
+    """One ``[[build.gate]]`` table: a command and, optionally, the repo-relative package dirs it applies to."""
+
+    run: str
+    packages: tuple[str, ...] | None = None
+
+
+_GATE_KEYS = frozenset({"run", "packages"})
+
+
+def _gate_entry(path: Path, index: int, raw: object) -> GateEntry:
+    where = f"{path}: build.gate[{index}]"
+    if not isinstance(raw, dict):
+        raise OrchestratorError(f"{where} must be a table")
+    unknown = sorted(set(raw) - _GATE_KEYS)
+    if unknown:
+        raise OrchestratorError(f"{where} has unknown keys: {', '.join(map(str, unknown))}")
+    run = raw.get("run")
+    if not isinstance(run, str) or not run.strip():
+        raise OrchestratorError(f"{where}.run must be a non-empty string")
+    packages = raw.get("packages")
+    if packages is None:
+        return GateEntry(run)
+    if not isinstance(packages, list) or not all(isinstance(p, str) and p.strip() for p in packages):
+        raise OrchestratorError(f"{where}.packages must be a list of non-empty strings")
+    for pkg in packages:
+        pure = Path(pkg)
+        if pure.is_absolute() or ".." in pure.parts:
+            raise OrchestratorError(f"{where}.packages: {pkg!r} must be repo-relative with no '..' segment")
+    return GateEntry(run, tuple(packages))
+
+
+def read_gate_entries(path: Path) -> list[GateEntry] | None:
+    """``[[build.gate]]`` entries, validated; ``None`` when the file, the table or the key is absent or empty."""
+    data = read_spf_config(path)
+    build = data.get("build") if data else None
+    raw = build.get("gate") if isinstance(build, dict) else None
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not all(isinstance(e, dict) for e in raw):
+        raise OrchestratorError(f"{path}: build.gate must be an array of tables")
+    return [_gate_entry(path, i, e) for i, e in enumerate(raw)] or None
+
+
+def _gate_applies(entry: GateEntry, repo_dir: Path, directory: Path) -> bool:
+    """An entry without ``packages`` applies everywhere; otherwise only to a listed directory (equality)."""
+    return entry.packages is None or any((repo_dir / pkg).resolve() == directory.resolve() for pkg in entry.packages)
+
+
 def package_dirs(repo_dir: Path, changed_files: Sequence[str]) -> list[Path]:
     """Nearest ancestor directory (below or at ``repo_dir``) of each changed file holding a package marker.
 
@@ -307,6 +358,16 @@ def build_orchestration_prompt(template: str, values: dict[str, str]) -> str:
     for key, value in values.items():
         template = template.replace(f"<{key}>", value)
     return template
+
+
+@dataclass(frozen=True)
+class GateFailure:
+    """The first failing gate command: what ran, where, its exit code and the output tail."""
+
+    command: str
+    directory: Path
+    returncode: int
+    tail: str
 
 
 def _tail(text: str, n: int = 400) -> str:
@@ -353,6 +414,7 @@ class _Run:
         self.prior_cp = self.rec.checkpoint
         self.pr: PullRequest | None = None
         self.gated = False
+        self.gate_failure: GateFailure | None = None
         self.notes: list[str] = []
         self.done_stages: list[str] = []
         self.skipped: list[str] = []
@@ -436,6 +498,8 @@ class _Run:
         wanted = [STAGE_ORDER.index(s) for s in self.stages()]
         return (
             self.stop is None
+            and self.gate_failure is None
+            and not self.rec.retries.get(GATE_FAILED_KEY)
             and not self.was_abandoned
             and self.rec.checkpoint is None
             and read_stop_record(self.rec.path) is None
@@ -714,6 +778,10 @@ class _Run:
 
     def stage_open_pr(self) -> None:
         with self.rec.stage_scope(OPEN_PR_STAGE):
+            # Validate the gate config before any PR exists: a malformed entry must not leave a PR with no gate result.
+            self.write_item_config()
+            read_build_commands(self.spf)
+            read_gate_entries(self.spf)
             try:
                 self.pr = self.gh.find_pr(self.branch)
                 if self.pr is None:
@@ -775,14 +843,20 @@ class _Run:
             self.notes.append(text)
 
     def gate(self) -> None:
-        """Run ``build.commands`` in each touched package dir at HEAD; raise C5 on the first failure.
+        """Run the gate commands in each touched package dir at HEAD; record the first failure.
 
-        When there are no ``build.commands`` or no changed files, note that the gate was not run and return.
+        Per directory, the plain ``build.commands`` run first, then the ``[[build.gate]]`` entries that apply
+        to it, in file order. An entry with ``packages`` applies only to a touched directory equal to one of
+        them; an entry without ``packages`` applies to every touched directory. When neither source exists,
+        when there are no changed files, or when only entries exist and none applies, note that the gate was
+        not run and return. A failing command is recorded in ``gate_failure`` and noted; the remaining commands
+        are skipped and nothing is raised, so the run still completes.
         """
         number = self.pr_number()
         self.write_item_config()
         commands = read_build_commands(self.spf)
-        if commands is None:
+        entries = read_gate_entries(self.spf)
+        if commands is None and entries is None:
             self.note(f"gate not run for PR #{number}: no build.commands in {self.spf}")
             return
         changed = self.git("diff", "--name-only", f"origin/{self.opt.base_branch}...HEAD").stdout.split("\n")
@@ -790,16 +864,28 @@ class _Run:
         if not dirs:
             self.note(f"gate not run for PR #{number}: no changed files to gate")
             return
+        plan: list[tuple[Path, str]] = []
         for directory in dirs:
-            for command in commands:
-                res = self.sh(shlex.split(command), directory)
-                if res.returncode != 0:
-                    raise _Stop(
-                        Checkpoint.C5,
-                        f"gate command '{command}' failed in {directory} (exit {res.returncode}): "
-                        f"{_tail(res.stderr or res.stdout)}",
-                    )
+            plan.extend((directory, c) for c in commands or [])
+            plan.extend((directory, e.run) for e in entries or [] if _gate_applies(e, self.repo, directory))
+        if not plan:
+            self.note(
+                f"gate not run for PR #{number}: no [[build.gate]] entry applies to the touched package directories"
+            )
+            return
+        for directory, command in plan:
+            res = self.sh(shlex.split(command), directory)
+            if res.returncode != 0:
+                tail = _tail(res.stderr or res.stdout)
+                self.gate_failure = GateFailure(command, directory, res.returncode, tail)
+                self.rec.retries[GATE_FAILED_KEY] = 1
+                self.rec.save()
+                self.note(f"gate command '{command}' failed in {directory} (exit {res.returncode}): {tail}")
+                return
         self.gated = True
+        if self.rec.retries.get(GATE_FAILED_KEY):
+            self.rec.retries[GATE_FAILED_KEY] = 0
+            self.rec.save()
 
 
 def run_item(
@@ -872,16 +958,25 @@ def _report(run: _Run) -> DigestReport:
     done: tuple[DoneEntry, ...] = ()
     if run.pr is not None:
         evidence = [run.pr.url or f"PR #{run.pr.number}", f"branch {run.branch}"]
-        evidence.append("gate passed" if run.gated else "gate not run")
+        if run.gate_failure is not None:
+            f = run.gate_failure
+            evidence.append(f"gate failed: {f.command} in {f.directory} (exit {f.returncode})")
+        elif run.rec.retries.get(GATE_FAILED_KEY):
+            evidence.append("gate failed in an earlier run")
+        else:
+            evidence.append("gate passed" if run.gated else "gate not run")
         if run.cleanup_done:
             evidence.append(run.cleanup_done)
         done = (DoneEntry(f"{run.item}: draft PR #{run.pr.number} opened", tuple(evidence)),)
     elif run.cleanup_done:
         done = (DoneEntry(f"{run.item}: local branch removed", (run.cleanup_done,)),)
+    deviations = list(run.notes)
+    if run.gate_failure is None and run.rec.retries.get(GATE_FAILED_KEY) and not run.gated:
+        deviations.append(f"{run.item}: gate failed in an earlier run and was not rerun")
     return DigestReport(
         needs_you=needs,
         done=done,
-        deviations=tuple(run.notes),
+        deviations=tuple(deviations),
         limits_hit=limits,
         timings=tuple(run.timings),
     )

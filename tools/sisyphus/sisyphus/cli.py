@@ -36,6 +36,8 @@ from sisyphus.digest import DigestReport, DigestWriteError, NeedsYou, describe_r
 from sisyphus.intake import AgentRunner, run_intake
 from sisyphus.lock import LockHeld, clone_lock
 from sisyphus.orchestrator import (
+    GATE_FAILED_KEY,
+    PR_NUMBER_KEY,
     GitHubError,
     OrchestratorOptions,
     PullRequest,
@@ -66,7 +68,7 @@ from sisyphus.resume import (
     list_waiting,
     reset_stage_retries,
 )
-from sisyphus.runrecord import STAGE_COMPLETE, RunRecord, record_path
+from sisyphus.runrecord import STAGE_COMPLETE, STAGE_IN_PROGRESS, RunRecord, record_path
 from sisyphus.stages import INTAKE_STAGE, OPEN_PR_STAGE
 from sisyphus.stoprecord import (
     CLEARS_BY,
@@ -78,6 +80,7 @@ from sisyphus.stoprecord import (
     read_stop_record,
     write_stop_record,
 )
+from sisyphus.subproc import run_command as run_subprocess
 
 AGENT_COMMANDS = {
     "claude": lambda prompt: ["claude", "-p", prompt, PERMISSION_FLAG],
@@ -179,6 +182,26 @@ def _pr_info(row: dict[str, Any]) -> PrInfo:
     )
 
 
+PR_STATE_TIMEOUT = 10.0  # seconds per `gh pr view`; fixed, not configurable
+
+
+class GhPrStateLookup:
+    """PR state by number: ``gh pr view <n> --json state`` through :class:`GhCli`, bounded by a fixed timeout."""
+
+    def __init__(self, repo_dir: Path, token: str | None, timeout: float = PR_STATE_TIMEOUT) -> None:
+        def run(argv: Sequence[str], cwd: Path | None, env: Any) -> Any:
+            return run_subprocess(argv, cwd, env, timeout=timeout)
+
+        self.gh = GhCli(repo_dir, token, run)
+
+    def __call__(self, number: int) -> str:
+        row = self.gh.json("pr", "view", str(number), "--json", "state")
+        state = row.get("state") if isinstance(row, dict) else None
+        if not isinstance(state, str) or not state:
+            raise PickError(f"gh pr view {number} returned no state")
+        return state.upper()
+
+
 @dataclass
 class Services:
     """Everything ``run`` and ``intake`` touch outside the process. Tests build fakes of these."""
@@ -193,6 +216,8 @@ class Services:
     today: datetime | None = None
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
     repo_info: Callable[[], str | None] | None = field(default=None)
+    # `status --check-prs`: PR number -> state (OPEN, MERGED, CLOSED); raises PickError when it cannot be read.
+    pr_state: Callable[[int], str] | None = None
 
 
 ServicesFactory = Callable[[SisyphusConfig], Services]
@@ -234,6 +259,7 @@ def default_services(config: SisyphusConfig) -> Services:
         pr_client=GhPullRequestClient(gh),
         agent_runner=runner,
         repo_info=repo_info,
+        pr_state=GhPrStateLookup(repo_dir, token),
     )
 
 
@@ -698,13 +724,34 @@ def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_
     return lines
 
 
+# Pre-#129 stage that no longer exists in STAGE_ORDER; old run records still carry it.
+LEGACY_FINISHED_STAGE = "ci-fix"
+
+
 def _is_settled(rec: RunRecord, stop: Any) -> bool:
-    """Settled: abandoned (no checkpoint), or finished (``open-pr`` complete) and not stopped."""
+    """Settled: abandoned (no checkpoint), or finished (``open-pr`` or legacy ``ci-fix`` complete) and not stopped."""
     if rec.checkpoint is not None:
         return False
+    if rec.retries.get(GATE_FAILED_KEY) and not is_abandoned(stop):
+        return False  # a failed gate leaves no checkpoint; keep the item visible
     if is_abandoned(stop):
         return True
-    return rec.stage == OPEN_PR_STAGE and rec.stage_status == STAGE_COMPLETE and not is_stopped(rec, stop)
+    finished_stage = rec.stage in (OPEN_PR_STAGE, LEGACY_FINISHED_STAGE)
+    return finished_stage and rec.stage_status == STAGE_COMPLETE and not is_stopped(rec, stop)
+
+
+def _pr_closed(rec: RunRecord, stop: Any, pr_state: Callable[[int], str]) -> bool:
+    """True if the record's PR is MERGED or CLOSED. Fails open: any lookup failure warns on stderr and returns False."""
+    number = rec.retries.get(PR_NUMBER_KEY)
+    if not number:
+        return False
+    if rec.checkpoint is None and stop is None and rec.stage_status == STAGE_IN_PROGRESS:
+        return False  # in progress with no stop record: may be running now, never hidden or looked up
+    try:
+        return pr_state(number) in ("MERGED", "CLOSED")
+    except (PickError, OSError, ValueError) as exc:
+        click.echo(f"warning: cannot check PR #{number} for {rec.item}: {exc}", err=True)
+        return False
 
 
 @main.command("status")
@@ -715,14 +762,21 @@ def _is_settled(rec: RunRecord, stop: Any) -> bool:
     is_flag=True,
     help="Show every item. By default settled items (abandoned, finished) are hidden.",
 )
+@click.option(
+    "--check-prs",
+    "check_prs",
+    is_flag=True,
+    help="Query GitHub for each shown item's recorded PR and hide items whose PR is merged or closed.",
+)
 @config_option
 @click.pass_obj
 def status_command(
-    factory: ServicesFactory | None, work_item_ref: str | None, show_all: bool, config_path: str
+    factory: ServicesFactory | None, work_item_ref: str | None, show_all: bool, check_prs: bool, config_path: str
 ) -> None:
     """Show stage, checkpoint, question, action and resume command per item (read-only; no lock, no agent).
 
     Settled items (abandoned, or finished with no stop) are hidden unless --all or a WORK_ITEM_REF is given.
+    With --check-prs, items whose recorded PR is merged or closed are hidden too (one gh lookup each, 10 s timeout).
     """
     config = _load(config_path)
     _require(config, "workspace_dir")
@@ -735,9 +789,13 @@ def status_command(
         click.echo("no items")
         return
     hidden = 0
+    pr_state = _services(factory, config).pr_state if check_prs and not show_all and work_item_ref is None else None
     for rec in records:
         stop = read_stop_record(rec.path)
         if not show_all and work_item_ref is None and _is_settled(rec, stop):
+            hidden += 1
+            continue
+        if pr_state is not None and _pr_closed(rec, stop, pr_state):
             hidden += 1
             continue
         if rec.checkpoint is not None:
