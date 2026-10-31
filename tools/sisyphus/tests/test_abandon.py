@@ -199,3 +199,10 @@ def test_resume_again_on_a_not_abandoned_item_errors(tmp_path: Path, fake_run_it
 def test_c7_action_points_at_abandon() -> None:
     assert "sisyphus abandon REF --config F" in ACTIONS["C7"]
     assert "rebase the branch yourself" not in ACTIONS["C7"].lower()
+
+
+def test_is_started_archive_dir_is_optional(tmp_path: Path) -> None:
+    assert not is_started(tmp_path / "ws", "OLD-1", tmp_path / "archive")
+    RunRecord.open(tmp_path / "archive", "OLD-1")
+    assert is_started(tmp_path / "ws", "OLD-1", tmp_path / "archive")
+    assert not is_started(tmp_path / "ws", "OLD-1")

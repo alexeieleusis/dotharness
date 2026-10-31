@@ -135,6 +135,45 @@ def test_started_items_skipped_and_limit_caps(tmp_path: Path) -> None:
     assert run(LIN, [lin("ENG-2")], tmp_path, limit=0) == []
 
 
+def test_archived_github_item_is_not_repicked(tmp_path: Path) -> None:
+    archive = tmp_path / "archive"
+    RunRecord.open(archive, "#1")
+    got = pick_items(GH, FakeTracker([issue(1), issue(2)]), FakeLookup(), workspace_dir=tmp_path / "ws", limit=5,
+                     archive_dir=archive)  # fmt: skip
+    assert refs(got) == ["#2"]
+
+
+def test_archived_file_item_is_not_repicked(tmp_path: Path) -> None:
+    write_ticket(tmp_path / "in", "A-1", mtime=1)
+    write_ticket(tmp_path / "in", "A-2", mtime=2)
+    archive = tmp_path / "archive"
+    RunRecord.open(archive, "A-1")
+    picked = pick_items(file_src(tmp_path / "in"), pick.FileTracker(), None, workspace_dir=tmp_path / "ws", limit=5,
+                        archive_dir=archive)  # fmt: skip
+    assert refs(picked) == ["A-2"]
+
+
+def test_missing_or_none_archive_dir_picks_normally(tmp_path: Path) -> None:
+    cands = [lin("ENG-1"), lin("ENG-2")]
+    for archive in (tmp_path / "nope" / "archive", None):
+        got = pick_items(LIN, FakeTracker(cands), FakeLookup(), workspace_dir=tmp_path / "ws", limit=5,
+                         archive_dir=archive)  # fmt: skip
+        assert refs(got) == ["ENG-1", "ENG-2"]
+    assert not (tmp_path / "nope").exists()
+    assert not pick.is_started(tmp_path / "ws", "ENG-1", tmp_path / "nope")
+
+
+def test_is_started_checks_workspace_and_archive_only(tmp_path: Path) -> None:
+    ws, archive = tmp_path / "ws", tmp_path / "archive"
+    assert not pick.is_started(ws, "X-1", archive)
+    RunRecord.open(archive, "X-1")
+    assert pick.is_started(ws, "X-1", archive)
+    assert not pick.is_started(ws, "X-1")
+    RunRecord.open(ws, "X-2")
+    assert pick.is_started(ws, "X-2", archive)
+    assert not ws.joinpath("X-1.json").exists()
+
+
 def test_github_without_lookup_and_bad_source(tmp_path: Path) -> None:
     with pytest.raises(PickError):
         pick_items(GH, FakeTracker([issue(1)]), None, workspace_dir=tmp_path, limit=1)
