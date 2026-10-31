@@ -7,9 +7,11 @@ or mixed trackers.
 
 ## Path rule
 
-Path values (`repo_dir`, `workspace_dir`, `brief_path_template`, `dir`, `digest.path_template` and the
-`[knowledge]` paths) are returned exactly as written. Relative paths resolve against the invoking working
-directory, not the directory that holds the config file. The loader never touches the filesystem for them.
+Path values (`repo_dir`, `workspace_dir`, `brief_path_template`, `[source.work_item]` `dir`,
+`digest.path_template`, `[archive]` `dir` and the `[knowledge]` paths) are returned exactly as written.
+Relative paths resolve against the invoking working directory, not the directory that holds the config file.
+The loader never touches the filesystem for them. The one exception is `[archive] dir`, which commands resolve
+against `[project].workspace_dir` (see [`[archive]`](#archive)).
 
 ## Secrets
 
@@ -96,6 +98,26 @@ in the file and have no effect.
 |---|---|---|
 | `sizing_file` | string | none |
 | `conventions_path` | string | none |
+
+### `[archive]`
+
+Optional.
+
+| Key | Type | Default |
+|---|---|---|
+| `dir` | string | `archive` |
+
+`sisyphus archive --config F` moves the files of settled items from `[project].workspace_dir` into the archive
+directory (see [`sisyphus archive`](usage.md#sisyphus-archive)). The layout is flat and keeps the original
+names, for example `<archive>/_23147.json` and `<archive>/plan-147/`. The directory is created on first use.
+
+- A relative `dir` resolves against `[project].workspace_dir`, not the invoking working directory, so the
+  default is `<workspace_dir>/archive`. This is an exception to the Path rule above. A relative `dir` needs
+  `[project].workspace_dir`; without it the command fails with a config error.
+- An absolute `dir` is allowed and may be on another filesystem (the move is copy-then-delete).
+- The archive directory must not equal or contain the workspace root. That is a config error.
+- The loader checks only that `dir` is a string and returns it as written. It does not expand `~`, resolve it
+  or touch the filesystem. Callers expand `~` and resolve the path, and check the rule above, when they use it.
 
 ## Minimal example
 

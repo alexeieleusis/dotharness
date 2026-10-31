@@ -8,6 +8,7 @@ sisyphus run --config <file> [--base <branch>]
 sisyphus intake <work-item-ref> --config <file>
 sisyphus status [--all] [--check-prs] [<work-item-ref>] --config <file>
 sisyphus resume <work-item-ref> --config <file> [--base <branch>]
+sisyphus archive --config <file>
 ```
 
 ## `sisyphus run`
@@ -24,7 +25,8 @@ sisyphus resume <work-item-ref> --config <file> [--base <branch>]
      last).
    - GitHub: open, assigned to `assignee`, labelled `pick_label` (default `sisyphus`), oldest first. An issue
      with an open linked PR, or one mentioned as `#N` in an open PR body, is skipped. Merged or closed PRs do
-     not exclude an issue.
+     not exclude an issue. Archived items (see "`sisyphus archive`") are excluded by the archive record check, not
+     by PR state.
    - File: the `*.md` ticket files in `[source.work_item].dir`, in Linear priority order (1 to 4 first, none
      last), then oldest modification time first, then `ref`. No `assignee` is needed and no PR lookup runs. A file
      whose front matter is invalid (see "Ticket files and the producer") is skipped with a one-line note on
@@ -158,7 +160,8 @@ the last resort). When nothing is proven the note lists each proof tried and why
 Never a remote branch or PR change. A deletion is shown under Done and names the proof used. For proof (3) it gives
 the full head SHA, the PR number and `git fetch origin pull/<N>/head`, which recovers the commit from GitHub. Rerunning after the branch is gone
 is a silent no-op. The run record, digest, stop and answer
-files and `<brief>.intake.json` are never deleted.
+files and `<brief>.intake.json` are never deleted. `sisyphus archive` may move them (all except the digest) into
+the archive directory once the item is settled (see "`sisyphus archive`").
 
 **Answering.** C1: edit the brief and mark each open decision resolved. C2, C3, C4: write your answer to
 `<workspace_dir>/<item-encoded>.answer.md` (the path is in the action text. Any non-empty text counts). The
@@ -230,6 +233,46 @@ from the recorded stage (without `--again`, `resume` refuses an abandoned item a
 that is not abandoned is an error. Reusing `resume` keeps the surface small: one command continues work, one
 flag says "I know I abandoned this".
 
+## `sisyphus archive`
+
+`sisyphus archive --config F` moves every settled item's files out of `[project].workspace_dir` into the archive
+directory, so the workspace only holds items that still matter. Nothing is deleted. The directory comes from
+`[archive] dir` (default `archive`; a relative path is resolved against `[project].workspace_dir`, an absolute
+path is allowed and `~` is expanded).
+
+- **Files moved**, per item: the run record `<enc>.json`, the stop record `<enc>.json.stopped.json`,
+  `<enc>.answer.md`, `<enc>.answer.md.used`, the brief with its `.intake.json` sidecar, and the whole `plan-<n>/`
+  tree. `<enc>` is the encoded work-item ref used in file names, for example `_23147`.
+- **Flat layout, original names**, for example `<archive>/_23147.json` and `<archive>/plan-147/`. A brief outside
+  the workspace moves to `<archive>/<basename>`. A brief that is not found gives a warning (on stderr).
+- **Not moved**: digests, the shared pre-#147 `workspace/handoffs/` directory, and `file`-kind tickets in
+  `[source.work_item].dir`. Digests are never moved or deleted.
+- **Settled** has the same meaning as for `status` (see below): abandoned items, and finished items, are included.
+  There is no PR lookup and no `--check-prs`. In-progress, stopped, checkpointed and gate-failed items are never
+  moved.
+- **No arguments beyond `--config`**: no `REF`, no `--dry-run` and no `--dir` flag.
+- **Output**: one line per archived item (`<ref> -> <archive dir>`), then a total (`archived N item(s)`). When
+  there is nothing to archive it prints nothing and exits 0.
+- **Lock**: it takes the clone lock like `abandon` and exits 0 quietly when the lock is held.
+- **Name collisions**: a destination name that already exists refuses that item. It is reported to stderr, nothing
+  is overwritten, the other items continue, and the exit code is 1.
+- **Safe to rerun**: it creates the archive directory on first use and is idempotent. If it was interrupted, run it
+  again. The run record moves last, so an interrupted item is still found and completed.
+- **Config error**: an archive directory equal to, or containing, the workspace is a config error (exit 1, nothing
+  moved).
+
+**Effect on picking.** `sisyphus run` skips an item that has a run record in the workspace or in the archive
+directory (`pick.is_started` checks both). A missing archive directory means nothing is archived. Moving or
+deleting the archive re-enables picking of the archived items. No tombstones are written.
+
+**Archived items and other commands.** There is no fallback and no restore (un-archive) command. `resume`,
+`abandon` and `status REF` report `no run record for <ref>` for an archived item (for `status` see "`sisyphus
+status`" below). `intake` is different: it opens or creates the run record and does not check the archive, so it does not report
+that message and would start a fresh record in the workspace. Do not run it for an archived item.
+
+The flat layout is designed so that a future read-only `history` command could read it. No `history` command
+exists.
+
 ## `sisyphus status`
 
 `sisyphus status [REF] --config F` is read-only (no lock, no agent). For each item (all items without REF) it
@@ -250,8 +293,8 @@ When records exist but every one is hidden, `status` prints `no items needing at
 
 | code | meaning |
 |---|---|
-| 0 | success, nothing to do, lock held, or a run stopped at a checkpoint (C1..C8) after its digest was written (the checkpoint is in the digest's "Needs you" section) |
-| 1 | an unhandled error, a config error, `resume`/`status` of an item that has no record (or `resume` of one that is not stopped), or a digest that cannot be written (message on stderr) |
+| 0 | success, nothing to do (including `archive` with nothing to archive), lock held, or a run stopped at a checkpoint (C1..C8) after its digest was written (the checkpoint is in the digest's "Needs you" section) |
+| 1 | an unhandled error, a config error (including an `[archive] dir` equal to or containing the workspace), `resume`/`status` of an item that has no record (or `resume` of one that is not stopped), a digest that cannot be written (message on stderr), or `archive` refusing at least one item |
 
 The digest is always attempted when anything ran, even if the run failed early. The failure is recorded in
 its Deviations section.
