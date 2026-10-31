@@ -89,6 +89,16 @@ def test_prompt_file_has_exactly_two_placeholders() -> None:
             assert line.strip() not in text
 
 
+def test_prompt_file_forbids_uv_and_virtualenvs_in_repo() -> None:
+    # Read the checkout copy: an installed copy under ~/.harness would shadow it via knowledge_file.
+    root = find_checkout_root()
+    assert root is not None
+    text = (root / "knowledge" / "sisyphus" / "intake-prompt.md").read_text()
+    assert "`uv`" in text
+    assert "uv run" in text
+    assert "virtualenvs" in text
+
+
 def test_both_placeholders_substituted(config: SisyphusConfig) -> None:
     runner = FakeRunner()
     result = run_intake("ENG-1", config, runner)

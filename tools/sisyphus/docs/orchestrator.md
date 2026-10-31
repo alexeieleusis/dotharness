@@ -62,7 +62,7 @@ runs no later stage. Run again to resume: the run starts at the stage that stopp
 | C2 | The plan agent writes a stop report with `C2` (`OPEN_QUESTIONS.md` has entries it cannot resolve from the repository). |
 | C3 | The build agent writes a stop report with `C3` (a leaf reports an open question). |
 | C4 | The build agent writes a stop report with `C4` (a deviation changes a later leaf, or it cannot tell). |
-| C5 | The build agent writes a stop report with `C5` (a leaf exhausted its retries or left its scope). Intake changed the target repository. The build was already stopped by C5 three times (`RetryBound`), so it is not launched again. |
+| C5 | The build agent writes a stop report with `C5` (a leaf exhausted its retries or left its scope). Intake changed the target repository: that stop has its own action text (remove or revert the listed paths, then resume) with no retry reset, because resuming runs intake again. For a build stop, the build was already stopped by C5 three times (`RetryBound`), so it is not launched again. |
 | C6 | The plan has more than `max_leaves_per_run` leaves. `max_run_minutes` elapsed (checked before each stage). A rerun after the leaf-limit C6 does not run the plan agent again. |
 | C7 | The branch needs a rebase or force-push (remote branch not an ancestor of HEAD). Sisyphus never rebases or force-pushes. |
 | C8 | `GitHubError` from the PR client, a failed fetch, ls-remote or push. |
