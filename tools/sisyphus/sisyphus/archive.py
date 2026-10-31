@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import os
 import shutil
@@ -118,11 +119,32 @@ def item_files(config: SisyphusConfig, rec: RunRecord) -> list[Path]:
     return _collect(config, rec, None)[0]
 
 
-def _copy_then_delete(src: Path, dest: Path, warnings: list[str]) -> None:
-    if src.is_dir() and not src.is_symlink():
-        shutil.copytree(src, dest, symlinks=True)
+def _partial_path(dest: Path) -> Path:
+    return dest.with_name(f".{dest.name}.partial")
+
+
+def _remove_path(path: Path) -> None:
+    """Remove a file, symlink or tree; missing paths are ignored."""
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path, ignore_errors=True)
     else:
-        shutil.copy2(src, dest, follow_symlinks=False)
+        with contextlib.suppress(OSError):  # best effort: a leftover partial is retried on the next run
+            path.unlink(missing_ok=True)
+
+
+def _copy_then_delete(src: Path, dest: Path, warnings: list[str]) -> None:
+    # Copy to a temporary name, then rename: only a complete copy ever appears at ``dest``.
+    partial = _partial_path(dest)
+    _remove_path(partial)
+    try:
+        if src.is_dir() and not src.is_symlink():
+            shutil.copytree(src, partial, symlinks=True)
+        else:
+            shutil.copy2(src, partial, follow_symlinks=False)
+        os.rename(partial, dest)  # same directory, so never EXDEV
+    except BaseException:
+        _remove_path(partial)
+        raise
     try:
         if src.is_dir() and not src.is_symlink():
             shutil.rmtree(src)
@@ -149,11 +171,14 @@ def archive_item(config: SisyphusConfig, rec: RunRecord, archive_dir: Path) -> A
     (no rollback); source present and destination absent is moved. The run record moves last, so an
     interrupted run leaves the item in the workspace and a rerun completes it. A fully archived item is a no-op.
     Same filesystem uses ``os.replace``; on ``EXDEV`` the file or tree is copied, then the source deleted (a
-    failed delete is a warning and the source is left). Other ``OSError`` propagate.
+    failed delete is a warning and the source is left); the copy goes to ``.<name>.partial`` first and is renamed
+    when complete, so an existing destination is always whole and stale partials are cleaned on rerun. Other ``OSError`` propagate.
     """
     files, warnings = _collect(config, rec, archive_dir)
     result = ArchiveResult(item=rec.item, warnings=warnings)
     pairs = [(src, archive_dir / src.name) for src in files]
+    for _, dest in pairs:
+        _remove_path(_partial_path(dest))  # stale leftover of an interrupted cross-filesystem copy
     for _, dest in pairs:
         if dest.exists() or dest.is_symlink():
             result.collision = dest
