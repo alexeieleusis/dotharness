@@ -767,7 +767,7 @@ def archive_command(factory: ServicesFactory | None, config_path: str) -> None:
     refused = False
     try:
         with clone_lock(config.project.repo_dir, services.lock_dir):
-            for rec in list(iter_records(workspace)):
+            for rec in iter_records(workspace):
                 if is_settled(rec, read_stop_record(rec.path)):
                     outcome = _archive_one(config, rec, archive_dir)
                     archived += outcome is True
