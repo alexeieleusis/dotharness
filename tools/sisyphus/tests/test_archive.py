@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -289,6 +290,57 @@ def test_cross_filesystem_copy_then_delete(tmp_path: Path, monkeypatch: pytest.M
     assert (arch / "plan-147" / "handoffs" / "h.md").read_text() == "h"
     assert (arch / f"{ENC}.answer.md").read_text() == "answer"
     ws = tmp_path / "ws"
+    assert not (ws / "plan-147").exists()
+    assert not rec.path.exists()
+
+
+def test_cross_filesystem_interrupted_tree_copy_leaves_no_partial_and_rerun_completes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _config(tmp_path)
+    rec = _populate(cfg)
+    arch = tmp_path / "arch"
+    ws = tmp_path / "ws"
+
+    def exdev(src: str | Path, dst: str | Path) -> None:
+        raise OSError(errno.EXDEV, "cross-device")
+
+    real_copy2 = shutil.copy2
+    real_copytree = shutil.copytree
+    plan_copies = 0
+
+    def flaky_copy2(src: str | Path, dst: str | Path, **kw: object) -> object:
+        nonlocal plan_copies
+        if "plan-147" in str(src):
+            plan_copies += 1
+            if plan_copies == 2:
+                raise OSError(errno.ENOSPC, "no space")
+        return real_copy2(src, dst, **kw)  # type: ignore[arg-type]
+
+    def patched_copytree(src: str | Path, dst: str | Path, *args: object, **kw: object) -> object:
+        # recursive calls pass copy_function positionally; only inject it on the outermost call
+        if len(args) < 3:
+            kw.setdefault("copy_function", flaky_copy2)
+        return real_copytree(src, dst, *args, **kw)  # type: ignore[arg-type]
+
+    with monkeypatch.context() as mp:
+        mp.setattr(os, "replace", exdev)
+        mp.setattr(shutil, "copy2", flaky_copy2)
+        # copytree binds copy2 as a default argument, so patching the module attribute alone is not enough
+        mp.setattr(shutil, "copytree", patched_copytree)
+        with pytest.raises(OSError, match="no space"):
+            archive_item(cfg, rec, arch)
+    # the destination name never appears for an incomplete copy, and no partial is left behind
+    assert not (arch / "plan-147").exists()
+    assert not any(p.name.endswith(".partial") for p in arch.iterdir())
+    assert (ws / "plan-147" / "handoffs" / "h.md").exists()
+    assert rec.path.exists()
+
+    monkeypatch.setattr(os, "replace", exdev)
+    res = archive_item(cfg, rec, arch)
+    assert not res.refused
+    assert (arch / "plan-147" / "handoffs" / "h.md").read_text() == "h"
+    assert (arch / "plan-147" / "a.md").read_text() == "a"
     assert not (ws / "plan-147").exists()
     assert not rec.path.exists()
 
