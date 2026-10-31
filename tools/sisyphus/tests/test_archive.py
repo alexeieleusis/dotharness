@@ -8,16 +8,14 @@ from pathlib import Path
 import pytest
 
 from sisyphus.archive import (
-    LEGACY_FINISHED_STAGE,
     archive_item,
     check_archive_dir,
-    is_settled,
     item_files,
     resolve_archive_dir,
 )
 from sisyphus.config import ConfigError, SisyphusConfig, load_config
-from sisyphus.orchestrator import GATE_FAILED_KEY
-from sisyphus.runrecord import RunRecord
+from sisyphus.runrecord import GATE_FAILED_KEY, RunRecord
+from sisyphus.settled import LEGACY_FINISHED_STAGE, is_settled
 from sisyphus.stages import OPEN_PR_STAGE
 from sisyphus.stoprecord import build_abandoned_record, build_stop_record
 

@@ -30,7 +30,7 @@ from typing import Any
 
 import click
 
-from sisyphus.archive import archive_item, check_archive_dir, is_settled, resolve_archive_dir
+from sisyphus.archive import archive_item, check_archive_dir, resolve_archive_dir
 from sisyphus.cleanup import PrInfo
 from sisyphus.config import ConfigError, SisyphusConfig, load_config
 from sisyphus.digest import DigestReport, DigestWriteError, NeedsYou, describe_reset, needs_from_record, write_digest
@@ -73,6 +73,7 @@ from sisyphus.resume import (
     reset_stage_retries,
 )
 from sisyphus.runrecord import STAGE_IN_PROGRESS, RunRecord, record_path
+from sisyphus.settled import is_settled
 from sisyphus.stages import INTAKE_STAGE
 from sisyphus.stoprecord import (
     CLEARS_BY,

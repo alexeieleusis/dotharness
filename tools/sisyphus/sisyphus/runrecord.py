@@ -46,6 +46,7 @@ DEFAULT_STATE_DIR = "~/.local/share/dotharness/sisyphus"
 
 STAGE_IN_PROGRESS = "in_progress"
 STAGE_COMPLETE = "complete"
+GATE_FAILED_KEY = "gate-failed"  # additive: 1 once a gate command failed, so status and reruns still see it
 STAGE_STATUSES = (STAGE_IN_PROGRESS, STAGE_COMPLETE)
 
 RECORD_SUFFIX = ".json"

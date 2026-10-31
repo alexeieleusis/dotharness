@@ -52,7 +52,7 @@ from sisyphus.rails import (
     push_guard,
 )
 from sisyphus.resume import answer_path, consume_answer, is_settled, read_answer
-from sisyphus.runrecord import STAGE_COMPLETE, RunRecord
+from sisyphus.runrecord import GATE_FAILED_KEY, STAGE_COMPLETE, RunRecord
 from sisyphus.stages import (
     BUILD_RETRY_KEY,
     BUILD_STAGE,
