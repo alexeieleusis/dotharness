@@ -71,7 +71,10 @@ For each phase, in order:
    phase's own new or changed code. Tell it to write tests for the behaviour the phase
    implements, and to create or change those test files even when they are not in `Scope`.
    Adding these tests is not a reason to stop or to raise an open question. It must not
-   list "should I write tests?" as an open question. Tell it to end its report with its own
+   list "should I write tests?" as an open question. This exception applies only to this
+   prompt-driven build. The mechanical scope guard of `build run` has no such exception: it
+   stops on any changed path outside `Scope`, test files included. For `build run`, the
+   phase's test paths must be listed in `Scope`. Tell it to end its report with its own
    handoff summary.
 3. Once the sub-agent reports that the implementation is done, **commit the result** in
    the target repo. Use a message that names the phase, for example
