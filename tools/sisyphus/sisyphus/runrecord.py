@@ -52,23 +52,34 @@ STAGE_STATUSES = (STAGE_IN_PROGRESS, STAGE_COMPLETE)
 RECORD_SUFFIX = ".json"
 _MAX_ENCODED = 120
 _LITERAL = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-")
+_ASCII_FOLD = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 
 
 class RunRecordError(Exception):
     """Raised for a corrupt, truncated or otherwise unusable run record."""
 
 
+def fold_item(item: str) -> str:
+    """ASCII-only case fold of an item reference (public helper name: ``fold_item``).
+
+    Maps only ``A-Z`` to ``a-z``; every other code point is unchanged (no ``str.lower()``/``casefold()``,
+    so non-ASCII letters such as ``é``/``É`` stay distinct). Pure and deterministic.
+    """
+    return item.translate(_ASCII_FOLD)
+
+
 def encode_item(item: str) -> str:
     """Encode an item reference as a filesystem-safe, case-insensitive-safe stem.
 
-    Injective: bytes in ``[a-z0-9-]`` stay literal, every other UTF-8 byte
-    (including ``_``, upper case, ``/`` and ``.``) becomes ``_XX`` lower hex.
+    ASCII upper case is folded to lower case first (see :func:`fold_item`), so ``ENG-1`` and ``eng-1``
+    share a stem. Injective modulo ASCII case: bytes in ``[a-z0-9-]`` stay literal, every other UTF-8 byte
+    (including ``_``, non-ASCII, ``/`` and ``.``) becomes ``_XX`` lower hex.
     References whose encoding would be long get a truncated prefix plus the full
-    SHA-256 of the reference, which keeps names within filesystem limits.
+    SHA-256 of the folded reference, which keeps names within filesystem limits.
     """
     if not isinstance(item, str) or not item:
         raise ValueError("item reference must be a non-empty string")
-    raw = item.encode("utf-8")
+    raw = fold_item(item).encode("utf-8")
     encoded = "".join(chr(b) if chr(b) in _LITERAL and b < 128 else f"_{b:02x}" for b in raw)
     if len(encoded) <= _MAX_ENCODED:
         return encoded
@@ -234,8 +245,9 @@ def _validate(data: Any, item: str) -> str | None:
     for key in ("item", "stage", "stage_status", "checkpoint", "started_at", "updated_at", "retries"):
         if key not in data:
             return f"missing field {key!r}"
-    if data["item"] != item:
-        return f"item reference {data['item']!r} does not match {item!r}"
+    stored = data["item"]
+    if not isinstance(stored, str) or fold_item(stored) != fold_item(item):
+        return f"item reference {stored!r} does not match {item!r}"
     problem = _validate_scalars(data)
     if problem:
         return problem
