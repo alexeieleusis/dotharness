@@ -40,6 +40,7 @@ from sisyphus.digest import (
 from sisyphus.intake import AgentRunner, BoundaryViolation, resolve_brief_path, run_intake
 from sisyphus.lock import clone_lock
 from sisyphus.paths import knowledge_file, tool_dir
+from sisyphus.pick import LabelRemover
 from sisyphus.plan import leaf_stems, plan_path
 from sisyphus.plan import read_spf_config as _read_spf_config
 from sisyphus.rails import (
@@ -388,6 +389,7 @@ class _Run:
         subprocess_runner: SubprocessRunner,
         pr_client: PullRequestClient,
         clock: Callable[[], float],
+        label_remover: LabelRemover | None = None,
     ) -> None:
         if not config.project.repo_dir:
             raise OrchestratorError("[project].repo_dir is not set")
@@ -401,6 +403,7 @@ class _Run:
         self.agent = agent_runner
         self.sh = subprocess_runner
         self.gh = pr_client
+        self.label_remover = label_remover
         self.clock = clock
         self.repo = Path(config.project.repo_dir).expanduser()
         self.workspace = Path(config.project.workspace_dir).expanduser()
@@ -896,6 +899,7 @@ def run_item(
     agent_runner: AgentRunner,
     subprocess_runner: SubprocessRunner,
     pr_client: PullRequestClient,
+    label_remover: LabelRemover | None = None,
     clock: Callable[[], float] = time.monotonic,
     today: datetime | None = None,
     write_digest_file: bool = True,
@@ -915,7 +919,7 @@ def run_item(
     if not config.project.repo_dir:
         raise OrchestratorError("[project].repo_dir is not set")
     with nullcontext() if lock_held else clone_lock(config.project.repo_dir, options.lock_dir):
-        run = _Run(item, config, options, agent_runner, subprocess_runner, pr_client, clock)
+        run = _Run(item, config, options, agent_runner, subprocess_runner, pr_client, clock, label_remover)
         error: BaseException | None = None
         checkpoint: Checkpoint | None = None
         try:

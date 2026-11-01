@@ -302,3 +302,33 @@ def test_other_tool_keys_rejected(tmp_path: Path, table: str) -> None:
         load_config(write(tmp_path, MIN + f"[{table}]\ncommands = []\n"))
     with pytest.raises(ConfigError, match="gh_token_cmd"):
         load_config(write(tmp_path, 'gh_token_cmd = "x"\n' + MIN))
+
+
+def test_remove_label_when_settled_defaults_on_for_github(tmp_path: Path) -> None:
+    cfg = load_config(write(tmp_path, MIN + '[source.work_item]\nkind = "github"\n'))
+    assert cfg.source.work_item is not None
+    assert cfg.source.work_item.remove_label_when_settled is True
+    off = MIN + '[source.work_item]\nkind = "github"\nremove_label_when_settled = false\n'
+    cfg = load_config(write(tmp_path, off))
+    assert cfg.source.work_item is not None
+    assert cfg.source.work_item.remove_label_when_settled is False
+
+
+def test_remove_label_when_settled_rejected_for_linear(tmp_path: Path) -> None:
+    text = MIN + '[source.work_item]\nkind = "linear"\nremove_label_when_settled = true\n'
+    with pytest.raises(ConfigError, match=r"remove_label_when_settled is a github key.*linear.*mixed tracker"):
+        load_config(write(tmp_path, text))
+    cfg = load_config(write(tmp_path, MIN + '[source.work_item]\nkind = "linear"\n'))
+    assert cfg.source.work_item is not None
+    assert cfg.source.work_item.remove_label_when_settled is None
+
+
+def test_remove_label_when_settled_ignored_for_file(tmp_path: Path) -> None:
+    text = MIN + '[source.work_item]\nkind = "file"\ndir = "t"\nremove_label_when_settled = true\n'
+    assert load_config(write(tmp_path, text)).source.work_item is not None
+
+
+def test_remove_label_when_settled_must_be_boolean(tmp_path: Path) -> None:
+    text = MIN + '[source.work_item]\nkind = "github"\nremove_label_when_settled = "yes"\n'
+    with pytest.raises(ConfigError, match="remove_label_when_settled must be a boolean"):
+        load_config(write(tmp_path, text))

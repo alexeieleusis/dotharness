@@ -51,8 +51,10 @@ from sisyphus.pick import (
     Candidate,
     FileTracker,
     GhCli,
+    GhLabelRemover,
     GhPullRequestLookup,
     GitHubIssueTracker,
+    LabelRemover,
     LinearTracker,
     PickError,
     PullRequestLookup,
@@ -202,6 +204,16 @@ class GhPrStateLookup:
         return state.upper()
 
 
+class GhTimeboundLabelRemover(GhLabelRemover):
+    """:class:`GhLabelRemover` whose ``gh`` call is bounded by :data:`PR_STATE_TIMEOUT` (a timeout is exit 124)."""
+
+    def __init__(self, repo_dir: Path, token: str | None, timeout: float = PR_STATE_TIMEOUT) -> None:
+        def run(argv: Sequence[str], cwd: Path | None, env: Any) -> Any:
+            return run_subprocess(argv, cwd, env, timeout=timeout)
+
+        super().__init__(GhCli(repo_dir, token, run))
+
+
 @dataclass
 class Services:
     """Everything ``run`` and ``intake`` touch outside the process. Tests build fakes of these."""
@@ -218,6 +230,8 @@ class Services:
     repo_info: Callable[[], str | None] | None = field(default=None)
     # `status --check-prs`: PR number -> state (OPEN, MERGED, CLOSED); raises PickError when it cannot be read.
     pr_state: Callable[[int], str] | None = None
+    # Removes the pick label from a settled GitHub issue; `None` means no removal is available.
+    label_remover: LabelRemover | None = None
 
 
 ServicesFactory = Callable[[SisyphusConfig], Services]
@@ -260,6 +274,7 @@ def default_services(config: SisyphusConfig) -> Services:
         agent_runner=runner,
         repo_info=repo_info,
         pr_state=GhPrStateLookup(repo_dir, token),
+        label_remover=GhTimeboundLabelRemover(repo_dir, token),
     )
 
 
@@ -418,6 +433,7 @@ def _run_one(
             agent_runner=services.agent_runner,
             subprocess_runner=services.subprocess_runner,
             pr_client=services.pr_client,
+            label_remover=services.label_remover,
             clock=services.clock,
             today=services.today,
             write_digest_file=False,

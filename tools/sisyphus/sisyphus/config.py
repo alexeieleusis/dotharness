@@ -41,6 +41,7 @@ class WorkItemSource:
     pick_state: str | None = None
     pick_label: str | None = None
     dir: str | None = None
+    remove_label_when_settled: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +105,13 @@ def _str(table: dict[str, Any], section: str, key: str) -> str | None:
     return value
 
 
+def _bool(table: dict[str, Any], section: str, key: str) -> bool | None:
+    value = table.get(key)
+    if value is not None and not isinstance(value, bool):
+        raise ConfigError(f"[{section}] {key} must be a boolean, got {type(value).__name__}")
+    return value
+
+
 def _posint(table: dict[str, Any], section: str, key: str, default: int | None) -> int | None:
     value = table.get(key, default)
     if value is None:
@@ -129,7 +137,11 @@ def _choice(value: str | None, section: str, key: str, allowed: tuple[str, ...])
 
 def _parse_work_item(raw: Any) -> WorkItemSource:
     section = "source.work_item"
-    t = _table(raw, section, ("kind", "instruction", "assignee", "pick_state", "pick_label", "dir"))
+    t = _table(
+        raw,
+        section,
+        ("kind", "instruction", "assignee", "pick_state", "pick_label", "dir", "remove_label_when_settled"),
+    )
     kind = _choice(_str(t, section, "kind"), section, "kind", TRACKER_KINDS)
     pick_state = _str(t, section, "pick_state")
     pick_label = _str(t, section, "pick_label")
@@ -141,6 +153,14 @@ def _parse_work_item(raw: Any) -> WorkItemSource:
         raise ConfigError(
             f'[{section}] pick_label is a github key and cannot be used with kind = "linear" (mixed tracker)'
         )
+    remove_label = _bool(t, section, "remove_label_when_settled")
+    if kind == "linear" and remove_label is not None:
+        raise ConfigError(
+            f"[{section}] remove_label_when_settled is a github key"
+            ' and cannot be used with kind = "linear" (mixed tracker)'
+        )
+    if kind == "github" and remove_label is None:
+        remove_label = True
     dir_ = _str(t, section, "dir")
     if kind == "file" and dir_ is None:
         raise ConfigError(f'[{section}] dir is required when kind = "file"')
@@ -155,6 +175,7 @@ def _parse_work_item(raw: Any) -> WorkItemSource:
         pick_state=pick_state,
         pick_label=pick_label,
         dir=dir_,
+        remove_label_when_settled=remove_label,
     )
 
 

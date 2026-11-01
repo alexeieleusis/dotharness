@@ -25,7 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from sisyphus.config import WorkItemSource
+from sisyphus.config import SisyphusConfig, WorkItemSource
 from sisyphus.runrecord import record_path
 from sisyphus.subproc import CommandResult, run_command
 from sisyphus.ticketfile import TICKET_SUFFIX, parse_front_matter, ref_from_filename, ticket_dir, valid_file_ref
@@ -222,6 +222,49 @@ class GhCli:
             return json.loads(res.stdout or "null")
         except ValueError as exc:
             raise PickError(f"gh {' '.join(args[:2])} returned invalid JSON: {exc}") from exc
+
+
+class LabelRemovalError(PickError):
+    """``gh issue edit --remove-label`` failed (non-zero exit, including a timeout as 124)."""
+
+
+class LabelRemover(Protocol):
+    """Removes one label from one GitHub issue. Raises :class:`LabelRemovalError` on failure."""
+
+    def remove_label(self, number: int, label: str) -> None: ...
+
+
+class GhLabelRemover:
+    """Real :class:`LabelRemover`: ``gh issue edit <n> --remove-label <label>`` through :class:`GhCli`.
+
+    No failure is swallowed: any non-zero exit raises. Whether ``gh`` fails for a label absent from the issue
+    is unverified (decision O-1); GitHub itself treats removing an unattached label as a no-op.
+    """
+
+    def __init__(self, gh: GhCli) -> None:
+        self.gh = gh
+
+    def remove_label(self, number: int, label: str) -> None:
+        res = self.gh.run("issue", "edit", str(number), "--remove-label", label)
+        if res.returncode != 0:
+            raise LabelRemovalError(
+                f"gh issue edit {number} --remove-label failed (exit {res.returncode}): {res.stderr.strip()[-300:]}"
+            )
+
+
+_HASH_REF = re.compile(r"#(\d+)")
+
+
+def label_removal_number(config: SisyphusConfig, ref: str) -> int | None:
+    """Issue number to remove the pick label from, or ``None`` when no call may be made.
+
+    Only for ``kind = "github"`` with ``pick_label`` set and ``remove_label_when_settled`` on, and a ``#N`` ref.
+    """
+    wi = config.source.work_item
+    if wi is None or wi.kind != "github" or not wi.pick_label or not wi.remove_label_when_settled:
+        return None
+    match = _HASH_REF.fullmatch(ref)
+    return int(match.group(1)) if match else None
 
 
 class GitHubIssueTracker:
