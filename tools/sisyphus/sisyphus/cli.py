@@ -719,7 +719,8 @@ def _remove_pick_label(config: SisyphusConfig, services: Services, ref: str) -> 
     try:
         services.label_remover.remove_label(number, wi.pick_label)
     except Exception as exc:  # label removal is best effort; abandon must still succeed
-        click.echo(f"{ref}: pick label '{wi.pick_label}' not removed: {type(exc).__name__}: {exc}", err=True)
+        detail = " ".join(str(exc).split())  # collapse multi-line gh stderr so this stays one line
+        click.echo(f"{ref}: pick label '{wi.pick_label}' not removed: {type(exc).__name__}: {detail}", err=True)
 
 
 def _need_lines(rec: RunRecord, stop: Any, need: NeedsYou, config: SisyphusConfig, config_path: str) -> list[str]:

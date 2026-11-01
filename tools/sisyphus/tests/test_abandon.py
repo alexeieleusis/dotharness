@@ -265,8 +265,10 @@ def test_abandon_label_failure_is_one_stderr_line_and_exit_zero(tmp_path: Path) 
     assert is_abandoned(rec.path)
     stop = read_stop_record(rec.path)
     assert stop is not None and stop.kind == KIND_ABANDONED
-    err = [ln for ln in result.stderr.splitlines() if "not removed" in ln]
-    assert len(err) == 1 and "#7" in err[0] and "sisyphus" in err[0] and "boom" in err[0]
+    err = result.stderr.strip().splitlines()
+    assert len(err) == 1, result.stderr
+    assert "not removed" in err[0] and "#7" in err[0] and "sisyphus" in err[0]
+    assert "boom second line" in err[0]
     assert "abandoned (" in result.stdout
 
 
