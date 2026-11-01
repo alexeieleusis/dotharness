@@ -371,6 +371,15 @@ def test_prompts_carry_resolved_paths(world: World) -> None:
         assert not re.search(r"<(stage|brief path|handoff dir|target repo dir|target branch|stop report path)>", prompt)
 
 
+def test_build_prompt_carries_the_test_only_deviation_rule() -> None:
+    root = find_checkout_root()
+    assert root is not None
+    text = " ".join((root / "knowledge" / "spec-prism-flow" / "build-execution-prompt.md").read_text().split())
+    assert "test-only deviation" in text
+    assert "Context for later phases" in text
+    assert "tests" in text
+
+
 def test_build_prompt_handoff_dir_is_the_items_plan_dir_not_the_workspace_root(world: World) -> None:
     world.run()
     build = world.agent_prompts[2]

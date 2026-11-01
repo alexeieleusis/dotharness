@@ -78,6 +78,9 @@ sub-agent its prompt file and the project's config or `BRIEF.md`.
   that changes a later phase. In both cases, the build sub-agent stops and returns to you. It
   does not guess. If it cannot tell whether a deviation affects a later phase, it asks. When
   you answer, it continues.
+  A deviation made only of tests for the phase's own behaviour does not stop the build. The
+  sub-agent records those tests in `Context for later phases`. The definition is in
+  `build-execution-prompt.md`.
 - **Done.** Each sub-agent reports when it finishes. The build report lists every commit,
   every deviation, and every question raised.
 
