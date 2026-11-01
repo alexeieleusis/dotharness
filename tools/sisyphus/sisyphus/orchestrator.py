@@ -40,6 +40,7 @@ from sisyphus.digest import (
 from sisyphus.intake import AgentRunner, BoundaryViolation, resolve_brief_path, run_intake
 from sisyphus.lock import clone_lock
 from sisyphus.paths import knowledge_file, tool_dir
+from sisyphus.pick import LabelRemover, label_removal_number
 from sisyphus.plan import leaf_stems, plan_path
 from sisyphus.plan import read_spf_config as _read_spf_config
 from sisyphus.rails import (
@@ -50,11 +51,12 @@ from sisyphus.rails import (
     parse_push_argv,
     push_guard,
 )
-from sisyphus.resume import answer_path, consume_answer, read_answer
+from sisyphus.resume import answer_path, consume_answer, is_settled, read_answer
 from sisyphus.runrecord import STAGE_COMPLETE, RunRecord
 from sisyphus.stages import (
     BUILD_RETRY_KEY,
     BUILD_STAGE,
+    GATE_FAILED_KEY,
     INTAKE_STAGE,
     LEAF_LIMIT_KEY,
     OPEN_PR_STAGE,
@@ -83,7 +85,6 @@ BRANCH_PREFIX = "sisyphus/"
 PACKAGE_MARKERS = ("Makefile", "pyproject.toml", "package.json", "Cargo.toml", "go.mod")
 
 BRANCH_CREATED_KEY = "branch-created"
-GATE_FAILED_KEY = "gate-failed"  # additive: 1 once a gate command failed, so status and reruns still see it
 PR_NUMBER_KEY = "pr-number"  # additive: the PR number, so the branch cleanup can ask gh about it by number
 
 _STOP_CHECKPOINTS = {PLAN_STAGE: {"C2"}, BUILD_STAGE: {"C3", "C4", "C5"}}
@@ -388,6 +389,7 @@ class _Run:
         subprocess_runner: SubprocessRunner,
         pr_client: PullRequestClient,
         clock: Callable[[], float],
+        label_remover: LabelRemover | None = None,
     ) -> None:
         if not config.project.repo_dir:
             raise OrchestratorError("[project].repo_dir is not set")
@@ -401,6 +403,7 @@ class _Run:
         self.agent = agent_runner
         self.sh = subprocess_runner
         self.gh = pr_client
+        self.label_remover = label_remover
         self.clock = clock
         self.repo = Path(config.project.repo_dir).expanduser()
         self.workspace = Path(config.project.workspace_dir).expanduser()
@@ -530,6 +533,29 @@ class _Run:
             self.cleanup_done = outcome.message
         elif outcome.status == KEPT:
             self.note(outcome.message)
+
+    # -- pick-label removal once the item is settled (shared predicate: ``resume.is_settled``)
+
+    def settled(self) -> bool:
+        """Settled: abandoned, or finished (open-pr or legacy ci-fix complete) with no gate failure and not stopped.
+
+        ``execute`` clears the stop record on a no-checkpoint return, so abandonment is read from ``was_abandoned``.
+        """
+        return is_settled(self.rec, read_stop_record(self.rec.path), abandoned=self.was_abandoned)
+
+    def remove_pick_label(self) -> None:
+        """Remove the pick label once, when settled. A failure is only a digest note, never an error or a stop."""
+        if self.label_remover is None or not self.settled():
+            return
+        number = label_removal_number(self.config, self.item)
+        if number is None:
+            return
+        wi = self.config.source.work_item
+        label = (wi.pick_label if wi else None) or ""  # label_removal_number ensured both are set
+        try:
+            self.label_remover.remove_label(number, label)
+        except Exception as exc:  # never alters the exit code or the records (LabelRemovalError and anything else)
+            self.note(f"Label kept: {self.item} label '{label}' removal failed: {type(exc).__name__}: {exc}")
 
     def resume_command(self) -> str:
         template = self.opt.resume_command or "sisyphus resume {item} --config <your .sisyphus.toml>"
@@ -896,6 +922,7 @@ def run_item(
     agent_runner: AgentRunner,
     subprocess_runner: SubprocessRunner,
     pr_client: PullRequestClient,
+    label_remover: LabelRemover | None = None,
     clock: Callable[[], float] = time.monotonic,
     today: datetime | None = None,
     write_digest_file: bool = True,
@@ -915,13 +942,14 @@ def run_item(
     if not config.project.repo_dir:
         raise OrchestratorError("[project].repo_dir is not set")
     with nullcontext() if lock_held else clone_lock(config.project.repo_dir, options.lock_dir):
-        run = _Run(item, config, options, agent_runner, subprocess_runner, pr_client, clock)
+        run = _Run(item, config, options, agent_runner, subprocess_runner, pr_client, clock, label_remover)
         error: BaseException | None = None
         checkpoint: Checkpoint | None = None
         try:
             checkpoint = run.execute()
             if checkpoint is None:
                 run.cleanup_branch()
+                run.remove_pick_label()
         except Exception as exc:
             error = exc
             run.record_error(exc)

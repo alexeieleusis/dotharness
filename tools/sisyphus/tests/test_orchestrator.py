@@ -22,7 +22,14 @@ import pytest
 
 from sisyphus import orchestrator, pick
 from sisyphus.cleanup import PrInfo
-from sisyphus.config import DigestConfig, LimitsConfig, ProjectConfig, SisyphusConfig
+from sisyphus.config import (
+    DigestConfig,
+    LimitsConfig,
+    ProjectConfig,
+    SisyphusConfig,
+    SourceConfig,
+    WorkItemSource,
+)
 from sisyphus.digest import DigestWriteError
 from sisyphus.intake import resolve_brief_path
 from sisyphus.lock import LockHeld, clone_lock
@@ -46,7 +53,7 @@ from sisyphus.orchestrator import (
 from sisyphus.paths import find_checkout_root, knowledge_file, tool_dir
 from sisyphus.rails import Checkpoint
 from sisyphus.runrecord import RunRecord
-from sisyphus.stoprecord import build_abandoned_record, write_stop_record
+from sisyphus.stoprecord import build_abandoned_record, read_stop_record, write_stop_record
 
 ITEM = "ENG-1"
 SHA1 = "1" * 40
@@ -126,6 +133,11 @@ class World:
         self.pr_state_error: GitHubError | None = None
         self.pr_state_refs: list[str] = []
         self.find_calls = 0
+        # label remover behaviour
+        self.item = ITEM
+        self.source: WorkItemSource | None = None
+        self.label_calls: list[tuple[int, str]] = []
+        self.label_error: Exception | None = None
         # config
         self.limits = LimitsConfig()
         (self.repo / ".spec-prism-flow.toml").write_text('[build]\ncommands = ["make check", "make test"]\n')
@@ -138,6 +150,7 @@ class World:
                 workspace_dir=str(self.tmp / "ws"),
                 brief_path_template="<workspace_dir>/<item-id>/brief.md",
             ),
+            source=SourceConfig(work_item=self.source),
             limits=self.limits,
             digest=DigestConfig(path_template=str(self.tmp / "digest-<date>.md")),
         )
@@ -171,10 +184,10 @@ class World:
             for i in range(self.leaves):
                 (self.phases / f"{i:02d}-leaf{i}-leaf.md").write_text("x")
             if self.requirements is not None:
-                plan_dir = self.tmp / "ws" / orchestrator.plan_dir_name(ITEM)
+                plan_dir = self.tmp / "ws" / orchestrator.plan_dir_name(self.item)
                 plan_dir.mkdir(parents=True, exist_ok=True)
                 (plan_dir / "requirements.md").write_text(self.requirements)
-                manifest = {"brief": str(resolve_brief_path(self.config(), ITEM))}
+                manifest = {"brief": str(resolve_brief_path(self.config(), self.item))}
                 (plan_dir / "init_manifest.json").write_text(json.dumps(manifest))
             if self.plan_stop:
                 stop_path.write_text(json.dumps(self.plan_stop))
@@ -261,16 +274,23 @@ class World:
         self.existing_pr = PullRequest(42, "https://example.test/pr/42")
         return self.existing_pr
 
+    # ---- label remover (the LabelRemover protocol)
+    def remove_label(self, number: int, label: str) -> None:
+        self.label_calls.append((number, label))
+        if self.label_error:
+            raise self.label_error
+
     # ---- run
     def run(self, lock_held: bool = False, **kw: object) -> orchestrator.RunResult:
         return run_item(
-            ITEM,
+            self.item,
             self.config(),
             self.options(**kw),
             lock_held=lock_held,
             agent_runner=self.agent,
             subprocess_runner=self.shell,
             pr_client=self,
+            label_remover=self,
             clock=self.clock,
             today=TODAY,
         )
@@ -1740,3 +1760,74 @@ def test_existing_pr_does_not_open_or_retitle(world: World, monkeypatch: pytest.
     world.run()
     assert world.opened == []
     assert calls == []
+
+
+# ------------------------------------------------------------ pick-label removal when settled
+
+
+def _github(world: World, remove: bool = True) -> None:
+    world.item = "#7"
+    world.source = WorkItemSource(kind="github", pick_label="bot-pick", remove_label_when_settled=remove)
+
+
+def test_label_removed_once_on_clean_finish_with_configured_label(world: World) -> None:
+    _github(world)
+    result = world.run()
+    assert result.completed
+    assert world.label_calls == [(7, "bot-pick")]
+
+
+def test_no_tracker_call_for_linear(world: World) -> None:
+    # A #N ref with pick_label and removal on, so only the kind check can prevent a removal call.
+    # (The ``file`` kind rejects a ``#N`` ref at intake; its kind gate is covered in test_pick.)
+    world.item = "#7"
+    world.source = WorkItemSource(kind="linear", pick_label="bot-pick", remove_label_when_settled=True)
+    assert world.run().completed
+    assert world.label_calls == []
+
+
+def test_no_call_when_removal_is_off(world: World) -> None:
+    _github(world, remove=False)
+    assert world.run().completed
+    assert world.label_calls == []
+
+
+def test_no_call_when_gate_failed(world: World) -> None:
+    _github(world)
+    world.gate_rc = 2
+    assert world.run().completed
+    assert world.label_calls == []
+
+
+def test_no_call_when_a_checkpoint_is_set(world: World) -> None:
+    _github(world)
+    world.build_stops = [{"checkpoint": "C3", "leaf": "13-foo", "detail": "Use A or B?"}]
+    assert world.run().checkpoint is Checkpoint.C3
+    assert world.label_calls == []
+
+
+def test_removal_failure_is_a_digest_note_only(world: World) -> None:
+    _github(world)
+    world.label_error = pick.LabelRemovalError("permission denied")
+    result = world.run()
+    assert result.completed
+    assert result.checkpoint is None
+    rec = RunRecord.open(world.tmp / "ws", "#7")
+    assert rec.checkpoint is None
+    assert read_stop_record(rec.path) is None
+    assert "Label kept: #7 label 'bot-pick' removal failed: LabelRemovalError: permission denied" in world.digest_text()
+
+
+def test_unexpected_removal_error_is_also_swallowed(world: World) -> None:
+    _github(world)
+    world.label_error = OSError("network down")
+    assert world.run().completed
+    assert "removal failed: OSError: network down" in world.digest_text()
+
+
+def test_repeated_invocation_is_harmless(world: World) -> None:
+    _github(world)
+    world.run()
+    again = world.run()
+    assert again.completed
+    assert world.label_calls == [(7, "bot-pick")] * 2  # one per invocation; removal is idempotent on the tracker

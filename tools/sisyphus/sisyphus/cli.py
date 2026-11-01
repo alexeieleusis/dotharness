@@ -36,7 +36,6 @@ from sisyphus.digest import DigestReport, DigestWriteError, NeedsYou, describe_r
 from sisyphus.intake import AgentRunner, run_intake
 from sisyphus.lock import LockHeld, clone_lock
 from sisyphus.orchestrator import (
-    GATE_FAILED_KEY,
     PR_NUMBER_KEY,
     GitHubError,
     OrchestratorOptions,
@@ -51,25 +50,29 @@ from sisyphus.pick import (
     Candidate,
     FileTracker,
     GhCli,
+    GhLabelRemover,
     GhPullRequestLookup,
     GitHubIssueTracker,
+    LabelRemover,
     LinearTracker,
     PickError,
     PullRequestLookup,
     TrackerClient,
+    label_removal_number,
     pick_items,
 )
 from sisyphus.rails import PERMISSION_FLAG, LimitTracker
 from sisyphus.resume import (
     AUTO_RETRY_KEY,
     cleared,
+    is_settled,
     is_stopped,
     iter_records,
     list_waiting,
     reset_stage_retries,
 )
-from sisyphus.runrecord import STAGE_COMPLETE, STAGE_IN_PROGRESS, RunRecord, record_path
-from sisyphus.stages import INTAKE_STAGE, OPEN_PR_STAGE
+from sisyphus.runrecord import STAGE_IN_PROGRESS, RunRecord, record_path
+from sisyphus.stages import INTAKE_STAGE
 from sisyphus.stoprecord import (
     CLEARS_BY,
     build_abandoned_record,
@@ -202,6 +205,16 @@ class GhPrStateLookup:
         return state.upper()
 
 
+class GhTimeboundLabelRemover(GhLabelRemover):
+    """:class:`GhLabelRemover` whose ``gh`` call is bounded by :data:`PR_STATE_TIMEOUT` (a timeout is exit 124)."""
+
+    def __init__(self, repo_dir: Path, token: str | None, timeout: float = PR_STATE_TIMEOUT) -> None:
+        def run(argv: Sequence[str], cwd: Path | None, env: Any) -> Any:
+            return run_subprocess(argv, cwd, env, timeout=timeout)
+
+        super().__init__(GhCli(repo_dir, token, run))
+
+
 @dataclass
 class Services:
     """Everything ``run`` and ``intake`` touch outside the process. Tests build fakes of these."""
@@ -218,6 +231,8 @@ class Services:
     repo_info: Callable[[], str | None] | None = field(default=None)
     # `status --check-prs`: PR number -> state (OPEN, MERGED, CLOSED); raises PickError when it cannot be read.
     pr_state: Callable[[int], str] | None = None
+    # Removes the pick label from a settled GitHub issue; `None` means no removal is available.
+    label_remover: LabelRemover | None = None
 
 
 ServicesFactory = Callable[[SisyphusConfig], Services]
@@ -260,6 +275,7 @@ def default_services(config: SisyphusConfig) -> Services:
         agent_runner=runner,
         repo_info=repo_info,
         pr_state=GhPrStateLookup(repo_dir, token),
+        label_remover=GhTimeboundLabelRemover(repo_dir, token),
     )
 
 
@@ -418,6 +434,7 @@ def _run_one(
             agent_runner=services.agent_runner,
             subprocess_runner=services.subprocess_runner,
             pr_client=services.pr_client,
+            label_remover=services.label_remover,
             clock=services.clock,
             today=services.today,
             write_digest_file=False,
@@ -652,8 +669,10 @@ def abandon_command(factory: ServicesFactory | None, work_item_ref: str, config_
     """Abandon WORK_ITEM_REF: the explicit way out of a dead end (C7 and others).
 
     Marks the item abandoned and removes its waiting state so it no longer blocks auto-resume or picking.
-    Touches only Sisyphus's own state files: never the remote branch, any PR, the local branch, the run
-    record or the digest, and never rewrites history.
+    Touches only Sisyphus's own state files, plus one remote effect: for a GitHub issue ref (``#N``) with a
+    ``pick_label`` and ``remove_label_when_settled`` on, the pick label is now removed from the issue (a failure
+    is reported on stderr and never changes the exit code). Never the remote branch, any PR, the local branch,
+    the run record or the digest, and never rewrites history.
     """
     config = _load(config_path)
     _require(config, "repo_dir", "workspace_dir")
@@ -682,9 +701,26 @@ def abandon_command(factory: ServicesFactory | None, work_item_ref: str, config_
             )
             if rec.checkpoint is not None:
                 rec.set_checkpoint(None)
+            _remove_pick_label(config, services, work_item_ref)
     except LockHeld:
         return
-    click.echo(f"{work_item_ref}: abandoned (branch, any PR and the run record left as they are)")
+    click.echo(
+        f"{work_item_ref}: abandoned (branch, any PR and the run record left as they are; "
+        "the issue's pick label is removed for a GitHub item when remove_label_when_settled is on)"
+    )
+
+
+def _remove_pick_label(config: SisyphusConfig, services: Services, ref: str) -> None:
+    """Remove the pick label from a settled GitHub issue; any failure is one stderr line, never an exit code."""
+    number = label_removal_number(config, ref)
+    wi = config.source.work_item
+    if number is None or wi is None or not wi.pick_label or services.label_remover is None:
+        return
+    try:
+        services.label_remover.remove_label(number, wi.pick_label)
+    except Exception as exc:  # label removal is best effort; abandon must still succeed
+        detail = " ".join(str(exc).split())  # collapse multi-line gh stderr so this stays one line
+        click.echo(f"{ref}: pick label '{wi.pick_label}' not removed: {type(exc).__name__}: {detail}", err=True)
 
 
 def _need_lines(rec: RunRecord, stop: Any, need: NeedsYou, config: SisyphusConfig, config_path: str) -> list[str]:
@@ -722,22 +758,6 @@ def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_
     if need is not None:
         lines.extend(_need_lines(rec, stop, need, config, config_path))
     return lines
-
-
-# Pre-#129 stage that no longer exists in STAGE_ORDER; old run records still carry it.
-LEGACY_FINISHED_STAGE = "ci-fix"
-
-
-def _is_settled(rec: RunRecord, stop: Any) -> bool:
-    """Settled: abandoned (no checkpoint), or finished (``open-pr`` or legacy ``ci-fix`` complete) and not stopped."""
-    if rec.checkpoint is not None:
-        return False
-    if rec.retries.get(GATE_FAILED_KEY) and not is_abandoned(stop):
-        return False  # a failed gate leaves no checkpoint; keep the item visible
-    if is_abandoned(stop):
-        return True
-    finished_stage = rec.stage in (OPEN_PR_STAGE, LEGACY_FINISHED_STAGE)
-    return finished_stage and rec.stage_status == STAGE_COMPLETE and not is_stopped(rec, stop)
 
 
 def _pr_closed(rec: RunRecord, stop: Any, pr_state: Callable[[int], str]) -> bool:
@@ -792,7 +812,7 @@ def status_command(
     pr_state = _services(factory, config).pr_state if check_prs and not show_all and work_item_ref is None else None
     for rec in records:
         stop = read_stop_record(rec.path)
-        if not show_all and work_item_ref is None and _is_settled(rec, stop):
+        if not show_all and work_item_ref is None and is_settled(rec, stop):
             hidden += 1
             continue
         if pr_state is not None and _pr_closed(rec, stop, pr_state):

@@ -88,6 +88,14 @@ class Env:
         return (self.root / "digests" / "2026-01-02.md").read_text()
 
 
+class FakeLabelRemover:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, str]] = []
+
+    def remove_label(self, number: int, label: str) -> None:
+        self.calls.append((number, label))
+
+
 def make_env(
     tmp_path: Path,
     refs: Sequence[str] = (),
@@ -119,6 +127,7 @@ pick_state = "Todo"
         tracker=FakeTracker(refs),
         lookup=FakeLookup(),
         pr_client=prs or FakePrs(),
+        label_remover=FakeLabelRemover(),
         agent_runner=lambda _p: None,
         lock_dir=tmp_path / "locks",
         today=TODAY,
@@ -163,6 +172,7 @@ def test_picks_and_runs_item_with_base_and_writes_digest(tmp_path: Path, fake_ru
     assert options.lock_dir == tmp_path / "locks"
     assert kwargs["write_digest_file"] is False
     assert kwargs["pr_client"] is env.services.pr_client
+    assert kwargs["label_remover"] is env.services.label_remover
     assert "ENG-1: draft PR #7" in result.output
     assert "## Needs you" in env.digest
 

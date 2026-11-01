@@ -11,17 +11,20 @@ from pathlib import Path
 import pytest
 
 from sisyphus import pick
-from sisyphus.config import WorkItemSource
+from sisyphus.config import ProjectConfig, SisyphusConfig, SourceConfig, WorkItemSource
 from sisyphus.pick import (
     Candidate,
     ExecResult,
     GhCli,
+    GhLabelRemover,
     GhPullRequestLookup,
     GitHubIssueTracker,
+    LabelRemovalError,
     LinearTracker,
     LinkedPr,
     PickError,
     default_open_pr_check,
+    label_removal_number,
     mentions_issue,
     pick_items,
 )
@@ -446,3 +449,49 @@ def test_file_tracker_code_imports_no_harness() -> None:
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "FileTracker")
     for node in ast.walk(cls):
         assert not isinstance(node, ast.Import | ast.ImportFrom)
+
+
+def _cfg(kind: str = "github", pick_label: str | None = "bot", remove: bool | None = True) -> SisyphusConfig:
+    wi = WorkItemSource(kind=kind, pick_label=pick_label, remove_label_when_settled=remove)
+    return SisyphusConfig(project=ProjectConfig(), source=SourceConfig(work_item=wi))
+
+
+def test_label_remover_runs_edit_with_configured_label(tmp_path: Path) -> None:
+    ex = FakeExec([ExecResult(0)])
+    GhLabelRemover(GhCli(tmp_path, "tok", ex)).remove_label(7, "bot")
+    assert ex.calls == [(["gh", "issue", "edit", "7", "--remove-label", "bot"], tmp_path, {"GH_TOKEN": "tok"})]
+
+
+def test_label_remover_maps_failure_and_timeout_to_error() -> None:
+    with pytest.raises(LabelRemovalError, match=r"exit 1.*boom"):
+        GhLabelRemover(GhCli(None, None, FakeExec([ExecResult(1, "", "boom")]))).remove_label(7, "bot")
+    with pytest.raises(LabelRemovalError, match="exit 124"):
+        GhLabelRemover(GhCli(None, None, FakeExec([ExecResult(124, "", "timed out after 10.0s")]))).remove_label(7, "x")
+    assert issubclass(LabelRemovalError, PickError)
+
+
+def test_timebound_label_remover_passes_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from sisyphus import cli
+
+    seen: list[object] = []
+
+    def fake(argv: Sequence[str], cwd: Path | None, env: object, timeout: float | None = None) -> ExecResult:
+        seen.append((list(argv), timeout))
+        return ExecResult(124, "", "timed out")
+
+    monkeypatch.setattr(cli, "run_subprocess", fake)
+    with pytest.raises(LabelRemovalError):
+        cli.GhTimeboundLabelRemover(tmp_path, None).remove_label(3, "bot")
+    assert seen == [(["gh", "issue", "edit", "3", "--remove-label", "bot"], cli.PR_STATE_TIMEOUT)]
+    assert pytest.approx(10.0) == cli.PR_STATE_TIMEOUT
+
+
+def test_label_removal_number_gating() -> None:
+    assert label_removal_number(_cfg(), "#12") == 12
+    assert label_removal_number(_cfg(), "ABC-12") is None
+    assert label_removal_number(_cfg(), "#12x") is None
+    assert label_removal_number(_cfg(remove=False), "#12") is None
+    assert label_removal_number(_cfg(pick_label=None), "#12") is None
+    assert label_removal_number(_cfg(kind="linear"), "#12") is None
+    assert label_removal_number(_cfg(kind="file"), "#12") is None
+    assert label_removal_number(SisyphusConfig(project=ProjectConfig()), "#12") is None

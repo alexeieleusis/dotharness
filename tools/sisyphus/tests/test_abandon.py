@@ -20,7 +20,7 @@ from sisyphus.stoprecord import (
     read_stop_record,
     write_stop_record,
 )
-from tests.test_cli import FakePrs, items, make_env
+from tests.test_cli import FakeLabelRemover, FakePrs, items, make_env
 from tests.test_resume import run, stopped
 
 
@@ -199,3 +199,91 @@ def test_resume_again_on_a_not_abandoned_item_errors(tmp_path: Path, fake_run_it
 def test_c7_action_points_at_abandon() -> None:
     assert "sisyphus abandon REF --config F" in ACTIONS["C7"]
     assert "rebase the branch yourself" not in ACTIONS["C7"].lower()
+
+
+GITHUB_SOURCE = """[source.work_item]
+kind = "github"
+assignee = "me"
+pick_label = "sisyphus"
+"""
+
+
+def github_env(tmp_path: Path, extra_key: str = "", kind_block: str | None = None) -> tuple[Any, FakeLabelRemover]:
+    env, _ = abandon_env(tmp_path)
+    text = env.config.read_text()
+    old = '[source.work_item]\nkind = "linear"\nassignee = "me@x.io"\npick_state = "Todo"\n'
+    assert old in text
+    block = kind_block if kind_block is not None else GITHUB_SOURCE + extra_key
+    env.config.write_text(text.replace(old, block))
+    remover = FakeLabelRemover()
+    env.services.label_remover = remover
+    return env, remover
+
+
+class FailingRemover(FakeLabelRemover):
+    def remove_label(self, number: int, label: str) -> None:
+        super().remove_label(number, label)
+        raise RuntimeError("boom\nsecond line")
+
+
+def test_abandon_removes_pick_label(tmp_path: Path) -> None:
+    env, remover = github_env(tmp_path)
+    rec = stopped(env, "#7", "C7", brief=None)
+    result = abandon(env, "#7")
+    assert result.exit_code == 0, result.output
+    assert remover.calls == [(7, "sisyphus")]
+    assert "pick label" in result.output and is_abandoned(rec.path)
+
+
+def test_abandon_already_abandoned_makes_no_label_call(tmp_path: Path) -> None:
+    env, remover = github_env(tmp_path)
+    stopped(env, "#7", "C7", brief=None)
+    abandon(env, "#7")
+    assert remover.calls == [(7, "sisyphus")]
+    result = abandon(env, "#7")
+    assert result.exit_code == 0 and "already abandoned" in result.output
+    assert remover.calls == [(7, "sisyphus")]  # repeated invocation is harmless, no retry (O-3)
+
+
+def test_abandon_without_record_or_under_lock_makes_no_label_call(tmp_path: Path) -> None:
+    env, remover = github_env(tmp_path)
+    assert abandon(env, "#9").exit_code == 1
+    stopped(env, "#7", "C7", brief=None)
+    with clone_lock(tmp_path / "repo", tmp_path / "locks"):
+        assert abandon(env, "#7").exit_code == 0
+    assert remover.calls == []
+
+
+def test_abandon_label_failure_is_one_stderr_line_and_exit_zero(tmp_path: Path) -> None:
+    env, _ = github_env(tmp_path)
+    remover = FailingRemover()
+    env.services.label_remover = remover
+    rec = stopped(env, "#7", "C7", brief=None)
+    result = abandon(env, "#7")
+    assert result.exit_code == 0 and result.exception is None
+    assert remover.calls == [(7, "sisyphus")]
+    assert is_abandoned(rec.path)
+    stop = read_stop_record(rec.path)
+    assert stop is not None and stop.kind == KIND_ABANDONED
+    err = result.stderr.strip().splitlines()
+    assert len(err) == 1, result.stderr
+    assert "not removed" in err[0] and "#7" in err[0] and "sisyphus" in err[0]
+    assert "boom second line" in err[0]
+    assert "abandoned (" in result.stdout
+
+
+def test_abandon_label_gating_makes_no_call(tmp_path: Path) -> None:
+    cases = {
+        "non-hash ref": (GITHUB_SOURCE, "OLD-1"),
+        "key off": (GITHUB_SOURCE + "remove_label_when_settled = false\n", "#7"),
+        "linear": ('[source.work_item]\nkind = "linear"\nassignee = "me@x.io"\npick_state = "Todo"\n', "#7"),
+        "file": ('[source.work_item]\nkind = "file"\ndir = "items"\n', "#7"),
+    }
+    for name, (block, ref) in cases.items():
+        sub = tmp_path / name.replace(" ", "_")
+        sub.mkdir()
+        env, remover = github_env(sub, kind_block=block)
+        stopped(env, ref, "C7", brief=None)
+        result = abandon(env, ref)
+        assert result.exit_code == 0, (name, result.output)
+        assert remover.calls == [], name

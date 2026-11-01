@@ -13,3 +13,4 @@ STAGE_ORDER = (INTAKE_STAGE, PLAN_STAGE, BUILD_STAGE, PUSH_STAGE, OPEN_PR_STAGE)
 AUTO_RETRY_KEY = "auto-retry"
 BUILD_RETRY_KEY = f"{BUILD_STAGE}:retry-cycles"
 LEAF_LIMIT_KEY = f"{PLAN_STAGE}:leaf-limit"
+GATE_FAILED_KEY = "gate-failed"  # additive: 1 once a gate command failed, so status and reruns still see it
