@@ -36,6 +36,11 @@ default is listed.
 then `main`. `main` is the correct base for normal use. You need `--base` or this key only if you work on your own stacked branch (a branch whose PR targets
 another unmerged branch). Set it to point at that parent branch.
 
+In `brief_path_template`, `<item-id>` is the folded stem of the work-item reference: the reference is
+ASCII-lower-cased and escaped, substituted as `template.replace("<item-id>", encode_item(item))`. For example
+`#147` gives `_23147` and the mixed-case `ENG-12` gives `eng-12`, so the brief is `<workspace_dir>/eng-12.brief.md`
+with the template above. References that differ only in ASCII case (`ENG-12` and `eng-12`) are one work item.
+
 ### `[source.work_item]`
 
 Declares the single tracker. Exactly one tracker is allowed.

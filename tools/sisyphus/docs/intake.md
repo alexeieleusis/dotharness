@@ -2,7 +2,8 @@
 
 `sisyphus.intake.run_intake(item, config, runner, record=None)` turns a work-item reference into a brief at
 `[project].brief_path_template` (placeholders `<workspace_dir>` and `<item-id>`, where `<item-id>` is the
-run-record encoding of the reference). It needs `[project].repo_dir` and `[project].workspace_dir`.
+folded stem of the reference, the run-record encoding `encode_item(item)`, substituted as
+`template.replace("<item-id>", encode_item(item))`; `ENG-12` gives `eng-12`). It needs `[project].repo_dir` and `[project].workspace_dir`.
 
 ## Prompt and placeholders
 

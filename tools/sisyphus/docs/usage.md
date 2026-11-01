@@ -93,6 +93,17 @@ Runs only the intake stage for one work item reference: the agent drafts the bri
 `brief_path_template`. Prints `brief: <path>` and any open decisions (checkpoint C1). Needs
 `[project].repo_dir`, `workspace_dir` and `brief_path_template`. Takes the same lock. Exits 0 quietly if held.
 
+### File names and case
+
+File names under `workspace_dir` use `<enc>`, the encoded work-item reference (the folded stem
+`encode_item(item)`), for example `#147` gives `_23147` and the mixed-case `ENG-12` gives `eng-12`. The
+reference is lower-cased (ASCII only) first, so references that differ only in ASCII case are one work item and share
+one record. The stored record keeps the original spelling.
+
+**Upgrade precondition.** Records created under the old encoding (which escaped upper case, for example `ENG-12`
+gave `_45_4e_47-12`) are not found after upgrading, so `is_started`, `resume`, `status` and `archive` will not see
+them. Process or archive all existing items before upgrading. There is no warning and no migration command.
+
 ## Ticket files and the producer
 
 With `kind = "file"` Sisyphus reads tickets from `<dir>/<ref>.md`. Each file is a front-matter block, then the
