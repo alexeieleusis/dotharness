@@ -24,7 +24,10 @@ sisyphus resume <work-item-ref> --config <file> [--base <branch>]
      last).
    - GitHub: open, assigned to `assignee`, labelled `pick_label` (default `sisyphus`), oldest first. An issue
      with an open linked PR, or one mentioned as `#N` in an open PR body, is skipped. Merged or closed PRs do
-     not exclude an issue.
+     not exclude an issue. Sisyphus removes `pick_label` from the issue when the item settles (the draft PR is
+     open, or you abandon it) unless `remove_label_when_settled = false`; see "Dead ends: `sisyphus abandon`" and
+     the orchestrator doc. To queue the issue again, relabel it by hand: `resume --again` does not restore the
+     label, and items settled before this behaviour existed are not back-filled.
    - File: the `*.md` ticket files in `[source.work_item].dir`, in Linear priority order (1 to 4 first, none
      last), then oldest modification time first, then `ref`. No `assignee` is needed and no PR lookup runs. A file
      whose front matter is invalid (see "Ticket files and the producer") is skipped with a one-line note on
@@ -219,16 +222,24 @@ message otherwise) and then:
 - marks the item abandoned: the stop record becomes `kind: "abandoned"` with the time in `stopped_at`, and the
   run record's checkpoint is cleared. The run record, the local branch, the digest and the answer/brief files stay.
 - removes the waiting state: the item is no longer "awaiting you", and is never auto-resumed. It is never re-picked either (any run record makes an item non-pickable).
+- for a GitHub item, removes the issue's pick label after the abandoned stop record is written. This runs only
+  when `pick_label` is set, `remove_label_when_settled` is on (default) and `REF` has the form `#<number>`; any
+  other ref form, `kind = "linear"` or `"file"`, or the key off makes no call. If the removal fails, `abandon`
+  prints one stderr line, `<ref>: pick label '<label>' not removed: <ExcType>: <message>`, and still exits 0: the
+  item stays abandoned. A label the issue does not carry is not an error; a label that does not exist in the
+  repository is a configuration error you must fix, and shows up as that stderr line.
 - never touches the remote branch or any PR, never rewrites history or force-pushes. What happens to them is for
-  you to decide by hand.
+  you to decide by hand. The issue's pick label is the only thing on the remote that `abandon` changes.
 
-Abandoning an already abandoned item is a no-op (exit 0). `status` shows `state: abandoned`, `abandoned_at` and
+Abandoning an already abandoned item is a no-op (exit 0, `<ref>: already abandoned`, no label call, so a failed
+removal is not retried by running `abandon` again; remove the label by hand). `status` shows `state: abandoned`, `abandoned_at` and
 the `re-enable` command. The digest lists a short "Abandoned" note under Deviations (not under "Needs you").
 
 **Re-enabling is deliberate:** `sisyphus resume REF --config F --again` clears the abandoned mark and resumes
 from the recorded stage (without `--again`, `resume` refuses an abandoned item and says so). `--again` on an item
 that is not abandoned is an error. Reusing `resume` keeps the surface small: one command continues work, one
-flag says "I know I abandoned this".
+flag says "I know I abandoned this". `--again` does not restore the pick label; relabel the issue by hand to
+queue it again.
 
 ## `sisyphus status`
 

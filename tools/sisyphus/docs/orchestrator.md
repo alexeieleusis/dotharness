@@ -114,6 +114,7 @@ never guessed. The Done entry's evidence says `gate passed`, `gate failed: <comm
   CLI. `default_subprocess_runner` is the real implementation for the CLI.
 - `pr_client: PullRequestClient`: `find_pr(branch) -> PullRequest | None` and
   `open_pr(branch, base, title, body) -> PullRequest`, which creates a draft PR (the real adapter runs `gh pr create --draft`). Raise `GitHubError` for an unrecoverable failure (C8).
+- `label_remover: LabelRemover`: `remove_label(number, label)`; see "Pick label removal".
 - `clock: Callable[[], float]` (default `time.monotonic`) feeds `LimitTracker`.
 
 `OrchestratorOptions` carries `base_branch`, `default_branch`, `spf_config_path`, `phase_dir`,
@@ -128,6 +129,22 @@ set to `<workspace_dir>/plan-<n>` and `plan.phase_dir` set to `phase_dir` or `<w
 receive this path as `phase config path`, and the orchestrator reads `build.commands` and counts leaves from it. The
 repository's file is never modified. Build-stage handoff summaries are saved as
 `<workspace_dir>/plan-<n>/handoffs/NN-<leaf name>.md`, and the orchestrator creates the `handoffs/` directory before the build stage.
+
+## Pick label removal
+
+For a GitHub work item with `pick_label` set and `remove_label_when_settled` on (default), `run_item` removes the
+issue's pick label through the injected `label_remover` (the real adapter runs `gh issue edit <n> --remove-label
+<label>`) once the item is settled: the draft PR is open and `open-pr` is complete, with no checkpoint or stop
+record. It runs after branch cleanup and before the digest is written. Only a ref of the form `#<number>` is
+handled; any other ref, `kind = "linear"` or `"file"`, or the key off makes no call. Removing a label the issue
+does not carry succeeds; a label that does not exist in the repository fails (a configuration error to fix by
+hand).
+
+A removal failure never stops the run or changes its result: it is recorded as the digest note `Label kept:
+<item> label '<label>' removal failed: <ExcType>: <message>`. A repeated `run_item` on an already finished item
+calls the remover again (once per invocation); that is harmless because the removal is idempotent. `resume --again`
+does not restore the label and earlier-settled items are not back-filled. Merged or closed PRs still do not
+exclude an issue from the pick. `sisyphus abandon` has its own trigger; see `usage.md`.
 
 ## Locking, digest and reruns
 
