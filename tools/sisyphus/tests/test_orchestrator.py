@@ -375,9 +375,10 @@ def test_build_prompt_carries_the_test_only_deviation_rule() -> None:
     root = find_checkout_root()
     assert root is not None
     text = " ".join((root / "knowledge" / "spec-prism-flow" / "build-execution-prompt.md").read_text().split())
-    assert "test-only deviation" in text
-    assert "Context for later phases" in text
-    assert "tests" in text
+    assert re.search(r"A test-only deviation does not trigger the rules above\.", text)
+    assert re.search(r"A test-only deviation is made only of new or changed test files", text)
+    assert re.search(r"If a phase's deviations include anything besides such tests, the rules above apply", text)
+    assert re.search(r"Context for later phases: .*list the tests you added or changed", text)
 
 
 def test_build_prompt_handoff_dir_is_the_items_plan_dir_not_the_workspace_root(world: World) -> None:
