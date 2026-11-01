@@ -33,6 +33,16 @@ def test_minimal_defaults(tmp_path: Path) -> None:
     assert cfg.knowledge.sizing_file is None
 
 
+def test_archive_dir_default(tmp_path: Path) -> None:
+    assert load_config(write(tmp_path, MIN)).archive.dir == "archive"
+    assert load_config(write(tmp_path, MIN + "[archive]\n")).archive.dir == "archive"
+
+
+@pytest.mark.parametrize("value", ["out/archive", "/abs/archive", "~/archive", "../a"])
+def test_archive_dir_verbatim(tmp_path: Path, value: str) -> None:
+    assert load_config(write(tmp_path, MIN + f'[archive]\ndir = "{value}"\n')).archive.dir == value
+
+
 def test_str_path_accepted(tmp_path: Path) -> None:
     assert load_config(str(write(tmp_path, MIN))).project.repo_dir is None
 
@@ -140,6 +150,7 @@ def test_unknown_top_level(tmp_path: Path) -> None:
         "limits",
         "digest",
         "knowledge",
+        "archive",
     ],
 )
 def test_unknown_key_in_each_section(tmp_path: Path, section: str) -> None:
@@ -241,6 +252,7 @@ def test_relative_paths_verbatim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         ("[project]\n[limits]\nmax_run_minutes = true\n", "max_run_minutes"),
         ("[project]\nsource = 1\n", "source"),
         ("project = 1\n", "project"),
+        ("[project]\n[archive]\ndir = 1\n", "dir"),
     ],
 )
 def test_wrong_types(tmp_path: Path, text: str, key: str) -> None:
