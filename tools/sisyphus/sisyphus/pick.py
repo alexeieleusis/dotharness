@@ -237,8 +237,9 @@ class LabelRemover(Protocol):
 class GhLabelRemover:
     """Real :class:`LabelRemover`: ``gh issue edit <n> --remove-label <label>`` through :class:`GhCli`.
 
-    No failure is swallowed: any non-zero exit raises. Whether ``gh`` fails for a label absent from the issue
-    is unverified (decision O-1); GitHub itself treats removing an unattached label as a no-op.
+    No failure is swallowed: any non-zero exit raises. Verified against real ``gh`` (decision O-1): removing a label
+    the issue does not carry exits 0 (idempotent), while a label that does not exist in the repository exits
+    non-zero (``'<label>' not found``), which is a configuration error the human must fix.
     """
 
     def __init__(self, gh: GhCli) -> None:
