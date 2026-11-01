@@ -60,6 +60,7 @@ logger = logging.getLogger(__name__)
 DIGEST_PREFIX = "ci-fix digest:"
 CI_FIX_STATE_FILE = "ci_fix_state.json"
 PROMPT_FILE = "ci-fix-prompt.md"
+UNKNOWN_STEP = "UNKNOWN STEP"  # step column gh prints when it cannot map a log line to a step
 
 OUTCOME_NOT_REPRODUCED = "did-not-reproduce"
 OUTCOME_CAP_REACHED = "cap-reached"
@@ -265,11 +266,33 @@ def _read_failed_log(repo: str, link: str, env: dict) -> str | None:
 
 
 def _failed_step_name(log: str) -> str | None:
-    """Step name from the first ``job<TAB>step<TAB>text`` line of a ``--log-failed`` output."""
+    """Step name from the first ``job<TAB>step<TAB>text`` line of a ``--log-failed`` output.
+
+    gh can print the placeholder ``UNKNOWN STEP`` instead of the real name; that is treated as no name
+    (see ``_failed_step_from_api``).
+    """
     for line in log.splitlines():
         parts = line.split("\t")
-        if len(parts) >= 3 and parts[1].strip():
+        if len(parts) >= 3 and parts[1].strip() and parts[1].strip() != UNKNOWN_STEP:
             return parts[1].strip()
+    return None
+
+
+def _failed_step_from_api(repo: str, link: str, env: dict) -> str | None:
+    """Name of the first failed step of the job in ``link``, from the job API; None when unavailable."""
+    job = _JOB_ID_RE.search(link)
+    if not job:
+        return None
+    result = _gh(["api", f"repos/{repo}/actions/jobs/{job.group(1)}"], env)
+    if result.returncode != 0:
+        return None
+    try:
+        steps = json.loads(_text(result.stdout)).get("steps") or []
+    except (json.JSONDecodeError, AttributeError):
+        return None
+    for step in steps:
+        if isinstance(step, dict) and step.get("conclusion") == "failure" and step.get("name"):
+            return str(step["name"])
     return None
 
 
@@ -451,7 +474,7 @@ def _fix_check(
     branch = pr["headRefName"]
 
     log = _read_failed_log(repo, check.link, env)
-    step_name = _failed_step_name(log) if log else None
+    step_name = (_failed_step_name(log) or _failed_step_from_api(repo, check.link, env)) if log else None
     if log is None or step_name is None:
         _digest(OUTCOME_PARSE_FAILURE, number, check.name, "could not read the failing job log or its step")
         return False
