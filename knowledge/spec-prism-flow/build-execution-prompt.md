@@ -67,7 +67,14 @@ For each phase, in order:
    `Requirements`, and `Acceptance criteria`, word for word. Also give it the paths of the
    handoff summary files of the phases already done (see "Handoff summary" below). Tell it to check its
    own work against the `Manual test checklist` before it reports that it is done. It must
-   not touch files outside the declared `Scope`. Tell it to end its report with its own
+   not touch files outside the declared `Scope`. The one exception is test files for the
+   phase's own new or changed code. Tell it to write tests for the behaviour the phase
+   implements, and to create or change those test files even when they are not in `Scope`.
+   Adding these tests is not a reason to stop or to raise an open question. It must not
+   list "should I write tests?" as an open question. This exception applies only to this
+   prompt-driven build. The mechanical scope guard of `build run` has no such exception: it
+   stops on any changed path outside `Scope`, test files included. For `build run`, the
+   phase's test paths must be listed in `Scope`. Tell it to end its report with its own
    handoff summary.
 3. Once the sub-agent reports that the implementation is done, **commit the result** in
    the target repo. Use a message that names the phase, for example
@@ -97,7 +104,8 @@ losing context.
 - Deviations from the plan: each difference from the leaf file (scope, names, shapes,
   skipped work, added work), and why. Write "None" if there are none.
 - Context for later phases: facts the next phases must know, such as a helper to reuse, a
-  constraint found in the code, or a slow or flaky test.
+  constraint found in the code, or a slow or flaky test. Also list the tests you added or
+  changed: file paths, and what each covers.
 - Open questions: each question that needs a human decision. Write "None" if there are none.
 ```
 
@@ -109,6 +117,18 @@ these rules:
   deviation affects a later phase, treat it as if it does, and ask the user.
 - If a summary lists an open question, stop. Ask the user. Continue after the user answers.
   Do not guess an answer.
+- A test-only deviation does not trigger the rules above. That holds even when a later
+  phase lists the same test file in its `Scope`: the later phase extends the file. A
+  test-only deviation is made only of new or changed test files that exercise only code
+  the phase itself added or changed. It leaves the phase's `Requirements` unchanged, and
+  changes no later phase's `Scope` except by that same-file extension.
+- If a phase's deviations include anything besides such tests, the rules above apply to
+  the whole summary unchanged. Examples: a changed `Scope`, a renamed or reshaped
+  interface, skipped work, or work that changes a later phase's `Requirements` or
+  dependencies. Tests for code the phase did not add or change are not exempt.
+
+Give the orchestrator's handoff paths, as before, to later phases. They carry the test
+list from `Context for later phases`.
 
 ## Done when
 

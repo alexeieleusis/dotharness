@@ -43,3 +43,17 @@ def test_check_raises_scope_violation_listing_exactly_the_offending_paths():
 def test_check_does_not_use_base_ref_beyond_formatting_the_hint():
     # base_ref is not resolved or validated -- an arbitrary string is accepted.
     assert check(["a/x.py"], ["a/*.py"], "not-a-real-ref") is None
+
+
+_PROMPT = Path(__file__).resolve().parents[4] / "knowledge" / "spec-prism-flow" / "build-execution-prompt.md"
+
+
+def test_guard_has_no_test_file_exception_and_prompt_says_so():
+    # The prompt tells the sub-agent it may write test files outside `Scope`. The mechanical
+    # guard does not allow that. If the guard ever gains an allowance, or the prompt drops its
+    # statement of the limitation, this test fails so the two are reconciled.
+    with pytest.raises(ScopeViolation):
+        check(["tests/test_foo.py"], ["src/foo.py"], "base")
+    text = " ".join(_PROMPT.read_text().split())
+    assert "applies only to this prompt-driven build" in text
+    assert "mechanical scope guard of `build run` has no such exception" in text
