@@ -52,7 +52,7 @@ from sisyphus.rails import (
     push_guard,
 )
 from sisyphus.resume import answer_path, consume_answer, is_settled, read_answer
-from sisyphus.runrecord import STAGE_COMPLETE, RunRecord
+from sisyphus.runrecord import STAGE_COMPLETE, RunRecord, fold_item
 from sisyphus.stages import (
     BUILD_RETRY_KEY,
     BUILD_STAGE,
@@ -182,21 +182,27 @@ class _Stop(Exception):
 
 
 def branch_name(item: str) -> str:
-    """Deterministic Sisyphus branch for ``item``: ``sisyphus/<slug>-<8 hex of sha256>``."""
+    """Deterministic Sisyphus branch for ``item``: ``sisyphus/<slug>-<8 hex of sha256>``.
+
+    The hash is taken over the ASCII-folded item, so case variants share one branch. Branches of existing mixed-case
+    items change hash (accepted; no migration).
+    """
     slug = re.sub(r"[^a-z0-9]+", "-", item.lower()).strip("-")[:40].strip("-") or "item"
-    return f"{BRANCH_PREFIX}{slug}-{hashlib.sha256(item.encode()).hexdigest()[:8]}"
+    return f"{BRANCH_PREFIX}{slug}-{hashlib.sha256(fold_item(item).encode()).hexdigest()[:8]}"
 
 
 def plan_dir_name(item: str) -> str:
     """Per-item plan directory name: ``plan-<n>`` for ``#<n>``, else ``plan-<slug>-<8 hex of sha256>``.
 
     The slug is truncated, so non-numeric references carry a hash of the full reference to keep distinct items apart.
+    The hash is taken over the ASCII-folded item, so case variants share one plan dir. Plan dirs of existing mixed-case
+    items change hash (accepted; no migration).
     """
     match = re.fullmatch(r"#?(\d+)", item.strip())
     if match:
         return f"plan-{match.group(1)}"
     slug = re.sub(r"[^a-z0-9]+", "-", item.lower()).strip("-")[:40].strip("-") or "item"
-    return f"plan-{slug}-{hashlib.sha256(item.encode()).hexdigest()[:8]}"
+    return f"plan-{slug}-{hashlib.sha256(fold_item(item).encode()).hexdigest()[:8]}"
 
 
 _BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")

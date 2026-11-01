@@ -800,6 +800,13 @@ def test_plan_dir_name() -> None:
     assert plan_dir_name("owner/repo#7").startswith("plan-owner-repo-7-")
 
 
+def test_plan_dir_name_is_case_insensitive_but_distinguishes_other_refs() -> None:
+    assert plan_dir_name("ENG-1") == plan_dir_name("eng-1")
+    assert plan_dir_name("Owner/Repo#7") == plan_dir_name("owner/repo#7")
+    assert plan_dir_name("ENG-1") != plan_dir_name("ENG-2")
+    assert plan_dir_name("ENG-1") != plan_dir_name("ENG_1")
+
+
 def test_plan_dir_name_distinguishes_refs_sharing_a_long_prefix() -> None:
     prefix = "https://linear.app/acme/issue/ENG-"
     a, b = plan_dir_name(f"{prefix}1/very-long-title"), plan_dir_name(f"{prefix}2/very-long-title")
@@ -1114,7 +1121,8 @@ def test_required_config_is_validated(world: World) -> None:
 
 def test_branch_name_is_deterministic_and_safe() -> None:
     assert branch_name("ENG-1") == branch_name("ENG-1")
-    assert branch_name("ENG-1") != branch_name("eng-1")
+    assert branch_name("ENG-1") == branch_name("eng-1")
+    assert branch_name("ENG-1") != branch_name("ENG-2")
     assert re.fullmatch(r"sisyphus/eng-1-[0-9a-f]{8}", branch_name("ENG-1"))
     assert re.fullmatch(r"sisyphus/item-[0-9a-f]{8}", branch_name("###"))
 
