@@ -66,7 +66,6 @@ from sisyphus.rails import PERMISSION_FLAG, LimitTracker
 from sisyphus.resume import (
     AUTO_RETRY_KEY,
     cleared,
-    is_settled,
     is_stopped,
     iter_records,
     list_waiting,

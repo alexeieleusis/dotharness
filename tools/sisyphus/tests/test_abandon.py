@@ -208,7 +208,7 @@ def test_is_started_archive_dir_is_optional(tmp_path: Path) -> None:
     assert not is_started(tmp_path / "ws", "OLD-1")
 
 
-qGITHUB_SOURCE = """[source.work_item]
+GITHUB_SOURCE = """[source.work_item]
 kind = "github"
 assignee = "me"
 pick_label = "sisyphus"
