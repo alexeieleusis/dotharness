@@ -59,6 +59,7 @@ from sisyphus.pick import (
     PickError,
     PullRequestLookup,
     TrackerClient,
+    label_removal_number,
     pick_items,
 )
 from sisyphus.rails import PERMISSION_FLAG, LimitTracker
@@ -668,8 +669,10 @@ def abandon_command(factory: ServicesFactory | None, work_item_ref: str, config_
     """Abandon WORK_ITEM_REF: the explicit way out of a dead end (C7 and others).
 
     Marks the item abandoned and removes its waiting state so it no longer blocks auto-resume or picking.
-    Touches only Sisyphus's own state files: never the remote branch, any PR, the local branch, the run
-    record or the digest, and never rewrites history.
+    Touches only Sisyphus's own state files, plus one remote effect: for a GitHub issue ref (``#N``) with a
+    ``pick_label`` and ``remove_label_when_settled`` on, the pick label is now removed from the issue (a failure
+    is reported on stderr and never changes the exit code). Never the remote branch, any PR, the local branch,
+    the run record or the digest, and never rewrites history.
     """
     config = _load(config_path)
     _require(config, "repo_dir", "workspace_dir")
@@ -698,9 +701,25 @@ def abandon_command(factory: ServicesFactory | None, work_item_ref: str, config_
             )
             if rec.checkpoint is not None:
                 rec.set_checkpoint(None)
+            _remove_pick_label(config, services, work_item_ref)
     except LockHeld:
         return
-    click.echo(f"{work_item_ref}: abandoned (branch, any PR and the run record left as they are)")
+    click.echo(
+        f"{work_item_ref}: abandoned (branch, any PR and the run record left as they are; "
+        "the issue's pick label is removed for a GitHub item when remove_label_when_settled is on)"
+    )
+
+
+def _remove_pick_label(config: SisyphusConfig, services: Services, ref: str) -> None:
+    """Remove the pick label from a settled GitHub issue; any failure is one stderr line, never an exit code."""
+    number = label_removal_number(config, ref)
+    wi = config.source.work_item
+    if number is None or wi is None or not wi.pick_label:
+        return
+    try:
+        services.label_remover.remove_label(number, wi.pick_label)
+    except Exception as exc:  # label removal is best effort; abandon must still succeed
+        click.echo(f"{ref}: pick label '{wi.pick_label}' not removed: {type(exc).__name__}: {exc}", err=True)
 
 
 def _need_lines(rec: RunRecord, stop: Any, need: NeedsYou, config: SisyphusConfig, config_path: str) -> list[str]:
