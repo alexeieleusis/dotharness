@@ -714,7 +714,7 @@ def _remove_pick_label(config: SisyphusConfig, services: Services, ref: str) -> 
     """Remove the pick label from a settled GitHub issue; any failure is one stderr line, never an exit code."""
     number = label_removal_number(config, ref)
     wi = config.source.work_item
-    if number is None or wi is None or not wi.pick_label:
+    if number is None or wi is None or not wi.pick_label or services.label_remover is None:
         return
     try:
         services.label_remover.remove_label(number, wi.pick_label)
