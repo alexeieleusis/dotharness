@@ -36,7 +36,6 @@ from sisyphus.digest import DigestReport, DigestWriteError, NeedsYou, describe_r
 from sisyphus.intake import AgentRunner, run_intake
 from sisyphus.lock import LockHeld, clone_lock
 from sisyphus.orchestrator import (
-    GATE_FAILED_KEY,
     PR_NUMBER_KEY,
     GitHubError,
     OrchestratorOptions,
@@ -66,13 +65,14 @@ from sisyphus.rails import PERMISSION_FLAG, LimitTracker
 from sisyphus.resume import (
     AUTO_RETRY_KEY,
     cleared,
+    is_settled,
     is_stopped,
     iter_records,
     list_waiting,
     reset_stage_retries,
 )
-from sisyphus.runrecord import STAGE_COMPLETE, STAGE_IN_PROGRESS, RunRecord, record_path
-from sisyphus.stages import INTAKE_STAGE, OPEN_PR_STAGE
+from sisyphus.runrecord import STAGE_IN_PROGRESS, RunRecord, record_path
+from sisyphus.stages import INTAKE_STAGE
 from sisyphus.stoprecord import (
     CLEARS_BY,
     build_abandoned_record,
@@ -760,22 +760,6 @@ def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_
     return lines
 
 
-# Pre-#129 stage that no longer exists in STAGE_ORDER; old run records still carry it.
-LEGACY_FINISHED_STAGE = "ci-fix"
-
-
-def _is_settled(rec: RunRecord, stop: Any) -> bool:
-    """Settled: abandoned (no checkpoint), or finished (``open-pr`` or legacy ``ci-fix`` complete) and not stopped."""
-    if rec.checkpoint is not None:
-        return False
-    if rec.retries.get(GATE_FAILED_KEY) and not is_abandoned(stop):
-        return False  # a failed gate leaves no checkpoint; keep the item visible
-    if is_abandoned(stop):
-        return True
-    finished_stage = rec.stage in (OPEN_PR_STAGE, LEGACY_FINISHED_STAGE)
-    return finished_stage and rec.stage_status == STAGE_COMPLETE and not is_stopped(rec, stop)
-
-
 def _pr_closed(rec: RunRecord, stop: Any, pr_state: Callable[[int], str]) -> bool:
     """True if the record's PR is MERGED or CLOSED. Fails open: any lookup failure warns on stderr and returns False."""
     number = rec.retries.get(PR_NUMBER_KEY)
@@ -828,7 +812,7 @@ def status_command(
     pr_state = _services(factory, config).pr_state if check_prs and not show_all and work_item_ref is None else None
     for rec in records:
         stop = read_stop_record(rec.path)
-        if not show_all and work_item_ref is None and _is_settled(rec, stop):
+        if not show_all and work_item_ref is None and is_settled(rec, stop):
             hidden += 1
             continue
         if pr_state is not None and _pr_closed(rec, stop, pr_state):

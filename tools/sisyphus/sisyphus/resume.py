@@ -15,11 +15,12 @@ from pathlib import Path
 
 from sisyphus.config import SisyphusConfig
 from sisyphus.intake import IntakeError, parse_open_decisions, resolve_brief_path
-from sisyphus.runrecord import RunRecord, record_path
+from sisyphus.runrecord import STAGE_COMPLETE, RunRecord, record_path
 from sisyphus.stages import (
     AUTO_RETRY_KEY,
     BUILD_RETRY_KEY,
     BUILD_STAGE,
+    GATE_FAILED_KEY,
     INTAKE_STAGE,
     OPEN_PR_STAGE,
     PLAN_STAGE,
@@ -108,6 +109,27 @@ def is_stopped(rec: RunRecord, stop: StopRecord | None) -> bool:
     if is_abandoned(stop):
         return False
     return rec.checkpoint is not None or stop is not None
+
+
+# Pre-#129 stage that no longer exists in STAGE_ORDER; old run records still carry it.
+LEGACY_FINISHED_STAGE = "ci-fix"
+
+
+def is_settled(rec: RunRecord, stop: StopRecord | None, *, abandoned: bool | None = None) -> bool:
+    """Settled: abandoned (no checkpoint), or finished (``open-pr`` or legacy ``ci-fix`` complete) and not stopped.
+
+    ``abandoned`` overrides what ``stop`` says, for a caller that already cleared the stop record.
+    """
+    if rec.checkpoint is not None:
+        return False
+    if abandoned is None:
+        abandoned = is_abandoned(stop)
+    if rec.retries.get(GATE_FAILED_KEY) and not abandoned:
+        return False  # a failed gate leaves no checkpoint; keep the item visible
+    if abandoned:
+        return True
+    finished_stage = rec.stage in (OPEN_PR_STAGE, LEGACY_FINISHED_STAGE)
+    return finished_stage and rec.stage_status == STAGE_COMPLETE and not is_stopped(rec, stop)
 
 
 def _stopped_at(rec: RunRecord, stop: StopRecord | None) -> datetime:

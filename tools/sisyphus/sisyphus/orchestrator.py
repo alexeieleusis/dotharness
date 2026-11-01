@@ -51,11 +51,12 @@ from sisyphus.rails import (
     parse_push_argv,
     push_guard,
 )
-from sisyphus.resume import answer_path, consume_answer, is_stopped, read_answer
+from sisyphus.resume import answer_path, consume_answer, is_settled, read_answer
 from sisyphus.runrecord import STAGE_COMPLETE, RunRecord
 from sisyphus.stages import (
     BUILD_RETRY_KEY,
     BUILD_STAGE,
+    GATE_FAILED_KEY,
     INTAKE_STAGE,
     LEAF_LIMIT_KEY,
     OPEN_PR_STAGE,
@@ -84,7 +85,6 @@ BRANCH_PREFIX = "sisyphus/"
 PACKAGE_MARKERS = ("Makefile", "pyproject.toml", "package.json", "Cargo.toml", "go.mod")
 
 BRANCH_CREATED_KEY = "branch-created"
-GATE_FAILED_KEY = "gate-failed"  # additive: 1 once a gate command failed, so status and reruns still see it
 PR_NUMBER_KEY = "pr-number"  # additive: the PR number, so the branch cleanup can ask gh about it by number
 
 _STOP_CHECKPOINTS = {PLAN_STAGE: {"C2"}, BUILD_STAGE: {"C3", "C4", "C5"}}
@@ -379,9 +379,6 @@ def _tail(text: str, n: int = 400) -> str:
 # --------------------------------------------------------------- the run
 
 
-_LEGACY_FINISHED_STAGE = "ci-fix"
-
-
 class _Run:
     def __init__(
         self,
@@ -537,23 +534,14 @@ class _Run:
         elif outcome.status == KEPT:
             self.note(outcome.message)
 
-    # -- pick-label removal once the item is settled (same semantics as ``cli._is_settled``)
+    # -- pick-label removal once the item is settled (shared predicate: ``resume.is_settled``)
 
     def settled(self) -> bool:
         """Settled: abandoned, or finished (open-pr or legacy ci-fix complete) with no gate failure and not stopped.
 
         ``execute`` clears the stop record on a no-checkpoint return, so abandonment is read from ``was_abandoned``.
         """
-        rec = self.rec
-        if rec.checkpoint is not None:
-            return False
-        if rec.retries.get(GATE_FAILED_KEY) and not self.was_abandoned:
-            return False
-        if self.was_abandoned:
-            return True
-        finished_stage = rec.stage in (OPEN_PR_STAGE, _LEGACY_FINISHED_STAGE)
-        stop = read_stop_record(rec.path)
-        return finished_stage and rec.stage_status == STAGE_COMPLETE and not is_stopped(rec, stop)
+        return is_settled(self.rec, read_stop_record(self.rec.path), abandoned=self.was_abandoned)
 
     def remove_pick_label(self) -> None:
         """Remove the pick label once, when settled. A failure is only a digest note, never an error or a stop."""
