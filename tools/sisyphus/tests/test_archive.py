@@ -4,6 +4,7 @@ import errno
 import os
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -307,19 +308,19 @@ def test_cross_filesystem_interrupted_tree_copy_leaves_no_partial_and_rerun_comp
     real_copytree = shutil.copytree
     plan_copies = 0
 
-    def flaky_copy2(src: str | Path, dst: str | Path, **kw: object) -> object:
+    def flaky_copy2(src: Any, dst: Any, **kw: Any) -> Any:
         nonlocal plan_copies
         if "plan-147" in os.fspath(src):  # copytree passes os.DirEntry objects
             plan_copies += 1
             if plan_copies == 2:
                 raise OSError(errno.ENOSPC, "no space")
-        return real_copy2(src, dst, **kw)  # type: ignore[arg-type]
+        return real_copy2(src, dst, **kw)
 
-    def patched_copytree(src: str | Path, dst: str | Path, *args: object, **kw: object) -> object:
+    def patched_copytree(src: Any, dst: Any, *args: Any, **kw: Any) -> Any:
         # recursive calls pass copy_function positionally; only inject it on the outermost call
         if len(args) < 3:
             kw.setdefault("copy_function", flaky_copy2)
-        return real_copytree(src, dst, *args, **kw)  # type: ignore[arg-type]
+        return real_copytree(src, dst, *args, **kw)
 
     with monkeypatch.context() as mp:
         mp.setattr(os, "replace", exdev)
