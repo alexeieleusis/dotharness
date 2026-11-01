@@ -456,3 +456,45 @@ def test_read_failing_checks_keeps_latest_failed_run_and_fails_closed_without_ti
 def test_failed_step_name_from_log():
     assert ci_fix._failed_step_name("quality\tRun checks\t2024Z ##[error]x") == "Run checks"
     assert ci_fix._failed_step_name("no tabs here") is None
+
+
+def test_failed_step_name_ignores_unknown_step_placeholder():
+    assert ci_fix._failed_step_name("quality\tUNKNOWN STEP\t2024Z error") is None
+    log = "quality\tUNKNOWN STEP\t2024Z a\nquality\tRun checks\t2024Z b"
+    assert ci_fix._failed_step_name(log) == "Run checks"
+
+
+def test_failed_step_from_api_picks_first_failed_step():
+    steps = [{"name": "Set up", "conclusion": "success"}, {"name": "Run checks", "conclusion": "failure"}]
+    with patch(P + "_gh", return_value=_proc(0, json.dumps({"steps": steps}).encode())) as gh:
+        assert ci_fix._failed_step_from_api("o/r", "https://x/actions/runs/9/job/8", {}) == "Run checks"
+    assert gh.call_args.args[0] == ["api", "repos/o/r/actions/jobs/8"]
+
+
+@pytest.mark.parametrize(
+    ("link", "result"),
+    [
+        ("https://x/actions/runs/9", _proc(0, b"{}")),  # no job id: no call at all
+        ("https://x/actions/runs/9/job/8", _proc(1)),
+        ("https://x/actions/runs/9/job/8", _proc(0, b"not json")),
+        ("https://x/actions/runs/9/job/8", _proc(0, b"[]")),
+        ("https://x/actions/runs/9/job/8", _proc(0, b'{"steps":[{"name":"a","conclusion":"success"}]}')),
+    ],
+)
+def test_failed_step_from_api_none_when_unavailable(link, result):
+    with patch(P + "_gh", return_value=result):
+        assert ci_fix._failed_step_from_api("o/r", link, {}) is None
+
+
+def test_fix_check_uses_api_step_when_log_says_unknown_step(tmp_path):
+    unknown = "quality\tUNKNOWN STEP\t2024Z error"
+    with (
+        _mocks(tmp_path) as m,
+        patch(P + "_read_failed_log", return_value=unknown),
+        patch(P + "_failed_step_from_api", return_value="Run checks") as api,
+        patch(P + "find_step_command", return_value=_Step("Run checks", "make check", "")) as find,
+    ):
+        ci_fix.run(_cfg(tmp_path))
+    api.assert_called_once()
+    assert find.call_args.args[1] == "Run checks"
+    assert m.pushes
