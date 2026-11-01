@@ -483,7 +483,7 @@ def test_timebound_label_remover_passes_timeout(monkeypatch: pytest.MonkeyPatch,
     with pytest.raises(LabelRemovalError):
         cli.GhTimeboundLabelRemover(tmp_path, None).remove_label(3, "bot")
     assert seen == [(["gh", "issue", "edit", "3", "--remove-label", "bot"], cli.PR_STATE_TIMEOUT)]
-    assert cli.PR_STATE_TIMEOUT == 10.0
+    assert cli.PR_STATE_TIMEOUT == pytest.approx(10.0)
 
 
 def test_label_removal_number_gating() -> None:
