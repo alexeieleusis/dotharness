@@ -492,6 +492,6 @@ def test_label_removal_number_gating() -> None:
     assert label_removal_number(_cfg(), "#12x") is None
     assert label_removal_number(_cfg(remove=False), "#12") is None
     assert label_removal_number(_cfg(pick_label=None), "#12") is None
-    assert label_removal_number(_cfg(kind="linear", pick_label=None), "#12") is None
-    assert label_removal_number(_cfg(kind="file", pick_label=None), "#12") is None
+    assert label_removal_number(_cfg(kind="linear"), "#12") is None
+    assert label_removal_number(_cfg(kind="file"), "#12") is None
     assert label_removal_number(SisyphusConfig(project=ProjectConfig()), "#12") is None

@@ -1777,10 +1777,12 @@ def test_label_removed_once_on_clean_finish_with_configured_label(world: World) 
     assert world.label_calls == [(7, "bot-pick")]
 
 
-@pytest.mark.parametrize("kind", ["linear", "file"])
-def test_no_tracker_call_for_linear_and_file(world: World, kind: str) -> None:
-    world.source = WorkItemSource(kind=kind, pick_label=None, **({"dir": "t"} if kind == "file" else {}))
-    world.run()
+def test_no_tracker_call_for_linear(world: World) -> None:
+    # A #N ref with pick_label and removal on, so only the kind check can prevent a removal call.
+    # (The ``file`` kind rejects a ``#N`` ref at intake; its kind gate is covered in test_pick.)
+    world.item = "#7"
+    world.source = WorkItemSource(kind="linear", pick_label="bot-pick", remove_label_when_settled=True)
+    assert world.run().completed
     assert world.label_calls == []
 
 
