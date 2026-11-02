@@ -49,7 +49,7 @@ uv run sisyphus archive --config .sisyphus.toml
 `archive` moves the files of settled items (run record, stop and answer files, brief with its intake sidecar,
 `plan-<n>/` tree) from `workspace_dir` into the archive directory (`[archive] dir`, default
 `<workspace_dir>/archive`). Digests, the shared pre-#147 `workspace/handoffs/` directory and `file`-kind tickets are
-not moved, and in-progress, stopped, checkpointed and gate-failed items never are. Like `abandon`, it takes the clone
+not moved, and in-progress, stopped and checkpointed items never are (a recorded gate failure does not matter). Like `abandon`, it takes the clone
 lock and exits 0 quietly when the lock is held. See [docs/usage.md](docs/usage.md#sisyphus-archive).
 
 To feed Sisyphus from local ticket files instead of a tracker, use the `file` kind. It picks the next

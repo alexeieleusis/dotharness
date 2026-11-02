@@ -67,7 +67,7 @@ optional). `dir` is rejected for any other kind.
 
 For `kind = "github"`, Sisyphus both reads and writes `pick_label`. With `remove_label_when_settled` on (the
 default), it removes the label from the issue when the item settles: when the finish trigger has opened the
-draft PR, or when you run `sisyphus abandon #<number>`. A removal failure is a digest note (finish) or one stderr
+draft PR (even if its gate failed; the failure stays in the digest and the PR), or when you run `sisyphus abandon #<number>`. A removal failure is a digest note (finish) or one stderr
 line (abandon), never a stop and never a changed exit code. Re-queuing is a manual relabel; `resume --again` does
 not restore the label, and items settled earlier are not back-filled. Set `remove_label_when_settled = false` to
 keep the label. Merged or closed PRs still do not exclude an issue from the pick.
@@ -121,7 +121,7 @@ Optional.
 | `dir` | string | `archive` |
 
 `sisyphus archive --config F` moves the files of settled items from `[project].workspace_dir` into the archive
-directory (see [`sisyphus archive`](usage.md#sisyphus-archive)). The layout is flat and keeps the original
+directory (see [`sisyphus archive`](usage.md#sisyphus-archive); a recorded gate failure does not keep an item from being moved). The layout is flat and keeps the original
 names, for example `<archive>/_23147.json` and `<archive>/plan-147/`. The directory is created on first use.
 
 - A relative `dir` resolves against `[project].workspace_dir`, not the invoking working directory, so the
