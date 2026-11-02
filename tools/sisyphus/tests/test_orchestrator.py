@@ -1810,11 +1810,21 @@ def test_no_call_when_removal_is_off(world: World) -> None:
     assert world.label_calls == []
 
 
-def test_no_call_when_gate_failed(world: World) -> None:
+def test_label_removed_once_when_gate_failed(world: World) -> None:
     _github(world)
     world.gate_rc = 2
     assert world.run().completed
-    assert world.label_calls == []
+    assert world.label_calls == [(7, "bot-pick")]
+    rec = RunRecord.open(world.tmp / "ws", "#7")
+    assert rec.retries["gate-failed"] == 1
+
+
+def test_removal_failure_with_gate_failed_is_a_digest_note_only(world: World) -> None:
+    _github(world)
+    world.gate_rc = 2
+    world.label_error = pick.LabelRemovalError("permission denied")
+    assert world.run().completed
+    assert "Label kept: #7 label 'bot-pick' removal failed" in world.digest_text()
 
 
 def test_no_call_when_a_checkpoint_is_set(world: World) -> None:

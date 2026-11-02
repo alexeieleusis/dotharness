@@ -15,10 +15,12 @@ from sisyphus.archive import (
     resolve_archive_dir,
 )
 from sisyphus.config import ConfigError, SisyphusConfig, load_config
+from sisyphus.orchestrator import _Run
 from sisyphus.runrecord import GATE_FAILED_KEY, RunRecord
 from sisyphus.settled import LEGACY_FINISHED_STAGE, is_settled
 from sisyphus.stages import OPEN_PR_STAGE
-from sisyphus.stoprecord import build_abandoned_record, build_stop_record
+from sisyphus.stoprecord import build_abandoned_record, build_stop_record, write_stop_record
+from tests.test_cli import make_env
 
 
 def test_absolute_dir(tmp_path: Path) -> None:
@@ -424,13 +426,15 @@ def test_is_settled_unfinished_stage_or_status(tmp_path: Path) -> None:
     assert not is_settled(_rec(tmp_path, OPEN_PR_STAGE, "in_progress"), None)
 
 
-def test_is_settled_checkpoint_gate_and_stop(tmp_path: Path) -> None:
+def test_is_settled_checkpoint_and_stop_but_not_gate(tmp_path: Path) -> None:
     cp = _rec(tmp_path, OPEN_PR_STAGE)
     cp.set_checkpoint("C1")
     assert not is_settled(cp, None)
     gf = _rec(tmp_path, OPEN_PR_STAGE)
     gf.set_checkpoint(None)
     gf.retries[GATE_FAILED_KEY] = 1
+    assert is_settled(gf, None)  # the gate-failed flag does not affect settledness
+    gf.set_checkpoint("C1")
     assert not is_settled(gf, None)
     stop = build_stop_record(
         "X-1", checkpoint=None, stage=OPEN_PR_STAGE, stage_status="complete", detail="x", resume_command="r"
@@ -438,10 +442,88 @@ def test_is_settled_checkpoint_gate_and_stop(tmp_path: Path) -> None:
     assert not is_settled(_rec(tmp_path, OPEN_PR_STAGE), stop)
 
 
-def test_is_settled_abandoned_even_with_gate_failed(tmp_path: Path) -> None:
+def test_is_settled_abandoned_ignores_gate_failed(tmp_path: Path) -> None:
     rec = _rec(tmp_path, "build", "in_progress")
     rec.retries[GATE_FAILED_KEY] = 1
     stop = build_abandoned_record(
         "X-1", stage="build", stage_status="in_progress", prior_label="l", reenable_command="r"
     )
     assert is_settled(rec, stop)
+
+
+def _rule(checkpoint: bool, stop: str, stage: str, status: str, gate_failed: int) -> bool:
+    """The current settled rule, restated independently of the implementation."""
+    if checkpoint:
+        return False
+    if stop == "abandoned":
+        return True
+    return stage in (OPEN_PR_STAGE, LEGACY_FINISHED_STAGE) and status == "complete" and stop == "none"
+
+
+_ROWS = [
+    (cp, stop, stage, status, gf)
+    for cp in (False, True)
+    for stop in ("none", "error", "abandoned")
+    for stage, status in (
+        (OPEN_PR_STAGE, "complete"),
+        (LEGACY_FINISHED_STAGE, "complete"),
+        (OPEN_PR_STAGE, "in_progress"),
+        ("build", "in_progress"),
+    )
+    for gf in (0, 1)
+]
+
+
+def test_status_archive_and_run_agree_on_settledness(tmp_path: Path) -> None:
+    env = make_env(tmp_path)
+    ws = tmp_path / "ws"
+    expected: dict[str, bool] = {}
+    paths: dict[str, Path] = {}
+    for i, (cp, stop, stage, status, gf) in enumerate(_ROWS):
+        item = f"R-{i}"
+        rec = RunRecord.open(ws, item)
+        rec.mark_stage(stage, status)
+        rec.set_checkpoint("C1" if cp else None)
+        rec.retries[GATE_FAILED_KEY] = gf
+        rec.save()
+        if stop == "error":
+            write_stop_record(
+                rec.path,
+                build_stop_record(
+                    item, checkpoint=None, stage=stage, stage_status=status, detail="x", resume_command="r"
+                ),
+            )
+        elif stop == "abandoned":
+            write_stop_record(
+                rec.path,
+                build_abandoned_record(item, stage=stage, stage_status=status, prior_label="l", reenable_command="r"),
+            )
+        expected[item] = _rule(cp, stop, stage, status, gf)
+        paths[item] = rec.path
+    unsettled = {item for item, settled in expected.items() if not settled}
+    assert unsettled and unsettled != set(expected)
+
+    # _Run.settled() reads abandonment from ``was_abandoned``, since execute() clears the stop record.
+    for i, (_cp, stop, *_rest) in enumerate(_ROWS):
+        item = f"R-{i}"
+        run = object.__new__(_Run)
+        run.rec = RunRecord.open(ws, item)
+        run.was_abandoned = stop == "abandoned"
+        assert run.settled() == expected[item], item
+
+    status_out = env.invoke("status", "--config", str(env.config))
+    assert status_out.exit_code == 0, status_out.output
+    shown = {item for item in expected if f"{item} " in status_out.output or f"{item}\n" in status_out.output}
+    assert shown == unsettled
+
+    archived = env.invoke("archive", "--config", str(env.config))
+    assert archived.exit_code == 0, archived.output
+    assert {item for item, path in paths.items() if path.exists()} == unsettled
+
+
+def test_is_settled_abandoned_override(tmp_path: Path) -> None:
+    rec = _rec(tmp_path, "build", "in_progress")
+    rec.retries[GATE_FAILED_KEY] = 1
+    assert is_settled(rec, None, abandoned=True)
+    assert not is_settled(rec, None, abandoned=False)
+    assert not is_settled(rec, None)

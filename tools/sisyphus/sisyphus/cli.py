@@ -749,8 +749,8 @@ def _archive_one(config: SisyphusConfig, rec: RunRecord, archive_dir: Path) -> b
 def archive_command(factory: ServicesFactory | None, config_path: str) -> None:
     """Move every settled item's files out of the workspace into the archive directory ([archive] dir).
 
-    Settled is the same predicate `status` uses to hide items. In-progress, stopped, checkpointed and
-    gate-failed items are never moved. Nothing is deleted and no PR lookup is made. A name that already
+    Settled is the same predicate `status` uses to hide items. In-progress, stopped and checkpointed
+    items are never moved. Nothing is deleted and no PR lookup is made. A name that already
     exists in the archive refuses that item (reported on stderr, exit 1); the other items still move.
     """
     config = _load(config_path)

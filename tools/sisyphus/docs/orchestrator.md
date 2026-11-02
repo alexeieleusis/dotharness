@@ -103,7 +103,7 @@ Per directory, the `build.commands` run first, then the applicable entries in fi
 order. If a command fails, the run does not stop: the failure is recorded, later gate commands are skipped, a Deviations note carries the command, directory, exit code and output tail, and the run completes. The local branch is kept. If neither `build.commands` nor `[[build.gate]]` exists, the gate is not
 run, and the digest "Deviations" section says so. If only entries exist and none applies to a touched directory, the
 gate is not run and the note says `no [[build.gate]] entry applies to the touched package directories`. Commands are
-never guessed. The Done entry's evidence says `gate passed`, `gate failed: <command> in <dir> (exit N)` or `gate not run`.
+never guessed. The Done entry's evidence says `gate passed`, `gate failed: <command> in <dir> (exit N)` or `gate not run`. A gate failure is reported in the digest and the PR but does not stop the pick label being removed (see "Pick label removal").
 
 ## Injected interfaces
 
@@ -135,7 +135,7 @@ repository's file is never modified. Build-stage handoff summaries are saved as
 For a GitHub work item with `pick_label` set and `remove_label_when_settled` on (default), `run_item` removes the
 issue's pick label through the injected `label_remover` (the real adapter runs `gh issue edit <n> --remove-label
 <label>`) once the item is settled: the draft PR is open and `open-pr` is complete, with no checkpoint or stop
-record. It runs after branch cleanup and before the digest is written. Only a ref of the form `#<number>` is
+record; a recorded gate failure does not prevent it. It runs after branch cleanup and before the digest is written. Only a ref of the form `#<number>` is
 handled; any other ref, `kind = "linear"` or `"file"`, or the key off makes no call. Removing a label the issue
 does not carry succeeds; a label that does not exist in the repository fails (a configuration error to fix by
 hand).

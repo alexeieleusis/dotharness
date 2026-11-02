@@ -503,7 +503,7 @@ def test_status_explicit_ref_shows_settled_item_without_all(tmp_path: Path) -> N
     assert "no run record for NOPE-1" in missing.output
 
 
-def test_status_shows_finished_item_with_failed_gate(tmp_path: Path) -> None:
+def test_status_hides_finished_item_with_failed_gate_by_default_but_all_and_ref_show_it(tmp_path: Path) -> None:
     env = make_env(tmp_path)
     ws = tmp_path / "ws"
     failed = RunRecord.open(ws, "GATE-1")
@@ -511,9 +511,14 @@ def test_status_shows_finished_item_with_failed_gate(tmp_path: Path) -> None:
     failed.retries[GATE_FAILED_KEY] = 1
     failed.save()
     RunRecord.open(ws, "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
-    result = env.invoke("status", "--config", str(env.config))
-    assert result.exit_code == 0, result.output
-    assert _shown(result.output) == ["GATE-1"]
+    default = env.invoke("status", "--config", str(env.config))
+    assert default.exit_code == 0, default.output
+    assert default.output.strip() == "no items needing attention (2 hidden; use --all)"
+    shown_all = env.invoke("status", "--all", "--config", str(env.config))
+    assert sorted(_shown(shown_all.output)) == ["FIN-1", "GATE-1"]
+    ref = env.invoke("status", "GATE-1", "--config", str(env.config))
+    assert ref.exit_code == 0, ref.output
+    assert _shown(ref.output) == ["GATE-1"]
 
 
 def test_status_all_hidden_reports_count_and_empty_says_no_items(tmp_path: Path) -> None:
@@ -907,11 +912,16 @@ def test_archive_moves_only_settled_items(tmp_path: Path) -> None:
     result = env.invoke("archive", "--config", str(env.config))
     assert result.exit_code == 0, result.output
     arch = ws / "archive"
-    assert sorted(result.stdout.splitlines()) == sorted([f"AB-1 -> {arch}", f"FIN-1 -> {arch}", "archived 2 item(s)"])
-    for ref in ("AB-1", "FIN-1"):
+    assert sorted(result.stdout.splitlines()) == sorted([
+        f"AB-1 -> {arch}",
+        f"FIN-1 -> {arch}",
+        f"GF-1 -> {arch}",
+        "archived 3 item(s)",
+    ])
+    for ref in ("AB-1", "FIN-1", "GF-1"):
         assert not record_path(ws, ref).exists()
         assert (arch / record_path(ws, ref).name).exists()
-    for ref in ("RUN-1", "CP-1", "ERR-1", "GF-1"):
+    for ref in ("RUN-1", "CP-1", "ERR-1"):
         assert record_path(ws, ref).exists()
         assert not (arch / record_path(ws, ref).name).exists()
 
