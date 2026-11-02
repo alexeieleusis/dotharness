@@ -426,13 +426,15 @@ def test_is_settled_unfinished_stage_or_status(tmp_path: Path) -> None:
     assert not is_settled(_rec(tmp_path, OPEN_PR_STAGE, "in_progress"), None)
 
 
-def test_is_settled_checkpoint_gate_and_stop(tmp_path: Path) -> None:
+def test_is_settled_checkpoint_and_stop_but_not_gate(tmp_path: Path) -> None:
     cp = _rec(tmp_path, OPEN_PR_STAGE)
     cp.set_checkpoint("C1")
     assert not is_settled(cp, None)
     gf = _rec(tmp_path, OPEN_PR_STAGE)
     gf.set_checkpoint(None)
     gf.retries[GATE_FAILED_KEY] = 1
+    assert is_settled(gf, None)  # the gate-failed flag does not affect settledness
+    gf.set_checkpoint("C1")
     assert not is_settled(gf, None)
     stop = build_stop_record(
         "X-1", checkpoint=None, stage=OPEN_PR_STAGE, stage_status="complete", detail="x", resume_command="r"
@@ -440,7 +442,7 @@ def test_is_settled_checkpoint_gate_and_stop(tmp_path: Path) -> None:
     assert not is_settled(_rec(tmp_path, OPEN_PR_STAGE), stop)
 
 
-def test_is_settled_abandoned_even_with_gate_failed(tmp_path: Path) -> None:
+def test_is_settled_abandoned_ignores_gate_failed(tmp_path: Path) -> None:
     rec = _rec(tmp_path, "build", "in_progress")
     rec.retries[GATE_FAILED_KEY] = 1
     stop = build_abandoned_record(
@@ -455,8 +457,6 @@ def _rule(checkpoint: bool, stop: str, stage: str, status: str, gate_failed: int
         return False
     if stop == "abandoned":
         return True
-    if gate_failed:
-        return False
     return stage in (OPEN_PR_STAGE, LEGACY_FINISHED_STAGE) and status == "complete" and stop == "none"
 
 

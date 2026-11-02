@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from sisyphus.resume import is_stopped
-from sisyphus.runrecord import GATE_FAILED_KEY, STAGE_COMPLETE, RunRecord
+from sisyphus.runrecord import STAGE_COMPLETE, RunRecord
 from sisyphus.stages import OPEN_PR_STAGE
 from sisyphus.stoprecord import StopRecord, is_abandoned
 
@@ -20,8 +20,6 @@ def is_settled(rec: RunRecord, stop: StopRecord | None, *, abandoned: bool | Non
         return False
     if abandoned is None:
         abandoned = is_abandoned(stop)
-    if rec.retries.get(GATE_FAILED_KEY) and not abandoned:
-        return False  # a failed gate leaves no checkpoint; keep the item visible
     if abandoned:
         return True
     finished_stage = rec.stage in (OPEN_PR_STAGE, LEGACY_FINISHED_STAGE)

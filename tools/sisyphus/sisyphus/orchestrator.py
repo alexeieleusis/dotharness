@@ -544,7 +544,7 @@ class _Run:
     # -- pick-label removal once the item is settled (shared predicate: ``settled.is_settled``)
 
     def settled(self) -> bool:
-        """Settled: abandoned, or finished (open-pr or legacy ci-fix complete) with no gate failure and not stopped.
+        """Settled: abandoned, or finished (open-pr or legacy ci-fix complete) and not stopped.
 
         ``execute`` clears the stop record on a no-checkpoint return, so abandonment is read from ``was_abandoned``.
         """
