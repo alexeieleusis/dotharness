@@ -16,6 +16,7 @@ from sisyphus.runrecord import (
     RunRecord,
     RunRecordError,
     encode_item,
+    fold_item,
     record_path,
 )
 
@@ -134,15 +135,33 @@ def test_invalid_field_values_rejected(tmp_path: Path) -> None:
             RunRecord.open(tmp_path, "X")
 
 
-def test_encoding_deterministic_safe_and_collision_free() -> None:
-    refs = ["a", "A", "a/b", "a_b", "a_2fb", "..", ".", "a b", "é", "ENG-1", "eng-1", "x" * 500, "x" * 501, "a\\b"]
-    names = [encode_item(r) for r in refs]
-    assert len(set(names)) == len(refs)
-    assert names == [encode_item(r) for r in refs]
-    for name in names:
+def test_encoding_deterministic_safe_and_case_insensitive() -> None:
+    long_lower = "x" * 500
+    long_mixed = "xX" * 250
+    same = [["a", "A"], ["ENG-1", "eng-1"], [long_lower, long_mixed]]
+    for group in same:
+        assert len({encode_item(r) for r in group}) == 1
+    distinct = ["a", "a/b", "a_b", "a_2fb", "..", ".", "a b", "é", "É", "eng-1", long_lower, "x" * 501, "a\\b"]
+    names = [encode_item(r) for r in distinct]
+    assert len(set(names)) == len(distinct)
+    assert names == [encode_item(r) for r in distinct]
+    for name in [*names, encode_item(long_mixed), encode_item("A")]:
         assert name not in {".", ".."}
         assert re.fullmatch(r"[a-z0-9_-]+", name)
         assert len(name) < 200
+
+
+def test_encode_item_known_values() -> None:
+    assert encode_item("ENG-12") == "eng-12"
+    assert encode_item("#147") == "_23147"
+    assert encode_item("a_b") == "a_5fb"
+    assert encode_item("é") == "_c3_a9"
+    assert encode_item("É") != encode_item("é")
+
+
+def test_fold_item_is_ascii_only() -> None:
+    assert fold_item("ENG-Ab") == "eng-ab"
+    assert fold_item("İÉ") == "İÉ"
 
 
 def test_encoding_rejects_empty() -> None:
@@ -155,11 +174,35 @@ def test_odd_references_get_distinct_files(tmp_path: Path) -> None:
     b = RunRecord.open(tmp_path, "ENG-1")
     c = RunRecord.open(tmp_path, "eng-1")
     assert {p.parent for p in (a.path, b.path, c.path)} == {tmp_path}
-    assert len({a.path, b.path, c.path}) == 3
+    assert b.path == c.path
+    assert a.path != b.path
 
 
 def test_record_path_is_verbatim(tmp_path: Path) -> None:
-    assert record_path(tmp_path, "X") == tmp_path / "_58.json"
+    assert record_path(tmp_path, "X") == tmp_path / "x.json"
+
+
+def test_open_other_case_reuses_record_and_keeps_first_spelling(tmp_path: Path) -> None:
+    first = RunRecord.open(tmp_path, "ENG-1")
+    second = RunRecord.open(tmp_path, "eng-1")
+    assert second.path == first.path
+    assert second.item == "ENG-1"
+    assert json.loads(first.path.read_text())["item"] == "ENG-1"
+
+
+@pytest.mark.parametrize(("stored", "wanted"), [("ENG-2", "ENG-1"), ("É", "é")])
+def test_stored_item_differing_beyond_case_rejected(tmp_path: Path, stored: str, wanted: str) -> None:
+    rec = RunRecord.open(tmp_path, wanted)
+    rec.path.write_text(json.dumps({**rec.to_dict(), "item": stored}))
+    with pytest.raises(RunRecordError, match="does not match"):
+        RunRecord.open(tmp_path, wanted)
+
+
+def test_non_str_stored_item_raises_run_record_error(tmp_path: Path) -> None:
+    rec = RunRecord.open(tmp_path, "X")
+    rec.path.write_text(json.dumps({**rec.to_dict(), "item": 5}))
+    with pytest.raises(RunRecordError, match="does not match"):
+        RunRecord.open(tmp_path, "X")
 
 
 def test_module_has_no_forbidden_imports() -> None:

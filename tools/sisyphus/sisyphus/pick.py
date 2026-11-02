@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from sisyphus.config import SisyphusConfig, WorkItemSource
-from sisyphus.runrecord import record_path
+from sisyphus.runrecord import fold_item, record_path
 from sisyphus.subproc import CommandResult, run_command
 from sisyphus.ticketfile import TICKET_SUFFIX, parse_front_matter, ref_from_filename, ticket_dir, valid_file_ref
 
@@ -181,15 +181,15 @@ def _take_unstarted(
     open_pr_check: OpenPrCheck,
     archive_dir: str | Path | None = None,
 ) -> list[Candidate]:
-    """First ``limit`` candidates with no run record (and, for GitHub, no open PR), de-duplicated by ref."""
+    """First ``limit`` candidates with no run record (and, for GitHub, no open PR), de-duplicated by ASCII-folded ref."""
     picked: list[Candidate] = []
     seen: set[str] = set()
     for cand in candidates:
-        if cand.ref in seen or is_started(workspace_dir, cand.ref, archive_dir):
+        if fold_item(cand.ref) in seen or is_started(workspace_dir, cand.ref, archive_dir):
             continue
         if lookup is not None and kind == "github" and open_pr_check(cand, lookup):
             continue
-        seen.add(cand.ref)
+        seen.add(fold_item(cand.ref))
         picked.append(cand)
         if len(picked) >= limit:
             break

@@ -24,6 +24,7 @@ from sisyphus.pick import (
     LinkedPr,
     PickError,
     default_open_pr_check,
+    is_started,
     label_removal_number,
     mentions_issue,
     pick_items,
@@ -175,6 +176,25 @@ def test_is_started_checks_workspace_and_archive_only(tmp_path: Path) -> None:
     RunRecord.open(ws, "X-2")
     assert pick.is_started(ws, "X-2", archive)
     assert not ws.joinpath("X-1.json").exists()
+
+
+def test_case_variant_refs_are_picked_once_keeping_first_spelling(tmp_path: Path) -> None:
+    assert refs(run(LIN, [lin("ENG-1"), lin("eng-1"), lin("ENG-2")], tmp_path)) == ["ENG-1", "ENG-2"]
+    assert refs(run(LIN, [lin("eng-1"), lin("ENG-1")], tmp_path)) == ["eng-1"]
+
+
+def test_started_item_skips_other_case_spelling(tmp_path: Path) -> None:
+    RunRecord.open(tmp_path, "ENG-1")
+    assert run(LIN, [lin("eng-1")], tmp_path) == []
+
+
+def test_is_started_ignores_ascii_case_in_workspace_and_archive(tmp_path: Path) -> None:
+    ws, archive = tmp_path / "ws", tmp_path / "archive"
+    RunRecord.open(ws, "ENG-1")
+    RunRecord.open(archive, "ENG-2")
+    assert is_started(ws, "eng-1")
+    assert is_started(archive, "eng-2")
+    assert not is_started(ws, "eng-2")
 
 
 def test_github_without_lookup_and_bad_source(tmp_path: Path) -> None:

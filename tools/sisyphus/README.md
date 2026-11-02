@@ -66,7 +66,7 @@ kind = "file"
 dir = "/path/to/tickets"
 ```
 
-Sisyphus substitutes `<workspace_dir>` and `<item-id>` in `brief_path_template`. A producer prompt (`knowledge/sisyphus/linear-feed-prompt.md`) can export Linear tickets into `dir`. See
+Sisyphus substitutes `<workspace_dir>` and `<item-id>` in `brief_path_template`. `<item-id>` is the folded stem (ASCII-lower-cased and escaped, so `ENG-12` gives `eng-12`), substituted as `template.replace("<item-id>", encode_item(item))`. A producer prompt (`knowledge/sisyphus/linear-feed-prompt.md`) can export Linear tickets into `dir`. See
 [usage](https://alexeieleusis.github.io/dotharness/sisyphus/usage/).
 
 Sisyphus never pushes to the base branch: each item gets its own `sisyphus/<slug>-<8 hex>` branch and a PR.
