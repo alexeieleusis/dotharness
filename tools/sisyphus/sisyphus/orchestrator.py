@@ -51,8 +51,9 @@ from sisyphus.rails import (
     parse_push_argv,
     push_guard,
 )
-from sisyphus.resume import answer_path, consume_answer, is_settled, read_answer
+from sisyphus.resume import answer_path, consume_answer, read_answer
 from sisyphus.runrecord import STAGE_COMPLETE, RunRecord, fold_item
+from sisyphus.settled import is_settled
 from sisyphus.stages import (
     BUILD_RETRY_KEY,
     BUILD_STAGE,
@@ -540,7 +541,7 @@ class _Run:
         elif outcome.status == KEPT:
             self.note(outcome.message)
 
-    # -- pick-label removal once the item is settled (shared predicate: ``resume.is_settled``)
+    # -- pick-label removal once the item is settled (shared predicate: ``settled.is_settled``)
 
     def settled(self) -> bool:
         """Settled: abandoned, or finished (open-pr or legacy ci-fix complete) with no gate failure and not stopped.
