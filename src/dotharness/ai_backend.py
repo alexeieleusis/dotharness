@@ -452,9 +452,9 @@ async def _attempt(
             await _wait_for_group_exit(pgid, prefix)
         if result.timed_out:
             await _warn_if_backend_survived(backend, prefix)
-        elif not result.not_found:
-            if expected_repo_name is not None:
-                await assert_repo_identity(cwd, expected_repo_name)
+        elif not result.not_found and expected_repo_name is not None:
+            await assert_repo_identity(cwd, expected_repo_name)
+        if not result.not_found:
             await _assert_harness_unchanged(harness)
         return result
     finally:
@@ -536,13 +536,14 @@ async def launch(
 
     total_attempts = max_retries + 1
     result: RunResult | None = None
+    # Snapshot once: re-snapshotting per attempt would adopt a HEAD an earlier attempt moved as the new baseline.
+    harness = None
+    if guard_harness_repo:
+        root = Path(harness_repo_root) if harness_repo_root is not None else None
+        harness = await _snapshot_harness_repo(Path(cwd_str), root)
     for attempt in range(1, total_attempts + 1):
         if expected_repo_name is not None:
             await assert_repo_identity(cwd_str, expected_repo_name)
-        harness = None
-        if guard_harness_repo:
-            root = Path(harness_repo_root) if harness_repo_root is not None else None
-            harness = await _snapshot_harness_repo(Path(cwd_str), root)
         logger.info("%sRunning %s backend (attempt %d/%d, cwd=%s)", prefix, name, attempt, total_attempts, cwd_str)
         result = await _attempt(
             name,
