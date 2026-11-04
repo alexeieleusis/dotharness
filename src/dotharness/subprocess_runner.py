@@ -104,7 +104,11 @@ async def run(
 
     pgid = proc.pid  # session leader, so its pid is the group id
     if on_start is not None:
-        on_start(pgid)
+        try:
+            on_start(pgid)
+        except BaseException:
+            await _cleanup_shielded(proc, pgid)
+            raise
     comm = asyncio.ensure_future(proc.communicate(stdin.encode() if stdin is not None else None))
     try:
         done, _ = await asyncio.wait({comm}, timeout=timeout)

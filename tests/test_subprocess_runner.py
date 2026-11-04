@@ -136,3 +136,18 @@ async def test_normal_exit_sweeps_leftover_grandchild(tmp_path: Path) -> None:
     result = await run([sys.executable, "-c", code], timeout=10)
     assert result.returncode == 0
     await _assert_dead(int(pid_file.read_text()))
+
+
+async def test_on_start_exception_kills_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(subprocess_runner, "KILL_GRACE_SECONDS", 0.2)
+    pids: list[int] = []
+
+    def boom(pid: int) -> None:
+        pids.append(pid)
+        raise RuntimeError("hook failed")
+
+    with pytest.raises(RuntimeError, match="hook failed"):
+        await run(["sleep", "60"], timeout=5, on_start=boom)
+
+    with pytest.raises(ProcessLookupError):
+        os.killpg(pids[0], 0)
