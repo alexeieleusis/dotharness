@@ -65,6 +65,7 @@ UNKNOWN_STEP = "UNKNOWN STEP"  # step column gh prints when it cannot map a log 
 
 OUTCOME_NOT_REPRODUCED = "did-not-reproduce"
 OUTCOME_CAP_REACHED = "cap-reached"
+OUTCOME_GATE_ONLY = "gate-only"
 OUTCOME_PARSE_FAILURE = "parse-failure"
 OUTCOME_REBASE_NEEDED = "rebase-needed"
 OUTCOME_STILL_FAILING = "still-failing"
@@ -103,6 +104,15 @@ def run(config: HarnessConfig, *, dry_run: bool = False, pr: int | None = None) 
         return
     with acquire_lock(config.lock_key):
         _run_locked(config, dry_run, pr)
+
+
+_GATE_PATTERNS = ("gate", "merge-reports")
+
+
+def _is_gate(check: _Check) -> bool:
+    """A gate only aggregates other jobs; its failure is a symptom, never fixable on its own."""
+    name = check.name.lower()
+    return any(p in name for p in _GATE_PATTERNS)
 
 
 def _digest(outcome: str, pr_number: int, check: str | None = None, detail: str = "") -> None:
@@ -471,8 +481,22 @@ def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, prompt: s
         logger.info("PR #%d: no failed checks (blocked by: %s), nothing to fix", number, blocked.reason)
         return
 
+    _fix_first_candidate(pr, failing, config, wdir, env, prompt, dry_run)
+
+
+def _fix_first_candidate(
+    pr: dict, failing: list[_Check], config: HarnessConfig, wdir: str, env: dict, prompt: str, dry_run: bool
+) -> None:
+    """Try the non-gate failing checks in order, stopping after the first push. Gates are never tried."""
+    number = pr["number"]
+    candidates = [c for c in failing if not _is_gate(c)]
+    if not candidates:
+        names = ", ".join(c.name for c in failing)
+        _digest(OUTCOME_GATE_ONLY, number, detail=f"only gate checks are failing: {names}")
+        return
+
     max_attempts = config.ci_fix.max_fix_attempts
-    for check in failing:
+    for check in candidates:
         attempts = get_attempts(config.repo_slug, number)
         if attempts >= max_attempts:
             _digest(OUTCOME_CAP_REACHED, number, check.name, f"attempts={attempts} max={max_attempts}")

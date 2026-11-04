@@ -57,6 +57,7 @@ def _mocks(
     backend_raises=None,
     status=b"",
     agent_commits=True,
+    failing=None,
 ):
     prs = [_pr()] if prs is None else prs
     head = {"sha": "sha0"}
@@ -102,7 +103,10 @@ def _mocks(
         patch(P + "_gh", side_effect=fake_gh) as gh,
         patch(P + "_check_ci", return_value=safety) as check_ci,
         patch(P + "_read_pr_state", return_value=state),
-        patch(P + "_read_failing_checks", return_value=[_Check("Run checks", "https://x/actions/runs/9/job/8")]),
+        patch(
+            P + "_read_failing_checks",
+            return_value=failing or [_Check("Run checks", "https://x/actions/runs/9/job/8")],
+        ),
         patch(P + "_read_failed_log", return_value="quality\tRun checks\t2024Z error"),
         patch(P + "find_step_command", return_value=_Step("Run checks", "make check", "tools/pr-review")),
         patch(P + "git_detach_and_record", return_value="orig"),
@@ -201,6 +205,47 @@ def test_ac4_not_reproduced_no_push_digest(tmp_path, caplog):
     assert ci_fix.get_attempts(SLUG, 1) == 0
     assert any("did-not-reproduce" in d for d in _digests(caplog))
     m.restore.assert_called_once()
+
+
+def test_gate_only_failure_no_agent_no_attempt_gate_only_digest(tmp_path, caplog):
+    gates = [
+        _Check("CI Gate", "https://x/actions/runs/9/job/1"),
+        _Check("merge-reports", "https://x/actions/runs/9/job/2"),
+    ]
+    with _mocks(tmp_path, failing=gates) as m, caplog.at_level(logging.INFO):
+        ci_fix.run(_cfg(tmp_path))
+    m.backend.run.assert_not_called()
+    m.checkout.assert_not_called()
+    assert m.pushes == []
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+    digests = _digests(caplog)
+    assert len(digests) == 1
+    assert "gate-only" in digests[0]
+
+
+def test_non_gate_picked_even_when_gate_listed_first(tmp_path):
+    failing = [
+        _Check("ci-GATE", "https://x/actions/runs/9/job/1"),
+        _Check("Run checks", "https://x/actions/runs/9/job/8"),
+    ]
+    with _mocks(tmp_path, failing=failing) as m:
+        ci_fix.run(_cfg(tmp_path))
+    assert len(m.pushes) == 1
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+    m.backend.run.assert_called_once()
+
+
+def test_gates_never_sent_after_non_gate_did_not_reproduce(tmp_path, caplog):
+    failing = [
+        _Check("Run checks", "https://x/actions/runs/9/job/8"),
+        _Check("ci-gate", "https://x/actions/runs/9/job/1"),
+    ]
+    with _mocks(tmp_path, failing=failing, repro_rc=0) as m, caplog.at_level(logging.INFO):
+        ci_fix.run(_cfg(tmp_path))
+    m.backend.run.assert_not_called()
+    m.checkout.assert_called_once()  # only the non-gate was tried
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+    assert not any("gate-only" in d for d in _digests(caplog))
 
 
 def test_still_failing_after_fix_no_push_digest(tmp_path, caplog):
