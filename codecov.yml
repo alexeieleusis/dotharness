@@ -1,3 +1,17 @@
+# Coverage policy for the dotharness project (D-6, staged floor).
+#
+# The `dotharness` flag below is informational: it has no failing target.
+# I-1 does not enforce a project-wide 90% floor. The tools are migrated first,
+# and the numeric floor is set when all four tools have migrated, at the level
+# then reached (by I-6). Reason: vibe-heal at about 0.79 would fail a 90% floor
+# as soon as I-2 lands.
+#
+# Current per-tool figures, non-authoritative inputs only (from local
+# coverage.xml files; they are recomputed in CI before any floor is set):
+#   pr-review 0.9396, spec-prism-flow 0.9667, sisyphus 0.9675, vibe-heal 0.7949
+#
+# The existing `sisyphus` status and flag stay untouched until I-8.
+
 coverage:
   range: 70..100
   round: down
@@ -9,7 +23,14 @@ coverage:
         threshold: 0.5%
         flags:
           - sisyphus
+      dotharness:
+        informational: true
+        flags:
+          - dotharness
 flags:
   sisyphus:
     paths:
       - tools/sisyphus/
+  dotharness:
+    paths:
+      - src/dotharness/

@@ -1,0 +1,97 @@
+name: Dotharness CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+env:
+  UV_VERSION: "0.10.12"
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Set up the environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          uv-version: ${{ env.UV_VERSION }}
+          working-directory: '.'
+
+      - name: Check lock file consistency
+        run: uv lock --locked
+
+      - name: Run pre-commit
+        run: uv run pre-commit run -a
+
+      - name: Check typing
+        run: uv run ty check
+
+      - name: Check for obsolete dependencies
+        run: uv run deptry . --extend-exclude "tools|vendor"
+
+  tests-and-type-check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+      fail-fast: false
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up the environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: ${{ matrix.python-version }}
+          uv-version: ${{ env.UV_VERSION }}
+          working-directory: '.'
+
+      - name: Run tests
+        run: uv run python -m pytest tests --cov --cov-config=pyproject.toml --cov-report=xml
+
+      - name: Check typing
+        run: uv run ty check
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v4
+        if: ${{ matrix.python-version == '3.12' }}
+        with:
+          files: ./coverage.xml
+          flags: dotharness
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  check-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up the environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          uv-version: ${{ env.UV_VERSION }}
+          working-directory: '.'
+
+      - name: Check if documentation can be built
+        run: uv run zensical build -s
