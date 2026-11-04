@@ -1,5 +1,7 @@
 """Tests for IssueProcessor."""
 
+import pytest
+
 from dotharness.vibe_heal.processor import IssueProcessor
 from dotharness.vibe_heal.sonarqube.models import SonarQubeIssue
 
@@ -296,3 +298,9 @@ class TestIssueProcessor:
         # UNKNOWN severity (rank 0) should be filtered out when min is MAJOR
         assert len(result.issues_to_fix) == 1
         assert result.issues_to_fix[0].severity == "MAJOR"
+
+
+def test_invalid_min_severity_raises() -> None:
+    """An unrecognised min_severity must not silently disable the filter."""
+    with pytest.raises(ValueError, match="MAJR"):
+        IssueProcessor(min_severity="MAJR")

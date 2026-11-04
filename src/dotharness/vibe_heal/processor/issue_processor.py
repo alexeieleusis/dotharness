@@ -26,6 +26,9 @@ class IssueProcessor:
         Args:
             min_severity: Minimum severity to process (BLOCKER, CRITICAL, MAJOR, MINOR, INFO)
             max_issues: Maximum number of issues to process
+
+        Raises:
+            ValueError: If min_severity is not a recognised severity.
         """
         self.min_severity = min_severity
         self.max_issues = max_issues
@@ -38,6 +41,10 @@ class IssueProcessor:
             "MINOR": 2,
             "INFO": 1,
         }
+
+        if min_severity and min_severity.upper() not in self._severity_rank:
+            valid = ", ".join(sorted(self._severity_rank, key=self._severity_rank.__getitem__, reverse=True))
+            raise ValueError(f"Invalid min_severity {min_severity!r}; expected one of: {valid}")
 
     def process(self, issues: list[SonarQubeIssue]) -> ProcessingResult:
         """Process issues: filter, sort, and limit."""
