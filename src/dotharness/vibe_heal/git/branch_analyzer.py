@@ -182,6 +182,12 @@ class BranchAnalyzer:
             True if branch exists (locally or remotely), False otherwise
         """
         try:
+            # Check local branches first: names like 'release/1.0' contain a slash
+            # but are local, not '<remote>/<branch>'.
+            local_branches = [ref.name for ref in self.repo.branches]
+            if branch in local_branches:
+                return True
+
             # Check if it's a remote ref (e.g., origin/main)
             if "/" in branch:
                 remote_name, branch_name = branch.split("/", 1)
@@ -189,15 +195,10 @@ class BranchAnalyzer:
                     remote = self.repo.remote(remote_name)
                     remote_branches = [ref.name for ref in remote.refs]
                 except Exception:
-                    # Cannot access remote, assume branch doesn't exist
-                    return False
-                else:
-                    return f"{remote_name}/{branch_name}" in remote_branches
-
-            # Check local branches
-            local_branches = [ref.name for ref in self.repo.branches]
-            if branch in local_branches:
-                return True
+                    # Not a known remote; fall through to default-remote check
+                    remote_branches = []
+                if f"{remote_name}/{branch_name}" in remote_branches:
+                    return True
 
             # Check default remote branches (origin/branch)
             try:
