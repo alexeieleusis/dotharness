@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import re
 import subprocess
 import sys
@@ -7,7 +8,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-VIBE_HEAL = Path.home() / "development" / "vibe-heal"
+_VIBE_HEAL_ENV = os.environ.get("VIBE_HEAL_PATH")
+VIBE_HEAL = Path(_VIBE_HEAL_ENV) if _VIBE_HEAL_ENV else Path.home() / "development" / "vibe-heal"
 
 _spec = importlib.util.spec_from_file_location("ledger_modules", ROOT / "scripts" / "ledger_modules.py")
 assert _spec is not None
@@ -43,8 +45,13 @@ def _have_commits() -> bool:
     return True
 
 
-@pytest.mark.skipif(not _have_commits(), reason="source commits not available")
 def test_ledger_rows_match_script() -> None:
+    if not _have_commits():
+        message = "source commits not available (set VIBE_HEAL_PATH to a vibe-heal clone with 9363868)"
+        # When CI explicitly configures VIBE_HEAL_PATH, a missing source must fail, not skip.
+        if os.environ.get("CI") and _VIBE_HEAL_ENV:
+            pytest.fail(message)
+        pytest.skip(message)
     modules = ledger_modules.list_modules(ROOT, VIBE_HEAL)
     ledger = (ROOT / "docs" / "migration-ledger.md").read_text()
     rows = re.findall(r"^\| `[^`]+` \| .*$", ledger, flags=re.MULTILINE)
