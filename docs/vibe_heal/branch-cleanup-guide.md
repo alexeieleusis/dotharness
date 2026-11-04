@@ -541,7 +541,7 @@ curl -u "your_token:" -X POST "https://sonar.example.com/api/projects/delete?pro
 1. Check SonarQube server status
 2. Try cleaning up fewer files with `--pattern`
 3. Check SonarQube server logs for errors
-4. Increase timeout (currently hardcoded to 300s - contact maintainers if needed)
+4. Increase the scanner timeout by setting `SCANNER_TIMEOUT_SECONDS` in `.env.vibeheal` (default 300)
 
 ### Issue: Files not being detected
 
