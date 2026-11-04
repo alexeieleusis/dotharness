@@ -21,6 +21,22 @@ engineering workflows with configurable AI backends (Claude Code or opencode).
 ## Setup
 
 ```bash
+git clone --recurse-submodules <repo-url> ~/.harness
+cd ~/.harness
+uv sync               # create the environment
+uv run pytest         # confirm it works
+uv tool install --editable ~/.harness
+```
+
+The root project `dotharness` registers four console scripts: `vibe_heal`,
+`pr_review`, `spec_prism_flow` and `sisyphus`. They are stubs until the tools are
+migrated (see [`docs/migration-ledger.md`](docs/migration-ledger.md)).
+
+### Legacy install (until I-8)
+
+The old tools stay installable until I-8. To use the current `harness` CLI:
+
+```bash
 uv tool install --editable ~/.harness/tools/pr-review/
 harness init          # in each repo you want to automate
 harness validate      # confirm config is correct
@@ -28,12 +44,26 @@ harness validate      # confirm config is correct
 
 ## Layout
 
-- `tools/` — Installable, uv-managed Python packages
-- `knowledge/` — Markdown knowledge files consumed by AI runners, model- and
-  tool-agnostic (no assumptions about which LLM or coding-agent CLI reads them)
-- `skills/` — Claude Code Agent Skills (`skills/<name>/SKILL.md`). They use the
-  Skill frontmatter schema (`name`/`description`/`version`) and are specific
-  to that format, unlike the tool-agnostic files in `knowledge/`
+- `src/dotharness/` — The `dotharness` Python package
+- `tests/` — Tests for the package
+- `docs/` — Documentation site (built with `uv run zensical build -s`), including
+  the migration ledger and contributor notes
+- `tools/` — The old, uv-managed tool packages, kept until I-8
+- `vendor/` — Vendored dependencies and files (submodules, `containers/`)
+- `knowledge` — Symlink to `src/dotharness/knowledge/`: Markdown knowledge files
+  consumed by AI runners, model- and tool-agnostic (no assumptions about which LLM
+  or coding-agent CLI reads them)
+- `skills/` — Symlinks to the skills in `src/dotharness/skills/`: Claude Code Agent
+  Skills (`skills/<name>/SKILL.md`). They use the Skill frontmatter schema
+  (`name`/`description`/`version`) and are specific to that format, unlike the
+  tool-agnostic files in `knowledge/`
+
+## Contributing
+
+Branch rule: I-1 targets `main`. I-2 to I-5 target `consolidation`. I-6 to I-8
+target `main` after I-5 merges. PRs that touch `src/dotharness/` update the
+[migration ledger](docs/migration-ledger.md). See
+[`docs/contributing.md`](docs/contributing.md).
 
 ## License
 

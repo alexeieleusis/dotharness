@@ -1,0 +1,59 @@
+[project]
+site_name = "dotharness"
+repo_url = "https://github.com/alexeieleusis/dotharness"
+site_url = "https://alexeieleusis.github.io/dotharness"
+site_description = "Personal AI tooling for automating recurring engineering workflows"
+site_author = "Alexei Diaz"
+edit_uri = "edit/main/docs/"
+repo_name = "alexeieleusis/dotharness"
+copyright = 'Maintained by <a href="https://github.com/alexeieleusis">alexeieleusis</a>.'
+
+nav = [
+    { "Home" = "index.md" },
+    { "vibe-heal" = "vibe_heal.md" },
+    { "pr-review" = "pr_review.md" },
+    { "spec-prism-flow" = "spec_prism_flow.md" },
+    { "sisyphus" = "sisyphus.md" },
+    { "Contributing" = "contributing.md" },
+    { "Migration ledger" = "migration-ledger.md" },
+]
+
+[project.theme]
+language = "en"
+features = [
+    "content.action.edit",
+    "content.action.view",
+    "content.code.copy",
+    "navigation.footer",
+    "navigation.instant",
+    "navigation.top",
+    "search.highlight",
+]
+
+[project.theme.icon]
+previous = "fontawesome/solid/angle-left"
+next = "fontawesome/solid/angle-right"
+repo = "fontawesome/brands/github"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "white"
+accent = "deep orange"
+toggle.icon = "material/brightness-7"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "black"
+accent = "deep orange"
+toggle.icon = "material/brightness-4"
+toggle.name = "Switch to system preference"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/github"
+link = "https://github.com/alexeieleusis/dotharness"
+
+[project.markdown_extensions.toc]
+permalink = true
