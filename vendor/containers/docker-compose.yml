@@ -1,0 +1,65 @@
+version: "3.8"
+
+services:
+  sonarqube_db:
+    image: docker.io/library/postgres:15-alpine
+    container_name: sonarqube_db
+    environment:
+      - POSTGRES_USER=sonar
+      - POSTGRES_PASSWORD=local_dev_password
+      - POSTGRES_DB=sonar
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - sonar_network
+    # Gives the DB a healthy amount of memory room
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  sonarqube_server:
+    image: docker.io/library/sonarqube:26.5.0.122743-community
+    container_name: sonarqube_server
+    security_opt:
+      - seccomp=unconfined
+    depends_on:
+      - sonarqube_db
+    ports:
+      - "9000:9000"
+    environment:
+      - SONAR_JDBC_USERNAME=sonar
+      - SONAR_JDBC_PASSWORD=local_dev_password
+      - SONAR_JDBC_URL=jdbc:postgresql://sonarqube_db:5432/sonar
+
+      # Recommended RAM Configuration: Give JVM room, but save 50% for Lucene OS caching
+      # This allocates 2GB to SonarQube Web and 2GB to the Elasticsearch Heap
+      - SONAR_WEB_JAVAOPTS=-Xmx2G -Xms2G -XX:+HeapDumpOnOutOfMemoryError
+      - SONAR_SEARCH_JAVAOPTS=-Xmx2G -Xms2G -XX:+HeapDumpOnOutOfMemoryError
+
+    # Elasticsearch needs high max_map_count to avoid OOM crashes on the host
+    sysctls:
+      net.core.somaxconn: 1024
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    deploy:
+      resources:
+        limits:
+          memory: 8g # Total max container cap (leaving room for OS caching)
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    networks:
+      - sonar_network
+
+volumes:
+  postgres_data:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
+
+networks:
+  sonar_network:
