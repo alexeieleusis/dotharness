@@ -9,7 +9,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 _VIBE_HEAL_ENV = os.environ.get("VIBE_HEAL_PATH")
-VIBE_HEAL = Path(_VIBE_HEAL_ENV) if _VIBE_HEAL_ENV else Path.home() / "development" / "vibe-heal"
+VIBE_HEAL = Path(_VIBE_HEAL_ENV) if _VIBE_HEAL_ENV else None
 
 _spec = importlib.util.spec_from_file_location("ledger_modules", ROOT / "scripts" / "ledger_modules.py")
 assert _spec is not None
@@ -88,7 +88,7 @@ def test_list_modules_init_empty_and_non_empty(tmp_path: Path, monkeypatch: pyte
 
     tree = ledger_modules.SourceTree("demo", "src/pkg", "src", commit)
     monkeypatch.setattr(ledger_modules, "TREES", (tree,))
-    modules = ledger_modules.list_modules(repo, tmp_path / "unused")
+    modules = ledger_modules.list_modules(repo, vibe_heal=tmp_path / "unused")
 
     assert [(m.path, m.name) for m in modules] == [
         ("src/pkg/mod.py", "pkg.mod"),
@@ -98,7 +98,7 @@ def test_list_modules_init_empty_and_non_empty(tmp_path: Path, monkeypatch: pyte
 
 
 def _have_commits() -> bool:
-    if not VIBE_HEAL.exists():
+    if VIBE_HEAL is None or not VIBE_HEAL.exists():
         return False
     try:
         for repo, commit in ((ROOT, "cb0efc1"), (VIBE_HEAL, "9363868")):
@@ -109,20 +109,25 @@ def _have_commits() -> bool:
     return True
 
 
-def test_ledger_rows_match_script() -> None:
-    if not _have_commits():
-        message = "source commits not available (set VIBE_HEAL_PATH to a vibe-heal clone with 9363868)"
-        # When CI explicitly configures VIBE_HEAL_PATH, a missing source must fail, not skip.
-        if os.environ.get("CI") and _VIBE_HEAL_ENV:
-            pytest.fail(message)
-        pytest.skip(message)
-    modules = ledger_modules.list_modules(ROOT, VIBE_HEAL)
+SNAPSHOT = ROOT / "tests" / "data" / "ledger_modules.tsv"
+
+
+def _snapshot() -> dict[str, tuple[str, str]]:
+    """Frozen module list: origin path -> (module name, origin tool)."""
+    result: dict[str, tuple[str, str]] = {}
+    for line in SNAPSHOT.read_text().splitlines():
+        name, tool, path = line.split("\t")
+        result[path] = (name, tool)
+    return result
+
+
+def test_ledger_rows_match_snapshot() -> None:
     ledger = (ROOT / "docs" / "migration-ledger.md").read_text()
     ledger = ledger.split("\n## Rows\n", 1)[1]
     # Row format: | module | origin tool | origin path | status | shared module | issue |
     row_re = re.compile(r"^\| `([^`]+)` \|(.*)\|\s*$", flags=re.MULTILINE)
     allowed = {"not migrated", "migrated", "dropped"}
-    ledger_rows: dict[str, tuple[str, str, str]] = {}
+    ledger_rows: dict[str, tuple[str, str]] = {}
     duplicates: list[str] = []
     for match in row_re.finditer(ledger):
         cells = [c.strip() for c in match.group(2).split("|")]
@@ -131,12 +136,20 @@ def test_ledger_rows_match_script() -> None:
         assert status in allowed, (origin_path, status)
         if origin_path in ledger_rows:
             duplicates.append(origin_path)
-        ledger_rows[origin_path] = (match.group(1), tool, status)
+        ledger_rows[origin_path] = (match.group(1), tool)
     assert not duplicates, duplicates
-    expected = {m.path: (m.name, m.tool) for m in modules}
+    expected = _snapshot()
     assert ledger_rows.keys() == expected.keys(), (
         sorted(expected.keys() - ledger_rows.keys()),
         sorted(ledger_rows.keys() - expected.keys()),
     )
-    for origin_path, (name, tool) in expected.items():
-        assert ledger_rows[origin_path][:2] == (name, tool), origin_path
+    for origin_path, name_and_tool in expected.items():
+        assert ledger_rows[origin_path] == name_and_tool, origin_path
+
+
+def test_snapshot_matches_script() -> None:
+    """Optional drift check against the real source commits; needs a vibe-heal clone."""
+    if not _have_commits():
+        pytest.skip("source commits not available (set VIBE_HEAL_PATH to a vibe-heal clone with 9363868)")
+    modules = ledger_modules.list_modules(ROOT, vibe_heal=VIBE_HEAL)
+    assert {m.path: (m.name, m.tool) for m in modules} == _snapshot()

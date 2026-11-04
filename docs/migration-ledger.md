@@ -33,15 +33,18 @@ not modules. A directory (package) is not a module.
 ## Re-running the seed script
 
 ```bash
-python scripts/ledger_modules.py --count                       # row count
-python scripts/ledger_modules.py                               # tool and path per module
-python scripts/ledger_modules.py --markdown                    # ledger rows
-python scripts/ledger_modules.py --vibe-heal /path/to/vibe-heal  # vibe-heal checkout
+V=/path/to/vibe-heal                                  # a clone containing 9363868
+python scripts/ledger_modules.py --vibe-heal $V --count      # row count
+python scripts/ledger_modules.py --vibe-heal $V              # tool and path per module
+python scripts/ledger_modules.py --vibe-heal $V --markdown   # ledger rows
+python scripts/ledger_modules.py --vibe-heal $V --snapshot   # tests/data/ledger_modules.tsv
 ```
 
 The script reads files with `git ls-tree` and `git show` at the commits above, so
-the working tree does not affect the result. The default vibe-heal checkout is
-`~/development/vibe-heal`. The row count must equal the number of rows below
+the working tree does not affect the result. The script is a one-off
+regeneration tool: `--vibe-heal` is required. CI checks the ledger against the frozen
+`tests/data/ledger_modules.tsv`, so no external checkout is needed; set `VIBE_HEAL_PATH`
+to also check that the snapshot still matches the source commits. The row count must equal the number of rows below
 (147 at seeding: pr-review 29, spec-prism-flow 39, sisyphus 20, vibe-heal 59).
 
 ## Update rule

@@ -10,7 +10,11 @@ Usage::
     python scripts/ledger_modules.py                 # one "tool<TAB>path" per line
     python scripts/ledger_modules.py --count         # the row count
     python scripts/ledger_modules.py --markdown      # ledger rows
-    python scripts/ledger_modules.py --vibe-heal PATH  # vibe-heal checkout
+    python scripts/ledger_modules.py --snapshot      # tests/data/ledger_modules.tsv content
+    python scripts/ledger_modules.py --vibe-heal PATH  # vibe-heal checkout (required)
+
+The frozen result is checked in as ``tests/data/ledger_modules.tsv``; regenerate it
+only if the seed commits change.
 """
 
 from __future__ import annotations
@@ -23,7 +27,6 @@ from pathlib import Path, PurePosixPath
 
 TOOLS_COMMIT = "cb0efc1"
 VIBE_HEAL_COMMIT = "9363868"
-DEFAULT_VIBE_HEAL = Path.home() / "development" / "vibe-heal"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -69,7 +72,7 @@ def is_test_file(path: str) -> bool:
     return "tests" in p.parts or name.startswith("test_") or name == "conftest.py"
 
 
-def list_modules(repo_root: Path = REPO_ROOT, vibe_heal: Path = DEFAULT_VIBE_HEAL) -> list[Module]:
+def list_modules(repo_root: Path = REPO_ROOT, *, vibe_heal: Path) -> list[Module]:
     modules: list[Module] = []
     for tree in TREES:
         repo = vibe_heal if tree.in_vibe_heal else repo_root
@@ -87,10 +90,11 @@ def list_modules(repo_root: Path = REPO_ROOT, vibe_heal: Path = DEFAULT_VIBE_HEA
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--vibe-heal", type=Path, default=DEFAULT_VIBE_HEAL)
+    parser.add_argument("--vibe-heal", type=Path, required=True)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--count", action="store_true")
     mode.add_argument("--markdown", action="store_true")
+    mode.add_argument("--snapshot", action="store_true")
     args = parser.parse_args(argv)
     modules = list_modules(vibe_heal=args.vibe_heal)
     if args.count:
@@ -98,6 +102,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.markdown:
         for m in modules:
             print(f"| `{m.name}` | {m.tool} | `{m.path}` | not migrated | | |")
+    elif args.snapshot:
+        for m in modules:
+            print(f"{m.name}\t{m.tool}\t{m.path}")
     else:
         for m in modules:
             print(f"{m.tool}\t{m.path}")
