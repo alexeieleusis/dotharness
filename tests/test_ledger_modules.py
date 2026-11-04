@@ -1,6 +1,7 @@
 import importlib.util
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ _spec = importlib.util.spec_from_file_location("ledger_modules", ROOT / "scripts
 assert _spec is not None
 assert _spec.loader is not None
 ledger_modules = importlib.util.module_from_spec(_spec)
+sys.modules["ledger_modules"] = ledger_modules
 _spec.loader.exec_module(ledger_modules)
 
 
