@@ -280,7 +280,7 @@ class CleanupOrchestrator:
                 fixable_issues = [issue for issue in issues if issue.is_fixable]
 
                 # Fix file using existing orchestrator
-                orchestrator = VibeHealOrchestrator(config=self.config)
+                orchestrator = VibeHealOrchestrator(config=self.config, ai_tool=self.ai_tool)
 
                 fix_summary = await orchestrator.fix_file(
                     file_path=str(file_path),
