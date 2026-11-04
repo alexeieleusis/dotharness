@@ -3,6 +3,7 @@
 import ipaddress
 import logging
 import re
+import socket
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -15,27 +16,46 @@ _TRAILING_PUNCTUATION = frozenset(".,);:'\"")
 _MAX_DOC_BYTES = 50_000
 _MAX_REDIRECTS = 5
 
-_LOOPBACK_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})  # noqa: S104
-_PRIVATE_NETWORKS = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("169.254.0.0/16"),  # link-local
-    ipaddress.ip_network("fc00::/7"),  # IPv6 ULA
-    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
-]
+_LOOPBACK_HOSTNAMES = frozenset({"localhost", "localhost.localdomain"})
+
+
+def _is_blocked_address(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True for any non-public address (private, loopback, link-local, reserved, ...)."""
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_reserved
+        or addr.is_unspecified
+        or addr.is_multicast
+        or not addr.is_global
+    )
 
 
 def _is_safe_url(url: str) -> bool:
-    """Return False if the URL targets a private or loopback address."""
+    """Return False unless every address the URL's host resolves to is public.
+
+    The host is resolved via the OS resolver (so non-dotted IP spellings and DNS names pointing
+    at private ranges are caught). Unresolvable hosts fail closed.
+    """
     try:
         host = urlparse(url).hostname or ""
-        if host in _LOOPBACK_HOSTNAMES:
-            return False
-        addr = ipaddress.ip_address(host)
-        return not any(addr in net for net in _PRIVATE_NETWORKS)
     except ValueError:
-        return True  # hostname (not a bare IP) — allow through
+        return False
+    if not host or host.lower().rstrip(".") in _LOOPBACK_HOSTNAMES:
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError):
+        return False
+    if not infos:
+        return False
+    try:
+        return not any(_is_blocked_address(ipaddress.ip_address(info[4][0].split("%")[0])) for info in infos)
+    except ValueError:
+        return False
 
 
 _BLOB_PREFIX = "https://github.com/jpablo/vibe-types/blob/main/"

@@ -19,6 +19,29 @@ from dotharness.vibe_heal.ai_tools.external_docs import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _fake_public_dns():
+    """Resolve non-literal hostnames to a public address so tests don't need network DNS."""
+    import socket
+
+    real = socket.getaddrinfo
+
+    def fake(host, *args, **kwargs):
+        return real(host, *args, **kwargs) if _is_literal(host) else [(2, 1, 6, "", ("93.184.216.34", 0))]
+
+    def _is_literal(host: str) -> bool:
+        import ipaddress
+
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            return host.isdigit() or host.startswith("0x") or host in {"localhost"}
+        return True
+
+    with patch("socket.getaddrinfo", fake):
+        yield
+
+
 class TestIsSafeUrl:
     def test_localhost_blocked(self) -> None:
         assert not _is_safe_url("http://localhost/evil")
@@ -37,6 +60,30 @@ class TestIsSafeUrl:
 
     def test_private_class_c_blocked(self) -> None:
         assert not _is_safe_url("http://192.168.1.1/evil")
+
+    def test_other_loopback_blocked(self) -> None:
+        assert not _is_safe_url("http://127.0.0.2/")
+
+    def test_ipv4_mapped_loopback_blocked(self) -> None:
+        assert not _is_safe_url("http://[::ffff:127.0.0.1]/")
+
+    def test_ipv4_mapped_private_blocked(self) -> None:
+        assert not _is_safe_url("http://[::ffff:10.0.0.1]/")
+
+    def test_unspecified_and_cgnat_blocked(self) -> None:
+        assert not _is_safe_url("http://0.0.0.0/")
+        assert not _is_safe_url("http://100.64.0.1/")
+
+    def test_decimal_ip_blocked(self) -> None:
+        assert not _is_safe_url("http://2130706433/")
+
+    def test_dns_name_resolving_to_private_blocked(self) -> None:
+        with patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("127.0.0.1", 0))]):
+            assert not _is_safe_url("http://127.0.0.1.nip.io/")
+
+    def test_unresolvable_host_blocked(self) -> None:
+        with patch("socket.getaddrinfo", side_effect=OSError):
+            assert not _is_safe_url("http://nonexistent.invalid/")
 
     def test_public_hostname_allowed(self) -> None:
         assert _is_safe_url("https://next.sonarqube.com/sonarqube/coding_rules")
