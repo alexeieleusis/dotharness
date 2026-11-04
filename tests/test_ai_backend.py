@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 import subprocess
 import textwrap
 import time
@@ -452,3 +453,33 @@ def test_launch_sync(bin_dir: Path, work: Path) -> None:
     assert result.stdout.strip() == "sync-ok"
     assert result.returncode == 0
     assert prompt_files() == []
+
+
+def test_prompt_file_is_private_and_randomly_named():
+    path = ai_backend._write_prompt_file("secret prompt")
+    try:
+        assert (path.stat().st_mode & 0o777) == 0o600
+        assert (ai_backend.TMP_DIR.stat().st_mode & 0o777) == 0o700
+        assert path.read_text(encoding="utf-8") == "secret prompt"
+        assert path.name != ai_backend._write_prompt_file("x").name
+    finally:
+        for f in ai_backend.TMP_DIR.glob("*"):
+            f.unlink()
+
+
+@pytest.mark.skipif(shutil.which("claude") is None, reason="needs the real claude CLI")
+@pytest.mark.skipif(not os.environ.get("DOTHARNESS_LIVE_CLAUDE"), reason="live check: set DOTHARNESS_LIVE_CLAUDE=1")
+def test_claude_accept_edits_can_read_prompt_outside_cwd(tmp_path):
+    """Fails if `claude --print --permission-mode acceptEdits --allowedTools Edit,Read` cannot read the prompt file."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    prompt = ai_backend._write_prompt_file("The magic word is PINEAPPLE-7. Reply with only the magic word.")
+    try:
+        result = subprocess.run(
+            ["claude", "--print", f"Read {prompt} and follow the instructions exactly.", "--output-format", "json",
+             "--permission-mode", "acceptEdits", "--allowedTools", "Edit,Read"],
+            cwd=repo, capture_output=True, text=True, timeout=120, check=False,
+        )
+    finally:
+        prompt.unlink(missing_ok=True)
+    assert "PINEAPPLE-7" in result.stdout

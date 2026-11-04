@@ -161,7 +161,9 @@ def _build_env(cwd: str, env: Mapping[str, str] | None, path_prepend: Sequence[s
 
 
 def _write_prompt_file(prompt: str) -> Path:
-    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    TMP_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    TMP_DIR.chmod(0o700)  # prompts hold source code; keep the directory private even if it pre-existed
+    # mkstemp creates the file with O_EXCL, a random name and mode 0600.
     fd, path_str = tempfile.mkstemp(suffix=".md", dir=TMP_DIR, prefix="dotharness_")
     path = Path(path_str)
     try:
