@@ -29,6 +29,7 @@ import asyncio
 import contextlib
 import os
 import signal
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -82,8 +83,12 @@ async def run(
     env: dict[str, str] | None = None,
     timeout: float,
     stdin: str | None = None,
+    on_start: Callable[[int], None] | None = None,
 ) -> RunResult:
-    """Run ``cmd`` and return its ``RunResult``; see the module docstring for the convention."""
+    """Run ``cmd`` and return its ``RunResult``; see the module docstring for the convention.
+
+    ``on_start``, when given, is called with the child's pid (also its group id) right after it spawned.
+    """
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -98,6 +103,8 @@ async def run(
         return RunResult(returncode=NOT_FOUND_RETURNCODE, stdout="", stderr=str(exc), not_found=True)
 
     pgid = proc.pid  # session leader, so its pid is the group id
+    if on_start is not None:
+        on_start(pgid)
     comm = asyncio.ensure_future(proc.communicate(stdin.encode() if stdin is not None else None))
     try:
         done, _ = await asyncio.wait({comm}, timeout=timeout)
