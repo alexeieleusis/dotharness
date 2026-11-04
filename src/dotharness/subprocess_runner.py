@@ -22,6 +22,13 @@ to ``KILL_GRACE_SECONDS`` (default 5 s) for the child to exit, then ``SIGKILL``
 to the group and reap the child. After ``run`` returns or raises, no member of
 the group is left (a ``SIGKILL`` sweep also runs after a normal exit).
 
+Consequences of the post-exit sweep: background processes the child started on
+purpose are killed too, so callers cannot rely on a daemon outliving the call.
+The sweep runs right after asyncio reaps the leader (asyncio reaps it itself, so
+it cannot run earlier). While any member survives, the kernel keeps the pgid
+reserved; if none survives, the sweep targets a number that could in theory be
+recycled, which is only possible if the pid space wraps within that instant.
+
 Neither the runner nor the result logs or carries argv or env.
 """
 
