@@ -5,7 +5,11 @@ set -e
 
 # --- Configurations ---
 IMAGE_NAME="docker.io/library/sonarqube:community"
-PROJECT_PREFIX="podman" # The prefix podman-compose adds to your volumes
+PROJECT_PREFIX="podman" # Compose project name (pinned via -p); prefixes volume names
+
+# Run from the script's directory so podman-compose finds docker-compose.yml
+# regardless of where the script is invoked from.
+cd "$(dirname "${BASH_SOURCE[0]}")"
 
 # --- Color Helpers for Scannable Output ---
 GREEN='\033[0;32m'
@@ -43,15 +47,15 @@ usage() {
 
 stack_down() {
   log_info "Taking down the podman-compose stack..."
-  podman-compose down || true
+  podman-compose -p "$PROJECT_PREFIX" down || true
   log_info "Pruning any leftover stopped container instances..."
   podman container prune -f
 }
 
 stack_up() {
   log_info "Bringing the stack back up..."
-  podman-compose up -d
-  log_info "Stack initialized! Check status with: podman-compose logs -f"
+  podman-compose -p "$PROJECT_PREFIX" up -d
+  log_info "Stack initialized! Check status with: podman-compose -p $PROJECT_PREFIX logs -f"
 }
 
 clean_images() {
