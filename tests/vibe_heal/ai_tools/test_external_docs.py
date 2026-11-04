@@ -126,6 +126,32 @@ class TestFetchUrlContent:
         assert content is None
 
     @pytest.mark.asyncio
+    @respx.mock
+    async def test_redirect_to_internal_address_blocked(self) -> None:
+        respx.get("https://attacker.example/r").mock(
+            return_value=httpx.Response(302, headers={"Location": "http://169.254.169.254/latest/meta-data/"})
+        )
+        internal = respx.get("http://169.254.169.254/latest/meta-data/").mock(
+            return_value=httpx.Response(200, text="secret")
+        )
+        content = await fetch_url_content("https://attacker.example/r")
+        assert content is None
+        assert not internal.called
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_safe_redirect_followed(self) -> None:
+        respx.get("https://example.com/a").mock(return_value=httpx.Response(302, headers={"Location": "/b"}))
+        respx.get("https://example.com/b").mock(return_value=httpx.Response(200, text="ok"))
+        assert await fetch_url_content("https://example.com/a") == "ok"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_redirect_loop_returns_none(self) -> None:
+        respx.get("https://example.com/loop").mock(return_value=httpx.Response(302, headers={"Location": "/loop"}))
+        assert await fetch_url_content("https://example.com/loop") is None
+
+    @pytest.mark.asyncio
     async def test_ssrf_localhost_returns_none(self) -> None:
         content = await fetch_url_content("http://localhost/secret")
         assert content is None

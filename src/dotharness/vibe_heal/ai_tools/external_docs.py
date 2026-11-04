@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 _URL_PATTERN = re.compile(r"https?://\S+")
 _TRAILING_PUNCTUATION = frozenset(".,);:'\"")
 _MAX_DOC_BYTES = 50_000
+_MAX_REDIRECTS = 5
 
 _LOOPBACK_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})  # noqa: S104
 _PRIVATE_NETWORKS = [
@@ -87,22 +88,37 @@ def extract_urls(text: str) -> list[str]:
 
 
 async def _stream_capped(url: str, client: httpx.AsyncClient) -> str | None:
-    """Fetch up to _MAX_DOC_BYTES from url using an existing client."""
-    logger.debug("Fetching external rule doc from %s", url)
-    chunks: list[bytes] = []
+    """Fetch up to _MAX_DOC_BYTES from url, following redirects manually and re-validating each hop.
+
+    The client must be created with follow_redirects=False so every Location is SSRF-checked.
+    """
+    current = url
     try:
-        async with client.stream("GET", url) as response:
-            response.raise_for_status()
-            total = 0
-            async for chunk in response.aiter_bytes():
-                chunks.append(chunk)
-                total += len(chunk)
-                if total >= _MAX_DOC_BYTES:
-                    break
+        for _ in range(_MAX_REDIRECTS + 1):
+            if not _is_safe_url(current):
+                logger.debug("Blocked SSRF-risk URL: %s", current)
+                return None
+            logger.debug("Fetching external rule doc from %s", current)
+            async with client.stream("GET", current) as response:
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location:
+                        return None
+                    current = str(httpx.URL(current).join(location))
+                    continue
+                response.raise_for_status()
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.aiter_bytes():
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total >= _MAX_DOC_BYTES:
+                        break
+                return b"".join(chunks)[:_MAX_DOC_BYTES].decode("utf-8", errors="replace")
+        logger.debug("Too many redirects fetching %s", url)
     except Exception as e:
-        logger.debug("Failed to fetch %s: %s", url, e)
-        return None
-    return b"".join(chunks)[:_MAX_DOC_BYTES].decode("utf-8", errors="replace")
+        logger.debug("Failed to fetch %s: %s", current, e)
+    return None
 
 
 async def _fetch_one(url: str) -> str | None:
@@ -127,7 +143,7 @@ async def _fetch_one(url: str) -> str | None:
         logger.debug("Blocked SSRF-risk URL: %s", fetch_url)
         return None
 
-    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
         return await _stream_capped(fetch_url, client)
 
 
