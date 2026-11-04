@@ -164,7 +164,7 @@ class TestCleanupPrPreconditions:
             await orchestrator.cleanup_pr(base_branch="upstream/develop")
 
         # Pin the exact argv: the split remote and branch, not just "fetch" somewhere.
-        assert ["git", "fetch", "upstream", "develop"] in commands
+        assert ["git", "fetch", "--", "upstream", "develop"] in commands
         assert mock_client.method_calls == []
 
     @pytest.mark.asyncio
@@ -226,7 +226,7 @@ class TestCleanupPrPreconditions:
         with _preconditions_pass(orchestrator, fetch_rc=1) as commands, pytest.raises(GitOperationError):
             await orchestrator.cleanup_pr(base_branch="origin/feature/x")
 
-        assert ["git", "fetch", "origin", "feature/x"] in commands
+        assert ["git", "fetch", "--", "origin", "feature/x"] in commands
         assert mock_client.method_calls == []
 
     @pytest.mark.asyncio

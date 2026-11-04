@@ -1,5 +1,6 @@
 """Git branch analysis for identifying modified files."""
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -12,6 +13,9 @@ from git.exc import InvalidGitRepositoryError
 
 from dotharness.vibe_heal.git.exceptions import GitOperationError
 from dotharness.vibe_heal.output import warn
+
+# Upper bound for any single git subprocess so a stalled network never hangs the CLI.
+GIT_COMMAND_TIMEOUT_SECONDS = 120
 
 
 class BranchAnalyzerError(Exception):
@@ -245,6 +249,30 @@ class BranchAnalyzer:
             msg = f"Failed to get user email: {e}"
             raise BranchAnalyzerError(msg) from e
 
+    def _run_git(
+        self, args: list[str], *, capture_stdout: bool = False, capture_stderr: bool = False
+    ) -> subprocess.CompletedProcess[bytes]:
+        """Run a git command with a timeout and without interactive prompts.
+
+        Raises:
+            GitOperationError: If the command times out.
+            OSError: If the git binary cannot be executed.
+        """
+        try:
+            return subprocess.run(  # noqa: S603
+                ["git", *args],  # noqa: S607
+                cwd=self.repo_path,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
+                stderr=subprocess.PIPE if capture_stderr else subprocess.DEVNULL,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as e:
+            msg = f"'git {' '.join(args)}' timed out after {GIT_COMMAND_TIMEOUT_SECONDS}s"
+            raise GitOperationError(msg) from e
+
     def split_remote_ref(self, ref: str) -> tuple[str, str] | None:
         """Split a ref into ``(remote, branch)`` if its prefix is a real remote.
 
@@ -256,12 +284,7 @@ class BranchAnalyzer:
             GitOperationError: If ``git remote`` cannot be run or fails.
         """
         try:
-            result = subprocess.run(
-                ["git", "remote"],  # noqa: S607
-                cwd=self.repo_path,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
+            result = self._run_git(["remote"], capture_stdout=True)
         except OSError as e:
             msg = f"Failed to run 'git remote': {e}"
             raise GitOperationError(msg) from e
@@ -289,12 +312,7 @@ class BranchAnalyzer:
             return False
         remote, branch = split
         try:
-            result = subprocess.run(  # noqa: S603
-                ["git", "fetch", remote, branch],  # noqa: S607
-                cwd=self.repo_path,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
+            result = self._run_git(["fetch", "--", remote, branch], capture_stderr=True)
         except OSError as e:
             msg = f"Failed to run 'git fetch {remote} {branch}': {e}"
             raise GitOperationError(msg) from e
@@ -312,12 +330,7 @@ class BranchAnalyzer:
             GitOperationError: If the git binary cannot be run.
         """
         try:
-            result = subprocess.run(  # noqa: S603
-                ["git", "merge-base", "--is-ancestor", ref, "HEAD"],  # noqa: S607
-                cwd=self.repo_path,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            result = self._run_git(["merge-base", "--is-ancestor", ref, "HEAD"])
         except OSError as e:
             msg = f"Failed to check ancestry with {ref}: {e}"
             raise GitOperationError(msg) from e
@@ -336,12 +349,7 @@ class BranchAnalyzer:
         created = False
         try:
             try:
-                result = subprocess.run(  # noqa: S603
-                    ["git", "worktree", "add", "--detach", str(worktree_dir), ref],  # noqa: S607
-                    cwd=self.repo_path,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                )
+                result = self._run_git(["worktree", "add", "--detach", str(worktree_dir), ref], capture_stderr=True)
             except OSError as e:
                 msg = f"Failed to create worktree for {ref}: {e}"
                 raise GitOperationError(msg) from e
@@ -354,15 +362,10 @@ class BranchAnalyzer:
         finally:
             if created:
                 try:
-                    removed = subprocess.run(  # noqa: S603
-                        ["git", "worktree", "remove", "--force", str(worktree_dir)],  # noqa: S607
-                        cwd=self.repo_path,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
+                    removed = self._run_git(["worktree", "remove", "--force", str(worktree_dir)])
                     if removed.returncode != 0:
                         warn(f"Warning: Failed to remove worktree {worktree_dir}")
-                except OSError as e:
+                except (OSError, GitOperationError) as e:
                     warn(f"Warning: Failed to remove worktree {worktree_dir}: {e}")
             # Also drops the mkdtemp directory when the worktree was never created.
             shutil.rmtree(worktree_dir, ignore_errors=True)
