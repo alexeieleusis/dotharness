@@ -61,6 +61,14 @@ clean_images() {
   podman pull "$IMAGE_NAME"
 }
 
+# Must run while the sonarqube_server container still exists (before stack_down).
+collect_sonar_anon_vols() {
+  local mounts
+  mounts=$(podman inspect sonarqube_server \
+    --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}{{"\n"}}{{end}}{{end}}' 2>/dev/null) || mounts=""
+  SONAR_ANON_VOLS=$(grep -E '^[a-f0-9]{64}$' <<<"$mounts" || true)
+}
+
 clean_volumes() {
   log_warn "Level 2: Purging SonarQube named and anonymous data volumes..."
 
@@ -72,10 +80,12 @@ clean_volumes() {
     fi
   done
 
-  # 2. Safely clear dangling hex-string anonymous volumes, protecting postgres
-  local anon_vols=$(podman volume ls --format "{{.Name}}" | grep -E '^[a-f0-9]{64}$')
-  if [ -not -z "$anon_vols" ]; then
-    for vol in $anon_vols; do
+  # 2. Clear anonymous volumes that were attached to the sonarqube_server
+  # container only (collected by collect_sonar_anon_vols before the stack went
+  # down). Other containers' volumes (postgres, other projects) are never touched.
+  if [ -n "$SONAR_ANON_VOLS" ]; then
+    local vol
+    for vol in $SONAR_ANON_VOLS; do
       podman volume rm "$vol" && log_info "Deleted anonymous volume: $vol"
     done
   fi
@@ -139,6 +149,7 @@ case $MODE in
   stack_up
   ;;
 "volume")
+  collect_sonar_anon_vols
   stack_down
   clean_volumes
   stack_up
