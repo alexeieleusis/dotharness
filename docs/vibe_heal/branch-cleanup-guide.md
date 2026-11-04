@@ -690,12 +690,20 @@ on:
   pull_request:
     types: [opened, synchronize]
 
+permissions:
+  contents: write  # needed to push cleanup commits back to the PR branch
+
 jobs:
   cleanup:
     runs-on: ubuntu-latest
+    # Fork PRs have no access to secrets and a read-only token, so skip them
+    if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
+          # On pull_request events the default checkout is a detached merge ref;
+          # check out the PR branch so commits can be pushed back to it
+          ref: ${{ github.head_ref }}
           fetch-depth: 0  # Need full history for branch comparison
 
       - name: Install sonar-scanner
@@ -706,30 +714,30 @@ jobs:
           sudo ln -s /opt/sonar-scanner/bin/sonar-scanner /usr/local/bin/sonar-scanner
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install vibe_heal
-        run: pip install git+https://github.com/alexeieleusis/dotharness
-
-      - name: Create config
-        run: |
-          cat > .env.vibeheal <<EOF
-          SONARQUBE_URL=${{ secrets.SONARQUBE_URL }}
-          SONARQUBE_TOKEN=${{ secrets.SONARQUBE_TOKEN }}
-          SONARQUBE_PROJECT_KEY=${{ secrets.SONARQUBE_PROJECT_KEY }}
-          AI_TOOL=claude-code
-          EOF
+        # Pin to a tag or commit SHA for reproducible, supply-chain-safe installs
+        run: pip install "git+https://github.com/alexeieleusis/dotharness@<tag-or-commit-sha>"
 
       - name: Run cleanup
-        run: vibe_heal cleanup --base-branch origin/${{ github.base_ref }}
+        # Secrets are passed as environment variables, not interpolated into the
+        # script and not written to disk
+        env:
+          SONARQUBE_URL: ${{ secrets.SONARQUBE_URL }}
+          SONARQUBE_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+          SONARQUBE_PROJECT_KEY: ${{ secrets.SONARQUBE_PROJECT_KEY }}
+          AI_TOOL: claude-code
+          BASE_REF: ${{ github.base_ref }}
+        run: vibe_heal cleanup --base-branch "origin/${BASE_REF}"
 
       - name: Push changes
         run: |
           git config user.name "vibe_heal[bot]"
           git config user.email "vibe_heal[bot]@users.noreply.github.com"
-          git push
+          git push origin HEAD:${{ github.head_ref }}
 ```
 
 ### GitLab CI
