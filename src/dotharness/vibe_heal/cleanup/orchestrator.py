@@ -99,7 +99,7 @@ class CleanupOrchestrator:
             CleanupResult with success status and details
         """
         temp_project: TempProjectMetadata | None = None
-        files_processed: list[FileCleanupResult] = []
+        file_results_map: dict[Path, FileCleanupResult] = {}
 
         try:
             # Step 1: Validate and filter modified files
@@ -117,9 +117,9 @@ class CleanupOrchestrator:
 
             # Step 3: Iterative fix loop
             analysis_result: AnalysisResult | None = None
-            file_results_map: dict[Path, FileCleanupResult] = {
-                f: FileCleanupResult(file_path=f, issues_fixed=0, success=True) for f in modified_files
-            }
+            for f in modified_files:
+                file_results_map[f] = FileCleanupResult(file_path=f, issues_fixed=0, success=True)
+            converged = False
 
             for iteration in range(max_iterations):
                 bold(f"\nIteration {iteration + 1}/{max_iterations}")
@@ -151,6 +151,7 @@ class CleanupOrchestrator:
 
                 if total_fixable_issues == 0:
                     success("✓ No fixable issues remaining!")
+                    converged = True
                     break
 
                 dim(f"Total fixable issues across all files: {total_fixable_issues}")
@@ -167,19 +168,27 @@ class CleanupOrchestrator:
             files_processed = list(file_results_map.values())
             total_issues_fixed = sum(f.issues_fixed for f in files_processed)
 
+            error_message: str | None = None
+            if not converged:
+                error_message = f"Fixable issues remain after {max_iterations} iteration(s)"
+            elif not all(f.success for f in files_processed):
+                error_message = "Some files had failed fixes"
+
             return CleanupResult(
-                success=True,
+                success=error_message is None,
                 files_processed=files_processed,
                 temp_project=temp_project,
                 analysis_result=analysis_result,
                 total_issues_fixed=total_issues_fixed,
+                error_message=error_message,
             )
 
         except Exception as e:
             return CleanupResult(
                 success=False,
-                files_processed=files_processed,
+                files_processed=list(file_results_map.values()),
                 temp_project=temp_project,
+                total_issues_fixed=sum(f.issues_fixed for f in file_results_map.values()),
                 error_message=f"Cleanup failed: {e}",
             )
 
