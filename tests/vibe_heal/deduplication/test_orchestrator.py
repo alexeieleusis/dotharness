@@ -159,3 +159,23 @@ class TestDedupeFileGroupFilter:
         assert processed_response.duplications == [kept_group]
         assert processed_response.files == response.files
         assert summary.total_issues == 1
+
+
+class TestMarkupEscaping:
+    """Dynamic error text must not be interpreted as Rich markup."""
+
+    def test_failed_fix_with_markup_in_error(self, config: VibeHealConfig, mock_ai_tool: MagicMock) -> None:
+        from rich.console import Console
+        from rich.progress import Progress
+
+        from dotharness.vibe_heal.ai_tools.models import FixResult
+        from dotharness.vibe_heal.models import FixSummary
+
+        orch = DeduplicationOrchestrator(config, mock_ai_tool, git_manager=MagicMock(spec=GitManager))
+        summary = FixSummary(total_issues=1)
+        with Progress(console=Console(record=True, width=120)) as progress:
+            task = progress.add_task("x")
+            fix = FixResult(success=False, error_message="hook output [/red] failed")
+            orch._handle_failed_fix(fix, summary, progress, task)
+            progress.refresh()
+        assert summary.failed == 1

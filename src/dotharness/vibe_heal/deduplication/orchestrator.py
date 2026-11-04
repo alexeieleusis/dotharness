@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
+from rich.markup import escape
 from rich.progress import Progress, SpinnerColumn, TaskID, TextColumn
 
 from dotharness.vibe_heal.ai_tools.base import AITool
@@ -328,7 +329,7 @@ class DeduplicationOrchestrator:
             summary.failed += 1
             progress.update(
                 task,
-                description=f"[red]✗ Commit failed: {e}[/red]",
+                description=f"[red]✗ Commit failed: {escape(str(e))}[/red]",
             )
 
     def _handle_successful_fix_dry_run(
@@ -368,10 +369,10 @@ class DeduplicationOrchestrator:
             task: Progress task
         """
         summary.failed += 1
-        error = fix_result.error_message or "Unknown error"
+        message = fix_result.error_message or "Unknown error"
         progress.update(
             task,
-            description=f"[red]✗ Failed: {error[:50]}[/red]",
+            description=f"[red]✗ Failed: {escape(message[:50])}[/red]",
         )
         logger.error(f"Failed to fix duplication: {fix_result.error_message}")
 
