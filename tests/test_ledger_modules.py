@@ -49,6 +49,9 @@ def test_ledger_rows_match_script() -> None:
     ledger = (ROOT / "docs" / "migration-ledger.md").read_text()
     rows = re.findall(r"^\| `[^`]+` \| .*$", ledger, flags=re.MULTILINE)
     assert len(rows) == len(modules)
-    assert all("| not migrated |" in row for row in rows)
+    allowed = {"not migrated", "migrated", "dropped"}
+    # Row splits to ["", module, origin tool, origin path, status, ...].
+    statuses = [row.split("|")[4].strip() for row in rows]
+    assert all(status in allowed for status in statuses), statuses
     for module in modules:
         assert f"| `{module.path}` |" in ledger
