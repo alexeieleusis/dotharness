@@ -3,7 +3,7 @@ from typer.testing import CliRunner
 
 from dotharness import cli
 
-NAMES = ["vibe_heal", "pr_review", "spec_prism_flow", "sisyphus"]
+NAMES = ["pr_review", "spec_prism_flow", "sisyphus"]
 
 
 @pytest.mark.parametrize("name", NAMES)

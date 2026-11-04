@@ -1,0 +1,88 @@
+{
+  "issues_response_main_py": {
+    "total": 2,
+    "p": 1,
+    "ps": 100,
+    "paging": {
+      "pageIndex": 1,
+      "pageSize": 100,
+      "total": 2
+    },
+    "issues": [
+      {
+        "key": "issue-1",
+        "rule": "python:S1481",
+        "severity": "MAJOR",
+        "message": "Remove this unused import",
+        "component": "my-project:src/main.py",
+        "line": 10,
+        "status": "OPEN",
+        "type": "CODE_SMELL"
+      },
+      {
+        "key": "issue-2",
+        "rule": "python:S1192",
+        "severity": "MINOR",
+        "message": "Define a constant instead of duplicating this literal",
+        "component": "my-project:src/main.py",
+        "line": 25,
+        "status": "OPEN",
+        "type": "CODE_SMELL"
+      }
+    ]
+  },
+  "issues_response_utils_py": {
+    "total": 1,
+    "p": 1,
+    "ps": 100,
+    "paging": {
+      "pageIndex": 1,
+      "pageSize": 100,
+      "total": 1
+    },
+    "issues": [
+      {
+        "key": "issue-3",
+        "rule": "python:S125",
+        "severity": "MINOR",
+        "message": "Remove this commented out code",
+        "component": "my-project:src/utils.py",
+        "line": 15,
+        "status": "OPEN",
+        "type": "CODE_SMELL"
+      }
+    ]
+  },
+  "issues_response_empty": {
+    "total": 0,
+    "p": 1,
+    "ps": 100,
+    "paging": {
+      "pageIndex": 1,
+      "pageSize": 100,
+      "total": 0
+    },
+    "issues": []
+  },
+  "issues_response_no_line": {
+    "total": 1,
+    "p": 1,
+    "ps": 100,
+    "paging": {
+      "pageIndex": 1,
+      "pageSize": 100,
+      "total": 1
+    },
+    "issues": [
+      {
+        "key": "issue-nolineno",
+        "rule": "python:S999",
+        "severity": "INFO",
+        "message": "File-level issue",
+        "component": "my-project:src/main.py",
+        "status": "OPEN",
+        "type": "CODE_SMELL"
+      }
+    ]
+  }
+}
