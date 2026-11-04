@@ -56,6 +56,10 @@ give the issue that moved the module. The PR template has a checkbox for this.
 imported from the vibe-heal repository at commit `9363868`. They are not Python
 modules and have no row.
 
+Known deviation from upstream in `docker-compose.yml`: SonarQube is bound to
+`127.0.0.1:9000` instead of all interfaces, and the database password comes from the
+required `SONAR_DB_PASSWORD` environment variable instead of a committed value.
+
 ## Rows
 
 | module | origin tool | origin path | status | shared module reused or extended | issue that moved it |
