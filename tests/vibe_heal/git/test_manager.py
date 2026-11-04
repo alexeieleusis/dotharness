@@ -680,10 +680,13 @@ class TestPreCommitHooks:
 
         manager = GitManager(git_repo, pre_commit_command="sleep 100000", pre_commit_timeout=7)
 
-        with patch(
-            "dotharness.vibe_heal.git.manager.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd="sleep", timeout=7),
-        ) as mock_run, pytest.raises(GitOperationError, match="timed out after 7"):
+        with (
+            patch(
+                "dotharness.vibe_heal.git.manager.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd="sleep", timeout=7),
+            ) as mock_run,
+            pytest.raises(GitOperationError, match="timed out after 7"),
+        ):
             manager._run_pre_commit_hooks(["test.py"])
 
         assert mock_run.call_args.kwargs["timeout"] == 7
@@ -753,3 +756,38 @@ class TestPreCommitHooks:
             pytest.raises(GitOperationError, match="Failed to create commit"),
         ):
             manager._stage_and_commit(["test.py"], "will fail")
+
+
+class TestStageAndCommitDeletedFiles:
+    """Tests for committing deleted tracked files."""
+
+    def test_commit_deleted_tracked_file(self, git_repo: Path) -> None:
+        """A deleted tracked file is staged as a removal instead of raising."""
+        manager = GitManager(git_repo, pre_commit_command="")
+        (git_repo / "test.py").unlink()
+
+        sha = manager.create_commit("remove test.py")
+
+        assert sha is not None
+        assert "test.py" not in [b.path for b in manager.repo.head.commit.tree.traverse()]
+
+    def test_commit_fix_auto_detect_deleted_file(self, git_repo: Path, sample_issue: SonarQubeIssue) -> None:
+        """commit_fix with files=None handles a deleted tracked file."""
+        manager = GitManager(git_repo, pre_commit_command="")
+        (git_repo / "test.py").unlink()
+
+        sha = manager.commit_fix(sample_issue, None, AIToolType.CLAUDE_CODE)
+
+        assert sha is not None
+
+    def test_oserror_wrapped_in_git_operation_error(self, git_repo: Path) -> None:
+        """OSError during staging is wrapped in GitOperationError."""
+        manager = GitManager(git_repo, pre_commit_command="")
+        (git_repo / "test.py").write_text("x")
+
+        mock_index = MagicMock()
+        mock_index.add.side_effect = OSError("boom")
+        manager.repo = MagicMock(working_dir=str(git_repo), index=mock_index)
+
+        with pytest.raises(GitOperationError, match="Failed to create commit"):
+            manager._stage_and_commit(["test.py"], "msg")

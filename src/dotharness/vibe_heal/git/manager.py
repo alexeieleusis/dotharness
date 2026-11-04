@@ -295,6 +295,25 @@ class GitManager:
         # Detect files modified by hooks (working tree differs from index)
         return [item.a_path for item in self.repo.index.diff(None) if item.a_path in files_set]
 
+    def _stage_files(self, files: list[str]) -> list[str]:
+        """Stage files, using index.remove for paths deleted from the working tree.
+
+        Args:
+            files: Paths to stage
+
+        Returns:
+            The subset of files that exist in the working tree
+        """
+        work_dir = Path(str(self.repo.working_dir))
+        existing = [f for f in files if (work_dir / f).exists()]
+        existing_set = set(existing)
+        missing = [f for f in files if f not in existing_set]
+        if existing:
+            self.repo.index.add(existing)
+        if missing:
+            self.repo.index.remove(missing)
+        return existing
+
     def _stage_and_commit(self, files: list[str], message: str) -> str | None:
         """Stage files and create a commit if there are changes.
 
@@ -310,11 +329,10 @@ class GitManager:
         """
         try:
             # Stage files (if any)
-            if files:
-                self.repo.index.add(files)
+            existing = self._stage_files(files)
 
             # Run pre-commit hooks and re-stage any auto-fixed files
-            hook_modified = self._run_pre_commit_hooks(files)
+            hook_modified = self._run_pre_commit_hooks(existing)
             if hook_modified:
                 self.repo.index.add(hook_modified)
 
@@ -345,7 +363,7 @@ class GitManager:
                     return commit.hexsha
             raise last_error
 
-        except git.GitError as e:
+        except (git.GitError, OSError) as e:
             msg = f"Failed to create commit: {e}"
             raise GitOperationError(msg) from e
 
