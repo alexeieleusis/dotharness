@@ -1,13 +1,15 @@
-"""Tests for OpenCode AI tool."""
+"""Tests for OpenCode AI tool (the shared launcher is mocked)."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
 from pytest_mock import MockerFixture
 
+from dotharness.subprocess_runner import RunResult
 from dotharness.vibe_heal.ai_tools import OpenCodeTool
 from dotharness.vibe_heal.sonarqube.models import SonarQubeIssue
+
+LAUNCH = "dotharness.vibe_heal.ai_tools.opencode.launch"
 
 
 @pytest.fixture
@@ -25,376 +27,177 @@ def sample_issue() -> SonarQubeIssue:
     )
 
 
+@pytest.fixture
+def source_file(tmp_path: Path) -> Path:
+    """Create a file to fix."""
+    path = tmp_path / "test.py"
+    path.write_text("def foo():\n    unused = 1\n")
+    return path
+
+
+@pytest.fixture(autouse=True)
+def installed(mocker: MockerFixture) -> None:
+    """Pretend the CLI is installed."""
+    mocker.patch("shutil.which", return_value="/usr/local/bin/opencode")
+
+
+def _launch_mock(mocker: MockerFixture, result: RunResult):
+    return mocker.patch(LAUNCH, return_value=result)
+
+
 class TestOpenCodeTool:
     """Tests for OpenCodeTool."""
 
-    def test_is_available_when_opencode_exists(self, mocker: MockerFixture) -> None:
-        """Test is_available returns True when opencode is installed."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/opencode")
-
-        tool = OpenCodeTool()
-        assert tool.is_available() is True
-
-    def test_is_available_when_opencode_missing(self, mocker: MockerFixture) -> None:
-        """Test is_available returns False when opencode is not installed."""
+    def test_is_available(self, mocker: MockerFixture) -> None:
+        """is_available follows shutil.which."""
+        assert OpenCodeTool().is_available() is True
         mocker.patch("shutil.which", return_value=None)
-
-        tool = OpenCodeTool()
-        assert tool.is_available() is False
+        assert OpenCodeTool().is_available() is False
 
     @pytest.mark.asyncio
     async def test_fix_issue_when_tool_not_available(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
+        self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path
     ) -> None:
-        """Test fix_issue returns error when tool not available."""
+        """fix_issue reports a missing CLI without launching."""
         mocker.patch("shutil.which", return_value=None)
+        launch = _launch_mock(mocker, RunResult(0, "", ""))
 
-        tool = OpenCodeTool()
-        result = await tool.fix_issue(sample_issue, "src/test.py")
+        result = await OpenCodeTool().fix_issue(sample_issue, str(source_file))
 
         assert result.success is False
-        assert result.failed is True
         assert "not found" in (result.error_message or "").lower()
+        launch.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_fix_issue_when_file_not_found(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
+        self, mocker: MockerFixture, sample_issue: SonarQubeIssue, tmp_path: Path
     ) -> None:
-        """Test fix_issue returns error when file doesn't exist."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/opencode")
+        """fix_issue reports a missing file without launching."""
+        launch = _launch_mock(mocker, RunResult(0, "", ""))
 
-        tool = OpenCodeTool()
-        nonexistent_file = tmp_path / "nonexistent.py"
-        result = await tool.fix_issue(sample_issue, str(nonexistent_file))
+        result = await OpenCodeTool().fix_issue(sample_issue, str(tmp_path / "nope.py"))
 
         assert result.success is False
         assert "File not found" in (result.error_message or "")
+        launch.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_fix_issue_success(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
-    ) -> None:
-        """Test successful fix execution."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/opencode")
+    async def test_successful_fix(self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path) -> None:
+        """A zero exit is a success and the prompt reaches the launcher."""
+        launch = _launch_mock(mocker, RunResult(0, '{"result": "ok"}', ""))
 
-        test_file = tmp_path / "test.py"
-        test_file.write_text("def foo():\n    unused = 1\n    pass\n")
-
-        mock_process = mocker.AsyncMock()
-        mock_process.communicate.return_value = (b"Fixed the issue", b"")
-        mock_process.returncode = 0
-
-        mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
-
-        tool = OpenCodeTool()
-        result = await tool.fix_issue(sample_issue, str(test_file))
+        result = await OpenCodeTool().fix_issue(sample_issue, str(source_file))
 
         assert result.success is True
-        assert result.failed is False
-        assert str(test_file) in result.files_modified
+        assert str(source_file) in result.files_modified
         assert result.error_message is None
+        assert launch.call_args.args[0] == "opencode"
+        assert "python:S1481" in launch.call_args.args[1]
 
     @pytest.mark.asyncio
-    async def test_fix_issue_command_failure(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
+    async def test_launcher_arguments(
+        self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path
     ) -> None:
-        """Test handling of command execution failure."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/opencode")
+        """Only launcher parameters are passed; no argv is built here."""
+        launch = _launch_mock(mocker, RunResult(0, "", ""))
 
-        test_file = tmp_path / "test.py"
-        test_file.write_text("code")
+        await OpenCodeTool(model="anthropic/claude-sonnet-4-5").fix_issue(sample_issue, str(source_file))
 
-        mock_process = mocker.AsyncMock()
-        mock_process.communicate.return_value = (b"", b"Error: Command failed")
-        mock_process.returncode = 1
+        kwargs = launch.call_args.kwargs
+        assert kwargs["cwd"] == Path.cwd()
+        assert kwargs["timeout"] == 1200
+        assert kwargs["model"] == "anthropic/claude-sonnet-4-5"
 
-        mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
+    @pytest.mark.asyncio
+    async def test_nonzero_exit(self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path) -> None:
+        """A non-zero exit is a failure carrying stderr."""
+        _launch_mock(mocker, RunResult(2, "out", "boom"))
 
-        tool = OpenCodeTool()
-        result = await tool.fix_issue(sample_issue, str(test_file))
+        result = await OpenCodeTool().fix_issue(sample_issue, str(source_file))
 
         assert result.success is False
-        assert "failed" in (result.error_message or "").lower()
+        assert "exit code 2" in (result.error_message or "")
+        assert "boom" in (result.error_message or "")
+        assert result.ai_response == "out"
 
     @pytest.mark.asyncio
-    async def test_fix_issue_timeout(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
+    async def test_not_found_from_launcher(
+        self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path
     ) -> None:
-        """Test handling of timeout."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/opencode")
+        """A launcher not_found result is reported as a missing CLI."""
+        _launch_mock(mocker, RunResult(127, "", "no such file", not_found=True))
 
-        test_file = tmp_path / "test.py"
-        test_file.write_text("code")
-
-        mock_process = mocker.AsyncMock()
-        mock_process.communicate.side_effect = TimeoutError()
-        mock_process.kill = mocker.Mock()
-        mock_process.wait = mocker.AsyncMock()
-
-        mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
-
-        tool = OpenCodeTool(timeout=1)
-        result = await tool.fix_issue(sample_issue, str(test_file))
+        result = await OpenCodeTool().fix_issue(sample_issue, str(source_file))
 
         assert result.success is False
-        assert "timed out" in (result.error_message or "").lower()
-        mock_process.kill.assert_called_once()
+        assert "not found" in (result.error_message or "").lower()
 
     @pytest.mark.asyncio
-    async def test_fix_issue_exception_handling(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
+    async def test_timeout_message_has_configured_value(
+        self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path
     ) -> None:
-        """Test handling of unexpected exceptions."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/opencode")
+        """The timeout message prints the same value the launcher enforces."""
+        launch = _launch_mock(mocker, RunResult(124, "", "", timed_out=True))
 
-        test_file = tmp_path / "test.py"
-        test_file.write_text("code")
-
-        mocker.patch(
-            "asyncio.create_subprocess_exec",
-            side_effect=RuntimeError("Unexpected error"),
-        )
-
-        tool = OpenCodeTool()
-        result = await tool.fix_issue(sample_issue, str(test_file))
+        result = await OpenCodeTool(timeout=7).fix_issue(sample_issue, str(source_file))
 
         assert result.success is False
-        assert "Error invoking OpenCode" in (result.error_message or "")
+        assert "timed out after 7 seconds" in (result.error_message or "")
+        assert launch.call_args.kwargs["timeout"] == 7
 
     @pytest.mark.asyncio
-    async def test_fix_issue_command_construction(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+    async def test_launcher_exception_is_reported(
+        self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path
     ) -> None:
-        """Test that command is constructed correctly."""
-        monkeypatch.chdir(tmp_path)
-        mocker.patch("shutil.which", return_value="/usr/local/bin/opencode")
+        """An exception from the launcher becomes a failed FixResult."""
+        mocker.patch(LAUNCH, side_effect=RuntimeError("kaput"))
 
-        test_file = tmp_path / "test.py"
-        test_file.write_text("code")
-
-        mock_process = mocker.AsyncMock()
-        mock_process.communicate.return_value = (b"Fixed", b"")
-        mock_process.returncode = 0
-
-        mock_create_subprocess = mocker.patch(
-            "asyncio.create_subprocess_exec",
-            return_value=mock_process,
-        )
-
-        tool = OpenCodeTool()
-        await tool.fix_issue(sample_issue, str(test_file))
-
-        args, _ = mock_create_subprocess.call_args
-        assert args[0] == "opencode"
-        assert args[1] == "run"
-        assert len(args) >= 3  # opencode run <prompt>
-
-        # Verify prompt references a temp file rather than embedding it directly
-        prompt_arg = args[2]
-        assert "Read" in prompt_arg
-        assert "follow the instructions" in prompt_arg
-        assert ".txt" in prompt_arg
-
-    @pytest.mark.asyncio
-    async def test_temp_file_cleanup(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Test that the temporary prompt file is cleaned up after execution."""
-        monkeypatch.chdir(tmp_path)
-        mocker.patch("shutil.which", return_value="/usr/local/bin/opencode")
-
-        test_file = tmp_path / "test.py"
-        test_file.write_text("code")
-
-        created_temp_files = []
-        original_mkstemp = tempfile.mkstemp
-
-        def track_mkstemp(*args, **kwargs):
-            fd, temp_path = original_mkstemp(*args, **kwargs)
-            created_temp_files.append(temp_path)
-            return fd, temp_path
-
-        mocker.patch("tempfile.mkstemp", side_effect=track_mkstemp)
-
-        mock_process = mocker.AsyncMock()
-        mock_process.communicate.return_value = (b"Fixed", b"")
-        mock_process.returncode = 0
-
-        mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
-
-        tool = OpenCodeTool()
-        await tool.fix_issue(sample_issue, str(test_file))
-
-        assert len(created_temp_files) == 1
-        temp_file_path = Path(created_temp_files[0])
-        assert not temp_file_path.exists()  # Should be deleted
-
-    @pytest.mark.asyncio
-    async def test_temp_file_cleanup_on_command_failure(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Test that the temporary prompt file is cleaned up even when the command fails."""
-        monkeypatch.chdir(tmp_path)
-        mocker.patch("shutil.which", return_value="/usr/local/bin/opencode")
-
-        test_file = tmp_path / "test.py"
-        test_file.write_text("code")
-
-        created_temp_files = []
-        original_mkstemp = tempfile.mkstemp
-
-        def track_mkstemp(*args, **kwargs):
-            fd, temp_path = original_mkstemp(*args, **kwargs)
-            created_temp_files.append(temp_path)
-            return fd, temp_path
-
-        mocker.patch("tempfile.mkstemp", side_effect=track_mkstemp)
-
-        mock_process = mocker.AsyncMock()
-        mock_process.communicate.return_value = (b"", b"Error: Command failed")
-        mock_process.returncode = 1
-
-        mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
-
-        tool = OpenCodeTool()
-        result = await tool.fix_issue(sample_issue, str(test_file))
+        result = await OpenCodeTool().fix_issue(sample_issue, str(source_file))
 
         assert result.success is False
-        assert len(created_temp_files) == 1
-        temp_file_path = Path(created_temp_files[0])
-        assert not temp_file_path.exists()  # Should still be deleted on failure
+        assert "kaput" in (result.error_message or "")
 
     @pytest.mark.asyncio
-    async def test_fix_issue_command_includes_model(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
-    ) -> None:
-        """Test that -m flag is added when model is specified."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/opencode")
+    async def test_fix_duplication(self, mocker: MockerFixture, source_file: Path) -> None:
+        """fix_duplication launches with the given prompt."""
+        launch = _launch_mock(mocker, RunResult(0, "", ""))
 
-        test_file = tmp_path / "test.py"
-        test_file.write_text("code")
-
-        mock_process = mocker.AsyncMock()
-        mock_process.communicate.return_value = (b"Fixed", b"")
-        mock_process.returncode = 0
-
-        mock_create_subprocess = mocker.patch(
-            "asyncio.create_subprocess_exec",
-            return_value=mock_process,
-        )
-
-        tool = OpenCodeTool(model="anthropic/claude-sonnet-4-5")
-        await tool.fix_issue(sample_issue, str(test_file))
-
-        args, _ = mock_create_subprocess.call_args
-        assert "-m" in args
-        model_index = list(args).index("-m")
-        assert args[model_index + 1] == "anthropic/claude-sonnet-4-5"
-
-    def test_custom_timeout(self) -> None:
-        """Test that custom timeout is accepted."""
-        tool = OpenCodeTool(timeout=600)
-        assert tool.timeout == 600
-
-    def test_initialization_with_model(self) -> None:
-        """Test that model config is properly stored."""
-        tool = OpenCodeTool(model="anthropic/claude-sonnet-4-5")
-        assert tool.model == "anthropic/claude-sonnet-4-5"
-
-    @pytest.mark.asyncio
-    async def test_fix_duplication_success(
-        self,
-        mocker: MockerFixture,
-        tmp_path: Path,
-    ) -> None:
-        """Test successful duplication fix."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/opencode")
-
-        test_file = tmp_path / "test.py"
-        test_file.write_text("code")
-
-        mock_process = mocker.AsyncMock()
-        mock_process.communicate.return_value = (b"Refactored", b"")
-        mock_process.returncode = 0
-
-        mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
-
-        tool = OpenCodeTool()
-        result = await tool.fix_duplication("Remove duplicate code", str(test_file))
+        result = await OpenCodeTool().fix_duplication("Remove duplicate code", str(source_file))
 
         assert result.success is True
-        assert str(test_file) in result.files_modified
+        assert launch.call_args.args[1] == "Remove duplicate code"
 
     @pytest.mark.asyncio
-    async def test_fix_duplication_failure(
-        self,
-        mocker: MockerFixture,
-        tmp_path: Path,
-    ) -> None:
-        """Test failed duplication fix."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/opencode")
+    async def test_fix_duplication_failure(self, mocker: MockerFixture, source_file: Path) -> None:
+        """A failing duplication fix is reported."""
+        _launch_mock(mocker, RunResult(1, "", "Error"))
 
-        test_file = tmp_path / "test.py"
-        test_file.write_text("code")
-
-        mock_process = mocker.AsyncMock()
-        mock_process.communicate.return_value = (b"", b"Error")
-        mock_process.returncode = 1
-
-        mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
-
-        tool = OpenCodeTool()
-        result = await tool.fix_duplication("Remove duplicate code", str(test_file))
+        result = await OpenCodeTool().fix_duplication("x", str(source_file))
 
         assert result.success is False
         assert result.error_message is not None
 
     @pytest.mark.asyncio
-    async def test_fix_duplication_tool_not_available(
-        self,
-        mocker: MockerFixture,
-        tmp_path: Path,
-    ) -> None:
-        """Test fix_duplication returns error when tool not available."""
+    async def test_fix_duplication_tool_not_available(self, mocker: MockerFixture, source_file: Path) -> None:
+        """fix_duplication reports a missing CLI."""
         mocker.patch("shutil.which", return_value=None)
 
-        test_file = tmp_path / "test.py"
-        test_file.write_text("code")
-
-        tool = OpenCodeTool()
-        result = await tool.fix_duplication("Remove duplicate code", str(test_file))
+        result = await OpenCodeTool().fix_duplication("x", str(source_file))
 
         assert result.success is False
         assert "not found" in (result.error_message or "").lower()
+
+    def test_initialization(self) -> None:
+        """Model and timeout are stored; the default timeout is 1200 s."""
+        tool = OpenCodeTool(model="m/x", timeout=600)
+        assert (tool.model, tool.timeout) == ("m/x", 600)
+        assert OpenCodeTool().timeout == 1200
+
+    @pytest.mark.asyncio
+    async def test_no_model_passes_none(self, mocker: MockerFixture, source_file: Path) -> None:
+        """Without a model the launcher gets model=None."""
+        launch = _launch_mock(mocker, RunResult(0, "", ""))
+
+        await OpenCodeTool().fix_duplication("p", str(source_file))
+
+        assert launch.call_args.kwargs["model"] is None

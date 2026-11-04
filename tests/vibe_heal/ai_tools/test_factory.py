@@ -1,15 +1,12 @@
 """Tests for AI tool factory."""
 
-from pathlib import Path
-
 from pytest_mock import MockerFixture
 
 from dotharness.vibe_heal.ai_tools import (
-    AiderTool,
     AIToolFactory,
     AIToolType,
     ClaudeCodeTool,
-    GeminiCliTool,
+    OpenCodeTool,
 )
 
 
@@ -23,19 +20,12 @@ class TestAIToolFactory:
         assert isinstance(tool, ClaudeCodeTool)
         assert tool.tool_type == AIToolType.CLAUDE_CODE
 
-    def test_create_aider_tool(self) -> None:
-        """Test creating Aider tool."""
-        tool = AIToolFactory.create(AIToolType.AIDER)
+    def test_create_opencode_tool(self) -> None:
+        """Test creating OpenCode tool."""
+        tool = AIToolFactory.create(AIToolType.OPENCODE)
 
-        assert isinstance(tool, AiderTool)
-        assert tool.tool_type == AIToolType.AIDER
-
-    def test_create_gemini_tool(self) -> None:
-        """Test creating Gemini CLI tool."""
-        tool = AIToolFactory.create(AIToolType.GEMINI)
-
-        assert isinstance(tool, GeminiCliTool)
-        assert tool.tool_type == AIToolType.GEMINI
+        assert isinstance(tool, OpenCodeTool)
+        assert tool.tool_type == AIToolType.OPENCODE
 
     def test_detect_available_when_claude_exists(self, mocker: MockerFixture) -> None:
         """Test auto-detection when Claude is available."""
@@ -46,38 +36,21 @@ class TestAIToolFactory:
 
         assert detected == AIToolType.CLAUDE_CODE
 
-    def test_detect_available_when_aider_exists(self, mocker: MockerFixture) -> None:
-        """Test auto-detection when Aider is available but Claude is not."""
+    def test_detect_available_when_only_opencode_exists(self, mocker: MockerFixture) -> None:
+        """Test auto-detection falls back to opencode when claude is missing."""
 
-        # Mock shutil.which to return None for claude, path for aider
         def which_mock(cmd: str) -> str | None:
-            if cmd == "claude":
-                return None
-            if cmd == "aider":
-                return "/usr/local/bin/aider"
-            return None
+            return "/usr/local/bin/opencode" if cmd == "opencode" else None
 
         mocker.patch("shutil.which", side_effect=which_mock)
 
-        detected = AIToolFactory.detect_available()
+        assert AIToolFactory.detect_available() == AIToolType.OPENCODE
 
-        assert detected == AIToolType.AIDER
+    def test_detect_prefers_claude_over_opencode(self, mocker: MockerFixture) -> None:
+        """Test auto-detection order: claude-code, then opencode."""
+        mocker.patch("shutil.which", return_value="/usr/local/bin/any")
 
-    def test_detect_available_when_gemini_exists(self, mocker: MockerFixture) -> None:
-        """Test auto-detection when Gemini is available but others are not."""
-
-        def which_mock(cmd: str) -> str | None:
-            if cmd in ("claude", "aider"):
-                return None
-            if cmd == "gemini":
-                return "/usr/local/bin/gemini"
-            return None
-
-        mocker.patch("shutil.which", side_effect=which_mock)
-
-        detected = AIToolFactory.detect_available()
-
-        assert detected == AIToolType.GEMINI
+        assert AIToolFactory.detect_available() == AIToolType.CLAUDE_CODE
 
     def test_detect_available_when_no_tools(self, mocker: MockerFixture) -> None:
         """Test auto-detection when no tools available."""
@@ -96,37 +69,3 @@ class TestAIToolFactory:
         assert tool1 is not tool2
         assert isinstance(tool1, ClaudeCodeTool)
         assert isinstance(tool2, ClaudeCodeTool)
-
-        tool3 = AIToolFactory.create(AIToolType.AIDER)
-        tool4 = AIToolFactory.create(AIToolType.AIDER)
-
-        assert tool3 is not tool4
-        assert isinstance(tool3, AiderTool)
-        assert isinstance(tool4, AiderTool)
-
-    def test_create_aider_with_config(self, mocker: MockerFixture) -> None:
-        """Test creating Aider tool with configuration."""
-        # Create mock config
-        mock_config = mocker.MagicMock()
-        mock_config.aider_model = "ollama_chat/gemma3:27b"
-        mock_config.aider_api_key = "test-key"
-        mock_config.aider_api_base = "http://localhost:11434"
-        env_file = Path("/path/to/.env.vibeheal")
-        mock_config.find_env_file.return_value = env_file
-
-        tool = AIToolFactory.create(AIToolType.AIDER, config=mock_config)
-
-        assert isinstance(tool, AiderTool)
-        assert tool.model == "ollama_chat/gemma3:27b"
-        assert tool.api_key == "test-key"
-        assert tool.api_base == "http://localhost:11434"
-        assert tool.env_file_path == env_file
-
-    def test_create_aider_without_config(self) -> None:
-        """Test creating Aider tool without configuration."""
-        tool = AIToolFactory.create(AIToolType.AIDER)
-
-        assert isinstance(tool, AiderTool)
-        assert tool.model is None
-        assert tool.api_key is None
-        assert tool.api_base is None

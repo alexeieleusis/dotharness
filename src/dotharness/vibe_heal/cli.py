@@ -96,7 +96,7 @@ def initialize_ai_tool(config: VibeHealConfig) -> AITool:
     else:
         detected_tool = AIToolFactory.detect_available()
         if not detected_tool:
-            error("No AI tool found. Please install Claude Code or Aider.")
+            error("No AI tool found. Please install Claude Code or opencode.")
             sys.exit(1)
         tool_type = detected_tool
         info(f"Auto-detected AI tool: {tool_type.display_name}")

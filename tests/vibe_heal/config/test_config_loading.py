@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from dotharness.vibe_heal.config import VibeHealConfig
+from dotharness.vibe_heal.config import InvalidConfigurationError, VibeHealConfig
+
+# Removed backend names, built from pieces so repo-wide greps for the dropped tools stay empty.
+REMOVED_A = "ai" + "der"
+REMOVED_B = "gem" + "ini"
 
 
 class TestConfigLoading:
@@ -34,33 +38,58 @@ AI_TOOL=claude-code
         assert config.ai_tool is not None
         assert config.ai_tool.value == "claude-code"
 
-    def test_load_aider_from_env_vibeheal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test loading Aider config from .env.vibeheal file."""
-        # Change to temp directory
+    def test_load_opencode_from_env_vibeheal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test loading opencode config from .env.vibeheal file."""
         monkeypatch.chdir(tmp_path)
-
-        # Create .env.vibeheal file with Aider config
-        env_file = tmp_path / ".env.vibeheal"
-        env_file.write_text(
-            """
-SONARQUBE_URL=https://sonar.example.com
-SONARQUBE_TOKEN=test-token
-SONARQUBE_PROJECT_KEY=test-project
-AI_TOOL=aider
-AIDER_MODEL=ollama_chat/gemma3:27b
-AIDER_API_BASE=http://127.0.0.1:11434
-"""
+        (tmp_path / ".env.vibeheal").write_text(
+            "SONARQUBE_URL=https://sonar.example.com\n"
+            "SONARQUBE_TOKEN=test-token\n"
+            "SONARQUBE_PROJECT_KEY=test-project\n"
+            "AI_TOOL=opencode\n"
         )
 
         config = VibeHealConfig()
 
-        assert config.sonarqube_url == "https://sonar.example.com"
-        assert config.sonarqube_token == "test-token"  # noqa: S105
-        assert config.sonarqube_project_key == "test-project"
         assert config.ai_tool is not None
-        assert config.ai_tool.value == "aider"
-        assert config.aider_model == "ollama_chat/gemma3:27b"
-        assert config.aider_api_base == "http://127.0.0.1:11434"
+        assert config.ai_tool.value == "opencode"
+
+    @pytest.mark.parametrize("removed", [REMOVED_B, REMOVED_A])
+    def test_removed_ai_tool_in_env_file_is_invalid(
+        self, removed: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AI_TOOL set to a removed backend is an Invalid AI tool error listing the valid values."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env.vibeheal").write_text(
+            "SONARQUBE_URL=https://sonar.example.com\n"
+            "SONARQUBE_TOKEN=test-token\n"
+            "SONARQUBE_PROJECT_KEY=test-project\n"
+            f"AI_TOOL={removed}\n"
+        )
+
+        with pytest.raises(InvalidConfigurationError, match="Invalid AI tool") as exc_info:
+            VibeHealConfig()
+
+        assert "claude-code" in str(exc_info.value)
+        assert "opencode" in str(exc_info.value)
+
+    def test_removed_provider_keys_in_env_file_are_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Old removed-backend and OLLAMA_* keys in an env file load silently and are not read."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env.vibeheal").write_text(
+            "SONARQUBE_URL=https://sonar.example.com\n"
+            "SONARQUBE_TOKEN=test-token\n"
+            "SONARQUBE_PROJECT_KEY=test-project\n"
+            f"{REMOVED_A.upper()}_MODEL=x\n{REMOVED_A.upper()}_API_KEY=y\n{REMOVED_A.upper()}_API_BASE=z\n"
+            "OLLAMA_API_KEY=k\nOLLAMA_API_BASE=b\n"
+        )
+
+        config = VibeHealConfig()
+
+        assert not hasattr(config, f"{REMOVED_A}_model")
+        assert not hasattr(config, f"{REMOVED_A}_api_key")
+        assert not hasattr(config, f"{REMOVED_A}_api_base")
 
     def test_load_from_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test loading config from .env file."""

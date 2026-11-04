@@ -1,13 +1,16 @@
-"""Tests for Claude Code AI tool."""
+"""Tests for Claude Code AI tool (the shared launcher is mocked)."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
 from pytest_mock import MockerFixture
 
+from dotharness.subprocess_runner import RunResult
 from dotharness.vibe_heal.ai_tools import ClaudeCodeTool
+from dotharness.vibe_heal.ai_tools.claude_code import CLAUDE_TIMEOUT_SECONDS
 from dotharness.vibe_heal.sonarqube.models import SonarQubeIssue
+
+LAUNCH = "dotharness.vibe_heal.ai_tools.claude_code.launch"
 
 
 @pytest.fixture
@@ -25,276 +28,196 @@ def sample_issue() -> SonarQubeIssue:
     )
 
 
+@pytest.fixture
+def source_file(tmp_path: Path) -> Path:
+    """Create a file to fix."""
+    path = tmp_path / "test.py"
+    path.write_text("def foo():\n    unused = 1\n")
+    return path
+
+
+@pytest.fixture(autouse=True)
+def installed(mocker: MockerFixture) -> None:
+    """Pretend the CLI is installed."""
+    mocker.patch("shutil.which", return_value="/usr/local/bin/claude")
+
+
+def _launch_mock(mocker: MockerFixture, result: RunResult):
+    return mocker.patch(LAUNCH, return_value=result)
+
+
 class TestClaudeCodeTool:
     """Tests for ClaudeCodeTool."""
 
-    def test_is_available_when_claude_exists(self, mocker: MockerFixture) -> None:
-        """Test is_available returns True when claude is installed."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/claude")
-
-        tool = ClaudeCodeTool()
-        assert tool.is_available() is True
-
-    def test_is_available_when_claude_missing(self, mocker: MockerFixture) -> None:
-        """Test is_available returns False when claude is not installed."""
+    def test_is_available(self, mocker: MockerFixture) -> None:
+        """is_available follows shutil.which."""
+        assert ClaudeCodeTool().is_available() is True
         mocker.patch("shutil.which", return_value=None)
-
-        tool = ClaudeCodeTool()
-        assert tool.is_available() is False
+        assert ClaudeCodeTool().is_available() is False
 
     @pytest.mark.asyncio
     async def test_fix_issue_when_tool_not_available(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
+        self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path
     ) -> None:
-        """Test fix_issue returns error when tool not available."""
+        """fix_issue reports a missing CLI without launching."""
         mocker.patch("shutil.which", return_value=None)
+        launch = _launch_mock(mocker, RunResult(0, "", ""))
 
-        tool = ClaudeCodeTool()
-        result = await tool.fix_issue(sample_issue, "src/test.py")
+        result = await ClaudeCodeTool().fix_issue(sample_issue, str(source_file))
 
         assert result.success is False
-        assert result.failed is True
         assert "not found" in (result.error_message or "").lower()
+        launch.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_fix_issue_when_file_not_found(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
+        self, mocker: MockerFixture, sample_issue: SonarQubeIssue, tmp_path: Path
     ) -> None:
-        """Test fix_issue returns error when file doesn't exist."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/claude")
+        """fix_issue reports a missing file without launching."""
+        launch = _launch_mock(mocker, RunResult(0, "", ""))
 
-        tool = ClaudeCodeTool()
-        nonexistent_file = tmp_path / "nonexistent.py"
-        result = await tool.fix_issue(sample_issue, str(nonexistent_file))
+        result = await ClaudeCodeTool().fix_issue(sample_issue, str(tmp_path / "nope.py"))
 
         assert result.success is False
         assert "File not found" in (result.error_message or "")
+        launch.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_successful_fix(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
-    ) -> None:
-        """Test successful fix execution."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/claude")
+    async def test_successful_fix(self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path) -> None:
+        """A zero exit is a success and the prompt reaches the launcher."""
+        launch = _launch_mock(mocker, RunResult(0, '{"result": "ok"}', ""))
 
-        # Create a temporary file
-        test_file = tmp_path / "test.py"
-        test_file.write_text("def foo():\n    unused = 1\n    pass\n")
-
-        # Mock subprocess
-        mock_process = mocker.AsyncMock()
-        mock_process.communicate.return_value = (
-            b'{"result": "success"}',
-            b"",
-        )
-        mock_process.returncode = 0
-
-        mocker.patch(
-            "asyncio.create_subprocess_exec",
-            return_value=mock_process,
-        )
-
-        tool = ClaudeCodeTool()
-        result = await tool.fix_issue(sample_issue, str(test_file))
+        result = await ClaudeCodeTool().fix_issue(sample_issue, str(source_file))
 
         assert result.success is True
-        assert result.failed is False
-        assert str(test_file) in result.files_modified
+        assert str(source_file) in result.files_modified
         assert result.error_message is None
+        assert launch.call_args.args[0] == "claude"
+        assert "python:S1481" in launch.call_args.args[1]
 
     @pytest.mark.asyncio
-    async def test_fix_with_command_failure(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
+    async def test_launcher_arguments(
+        self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path
     ) -> None:
-        """Test handling of command execution failure."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/claude")
+        """Only launcher parameters are passed; no argv is built here."""
+        launch = _launch_mock(mocker, RunResult(0, "", ""))
 
-        # Create a temporary file
-        test_file = tmp_path / "test.py"
-        test_file.write_text("code")
+        await ClaudeCodeTool().fix_issue(sample_issue, str(source_file))
 
-        # Mock subprocess with failure
-        mock_process = mocker.AsyncMock()
-        mock_process.communicate.return_value = (
-            b"",
-            b"Error: Command failed",
-        )
-        mock_process.returncode = 1
+        kwargs = launch.call_args.kwargs
+        assert kwargs["cwd"] == Path.cwd()
+        assert kwargs["timeout"] == 1200
+        assert kwargs["print_flag"] == "--print"
+        assert kwargs["output_format"] == "json"
+        assert kwargs["permission_mode"] == "acceptEdits"
+        assert kwargs["allowed_tools"] == "Edit,Read"
 
-        mocker.patch(
-            "asyncio.create_subprocess_exec",
-            return_value=mock_process,
-        )
+    @pytest.mark.asyncio
+    async def test_nonzero_exit(self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path) -> None:
+        """A non-zero exit is a failure carrying stderr."""
+        _launch_mock(mocker, RunResult(2, "out", "boom"))
 
-        tool = ClaudeCodeTool()
-        result = await tool.fix_issue(sample_issue, str(test_file))
+        result = await ClaudeCodeTool().fix_issue(sample_issue, str(source_file))
 
         assert result.success is False
-        assert "failed" in (result.error_message or "").lower()
+        assert "exit code 2" in (result.error_message or "")
+        assert "boom" in (result.error_message or "")
+        assert result.ai_response == "out"
 
     @pytest.mark.asyncio
-    async def test_timeout_handling(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
+    async def test_not_found_from_launcher(
+        self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path
     ) -> None:
-        """Test handling of timeout."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/claude")
+        """A launcher not_found result is reported as a missing CLI."""
+        _launch_mock(mocker, RunResult(127, "", "no such file", not_found=True))
 
-        # Create a temporary file
-        test_file = tmp_path / "test.py"
-        test_file.write_text("code")
-
-        # Mock subprocess that times out
-        mock_process = mocker.AsyncMock()
-        mock_process.communicate.side_effect = TimeoutError()
-        mock_process.kill = mocker.Mock()
-        mock_process.wait = mocker.AsyncMock()
-
-        mocker.patch(
-            "asyncio.create_subprocess_exec",
-            return_value=mock_process,
-        )
-
-        tool = ClaudeCodeTool(timeout=1)
-        result = await tool.fix_issue(sample_issue, str(test_file))
+        result = await ClaudeCodeTool().fix_issue(sample_issue, str(source_file))
 
         assert result.success is False
-        assert "timed out" in (result.error_message or "").lower()
-        mock_process.kill.assert_called_once()
+        assert "not found" in (result.error_message or "").lower()
 
     @pytest.mark.asyncio
-    async def test_exception_handling(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
+    async def test_timeout_message_has_configured_value(
+        self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path
     ) -> None:
-        """Test handling of unexpected exceptions."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/claude")
+        """The timeout message prints the same value the launcher enforces."""
+        launch = _launch_mock(mocker, RunResult(124, "", "", timed_out=True))
 
-        # Create a temporary file
-        test_file = tmp_path / "test.py"
-        test_file.write_text("code")
-
-        # Mock subprocess that raises exception
-        mocker.patch(
-            "asyncio.create_subprocess_exec",
-            side_effect=RuntimeError("Unexpected error"),
-        )
-
-        tool = ClaudeCodeTool()
-        result = await tool.fix_issue(sample_issue, str(test_file))
+        result = await ClaudeCodeTool(timeout=7).fix_issue(sample_issue, str(source_file))
 
         assert result.success is False
-        assert "Error invoking Claude" in (result.error_message or "")
+        assert "timed out after 7 seconds" in (result.error_message or "")
+        assert launch.call_args.kwargs["timeout"] == 7
 
     @pytest.mark.asyncio
-    async def test_command_construction(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
+    async def test_launcher_exception_is_reported(
+        self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path
     ) -> None:
-        """Test that command is constructed correctly."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/claude")
+        """An exception from the launcher becomes a failed FixResult."""
+        mocker.patch(LAUNCH, side_effect=RuntimeError("kaput"))
 
-        # Create a temporary file
-        test_file = tmp_path / "test.py"
-        test_file.write_text("code")
+        result = await ClaudeCodeTool().fix_issue(sample_issue, str(source_file))
 
-        # Mock subprocess
-        mock_process = mocker.AsyncMock()
-        mock_process.communicate.return_value = (b"{}", b"")
-        mock_process.returncode = 0
-
-        mock_create_subprocess = mocker.patch(
-            "asyncio.create_subprocess_exec",
-            return_value=mock_process,
-        )
-
-        tool = ClaudeCodeTool()
-        await tool.fix_issue(sample_issue, str(test_file))
-
-        # Verify command was called correctly
-        args, _ = mock_create_subprocess.call_args
-        assert args[0] == "claude"
-        assert "--print" in args
-        assert "--output-format" in args
-        assert "json" in args
-        assert "--permission-mode" in args
-        assert "acceptEdits" in args
-        assert "--allowedTools" in args
-
-        # Verify prompt references a temp file
-        prompt_arg = args[2]  # The prompt is the 3rd argument after "claude" and "--print"
-        assert "Read" in prompt_arg
-        assert "follow the instructions" in prompt_arg
-        assert ".txt" in prompt_arg
+        assert result.success is False
+        assert "kaput" in (result.error_message or "")
 
     @pytest.mark.asyncio
-    async def test_temp_file_cleanup(
-        self,
-        mocker: MockerFixture,
-        sample_issue: SonarQubeIssue,
-        tmp_path: Path,
+    async def test_fix_duplication(self, mocker: MockerFixture, source_file: Path) -> None:
+        """fix_duplication launches with the given prompt."""
+        launch = _launch_mock(mocker, RunResult(0, "", ""))
+
+        result = await ClaudeCodeTool().fix_duplication("Remove duplicate code", str(source_file))
+
+        assert result.success is True
+        assert launch.call_args.args[1] == "Remove duplicate code"
+
+    @pytest.mark.asyncio
+    async def test_fix_duplication_failure(self, mocker: MockerFixture, source_file: Path) -> None:
+        """A failing duplication fix is reported."""
+        _launch_mock(mocker, RunResult(1, "", "Error"))
+
+        result = await ClaudeCodeTool().fix_duplication("x", str(source_file))
+
+        assert result.success is False
+        assert result.error_message is not None
+
+    @pytest.mark.asyncio
+    async def test_fix_duplication_tool_not_available(self, mocker: MockerFixture, source_file: Path) -> None:
+        """fix_duplication reports a missing CLI."""
+        mocker.patch("shutil.which", return_value=None)
+
+        result = await ClaudeCodeTool().fix_duplication("x", str(source_file))
+
+        assert result.success is False
+        assert "not found" in (result.error_message or "").lower()
+
+    def test_default_timeout_is_1200(self) -> None:
+        """Decision D-6: one default, 1200 s (no 300 default, no literal 600)."""
+        assert ClaudeCodeTool().timeout == 1200
+        assert CLAUDE_TIMEOUT_SECONDS == 1200
+
+    @pytest.mark.asyncio
+    async def test_default_timeout_flows_to_launcher_and_message(
+        self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path
     ) -> None:
-        """Test that temporary file is cleaned up after execution."""
-        mocker.patch("shutil.which", return_value="/usr/local/bin/claude")
+        """The default 1200 s reaches the launcher and appears in the timeout message."""
+        launch = _launch_mock(mocker, RunResult(124, "", "", timed_out=True))
 
-        # Create a test file
-        test_file = tmp_path / "test.py"
-        test_file.write_text("code")
+        result = await ClaudeCodeTool().fix_issue(sample_issue, str(source_file))
 
-        # Track created temp files
-        created_temp_files = []
-        original_mkstemp = tempfile.mkstemp
+        assert launch.call_args.kwargs["timeout"] == 1200
+        assert "timed out after 1200 seconds" in (result.error_message or "")
 
-        def track_mkstemp(*args, **kwargs):
-            fd, temp_path = original_mkstemp(*args, **kwargs)
-            created_temp_files.append(temp_path)
-            return fd, temp_path
-
-        mocker.patch("tempfile.mkstemp", side_effect=track_mkstemp)
-
-        # Mock aiofiles.open to avoid actual async file I/O
-        mock_file = mocker.AsyncMock()
-        mock_file.__aenter__.return_value = mock_file
-        mock_file.__aexit__.return_value = None
-        mock_file.write = mocker.AsyncMock()
-        mocker.patch("aiofiles.open", return_value=mock_file)
-
-        # Mock subprocess
-        mock_process = mocker.AsyncMock()
-        mock_process.communicate.return_value = (b"{}", b"")
-        mock_process.returncode = 0
-
-        mocker.patch(
-            "asyncio.create_subprocess_exec",
-            return_value=mock_process,
+    def test_parse_modified_files(self) -> None:
+        """Edit and Write tool uses are extracted from the JSON output."""
+        output = (
+            '{"toolUses": [{"name": "Edit", "parameters": {"file_path": "a.py"}},'
+            ' {"name": "Read", "parameters": {"file_path": "b.py"}}]}'
         )
+        assert ClaudeCodeTool()._parse_modified_files(output, "t.py") == ["a.py"]
 
+    def test_parse_modified_files_falls_back_to_target(self) -> None:
+        """Invalid JSON or no tool uses assume the target file was modified."""
         tool = ClaudeCodeTool()
-        await tool.fix_issue(sample_issue, str(test_file))
-
-        # Verify temp file was created and then cleaned up
-        assert len(created_temp_files) == 1
-        temp_file_path = Path(created_temp_files[0])
-        assert not temp_file_path.exists()  # Should be deleted
-
-    def test_custom_timeout(self) -> None:
-        """Test that custom timeout is accepted."""
-        tool = ClaudeCodeTool(timeout=600)
-        assert tool.timeout == 600
+        assert tool._parse_modified_files("not json", "t.py") == ["t.py"]
+        assert tool._parse_modified_files("{}", "t.py") == ["t.py"]

@@ -1,13 +1,12 @@
 """OpenCode AI tool implementation."""
 
-import asyncio
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from dotharness.ai_backend import launch
 from dotharness.vibe_heal.ai_tools.base import AITool, AIToolType
 from dotharness.vibe_heal.ai_tools.models import FixResult
-from dotharness.vibe_heal.ai_tools.utils import build_file_prompt, run_command, temp_prompt_file
 
 if TYPE_CHECKING:
     from dotharness.vibe_heal.sonarqube.models import SonarQubeIssue, SonarQubeRule, SourceLine
@@ -78,11 +77,6 @@ class OpenCodeTool(AITool):
 
         try:
             result = await self._invoke_opencode(prompt, file_path)
-        except TimeoutError:
-            return FixResult(
-                success=False,
-                error_message=f"OpenCode timed out after {self.timeout} seconds",
-            )
         except Exception as e:
             return FixResult(
                 success=False,
@@ -119,11 +113,6 @@ class OpenCodeTool(AITool):
 
         try:
             result = await self._invoke_opencode(prompt, file_path)
-        except TimeoutError:
-            return FixResult(
-                success=False,
-                error_message=f"OpenCode timed out after {self.timeout} seconds",
-            )
         except Exception as e:
             return FixResult(
                 success=False,
@@ -146,23 +135,32 @@ class OpenCodeTool(AITool):
         Returns:
             FixResult with outcome
         """
-        async with temp_prompt_file(prompt) as temp_file_path:
-            cmd = ["opencode", "run", build_file_prompt(temp_file_path)]
-
-            if self.model:
-                cmd.extend(["-m", self.model])
-
-            async with asyncio.timeout(self.timeout):
-                result = await run_command(cmd)
-
-            if result.success:
-                return FixResult(
-                    success=True,
-                    files_modified=[file_path],
-                    ai_response=result.stdout,
-                )
+        result = await launch(
+            "opencode",
+            prompt,
+            cwd=Path.cwd(),
+            timeout=self.timeout,
+            model=self.model,
+        )
+        if result.timed_out:
             return FixResult(
                 success=False,
-                error_message=f"OpenCode failed with exit code {result.exit_code}: {result.stderr}",
+                error_message=f"OpenCode timed out after {self.timeout} seconds",
                 ai_response=result.stdout,
             )
+        if result.not_found:
+            return FixResult(
+                success=False,
+                error_message="OpenCode CLI not found. Please install OpenCode first.",
+            )
+        if result.returncode == 0:
+            return FixResult(
+                success=True,
+                files_modified=[file_path],
+                ai_response=result.stdout,
+            )
+        return FixResult(
+            success=False,
+            error_message=f"OpenCode failed with exit code {result.returncode}: {result.stderr}",
+            ai_response=result.stdout,
+        )

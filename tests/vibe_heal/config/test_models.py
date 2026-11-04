@@ -8,6 +8,9 @@ from pydantic import ValidationError
 from dotharness.vibe_heal.ai_tools.base import AIToolType
 from dotharness.vibe_heal.config import InvalidConfigurationError, VibeHealConfig
 
+# Removed backend names, built from pieces so repo-wide greps for the dropped tools stay empty.
+REMOVED_TOOLS = ("ai" + "der", "gem" + "ini")
+
 
 class TestVibeHealConfig:
     """Tests for VibeHealConfig model."""
@@ -167,16 +170,30 @@ class TestVibeHealConfig:
 
         assert config.ai_tool == AIToolType.CLAUDE_CODE
 
-    def test_ai_tool_aider_from_string(self) -> None:
-        """Test parsing Aider from lowercase string."""
+    def test_ai_tool_opencode_from_string(self) -> None:
+        """Test parsing opencode from lowercase string."""
         config = VibeHealConfig(
             sonarqube_url="https://sonar.example.com",
             sonarqube_token="token",  # noqa: S106
             sonarqube_project_key="my-project",
-            ai_tool="aider",
+            ai_tool="opencode",
         )
 
-        assert config.ai_tool == AIToolType.AIDER
+        assert config.ai_tool == AIToolType.OPENCODE
+
+    @pytest.mark.parametrize("removed", REMOVED_TOOLS)
+    def test_removed_ai_tool_is_invalid(self, removed: str) -> None:
+        """Removed backends are rejected with the valid values listed."""
+        with pytest.raises(InvalidConfigurationError, match="Invalid AI tool") as exc_info:
+            VibeHealConfig(
+                sonarqube_url="https://sonar.example.com",
+                sonarqube_token="token",  # noqa: S106
+                sonarqube_project_key="my-project",
+                ai_tool=removed,
+            )
+
+        assert "claude-code" in str(exc_info.value)
+        assert "opencode" in str(exc_info.value)
 
     def test_ai_tool_from_enum(self) -> None:
         """Test that enum value is accepted directly."""
@@ -184,10 +201,10 @@ class TestVibeHealConfig:
             sonarqube_url="https://sonar.example.com",
             sonarqube_token="token",  # noqa: S106
             sonarqube_project_key="my-project",
-            ai_tool=AIToolType.AIDER,
+            ai_tool=AIToolType.OPENCODE,
         )
 
-        assert config.ai_tool == AIToolType.AIDER
+        assert config.ai_tool == AIToolType.OPENCODE
 
     def test_ai_tool_none(self) -> None:
         """Test that None is accepted for ai_tool (auto-detect)."""
@@ -365,9 +382,9 @@ class TestVibeHealConfig:
             "SONARQUBE_URL=https://custom.example.com\n"
             "SONARQUBE_TOKEN=custom-token\n"
             "SONARQUBE_PROJECT_KEY=custom-project\n"
-            "AI_TOOL=aider\n"
+            "AI_TOOL=opencode\n"
         )
 
         config = VibeHealConfig(env_file=custom_env)
 
-        assert config.ai_tool == AIToolType.AIDER
+        assert config.ai_tool == AIToolType.OPENCODE

@@ -53,7 +53,7 @@ class VibeHealOrchestrator:
         else:
             detected_tool = AIToolFactory.detect_available()
             if not detected_tool:
-                msg = "No AI tool found. Please install Claude Code or Aider."
+                msg = "No AI tool found. Please install Claude Code or opencode."
                 raise RuntimeError(msg)
             tool_type = detected_tool
             info(f"Auto-detected AI tool: {tool_type.display_name}")

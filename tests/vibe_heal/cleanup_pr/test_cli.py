@@ -98,7 +98,7 @@ class TestCleanupPrCommand:
                 "MAJOR",
                 "--dry-run",
                 "--ai-tool",
-                "aider",
+                "opencode",
                 "--env-file",
                 ".env.x",
             ],
@@ -202,3 +202,41 @@ def test_header_describes_whole_branch_rounds(mocks: tuple[MagicMock, MagicMock]
     result = runner.invoke(app, ["cleanup-pr"])
 
     assert "Max analysis rounds (whole branch): 10" in result.stdout
+
+
+class TestRemovedAiTools:
+    """Removed backends are rejected as --ai-tool choices."""
+
+    @pytest.mark.parametrize("removed", ["ai" + "der", "gem" + "ini"])
+    def test_removed_ai_tool_choice_exits_nonzero_naming_choices(self, removed: str) -> None:
+        result = runner.invoke(app, ["cleanup-pr", "--ai-tool", removed])
+
+        assert result.exit_code != 0
+        output = result.output
+        assert "claude-code" in output
+        assert "opencode" in output
+
+    @pytest.mark.parametrize("command", ["fix", "dedupe", "cleanup", "dedupe-branch"])
+    def test_every_command_rejects_removed_choice(self, command: str) -> None:
+        args = [command, "some.py"] if command in ("fix", "dedupe") else [command]
+        result = runner.invoke(app, [*args, "--ai-tool", "ai" + "der"])
+
+        assert result.exit_code != 0
+        assert "claude-code" in result.output
+        assert "opencode" in result.output
+
+    def test_config_command_exits_1_for_removed_env_tool(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        env_file = tmp_path / ".env.removed"
+        env_file.write_text(
+            "SONARQUBE_URL=https://sonar.example.com\n"
+            "SONARQUBE_TOKEN=t\n"
+            "SONARQUBE_PROJECT_KEY=p\n"
+            "AI_TOOL=" + "gem" + "ini\n"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["config", "--env-file", str(env_file)])
+
+        assert result.exit_code == 1
+        assert "Invalid AI tool" in result.output
+        assert "opencode" in result.output

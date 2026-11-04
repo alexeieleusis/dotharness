@@ -42,7 +42,7 @@ Argv per copy:
 | Permission flags | Caller chooses: `skip_permissions`, `permission_mode`, `disable_slash_commands`, `allowed_tools`; none on by default. The launcher holds no vibe-heal or pr-review values. | A default of `--dangerously-skip-permissions` is not adopted: sisyphus and pr-review want it, vibe-heal must not have it. |
 | Prompt file vs argv | File by default (`prompt_via_file=True`) under `~/.local/share/dotharness/tmp`, removed in `finally` (also on cancellation). Inline argv via `prompt_via_file=False`. | vibe-heal's file in cwd is not adopted: it litters the working tree. sisyphus's argv prompt is kept as an option for short prompts. |
 | 127 / 124 vs exceptions | `RunResult` with `not_found` (127) and `timed_out` (124) flags; the launcher does not raise for these. Guard failures raise typed errors. | pr-review and spec-prism-flow raise `TimeoutExpired`/`CalledProcessError`: callers that want that can check the flags. Return codes alone are ambiguous, hence the flags. |
-| 1800 s default (spec-prism-flow) | No default: `timeout` is required. | A silent default hides a decision. Per-caller values: pr-review config, spec-prism-flow 1800, vibe-heal Claude 1200 (D-6, implemented in the vibe-heal leaf). |
+| 1800 s default (spec-prism-flow) | No default: `timeout` is required. | A silent default hides a decision. Per-caller values: pr-review config, spec-prism-flow 1800, vibe-heal Claude 1200 (D-6, implemented). |
 | opencode without a permission flag (spec-prism-flow) | Adopted: `opencode` never receives `--dangerously-skip-permissions` (opencode 2.0 dropped it); `auto` is the only approval flag. | n/a |
 | Global opencode lock (pr-review `_OPENCODE_GLOBAL_LOCK_KEY`) | Dropped. | opencode 2.0 no longer needs it. |
 
@@ -117,4 +117,4 @@ and is not wired into any of them yet.
 - Cancelling the task kills the process group and removes the prompt file.
 - Neither argv nor env is logged or placed in exception text. Callers must keep to this.
 - Not provided: lock files, `gh`, config loading, `build_subprocess_env`.
-- Timeout for Claude in vibe-heal: D-6 sets 1200 s; implemented in the next leaf.
+- Decision D-6: the Claude timeout in vibe-heal is one value, 1200 s (`CLAUDE_TIMEOUT_SECONDS` in `ClaudeCodeTool`). It is passed to the launcher, which enforces it, and printed in the timeout message. The old 300 s constructor default and the literal 600 s wrapper are removed. `ClaudeCodeTool` and `OpenCodeTool` call `launch` only; their prompt files now live under `~/.local/share/dotharness/tmp` instead of the working tree.

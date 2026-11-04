@@ -12,9 +12,7 @@ if TYPE_CHECKING:
 class AIToolType(StrEnum):
     """Supported AI coding tools."""
 
-    AIDER = "aider"
     CLAUDE_CODE = "claude-code"
-    GEMINI = "gemini"
     OPENCODE = "opencode"
 
     @property
@@ -35,8 +33,6 @@ class AIToolType(StrEnum):
         """
         return {
             AIToolType.CLAUDE_CODE: "Claude Code",
-            AIToolType.AIDER: "Aider",
-            AIToolType.GEMINI: "Gemini",
             AIToolType.OPENCODE: "OpenCode",
         }[self]
 

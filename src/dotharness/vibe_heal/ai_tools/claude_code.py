@@ -1,29 +1,36 @@
 """Claude Code AI tool implementation."""
 
-import asyncio
 import json
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from dotharness.ai_backend import launch
 from dotharness.vibe_heal.ai_tools.base import AITool, AIToolType
 from dotharness.vibe_heal.ai_tools.models import FixResult
-from dotharness.vibe_heal.ai_tools.utils import build_file_prompt, run_command, temp_prompt_file
 
 if TYPE_CHECKING:
     from dotharness.vibe_heal.sonarqube.models import SonarQubeIssue, SonarQubeRule, SourceLine
 
 
+CLAUDE_TIMEOUT_SECONDS = 1200
+
+
 class ClaudeCodeTool(AITool):
-    """Claude Code AI tool implementation."""
+    """Claude Code AI tool implementation.
+
+    Decision D-6: the Claude timeout is one value, 1200 seconds (20 minutes). The same value is passed to the
+    shared launcher (which enforces it and kills the whole process group) and printed in the timeout message.
+    The earlier 300 s default and the literal 600 s wrapper are gone.
+    """
 
     tool_type = AIToolType.CLAUDE_CODE
 
-    def __init__(self, timeout: int = 300) -> None:
+    def __init__(self, timeout: int = CLAUDE_TIMEOUT_SECONDS) -> None:
         """Initialize Claude Code tool.
 
         Args:
-            timeout: Timeout in seconds for AI operations (default: 5 minutes)
+            timeout: Timeout in seconds for AI operations (default: 1200, decision D-6)
         """
         self.timeout = timeout
 
@@ -77,11 +84,6 @@ class ClaudeCodeTool(AITool):
         # Invoke Claude
         try:
             result = await self._invoke_claude(prompt, file_path)
-        except TimeoutError:
-            return FixResult(
-                success=False,
-                error_message=f"Claude timed out after {self.timeout} seconds",
-            )
         except Exception as e:
             return FixResult(
                 success=False,
@@ -120,11 +122,6 @@ class ClaudeCodeTool(AITool):
         # Invoke Claude with the duplication prompt
         try:
             result = await self._invoke_claude(prompt, file_path)
-        except TimeoutError:
-            return FixResult(
-                success=False,
-                error_message=f"Claude timed out after {self.timeout} seconds",
-            )
         except Exception as e:
             return FixResult(
                 success=False,
@@ -147,39 +144,39 @@ class ClaudeCodeTool(AITool):
         Returns:
             FixResult with outcome
         """
-        # Create a temporary file for the detailed instructions
-        async with temp_prompt_file(prompt) as temp_file_path:
-            # Build command with JSON output for structured parsing
-            # Pass a simple prompt that references the temp file
-            cmd = [
-                "claude",
-                "--print",
-                build_file_prompt(temp_file_path),
-                "--output-format",
-                "json",
-                "--permission-mode",
-                "acceptEdits",
-                "--allowedTools",
-                "Edit,Read",
-            ]
-
-            async with asyncio.timeout(600):
-                command_result = await run_command(cmd)
-            if command_result.success:
-                # Parse JSON response to extract information
-                files_modified = self._parse_modified_files(command_result.stdout, file_path)
-
-                return FixResult(
-                    success=True,
-                    files_modified=files_modified,
-                    ai_response=command_result.stdout,
-                )
-            else:
-                return FixResult(
-                    success=False,
-                    error_message=f"Claude failed with exit code {command_result.exit_code}: {command_result.stderr}",
-                    ai_response=command_result.stdout,
-                )
+        result = await launch(
+            "claude",
+            prompt,
+            cwd=Path.cwd(),
+            timeout=self.timeout,
+            print_flag="--print",
+            output_format="json",
+            permission_mode="acceptEdits",
+            allowed_tools="Edit,Read",
+        )
+        if result.timed_out:
+            return FixResult(
+                success=False,
+                error_message=f"Claude timed out after {self.timeout} seconds",
+                ai_response=result.stdout,
+            )
+        if result.not_found:
+            return FixResult(
+                success=False,
+                error_message="Claude CLI not found. Please install Claude Code first.",
+            )
+        if result.returncode == 0:
+            # Parse JSON response to extract information
+            return FixResult(
+                success=True,
+                files_modified=self._parse_modified_files(result.stdout, file_path),
+                ai_response=result.stdout,
+            )
+        return FixResult(
+            success=False,
+            error_message=f"Claude failed with exit code {result.returncode}: {result.stderr}",
+            ai_response=result.stdout,
+        )
 
     def _parse_modified_files(self, json_output: str, file_path: str) -> list[str]:
         """Parse JSON output to extract modified files.

@@ -42,20 +42,6 @@ class VibeHealConfig(BaseSettings):
         description="AI tool to use (auto-detect if not specified)",
     )
 
-    # Aider-specific settings (only used when ai_tool=AIDER)
-    aider_model: str | None = Field(
-        default=None,
-        description="Aider model to use (e.g., 'ollama_chat/gemma3:27b')",
-    )
-    aider_api_key: str | None = Field(
-        default=None,
-        description="API key for Aider's model provider (e.g., OLLAMA_API_KEY)",
-    )
-    aider_api_base: str | None = Field(
-        default=None,
-        description="API base URL for Aider's model provider (e.g., 'http://127.0.0.1:11434')",
-    )
-
     # Context enrichment settings
     code_context_lines: int = Field(
         default=5,
