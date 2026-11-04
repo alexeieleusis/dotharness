@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parent.parent
 VIBE_HEAL = Path.home() / "development" / "vibe-heal"
 
 _spec = importlib.util.spec_from_file_location("ledger_modules", ROOT / "scripts" / "ledger_modules.py")
+assert _spec is not None
+assert _spec.loader is not None
 ledger_modules = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ledger_modules)
 
