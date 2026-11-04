@@ -107,13 +107,12 @@ def run(config: HarnessConfig, *, dry_run: bool = False, pr: int | None = None) 
         _run_locked(config, dry_run, pr)
 
 
-_GATE_PATTERNS = ("gate", "merge-reports")
+_GATE_RE = re.compile(r"(?<![a-z0-9])gate(?![a-z0-9])|merge-reports")
 
 
 def _is_gate(check: _Check) -> bool:
     """A gate only aggregates other jobs; its failure is a symptom, never fixable on its own."""
-    name = check.name.lower()
-    return any(p in name for p in _GATE_PATTERNS)
+    return _GATE_RE.search(check.name.lower()) is not None
 
 
 def _digest(outcome: str, pr_number: int, check: str | None = None, detail: str = "") -> None:

@@ -83,7 +83,7 @@ Settings live in the `[ci_fix]` section of `.harness.toml` (see
 - It skips PRs not authored by the acting user, draft PRs and closed PRs.
 - It pushes only after the command passes locally, and only to the PR's own
   branch.
-- It never tries a gate check (a name containing `gate` or `merge-reports`,
+- It never tries a gate check (a name containing `gate` as a whole word, or `merge-reports`,
   case-insensitive). Gates never reach the agent and never use an attempt;
   the other failing checks on the PR are tried.
 - A digest entry is recorded for exactly these cases: the failure did not

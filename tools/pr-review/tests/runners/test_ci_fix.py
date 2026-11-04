@@ -258,6 +258,16 @@ def test_gate_only_failure_no_agent_no_attempt_gate_only_digest(tmp_path, caplog
     assert "gate-only" in digests[0]
 
 
+@pytest.mark.parametrize("name", ["aggregate-coverage", "propagate-labels", "investigate-flaky", "delegate-tests"])
+def test_words_containing_gate_are_not_gates(name):
+    assert not ci_fix._is_gate(_Check(name, "https://x/actions/runs/9/job/1"))
+
+
+@pytest.mark.parametrize("name", ["gate", "CI Gate", "ci-gate", "merge-gate", "integration-gate-tests"])
+def test_gate_names_are_gates(name):
+    assert ci_fix._is_gate(_Check(name, "https://x/actions/runs/9/job/1"))
+
+
 def test_non_gate_picked_even_when_gate_listed_first(tmp_path):
     failing = [
         _Check("ci-GATE", "https://x/actions/runs/9/job/1"),
