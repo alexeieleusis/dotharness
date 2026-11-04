@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 KILL_GRACE_SECONDS = 5.0
+DRAIN_SECONDS = 2.0  # bounded wait for pipe readers after the child exited
 NOT_FOUND_RETURNCODE = 127
 TIMEOUT_RETURNCODE = 124
 
@@ -110,12 +111,16 @@ async def run(
             await _cleanup_shielded(proc, pgid)
             raise
     comm = asyncio.ensure_future(proc.communicate(stdin.encode() if stdin is not None else None))
+    waiter = asyncio.ensure_future(proc.wait())
     try:
-        done, _ = await asyncio.wait({comm}, timeout=timeout)
-        if comm in done:
-            out, err = comm.result()
-            await proc.wait()
-            _killpg(pgid, signal.SIGKILL)  # sweep any grandchildren left behind
+        # Wait on the child's exit, not on pipe EOF: a grandchild may keep the pipes open.
+        done, _ = await asyncio.wait({waiter}, timeout=timeout)
+        if waiter in done:
+            _killpg(pgid, signal.SIGKILL)  # sweep any grandchildren left behind; closes their pipe ends
+            out, err = b"", b""
+            done, _ = await asyncio.wait({comm}, timeout=DRAIN_SECONDS)
+            if comm in done and not comm.cancelled() and comm.exception() is None:
+                out, err = comm.result()
             return RunResult(returncode=proc.returncode or 0, stdout=_text(out), stderr=_text(err))
 
         await _kill_group(proc, pgid)
@@ -130,7 +135,8 @@ async def run(
         await _cleanup_shielded(proc, pgid)
         raise
     finally:
-        if not comm.done():
-            comm.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await comm
+        for fut in (comm, waiter):
+            if not fut.done():
+                fut.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await fut

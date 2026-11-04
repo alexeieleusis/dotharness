@@ -151,3 +151,12 @@ async def test_on_start_exception_kills_group(monkeypatch: pytest.MonkeyPatch) -
 
     with pytest.raises(ProcessLookupError):
         os.killpg(pids[0], 0)
+
+
+async def test_background_grandchild_holding_pipes_does_not_cause_timeout() -> None:
+    start = time.monotonic()
+    result = await run(["sh", "-c", "sleep 300 & echo done"], timeout=10)
+    assert time.monotonic() - start < 5
+    assert result.returncode == 0
+    assert not result.timed_out
+    assert result.stdout == "done\n"
