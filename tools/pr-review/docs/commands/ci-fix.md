@@ -53,9 +53,12 @@ commands. The command comes from the workflow file each time.
 
 ## Bounds
 
-- At most `max_fix_attempts` agent runs per PR (default 3), whether or not the
-  fix then passes or is pushed. The count persists across runs, so re-running
-  does not reset it.
+- At most `max_fix_attempts` counted agent runs per PR (default 3). A run counts
+  when it changes the branch (new commit or any change to the working tree) or
+  crashes or times out, whether or not the fix then passes or is pushed. A run
+  that leaves HEAD and the working tree exactly as it found them does not count. The count persists across runs until ci-fix
+  finds the PR's CI green; that resets the count, so a later unrelated failure
+  gets a full budget again. Dry runs never reset it.
 - A failure that does not reproduce locally, or that still fails once the cap
   is reached, becomes a digest entry. Nothing more is pushed for it.
 - Pushes are plain pushes to the PR's own branch. There is no rebase and no
@@ -69,7 +72,7 @@ Settings live in the `[ci_fix]` section of `.harness.toml` (see
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `enabled` | `false` | Turns the command on. |
-| `max_fix_attempts` | `3` | Maximum agent runs per PR, counted across runs. |
+| `max_fix_attempts` | `3` | Maximum counted agent runs per PR (runs that changed the branch or crashed), counted across runs. |
 
 ## Safety conditions
 
@@ -80,9 +83,13 @@ Settings live in the `[ci_fix]` section of `.harness.toml` (see
 - It skips PRs not authored by the acting user, draft PRs and closed PRs.
 - It pushes only after the command passes locally, and only to the PR's own
   branch.
+- It never tries a gate check (a name containing `gate` as a whole word, or `merge-reports`,
+  case-insensitive). Gates never reach the agent and never use an attempt;
+  the other failing checks on the PR are tried.
 - A digest entry is recorded for exactly these cases: the failure did not
   reproduce, the attempt cap was reached, the check output could not be
-  parsed, a rebase is needed, or the check is still failing after a fix.
+  parsed, a rebase is needed, the check is still failing after a fix, or only
+  gate checks are failing (`gate-only`).
 
 Attempt counters and digest entries are written by the runner. This page only
 describes them.

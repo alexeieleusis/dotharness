@@ -10,8 +10,10 @@ Public entry point (takes the shared working-directory lock itself, like the sib
   failing job log, finds the step command in ``.github/workflows/``, reproduces it locally,
   lets the backend agent make the smallest fix (instructions: ``knowledge/pr-review/ci-fix-prompt.md``,
   read-only), re-runs the command and, only if it passes, commits and plain-pushes to the PR's own
-  branch. One agent run is one attempt; at most ``max_fix_attempts`` agent runs per PR, counted across runs in
-  ``ci_fix_state.json``. At most one push per PR per run.
+  branch. One agent run that changes the branch (or crashes) is one attempt; a run that leaves HEAD and the
+  tree unchanged is not counted, but is remembered per (head SHA, check) so it is not retried until the head moves. At most ``max_fix_attempts`` counted runs per PR, counted across runs in
+  ``ci_fix_state.json``. At most one push per PR per run. The counter of a PR is reset when ci-fix finds its
+  CI green (not in dry-run), so a later unrelated failure gets a full budget.
 * ``dry_run=True`` fetches, checks out and reproduces, but never commits, pushes, runs the agent or
   changes a counter.
 * Never force-pushes, rebases, pushes another ref, approves or merges.
@@ -63,7 +65,9 @@ PROMPT_FILE = "ci-fix-prompt.md"
 UNKNOWN_STEP = "UNKNOWN STEP"  # step column gh prints when it cannot map a log line to a step
 
 OUTCOME_NOT_REPRODUCED = "did-not-reproduce"
+OUTCOME_NOOP_REPEAT = "noop-repeat"
 OUTCOME_CAP_REACHED = "cap-reached"
+OUTCOME_GATE_ONLY = "gate-only"
 OUTCOME_PARSE_FAILURE = "parse-failure"
 OUTCOME_REBASE_NEEDED = "rebase-needed"
 OUTCOME_STILL_FAILING = "still-failing"
@@ -102,6 +106,14 @@ def run(config: HarnessConfig, *, dry_run: bool = False, pr: int | None = None) 
         return
     with acquire_lock(config.lock_key):
         _run_locked(config, dry_run, pr)
+
+
+_GATE_RE = re.compile(r"(?<![a-z0-9])gate(?![a-z0-9])|merge-reports")
+
+
+def _is_gate(check: _Check) -> bool:
+    """A gate only aggregates other jobs; its failure is a symptom, never fixable on its own."""
+    return _GATE_RE.search(check.name.lower()) is not None
 
 
 def _digest(outcome: str, pr_number: int, check: str | None = None, detail: str = "") -> None:
@@ -179,7 +191,7 @@ def _is_in_scope(pr: dict, current_user: str) -> bool:
 
 
 def _read_ci_fix_state(repo_slug: str) -> dict:
-    defaults: dict = {"version": 1, "attempts": {}}
+    defaults: dict = {"version": 1, "attempts": {}, "noops": {}}
     p = _state_path(repo_slug, CI_FIX_STATE_FILE)
     if not p.exists():
         return defaults
@@ -190,6 +202,8 @@ def _read_ci_fix_state(repo_slug: str) -> dict:
         return defaults
     if not isinstance(data, dict) or not isinstance(data.get("attempts"), dict):
         return defaults
+    if not isinstance(data.get("noops"), dict):
+        data["noops"] = {}
     return data
 
 
@@ -208,15 +222,56 @@ def _record_attempt(repo_slug: str, pr_number: int) -> None:
     _update_state(repo_slug, CI_FIX_STATE_FILE, _read_ci_fix_state, mutate)
 
 
+def _noop_key(head_sha: str, check_name: str) -> str:
+    return f"{head_sha}\n{check_name}"
+
+
+def _was_noop(repo_slug: str, pr_number: int, head_sha: str, check_name: str) -> bool:
+    entries = _read_ci_fix_state(repo_slug)["noops"].get(str(pr_number), [])
+    return isinstance(entries, list) and _noop_key(head_sha, check_name) in entries
+
+
+def _record_noop(repo_slug: str, pr_number: int, head_sha: str, check_name: str) -> None:
+    """Remember that the agent changed nothing for this head SHA and check, so the same input is not retried."""
+
+    def mutate(current: dict) -> bool:
+        entries = current["noops"].get(str(pr_number))
+        if not isinstance(entries, list):
+            entries = []
+        key = _noop_key(head_sha, check_name)
+        if key in entries:
+            return False
+        # Only the current head matters: a new head SHA invalidates the older entries.
+        current["noops"][str(pr_number)] = [e for e in entries if e.split("\n", 1)[0] == head_sha] + [key]
+        return True
+
+    _update_state(repo_slug, CI_FIX_STATE_FILE, _read_ci_fix_state, mutate)
+
+
 def _prune_counters(repo_slug: str, open_pr_numbers: set[int]) -> None:
     """Drop counters of PRs that are no longer open, so the map does not grow without bound."""
     keep = {str(n) for n in open_pr_numbers}
 
     def mutate(current: dict) -> bool:
-        to_drop = current["attempts"].keys() - keep
+        to_drop = (current["attempts"].keys() | current["noops"].keys()) - keep
         for key in to_drop:
-            del current["attempts"][key]
+            current["attempts"].pop(key, None)
+            current["noops"].pop(key, None)
         return bool(to_drop)
+
+    _update_state(repo_slug, CI_FIX_STATE_FILE, _read_ci_fix_state, mutate)
+
+
+def _reset_attempts(repo_slug: str, pr_number: int) -> None:
+    """Forget the attempt counter of a PR whose CI is green. Writes nothing when there is no counter."""
+    key = str(pr_number)
+
+    def mutate(current: dict) -> bool:
+        if key not in current["attempts"] and key not in current["noops"]:
+            return False
+        current["attempts"].pop(key, None)
+        current["noops"].pop(key, None)
+        return True
 
     _update_state(repo_slug, CI_FIX_STATE_FILE, _read_ci_fix_state, mutate)
 
@@ -438,6 +493,8 @@ def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, prompt: s
     blocked = _check_ci(repo, number, pr.get("baseRefName", ""), env)
     if blocked is None:
         logger.info("PR #%d: CI is green, nothing to fix", number)
+        if not dry_run:
+            _reset_attempts(config.repo_slug, number)
         return
     state = _read_pr_state(repo, number, env)
     skip = _state_skip_reason(state) if state else None
@@ -455,8 +512,22 @@ def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, prompt: s
         logger.info("PR #%d: no failed checks (blocked by: %s), nothing to fix", number, blocked.reason)
         return
 
+    _fix_first_candidate(pr, failing, config, wdir, env, prompt, dry_run)
+
+
+def _fix_first_candidate(
+    pr: dict, failing: list[_Check], config: HarnessConfig, wdir: str, env: dict, prompt: str, dry_run: bool
+) -> None:
+    """Try the non-gate failing checks in order, stopping after the first push. Gates are never tried."""
+    number = pr["number"]
+    candidates = [c for c in failing if not _is_gate(c)]
+    if not candidates:
+        names = ", ".join(c.name for c in failing)
+        _digest(OUTCOME_GATE_ONLY, number, detail=f"only gate checks are failing: {names}")
+        return
+
     max_attempts = config.ci_fix.max_fix_attempts
-    for check in failing:
+    for check in candidates:
         attempts = get_attempts(config.repo_slug, number)
         if attempts >= max_attempts:
             _digest(OUTCOME_CAP_REACHED, number, check.name, f"attempts={attempts} max={max_attempts}")
@@ -543,14 +614,28 @@ def _agent_fix_and_push(
     )
     opencode_dir = str(config.repo.opencode_dir) if config.repo.opencode_dir else None
     pre_sha = _head(wdir, env)
-    # Count the attempt before the (expensive) agent run, so failed runs also hit the cap.
-    _record_attempt(config.repo_slug, number)
-    backend.run(
-        _build_instructions(prompt, check, step, before, log),
-        cwd=wdir,
-        opencode_dir=opencode_dir,
-        context=f"PR #{number} ci-fix {check.name}",
-    )
+    pre_status = _status(wdir, env)
+    if _was_noop(config.repo_slug, number, pre_sha, check.name):
+        _digest(OUTCOME_NOOP_REPEAT, number, check.name, "the agent already changed nothing for this head SHA")
+        return False
+    # An agent run is an attempt unless it left the branch untouched (same HEAD, same tree): a run that
+    # changed something, failed to fix it or crashed still counts, so a PR that keeps failing hits the cap.
+    # The attempt is recorded after the (expensive) run, and also when the run raises (crash or timeout).
+    try:
+        backend.run(
+            _build_instructions(prompt, check, step, before, log),
+            cwd=wdir,
+            opencode_dir=opencode_dir,
+            context=f"PR #{number} ci-fix {check.name}",
+        )
+    except BaseException:
+        _record_attempt(config.repo_slug, number)
+        raise
+    if _head(wdir, env) != pre_sha or _status(wdir, env) != pre_status:
+        _record_attempt(config.repo_slug, number)
+    else:
+        # Free of the fix budget, but bounded: skip this (head SHA, check) until the head moves.
+        _record_noop(config.repo_slug, number, pre_sha, check.name)
 
     after = _run_step(step, wdir, env)
     if after.returncode != 0:
@@ -572,6 +657,11 @@ def _head(wdir: str, env: dict) -> str:
     return _text(result.stdout).strip()
 
 
+def _status(wdir: str, env: dict) -> str:
+    result = run_cmd(["git", "status", "--porcelain"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
+    return _text(result.stdout)
+
+
 def _unsafe_change(wdir: str, env: dict, pre_sha: str) -> str | None:
     """Why the result must not be pushed: untracked files, or a change under ``.github/``; else None."""
     untracked = run_cmd(["git", "ls-files", "--others", "--exclude-standard"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
@@ -587,8 +677,7 @@ def _unsafe_change(wdir: str, env: dict, pre_sha: str) -> str | None:
 
 def _commit_if_dirty(check: _Check, wdir: str, env: dict) -> None:
     """Commit tracked changes the agent left uncommitted (never untracked files); a no-op when clean."""
-    status = run_cmd(["git", "status", "--porcelain"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
-    if not _text(status.stdout).strip():
+    if not _status(wdir, env).strip():
         return
     run_cmd(["git", "add", "-u"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
     run_cmd(["git", "commit", "-m", f"ci-fix: {check.name}"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)

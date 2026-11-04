@@ -57,9 +57,11 @@ def _mocks(
     backend_raises=None,
     status=b"",
     agent_commits=True,
+    failing=None,
 ):
     prs = [_pr()] if prs is None else prs
     head = {"sha": "sha0"}
+    status_box = [status]
     pushes: list[list[str]] = []
     cmds: list[list[str]] = []
     step_results = [_proc(repro_rc, b"boom"), _proc(after_rc)]
@@ -76,7 +78,7 @@ def _mocks(
         if cmd[:2] == ["git", "rev-parse"]:
             return _proc(0, head["sha"].encode())
         if cmd[:2] == ["git", "status"]:
-            return _proc(0, status)
+            return _proc(0, status_box[0])
         if cmd[:2] == ["git", "push"]:
             pushes.append(cmd)
             return _proc(push_rc, b"", push_stderr if push_rc else b"")
@@ -102,7 +104,10 @@ def _mocks(
         patch(P + "_gh", side_effect=fake_gh) as gh,
         patch(P + "_check_ci", return_value=safety) as check_ci,
         patch(P + "_read_pr_state", return_value=state),
-        patch(P + "_read_failing_checks", return_value=[_Check("Run checks", "https://x/actions/runs/9/job/8")]),
+        patch(
+            P + "_read_failing_checks",
+            return_value=failing or [_Check("Run checks", "https://x/actions/runs/9/job/8")],
+        ),
         patch(P + "_read_failed_log", return_value="quality\tRun checks\t2024Z error"),
         patch(P + "find_step_command", return_value=_Step("Run checks", "make check", "tools/pr-review")),
         patch(P + "git_detach_and_record", return_value="orig"),
@@ -121,6 +126,7 @@ def _mocks(
             pushes=pushes,
             cmds=cmds,
             backend=backend,
+            status_box=status_box,
             backend_cls=backend_cls,
         )
 
@@ -172,8 +178,51 @@ def test_agent_changes_nothing_while_step_passes_is_not_reproduced(tmp_path, cap
         ci_fix.run(_cfg(tmp_path))
     assert m.pushes == []
     assert not any(c[:2] == ["git", "commit"] for c in m.cmds)
-    assert ci_fix.get_attempts(SLUG, 1) == 1  # the agent ran, so the attempt counts
+    assert ci_fix.get_attempts(SLUG, 1) == 0  # the agent changed nothing, so no attempt
     assert any("did-not-reproduce" in d and "no change to the branch" in d for d in _digests(caplog))
+
+
+def test_noop_run_with_step_still_failing_is_not_counted(tmp_path):
+    with _mocks(tmp_path, agent_commits=False, after_rc=1):
+        ci_fix.run(_cfg(tmp_path))
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+
+
+def test_repeated_noop_for_same_head_and_check_does_not_rerun_the_agent(tmp_path, caplog):
+    with _mocks(tmp_path, agent_commits=False, after_rc=1) as m, caplog.at_level(logging.INFO):
+        m.run_step.side_effect = [_proc(1), _proc(1)] * 3
+        for _ in range(3):
+            ci_fix.run(_cfg(tmp_path))
+    assert m.backend.run.call_count == 1
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+    assert any("noop-repeat" in d for d in _digests(caplog))
+
+
+def test_noop_run_on_dirty_start_tree_is_not_counted(tmp_path):
+    with _mocks(tmp_path, agent_commits=False, after_rc=1, status=b" M a.py\n"):
+        ci_fix.run(_cfg(tmp_path))
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+
+
+def test_run_that_dirties_tree_without_commit_is_counted(tmp_path):
+    with _mocks(tmp_path, agent_commits=False, after_rc=1) as m:
+        orig = m.backend.run.side_effect
+
+        def run(*a, **k):
+            orig(*a, **k)
+            m.status_box[0] = b" M a.py\n"
+            return _proc(0)
+
+        m.backend.run.side_effect = run
+        ci_fix.run(_cfg(tmp_path))
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+
+
+@pytest.mark.parametrize("exc", [RuntimeError("agent died"), TimeoutError("timeout")])
+def test_backend_crash_or_timeout_still_counts(tmp_path, exc):
+    with _mocks(tmp_path, backend_raises=exc, agent_commits=False), pytest.raises(CiFixError):
+        ci_fix.run(_cfg(tmp_path))
+    assert ci_fix.get_attempts(SLUG, 1) == 1
 
 
 def test_ac3_cap_reached_across_runs_writes_digest(tmp_path, caplog):
@@ -201,6 +250,57 @@ def test_ac4_not_reproduced_no_push_digest(tmp_path, caplog):
     assert ci_fix.get_attempts(SLUG, 1) == 0
     assert any("did-not-reproduce" in d for d in _digests(caplog))
     m.restore.assert_called_once()
+
+
+def test_gate_only_failure_no_agent_no_attempt_gate_only_digest(tmp_path, caplog):
+    gates = [
+        _Check("CI Gate", "https://x/actions/runs/9/job/1"),
+        _Check("merge-reports", "https://x/actions/runs/9/job/2"),
+    ]
+    with _mocks(tmp_path, failing=gates) as m, caplog.at_level(logging.INFO):
+        ci_fix.run(_cfg(tmp_path))
+    m.backend.run.assert_not_called()
+    m.checkout.assert_not_called()
+    assert m.pushes == []
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+    digests = _digests(caplog)
+    assert len(digests) == 1
+    assert "gate-only" in digests[0]
+
+
+@pytest.mark.parametrize("name", ["aggregate-coverage", "propagate-labels", "investigate-flaky", "delegate-tests"])
+def test_words_containing_gate_are_not_gates(name):
+    assert not ci_fix._is_gate(_Check(name, "https://x/actions/runs/9/job/1"))
+
+
+@pytest.mark.parametrize("name", ["gate", "CI Gate", "ci-gate", "merge-gate", "integration-gate-tests"])
+def test_gate_names_are_gates(name):
+    assert ci_fix._is_gate(_Check(name, "https://x/actions/runs/9/job/1"))
+
+
+def test_non_gate_picked_even_when_gate_listed_first(tmp_path):
+    failing = [
+        _Check("ci-GATE", "https://x/actions/runs/9/job/1"),
+        _Check("Run checks", "https://x/actions/runs/9/job/8"),
+    ]
+    with _mocks(tmp_path, failing=failing) as m:
+        ci_fix.run(_cfg(tmp_path))
+    assert len(m.pushes) == 1
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+    m.backend.run.assert_called_once()
+
+
+def test_gates_never_sent_after_non_gate_did_not_reproduce(tmp_path, caplog):
+    failing = [
+        _Check("Run checks", "https://x/actions/runs/9/job/8"),
+        _Check("ci-gate", "https://x/actions/runs/9/job/1"),
+    ]
+    with _mocks(tmp_path, failing=failing, repro_rc=0) as m, caplog.at_level(logging.INFO):
+        ci_fix.run(_cfg(tmp_path))
+    m.backend.run.assert_not_called()
+    m.checkout.assert_called_once()  # only the non-gate was tried
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+    assert not any("gate-only" in d for d in _digests(caplog))
 
 
 def test_still_failing_after_fix_no_push_digest(tmp_path, caplog):
@@ -343,10 +443,47 @@ def test_one_pr_failing_does_not_stop_the_others(tmp_path):
 def test_counters_of_closed_prs_are_pruned(tmp_path):
     ci_fix._record_attempt(SLUG, 1)
     ci_fix._record_attempt(SLUG, 99)
-    with _mocks(tmp_path, green=True):
+    with _mocks(tmp_path, green=False, after_rc=1):
+        ci_fix.run(_cfg(tmp_path))
+    assert ci_fix.get_attempts(SLUG, 1) == 2  # open and not green: kept, plus this run's attempt
+    assert ci_fix.get_attempts(SLUG, 99) == 0
+
+
+def test_counter_reset_when_ci_green(tmp_path):
+    ci_fix._record_attempt(SLUG, 1)
+    ci_fix._record_attempt(SLUG, 2)
+    with _mocks(tmp_path, prs=[_pr(1)], green=True):
+        ci_fix.run(_cfg(tmp_path), pr=1)
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+    assert ci_fix.get_attempts(SLUG, 2) == 1
+
+
+def test_counter_untouched_while_not_green(tmp_path):
+    ci_fix._record_attempt(SLUG, 1)
+    with _mocks(tmp_path, green=False) as m:
+        m.run_step.side_effect = [_proc(0)]  # does not reproduce: no agent run
         ci_fix.run(_cfg(tmp_path))
     assert ci_fix.get_attempts(SLUG, 1) == 1
-    assert ci_fix.get_attempts(SLUG, 99) == 0
+
+
+def test_counter_untouched_in_dry_run_when_green(tmp_path):
+    ci_fix._record_attempt(SLUG, 1)
+    with _mocks(tmp_path, green=True):
+        ci_fix.run(_cfg(tmp_path), dry_run=True)
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+
+
+def test_reset_attempts_is_idempotent_and_writes_nothing_without_key(tmp_path):
+    ci_fix._reset_attempts(SLUG, 1)
+    with patch("harness.state._atomic_write") as write:
+        ci_fix._reset_attempts(SLUG, 1)
+    write.assert_not_called()
+    ci_fix._record_attempt(SLUG, 1)
+    ci_fix._reset_attempts(SLUG, 1)
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+    with patch("harness.state._atomic_write") as write:
+        ci_fix._reset_attempts(SLUG, 1)
+    write.assert_not_called()
 
 
 @pytest.fixture(autouse=True)
