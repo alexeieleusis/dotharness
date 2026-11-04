@@ -10,7 +10,8 @@ Public entry point (takes the shared working-directory lock itself, like the sib
   failing job log, finds the step command in ``.github/workflows/``, reproduces it locally,
   lets the backend agent make the smallest fix (instructions: ``knowledge/pr-review/ci-fix-prompt.md``,
   read-only), re-runs the command and, only if it passes, commits and plain-pushes to the PR's own
-  branch. One agent run is one attempt; at most ``max_fix_attempts`` agent runs per PR, counted across runs in
+  branch. One agent run that changes the branch (or crashes) is one attempt; a run that leaves HEAD and the
+  tree unchanged is not counted. At most ``max_fix_attempts`` counted runs per PR, counted across runs in
   ``ci_fix_state.json``. At most one push per PR per run. The counter of a PR is reset when ci-fix finds its
   CI green (not in dry-run), so a later unrelated failure gets a full budget.
 * ``dry_run=True`` fetches, checks out and reproduces, but never commits, pushes, runs the agent or
@@ -583,14 +584,22 @@ def _agent_fix_and_push(
     )
     opencode_dir = str(config.repo.opencode_dir) if config.repo.opencode_dir else None
     pre_sha = _head(wdir, env)
-    # Count the attempt before the (expensive) agent run, so failed runs also hit the cap.
-    _record_attempt(config.repo_slug, number)
-    backend.run(
-        _build_instructions(prompt, check, step, before, log),
-        cwd=wdir,
-        opencode_dir=opencode_dir,
-        context=f"PR #{number} ci-fix {check.name}",
-    )
+    pre_status = _status(wdir, env)
+    # An agent run is an attempt unless it left the branch untouched (same HEAD, same tree): a run that
+    # changed something, failed to fix it or crashed still counts, so a PR that keeps failing hits the cap.
+    # The attempt is recorded after the (expensive) run, and also when the run raises (crash or timeout).
+    try:
+        backend.run(
+            _build_instructions(prompt, check, step, before, log),
+            cwd=wdir,
+            opencode_dir=opencode_dir,
+            context=f"PR #{number} ci-fix {check.name}",
+        )
+    except BaseException:
+        _record_attempt(config.repo_slug, number)
+        raise
+    if _head(wdir, env) != pre_sha or _status(wdir, env) != pre_status:
+        _record_attempt(config.repo_slug, number)
 
     after = _run_step(step, wdir, env)
     if after.returncode != 0:
@@ -612,6 +621,11 @@ def _head(wdir: str, env: dict) -> str:
     return _text(result.stdout).strip()
 
 
+def _status(wdir: str, env: dict) -> str:
+    result = run_cmd(["git", "status", "--porcelain"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
+    return _text(result.stdout)
+
+
 def _unsafe_change(wdir: str, env: dict, pre_sha: str) -> str | None:
     """Why the result must not be pushed: untracked files, or a change under ``.github/``; else None."""
     untracked = run_cmd(["git", "ls-files", "--others", "--exclude-standard"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
@@ -627,8 +641,7 @@ def _unsafe_change(wdir: str, env: dict, pre_sha: str) -> str | None:
 
 def _commit_if_dirty(check: _Check, wdir: str, env: dict) -> None:
     """Commit tracked changes the agent left uncommitted (never untracked files); a no-op when clean."""
-    status = run_cmd(["git", "status", "--porcelain"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
-    if not _text(status.stdout).strip():
+    if not _status(wdir, env).strip():
         return
     run_cmd(["git", "add", "-u"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
     run_cmd(["git", "commit", "-m", f"ci-fix: {check.name}"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)

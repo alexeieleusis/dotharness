@@ -53,8 +53,10 @@ commands. The command comes from the workflow file each time.
 
 ## Bounds
 
-- At most `max_fix_attempts` agent runs per PR (default 3), whether or not the
-  fix then passes or is pushed. The count persists across runs until ci-fix
+- At most `max_fix_attempts` counted agent runs per PR (default 3). A run counts
+  when it changes the branch (new commit or any change to the working tree) or
+  crashes or times out, whether or not the fix then passes or is pushed. A run
+  that leaves HEAD and the working tree exactly as it found them does not count. The count persists across runs until ci-fix
   finds the PR's CI green; that resets the count, so a later unrelated failure
   gets a full budget again. Dry runs never reset it.
 - A failure that does not reproduce locally, or that still fails once the cap
@@ -70,7 +72,7 @@ Settings live in the `[ci_fix]` section of `.harness.toml` (see
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `enabled` | `false` | Turns the command on. |
-| `max_fix_attempts` | `3` | Maximum agent runs per PR, counted across runs. |
+| `max_fix_attempts` | `3` | Maximum counted agent runs per PR (runs that changed the branch or crashed), counted across runs. |
 
 ## Safety conditions
 
