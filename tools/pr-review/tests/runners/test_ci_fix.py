@@ -343,10 +343,47 @@ def test_one_pr_failing_does_not_stop_the_others(tmp_path):
 def test_counters_of_closed_prs_are_pruned(tmp_path):
     ci_fix._record_attempt(SLUG, 1)
     ci_fix._record_attempt(SLUG, 99)
-    with _mocks(tmp_path, green=True):
+    with _mocks(tmp_path, green=False, after_rc=1):
+        ci_fix.run(_cfg(tmp_path))
+    assert ci_fix.get_attempts(SLUG, 1) == 2  # open and not green: kept, plus this run's attempt
+    assert ci_fix.get_attempts(SLUG, 99) == 0
+
+
+def test_counter_reset_when_ci_green(tmp_path):
+    ci_fix._record_attempt(SLUG, 1)
+    ci_fix._record_attempt(SLUG, 2)
+    with _mocks(tmp_path, prs=[_pr(1)], green=True):
+        ci_fix.run(_cfg(tmp_path), pr=1)
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+    assert ci_fix.get_attempts(SLUG, 2) == 1
+
+
+def test_counter_untouched_while_not_green(tmp_path):
+    ci_fix._record_attempt(SLUG, 1)
+    with _mocks(tmp_path, green=False) as m:
+        m.run_step.side_effect = [_proc(0)]  # does not reproduce: no agent run
         ci_fix.run(_cfg(tmp_path))
     assert ci_fix.get_attempts(SLUG, 1) == 1
-    assert ci_fix.get_attempts(SLUG, 99) == 0
+
+
+def test_counter_untouched_in_dry_run_when_green(tmp_path):
+    ci_fix._record_attempt(SLUG, 1)
+    with _mocks(tmp_path, green=True):
+        ci_fix.run(_cfg(tmp_path), dry_run=True)
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+
+
+def test_reset_attempts_is_idempotent_and_writes_nothing_without_key(tmp_path):
+    ci_fix._reset_attempts(SLUG, 1)
+    with patch("harness.state._atomic_write") as write:
+        ci_fix._reset_attempts(SLUG, 1)
+    write.assert_not_called()
+    ci_fix._record_attempt(SLUG, 1)
+    ci_fix._reset_attempts(SLUG, 1)
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+    with patch("harness.state._atomic_write") as write:
+        ci_fix._reset_attempts(SLUG, 1)
+    write.assert_not_called()
 
 
 @pytest.fixture(autouse=True)

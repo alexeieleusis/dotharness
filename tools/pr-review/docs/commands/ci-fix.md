@@ -54,8 +54,9 @@ commands. The command comes from the workflow file each time.
 ## Bounds
 
 - At most `max_fix_attempts` agent runs per PR (default 3), whether or not the
-  fix then passes or is pushed. The count persists across runs, so re-running
-  does not reset it.
+  fix then passes or is pushed. The count persists across runs until ci-fix
+  finds the PR's CI green; that resets the count, so a later unrelated failure
+  gets a full budget again. Dry runs never reset it.
 - A failure that does not reproduce locally, or that still fails once the cap
   is reached, becomes a digest entry. Nothing more is pushed for it.
 - Pushes are plain pushes to the PR's own branch. There is no rebase and no

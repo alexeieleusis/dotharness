@@ -11,7 +11,8 @@ Public entry point (takes the shared working-directory lock itself, like the sib
   lets the backend agent make the smallest fix (instructions: ``knowledge/pr-review/ci-fix-prompt.md``,
   read-only), re-runs the command and, only if it passes, commits and plain-pushes to the PR's own
   branch. One agent run is one attempt; at most ``max_fix_attempts`` agent runs per PR, counted across runs in
-  ``ci_fix_state.json``. At most one push per PR per run.
+  ``ci_fix_state.json``. At most one push per PR per run. The counter of a PR is reset when ci-fix finds its
+  CI green (not in dry-run), so a later unrelated failure gets a full budget.
 * ``dry_run=True`` fetches, checks out and reproduces, but never commits, pushes, runs the agent or
   changes a counter.
 * Never force-pushes, rebases, pushes another ref, approves or merges.
@@ -217,6 +218,19 @@ def _prune_counters(repo_slug: str, open_pr_numbers: set[int]) -> None:
         for key in to_drop:
             del current["attempts"][key]
         return bool(to_drop)
+
+    _update_state(repo_slug, CI_FIX_STATE_FILE, _read_ci_fix_state, mutate)
+
+
+def _reset_attempts(repo_slug: str, pr_number: int) -> None:
+    """Forget the attempt counter of a PR whose CI is green. Writes nothing when there is no counter."""
+    key = str(pr_number)
+
+    def mutate(current: dict) -> bool:
+        if key not in current["attempts"]:
+            return False
+        del current["attempts"][key]
+        return True
 
     _update_state(repo_slug, CI_FIX_STATE_FILE, _read_ci_fix_state, mutate)
 
@@ -438,6 +452,8 @@ def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, prompt: s
     blocked = _check_ci(repo, number, pr.get("baseRefName", ""), env)
     if blocked is None:
         logger.info("PR #%d: CI is green, nothing to fix", number)
+        if not dry_run:
+            _reset_attempts(config.repo_slug, number)
         return
     state = _read_pr_state(repo, number, env)
     skip = _state_skip_reason(state) if state else None
