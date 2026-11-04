@@ -128,7 +128,11 @@ class CleanupPrOrchestrator:
         self.project_manager = ProjectManager(client)
         self.analysis_runner = AnalysisRunner(config, client)
         self.branch_analyzer = BranchAnalyzer(Path.cwd())
-        self.git_manager = GitManager(Path.cwd(), pre_commit_command=config.pre_commit_command)
+        self.git_manager = GitManager(
+            Path.cwd(),
+            pre_commit_command=config.pre_commit_command,
+            pre_commit_timeout=config.pre_commit_timeout_seconds,
+        )
         self.diff_parser = diff_parser if diff_parser is not None else DiffParser(Path.cwd())
         # Repo-relative files touched by fix commits since the current analysis; their line numbers are stale.
         self._stale_files: set[str] = set()

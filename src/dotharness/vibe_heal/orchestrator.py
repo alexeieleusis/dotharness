@@ -35,7 +35,10 @@ class VibeHealOrchestrator:
             ai_tool: Optional pre-initialized AI tool. If not provided, will auto-detect.
         """
         self.config = config
-        self.git_manager = GitManager(pre_commit_command=config.pre_commit_command)
+        self.git_manager = GitManager(
+            pre_commit_command=config.pre_commit_command,
+            pre_commit_timeout=config.pre_commit_timeout_seconds,
+        )
         self.ai_tool = ai_tool if ai_tool is not None else self._initialize_ai_tool()
 
     def _initialize_ai_tool(self) -> AITool:

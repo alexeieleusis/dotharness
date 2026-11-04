@@ -674,6 +674,21 @@ class TestPreCommitHooks:
         call_args = mock_run.call_args[0][0]
         assert call_args[:3] == ["my-hook-runner", "--check", "test.py"]
 
+    def test_hook_timeout_raises_git_operation_error(self, git_repo: Path) -> None:
+        """A hanging hook is bounded by the timeout, runs without stdin, and raises GitOperationError."""
+        import subprocess
+
+        manager = GitManager(git_repo, pre_commit_command="sleep 100000", pre_commit_timeout=7)
+
+        with patch(
+            "dotharness.vibe_heal.git.manager.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="sleep", timeout=7),
+        ) as mock_run, pytest.raises(GitOperationError, match="timed out after 7"):
+            manager._run_pre_commit_hooks(["test.py"])
+
+        assert mock_run.call_args.kwargs["timeout"] == 7
+        assert mock_run.call_args.kwargs["stdin"] == subprocess.DEVNULL
+
     def test_stage_and_commit_restages_hook_modified_files(
         self,
         git_repo: Path,

@@ -67,6 +67,11 @@ class VibeHealConfig(BaseSettings):
         ),
     )
 
+    pre_commit_timeout_seconds: int = Field(
+        default=300,
+        description="Max seconds to wait for the pre-commit hook subprocess before killing it",
+    )
+
     model_config = SettingsConfigDict(
         env_file=[".env.vibeheal", ".env"],
         env_file_encoding="utf-8",

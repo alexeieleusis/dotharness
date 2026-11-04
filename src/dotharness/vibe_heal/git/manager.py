@@ -24,6 +24,7 @@ class GitManager:
         self,
         repo_path: str | Path | None = None,
         pre_commit_command: str | None = None,
+        pre_commit_timeout: float = 300,
     ) -> None:
         """Initialize Git manager.
 
@@ -31,12 +32,14 @@ class GitManager:
             repo_path: Path to Git repository (default: current directory)
             pre_commit_command: Command to run before committing. None means auto-detect,
                 empty string means disabled.
+            pre_commit_timeout: Max seconds to wait for the hook subprocess before killing it
 
         Raises:
             NotAGitRepositoryError: If path is not a Git repository
         """
         self.repo_path = Path(repo_path or Path.cwd())
         self._pre_commit_command = pre_commit_command
+        self._pre_commit_timeout = pre_commit_timeout
 
         try:
             self.repo = git.Repo(self.repo_path, search_parent_directories=True)
@@ -273,7 +276,17 @@ class GitManager:
             cmd = ["git", "hook", "run", "--ignore-missing", "pre-commit"]
 
         try:
-            subprocess.run(cmd, cwd=repo_root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # noqa: S603
+            subprocess.run(  # noqa: S603
+                cmd,
+                cwd=repo_root,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=self._pre_commit_timeout,
+            )
+        except subprocess.TimeoutExpired as e:
+            msg = f"Pre-commit hook timed out after {self._pre_commit_timeout} seconds"
+            raise GitOperationError(msg) from e
         except OSError as e:
             msg = f"Pre-commit hook failed to run: {e}"
             raise GitOperationError(msg) from e

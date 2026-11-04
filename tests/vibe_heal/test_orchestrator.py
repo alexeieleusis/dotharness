@@ -29,6 +29,7 @@ def mock_config() -> VibeHealConfig:
     config.include_rule_description = True  # Default to true
     config.code_context_lines = 5  # Default value
     config.pre_commit_command = None  # Default: auto-detect
+    config.pre_commit_timeout_seconds = 300
     return config
 
 
