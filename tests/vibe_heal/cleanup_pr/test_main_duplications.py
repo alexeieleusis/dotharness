@@ -17,6 +17,7 @@ from dotharness.vibe_heal.cleanup_pr.main_duplications import (
     build_main_duplication_task,
     extract_branch_hunks,
     format_block_snippet,
+    read_main_file_lines,
 )
 from dotharness.vibe_heal.cleanup_pr.orchestrator import (
     CleanupPrAnalysisError,
@@ -103,6 +104,13 @@ def _task(resolved: ResolvedDuplication | None = None, file_path: Path = _FILE) 
         branch_hunk="@@ -6 +20 @@\n-old\n+new",
         branch_range=(20, 20),
     )
+
+
+class TestReadMainFileLines:
+    def test_splits_on_newline_only(self) -> None:
+        repo = MagicMock()
+        repo.git.show.return_value = "a\fb\u2028c\nline2\r\nline3\n"
+        assert read_main_file_lines(repo, "abc", "x.py") == ["a\fb\u2028c", "line2", "line3"]
 
 
 class TestFormatBlockSnippet:

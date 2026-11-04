@@ -48,7 +48,13 @@ def read_main_file_lines(repo: Repo, merge_base: str, repo_relative: str) -> lis
         content = repo.git.show(f"{merge_base}:{repo_relative}")
     except GitCommandError:
         return None
-    return str(content).splitlines()
+    # Split on "\n" only: str.splitlines() also breaks on \f, \v, \x1c-\x1e, \x85,
+    # U+2028/2029 and lone \r, which git and SonarQube do not count as line ends.
+    text = str(content)
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return [line.removesuffix("\r") for line in lines]
 
 
 def format_block_snippet(lines: list[str], from_line: int, to_line: int) -> str:
