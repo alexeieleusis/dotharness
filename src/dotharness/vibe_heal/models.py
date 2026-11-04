@@ -1,4 +1,4 @@
-"""Top-level models for vibe-heal."""
+"""Top-level models for vibe_heal."""
 
 from pydantic import BaseModel, Field
 

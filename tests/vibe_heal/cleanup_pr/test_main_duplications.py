@@ -1,6 +1,6 @@
 """Tests for main-duplication detection, prompt and commits (FR-6, --include-main-duplications)."""
 
-from collections.abc import Iterator
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from git import Repo
 
-from tests.vibe_heal.cleanup_pr.test_orchestrator import _diff, _dup_response, _loop_env, _preconditions_pass
 from dotharness.vibe_heal.ai_tools.base import AITool
 from dotharness.vibe_heal.ai_tools.models import FixResult
 from dotharness.vibe_heal.cleanup_pr.main_duplications import (
@@ -33,6 +32,7 @@ from dotharness.vibe_heal.review.models import DuplicationLocation, ResolvedDupl
 from dotharness.vibe_heal.sonarqube.analysis_runner import AnalysisRunner
 from dotharness.vibe_heal.sonarqube.client import SonarQubeClient
 from dotharness.vibe_heal.sonarqube.project_manager import TempProjectMetadata
+from tests.vibe_heal.cleanup_pr.test_orchestrator import _diff, _dup_response, _loop_env, _preconditions_pass
 
 _MODULE = "dotharness.vibe_heal.cleanup_pr.orchestrator"
 _FILE = Path("src/a.py")
@@ -42,7 +42,7 @@ _FILE = Path("src/a.py")
 def config() -> VibeHealConfig:
     return VibeHealConfig(
         sonarqube_url="https://sonar.test.com",
-        sonarqube_token="test-token",
+        sonarqube_token="test-token",  # noqa: S106
         sonarqube_project_key="my-project",
     )
 
@@ -195,7 +195,7 @@ class TestPromptAndCommit:
         assert "src/b.py (lines 1-5)" in msg
         assert "lines 20-20" in msg
         assert "AI tool: Claude Code" in msg
-        assert msg.endswith("[vibe-heal](https://github.com/alexeieleusis/vibe-heal)")
+        assert msg.endswith("[vibe_heal](https://github.com/alexeieleusis/dotharness)")
         assert "Co-Authored-By" not in msg
 
 
@@ -247,7 +247,7 @@ def _main_env(
     tasks: list[MainDuplicationTask] | None = None,
     commit_results: list[str | None] | None = None,
     rebuild_tasks: list[MainDuplicationTask] | None = None,
-) -> Iterator[MagicMock]:
+) -> Generator[MagicMock]:
     """Loop harness plus mocks for the main-duplication phase (detection patched out).
 
     ``rebuild_tasks`` stands in for the lazy task rebuild from the current HEAD that runs
@@ -576,9 +576,9 @@ class TestMainDuplicationDetection:
     def _patched(
         orchestrator: CleanupPrOrchestrator,
         real_response: DuplicationsResponse,
-        temp_result: tuple[list[object], str | None] = ([], None),
+        temp_result: tuple[Sequence[object], str | None] = ([], None),
         build_side_effect: object | None = None,
-    ) -> Iterator[tuple[MagicMock, MagicMock, MagicMock]]:
+    ) -> Generator[tuple[MagicMock, MagicMock, MagicMock]]:
         dup_client = MagicMock()
         dup_client.get_duplications_for_file = AsyncMock(return_value=real_response)
         cm = MagicMock()

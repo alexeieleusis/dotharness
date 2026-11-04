@@ -1,6 +1,7 @@
 """Tests for AnalysisRunner class."""
 
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -16,7 +17,7 @@ def config() -> VibeHealConfig:
     """Create test configuration."""
     return VibeHealConfig(
         sonarqube_url="https://sonar.test.com",
-        sonarqube_token="test-token",
+        sonarqube_token="test-token",  # noqa: S106
         sonarqube_project_key="my-project",
     )
 
@@ -198,7 +199,7 @@ class TestRunAnalysis:
             )
 
         assert result.success is False
-        assert "not installed" in result.error_message
+        assert "not installed" in (result.error_message or "")
 
     @pytest.mark.asyncio
     async def test_successful_analysis(
@@ -248,7 +249,7 @@ INFO: Analysis total time: 10.234 s
         mock_process.communicate = AsyncMock(side_effect=hang)
         mock_process.kill = Mock()  # Process.kill() is synchronous in the real API
 
-        analysis_runner.config.scanner_timeout_seconds = 0.05
+        cast("Any", analysis_runner.config).scanner_timeout_seconds = 0.05
 
         with (
             patch.object(analysis_runner, "validate_scanner_available", return_value=True),
@@ -262,7 +263,7 @@ INFO: Analysis total time: 10.234 s
 
         assert result.success is False
         assert result.retryable is False
-        assert "did not complete" in result.error_message
+        assert "did not complete" in (result.error_message or "")
         mock_process.kill.assert_called_once()
         mock_process.wait.assert_awaited_once()
 
@@ -284,8 +285,8 @@ INFO: Analysis total time: 10.234 s
             )
 
         assert result.success is False
-        assert "exit code 1" in result.error_message
-        assert "ERROR: Analysis failed" in result.error_message
+        assert "exit code 1" in (result.error_message or "")
+        assert "ERROR: Analysis failed" in (result.error_message or "")
 
     @pytest.mark.asyncio
     async def test_no_task_id_in_output(self, analysis_runner: AnalysisRunner, tmp_path: Path) -> None:
@@ -305,7 +306,7 @@ INFO: Analysis total time: 10.234 s
             )
 
         assert result.success is False
-        assert "Could not extract task ID" in result.error_message
+        assert "Could not extract task ID" in (result.error_message or "")
 
     @pytest.mark.asyncio
     async def test_analysis_failed_on_server(self, analysis_runner: AnalysisRunner, tmp_path: Path) -> None:
@@ -332,8 +333,8 @@ INFO: More about the report processing at https://sonar.test.com/api/ce/task?id=
 
         assert result.success is False
         assert result.task_id == "AY123"
-        assert "failed on server" in result.error_message
-        assert "Out of memory" in result.error_message
+        assert "failed on server" in (result.error_message or "")
+        assert "Out of memory" in (result.error_message or "")
 
     @pytest.mark.asyncio
     async def test_analysis_succeeds_after_retry(self, analysis_runner: AnalysisRunner, tmp_path: Path) -> None:
@@ -394,8 +395,8 @@ INFO: More about the report processing at https://sonar.test.com/api/ce/task?id=
             )
 
         assert result.success is False
-        assert "failed on server" in result.error_message
-        assert "Fail to extract report from database" in result.error_message
+        assert "failed on server" in (result.error_message or "")
+        assert "Fail to extract report from database" in (result.error_message or "")
         assert mock_create.call_count == 3
 
     @pytest.mark.asyncio
@@ -434,7 +435,7 @@ INFO: More about the report processing at https://sonar.test.com/api/ce/task?id=
 
         assert result.success is False
         assert result.task_id == "AY123"
-        assert "timed out after 300 seconds" in result.error_message
+        assert "timed out after 300 seconds" in (result.error_message or "")
 
     @pytest.mark.asyncio
     async def test_subprocess_exception(self, analysis_runner: AnalysisRunner, tmp_path: Path) -> None:
@@ -453,8 +454,8 @@ INFO: More about the report processing at https://sonar.test.com/api/ce/task?id=
             )
 
         assert result.success is False
-        assert "Failed to run analysis" in result.error_message
-        assert "Subprocess error" in result.error_message
+        assert "Failed to run analysis" in (result.error_message or "")
+        assert "Subprocess error" in (result.error_message or "")
 
 
 class TestAnalysisResult:
@@ -515,7 +516,7 @@ class TestAuthHint:
                 project_dir=tmp_path,
             )
         assert result.success is False
-        assert "SONAR_TOKEN" in result.error_message
+        assert "SONAR_TOKEN" in (result.error_message or "")
 
     @pytest.mark.asyncio
     async def test_no_auth_hint_without_properties_file(self, analysis_runner: AnalysisRunner, tmp_path: Path) -> None:
@@ -532,7 +533,7 @@ class TestAuthHint:
                 project_dir=tmp_path,
             )
         assert result.success is False
-        assert "SONAR_TOKEN" not in result.error_message
+        assert "SONAR_TOKEN" not in (result.error_message or "")
 
     @pytest.mark.asyncio
     async def test_no_auth_hint_for_non_auth_failure(self, analysis_runner: AnalysisRunner, tmp_path: Path) -> None:
@@ -550,4 +551,4 @@ class TestAuthHint:
                 project_dir=tmp_path,
             )
         assert result.success is False
-        assert "SONAR_TOKEN" not in result.error_message
+        assert "SONAR_TOKEN" not in (result.error_message or "")

@@ -1,4 +1,4 @@
-"""Shared utilities for vibe-heal."""
+"""Shared utilities for vibe_heal."""
 
 from dotharness.vibe_heal.models import FixSummary
 from dotharness.vibe_heal.output import bold, console, dim, error, success, warn
@@ -40,4 +40,4 @@ def display_fix_summary(
     if dry_run:
         warn("\nDry-run mode: no changes committed")
 
-    dim("\nGitHub: https://github.com/alexeieleusis/vibe-heal")
+    dim("\nGitHub: https://github.com/alexeieleusis/dotharness")

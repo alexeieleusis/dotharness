@@ -56,7 +56,8 @@ class AIToolFactory:
         if tool_type == AIToolType.OPENCODE:
             return OpenCodeTool()
 
-        raise ValueError(f"Unsupported AI tool type: {tool_type}")
+        msg = f"Unsupported AI tool type: {tool_type}"
+        raise ValueError(msg)
 
     @staticmethod
     def detect_available() -> AIToolType | None:

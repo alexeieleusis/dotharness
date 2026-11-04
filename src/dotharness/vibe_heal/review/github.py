@@ -76,7 +76,8 @@ class GitHubReviewClient:
         if not result.success:
             stderr = result.stderr.strip()
             if "no pull requests found" in stderr.lower():
-                raise NoOpenPrError("No open pull request found for the current branch")
+                msg = "No open pull request found for the current branch"
+                raise NoOpenPrError(msg)
             msg = f"Failed to detect PR: {stderr or 'not authenticated'}"
             raise GitHubReviewError(msg)
 
@@ -166,7 +167,8 @@ class GitHubReviewClient:
                     fallback,
                 )
             except GitHubReviewError as e:
-                raise GitHubReviewError(f"Review posting failed: {e}") from e
+                msg = f"Review posting failed: {e}"
+                raise GitHubReviewError(msg) from e
 
     def build_payload(self, report: ReviewResult) -> dict[str, Any]:
         """Build the GitHub review payload with inline comments."""
@@ -321,10 +323,11 @@ class GitHubReviewClient:
         try:
             async with asyncio.timeout(60):
                 stdout_bytes, stderr_bytes = await process.communicate(stdin_data)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             process.kill()
             await process.wait()
-            raise GitHubReviewError("gh API call timed out after 60s") from None
+            msg = "gh API call timed out after 60s"
+            raise GitHubReviewError(msg) from None
         if process.returncode != 0:
             stderr_msg = stderr_bytes.decode().strip()
             stdout_msg = stdout_bytes.decode().strip()

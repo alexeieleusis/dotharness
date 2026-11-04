@@ -92,8 +92,7 @@ class AiderTool(AITool):
         # Invoke Aider
         try:
             result = await self._invoke_aider(prompt, file_path)
-            return result
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return FixResult(
                 success=False,
                 error_message=f"Aider timed out after {self.timeout} seconds",
@@ -103,6 +102,8 @@ class AiderTool(AITool):
                 success=False,
                 error_message=f"Error invoking Aider: {e}",
             )
+        else:
+            return result
 
     async def fix_duplication(
         self,
@@ -134,8 +135,7 @@ class AiderTool(AITool):
         # Invoke Aider with the duplication prompt
         try:
             result = await self._invoke_aider(prompt, file_path)
-            return result
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return FixResult(
                 success=False,
                 error_message=f"Aider timed out after {self.timeout} seconds",
@@ -145,6 +145,8 @@ class AiderTool(AITool):
                 success=False,
                 error_message=f"Error invoking Aider: {e}",
             )
+        else:
+            return result
 
     async def _invoke_aider(
         self,
@@ -223,7 +225,7 @@ class AiderTool(AITool):
                     ai_response=stdout_text,
                 )
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 process.kill()
                 await process.wait()
                 raise

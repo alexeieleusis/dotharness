@@ -1,4 +1,4 @@
-"""Git integration for vibe-heal."""
+"""Git integration for vibe_heal."""
 
 from dotharness.vibe_heal.git.diff_parser import DiffParser, DiffParserError
 from dotharness.vibe_heal.git.exceptions import (

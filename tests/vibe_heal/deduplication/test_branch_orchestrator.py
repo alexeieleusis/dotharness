@@ -4,11 +4,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from tests.vibe_heal.shared_orchestrator_tests import BaseTestCreateTempProject
 from dotharness.vibe_heal.ai_tools.base import AITool
 from dotharness.vibe_heal.config import VibeHealConfig
 from dotharness.vibe_heal.deduplication.orchestrator import DedupeBranchOrchestrator
 from dotharness.vibe_heal.sonarqube.client import SonarQubeClient
+from tests.vibe_heal.shared_orchestrator_tests import BaseTestCreateTempProject
 
 
 @pytest.fixture
@@ -16,7 +16,7 @@ def config() -> VibeHealConfig:
     """Create test configuration."""
     return VibeHealConfig(
         sonarqube_url="https://sonar.test.com",
-        sonarqube_token="test-token",
+        sonarqube_token="test-token",  # noqa: S106
         sonarqube_project_key="my-project",
     )
 

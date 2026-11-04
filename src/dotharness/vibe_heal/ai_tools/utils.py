@@ -3,7 +3,7 @@
 import asyncio
 import os
 import tempfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import NamedTuple
@@ -42,7 +42,7 @@ async def run_command(
 
     try:
         stdout_bytes, stderr_bytes = await process.communicate()
-    except (asyncio.TimeoutError, asyncio.CancelledError):
+    except (TimeoutError, asyncio.CancelledError):
         process.kill()
         await process.wait()
         raise
@@ -84,7 +84,7 @@ async def write_prompt_file(prompt: str, *, suffix: str = ".txt") -> Path:
 
 
 @asynccontextmanager
-async def temp_prompt_file(prompt: str, *, suffix: str = ".txt") -> AsyncIterator[Path]:
+async def temp_prompt_file(prompt: str, *, suffix: str = ".txt") -> AsyncGenerator[Path]:
     """Write a prompt to a temp file and clean it up afterward.
 
     Args:

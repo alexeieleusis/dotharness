@@ -222,5 +222,5 @@ def build_main_duplication_commit_message(task: MainDuplicationTask, ai_tool_nam
         f"Branch-side changed range:\n"
         f"  - {task.repo_relative} (lines {task.branch_range[0]}-{task.branch_range[1]})\n\n"
         f"AI tool: {ai_tool_name}\n\n"
-        f"[vibe-heal](https://github.com/alexeieleusis/vibe-heal)"
+        f"[vibe_heal](https://github.com/alexeieleusis/dotharness)"
     )

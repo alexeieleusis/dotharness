@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dotharness.vibe_heal.review.models import FileReview, ResolvedDuplication, ReviewDuplication, ReviewIssue, ReviewResult
+from dotharness.vibe_heal.review.models import (
+    FileReview,
+    ResolvedDuplication,
+    ReviewDuplication,
+    ReviewIssue,
+    ReviewResult,
+)
 
 
 def default_report_dir(project_key: str, branch: str) -> Path:
@@ -41,11 +47,13 @@ def load_report(report_dir: Path) -> ReviewResult:
     try:
         data = json_path.read_text(encoding="utf-8")
     except OSError as e:
-        raise FileNotFoundError(f"Cannot read report file: {json_path}") from e
+        msg = f"Cannot read report file: {json_path}"
+        raise FileNotFoundError(msg) from e
     try:
         return ReviewResult.model_validate_json(data)
     except Exception as e:
-        raise ValueError(f"Malformed report file: {json_path}") from e
+        msg = f"Malformed report file: {json_path}"
+        raise ValueError(msg) from e
 
 
 def load_report_from_path(json_path: Path) -> ReviewResult:
@@ -53,11 +61,13 @@ def load_report_from_path(json_path: Path) -> ReviewResult:
     try:
         data = json_path.read_text(encoding="utf-8")
     except OSError as e:
-        raise FileNotFoundError(f"Cannot read report file: {json_path}") from e
+        msg = f"Cannot read report file: {json_path}"
+        raise FileNotFoundError(msg) from e
     try:
         return ReviewResult.model_validate_json(data)
     except Exception as e:
-        raise ValueError(f"Malformed report file: {json_path}") from e
+        msg = f"Malformed report file: {json_path}"
+        raise ValueError(msg) from e
 
 
 def _write_json(result: ReviewResult, path: Path) -> None:

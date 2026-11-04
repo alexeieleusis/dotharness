@@ -305,7 +305,6 @@ class ReviewOrchestrator:
                 f"{result.total_duplications} duplication finding(s) "
                 f"across {len(result.files)} file(s)."
             )
-            return result
 
         except Exception as e:
             result.success = False
@@ -315,6 +314,8 @@ class ReviewOrchestrator:
 
         finally:
             await self._cleanup_temp_project(temp_project)
+
+        return result
 
     async def run_baseline_scan(self) -> BaselineScanResult:
         """Run a full SonarQube scan directly against the real project.

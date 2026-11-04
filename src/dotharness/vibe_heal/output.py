@@ -1,4 +1,4 @@
-"""Safe terminal output helpers for vibe-heal.
+"""Safe terminal output helpers for vibe_heal.
 
 This module is the single place in vibe_heal where Rich markup strings are
 constructed at runtime. All dynamic values are escaped before insertion so that

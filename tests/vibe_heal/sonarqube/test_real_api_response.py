@@ -1,11 +1,13 @@
 """Test with real SonarQube API response."""
 
+from typing import Any
+
 from dotharness.vibe_heal.sonarqube.models import IssuesResponse
 
 
 def test_parse_real_sonarqube_response() -> None:
     """Test parsing actual SonarQube API response."""
-    real_response = {
+    real_response: dict[str, Any] = {
         "paging": {"pageIndex": 1, "pageSize": 100, "total": 1},
         "issues": [
             {

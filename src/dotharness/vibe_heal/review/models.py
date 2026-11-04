@@ -1,6 +1,6 @@
 """Models for the review command."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
@@ -184,7 +184,7 @@ class ReviewResult(BaseModel):
     head_sha: str = Field(default="", description="Full HEAD commit SHA the review was generated against")
     base_branch: str = Field(description="Base branch for comparison (e.g., 'origin/main')")
     generated_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Timestamp when the review was generated",
     )
     files: list[FileReview] = Field(default_factory=list, description="Per-file review results")

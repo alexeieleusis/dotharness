@@ -55,7 +55,7 @@ def test_is_test_file(path: str, expected: bool) -> None:
 
 def _git(repo: Path, *args: str) -> None:
     cmd = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com", *args]
-    subprocess.run(cmd, check=True, capture_output=True)  # noqa: S603
+    subprocess.run(cmd, check=True, capture_output=True)
 
 
 def test_list_modules_init_empty_and_non_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -79,7 +79,7 @@ def test_list_modules_init_empty_and_non_empty(tmp_path: Path, monkeypatch: pyte
         target.write_text(content)
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "init")
-    commit = subprocess.run(  # noqa: S603
+    commit = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"],  # noqa: S607
         check=True,
         capture_output=True,
@@ -103,7 +103,7 @@ def _have_commits() -> bool:
     try:
         for repo, commit in ((ROOT, "cb0efc1"), (VIBE_HEAL, "9363868")):
             cmd = ["git", "-C", str(repo), "cat-file", "-e", commit]
-            subprocess.run(cmd, check=True, capture_output=True)  # noqa: S603
+            subprocess.run(cmd, check=True, capture_output=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
     return True

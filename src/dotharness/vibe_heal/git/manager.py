@@ -18,7 +18,7 @@ from dotharness.vibe_heal.sonarqube.models import SonarQubeIssue, SonarQubeRule
 
 
 class GitManager:
-    """Manages Git operations for vibe-heal."""
+    """Manages Git operations for vibe_heal."""
 
     def __init__(
         self,
@@ -319,7 +319,6 @@ class GitManager:
             for attempt in range(2):
                 try:
                     commit = self._do_commit(message)
-                    return commit.hexsha
                 except git.GitError as exc:
                     last_error = exc
                     if attempt == 1:
@@ -329,6 +328,8 @@ class GitManager:
                     if not retry_dirty:
                         break
                     self.repo.index.add(retry_dirty)
+                else:
+                    return commit.hexsha
             raise last_error
 
         except git.GitError as e:
@@ -397,9 +398,9 @@ class GitManager:
                 body_parts.extend([details, ""])
 
         body_parts.extend([
-            f"Fixed by: vibe-heal using {ai_tool_type.display_name}",
+            f"Fixed by: vibe_heal using {ai_tool_type.display_name}",
             "",
-            "[vibe-heal](https://github.com/alexeieleusis/vibe-heal)",
+            "[vibe_heal](https://github.com/alexeieleusis/dotharness)",
         ])
 
         body = "\n".join(body_parts)

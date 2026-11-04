@@ -1,4 +1,4 @@
-"""Main workflow orchestration for vibe-heal."""
+"""Main workflow orchestration for vibe_heal."""
 
 import asyncio
 import logging

@@ -282,7 +282,7 @@ class DeduplicationOrchestrator:
             f"This code was duplicated in {len(group.blocks)} location(s):\n"
             f"{locations_text}\n\n"
             f"AI tool: {self.ai_tool.tool_type.display_name}\n\n"
-            f"[vibe-heal](https://github.com/alexeieleusis/vibe-heal)"
+            f"[vibe_heal](https://github.com/alexeieleusis/dotharness)"
         )
 
     def _handle_successful_fix_commit(

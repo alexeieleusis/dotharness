@@ -1,6 +1,5 @@
 """Tests for OpenCode AI tool."""
 
-import asyncio
 import tempfile
 from pathlib import Path
 
@@ -57,7 +56,7 @@ class TestOpenCodeTool:
 
         assert result.success is False
         assert result.failed is True
-        assert "not found" in result.error_message.lower()
+        assert "not found" in (result.error_message or "").lower()
 
     @pytest.mark.asyncio
     async def test_fix_issue_when_file_not_found(
@@ -74,7 +73,7 @@ class TestOpenCodeTool:
         result = await tool.fix_issue(sample_issue, str(nonexistent_file))
 
         assert result.success is False
-        assert "File not found" in result.error_message
+        assert "File not found" in (result.error_message or "")
 
     @pytest.mark.asyncio
     async def test_fix_issue_success(
@@ -126,7 +125,7 @@ class TestOpenCodeTool:
         result = await tool.fix_issue(sample_issue, str(test_file))
 
         assert result.success is False
-        assert "failed" in result.error_message.lower()
+        assert "failed" in (result.error_message or "").lower()
 
     @pytest.mark.asyncio
     async def test_fix_issue_timeout(
@@ -142,7 +141,7 @@ class TestOpenCodeTool:
         test_file.write_text("code")
 
         mock_process = mocker.AsyncMock()
-        mock_process.communicate.side_effect = asyncio.TimeoutError()
+        mock_process.communicate.side_effect = TimeoutError()
         mock_process.kill = mocker.Mock()
         mock_process.wait = mocker.AsyncMock()
 
@@ -152,7 +151,7 @@ class TestOpenCodeTool:
         result = await tool.fix_issue(sample_issue, str(test_file))
 
         assert result.success is False
-        assert "timed out" in result.error_message.lower()
+        assert "timed out" in (result.error_message or "").lower()
         mock_process.kill.assert_called_once()
 
     @pytest.mark.asyncio
@@ -177,7 +176,7 @@ class TestOpenCodeTool:
         result = await tool.fix_issue(sample_issue, str(test_file))
 
         assert result.success is False
-        assert "Error invoking OpenCode" in result.error_message
+        assert "Error invoking OpenCode" in (result.error_message or "")
 
     @pytest.mark.asyncio
     async def test_fix_issue_command_construction(
@@ -398,4 +397,4 @@ class TestOpenCodeTool:
         result = await tool.fix_duplication("Remove duplicate code", str(test_file))
 
         assert result.success is False
-        assert "not found" in result.error_message.lower()
+        assert "not found" in (result.error_message or "").lower()

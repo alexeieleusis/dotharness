@@ -16,7 +16,6 @@ dependencies = [
     "pydantic-settings>=2.15.0",
     "rich>=15.0.0",
     "typer>=0.27.1",
-    "typing-extensions>=4.16.0",
 ]
 classifiers = [
     "Intended Audience :: Developers",
@@ -125,10 +124,13 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]
+"tests/*" = ["S101", "S603"]
 
 [tool.ruff.format]
 preview = true
+
+[tool.deptry]
+known_first_party = ["dotharness"]
 
 [tool.coverage.report]
 skip_empty = true

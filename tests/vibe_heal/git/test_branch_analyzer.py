@@ -1,6 +1,7 @@
 """Tests for BranchAnalyzer class."""
 
 from pathlib import Path
+from typing import cast
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
@@ -29,6 +30,11 @@ def branch_analyzer(tmp_path: Path, mock_repo: MagicMock) -> BranchAnalyzer:
     with patch("dotharness.vibe_heal.git.branch_analyzer.Repo", return_value=mock_repo):
         analyzer = BranchAnalyzer(tmp_path)
     return analyzer
+
+
+def _repo(analyzer: BranchAnalyzer) -> MagicMock:
+    """Return the analyzer's (mocked) repo typed as a mock so attributes can be configured."""
+    return cast("MagicMock", analyzer.repo)
 
 
 class TestBranchAnalyzerInit:
@@ -290,8 +296,8 @@ class TestGetCurrentBranch:
 
     def test_get_current_branch_success(self, branch_analyzer: BranchAnalyzer) -> None:
         """Test getting current branch name."""
-        branch_analyzer.repo.head.is_detached = False
-        branch_analyzer.repo.active_branch.name = "feature/new-feature"
+        _repo(branch_analyzer).head.is_detached = False
+        _repo(branch_analyzer).active_branch.name = "feature/new-feature"
 
         branch_name = branch_analyzer.get_current_branch()
 
@@ -299,8 +305,8 @@ class TestGetCurrentBranch:
 
     def test_get_current_branch_main(self, branch_analyzer: BranchAnalyzer) -> None:
         """Test getting current branch when on main."""
-        branch_analyzer.repo.head.is_detached = False
-        branch_analyzer.repo.active_branch.name = "main"
+        _repo(branch_analyzer).head.is_detached = False
+        _repo(branch_analyzer).active_branch.name = "main"
 
         branch_name = branch_analyzer.get_current_branch()
 
@@ -308,7 +314,7 @@ class TestGetCurrentBranch:
 
     def test_get_current_branch_detached_head(self, branch_analyzer: BranchAnalyzer) -> None:
         """Test error when repository is in detached HEAD state."""
-        branch_analyzer.repo.head.is_detached = True
+        _repo(branch_analyzer).head.is_detached = True
 
         with pytest.raises(BranchAnalyzerError, match="detached HEAD state"):
             branch_analyzer.get_current_branch()
@@ -331,7 +337,7 @@ class TestValidateBranchExists:
         mock_branch2 = MagicMock()
         mock_branch2.name = "develop"
 
-        branch_analyzer.repo.branches = [mock_branch1, mock_branch2]
+        _repo(branch_analyzer).branches = [mock_branch1, mock_branch2]
 
         assert branch_analyzer.validate_branch_exists("main") is True
         assert branch_analyzer.validate_branch_exists("develop") is True
@@ -340,7 +346,7 @@ class TestValidateBranchExists:
         """Test validation of non-existent local branch."""
         mock_branch = MagicMock()
         mock_branch.name = "main"
-        branch_analyzer.repo.branches = [mock_branch]
+        _repo(branch_analyzer).branches = [mock_branch]
 
         assert branch_analyzer.validate_branch_exists("nonexistent") is False
 
@@ -355,7 +361,7 @@ class TestValidateBranchExists:
         mock_remote = MagicMock()
         mock_remote.refs = [mock_ref1, mock_ref2]
 
-        branch_analyzer.repo.remote.return_value = mock_remote
+        _repo(branch_analyzer).remote.return_value = mock_remote
 
         assert branch_analyzer.validate_branch_exists("origin/main") is True
         assert branch_analyzer.validate_branch_exists("origin/develop") is True
@@ -368,14 +374,14 @@ class TestValidateBranchExists:
         mock_remote = MagicMock()
         mock_remote.refs = [mock_ref]
 
-        branch_analyzer.repo.remote.return_value = mock_remote
+        _repo(branch_analyzer).remote.return_value = mock_remote
 
         assert branch_analyzer.validate_branch_exists("origin/nonexistent") is False
 
     def test_validate_branch_checks_default_remote(self, branch_analyzer: BranchAnalyzer) -> None:
         """Test that validation checks default remote for simple branch names."""
         # No local branches
-        branch_analyzer.repo.branches = []
+        _repo(branch_analyzer).branches = []
 
         # Mock default remote (origin)
         mock_ref = MagicMock()
@@ -384,22 +390,22 @@ class TestValidateBranchExists:
         mock_remote = MagicMock()
         mock_remote.refs = [mock_ref]
 
-        branch_analyzer.repo.remote.return_value = mock_remote
+        _repo(branch_analyzer).remote.return_value = mock_remote
 
         # Should find 'main' in origin/main
         assert branch_analyzer.validate_branch_exists("main") is True
 
     def test_validate_branch_exception_handling(self, branch_analyzer: BranchAnalyzer) -> None:
         """Test that exceptions during validation return False."""
-        branch_analyzer.repo.branches = []
-        branch_analyzer.repo.remote.side_effect = Exception("Remote error")
+        _repo(branch_analyzer).branches = []
+        _repo(branch_analyzer).remote.side_effect = Exception("Remote error")
 
         # Should return False instead of raising
         assert branch_analyzer.validate_branch_exists("main") is False
 
     def test_validate_remote_branch_invalid_remote(self, branch_analyzer: BranchAnalyzer) -> None:
         """Test validation when remote doesn't exist."""
-        branch_analyzer.repo.remote.side_effect = Exception("Remote not found")
+        _repo(branch_analyzer).remote.side_effect = Exception("Remote not found")
 
         assert branch_analyzer.validate_branch_exists("upstream/main") is False
 
@@ -411,7 +417,7 @@ class TestGetUserEmail:
         """Test getting user email from git config."""
         mock_config = MagicMock()
         mock_config.get_value.return_value = "user@example.com"
-        branch_analyzer.repo.config_reader.return_value = mock_config
+        _repo(branch_analyzer).config_reader.return_value = mock_config
 
         email = branch_analyzer.get_user_email()
 
@@ -422,14 +428,14 @@ class TestGetUserEmail:
         """Test error when user email is not configured."""
         mock_config = MagicMock()
         mock_config.get_value.return_value = None
-        branch_analyzer.repo.config_reader.return_value = mock_config
+        _repo(branch_analyzer).config_reader.return_value = mock_config
 
         with pytest.raises(BranchAnalyzerError, match="Git user email not configured"):
             branch_analyzer.get_user_email()
 
     def test_get_user_email_config_error(self, branch_analyzer: BranchAnalyzer) -> None:
         """Test error handling when reading config fails."""
-        branch_analyzer.repo.config_reader.side_effect = Exception("Config read error")
+        _repo(branch_analyzer).config_reader.side_effect = Exception("Config read error")
 
         with pytest.raises(BranchAnalyzerError, match="Failed to get user email"):
             branch_analyzer.get_user_email()
@@ -437,7 +443,7 @@ class TestGetUserEmail:
     def test_get_user_email_various_formats(self, branch_analyzer: BranchAnalyzer) -> None:
         """Test that various email formats are accepted."""
         mock_config = MagicMock()
-        branch_analyzer.repo.config_reader.return_value = mock_config
+        _repo(branch_analyzer).config_reader.return_value = mock_config
 
         test_emails = [
             "simple@example.com",

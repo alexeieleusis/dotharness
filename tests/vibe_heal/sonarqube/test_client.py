@@ -31,7 +31,7 @@ def config() -> VibeHealConfig:
     """Create test configuration."""
     return VibeHealConfig(
         sonarqube_url="https://sonar.test.com",
-        sonarqube_token="test-token",
+        sonarqube_token="test-token",  # noqa: S106
         sonarqube_project_key="my-project",
     )
 
@@ -42,7 +42,7 @@ def config_basic_auth() -> VibeHealConfig:
     return VibeHealConfig(
         sonarqube_url="https://sonar.test.com",
         sonarqube_username="testuser",
-        sonarqube_password="testpass",
+        sonarqube_password="testpass",  # noqa: S106
         sonarqube_project_key="my-project",
     )
 
@@ -318,7 +318,7 @@ class TestSonarQubeClient:
         # Create config with uppercase project key
         config_uppercase = VibeHealConfig(
             sonarqube_url="https://sonar.test.com",
-            sonarqube_token="test-token",
+            sonarqube_token="test-token",  # noqa: S106
             sonarqube_project_key="MY-PROJECT",  # Uppercase
         )
 

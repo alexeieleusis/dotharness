@@ -1,6 +1,6 @@
 """Tests for ProjectManager class."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -70,7 +70,7 @@ class TestCreateTempProject:
 
         # Verify timestamp is recent (within last minute)
         created_time = datetime.fromisoformat(metadata.created_at)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         time_diff = (now - created_time).total_seconds()
         assert time_diff < 60
 
@@ -340,13 +340,13 @@ class TestTempProjectMetadata:
 
         # Missing required field should raise error
         with pytest.raises(ValidationError):
-            TempProjectMetadata(
-                project_key="test",
-                project_name="test",
+            TempProjectMetadata.model_validate({
+                "project_key": "test",
+                "project_name": "test",
                 # Missing created_at
-                base_project_key="base",
-                branch_name="main",
-            )
+                "base_project_key": "base",
+                "branch_name": "main",
+            })
 
 
 class TestFindStaleProjects:
@@ -355,7 +355,7 @@ class TestFindStaleProjects:
     @pytest.mark.asyncio
     async def test_finds_stale_temp_project(self, project_manager: ProjectManager, mock_client: AsyncMock) -> None:
         """A temp project older than the threshold with zero analyses is reported stale."""
-        old_timestamp = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%y%m%d-%H%M")
+        old_timestamp = (datetime.now(UTC) - timedelta(hours=2)).strftime("%y%m%d-%H%M")
         stale_key = f"my_project_user_example_com_main_{old_timestamp}"
         mock_client.search_projects = AsyncMock(
             return_value=[{"key": stale_key, "name": "my_project analysis user main"}]
@@ -375,7 +375,7 @@ class TestFindStaleProjects:
         self, project_manager: ProjectManager, mock_client: AsyncMock
     ) -> None:
         """A temp project that has at least one analysis is not stale."""
-        old_timestamp = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%y%m%d-%H%M")
+        old_timestamp = (datetime.now(UTC) - timedelta(hours=2)).strftime("%y%m%d-%H%M")
         key = f"my_project_user_example_com_main_{old_timestamp}"
         mock_client.search_projects = AsyncMock(return_value=[{"key": key, "name": "my_project analysis user main"}])
         mock_client.get_project_analyses_count = AsyncMock(return_value=1)
@@ -389,7 +389,7 @@ class TestFindStaleProjects:
         self, project_manager: ProjectManager, mock_client: AsyncMock
     ) -> None:
         """A recently created temp project is not stale, even with zero analyses."""
-        recent_timestamp = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%y%m%d-%H%M")
+        recent_timestamp = (datetime.now(UTC) - timedelta(minutes=5)).strftime("%y%m%d-%H%M")
         key = f"my_project_user_example_com_main_{recent_timestamp}"
         mock_client.search_projects = AsyncMock(return_value=[{"key": key, "name": "my_project analysis user main"}])
         mock_client.get_project_analyses_count = AsyncMock(return_value=0)
@@ -433,7 +433,7 @@ class TestFindStaleProjects:
         self, project_manager: ProjectManager, mock_client: AsyncMock
     ) -> None:
         """A single candidate whose analyses-count lookup fails is skipped, not fatal."""
-        old_timestamp = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%y%m%d-%H%M")
+        old_timestamp = (datetime.now(UTC) - timedelta(hours=2)).strftime("%y%m%d-%H%M")
         failing_key = f"my_project_user_example_com_main_{old_timestamp}"
         ok_key = f"my_project_user_example_com_other_{old_timestamp}"
         mock_client.search_projects = AsyncMock(
@@ -453,7 +453,7 @@ class TestFindStaleProjects:
         self, project_manager: ProjectManager, mock_client: AsyncMock
     ) -> None:
         """With multiple candidates, each analyses count is paired with its own project key."""
-        old_timestamp = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%y%m%d-%H%M")
+        old_timestamp = (datetime.now(UTC) - timedelta(hours=2)).strftime("%y%m%d-%H%M")
         stale_key = f"my_project_user_example_com_a_{old_timestamp}"
         active_key = f"my_project_user_example_com_b_{old_timestamp}"
         mock_client.search_projects = AsyncMock(
@@ -473,7 +473,7 @@ class TestPruneStaleProjects:
     """Tests for prune_stale_projects method."""
 
     def _stale_project(self, key: str) -> StaleProject:
-        return StaleProject(project_key=key, created_at=datetime.now(timezone.utc) - timedelta(hours=2))
+        return StaleProject(project_key=key, created_at=datetime.now(UTC) - timedelta(hours=2))
 
     @pytest.mark.asyncio
     async def test_all_deletions_succeed(self, project_manager: ProjectManager, mock_client: AsyncMock) -> None:

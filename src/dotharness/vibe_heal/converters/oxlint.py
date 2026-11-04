@@ -26,9 +26,10 @@ def _extract_position(diagnostic: dict[str, Any]) -> tuple[int, int]:
         span = diagnostic["labels"][0]["span"]
         line: int = span["line"]
         col: int = span["column"] + 1  # oxlint 0-indexed → ESLint 1-indexed
-        return line, col
     except (KeyError, TypeError, IndexError):
         return 1, 1
+    else:
+        return line, col
 
 
 def convert_oxlint_to_eslint(data: dict[str, Any]) -> list[dict[str, Any]]:

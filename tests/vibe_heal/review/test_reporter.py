@@ -1,6 +1,6 @@
 """Tests for the Reporter module."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dotharness.vibe_heal.review.models import FileReview, ReviewIssue, ReviewResult
@@ -13,7 +13,7 @@ def _make_result() -> ReviewResult:
         project_key="my-project",
         branch="feature/test",
         base_branch="origin/main",
-        generated_at=datetime(2025, 10, 24, 14, 30, 0, tzinfo=timezone.utc),
+        generated_at=datetime(2025, 10, 24, 14, 30, 0, tzinfo=UTC),
         files=[
             FileReview(
                 file_path="src/example.py",
@@ -44,7 +44,7 @@ def _make_empty_result() -> ReviewResult:
         project_key="empty-project",
         branch="main",
         base_branch="origin/main",
-        generated_at=datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        generated_at=datetime(2025, 1, 1, 0, 0, 0, tzinfo=UTC),
         files=[],
     )
 

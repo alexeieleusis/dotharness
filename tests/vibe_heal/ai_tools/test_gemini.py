@@ -23,18 +23,18 @@ def gemini_tool() -> GeminiCliTool:
 @pytest.fixture
 def mock_issue() -> SonarQubeIssue:
     """Fixture for a mock SonarQube issue."""
-    return SonarQubeIssue(
-        key="test-issue",
-        rule="python:S1135",
-        component="src/main.py",
-        project="test-project",
-        line=10,
-        message="Test issue message",
-        status="OPEN",
-        severity="MAJOR",
-        type="CODE_SMELL",
-        textRange={"startLine": 10, "endLine": 10, "startOffset": 4, "endOffset": 15},
-    )
+    return SonarQubeIssue.model_validate({
+        "key": "test-issue",
+        "rule": "python:S1135",
+        "component": "src/main.py",
+        "project": "test-project",
+        "line": 10,
+        "message": "Test issue message",
+        "status": "OPEN",
+        "severity": "MAJOR",
+        "type": "CODE_SMELL",
+        "textRange": {"startLine": 10, "endLine": 10, "startOffset": 4, "endOffset": 15},
+    })
 
 
 class TestGeminiCliTool:
@@ -63,7 +63,7 @@ class TestGeminiCliTool:
             file_path.touch()
             result = await gemini_tool.fix_issue(mock_issue, str(file_path))
             assert not result.success
-            assert "Gemini CLI not found" in result.error_message
+            assert "Gemini CLI not found" in (result.error_message or "")
 
     @pytest.mark.asyncio
     async def test_fix_issue_file_not_found(
@@ -75,7 +75,7 @@ class TestGeminiCliTool:
         with patch.object(gemini_tool, "is_available", return_value=True):
             result = await gemini_tool.fix_issue(mock_issue, "non_existent_file.py")
             assert not result.success
-            assert "File not found" in result.error_message
+            assert "File not found" in (result.error_message or "")
 
     @pytest.mark.asyncio
     async def test_fix_duplication_gemini_not_found(
@@ -89,7 +89,7 @@ class TestGeminiCliTool:
             file_path.touch()
             result = await gemini_tool.fix_duplication("prompt", str(file_path))
             assert not result.success
-            assert "Gemini CLI not found" in result.error_message
+            assert "Gemini CLI not found" in (result.error_message or "")
 
     @pytest.mark.asyncio
     async def test_invoke_gemini_timeout(
@@ -132,7 +132,7 @@ class TestGeminiCliTool:
 
             assert result.success
             assert result.files_modified == ["src/main.py"]
-            assert "tool_code" in result.ai_response
+            assert "tool_code" in (result.ai_response or "")
 
         # Verify prompt references a temp file rather than embedding it directly
         args, _ = mock_create_subprocess.call_args
@@ -162,8 +162,8 @@ class TestGeminiCliTool:
             result = await gemini_tool.fix_issue(mock_issue, str(file_path))
 
             assert not result.success
-            assert "Gemini failed" in result.error_message
-            assert "Error from Gemini" in result.error_message
+            assert "Gemini failed" in (result.error_message or "")
+            assert "Error from Gemini" in (result.error_message or "")
 
     @pytest.mark.asyncio
     async def test_parse_modified_files(self, gemini_tool: GeminiCliTool) -> None:

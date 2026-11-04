@@ -1,4 +1,4 @@
-"""SonarQube API integration for vibe-heal."""
+"""SonarQube API integration for vibe_heal."""
 
 from dotharness.vibe_heal.sonarqube.client import SonarQubeClient
 from dotharness.vibe_heal.sonarqube.exceptions import (

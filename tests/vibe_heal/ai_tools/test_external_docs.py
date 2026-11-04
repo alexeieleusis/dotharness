@@ -190,7 +190,8 @@ class TestFetchUrlContent:
 
         blob_url = "https://github.com/jpablo/vibe-types/blob/main/plugin/skills/typescript/catalog/T01-algebraic-data-types.md"
         with patch(
-            "dotharness.vibe_heal.ai_tools.external_docs._vibe_types_local_path", return_value=Path("/nonexistent/path/T01.md")
+            "dotharness.vibe_heal.ai_tools.external_docs._vibe_types_local_path",
+            return_value=Path("/nonexistent/path/T01.md"),
         ):
             content = await fetch_url_content(blob_url)
 

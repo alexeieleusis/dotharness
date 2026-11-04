@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from pydantic import BaseModel
@@ -35,7 +35,7 @@ class StaleProject(BaseModel):
     @property
     def age_minutes(self) -> float:
         """Minutes elapsed since the project was created."""
-        return (datetime.now(timezone.utc) - self.created_at).total_seconds() / 60
+        return (datetime.now(UTC) - self.created_at).total_seconds() / 60
 
 
 class PruneResult(BaseModel):
@@ -109,7 +109,7 @@ class ProjectManager:
         sanitized_branch = self._sanitize_identifier(branch_name)
 
         # Generate timestamp in yymmdd-hhmm format
-        timestamp = datetime.now(timezone.utc).strftime(self.TIMESTAMP_FORMAT)
+        timestamp = datetime.now(UTC).strftime(self.TIMESTAMP_FORMAT)
 
         project_key = f"{base_key}_{sanitized_email}_{sanitized_branch}_{timestamp}"
         email_local = user_email.split("@")[0] if "@" in user_email else user_email
@@ -123,7 +123,7 @@ class ProjectManager:
         metadata = TempProjectMetadata(
             project_key=project_key,
             project_name=project_name,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
             base_project_key=base_key,
             branch_name=branch_name,
             user_email=user_email,
@@ -159,7 +159,7 @@ class ProjectManager:
     async def find_stale_projects(self, base_key: str, older_than_minutes: int = 60) -> list[StaleProject]:
         """Find temp projects for base_key that never completed an analysis.
 
-        Matches vibe-heal's temp project naming convention
+        Matches vibe_heal's temp project naming convention
         ({base_key}_{sanitized_email}_{sanitized_branch}_{timestamp}) and only
         considers projects older than older_than_minutes (parsed from the
         timestamp embedded in the key) so a project whose analysis is still
@@ -176,7 +176,7 @@ class ProjectManager:
             SonarQubeAPIError: If a search or analyses-count request fails
         """
         pattern = re.compile(rf"^{re.escape(base_key)}_.+_({self._TIMESTAMP_PATTERN})$")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         candidates = await self.client.search_projects(query=base_key)
 
@@ -188,7 +188,7 @@ class ProjectManager:
                 continue
 
             try:
-                created_at = datetime.strptime(match.group(1), self.TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
+                created_at = datetime.strptime(match.group(1), self.TIMESTAMP_FORMAT).replace(tzinfo=UTC)
             except ValueError:
                 continue
 

@@ -1,7 +1,7 @@
 """Discovers SonarQube auth and host URL from the same sources `sonar-scanner` itself would use.
 
 Machines that already run `sonar-scanner` directly often have credentials and a server
-URL configured outside of vibe-heal's own `.env.vibeheal`/`.env` (scanner-convention env
+URL configured outside of vibe_heal's own `.env.vibeheal`/`.env` (scanner-convention env
 vars, a project's `sonar-project.properties`, or the scanner installation's global
 `sonar-scanner.properties`). This lets `VibeHealConfig` reuse that configuration
 instead of requiring it to be duplicated.

@@ -1,7 +1,7 @@
 """Base classes and types for AI tool integration."""
 
 from abc import ABC, abstractmethod
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from dotharness.vibe_heal.sonarqube.models import SonarQubeIssue, SonarQubeRule, SourceLine
 
 
-class AIToolType(str, Enum):
+class AIToolType(StrEnum):
     """Supported AI coding tools."""
 
     AIDER = "aider"

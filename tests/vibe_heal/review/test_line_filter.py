@@ -1,5 +1,6 @@
 """Tests for IssueLineFilter (changed-line filtering)."""
 
+from typing import Any
 from unittest.mock import patch
 
 from dotharness.vibe_heal.review.line_filter import IssueLineFilter
@@ -10,7 +11,7 @@ from dotharness.vibe_heal.sonarqube.models import SonarQubeIssue
 class TestIssueLineFilter:
     """Tests for IssueLineFilter.filter_issues()."""
 
-    def _make_issue(self, line: int, **kwargs: object) -> SonarQubeIssue:
+    def _make_issue(self, line: int, **kwargs: Any) -> SonarQubeIssue:
         return SonarQubeIssue(
             key=f"issue-{line}",
             rule="python:S1481",

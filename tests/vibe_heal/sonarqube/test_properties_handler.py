@@ -17,7 +17,7 @@ from dotharness.vibe_heal.sonarqube.properties_handler import (
 def config() -> VibeHealConfig:
     return VibeHealConfig(
         sonarqube_url="https://sonar.test.com",
-        sonarqube_token="test-token",
+        sonarqube_token="test-token",  # noqa: S106
         sonarqube_project_key="my-project",
     )
 
@@ -27,7 +27,7 @@ def basic_auth_config() -> VibeHealConfig:
     return VibeHealConfig(
         sonarqube_url="https://sonar.test.com",
         sonarqube_username="user",
-        sonarqube_password="pass",
+        sonarqube_password="pass",  # noqa: S106
         sonarqube_project_key="my-project",
     )
 
@@ -373,7 +373,7 @@ class TestPatched:
         props.write_text(original)
         handler = SonarPropertiesHandler(tmp_path, config)
         with pytest.raises(ValueError), handler.patched("temp-key", "Temp Name"):
-            raise ValueError("simulated failure")
+            raise ValueError("simulated failure")  # noqa: TRY003
         assert props.read_text() == original
 
     def test_noop_when_file_absent(self, tmp_path: Path, config: VibeHealConfig) -> None:

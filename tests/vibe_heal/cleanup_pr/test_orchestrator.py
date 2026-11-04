@@ -1,15 +1,15 @@
 """Tests for CleanupPrOrchestrator class."""
 
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tests.vibe_heal.shared_orchestrator_tests import BaseTestCreateTempProject
 from dotharness.vibe_heal.ai_tools.base import AITool
 from dotharness.vibe_heal.cleanup_pr.orchestrator import (
     CleanupPrOrchestrator,
@@ -27,6 +27,7 @@ from dotharness.vibe_heal.sonarqube.client import SonarQubeClient
 from dotharness.vibe_heal.sonarqube.exceptions import ComponentNotFoundError
 from dotharness.vibe_heal.sonarqube.models import SonarQubeIssue
 from dotharness.vibe_heal.sonarqube.project_manager import ProjectManager, TempProjectMetadata
+from tests.vibe_heal.shared_orchestrator_tests import BaseTestCreateTempProject
 
 
 @pytest.fixture
@@ -34,7 +35,7 @@ def config() -> VibeHealConfig:
     """Create test configuration."""
     return VibeHealConfig(
         sonarqube_url="https://sonar.test.com",
-        sonarqube_token="test-token",
+        sonarqube_token="test-token",  # noqa: S106
         sonarqube_project_key="my-project",
     )
 
@@ -80,7 +81,7 @@ def _preconditions_pass(
     ancestor_rc: int = 0,
     dirty: bool = False,
     remotes: tuple[str, ...] = ("origin", "upstream"),
-) -> Iterator[list[list[str]]]:
+) -> Generator[list[list[str]]]:
     """Make the up-front preconditions pass, with controllable git exit codes.
 
     ``fetch_rc`` controls the ``git fetch`` exit code, ``ancestor_rc`` the
@@ -360,7 +361,7 @@ class TestCleanupPrTempProjectLifecycle:
             result = await orchestrator.cleanup_pr()
 
         assert result.success is False
-        assert "boom" in result.error_message
+        assert "boom" in (result.error_message or "")
         # Both keys restored to the original value on every path.
         assert config.sonarqube_project_key == original_key
         assert mock_client.config.sonarqube_project_key == original_key
@@ -400,7 +401,7 @@ class TestCleanupPrTempProjectLifecycle:
             result = await orchestrator.cleanup_pr()
 
         assert result.success is False
-        assert "Analysis failed" in result.error_message
+        assert "Analysis failed" in (result.error_message or "")
         mock_delete.assert_called_once_with(temp_project.project_key)
 
     @pytest.mark.asyncio
@@ -515,7 +516,7 @@ def _loop_env(
     analysis_ok: bool = True,
     fixed_dups: int = 0,
     fixed_issues: int = 0,
-) -> Iterator[_Harness]:
+) -> Generator[_Harness]:
     """Patch everything the loop touches; per-iteration data comes from the lists."""
     analysis = AsyncMock(
         return_value=AnalysisResult(success=analysis_ok, error_message=None if analysis_ok else "scanner boom")
@@ -684,7 +685,7 @@ class TestIterationLoopDuplicationScope:
             diff = DiffLines(
                 new_lines={"src/a.py": {10}, "src/b.py": {1}}, old_lines={}, strict_new_lines={"src/a.py": {10}}
             )
-            orchestrator.diff_parser.get_diff_lines.side_effect = [diff]
+            cast("MagicMock", orchestrator.diff_parser.get_diff_lines).side_effect = [diff]
             _, _, external = await _run_loop(orchestrator, temp_project, max_iterations=1)
 
         assert external == [Path("src/util.py")]
@@ -716,7 +717,7 @@ class TestIterationLoopDuplicationScope:
             ) as h,
             patch.object(orchestrator.branch_analyzer, "repo", repo),
         ):
-            orchestrator.diff_parser.get_diff_lines.side_effect = [diff]
+            cast("MagicMock", orchestrator.diff_parser.get_diff_lines).side_effect = [diff]
             files, _, _ = await orchestrator._run_iteration_loop(
                 modified_files=[_FILE, other],
                 temp_project=temp_project,
@@ -811,7 +812,7 @@ class TestIterationLoopControl:
             result = await orchestrator.cleanup_pr(max_iterations=2)
 
         assert result.success is False
-        assert "Analysis failed at iteration 1" in result.error_message
+        assert "Analysis failed at iteration 1" in (result.error_message or "")
         assert result.analysis_result is not None
         assert result.files_processed[0].file_path == _FILE
         mock_delete.assert_awaited_once()
@@ -844,7 +845,7 @@ class TestIterationLoopControl:
             result = await orchestrator.cleanup_pr(max_iterations=2)
 
         assert result.success is False
-        assert "Cleanup failed: dirty tree" in result.error_message
+        assert "Cleanup failed: dirty tree" in (result.error_message or "")
         assert result.files_processed[0].file_path == _FILE
         assert result.total_issues_fixed == 2
 

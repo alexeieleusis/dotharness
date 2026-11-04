@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -33,7 +33,7 @@ def config() -> VibeHealConfig:
 
     return VibeHealConfig(
         sonarqube_url="https://sonar.test.com",
-        sonarqube_token="test-token",
+        sonarqube_token="test-token",  # noqa: S106
         sonarqube_project_key="my-project",
     )
 
@@ -56,7 +56,7 @@ def _make_review_result(total_issues: int = 2) -> ReviewResult:
         project_key="temp-project-key",
         branch="feature/test",
         base_branch="origin/main",
-        generated_at=datetime(2025, 10, 24, 14, 30, 0, tzinfo=timezone.utc),
+        generated_at=datetime(2025, 10, 24, 14, 30, 0, tzinfo=UTC),
         files=[
             FileReview(
                 file_path="src/file.py",
@@ -821,7 +821,7 @@ class TestGetActiveDuplications:
 
         config = VibeHealConfig(
             sonarqube_url="https://sonar.test.com",
-            sonarqube_token="test-token",
+            sonarqube_token="test-token",  # noqa: S106
             sonarqube_project_key="temp-project",
         )
         mock_client = AsyncMock()
@@ -979,7 +979,7 @@ class TestGetResolvedDuplications:
 
         config = VibeHealConfig(
             sonarqube_url="https://sonar.test.com",
-            sonarqube_token="test-token",
+            sonarqube_token="test-token",  # noqa: S106
             sonarqube_project_key="temp-project",
         )
         mock_client = AsyncMock()
@@ -1146,7 +1146,7 @@ class TestSameFileDuplication:
 
         config = VibeHealConfig(
             sonarqube_url="https://sonar.test.com",
-            sonarqube_token="test-token",
+            sonarqube_token="test-token",  # noqa: S106
             sonarqube_project_key="temp-project",
         )
         mock_client = AsyncMock()

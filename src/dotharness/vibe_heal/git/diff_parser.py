@@ -54,7 +54,8 @@ class DiffParser:
         try:
             self.repo = Repo(repo_path, search_parent_directories=True)
         except InvalidGitRepositoryError as e:
-            raise DiffParserError(f"Not a valid git repository: {repo_path}") from e
+            msg = f"Not a valid git repository: {repo_path}"
+            raise DiffParserError(msg) from e
 
     def get_diff_lines(self, base_branch: str = _DEFAULT_BASE_BRANCH) -> DiffLines:
         """Get changed line numbers per file between base branch and HEAD.
@@ -80,7 +81,8 @@ class DiffParser:
             merge_base = self.repo.git.merge_base(base_branch, "HEAD").strip()
             diff_output = self.repo.git.diff("--no-color", "--unified=0", f"{merge_base}..HEAD")
         except GitCommandError as e:
-            raise DiffParserError(f"Git diff command failed: {e}") from e
+            msg = f"Git diff command failed: {e}"
+            raise DiffParserError(msg) from e
 
         if not diff_output.strip():
             return DiffLines(new_lines={}, old_lines={})

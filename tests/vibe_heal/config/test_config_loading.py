@@ -29,7 +29,7 @@ AI_TOOL=claude-code
         config = VibeHealConfig()
 
         assert config.sonarqube_url == "https://sonar.vibeheal.com"
-        assert config.sonarqube_token == "vibeheal-token"
+        assert config.sonarqube_token == "vibeheal-token"  # noqa: S105
         assert config.sonarqube_project_key == "vibeheal-project"
         assert config.ai_tool is not None
         assert config.ai_tool.value == "claude-code"
@@ -55,7 +55,7 @@ AIDER_API_BASE=http://127.0.0.1:11434
         config = VibeHealConfig()
 
         assert config.sonarqube_url == "https://sonar.example.com"
-        assert config.sonarqube_token == "test-token"
+        assert config.sonarqube_token == "test-token"  # noqa: S105
         assert config.sonarqube_project_key == "test-project"
         assert config.ai_tool is not None
         assert config.ai_tool.value == "aider"
@@ -80,7 +80,7 @@ SONARQUBE_PROJECT_KEY=env-project
         config = VibeHealConfig()
 
         assert config.sonarqube_url == "https://sonar.env.com"
-        assert config.sonarqube_token == "env-token"
+        assert config.sonarqube_token == "env-token"  # noqa: S105
         assert config.sonarqube_project_key == "env-project"
 
     def test_load_from_environment_variables(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -96,7 +96,7 @@ SONARQUBE_PROJECT_KEY=env-project
         config = VibeHealConfig()
 
         assert config.sonarqube_url == "https://sonar.envvar.com"
-        assert config.sonarqube_token == "envvar-token"
+        assert config.sonarqube_token == "envvar-token"  # noqa: S105
         assert config.sonarqube_project_key == "envvar-project"
 
     def test_environment_variables_override_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -122,7 +122,7 @@ SONARQUBE_PROJECT_KEY=file-project
 
         # Environment variables should override file
         assert config.sonarqube_url == "https://sonar.envvar.com"
-        assert config.sonarqube_token == "envvar-token"
+        assert config.sonarqube_token == "envvar-token"  # noqa: S105
         # This should still come from file
         assert config.sonarqube_project_key == "file-project"
 
@@ -139,7 +139,7 @@ SONARQUBE_PROJECT_KEY=file-project
         config = VibeHealConfig()
 
         assert config.sonarqube_url == "https://sonar.example.com"
-        assert config.sonarqube_token == "token"
+        assert config.sonarqube_token == "token"  # noqa: S105
         assert config.sonarqube_project_key == "project"
 
     def test_no_config_files_uses_env_vars(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -157,5 +157,5 @@ SONARQUBE_PROJECT_KEY=file-project
 
         assert config.sonarqube_url == "https://sonar.example.com"
         assert config.sonarqube_username == "user"
-        assert config.sonarqube_password == "pass"
+        assert config.sonarqube_password == "pass"  # noqa: S105
         assert config.sonarqube_project_key == "project"

@@ -1,6 +1,6 @@
 """Tests for CLI commands."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -413,7 +413,7 @@ class TestPruneProjectsCommand:
     """Tests for prune-projects command."""
 
     def _stale_project(self, key: str = "my_project_user_example_com_main_240101-0000") -> StaleProject:
-        return StaleProject(project_key=key, created_at=datetime.now(timezone.utc) - timedelta(hours=2))
+        return StaleProject(project_key=key, created_at=datetime.now(UTC) - timedelta(hours=2))
 
     @patch("dotharness.vibe_heal.cli.ProjectManager")
     @patch("dotharness.vibe_heal.cli.SonarQubeClient")
@@ -576,7 +576,7 @@ class TestVersionCommand:
         result = runner.invoke(app, ["version"])
 
         assert result.exit_code == 0
-        assert "vibe-heal version" in result.stdout
+        assert "vibe_heal version" in result.stdout
 
 
 class TestDebugIssuesCommand:
@@ -731,16 +731,16 @@ class TestDebugIssuesCommand:
         mock_client.__aexit__.return_value = None
         mock_client.get_issues_for_file = AsyncMock(
             return_value=[
-                SonarQubeIssue(
-                    key="AXfull123",
-                    rule="python:S999",
-                    component="myproject:src/module/file.py",
-                    message="Complete issue with all fields",
-                    line=42,
-                    status="OPEN",
-                    issue_status="OPEN",
-                    severity="BLOCKER",
-                ),
+                SonarQubeIssue.model_validate({
+                    "key": "AXfull123",
+                    "rule": "python:S999",
+                    "component": "myproject:src/module/file.py",
+                    "message": "Complete issue with all fields",
+                    "line": 42,
+                    "status": "OPEN",
+                    "issue_status": "OPEN",
+                    "severity": "BLOCKER",
+                }),
             ]
         )
         mock_client_class.return_value = mock_client

@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tests.vibe_heal.shared_orchestrator_tests import BaseTestCreateTempProject
 from dotharness.vibe_heal.ai_tools.base import AITool
 from dotharness.vibe_heal.cleanup.orchestrator import (
     CleanupOrchestrator,
@@ -16,6 +15,7 @@ from dotharness.vibe_heal.git.manager import GitManager
 from dotharness.vibe_heal.sonarqube.analysis_runner import AnalysisResult, AnalysisRunner
 from dotharness.vibe_heal.sonarqube.client import SonarQubeClient
 from dotharness.vibe_heal.sonarqube.project_manager import ProjectManager, TempProjectMetadata
+from tests.vibe_heal.shared_orchestrator_tests import BaseTestCreateTempProject
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def config() -> VibeHealConfig:
     """Create test configuration."""
     return VibeHealConfig(
         sonarqube_url="https://sonar.test.com",
-        sonarqube_token="test-token",
+        sonarqube_token="test-token",  # noqa: S106
         sonarqube_project_key="my-project",
     )
 
@@ -149,7 +149,7 @@ class TestCleanupBranch:
             result = await orchestrator.cleanup_branch()
 
         assert result.success is False
-        assert "Analysis failed at iteration 1" in result.error_message
+        assert "Analysis failed at iteration 1" in (result.error_message or "")
         assert result.temp_project == temp_project
         mock_delete.assert_called_once_with(temp_project.project_key)
 
@@ -169,7 +169,7 @@ class TestCleanupBranch:
             result = await orchestrator.cleanup_branch()
 
         assert result.success is False
-        assert "Cleanup failed: Git error" in result.error_message
+        assert "Cleanup failed: Git error" in (result.error_message or "")
 
     @pytest.mark.asyncio
     async def test_project_cleanup_on_exception(

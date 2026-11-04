@@ -484,7 +484,7 @@ class TestGitManagerSafety:
         # Modify file
         (git_repo / "test.py").write_text("print('modified')")
 
-        with pytest.raises(DirtyWorkingDirectoryError, match="test.py"):
+        with pytest.raises(DirtyWorkingDirectoryError, match="test.py"):  # noqa: RUF043
             manager.require_clean_working_directory()
 
     def test_require_clean_working_directory_allows_untracked_files(
@@ -717,7 +717,7 @@ class TestPreCommitHooks:
             if call_count == 1:
                 # Simulate hook modifying file during commit
                 (git_repo / "test.py").write_text('print("retry-version")\n')
-                raise git.GitError("pre-commit hook failed")
+                raise git.GitError("pre-commit hook failed")  # noqa: TRY003
             return original_do_commit(msg)
 
         with patch.object(manager, "_do_commit", side_effect=failing_then_succeeding):

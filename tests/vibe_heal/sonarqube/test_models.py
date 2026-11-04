@@ -1,5 +1,7 @@
 """Tests for SonarQube models."""
 
+from typing import Any
+
 import pytest
 
 from dotharness.vibe_heal.sonarqube.models import IssuesResponse, SonarQubeIssue, SourceLine
@@ -168,7 +170,7 @@ class TestIssuesResponse:
 
     def test_default_values(self) -> None:
         """Test default values for optional fields."""
-        data = {"total": 0, "p": 1, "ps": 100}
+        data: dict[str, Any] = {"total": 0, "p": 1, "ps": 100}
 
         response = IssuesResponse(**data)
 

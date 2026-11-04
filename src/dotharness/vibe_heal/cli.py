@@ -1,17 +1,18 @@
-"""Command-line interface for vibe-heal."""
+"""Command-line interface for vibe_heal."""
 
 import asyncio
 import json
 import logging
 import sys
+from importlib.metadata import version as _package_version
 from pathlib import Path
+from typing import Annotated
 
 import typer
 from rich.logging import RichHandler
 from rich.markup import escape as rich_escape
 from rich.table import Table
 
-from dotharness.vibe_heal import __version__
 from dotharness.vibe_heal.ai_tools.base import AITool, AIToolType
 from dotharness.vibe_heal.ai_tools.factory import AIToolFactory
 from dotharness.vibe_heal.cleanup.orchestrator import CleanupOrchestrator, CleanupResult
@@ -37,8 +38,8 @@ from dotharness.vibe_heal.sonarqube.client import SonarQubeClient
 from dotharness.vibe_heal.sonarqube.project_manager import ProjectManager, StaleProject
 
 app = typer.Typer(
-    name="vibe-heal",
-    help="AI-powered SonarQube issue remediation tool\n\nGitHub: https://github.com/alexeieleusis/vibe-heal",
+    name="vibe_heal",
+    help="AI-powered SonarQube issue remediation tool\n\nGitHub: https://github.com/alexeieleusis/dotharness",
     add_completion=False,
 )
 
@@ -51,7 +52,7 @@ FILE_PATTERN_HELP = "File patterns to filter (e.g., '*.py', 'src/**/*.ts')"
 BASE_BRANCH_HELP = "Base branch to compare against"
 
 # Display constants
-GITHUB_FOOTER_LINE = "\n[dim]GitHub: https://github.com/alexeieleusis/vibe-heal[/dim]"
+GITHUB_FOOTER_LINE = "\n[dim]GitHub: https://github.com/alexeieleusis/dotharness[/dim]"
 STATUS_SUCCESS = "[green]✓[/green]"
 STATUS_FAILURE = "[red]✗[/red]"
 PER_FILE_RESULTS_HEADER = "\n[bold]Per-File Results:[/bold]"
@@ -130,11 +131,13 @@ def fix(
         "--min-severity",
         help="Minimum severity (BLOCKER, CRITICAL, MAJOR, MINOR, INFO)",
     ),
-    ai_tool: AIToolType | None = typer.Option(
-        None,
-        "--ai-tool",
-        help=AI_TOOL_OVERRIDE_HELP,
-    ),
+    ai_tool: Annotated[
+        AIToolType | None,
+        typer.Option(
+            "--ai-tool",
+            help=AI_TOOL_OVERRIDE_HELP,
+        ),
+    ] = None,
     env_file: str | None = typer.Option(
         None,
         "--env-file",
@@ -202,11 +205,13 @@ def dedupe(
         "-n",
         help="Maximum number of duplication groups to fix",
     ),
-    ai_tool: AIToolType | None = typer.Option(
-        None,
-        "--ai-tool",
-        help=AI_TOOL_OVERRIDE_HELP,
-    ),
+    ai_tool: Annotated[
+        AIToolType | None,
+        typer.Option(
+            "--ai-tool",
+            help=AI_TOOL_OVERRIDE_HELP,
+        ),
+    ] = None,
     env_file: str | None = typer.Option(
         None,
         "--env-file",
@@ -360,17 +365,21 @@ def cleanup(
         "-i",
         help="Maximum fix iterations per file",
     ),
-    file_patterns: list[str] | None = typer.Option(
-        None,
-        "--pattern",
-        "-p",
-        help=FILE_PATTERN_HELP,
-    ),
-    ai_tool: AIToolType | None = typer.Option(
-        None,
-        "--ai-tool",
-        help=AI_TOOL_OVERRIDE_HELP,
-    ),
+    file_patterns: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--pattern",
+            "-p",
+            help=FILE_PATTERN_HELP,
+        ),
+    ] = None,
+    ai_tool: Annotated[
+        AIToolType | None,
+        typer.Option(
+            "--ai-tool",
+            help=AI_TOOL_OVERRIDE_HELP,
+        ),
+    ] = None,
     env_file: str | None = typer.Option(
         None,
         "--env-file",
@@ -541,12 +550,14 @@ def cleanup_pr(
         "-i",
         help="Maximum analyze/fix rounds for the whole branch",
     ),
-    file_patterns: list[str] | None = typer.Option(
-        None,
-        "--pattern",
-        "-p",
-        help=FILE_PATTERN_HELP,
-    ),
+    file_patterns: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--pattern",
+            "-p",
+            help=FILE_PATTERN_HELP,
+        ),
+    ] = None,
     min_severity: str | None = typer.Option(
         None,
         "--min-severity",
@@ -566,11 +577,13 @@ def cleanup_pr(
         "--dry-run",
         help=DRY_RUN_HELP,
     ),
-    ai_tool: AIToolType | None = typer.Option(
-        None,
-        "--ai-tool",
-        help=AI_TOOL_OVERRIDE_HELP,
-    ),
+    ai_tool: Annotated[
+        AIToolType | None,
+        typer.Option(
+            "--ai-tool",
+            help=AI_TOOL_OVERRIDE_HELP,
+        ),
+    ] = None,
     env_file: str | None = typer.Option(
         None,
         "--env-file",
@@ -704,17 +717,21 @@ def dedupe_branch(
         "-i",
         help="Maximum dedup iterations per file",
     ),
-    file_patterns: list[str] | None = typer.Option(
-        None,
-        "--pattern",
-        "-p",
-        help=FILE_PATTERN_HELP,
-    ),
-    ai_tool: AIToolType | None = typer.Option(
-        None,
-        "--ai-tool",
-        help=AI_TOOL_OVERRIDE_HELP,
-    ),
+    file_patterns: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--pattern",
+            "-p",
+            help=FILE_PATTERN_HELP,
+        ),
+    ] = None,
+    ai_tool: Annotated[
+        AIToolType | None,
+        typer.Option(
+            "--ai-tool",
+            help=AI_TOOL_OVERRIDE_HELP,
+        ),
+    ] = None,
     env_file: str | None = typer.Option(
         None,
         "--env-file",
@@ -861,7 +878,7 @@ def prune_projects(
         help=VERBOSE_OUTPUT_HELP,
     ),
 ) -> None:
-    """Delete stale vibe-heal temp SonarQube projects that never completed an analysis.
+    """Delete stale vibe_heal temp SonarQube projects that never completed an analysis.
 
     Finds temp projects (created by review/cleanup/dedupe-branch) matching the
     configured project key that have zero finished analyses and are older than
@@ -1176,17 +1193,21 @@ def review(
             "origin/main when no open PR is found."
         ),
     ),
-    file_patterns: list[str] | None = typer.Option(
-        None,
-        "--pattern",
-        "-p",
-        help=FILE_PATTERN_HELP,
-    ),
-    report_file: Path | None = typer.Option(
-        None,
-        "--report-file",
-        help="Override report output path",
-    ),
+    file_patterns: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--pattern",
+            "-p",
+            help=FILE_PATTERN_HELP,
+        ),
+    ] = None,
+    report_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--report-file",
+            help="Override report output path",
+        ),
+    ] = None,
     env_file: str | None = typer.Option(
         None,
         "--env-file",
@@ -1282,7 +1303,7 @@ def config(
 @app.command()
 def version() -> None:
     """Show version information."""
-    console.print(f"vibe-heal version {__version__}")
+    console.print(f"vibe_heal version {_package_version('dotharness')}")
 
 
 @app.command()

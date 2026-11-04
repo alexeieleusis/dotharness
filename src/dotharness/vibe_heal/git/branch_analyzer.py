@@ -3,7 +3,7 @@
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -51,7 +51,8 @@ class BranchAnalyzer:
         try:
             self.repo = Repo(repo_path, search_parent_directories=True)
         except InvalidGitRepositoryError as e:
-            raise InvalidRepositoryError(f"Not a valid git repository: {repo_path}") from e
+            msg = f"Not a valid git repository: {repo_path}"
+            raise InvalidRepositoryError(msg) from e
 
         self.repo_path = Path(self.repo.working_dir)
 
@@ -75,7 +76,8 @@ class BranchAnalyzer:
         """
         # Validate base branch exists
         if not self.validate_branch_exists(base_branch):
-            raise BranchNotFoundError(f"Branch '{base_branch}' does not exist in repository")
+            msg = f"Branch '{base_branch}' does not exist in repository"
+            raise BranchNotFoundError(msg)
 
         try:
             # Use three-dot diff syntax to compare merge base
@@ -121,10 +123,11 @@ class BranchAnalyzer:
                     # Running from repo root — keep original behavior
                     existing_files.append(repo_relative_path)
 
-            return existing_files
-
         except GitCommandError as e:
-            raise BranchAnalyzerError(f"Git diff command failed: {e}") from e
+            msg = f"Git diff command failed: {e}"
+            raise BranchAnalyzerError(msg) from e
+        else:
+            return existing_files
 
     def get_current_branch(self) -> str:
         """Get name of the current active branch.
@@ -138,15 +141,18 @@ class BranchAnalyzer:
 
         def _raise_if_detached() -> None:
             if self.repo.head.is_detached:
-                raise BranchAnalyzerError("Repository is in detached HEAD state")
+                msg = "Repository is in detached HEAD state"
+                raise BranchAnalyzerError(msg)
 
         try:
             _raise_if_detached()
             branch_name = self.repo.active_branch.name
-            return branch_name
 
         except Exception as e:
-            raise BranchAnalyzerError(f"Failed to get current branch: {e}") from e
+            msg = f"Failed to get current branch: {e}"
+            raise BranchAnalyzerError(msg) from e
+        else:
+            return branch_name
 
     def get_head_sha(self) -> str:
         """Get the full commit SHA of the current HEAD.
@@ -160,7 +166,8 @@ class BranchAnalyzer:
         try:
             return self.repo.head.commit.hexsha
         except Exception as e:
-            raise BranchAnalyzerError(f"Failed to get HEAD commit SHA: {e}") from e
+            msg = f"Failed to get HEAD commit SHA: {e}"
+            raise BranchAnalyzerError(msg) from e
 
     def validate_branch_exists(self, branch: str) -> bool:
         """Check if a branch exists in the repository.
@@ -181,10 +188,11 @@ class BranchAnalyzer:
                 try:
                     remote = self.repo.remote(remote_name)
                     remote_branches = [ref.name for ref in remote.refs]
-                    return f"{remote_name}/{branch_name}" in remote_branches
                 except Exception:
                     # Cannot access remote, assume branch doesn't exist
                     return False
+                else:
+                    return f"{remote_name}/{branch_name}" in remote_branches
 
             # Check local branches
             local_branches = [ref.name for ref in self.repo.branches]
@@ -200,10 +208,10 @@ class BranchAnalyzer:
                 # Cannot access default remote, assume branch doesn't exist
                 pass
 
-            return False
-
         except Exception:
             # If we can't list branches, assume it doesn't exist
+            return False
+        else:
             return False
 
     def get_user_email(self) -> str:
@@ -219,7 +227,8 @@ class BranchAnalyzer:
         def _validate_email_is_string(email: str | int | float | None) -> str:
             """Validate that email is a non-empty string."""
             if not email or not isinstance(email, str):
-                raise BranchAnalyzerError("Git user email not configured. Run: git config user.email 'your@email.com'")
+                msg = "Git user email not configured. Run: git config user.email 'your@email.com'"
+                raise BranchAnalyzerError(msg)
             return email
 
         try:
@@ -231,7 +240,8 @@ class BranchAnalyzer:
             # Re-raise our own exceptions
             raise
         except Exception as e:
-            raise BranchAnalyzerError(f"Failed to get user email: {e}") from e
+            msg = f"Failed to get user email: {e}"
+            raise BranchAnalyzerError(msg) from e
 
     def split_remote_ref(self, ref: str) -> tuple[str, str] | None:
         """Split a ref into ``(remote, branch)`` if its prefix is a real remote.
@@ -312,7 +322,7 @@ class BranchAnalyzer:
         return result.returncode == 0
 
     @contextmanager
-    def temporary_worktree(self, ref: str) -> Iterator[Path]:
+    def temporary_worktree(self, ref: str) -> Generator[Path]:
         """Check ``ref`` out into a temporary detached worktree, removed on exit.
 
         The main working tree is untouched. Removal failures are warnings, never errors.

@@ -3,12 +3,13 @@
 import shutil
 import subprocess
 import tempfile
+from contextlib import AbstractContextManager
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tests.vibe_heal.cleanup_pr.test_orchestrator import _git_result, _preconditions_pass
 from dotharness.vibe_heal.ai_tools.base import AITool
 from dotharness.vibe_heal.cleanup_pr.orchestrator import CleanupPrOrchestrator
 from dotharness.vibe_heal.config import VibeHealConfig
@@ -17,6 +18,7 @@ from dotharness.vibe_heal.git.exceptions import GitOperationError
 from dotharness.vibe_heal.sonarqube.analysis_runner import AnalysisResult, AnalysisRunner
 from dotharness.vibe_heal.sonarqube.client import SonarQubeClient
 from dotharness.vibe_heal.sonarqube.project_manager import TempProjectMetadata
+from tests.vibe_heal.cleanup_pr.test_orchestrator import _git_result, _preconditions_pass
 
 _FILE = Path("src/a.py")
 
@@ -25,7 +27,7 @@ _FILE = Path("src/a.py")
 def config() -> VibeHealConfig:
     return VibeHealConfig(
         sonarqube_url="https://sonar.test.com",
-        sonarqube_token="test-token",
+        sonarqube_token="test-token",  # noqa: S106
         sonarqube_project_key="my-project",
     )
 
@@ -109,7 +111,7 @@ def _patch_subprocess(
     worktree_add_rc: int = 0,
     worktree_remove_rc: int = 0,
     worktree_remove_exc: Exception | None = None,
-) -> object:
+) -> AbstractContextManager[Any]:
     def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
         if "worktree" in cmd:
             env.worktree_cmds.append(cmd)
@@ -140,8 +142,9 @@ class TestBaselineScan:
             result = await orchestrator.cleanup_pr(base_branch="origin/dev", include_main_duplications=True)
 
         assert result.success is True
-        run_analysis = orchestrator.analysis_runner.run_analysis
+        run_analysis = cast("AsyncMock", orchestrator.analysis_runner.run_analysis)
         assert run_analysis.await_count == 1
+        assert run_analysis.await_args is not None
         kwargs = run_analysis.await_args.kwargs
         assert kwargs["project_key"] == "my-project"
         assert kwargs["project_dir"] == env.dirs[0]
@@ -167,7 +170,7 @@ class TestBaselineScan:
             result = await orchestrator.cleanup_pr(include_main_duplications=True, dry_run=True)
 
         assert result.success is True
-        assert orchestrator.analysis_runner.run_analysis.await_count == 1
+        assert cast("AsyncMock", orchestrator.analysis_runner.run_analysis).await_count == 1
 
     @pytest.mark.asyncio
     async def test_flag_off_no_baseline_no_worktree(
@@ -179,12 +182,12 @@ class TestBaselineScan:
 
         assert result.success is True
         assert env.worktree_cmds == []
-        assert orchestrator.analysis_runner.run_analysis.await_count == 0
+        assert cast("AsyncMock", orchestrator.analysis_runner.run_analysis).await_count == 0
         assert env.events == ["create_temp"]
         # No SonarQube query may reference the real project key: assert the client
         # mock (and every child method mock) received zero calls, not just that the
         # client object was never invoked as a callable.
-        assert orchestrator.client.mock_calls == []
+        assert cast("AsyncMock", orchestrator.client).mock_calls == []
 
     @pytest.mark.asyncio
     async def test_analysis_failure_returns_failed_result_and_removes_worktree(
@@ -201,7 +204,7 @@ class TestBaselineScan:
         assert not env.dirs[0].exists()
         create.assert_not_awaited()
         delete.assert_not_awaited()
-        orchestrator._run_iteration_loop.assert_not_awaited()  # type: ignore[attr-defined]
+        cast("AsyncMock", orchestrator._run_iteration_loop).assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_analysis_exception_removes_worktree(
@@ -232,7 +235,7 @@ class TestBaselineScan:
 
         assert result.success is False
         assert "bad ref" in (result.error_message or "")
-        assert orchestrator.analysis_runner.run_analysis.await_count == 0
+        assert cast("AsyncMock", orchestrator.analysis_runner.run_analysis).await_count == 0
         # No worktree was created, so none is removed via git.
         assert [c[2] for c in env.worktree_cmds] == ["add"]
         # With created=False the rmtree fallback is the only thing that drops the mkdtemp dir.

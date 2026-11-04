@@ -1,4 +1,4 @@
-"""Configuration management for vibe-heal."""
+"""Configuration management for vibe_heal."""
 
 from dotharness.vibe_heal.config.exceptions import (
     ConfigurationError,

@@ -22,12 +22,12 @@ class TestVibeHealConfig:
         """Test creating config with token authentication."""
         config = VibeHealConfig(
             sonarqube_url="https://sonar.example.com",
-            sonarqube_token="test-token",
+            sonarqube_token="test-token",  # noqa: S106
             sonarqube_project_key="my-project",
         )
 
         assert config.sonarqube_url == "https://sonar.example.com"
-        assert config.sonarqube_token == "test-token"
+        assert config.sonarqube_token == "test-token"  # noqa: S105
         assert config.sonarqube_project_key == "my-project"
         assert config.use_token_auth is True
 
@@ -36,12 +36,12 @@ class TestVibeHealConfig:
         config = VibeHealConfig(
             sonarqube_url="https://sonar.example.com",
             sonarqube_username="user",
-            sonarqube_password="pass",
+            sonarqube_password="pass",  # noqa: S106
             sonarqube_project_key="my-project",
         )
 
         assert config.sonarqube_username == "user"
-        assert config.sonarqube_password == "pass"
+        assert config.sonarqube_password == "pass"  # noqa: S105
         assert config.use_token_auth is False
 
     def test_invalid_missing_auth(self) -> None:
@@ -66,7 +66,7 @@ class TestVibeHealConfig:
         with pytest.raises(InvalidConfigurationError, match="Must provide either"):
             VibeHealConfig(
                 sonarqube_url="https://sonar.example.com",
-                sonarqube_password="pass",
+                sonarqube_password="pass",  # noqa: S106
                 sonarqube_project_key="my-project",
             )
 
@@ -81,7 +81,7 @@ class TestVibeHealConfig:
             sonarqube_project_key="my-project",
         )
 
-        assert config.sonarqube_token == "discovered-token"
+        assert config.sonarqube_token == "discovered-token"  # noqa: S105
         assert config.use_token_auth is True
 
     def test_scanner_fallback_not_used_when_token_already_provided(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -92,11 +92,11 @@ class TestVibeHealConfig:
         )
         config = VibeHealConfig(
             sonarqube_url="https://sonar.example.com",
-            sonarqube_token="explicit-token",
+            sonarqube_token="explicit-token",  # noqa: S106
             sonarqube_project_key="my-project",
         )
 
-        assert config.sonarqube_token == "explicit-token"
+        assert config.sonarqube_token == "explicit-token"  # noqa: S105
 
     def test_falls_back_to_scanner_host_url_when_unconfigured(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that a host URL discovered via scanner conventions is used."""
@@ -105,7 +105,7 @@ class TestVibeHealConfig:
             lambda project_dir: "https://discovered.example.com",
         )
         config = VibeHealConfig(
-            sonarqube_token="test-token",
+            sonarqube_token="test-token",  # noqa: S106
             sonarqube_project_key="my-project",
         )
 
@@ -119,7 +119,7 @@ class TestVibeHealConfig:
         )
         config = VibeHealConfig(
             sonarqube_url="https://explicit.example.com",
-            sonarqube_token="test-token",
+            sonarqube_token="test-token",  # noqa: S106
             sonarqube_project_key="my-project",
         )
 
@@ -129,7 +129,7 @@ class TestVibeHealConfig:
         """Test that trailing slash is removed from URL."""
         config = VibeHealConfig(
             sonarqube_url="https://sonar.example.com/",
-            sonarqube_token="token",
+            sonarqube_token="token",  # noqa: S106
             sonarqube_project_key="my-project",
         )
 
@@ -139,7 +139,7 @@ class TestVibeHealConfig:
         """Test that multiple trailing slashes are removed."""
         config = VibeHealConfig(
             sonarqube_url="https://sonar.example.com///",
-            sonarqube_token="token",
+            sonarqube_token="token",  # noqa: S106
             sonarqube_project_key="my-project",
         )
 
@@ -149,7 +149,7 @@ class TestVibeHealConfig:
         """Test parsing AI tool from lowercase string."""
         config = VibeHealConfig(
             sonarqube_url="https://sonar.example.com",
-            sonarqube_token="token",
+            sonarqube_token="token",  # noqa: S106
             sonarqube_project_key="my-project",
             ai_tool="claude-code",
         )
@@ -160,7 +160,7 @@ class TestVibeHealConfig:
         """Test parsing AI tool from uppercase string (case insensitive)."""
         config = VibeHealConfig(
             sonarqube_url="https://sonar.example.com",
-            sonarqube_token="token",
+            sonarqube_token="token",  # noqa: S106
             sonarqube_project_key="my-project",
             ai_tool="CLAUDE-CODE",
         )
@@ -171,7 +171,7 @@ class TestVibeHealConfig:
         """Test parsing Aider from lowercase string."""
         config = VibeHealConfig(
             sonarqube_url="https://sonar.example.com",
-            sonarqube_token="token",
+            sonarqube_token="token",  # noqa: S106
             sonarqube_project_key="my-project",
             ai_tool="aider",
         )
@@ -182,7 +182,7 @@ class TestVibeHealConfig:
         """Test that enum value is accepted directly."""
         config = VibeHealConfig(
             sonarqube_url="https://sonar.example.com",
-            sonarqube_token="token",
+            sonarqube_token="token",  # noqa: S106
             sonarqube_project_key="my-project",
             ai_tool=AIToolType.AIDER,
         )
@@ -193,7 +193,7 @@ class TestVibeHealConfig:
         """Test that None is accepted for ai_tool (auto-detect)."""
         config = VibeHealConfig(
             sonarqube_url="https://sonar.example.com",
-            sonarqube_token="token",
+            sonarqube_token="token",  # noqa: S106
             sonarqube_project_key="my-project",
         )
 
@@ -204,7 +204,7 @@ class TestVibeHealConfig:
         with pytest.raises(InvalidConfigurationError, match="Invalid AI tool"):
             VibeHealConfig(
                 sonarqube_url="https://sonar.example.com",
-                sonarqube_token="token",
+                sonarqube_token="token",  # noqa: S106
                 sonarqube_project_key="my-project",
                 ai_tool="invalid-tool",
             )
@@ -213,7 +213,7 @@ class TestVibeHealConfig:
         """Test that missing URL raises ValidationError."""
         with pytest.raises(ValidationError, match="sonarqube_url"):
             VibeHealConfig(
-                sonarqube_token="token",
+                sonarqube_token="token",  # noqa: S106
                 sonarqube_project_key="my-project",
             )
 
@@ -222,16 +222,16 @@ class TestVibeHealConfig:
         with pytest.raises(ValidationError, match="sonarqube_project_key"):
             VibeHealConfig(
                 sonarqube_url="https://sonar.example.com",
-                sonarqube_token="token",
+                sonarqube_token="token",  # noqa: S106
             )
 
     def test_token_auth_takes_precedence(self) -> None:
         """Test that token auth is preferred when both methods provided."""
         config = VibeHealConfig(
             sonarqube_url="https://sonar.example.com",
-            sonarqube_token="token",
+            sonarqube_token="token",  # noqa: S106
             sonarqube_username="user",
-            sonarqube_password="pass",
+            sonarqube_password="pass",  # noqa: S106
             sonarqube_project_key="my-project",
         )
 
@@ -303,7 +303,7 @@ class TestVibeHealConfig:
         config = VibeHealConfig(env_file=str(custom_env))
 
         assert config.sonarqube_url == "https://custom.example.com"
-        assert config.sonarqube_token == "custom-token"
+        assert config.sonarqube_token == "custom-token"  # noqa: S105
         assert config.sonarqube_project_key == "custom-project"
 
     def test_custom_env_file_path_object(self, tmp_path: Path) -> None:
@@ -319,7 +319,7 @@ class TestVibeHealConfig:
         config = VibeHealConfig(env_file=custom_env)
 
         assert config.sonarqube_url == "https://custom.example.com"
-        assert config.sonarqube_token == "custom-token"
+        assert config.sonarqube_token == "custom-token"  # noqa: S105
         assert config.sonarqube_project_key == "custom-project"
 
     def test_custom_env_file_not_found(self, tmp_path: Path) -> None:
@@ -354,7 +354,7 @@ class TestVibeHealConfig:
         config = VibeHealConfig(env_file=custom_env)
 
         assert config.sonarqube_url == "https://custom.example.com"
-        assert config.sonarqube_token == "custom-token"
+        assert config.sonarqube_token == "custom-token"  # noqa: S105
         assert config.sonarqube_project_key == "custom-project"
 
     def test_custom_env_file_with_ai_tool(self, tmp_path: Path) -> None:

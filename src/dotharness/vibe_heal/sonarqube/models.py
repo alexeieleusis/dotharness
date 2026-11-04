@@ -2,10 +2,9 @@
 
 import html
 import re
-from typing import Any
+from typing import Any, Self
 
 from pydantic import BaseModel, Field, model_validator
-from typing_extensions import Self
 
 
 class SonarQubeIssue(BaseModel):

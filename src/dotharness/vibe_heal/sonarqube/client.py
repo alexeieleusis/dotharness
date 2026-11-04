@@ -100,13 +100,15 @@ class SonarQubeClient:
             SonarQubeAPIError: API request failed
         """
         if not self._client:
-            raise RuntimeError("Client not initialized. Use async context manager.")
+            msg = "Client not initialized. Use async context manager."
+            raise RuntimeError(msg)
 
         try:
             response = await self._client.request(method, endpoint, **kwargs)
 
             if response.status_code == 401:
-                raise SonarQubeAuthError("Authentication failed. Check your credentials.")
+                msg = "Authentication failed. Check your credentials."
+                raise SonarQubeAuthError(msg)
 
             if response.status_code == 404:
                 # Check if this is a component not found error
@@ -114,25 +116,26 @@ class SonarQubeClient:
                     error_data = response.json()
                     errors = error_data.get("errors", [])
                     if errors and any("not found" in str(err.get("msg", "")).lower() for err in errors):
-                        raise ComponentNotFoundError(f"Component not found: {response.text}")
+                        msg = f"Component not found: {response.text}"
+                        raise ComponentNotFoundError(msg)
                 except (ValueError, KeyError):
                     pass  # Not a JSON response or missing expected fields
 
             if response.status_code >= 400:
-                raise SonarQubeAPIError(
-                    f"API request failed: {response.text}",
-                    status_code=response.status_code,
-                )
+                msg = f"API request failed: {response.text}"
+                raise SonarQubeAPIError(msg, status_code=response.status_code)
 
             # Handle 204 No Content responses (e.g., delete operations)
             if response.status_code == 204 or not response.content:
                 return {}
 
             result: dict[Any, Any] = response.json()
-            return result
 
         except httpx.HTTPError as e:
-            raise SonarQubeAPIError(f"HTTP error: {e}") from e
+            msg = f"HTTP error: {e}"
+            raise SonarQubeAPIError(msg) from e
+        else:
+            return result
 
     def _log_first_page_raw_response(self, data: dict) -> None:
         """Log raw API response details for the first page.
@@ -221,7 +224,8 @@ class SonarQubeClient:
 
             # Check if there are more pages
             if response.total is None:
-                raise SonarQubeAPIError("API response missing total count")
+                msg = "API response missing total count"
+                raise SonarQubeAPIError(msg)
             total_pages = (response.total + page_size - 1) // page_size
             if page >= total_pages:
                 break
@@ -274,16 +278,19 @@ class SonarQubeClient:
         except ComponentNotFoundError as e:
             # _request() raises ComponentNotFoundError for any 404 whose body contains
             # "not found". Reclassify so callers see a consistent SonarQubeRuleNotFoundError.
-            raise SonarQubeRuleNotFoundError(f"Rule not found in SonarQube: {rule_key}") from e
+            msg = f"Rule not found in SonarQube: {rule_key}"
+            raise SonarQubeRuleNotFoundError(msg) from e
         except SonarQubeAPIError as e:
             if e.status_code == 404:
-                raise SonarQubeRuleNotFoundError(f"Rule not found in SonarQube: {rule_key}") from e
+                msg = f"Rule not found in SonarQube: {rule_key}"
+                raise SonarQubeRuleNotFoundError(msg) from e
             raise
 
         try:
             response = RuleResponse(**data)
         except ValidationError as e:
-            raise SonarQubeRuleNotFoundError(f"Rule not found in SonarQube: {rule_key}") from e
+            msg = f"Rule not found in SonarQube: {rule_key}"
+            raise SonarQubeRuleNotFoundError(msg) from e
         return response.rule
 
     async def get_source_lines(
@@ -450,7 +457,8 @@ class SonarQubeClient:
             paging = data.get("paging", {})
             total = paging.get("total")
             if total is None:
-                raise SonarQubeAPIError("API response missing total count")
+                msg = "API response missing total count"
+                raise SonarQubeAPIError(msg)
             if page * page_size >= total:
                 break
             page += 1

@@ -77,8 +77,7 @@ class GeminiCliTool(AITool):
         # Invoke Gemini
         try:
             result = await self._invoke_gemini(prompt, file_path)
-            return result
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return FixResult(
                 success=False,
                 error_message=f"Gemini timed out after {self.timeout} seconds",
@@ -88,6 +87,8 @@ class GeminiCliTool(AITool):
                 success=False,
                 error_message=f"Error invoking Gemini: {e}",
             )
+        else:
+            return result
 
     async def fix_duplication(
         self,
@@ -119,8 +120,7 @@ class GeminiCliTool(AITool):
         # Invoke Gemini with the duplication prompt
         try:
             result = await self._invoke_gemini(prompt, file_path)
-            return result
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return FixResult(
                 success=False,
                 error_message=f"Gemini timed out after {self.timeout} seconds",
@@ -130,6 +130,8 @@ class GeminiCliTool(AITool):
                 success=False,
                 error_message=f"Error invoking Gemini: {e}",
             )
+        else:
+            return result
 
     async def _invoke_gemini(
         self,

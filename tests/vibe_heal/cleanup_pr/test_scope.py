@@ -270,7 +270,7 @@ class TestActiveFindingBehaviorUnchanged:
 
         config = VibeHealConfig(
             sonarqube_url="https://sonar.test.com",
-            sonarqube_token="test-token",
+            sonarqube_token="test-token",  # noqa: S106
             sonarqube_project_key="temp-project",
         )
         mock_client = AsyncMock()

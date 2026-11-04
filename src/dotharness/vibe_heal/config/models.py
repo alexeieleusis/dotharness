@@ -1,12 +1,13 @@
 """Configuration models."""
 
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Self, cast
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
+    InitSettingsSource,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
@@ -17,7 +18,7 @@ from dotharness.vibe_heal.config.scanner_discovery import resolve_scanner_auth, 
 
 
 class VibeHealConfig(BaseSettings):
-    """Configuration for vibe-heal application."""
+    """Configuration for vibe_heal application."""
 
     # SonarQube settings
     sonarqube_url: str = Field(description="SonarQube server URL")
@@ -110,7 +111,8 @@ class VibeHealConfig(BaseSettings):
         if env_file is not None:
             env_path = Path(env_file)
             if not env_path.exists():
-                raise InvalidConfigurationError(f"Environment file not found: {env_file}")
+                msg = f"Environment file not found: {env_file}"
+                raise InvalidConfigurationError(msg)
             # Pass custom env file path through kwargs so settings_customise_sources can access it
             kwargs["_custom_env_file"] = env_path
 
@@ -144,7 +146,7 @@ class VibeHealConfig(BaseSettings):
         # Try to get custom env file path from init settings
         # init_settings wraps the kwargs passed to __init__
         # Note: init_kwargs exists at runtime but may not be in type stubs
-        init_kwargs = init_settings.init_kwargs  # type: ignore[attr-defined]
+        init_kwargs = cast("InitSettingsSource", init_settings).init_kwargs
         custom_env_path = init_kwargs.get("_custom_env_file")
 
         if custom_env_path is not None:
@@ -182,8 +184,10 @@ class VibeHealConfig(BaseSettings):
                 return AIToolType(v.lower())
             except ValueError as e:
                 valid_tools = [t.value for t in AIToolType]
-                raise InvalidConfigurationError(f"Invalid AI tool: {v}. Valid options: {valid_tools}") from e
-        raise InvalidConfigurationError(f"Invalid AI tool type: {type(v)}")
+                msg = f"Invalid AI tool: {v}. Valid options: {valid_tools}"
+                raise InvalidConfigurationError(msg) from e
+        msg = f"Invalid AI tool type: {type(v)}"
+        raise InvalidConfigurationError(msg)
 
     @field_validator("sonarqube_url")
     @classmethod
@@ -204,7 +208,7 @@ class VibeHealConfig(BaseSettings):
         """Fall back to sonar-scanner's own host URL sources when unset.
 
         Mirrors `apply_scanner_auth_fallback`, but for the SonarQube server URL:
-        only triggers when `sonarqube_url` wasn't already provided via vibe-heal's
+        only triggers when `sonarqube_url` wasn't already provided via vibe_heal's
         normal sources (init kwargs, env vars, .env file).
 
         Args:
@@ -228,7 +232,7 @@ class VibeHealConfig(BaseSettings):
         """Fall back to sonar-scanner's own credential sources when auth is unset.
 
         Only triggers when neither a token nor a full username+password pair was
-        found via vibe-heal's normal sources (init kwargs, env vars, .env file).
+        found via vibe_heal's normal sources (init kwargs, env vars, .env file).
 
         Args:
             data: Merged settings values from all sources.
@@ -263,9 +267,8 @@ class VibeHealConfig(BaseSettings):
         has_basic = self.sonarqube_username is not None and self.sonarqube_password is not None
 
         if not has_token and not has_basic:
-            raise InvalidConfigurationError(
-                "Must provide either SONARQUBE_TOKEN or both SONARQUBE_USERNAME and SONARQUBE_PASSWORD"
-            )
+            msg = "Must provide either SONARQUBE_TOKEN or both SONARQUBE_USERNAME and SONARQUBE_PASSWORD"
+            raise InvalidConfigurationError(msg)
 
         return self
 

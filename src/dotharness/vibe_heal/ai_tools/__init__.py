@@ -1,4 +1,4 @@
-"""AI tool integration for vibe-heal."""
+"""AI tool integration for vibe_heal."""
 
 from typing import Any
 
@@ -29,4 +29,5 @@ def __getattr__(name: str) -> Any:
         from dotharness.vibe_heal.ai_tools.prompts import create_fix_prompt as _create_fix_prompt
 
         return _create_fix_prompt
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)

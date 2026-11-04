@@ -1,6 +1,6 @@
 """Tests for review command models."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from dotharness.vibe_heal.review.models import (
     DuplicationLocation,
@@ -89,13 +89,13 @@ class TestReviewIssue:
 
     def test_extra_fields_ignored(self) -> None:
         """Test that extra fields from API are ignored."""
-        issue = ReviewIssue(
-            rule="python:S1481",
-            message="Test",
-            line=1,
-            extra_field="should be ignored",
-            another_field=123,
-        )
+        issue = ReviewIssue.model_validate({
+            "rule": "python:S1481",
+            "message": "Test",
+            "line": 1,
+            "extra_field": "should be ignored",
+            "another_field": 123,
+        })
 
         assert issue.rule == "python:S1481"
 
@@ -189,7 +189,7 @@ class TestReviewResult:
             project_key="my-project",
             branch="feature/test",
             base_branch="origin/main",
-            generated_at=datetime(2025, 5, 1, 12, 0, 0, tzinfo=timezone.utc),
+            generated_at=datetime(2025, 5, 1, 12, 0, 0, tzinfo=UTC),
             files=files,
         )
 
@@ -226,20 +226,20 @@ class TestReviewResult:
 
     def test_generated_at_defaults_to_now(self) -> None:
         """Test that generated_at defaults to current UTC time."""
-        before = datetime.now(timezone.utc)
+        before = datetime.now(UTC)
         result = ReviewResult(
             project_key="my-project",
             branch="main",
             base_branch="origin/main",
         )
-        after = datetime.now(timezone.utc)
+        after = datetime.now(UTC)
 
         assert before <= result.generated_at <= after
         assert result.generated_at.tzinfo is not None
 
     def test_serialization_round_trip(self) -> None:
         """Test that a ReviewResult serializes and deserializes correctly."""
-        generated_at = datetime(2025, 6, 15, 9, 30, 0, tzinfo=timezone.utc)
+        generated_at = datetime(2025, 6, 15, 9, 30, 0, tzinfo=UTC)
         original = ReviewResult(
             project_key="test-project",
             branch="dev",
@@ -275,7 +275,7 @@ class TestReviewResult:
 
     def test_json_serialization_round_trip(self) -> None:
         """Test JSON serialization and deserialization."""
-        generated_at = datetime(2025, 7, 1, 0, 0, 0, tzinfo=timezone.utc)
+        generated_at = datetime(2025, 7, 1, 0, 0, 0, tzinfo=UTC)
         original = ReviewResult(
             project_key="proj",
             branch="feat",
