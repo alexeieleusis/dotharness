@@ -295,8 +295,11 @@ async def _resolve_ssh_host(host: str) -> str:
         return "github.com"
     if host in _ssh_hosts:
         return _ssh_hosts[host]
+    if host.startswith("-"):
+        # An untrusted remote host must never be parsed by ssh as an option; fail closed.
+        return host
     resolved = host
-    result = await run(["ssh", "-G", host], timeout=_HELPER_TIMEOUT_SECONDS)
+    result = await run(["ssh", "-G", "--", host], timeout=_HELPER_TIMEOUT_SECONDS)
     if result.returncode == 0:
         for line in result.stdout.splitlines():
             if line.startswith("hostname "):
