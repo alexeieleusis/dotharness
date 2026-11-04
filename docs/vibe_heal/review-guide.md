@@ -151,7 +151,7 @@ Pass `--base-branch` explicitly to skip auto-detection entirely (e.g. in CI, or 
 9. Optionally enrich each issue with rule root_cause documentation
 10. If --coverage: fetch lineHits data per changed line from SonarQube and
     compute coverage_pct/covered_lines/instrumented_changed_lines per file
-11. Write report to ~/.vibe_heal/reviews/<project-key>/<branch>/review.json
+11. Write report to ~/.vibe-heal/reviews/<project-key>/<branch>/review.json
     and review.md
 12. Delete temporary SonarQube project
 13. Display per-file summary table in terminal (with Coverage column when applicable)
@@ -187,7 +187,7 @@ Per-File Breakdown:
   src/models/user.py             2             MINOR             0
   tests/test_api.py              0               N/A             0
 
-Report saved to /Users/you/.vibe_heal/reviews/my-project/feature-new-api/review.json
+Report saved to /Users/you/.vibe-heal/reviews/my-project/feature-new-api/review.json
 ```
 
 With `--coverage` (adds a Coverage column when SonarQube has coverage data):
@@ -209,7 +209,7 @@ Two files are written after each analysis:
 - **`review.json`** — machine-readable report; includes `root_cause` HTML per issue so `--post` can include rule docs without re-fetching. Also stores `coverage_pct`, `covered_lines`, and `instrumented_changed_lines` per file when `--coverage` was used.
 - **`review.md`** — human-readable Markdown with issues per file and one collapsed `<details>` block per unique rule (deduped). When coverage data is present, each file section opens with a bold coverage line (e.g. `**Coverage on changed lines: 66.7% (4/6 instrumented lines covered)**`).
 
-Default report directory: `~/.vibe_heal/reviews/<project-key>/<branch>/`
+Default report directory: `~/.vibe-heal/reviews/<project-key>/<branch>/`
 
 ### Inline PR comments (post phase)
 
