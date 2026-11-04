@@ -70,3 +70,22 @@ checker). The files were written by hand. Cookiecutter was not run.
 Ruff, `ty` and pre-commit exclude `tools` and `vendor`, so the old tools are not
 modified or checked by the new project. Later phases may remove these excludes as
 the tools migrate.
+
+### Coverage policy
+
+I-1 enforces no project-wide numeric coverage floor (D-6, staged floor). The
+`dotharness` Codecov status is informational. The tools are migrated first, and the
+floor is set in I-6, once all four tools have migrated, at the level then reached.
+A 90% floor would fail as soon as vibe-heal migrates in I-2.
+
+Input figures, from local `coverage.xml` files. They are non-authoritative and are
+recomputed in CI before any floor is set:
+
+| Tool | Coverage |
+| --- | --- |
+| pr-review | 0.9396 |
+| spec-prism-flow | 0.9667 |
+| sisyphus | 0.9675 |
+| vibe-heal | 0.7949 |
+
+The existing `sisyphus` status and flag stay untouched until I-8.
