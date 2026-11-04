@@ -188,6 +188,16 @@ def test_noop_run_with_step_still_failing_is_not_counted(tmp_path):
     assert ci_fix.get_attempts(SLUG, 1) == 0
 
 
+def test_repeated_noop_for_same_head_and_check_does_not_rerun_the_agent(tmp_path, caplog):
+    with _mocks(tmp_path, agent_commits=False, after_rc=1) as m, caplog.at_level(logging.INFO):
+        m.run_step.side_effect = [_proc(1), _proc(1)] * 3
+        for _ in range(3):
+            ci_fix.run(_cfg(tmp_path))
+    assert m.backend.run.call_count == 1
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+    assert any("noop-repeat" in d for d in _digests(caplog))
+
+
 def test_noop_run_on_dirty_start_tree_is_not_counted(tmp_path):
     with _mocks(tmp_path, agent_commits=False, after_rc=1, status=b" M a.py\n"):
         ci_fix.run(_cfg(tmp_path))

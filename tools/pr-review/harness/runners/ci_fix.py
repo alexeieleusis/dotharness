@@ -11,7 +11,7 @@ Public entry point (takes the shared working-directory lock itself, like the sib
   lets the backend agent make the smallest fix (instructions: ``knowledge/pr-review/ci-fix-prompt.md``,
   read-only), re-runs the command and, only if it passes, commits and plain-pushes to the PR's own
   branch. One agent run that changes the branch (or crashes) is one attempt; a run that leaves HEAD and the
-  tree unchanged is not counted. At most ``max_fix_attempts`` counted runs per PR, counted across runs in
+  tree unchanged is not counted, but is remembered per (head SHA, check) so it is not retried until the head moves. At most ``max_fix_attempts`` counted runs per PR, counted across runs in
   ``ci_fix_state.json``. At most one push per PR per run. The counter of a PR is reset when ci-fix finds its
   CI green (not in dry-run), so a later unrelated failure gets a full budget.
 * ``dry_run=True`` fetches, checks out and reproduces, but never commits, pushes, runs the agent or
@@ -65,6 +65,7 @@ PROMPT_FILE = "ci-fix-prompt.md"
 UNKNOWN_STEP = "UNKNOWN STEP"  # step column gh prints when it cannot map a log line to a step
 
 OUTCOME_NOT_REPRODUCED = "did-not-reproduce"
+OUTCOME_NOOP_REPEAT = "noop-repeat"
 OUTCOME_CAP_REACHED = "cap-reached"
 OUTCOME_GATE_ONLY = "gate-only"
 OUTCOME_PARSE_FAILURE = "parse-failure"
@@ -190,7 +191,7 @@ def _is_in_scope(pr: dict, current_user: str) -> bool:
 
 
 def _read_ci_fix_state(repo_slug: str) -> dict:
-    defaults: dict = {"version": 1, "attempts": {}}
+    defaults: dict = {"version": 1, "attempts": {}, "noops": {}}
     p = _state_path(repo_slug, CI_FIX_STATE_FILE)
     if not p.exists():
         return defaults
@@ -201,6 +202,8 @@ def _read_ci_fix_state(repo_slug: str) -> dict:
         return defaults
     if not isinstance(data, dict) or not isinstance(data.get("attempts"), dict):
         return defaults
+    if not isinstance(data.get("noops"), dict):
+        data["noops"] = {}
     return data
 
 
@@ -219,14 +222,41 @@ def _record_attempt(repo_slug: str, pr_number: int) -> None:
     _update_state(repo_slug, CI_FIX_STATE_FILE, _read_ci_fix_state, mutate)
 
 
+def _noop_key(head_sha: str, check_name: str) -> str:
+    return f"{head_sha}\n{check_name}"
+
+
+def _was_noop(repo_slug: str, pr_number: int, head_sha: str, check_name: str) -> bool:
+    entries = _read_ci_fix_state(repo_slug)["noops"].get(str(pr_number), [])
+    return isinstance(entries, list) and _noop_key(head_sha, check_name) in entries
+
+
+def _record_noop(repo_slug: str, pr_number: int, head_sha: str, check_name: str) -> None:
+    """Remember that the agent changed nothing for this head SHA and check, so the same input is not retried."""
+
+    def mutate(current: dict) -> bool:
+        entries = current["noops"].get(str(pr_number))
+        if not isinstance(entries, list):
+            entries = []
+        key = _noop_key(head_sha, check_name)
+        if key in entries:
+            return False
+        # Only the current head matters: a new head SHA invalidates the older entries.
+        current["noops"][str(pr_number)] = [e for e in entries if e.split("\n", 1)[0] == head_sha] + [key]
+        return True
+
+    _update_state(repo_slug, CI_FIX_STATE_FILE, _read_ci_fix_state, mutate)
+
+
 def _prune_counters(repo_slug: str, open_pr_numbers: set[int]) -> None:
     """Drop counters of PRs that are no longer open, so the map does not grow without bound."""
     keep = {str(n) for n in open_pr_numbers}
 
     def mutate(current: dict) -> bool:
-        to_drop = current["attempts"].keys() - keep
+        to_drop = (current["attempts"].keys() | current["noops"].keys()) - keep
         for key in to_drop:
-            del current["attempts"][key]
+            current["attempts"].pop(key, None)
+            current["noops"].pop(key, None)
         return bool(to_drop)
 
     _update_state(repo_slug, CI_FIX_STATE_FILE, _read_ci_fix_state, mutate)
@@ -237,9 +267,10 @@ def _reset_attempts(repo_slug: str, pr_number: int) -> None:
     key = str(pr_number)
 
     def mutate(current: dict) -> bool:
-        if key not in current["attempts"]:
+        if key not in current["attempts"] and key not in current["noops"]:
             return False
-        del current["attempts"][key]
+        current["attempts"].pop(key, None)
+        current["noops"].pop(key, None)
         return True
 
     _update_state(repo_slug, CI_FIX_STATE_FILE, _read_ci_fix_state, mutate)
@@ -584,6 +615,9 @@ def _agent_fix_and_push(
     opencode_dir = str(config.repo.opencode_dir) if config.repo.opencode_dir else None
     pre_sha = _head(wdir, env)
     pre_status = _status(wdir, env)
+    if _was_noop(config.repo_slug, number, pre_sha, check.name):
+        _digest(OUTCOME_NOOP_REPEAT, number, check.name, "the agent already changed nothing for this head SHA")
+        return False
     # An agent run is an attempt unless it left the branch untouched (same HEAD, same tree): a run that
     # changed something, failed to fix it or crashed still counts, so a PR that keeps failing hits the cap.
     # The attempt is recorded after the (expensive) run, and also when the run raises (crash or timeout).
@@ -599,6 +633,9 @@ def _agent_fix_and_push(
         raise
     if _head(wdir, env) != pre_sha or _status(wdir, env) != pre_status:
         _record_attempt(config.repo_slug, number)
+    else:
+        # Free of the fix budget, but bounded: skip this (head SHA, check) until the head moves.
+        _record_noop(config.repo_slug, number, pre_sha, check.name)
 
     after = _run_step(step, wdir, env)
     if after.returncode != 0:
