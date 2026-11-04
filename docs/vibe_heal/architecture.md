@@ -53,8 +53,8 @@ src/dotharness/vibe_heal/
 ├── ai_tools/
 │   ├── __init__.py
 │   ├── base.py             # Abstract base class + AIToolType enum
-│   ├── claude_code.py      # Claude Code implementation
-│   ├── opencode.py         # opencode implementation
+│   ├── claude_code.py      # Claude Code implementation (delegates to dotharness.ai_backend.launch)
+│   ├── opencode.py         # opencode implementation (delegates to dotharness.ai_backend.launch)
 │   ├── factory.py          # Factory for creating AI tool instances
 │   └── models.py           # Shared models (FixResult, etc.)
 ├── git/
@@ -227,6 +227,9 @@ class VibeHealConfig(BaseSettings):
       ) -> FixResult:
           """Attempt to fix the issue"""
   ```
+
+- **Shared launcher**: `ClaudeCodeTool` and `OpenCodeTool` do not assemble argv or spawn processes themselves. Both call `launch` in `dotharness/ai_backend.py`, which builds the backend command, runs it asynchronously through `dotharness/subprocess_runner.py`, enforces the timeout and kills the whole process group on expiry. Prompt files are written under `~/.local/share/dotharness/tmp`, not the working tree. See `docs/design/shared-async-layer.md`.
+- **Claude timeout (D-6)**: one value, `CLAUDE_TIMEOUT_SECONDS = 1200` (20 minutes), is passed to the launcher and printed in the timeout message. `OpenCodeTool` also defaults to 1200 seconds.
 
 - `ClaudeCodeTool(AITool)`: Claude Code implementation
   ```python
@@ -486,10 +489,12 @@ def fix(
 ## Configuration Priority
 
 1. Command-line arguments (`--ai-tool` flag)
-2. `.env.vibeheal` file
-3. `.env` file
-4. Environment variables
+2. Environment variables
+3. `.env.vibeheal` file
+4. `.env` file
 5. Auto-detection (if ai_tool not specified)
+
+`--env-file <path>` replaces the default `.env.vibeheal` / `.env` search. With it, the order becomes CLI arguments, the given file, then environment variables, so the file takes precedence over environment variables. This mirrors `VibeHealConfig.settings_customise_sources` in `config/models.py`.
 
 ## Testing Strategy
 
