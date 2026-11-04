@@ -82,13 +82,14 @@ class BranchAnalyzer:
         try:
             # Use three-dot diff syntax to compare merge base
             # This shows changes on current branch since it diverged from base_branch
-            diff_output = self.repo.git.diff("--name-only", f"{base_branch}...HEAD")
+            # -z emits NUL-separated, unquoted paths so non-ASCII/special names survive
+            diff_output = self.repo.git.diff("--name-only", "-z", f"{base_branch}...HEAD")
 
-            if not diff_output.strip():
+            if not diff_output.strip("\0"):
                 return []
 
             # Parse file paths from diff output
-            file_paths = [line.strip() for line in diff_output.split("\n") if line.strip()]
+            file_paths = [path for path in diff_output.split("\0") if path]
 
             # Determine if we're running from a subdirectory of the repo (monorepo support)
             cwd = Path.cwd().resolve()

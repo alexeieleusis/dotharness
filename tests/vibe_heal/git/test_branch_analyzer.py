@@ -83,7 +83,7 @@ class TestGetModifiedFiles:
             files = branch_analyzer.get_modified_files()
 
         # Verify default base branch is used
-        branch_analyzer.repo.git.diff.assert_called_once_with("--name-only", "origin/main...HEAD")
+        branch_analyzer.repo.git.diff.assert_called_once_with("--name-only", "-z", "origin/main...HEAD")
         assert files == [Path("file1.py")]
 
     def test_get_modified_files_custom_base_branch(self, branch_analyzer: BranchAnalyzer, tmp_path: Path) -> None:
@@ -96,7 +96,7 @@ class TestGetModifiedFiles:
         with patch.object(branch_analyzer, "validate_branch_exists", return_value=True):
             files = branch_analyzer.get_modified_files("develop")
 
-        branch_analyzer.repo.git.diff.assert_called_once_with("--name-only", "develop...HEAD")
+        branch_analyzer.repo.git.diff.assert_called_once_with("--name-only", "-z", "develop...HEAD")
         assert files == [Path("file1.py")]
 
     def test_get_modified_files_multiple_files(self, branch_analyzer: BranchAnalyzer, tmp_path: Path) -> None:
@@ -107,7 +107,7 @@ class TestGetModifiedFiles:
         file1.write_text("content")
         file2.write_text("content")
 
-        branch_analyzer.repo.git.diff.return_value = "file1.py\nfile2.py"
+        branch_analyzer.repo.git.diff.return_value = "file1.py\0file2.py"
 
         with patch.object(branch_analyzer, "validate_branch_exists", return_value=True):
             files = branch_analyzer.get_modified_files()
@@ -123,7 +123,7 @@ class TestGetModifiedFiles:
         file1.write_text("content")
 
         # Git diff shows both files, but file2.py doesn't exist
-        branch_analyzer.repo.git.diff.return_value = "file1.py\nfile2.py"
+        branch_analyzer.repo.git.diff.return_value = "file1.py\0file2.py"
 
         with patch.object(branch_analyzer, "validate_branch_exists", return_value=True):
             files = branch_analyzer.get_modified_files()
@@ -161,12 +161,24 @@ class TestGetModifiedFiles:
         file1.write_text("content")
 
         # Diff output with extra whitespace
-        branch_analyzer.repo.git.diff.return_value = "\nfile1.py\n\n"
+        branch_analyzer.repo.git.diff.return_value = "\0file1.py\0\0"
 
         with patch.object(branch_analyzer, "validate_branch_exists", return_value=True):
             files = branch_analyzer.get_modified_files()
 
         assert files == [Path("file1.py")]
+
+    def test_get_modified_files_non_ascii_and_spaces(self, branch_analyzer: BranchAnalyzer, tmp_path: Path) -> None:
+        """Paths with non-ASCII characters or spaces are preserved (NUL-separated, unquoted)."""
+        (tmp_path / "café.py").write_text("content")
+        (tmp_path / "my file.py").write_text("content")
+
+        branch_analyzer.repo.git.diff.return_value = "café.py\0my file.py\0"
+
+        with patch.object(branch_analyzer, "validate_branch_exists", return_value=True):
+            files = branch_analyzer.get_modified_files()
+
+        assert files == [Path("café.py"), Path("my file.py")]
 
     def test_get_modified_files_branch_not_found(self, branch_analyzer: BranchAnalyzer) -> None:
         """Test error when base branch doesn't exist."""
@@ -195,7 +207,7 @@ class TestGetModifiedFiles:
         file1.write_text("content")
 
         # Diff shows both (though git diff typically only shows files)
-        branch_analyzer.repo.git.diff.return_value = "dir1\nfile1.py"
+        branch_analyzer.repo.git.diff.return_value = "dir1\0file1.py"
 
         with patch.object(branch_analyzer, "validate_branch_exists", return_value=True):
             files = branch_analyzer.get_modified_files()
@@ -259,7 +271,7 @@ class TestGetModifiedFiles:
         bar_file.write_text("content")
 
         # Git diff returns both files
-        branch_analyzer.repo.git.diff.return_value = "foo/main.py\nbar/main.py"
+        branch_analyzer.repo.git.diff.return_value = "foo/main.py\0bar/main.py"
 
         with (
             patch.object(branch_analyzer, "validate_branch_exists", return_value=True),
@@ -280,7 +292,7 @@ class TestGetModifiedFiles:
         existing_file.write_text("content")
 
         # Git diff shows two files, but deleted.py doesn't exist on disk
-        branch_analyzer.repo.git.diff.return_value = "foo/main.py\nfoo/deleted.py"
+        branch_analyzer.repo.git.diff.return_value = "foo/main.py\0foo/deleted.py"
 
         with (
             patch.object(branch_analyzer, "validate_branch_exists", return_value=True),
