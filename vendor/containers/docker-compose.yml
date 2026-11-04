@@ -37,9 +37,12 @@ services:
       - SONAR_WEB_JAVAOPTS=-Xmx2G -Xms2G -XX:+HeapDumpOnOutOfMemoryError
       - SONAR_SEARCH_JAVAOPTS=-Xmx2G -Xms2G -XX:+HeapDumpOnOutOfMemoryError
 
-    # Elasticsearch needs high max_map_count to avoid OOM crashes on the host
-    sysctls:
-      net.core.somaxconn: 1024
+    # HOST PREREQUISITE: SonarQube's embedded Elasticsearch requires
+    # vm.max_map_count >= 524288. This is a non-namespaced host kernel setting,
+    # so Compose cannot set it per container. On a Linux host or CI runner
+    # (default 65530) run `sudo sysctl -w vm.max_map_count=524288` first, or the
+    # search process fails its bootstrap check and the server exits at startup.
+    # Docker Desktop / Podman machine VMs usually already set a high enough value.
     ulimits:
       nofile:
         soft: 65536
