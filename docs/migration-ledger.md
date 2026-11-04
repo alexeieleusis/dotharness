@@ -63,6 +63,32 @@ Known deviation from upstream in `docker-compose.yml`: SonarQube is bound to
 `127.0.0.1:9000` instead of all interfaces, and the database password comes from the
 required `SONAR_DB_PASSWORD` environment variable instead of a committed value.
 
+## Tests dropped or rewritten in I-2
+
+Tests are not ledger modules: the ledger has one row per source module, and test files
+have no row. This section records what happened to the vibe-heal tests in I-2 (#164).
+
+The vibe-heal tree at `9363868` has 44 `test_*.py` files (57 `.py` files under `tests`).
+The migrated tree has 43 `test_*.py` files (56 `.py` files): 44 minus the 2 deleted
+files plus the new `tests/vibe_heal/test_cli_surface.py`.
+
+Deleted with the removed backends:
+
+- `tests/ai_tools/test_aider.py`
+- `tests/ai_tools/test_gemini.py`
+
+Rewritten for the claude-code and opencode backends and the shared AI backend launcher:
+
+- `tests/ai_tools/test_factory.py`
+- `tests/ai_tools/test_base.py`
+- `tests/config/test_config_loading.py`
+- `tests/config/test_models.py`
+- `tests/cleanup_pr/test_cli.py`
+- also `tests/ai_tools/test_claude_code.py`, `test_opencode.py` and `test_utils.py`
+
+New tests for the shared layer: `tests/test_subprocess_runner.py`, `tests/test_ai_backend.py`
+and `tests/vibe_heal/test_cli_surface.py`.
+
 ## Rows
 
 | module | origin tool | origin path | status | shared module reused or extended | issue that moved it |
@@ -155,62 +181,62 @@ required `SONAR_DB_PASSWORD` environment variable instead of a committed value.
 | `sisyphus.stoprecord` | sisyphus | `tools/sisyphus/sisyphus/stoprecord.py` | not migrated | | |
 | `sisyphus.subproc` | sisyphus | `tools/sisyphus/sisyphus/subproc.py` | not migrated | | |
 | `sisyphus.ticketfile` | sisyphus | `tools/sisyphus/sisyphus/ticketfile.py` | not migrated | | |
-| `vibe_heal` | vibe-heal | `src/vibe_heal/__init__.py` | not migrated | | |
-| `vibe_heal.__main__` | vibe-heal | `src/vibe_heal/__main__.py` | not migrated | | |
-| `vibe_heal.ai_tools` | vibe-heal | `src/vibe_heal/ai_tools/__init__.py` | not migrated | | |
-| `vibe_heal.ai_tools.aider` | vibe-heal | `src/vibe_heal/ai_tools/aider.py` | not migrated | | |
-| `vibe_heal.ai_tools.base` | vibe-heal | `src/vibe_heal/ai_tools/base.py` | not migrated | | |
-| `vibe_heal.ai_tools.claude_code` | vibe-heal | `src/vibe_heal/ai_tools/claude_code.py` | not migrated | | |
-| `vibe_heal.ai_tools.external_docs` | vibe-heal | `src/vibe_heal/ai_tools/external_docs.py` | not migrated | | |
-| `vibe_heal.ai_tools.factory` | vibe-heal | `src/vibe_heal/ai_tools/factory.py` | not migrated | | |
-| `vibe_heal.ai_tools.gemini` | vibe-heal | `src/vibe_heal/ai_tools/gemini.py` | not migrated | | |
-| `vibe_heal.ai_tools.models` | vibe-heal | `src/vibe_heal/ai_tools/models.py` | not migrated | | |
-| `vibe_heal.ai_tools.opencode` | vibe-heal | `src/vibe_heal/ai_tools/opencode.py` | not migrated | | |
-| `vibe_heal.ai_tools.prompts` | vibe-heal | `src/vibe_heal/ai_tools/prompts.py` | not migrated | | |
-| `vibe_heal.ai_tools.utils` | vibe-heal | `src/vibe_heal/ai_tools/utils.py` | not migrated | | |
-| `vibe_heal.cleanup` | vibe-heal | `src/vibe_heal/cleanup/__init__.py` | not migrated | | |
-| `vibe_heal.cleanup.orchestrator` | vibe-heal | `src/vibe_heal/cleanup/orchestrator.py` | not migrated | | |
-| `vibe_heal.cleanup_pr` | vibe-heal | `src/vibe_heal/cleanup_pr/__init__.py` | not migrated | | |
-| `vibe_heal.cleanup_pr.main_duplications` | vibe-heal | `src/vibe_heal/cleanup_pr/main_duplications.py` | not migrated | | |
-| `vibe_heal.cleanup_pr.orchestrator` | vibe-heal | `src/vibe_heal/cleanup_pr/orchestrator.py` | not migrated | | |
-| `vibe_heal.cleanup_pr.scope` | vibe-heal | `src/vibe_heal/cleanup_pr/scope.py` | not migrated | | |
-| `vibe_heal.cli` | vibe-heal | `src/vibe_heal/cli.py` | not migrated | | |
-| `vibe_heal.config` | vibe-heal | `src/vibe_heal/config/__init__.py` | not migrated | | |
-| `vibe_heal.config.exceptions` | vibe-heal | `src/vibe_heal/config/exceptions.py` | not migrated | | |
-| `vibe_heal.config.models` | vibe-heal | `src/vibe_heal/config/models.py` | not migrated | | |
-| `vibe_heal.config.scanner_discovery` | vibe-heal | `src/vibe_heal/config/scanner_discovery.py` | not migrated | | |
-| `vibe_heal.converters` | vibe-heal | `src/vibe_heal/converters/__init__.py` | not migrated | | |
-| `vibe_heal.converters.oxlint` | vibe-heal | `src/vibe_heal/converters/oxlint.py` | not migrated | | |
-| `vibe_heal.deduplication` | vibe-heal | `src/vibe_heal/deduplication/__init__.py` | not migrated | | |
-| `vibe_heal.deduplication.client` | vibe-heal | `src/vibe_heal/deduplication/client.py` | not migrated | | |
-| `vibe_heal.deduplication.models` | vibe-heal | `src/vibe_heal/deduplication/models.py` | not migrated | | |
-| `vibe_heal.deduplication.orchestrator` | vibe-heal | `src/vibe_heal/deduplication/orchestrator.py` | not migrated | | |
-| `vibe_heal.deduplication.processor` | vibe-heal | `src/vibe_heal/deduplication/processor.py` | not migrated | | |
-| `vibe_heal.git` | vibe-heal | `src/vibe_heal/git/__init__.py` | not migrated | | |
-| `vibe_heal.git.branch_analyzer` | vibe-heal | `src/vibe_heal/git/branch_analyzer.py` | not migrated | | |
-| `vibe_heal.git.diff_parser` | vibe-heal | `src/vibe_heal/git/diff_parser.py` | not migrated | | |
-| `vibe_heal.git.exceptions` | vibe-heal | `src/vibe_heal/git/exceptions.py` | not migrated | | |
-| `vibe_heal.git.file_selection` | vibe-heal | `src/vibe_heal/git/file_selection.py` | not migrated | | |
-| `vibe_heal.git.manager` | vibe-heal | `src/vibe_heal/git/manager.py` | not migrated | | |
-| `vibe_heal.git.paths` | vibe-heal | `src/vibe_heal/git/paths.py` | not migrated | | |
-| `vibe_heal.models` | vibe-heal | `src/vibe_heal/models.py` | not migrated | | |
-| `vibe_heal.orchestrator` | vibe-heal | `src/vibe_heal/orchestrator.py` | not migrated | | |
-| `vibe_heal.output` | vibe-heal | `src/vibe_heal/output.py` | not migrated | | |
-| `vibe_heal.processor` | vibe-heal | `src/vibe_heal/processor/__init__.py` | not migrated | | |
-| `vibe_heal.processor.issue_processor` | vibe-heal | `src/vibe_heal/processor/issue_processor.py` | not migrated | | |
-| `vibe_heal.processor.models` | vibe-heal | `src/vibe_heal/processor/models.py` | not migrated | | |
-| `vibe_heal.review` | vibe-heal | `src/vibe_heal/review/__init__.py` | not migrated | | |
-| `vibe_heal.review.duplication_scope` | vibe-heal | `src/vibe_heal/review/duplication_scope.py` | not migrated | | |
-| `vibe_heal.review.github` | vibe-heal | `src/vibe_heal/review/github.py` | not migrated | | |
-| `vibe_heal.review.line_filter` | vibe-heal | `src/vibe_heal/review/line_filter.py` | not migrated | | |
-| `vibe_heal.review.models` | vibe-heal | `src/vibe_heal/review/models.py` | not migrated | | |
-| `vibe_heal.review.orchestrator` | vibe-heal | `src/vibe_heal/review/orchestrator.py` | not migrated | | |
-| `vibe_heal.review.reporter` | vibe-heal | `src/vibe_heal/review/reporter.py` | not migrated | | |
-| `vibe_heal.sonarqube` | vibe-heal | `src/vibe_heal/sonarqube/__init__.py` | not migrated | | |
-| `vibe_heal.sonarqube.analysis_runner` | vibe-heal | `src/vibe_heal/sonarqube/analysis_runner.py` | not migrated | | |
-| `vibe_heal.sonarqube.client` | vibe-heal | `src/vibe_heal/sonarqube/client.py` | not migrated | | |
-| `vibe_heal.sonarqube.exceptions` | vibe-heal | `src/vibe_heal/sonarqube/exceptions.py` | not migrated | | |
-| `vibe_heal.sonarqube.models` | vibe-heal | `src/vibe_heal/sonarqube/models.py` | not migrated | | |
-| `vibe_heal.sonarqube.project_manager` | vibe-heal | `src/vibe_heal/sonarqube/project_manager.py` | not migrated | | |
-| `vibe_heal.sonarqube.properties_handler` | vibe-heal | `src/vibe_heal/sonarqube/properties_handler.py` | not migrated | | |
-| `vibe_heal.utils` | vibe-heal | `src/vibe_heal/utils/__init__.py` | not migrated | | |
+| `vibe_heal` | vibe-heal | `src/vibe_heal/__init__.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.__main__` | vibe-heal | `src/vibe_heal/__main__.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.ai_tools` | vibe-heal | `src/vibe_heal/ai_tools/__init__.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.ai_tools.aider` | vibe-heal | `src/vibe_heal/ai_tools/aider.py` | dropped | none: aider backend removed | #164 (backend removed; only claude-code and opencode remain) |
+| `vibe_heal.ai_tools.base` | vibe-heal | `src/vibe_heal/ai_tools/base.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.ai_tools.claude_code` | vibe-heal | `src/vibe_heal/ai_tools/claude_code.py` | migrated | `dotharness.ai_backend`, `dotharness.subprocess_runner` | #164 |
+| `vibe_heal.ai_tools.external_docs` | vibe-heal | `src/vibe_heal/ai_tools/external_docs.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.ai_tools.factory` | vibe-heal | `src/vibe_heal/ai_tools/factory.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.ai_tools.gemini` | vibe-heal | `src/vibe_heal/ai_tools/gemini.py` | dropped | none: gemini backend removed | #164 (backend removed; only claude-code and opencode remain) |
+| `vibe_heal.ai_tools.models` | vibe-heal | `src/vibe_heal/ai_tools/models.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.ai_tools.opencode` | vibe-heal | `src/vibe_heal/ai_tools/opencode.py` | migrated | `dotharness.ai_backend`, `dotharness.subprocess_runner` | #164 |
+| `vibe_heal.ai_tools.prompts` | vibe-heal | `src/vibe_heal/ai_tools/prompts.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.ai_tools.utils` | vibe-heal | `src/vibe_heal/ai_tools/utils.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.cleanup` | vibe-heal | `src/vibe_heal/cleanup/__init__.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.cleanup.orchestrator` | vibe-heal | `src/vibe_heal/cleanup/orchestrator.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.cleanup_pr` | vibe-heal | `src/vibe_heal/cleanup_pr/__init__.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.cleanup_pr.main_duplications` | vibe-heal | `src/vibe_heal/cleanup_pr/main_duplications.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.cleanup_pr.orchestrator` | vibe-heal | `src/vibe_heal/cleanup_pr/orchestrator.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.cleanup_pr.scope` | vibe-heal | `src/vibe_heal/cleanup_pr/scope.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.cli` | vibe-heal | `src/vibe_heal/cli.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.config` | vibe-heal | `src/vibe_heal/config/__init__.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.config.exceptions` | vibe-heal | `src/vibe_heal/config/exceptions.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.config.models` | vibe-heal | `src/vibe_heal/config/models.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.config.scanner_discovery` | vibe-heal | `src/vibe_heal/config/scanner_discovery.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.converters` | vibe-heal | `src/vibe_heal/converters/__init__.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.converters.oxlint` | vibe-heal | `src/vibe_heal/converters/oxlint.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.deduplication` | vibe-heal | `src/vibe_heal/deduplication/__init__.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.deduplication.client` | vibe-heal | `src/vibe_heal/deduplication/client.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.deduplication.models` | vibe-heal | `src/vibe_heal/deduplication/models.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.deduplication.orchestrator` | vibe-heal | `src/vibe_heal/deduplication/orchestrator.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.deduplication.processor` | vibe-heal | `src/vibe_heal/deduplication/processor.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.git` | vibe-heal | `src/vibe_heal/git/__init__.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.git.branch_analyzer` | vibe-heal | `src/vibe_heal/git/branch_analyzer.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.git.diff_parser` | vibe-heal | `src/vibe_heal/git/diff_parser.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.git.exceptions` | vibe-heal | `src/vibe_heal/git/exceptions.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.git.file_selection` | vibe-heal | `src/vibe_heal/git/file_selection.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.git.manager` | vibe-heal | `src/vibe_heal/git/manager.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.git.paths` | vibe-heal | `src/vibe_heal/git/paths.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.models` | vibe-heal | `src/vibe_heal/models.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.orchestrator` | vibe-heal | `src/vibe_heal/orchestrator.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.output` | vibe-heal | `src/vibe_heal/output.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.processor` | vibe-heal | `src/vibe_heal/processor/__init__.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.processor.issue_processor` | vibe-heal | `src/vibe_heal/processor/issue_processor.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.processor.models` | vibe-heal | `src/vibe_heal/processor/models.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.review` | vibe-heal | `src/vibe_heal/review/__init__.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.review.duplication_scope` | vibe-heal | `src/vibe_heal/review/duplication_scope.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.review.github` | vibe-heal | `src/vibe_heal/review/github.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.review.line_filter` | vibe-heal | `src/vibe_heal/review/line_filter.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.review.models` | vibe-heal | `src/vibe_heal/review/models.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.review.orchestrator` | vibe-heal | `src/vibe_heal/review/orchestrator.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.review.reporter` | vibe-heal | `src/vibe_heal/review/reporter.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.sonarqube` | vibe-heal | `src/vibe_heal/sonarqube/__init__.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.sonarqube.analysis_runner` | vibe-heal | `src/vibe_heal/sonarqube/analysis_runner.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.sonarqube.client` | vibe-heal | `src/vibe_heal/sonarqube/client.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.sonarqube.exceptions` | vibe-heal | `src/vibe_heal/sonarqube/exceptions.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.sonarqube.models` | vibe-heal | `src/vibe_heal/sonarqube/models.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.sonarqube.project_manager` | vibe-heal | `src/vibe_heal/sonarqube/project_manager.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.sonarqube.properties_handler` | vibe-heal | `src/vibe_heal/sonarqube/properties_handler.py` | migrated | none: vibe-heal specific | #164 |
+| `vibe_heal.utils` | vibe-heal | `src/vibe_heal/utils/__init__.py` | migrated | none: vibe-heal specific | #164 |

@@ -10,13 +10,23 @@ copyright = 'Maintained by <a href="https://github.com/alexeieleusis">alexeieleu
 
 nav = [
     { "Home" = "index.md" },
-    { "vibe-heal" = "vibe_heal.md" },
+    { "vibe_heal" = [
+        "vibe_heal.md",
+        { "Overview" = "vibe_heal/overview.md" },
+        { "Branch cleanup guide" = "vibe_heal/branch-cleanup-guide.md" },
+        { "Review guide" = "vibe_heal/review-guide.md" },
+        { "Architecture" = "vibe_heal/architecture.md" },
+        { "API reference" = "vibe_heal/api.md" },
+    ] },
     { "pr-review" = "pr_review.md" },
     { "spec-prism-flow" = "spec_prism_flow.md" },
     { "sisyphus" = "sisyphus.md" },
     { "Contributing" = "contributing.md" },
     { "Migration ledger" = "migration-ledger.md" },
 ]
+
+[project.plugins.mkdocstrings.handlers.python]
+paths = ["src"]
 
 [project.theme]
 language = "en"
