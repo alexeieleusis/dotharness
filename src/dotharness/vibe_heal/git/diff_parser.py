@@ -57,6 +57,32 @@ class DiffParser:
             msg = f"Not a valid git repository: {repo_path}"
             raise DiffParserError(msg) from e
 
+    def _merge_base(self, base_branch: str) -> str:
+        """Resolve a single merge-base SHA (first line if git reports several)."""
+        output = self.repo.git.merge_base(base_branch, "HEAD").strip()
+        return output.splitlines()[0].strip() if output else output
+
+    def _run_diff(self, merge_base: str) -> str:
+        """Run git diff with output independent of user/repo git configuration."""
+        # core.quotePath=false is set via env (git >= 2.31); a `-c` kwarg would
+        # be rendered as the `git diff -c` combined-diff flag instead.
+        with self.repo.git.custom_environment(
+            GIT_CONFIG_COUNT="1",
+            GIT_CONFIG_KEY_0="core.quotePath",
+            GIT_CONFIG_VALUE_0="false",
+        ):
+            return str(
+                self.repo.git.diff(
+                    "--no-color",
+                    "--no-ext-diff",
+                    "--no-renames",
+                    "--src-prefix=a/",
+                    "--dst-prefix=b/",
+                    "--unified=0",
+                    f"{merge_base}..HEAD",
+                )
+            )
+
     def get_diff_lines(self, base_branch: str = _DEFAULT_BASE_BRANCH) -> DiffLines:
         """Get changed line numbers per file between base branch and HEAD.
 
@@ -78,8 +104,8 @@ class DiffParser:
             DiffParserError: If the git diff command fails.
         """
         try:
-            merge_base = self.repo.git.merge_base(base_branch, "HEAD").strip()
-            diff_output = self.repo.git.diff("--no-color", "--unified=0", f"{merge_base}..HEAD")
+            merge_base = self._merge_base(base_branch)
+            diff_output = self._run_diff(merge_base)
         except GitCommandError as e:
             msg = f"Git diff command failed: {e}"
             raise DiffParserError(msg) from e
@@ -115,8 +141,8 @@ class DiffParser:
             Raw diff string, or empty string on error.
         """
         try:
-            merge_base = self.repo.git.merge_base(base_branch, "HEAD").strip()
-            return str(self.repo.git.diff("--no-color", "--unified=0", f"{merge_base}..HEAD"))
+            merge_base = self._merge_base(base_branch)
+            return str(self._run_diff(merge_base))
         except GitCommandError:
             return ""
 
@@ -232,6 +258,24 @@ def _parse_content_line(
     return (None, None, None)
 
 
+def _path_from_diff_header(line: str) -> str | None:
+    """Extract the path from ``diff --git a/<path> b/<path>``.
+
+    The diff is generated with --no-renames and fixed a/ b/ prefixes, so both
+    sides carry the identical path; splitting by length (not on ' b/') keeps
+    paths containing spaces or ' b/' intact.
+    """
+    rest = line[len("diff --git ") :]
+    length = len(rest) - 5
+    if length > 0 and length % 2 == 0:
+        path = length // 2
+        if rest.startswith("a/") and rest[2 + path : 5 + path] == " b/" and rest[2 : 2 + path] == rest[path + 5 :]:
+            return rest[path + 5 :]
+    # Fallback (e.g. rename headers): anchor on the last ' b/'.
+    match = re.search(r" b/(.+)$", rest)
+    return match.group(1) if match else None
+
+
 def _parse_diff_line(
     line: str,
     current_file: str | None,
@@ -247,10 +291,7 @@ def _parse_diff_line(
         None in any position means no change to that field.
     """
     if line.startswith("diff --git "):
-        # Format is: diff --git a/<path> b/<path>
-        # Using a regex with the anchored b/ prefix avoids breaking on filenames with spaces.
-        match = re.search(r" b/(.+)$", line)
-        return (match.group(1) if match else None, None, None)
+        return (_path_from_diff_header(line), None, None)
 
     if current_file is None or line.startswith(_DIFF_HEADER_PREFIXES):
         return (None, None, None)

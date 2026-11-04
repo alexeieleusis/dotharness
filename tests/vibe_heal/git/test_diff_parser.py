@@ -233,7 +233,15 @@ class TestParseChangedLines:
         parser.get_changed_lines("origin/main")
 
         mock_repo.git.merge_base.assert_called_once_with("origin/main", "HEAD")
-        mock_repo.git.diff.assert_called_once_with("--no-color", "--unified=0", "abc123sha..HEAD")
+        mock_repo.git.diff.assert_called_once_with(
+            "--no-color",
+            "--no-ext-diff",
+            "--no-renames",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "--unified=0",
+            "abc123sha..HEAD",
+        )
 
     def test_custom_base_branch(self, parser: DiffParser, mock_repo: MagicMock) -> None:
         """Test with custom base branch."""
@@ -243,7 +251,15 @@ class TestParseChangedLines:
         parser.get_changed_lines("develop")
 
         mock_repo.git.merge_base.assert_called_once_with("develop", "HEAD")
-        mock_repo.git.diff.assert_called_once_with("--no-color", "--unified=0", "deadbeef..HEAD")
+        mock_repo.git.diff.assert_called_once_with(
+            "--no-color",
+            "--no-ext-diff",
+            "--no-renames",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "--unified=0",
+            "deadbeef..HEAD",
+        )
 
     def test_git_command_error(self, parser: DiffParser, mock_repo: MagicMock) -> None:
         """Test error handling when git diff fails."""
@@ -386,3 +402,38 @@ class TestGetDiffLines:
         diff = parser.get_diff_lines("origin/main")
 
         assert changed == diff.new_lines
+
+
+class TestDiffParserGitConfigIndependence:
+    """Real-repo tests: parsing must not depend on user git config."""
+
+    @staticmethod
+    def _repo_with_change(tmp_path: Path, name: str) -> Path:
+        repo = Repo.init(tmp_path, initial_branch="main")
+        repo.git.config("user.email", "t@example.com")
+        repo.git.config("user.name", "t")
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("a\nb\n")
+        repo.git.add("-A")
+        repo.git.commit("-m", "base")
+        target.write_text("a\nB\n")
+        repo.git.add("-A")
+        repo.git.commit("-m", "change")
+        return tmp_path
+
+    def test_diff_noprefix_config(self, tmp_path: Path) -> None:
+        self._repo_with_change(tmp_path, "foo.py")
+        Repo(tmp_path).git.config("diff.noprefix", "true")
+        changed = DiffParser(tmp_path).get_changed_lines("HEAD~1")
+        assert 2 in changed["foo.py"]
+
+    def test_mnemonic_prefix_config(self, tmp_path: Path) -> None:
+        self._repo_with_change(tmp_path, "foo.py")
+        Repo(tmp_path).git.config("diff.mnemonicPrefix", "true")
+        assert 2 in DiffParser(tmp_path).get_changed_lines("HEAD~1")["foo.py"]
+
+    def test_space_and_non_ascii_path(self, tmp_path: Path) -> None:
+        name = "docs/a b/caf\u00e9.py"
+        self._repo_with_change(tmp_path, name)
+        assert 2 in DiffParser(tmp_path).get_changed_lines("HEAD~1")[name]
