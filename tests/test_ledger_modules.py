@@ -54,11 +54,25 @@ def test_ledger_rows_match_script() -> None:
         pytest.skip(message)
     modules = ledger_modules.list_modules(ROOT, VIBE_HEAL)
     ledger = (ROOT / "docs" / "migration-ledger.md").read_text()
-    rows = re.findall(r"^\| `[^`]+` \| .*$", ledger, flags=re.MULTILINE)
-    assert len(rows) == len(modules)
+    ledger = ledger.split("\n## Rows\n", 1)[1]
+    # Row format: | module | origin tool | origin path | status | shared module | issue |
+    row_re = re.compile(r"^\| `([^`]+)` \|(.*)\|\s*$", flags=re.MULTILINE)
     allowed = {"not migrated", "migrated", "dropped"}
-    # Row splits to ["", module, origin tool, origin path, status, ...].
-    statuses = [row.split("|")[4].strip() for row in rows]
-    assert all(status in allowed for status in statuses), statuses
-    for module in modules:
-        assert f"| `{module.path}` |" in ledger
+    ledger_rows: dict[str, tuple[str, str, str]] = {}
+    duplicates: list[str] = []
+    for match in row_re.finditer(ledger):
+        cells = [c.strip() for c in match.group(2).split("|")]
+        assert len(cells) == 5, match.group(0)
+        tool, origin_path, status = cells[0], cells[1].strip("`"), cells[2]
+        assert status in allowed, (origin_path, status)
+        if origin_path in ledger_rows:
+            duplicates.append(origin_path)
+        ledger_rows[origin_path] = (match.group(1), tool, status)
+    assert not duplicates, duplicates
+    expected = {m.path: (m.name, m.tool) for m in modules}
+    assert ledger_rows.keys() == expected.keys(), (
+        sorted(expected.keys() - ledger_rows.keys()),
+        sorted(ledger_rows.keys() - expected.keys()),
+    )
+    for origin_path, (name, tool) in expected.items():
+        assert ledger_rows[origin_path][:2] == (name, tool), origin_path
