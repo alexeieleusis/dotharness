@@ -79,7 +79,7 @@ def test_list_modules_init_empty_and_non_empty(tmp_path: Path, monkeypatch: pyte
         target.write_text(content)
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "init")
-    commit = subprocess.run(
+    commit = subprocess.run(  # noqa: S603
         ["git", "-C", str(repo), "rev-parse", "HEAD"],  # noqa: S607
         check=True,
         capture_output=True,
