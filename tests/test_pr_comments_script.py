@@ -11,6 +11,8 @@ SCRIPT = Path(__file__).parent.parent / "src" / "dotharness" / "scripts" / "pr-c
 
 def _load():
     spec = importlib.util.spec_from_file_location("pr_comments_script", SCRIPT)
+    assert spec is not None
+    assert spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

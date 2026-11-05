@@ -6,7 +6,7 @@ import re
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -384,7 +384,7 @@ def add_reviewer(pr_number: int, repo: str, login: str, env: dict) -> None:
 
 
 @contextmanager
-def preserve_reviewer_request(pr_number: int, repo: str, login: str, env: dict) -> Iterator[None]:
+def preserve_reviewer_request(pr_number: int, repo: str, login: str, env: dict) -> Generator[None]:
     """Wrap a PR-processing block that might submit a GitHub review as a side effect
     (e.g. replying to comments via the backend, or vibe_heal posting a static-analysis
     review), re-adding `login` as a requested reviewer afterward if it held that status

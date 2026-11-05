@@ -803,13 +803,14 @@ def _check_gql_unresolved_threads(pr_number: int, repo: str, env: dict) -> tuple
             data = json.loads(gql_result.stdout) or {}
             repository = (data.get("data") or {}).get("repository") or {}
             threads_page = (repository.get("pullRequest") or {}).get("reviewThreads")
-            if threads_page is None:
-                raise ValueError("missing reviewThreads in GraphQL response")
-            nodes = threads_page.get("nodes") or []
+            nodes = (threads_page or {}).get("nodes") or []
             page_unresolved = sum(1 for t in nodes if not t.get("isResolved", False))
-            page_info = threads_page.get("pageInfo") or {}
+            page_info = (threads_page or {}).get("pageInfo") or {}
         except (ValueError, AttributeError, KeyError, TypeError):
             logger.warning("PR #%d: malformed GraphQL review threads response", pr_number, exc_info=True)
+            return total_threads, total_unresolved, False
+        if threads_page is None:
+            logger.warning("PR #%d: missing reviewThreads in GraphQL response", pr_number)
             return total_threads, total_unresolved, False
         total_threads += len(nodes)
         total_unresolved += page_unresolved

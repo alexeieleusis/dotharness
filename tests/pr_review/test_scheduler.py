@@ -327,9 +327,7 @@ class TestUninstallCron:
 
     def test_orphaned_marker_keeps_unrelated_comment_line(self):
         crontab = (
-            "0 3 * * * /usr/bin/backup\n"
-            "# my own note\n"
-            "# harness: review-prs acme-frontend 7200 /c/.harness.toml\n"
+            "0 3 * * * /usr/bin/backup\n# my own note\n# harness: review-prs acme-frontend 7200 /c/.harness.toml\n"
         )
         captured = {}
 

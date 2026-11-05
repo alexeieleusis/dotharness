@@ -24,7 +24,14 @@ _URL = (
 
 
 def test_matches_inline_comment_with_knowledge_url():
-    comments = [{"type": "inline", "author": _USER, "body": f"Flatten into a single union instead. See: {_URL} {_MARK}", "replies": []}]
+    comments = [
+        {
+            "type": "inline",
+            "author": _USER,
+            "body": f"Flatten into a single union instead. See: {_URL} {_MARK}",
+            "replies": [],
+        }
+    ]
     result = _matching_comments(comments, _USER)
     assert len(result) == 1
     _comment, commit, path = result[0]
