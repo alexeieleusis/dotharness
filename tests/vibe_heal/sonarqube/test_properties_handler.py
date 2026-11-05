@@ -1,6 +1,7 @@
 """Tests for SonarPropertiesHandler."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -536,11 +537,11 @@ class TestRestoreFailureLogging:
         real_write_text = Path.write_text
         calls = {"n": 0}
 
-        def flaky_write_text(self: Path, *args: object, **kwargs: object) -> int:
+        def flaky_write_text(self: Path, *args: Any, **kwargs: Any) -> int:
             calls["n"] += 1
             if calls["n"] == 2:  # first write patches, second is the restore
                 raise OSError("disk full")  # noqa: TRY003
-            return real_write_text(self, *args, **kwargs)  # type: ignore[arg-type]
+            return real_write_text(self, *args, **kwargs)
 
         monkeypatch.setattr(Path, "write_text", flaky_write_text)
         with caplog.at_level("ERROR"), handler.patched("temp-key", "Temp Name"):

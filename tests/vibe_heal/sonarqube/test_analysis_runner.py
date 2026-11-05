@@ -264,6 +264,7 @@ INFO: Analysis total time: 10.234 s
         assert result.retryable is False
         assert "did not complete" in (result.error_message or "")
         mock_run.assert_awaited_once()
+        assert mock_run.await_args is not None
         assert mock_run.await_args.kwargs["timeout"] == 0.05
 
     @pytest.mark.asyncio

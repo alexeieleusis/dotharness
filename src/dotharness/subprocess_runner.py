@@ -39,6 +39,7 @@ import signal
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 KILL_GRACE_SECONDS = 5.0
 DRAIN_SECONDS = 2.0  # bounded wait for pipe readers after the child exited
@@ -102,7 +103,7 @@ async def _wait_exit(proc: asyncio.subprocess.Process) -> None:
         await asyncio.sleep(0.01)
 
 
-async def _cancel_pending(*futs: "asyncio.Future[object]") -> None:
+async def _cancel_pending(*futs: "asyncio.Future[Any]") -> None:
     for fut in futs:
         if not fut.done():
             fut.cancel()

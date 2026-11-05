@@ -53,7 +53,7 @@ def _is_safe_url(url: str) -> bool:
     if not infos:
         return False
     try:
-        return not any(_is_blocked_address(ipaddress.ip_address(info[4][0].split("%")[0])) for info in infos)
+        return not any(_is_blocked_address(ipaddress.ip_address(str(info[4][0]).split("%")[0])) for info in infos)
     except ValueError:
         return False
 
