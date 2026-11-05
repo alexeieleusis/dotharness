@@ -182,7 +182,7 @@ class ProjectManager:
             SonarQubeAPIError: If a search or analyses-count request fails
         """
         if older_than_minutes < 1:
-            raise ValueError("older_than_minutes must be at least 1")
+            raise ValueError("older_than_minutes must be at least 1")  # noqa: TRY003
 
         pattern = re.compile(rf"^{re.escape(base_key)}_.+_({self._TIMESTAMP_PATTERN})$")
         name_prefix = f"{base_key} "
