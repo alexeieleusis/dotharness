@@ -77,7 +77,7 @@ class TestSonarQubeIssue:
 
     @pytest.mark.parametrize(
         "status",
-        ["RESOLVED", "CLOSED", "WONTFIX", "FALSE-POSITIVE"],
+        ["RESOLVED", "CLOSED", "WONTFIX", "FALSE-POSITIVE", "FALSE_POSITIVE", "FIXED", "ACCEPTED"],
     )
     def test_is_fixable_with_resolved_status(self, status: str) -> None:
         """Test is_fixable returns False for resolved issues."""
@@ -90,6 +90,20 @@ class TestSonarQubeIssue:
             line=10,
             status=status,
             type="CODE_SMELL",
+        )
+
+        assert issue.is_fixable is False
+
+    @pytest.mark.parametrize("status", ["FALSE_POSITIVE", "FIXED", "ACCEPTED"])
+    def test_is_fixable_with_new_api_issue_status(self, status: str) -> None:
+        """Test is_fixable returns False for new-API issueStatus values."""
+        issue = SonarQubeIssue(
+            key="k",
+            rule="r",
+            message="m",
+            component="c",
+            line=3,
+            issueStatus=status,
         )
 
         assert issue.is_fixable is False

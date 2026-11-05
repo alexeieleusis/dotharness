@@ -77,14 +77,16 @@ class SonarQubeIssue(BaseModel):
         if self.line is None:
             return False
         # Don't auto-fix resolved/accepted issues
-        status_upper = (self.status or "").upper()
-        return status_upper not in [
+        # Normalise hyphens so old ("FALSE-POSITIVE") and new ("FALSE_POSITIVE") formats match
+        status_upper = (self.status or "").upper().replace("-", "_")
+        return status_upper not in {
             "RESOLVED",
             "CLOSED",
             "WONTFIX",
-            "FALSE-POSITIVE",
+            "FALSE_POSITIVE",
             "ACCEPTED",
-        ]
+            "FIXED",
+        }
 
 
 class DescriptionSection(BaseModel):
