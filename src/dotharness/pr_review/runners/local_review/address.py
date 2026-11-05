@@ -218,13 +218,14 @@ def _resolution_decision(path: Path) -> str | None:
     return None
 
 
-def _make_backend(config: HarnessConfig) -> Backend:
+def _make_backend(config: HarnessConfig, max_retries: int = 1) -> Backend:
     return Backend(
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
         dict(config.harness.env),
         expected_repo_name=config.repo.name if config.repo.name_provided else None,
+        max_retries=max_retries,
     )
 
 
@@ -380,7 +381,8 @@ def _build_address_context(
         target=target,
         wdir=wdir,
         env=env,
-        backend=backend or _make_backend(config),
+        # the backend edits and commits, so a retry is not idempotent; the loop handles failures itself
+        backend=backend or _make_backend(config, max_retries=0),
         instructions=(Path(config.harness.knowledge_dir) / "pr-review" / ADDRESS_TEMPLATE).read_text(encoding="utf-8"),
         vibe=get_vibe_heal_context(config.repo.subdirs, str(wdir), target.branch) or None,
         review_head=review_head,

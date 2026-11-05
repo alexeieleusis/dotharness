@@ -879,3 +879,11 @@ def test_full_command_without_remotes_or_gh(
     assert git_calls
     assert not [c for c in git_calls if forbidden & set(c)]
     assert git(env.repo, "remote") == ""
+
+
+def test_address_backend_is_built_without_retries(env: Env) -> None:
+    """The address backend edits and commits, so a retry after a non-zero exit is not idempotent."""
+    rdir = env.write_review(files={"a.py": stamped(block("one"))})
+    ctx = lr_address._build_address_context(env.cfg, env.target, rdir, None)
+    assert ctx.backend.max_retries == 0
+    assert lr_address._make_backend(env.cfg).max_retries == 1  # read-only review pass keeps the default
