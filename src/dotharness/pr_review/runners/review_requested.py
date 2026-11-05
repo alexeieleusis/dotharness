@@ -240,8 +240,13 @@ def _process_pr(
             # re-diff every changed file for each pass.
             ctx = _gather_pr_context(pr, config, wdir, env)
             if run_files_summary:
-                _run_file_reviews(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, ctx)
-                _run_summary_review(pr, config, knowledge_dir, extra_knowledge, backend, wdir, ctx)
+                # Only post the summary when every file review succeeded: the summary comment
+                # is what _should_skip_pr treats as "done", so posting it after a partial
+                # failure would permanently suppress the retry of the failed files.
+                if _run_file_reviews(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, ctx):
+                    _run_summary_review(pr, config, knowledge_dir, extra_knowledge, backend, wdir, ctx)
+                else:
+                    logger.warning("PR #%d: file review(s) failed, skipping summary so the next run retries", pr_number)
             # Independent of the correctness pipeline by design: this pass's own fate
             # (and its own noop-if-already-posted check inside _run_design_review) is
             # decoupled from files/summary's, so neither one's retry forces the other's.

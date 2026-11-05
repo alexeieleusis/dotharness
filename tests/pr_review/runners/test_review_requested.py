@@ -593,3 +593,25 @@ def test_fatal_git_error_stops_loop_and_restores(tmp_xdg, tmp_path):
         review_requested._run_locked(cfg, pr_url=None)
     assert mocks.fetch_checkout.call_count == 1
     mocks.restore.assert_called_once()
+
+
+def test_process_pr_skips_summary_when_file_reviews_fail(tmp_path):
+    """A failed file review must not be followed by the summary: the summary comment marks
+    the PR "done" in _should_skip_pr, which would permanently suppress the retry."""
+    mod = "dotharness.pr_review.runners.review_requested"
+    pr = {"number": 7, "headRefName": "feat"}
+    with (
+        patch(f"{mod}.git_detach_and_record", return_value="sha"),
+        patch(f"{mod}.git_restore"),
+        patch(f"{mod}.git_fetch_and_checkout"),
+        patch(f"{mod}.preserve_reviewer_request", return_value=contextlib.nullcontext()),
+        patch(f"{mod}._gather_pr_context", return_value={}),
+        patch(f"{mod}._run_file_reviews", return_value=False),
+        patch(f"{mod}._run_summary_review") as summary,
+        patch(f"{mod}._run_design_review"),
+        patch(f"{mod}._run_traceability_review"),
+    ):
+        review_requested._process_pr(
+            pr, _cfg(tmp_path), tmp_path, None, MagicMock(), str(tmp_path), {}, "me", True, True, True, True
+        )
+    summary.assert_not_called()
