@@ -1,0 +1,86 @@
+# Commands
+
+Each command below is a subcommand of `pr_review run`. Each command loads a
+[`.harness.toml`](../configuration.md) config file (`./.harness.toml` by default, or
+the path passed to `--config`) before doing anything else.
+
+The CLI name `pr_review` and the config file names (`.harness*.toml`, `.sisyphus*.toml`, `.env*`) differ on purpose:
+the command was renamed when the tool moved into dotharness, while existing config files keep their names.
+
+```
+pr_review run [--config PATH] [--verbose] <command> [command options]
+```
+
+| Command | Scope | Purpose |
+|---|---|---|
+| [`review-prs`](review-prs.md) | Every open, non-draft PR in the repo | Sweep all open PRs and post `vibe_heal`/SonarQube-style static-analysis feedback. It tracks progress with a persisted watermark. |
+| [`focused-review`](focused-review.md) | Open PRs (drafts included) where the current `gh` user is author, assignee, or requested reviewer | Expand SonarQube comments into a detailed refactor description, citing a `jpablo/vibe-types` knowledge file. Post the description as a reply. If the finding is judged a false positive, post a reply saying so, then resolve the review thread and minimise the comment. |
+| [`review-requested`](review-requested.md) | PRs where review was explicitly requested from the `gh` account | Have the configured AI backend produce inline + summary code review comments. The command reacts to GitHub review-request state, not a schedule. |
+| [`self-review`](self-review.md) | Your own open PRs (`--author @me`) | Get an automated first-pass AI review of your own PRs before asking a human. |
+| [`address-comments`](address-comments.md) | Open PRs (drafts included) you authored or are assigned to, with pending reviewer feedback | Have the AI backend read unresolved review comments, make the smallest fix (or reply), commit, and push. |
+| [`auto-approve`](auto-approve.md) | PRs where review was explicitly requested from the `gh` account, once the PR author has answered the reviewer | Mark small files viewed and approve small PRs. Off by default (`[auto_approve].enabled`). The one command allowed to conclude a review. |
+| [`ci-fix`](ci-fix.md) | Your own open, non-draft PRs (`--author @me`) with a failing required check | Reproduce the failing check locally, have the AI backend make the smallest fix, and push it to the PR's own branch. Off by default (`[ci_fix].enabled`). Takes `--dry-run` and `--pr N`. |
+| [`merge`](merge.md) | Your own open PRs (`--author @me`) | Squash-merge a PR only when every merge condition holds. Never approves. Off by default (`[merge].enabled`). Takes `--dry-run` and `--pr N`. |
+| [`local-review`](local-review.md) | The branch checked out in `repo.working_dir`, compared with its base ref | Review a local branch before you push, and write findings to Markdown files. With `--address`, the backend also fixes the open findings and commits the fixes on your branch (never pushed). No GitHub access. `pr_review run all` does not include `local-review`. |
+
+There is also an optional `regret-review` pass. It is enabled via the [`[regret_review]`](../configuration.md#regret_review) config section. It re-checks old, ignored review comments on the PRs that `self-review` and `review-requested` already cover.
+
+There's also a convenience command that runs eight commands in sequence:
+
+```
+pr_review run [--config PATH] [--verbose] all
+```
+
+`all` runs the commands in this order: `review-prs`, `focused-review`,
+`self-review`, `review-requested`, `address-comments`, `auto-approve`, `ci-fix`, `merge`. `ci-fix` and `merge` do nothing unless enabled in their config sections. `pr_review run all` does not include `local-review`. If one command fails, `all`
+continues to the next. If any command fails, `all` exits non-zero.
+
+## Argument order for `--config`
+
+`--config` belongs to the `run` group, so it goes before the command name. Two forms are in play:
+
+- cron form: `<bin> run --config <cfg> <command>`. This is the working form, and `schedule install` writes it for both
+  `cron` and `launchd` entries (`<bin>` is the `pr_review` executable).
+- launchd form: `<bin> run <command> --config <cfg>`. The old harness launchd plists used this order. It fails
+  today (D-8): the command does not accept `--config` after the command name.
+
+Observed by the typer CLI test (`tests/pr_review/test_scheduler.py`,
+`test_run_config_then_runner_works_and_runner_then_config_is_usage_error`): `pr_review run review-prs --config <cfg>`
+exits with code 2 and prints `Error: No such option: --config`, while `pr_review run --config <cfg> review-prs`
+parses. Entries installed by the old `harness` binary (crontab lines or launchd plists using the old binary name or the
+launchd order) must be reinstalled with `pr_review schedule install`.
+
+## Shared behavior
+
+- **Locking.**
+  - Every command acquires a non-blocking file lock before doing any work.
+  - The lock key is the resolved `repo.working_dir` path, not `repo.name` or `repo_slug`.
+  - All commands share the lock, not just same-command invocations. Since the commands mutate the same `repo.working_dir` checkout, a second concurrent invocation against the same working directory exits immediately. It does not queue or race the first invocation.
+  - Two configs that point at the same checkout share a lock even if their `repo.name` differs. Two configs with the same `repo.name` but separate `working_dir` clones (e.g. a second clone dedicated to a cheaper backend) get independent locks. They can run concurrently.
+- **Logging.** Logs always go to `~/.local/share/dotharness/logs/<command>/<date>.log`.
+  `--verbose` additionally enables DEBUG-level logging and mirrors it to stdout.
+- **Working directory mutation.** Commands that talk to an AI backend or `vibe_heal`
+  check out PR branches directly inside `repo.working_dir`. Each checkout runs
+  `git checkout -B <branch> origin/<branch>`, which unconditionally repoints the local
+  branch to its remote tracking branch and discards any local-only commits. The
+  command restores the original detached HEAD commit afterward. Don't point
+  `working_dir` at a checkout with uncommitted work.
+- **`gh` account state.** Several commands rely on `gh`'s currently active authenticated
+  account (for `--author @me`, `--assignee @me`, `user-review-requested:@me`, and posting as "you"). If you
+  juggle multiple `gh` accounts, the active one is global machine state, not scoped to
+  a particular `.harness.toml`.
+
+## Related commands
+
+- `pr_review init [DIRECTORY]` — scaffold a starting `.harness.toml`.
+- `pr_review validate [DIRECTORY] [--config PATH]` — sanity-check a config file.
+- `pr_review state reset <command> [--config PATH] [--yes]` — clear persisted state for
+  `review-prs` or `self-review` (see each command's own "State and idempotency" section),
+  or delete the review output of `local-review` (see [`local-review`](local-review.md#re-runs)).
+- `pr_review schedule install <command> --every <duration> [--config PATH] [--scheduler cron|launchd]` —
+  install a recurring `cron`/`launchd` schedule for a command.
+- `pr_review schedule uninstall <command> [--config PATH] [--scheduler cron|launchd]` — remove one.
+- `pr_review schedule list` — list installed schedules.
+
+See [Configuration](../configuration.md) for the full `.harness.toml` schema referenced
+throughout these pages.
