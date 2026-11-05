@@ -241,7 +241,7 @@ def _process_pr(
             ctx = _gather_pr_context(pr, config, wdir, env)
             if run_files_summary:
                 _run_file_reviews(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, ctx)
-                _run_summary_review(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, ctx)
+                _run_summary_review(pr, config, knowledge_dir, extra_knowledge, backend, wdir, ctx)
             # Independent of the correctness pipeline by design: this pass's own fate
             # (and its own noop-if-already-posted check inside _run_design_review) is
             # decoupled from files/summary's, so neither one's retry forces the other's.
@@ -609,7 +609,6 @@ def _run_summary_review(
     extra_knowledge: str | None,
     backend: Backend,
     wdir: str,
-    env: dict,
     ctx: dict,
 ) -> bool:
     pr_number = pr["number"]
