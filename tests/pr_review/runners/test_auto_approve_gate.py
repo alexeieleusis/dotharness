@@ -1,4 +1,5 @@
 import json
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -46,7 +47,7 @@ def commits_json(date, login=AUTHOR):
     return json.dumps({"commits": [{"committedDate": date, "authors": [{"login": login}]}]}).encode()
 
 
-def run(issues, review_comments, reviews, commits=None):
+def run(issues, review_comments, reviews, commits=None, author=AUTHOR):
     """commits: bytes stdout, or None for a failed read."""
     pages = {"issues": issues, "pulls": review_comments, "reviews": reviews}
 
@@ -62,11 +63,13 @@ def run(issues, review_comments, reviews, commits=None):
         patch("dotharness.pr_review.runners.auto_approve_github.fetch_all_pages", side_effect=fake_pages),
         patch("dotharness.pr_review.runners.auto_approve_github.run_cmd", return_value=proc) as mock_cmd,
     ):
-        result = check_timing_gate("o/r", 7, AUTHOR, ME, {})
-    assert all("--method" not in c.args[0] or "GET" in c.args[0] for c in mock_cmd.call_args_list)
+        result = check_timing_gate("o/r", 7, author, ME, {})
+    for c in mock_cmd.call_args_list:
+        assert c.args[0] == COMMITS_ARGV
     return result
 
 
+COMMITS_ARGV = ["gh", "pr", "view", "7", "--repo", "o/r", "--json", "commits"]
 EMPTY_COMMITS = commits_json(EARLIER)
 
 
@@ -99,14 +102,12 @@ def test_design_and_traceability_inline_comments_are_findings(marker):
     assert r.reason == "no author activity after T"
 
 
-def test_author_activity_after_design_inline_comment_passes():
-    r = run(
-        all_three(),
-        [issue(f"finding {DESIGN_REVIEW_MARKER}", ts=T)],
-        [],
-        EMPTY_COMMITS,
-    )
+def test_design_inline_comment_without_author_activity_not_passed():
+    r = run(all_three(), [issue(f"finding {DESIGN_REVIEW_MARKER}", ts=T)], [], EMPTY_COMMITS)
     assert r.status is GateStatus.NOT_PASSED
+
+
+def test_author_activity_after_design_inline_comment_passes():
     r = run(
         [*all_three(), issue("reply", AUTHOR, ts=LATER)],
         [issue(f"finding {DESIGN_REVIEW_MARKER}", ts=T)],
@@ -198,3 +199,59 @@ def test_unknown_acting_account_is_read_failed():
     with patch("dotharness.pr_review.runners.auto_approve_github.fetch_all_pages") as mock_pages:
         assert check_timing_gate("o/r", 7, AUTHOR, "", {}).status is GateStatus.READ_FAILED
     mock_pages.assert_not_called()
+
+
+@pytest.mark.parametrize("bad_ts", [None, "not-a-date"])
+@pytest.mark.parametrize("make", [summary, design, trace])
+def test_issue_comment_bad_created_at_is_read_failed(make, bad_ts):
+    items = [make(ts=bad_ts), *[c for c in all_three() if c["body"] != make()["body"]]]
+    assert run(items, [], [], EMPTY_COMMITS).status is GateStatus.READ_FAILED
+
+
+@pytest.mark.parametrize("bad_ts", [None, "not-a-date"])
+def test_inline_comment_bad_created_at_is_read_failed(bad_ts):
+    assert run(all_three(), [inline(ts=bad_ts)], [], EMPTY_COMMITS).status is GateStatus.READ_FAILED
+
+
+@pytest.mark.parametrize("stdout", [b"not json", b"[]", b'{"commits": null}', b'{"commits": {}}', b"{}"])
+def test_unusable_commits_output_is_read_failed(stdout):
+    assert run(all_three(), [inline()], [], stdout).status is GateStatus.READ_FAILED
+
+
+@pytest.mark.parametrize("exc", [subprocess.TimeoutExpired("gh", 1), OSError("boom"), ValueError("bad")])
+@pytest.mark.parametrize("target", ["fetch_all_pages", "run_cmd"])
+def test_raised_read_error_is_read_failed(target, exc):
+    def fake_pages(path, env):
+        return all_three() if "/issues/" in path else [inline()] if path.endswith("/comments") else []
+
+    with (
+        patch("dotharness.pr_review.runners.auto_approve_github.fetch_all_pages", side_effect=fake_pages),
+        patch("dotharness.pr_review.runners.auto_approve_github.run_cmd", return_value=MagicMock()),
+        patch(f"dotharness.pr_review.runners.auto_approve_github.{target}", side_effect=exc),
+    ):
+        r = check_timing_gate("o/r", 7, AUTHOR, ME, {})
+    assert r.status is GateStatus.READ_FAILED
+
+
+def test_author_login_matched_case_insensitively():
+    items = [*all_three(), issue("ok", "Alice", ts=LATER)]
+    assert run(items, [inline()], [], EMPTY_COMMITS).status is GateStatus.PASSED
+    assert run(all_three(), [inline()], [], commits_json(LATER, "Alice")).status is GateStatus.PASSED
+
+
+def test_acting_login_matched_case_insensitively():
+    # Mixed-case acting-account comments still count as the tool's own review comments...
+    own = [issue(c["body"], "Reviewer", ts=T) for c in all_three()]
+    assert run(own, [inline(login="Reviewer")], [], EMPTY_COMMITS).status is GateStatus.NOT_PASSED
+    # ...and its later activity is not author activity even when it is also the PR author.
+    later = issue("me", "Reviewer", ts=LATER)
+    assert run([*own, later], [inline(login="Reviewer")], [], EMPTY_COMMITS, author="reviewer").status is (
+        GateStatus.NOT_PASSED
+    )
+
+
+def test_items_with_null_user_do_not_raise():
+    ghost = {"body": "hi", "created_at": LATER, "user": None}
+    review = {"submitted_at": LATER, "state": "COMMENTED", "user": None}
+    r = run([*all_three(), ghost], [inline(), dict(ghost)], [review], EMPTY_COMMITS)
+    assert r.status is GateStatus.NOT_PASSED
