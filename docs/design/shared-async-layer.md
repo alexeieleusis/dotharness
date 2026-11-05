@@ -273,7 +273,7 @@ beyond `_HARNESS_REPO_ROOT`, plus test-only lookups.
 | File (old) | Expression | Locates | Disposition |
 | --- | --- | --- | --- |
 | `harness/backend.py:43` | `_HARNESS_REPO_ROOT = discover_repo_root(Path(__file__).resolve().parent)` | the checkout to watch with the harness-HEAD guard | Replace: removed with the Phase 05 adapter; root now comes from `find_harness_checkout()` / `harness_repo_root` (D-1) |
-| `harness/runners/common.py:52` | `PR_COMMENTS_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "pr-comments.py"` | `tools/pr-review/scripts/pr-comments.py`, run as `python3 <script> fetch --pr N` | Replace with a packaged resource or config. NOT done in this phase (see below): in the new tree the expression resolves to a non-existent `src/dotharness/scripts/pr-comments.py` |
+| `harness/runners/common.py:52` | `PR_COMMENTS_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "pr-comments.py"` | `tools/pr-review/scripts/pr-comments.py`, run as `python3 <script> fetch --pr N` | Replace with a packaged resource or config. Resolved in phase 07: `pr-comments.py` is packaged as package data at `src/dotharness/scripts/pr-comments.py`, which is where the expression resolves (see below) |
 | `tests/runners/test_focused_review.py:220` | `Path(focused_review.__file__).read_text()` | module source, for a static source guard | Keep (module-relative by design; works installed from source) |
 | `tests/runners/test_focused_review.py:720` | `Path(__file__).resolve().parents[4] / "knowledge" / "pr-review" / "focused-review.md"` | repo-root `knowledge/` template | Keep, depth adjusted to `parents[3]` (phase 01); the root `knowledge` is a symlink to the package |
 | `tests/runners/test_local_review.py:40` | `Path(__file__).resolve().parents[4] / "knowledge" / "pr-review"` | repo-root `knowledge/` | Keep, `parents[3]` (phase 01) |
@@ -284,11 +284,11 @@ beyond `_HARNESS_REPO_ROOT`, plus test-only lookups.
 Not a `Path(__file__)` lookup but listed for completeness: `src/dotharness/repo_guard.py:108` (shared layer, new tree) uses
 `Path(__file__).resolve().parent` as the discovery fallback in `snapshot_harness_repo`; pr-review avoids it (D-1).
 
-`PR_COMMENTS_SCRIPT_PATH` follow-up: the script is kept as a historical file under `docs/pr_review/` by the docs phase
-and is not packaged, so `address-comments`, `focused-review` and `regret-review` (the three users) cannot find it
-installed. The fix (ship `pr-comments.py` as package data under `src/dotharness/` and resolve it with
-`importlib.resources`, or add a config key) touches `runners/common.py`, which is outside this phase's Scope; it is
-raised as an open question.
+`PR_COMMENTS_SCRIPT_PATH` follow-up: resolved in phase 07 (commit 31843c4). `pr-comments.py` ships as package data at
+`src/dotharness/scripts/pr-comments.py` (hatch `packages = ["src/dotharness"]` includes it in the wheel; a wheel build lists
+`dotharness/scripts/pr-comments.py`), and the `Path(__file__)` expression in `runners/common.py` resolves to it, so
+`address-comments`, `focused-review` and `regret-review` find it when installed.
+`tests/test_package_data.py::test_pr_comments_script_is_package_data_and_matches_runner_path` pins this.
 
 ### Knowledge and vendor defaults (D-7, D-10)
 

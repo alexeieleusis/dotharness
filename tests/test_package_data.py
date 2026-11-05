@@ -84,3 +84,11 @@ def test_importlib_resources_resolves_knowledge_and_skills() -> None:
     assert (pkg / "skills").is_dir()
     assert (pkg / "knowledge" / "sisyphus" / "orchestration-prompt.md").is_file()
     assert (pkg / "skills" / "asd-ste100" / "SKILL.md").is_file()
+
+
+def test_pr_comments_script_is_package_data_and_matches_runner_path():
+    from dotharness.pr_review.runners.common import PR_COMMENTS_SCRIPT_PATH
+
+    packaged = PACKAGE_DIR / "scripts" / "pr-comments.py"
+    assert packaged.is_file()
+    assert PR_COMMENTS_SCRIPT_PATH.resolve() == packaged.resolve()
