@@ -11,6 +11,8 @@ from dotharness.vibe_heal.ai_tools.models import FixResult
 if TYPE_CHECKING:
     from dotharness.vibe_heal.sonarqube.models import SonarQubeIssue, SonarQubeRule, SourceLine
 
+_CLI_NOT_FOUND_MESSAGE = "OpenCode CLI not found. Please install OpenCode first."
+
 
 class OpenCodeTool(AITool):
     """OpenCode AI tool implementation."""
@@ -64,7 +66,7 @@ class OpenCodeTool(AITool):
         if not self.is_available():
             return FixResult(
                 success=False,
-                error_message="OpenCode CLI not found. Please install OpenCode first.",
+                error_message=_CLI_NOT_FOUND_MESSAGE,
             )
 
         if not Path(file_path).exists():
@@ -102,7 +104,7 @@ class OpenCodeTool(AITool):
         if not self.is_available():
             return FixResult(
                 success=False,
-                error_message="OpenCode CLI not found. Please install OpenCode first.",
+                error_message=_CLI_NOT_FOUND_MESSAGE,
             )
 
         if not Path(file_path).exists():
@@ -151,7 +153,7 @@ class OpenCodeTool(AITool):
         if result.not_found:
             return FixResult(
                 success=False,
-                error_message="OpenCode CLI not found. Please install OpenCode first.",
+                error_message=_CLI_NOT_FOUND_MESSAGE,
             )
         if result.returncode == 0:
             return FixResult(
