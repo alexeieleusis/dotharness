@@ -15,6 +15,9 @@ Result and error convention:
 * ``ValueError``: unknown backend name. ``TypeError``: ``backend_options`` of the other backend's type.
 * ``OpencodePluginError``, ``BackendCwdDivergedError`` and ``RepoIdentityError`` are raised by the optional guards.
 
+The repo and harness guards live in ``repo_guard``, the opencode plugin check and cwd monitor in
+``opencode_guards``; ``launch`` composes them.
+
 Neither argv nor env is ever logged, put in an exception message or kept in a result.
 """
 
@@ -23,7 +26,6 @@ import contextlib
 import functools
 import logging
 import os
-import signal
 import tempfile
 import time
 from collections.abc import Callable, Coroutine, Mapping, Sequence
@@ -31,6 +33,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, ParamSpec, TypeVar
 
+from dotharness.opencode_guards import (
+    BackendCwdDivergedError,
+    MonitorState,
+    assert_no_opencode_plugins,
+    watch_cwd,
+)
+from dotharness.repo_guard import (
+    RepoIdentityError,
+    assert_harness_unchanged,
+    assert_repo_identity,
+    snapshot_harness_repo,
+)
 from dotharness.subprocess_runner import RunResult, run
 
 logger = logging.getLogger(__name__)
@@ -46,25 +60,7 @@ TMP_DIR = Path.home() / ".local/share/dotharness/tmp"
 # How long to wait for a run's own process group to fully exit, and how often to poll.
 GROUP_EXIT_WAIT_SECONDS = 30.0
 GROUP_EXIT_POLL_SECONDS = 1.0
-# How often to compare a running opencode process's kernel-level cwd with the directory it was launched in.
-CWD_MONITOR_POLL_SECONDS = 3.0
-_HELPER_TIMEOUT_SECONDS = 30.0
-_LSOF_TIMEOUT_SECONDS = 10.0
-
-
-class OpencodePluginError(RuntimeError):
-    """opencode has a plugin installed, which can act independently of the session isolation ``--standalone`` gives."""
-
-
-class BackendCwdDivergedError(RuntimeError):
-    """The backend process's kernel-level cwd no longer matched the directory it was launched in.
-
-    Its output cannot be trusted, so the process is killed rather than let finish.
-    """
-
-
-class RepoIdentityError(RuntimeError):
-    """``cwd`` is not the git repo ``expected_repo_name`` says it is, or the harness repo's HEAD moved."""
+_PGREP_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -93,15 +89,6 @@ class OpencodeOptions:
 
 
 BackendOptions = ClaudeOptions | OpencodeOptions
-
-
-@dataclass
-class _Run:
-    """Mutable per-attempt state shared between the runner callback and the monitor."""
-
-    pid: int | None = None
-    monitor: "asyncio.Task[None] | None" = None
-    diverged_to: str | None = None
 
 
 def select_backend(name: str) -> BackendName:
@@ -202,11 +189,6 @@ def _write_prompt_file(prompt: str) -> Path:
     return path
 
 
-def _killpg(pgid: int, sig: signal.Signals) -> None:
-    with contextlib.suppress(ProcessLookupError):
-        os.killpg(pgid, sig)
-
-
 def _group_alive(pgid: int) -> bool:
     try:
         os.killpg(pgid, 0)
@@ -237,7 +219,7 @@ async def _warn_if_backend_survived(backend: BackendName, prefix: str) -> None:
 
     Only pids are inspected and logged: ``pgrep -a`` would print other processes' command lines.
     """
-    result = await run(["pgrep", "-x", backend], timeout=_LSOF_TIMEOUT_SECONDS)
+    result = await run(["pgrep", "-x", backend], timeout=_PGREP_TIMEOUT_SECONDS)
     pids = result.stdout.split()
     if result.returncode == 0 and pids:
         logger.warning(
@@ -248,166 +230,6 @@ async def _warn_if_backend_survived(backend: BackendName, prefix: str) -> None:
             backend,
             ", ".join(pids),
         )
-
-
-async def _lsof_cwd(pid: int) -> str | None:
-    """The kernel-level cwd of ``pid`` (not the PWD env var); None if the process is gone or lsof fails."""
-    result = await run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"], timeout=_LSOF_TIMEOUT_SECONDS)
-    if result.returncode != 0:
-        return None
-    for line in result.stdout.splitlines():
-        if line.startswith("n"):
-            return line[1:]
-    return None
-
-
-async def _watch_cwd(state: _Run, expected_cwd: str, prefix: str) -> None:
-    expected = str(Path(expected_cwd).resolve())
-    while True:
-        await asyncio.sleep(CWD_MONITOR_POLL_SECONDS)
-        if state.pid is None:
-            return
-        actual = await _lsof_cwd(state.pid)
-        if actual is not None and actual != expected:
-            state.diverged_to = actual
-            logger.error(
-                "%sBackend process (pid %d) cwd diverged from %s to %s mid-run, killing it; its output "
-                "cannot be trusted",
-                prefix,
-                state.pid,
-                expected,
-                actual,
-            )
-            _killpg(state.pid, signal.SIGKILL)
-            return
-
-
-async def assert_no_opencode_plugins(cwd: str | Path, env: Mapping[str, str] | None = None) -> None:
-    """Raise ``OpencodePluginError`` unless ``opencode plugin list`` reports no plugins in ``cwd``.
-
-    ``--standalone`` isolates sessions but not a globally installed plugin, which can mutate git state on its own.
-    Plugins are configured per project, so this must run with the same ``cwd`` as the backend run.
-    """
-    result = await run(
-        ["opencode", "plugin", "list"],
-        cwd=cwd,
-        env=dict(env) if env is not None else None,
-        timeout=_HELPER_TIMEOUT_SECONDS,
-    )
-    if result.returncode != 0:
-        msg = (
-            f"could not verify opencode has no plugins installed ('opencode plugin list' exited "
-            f"{result.returncode}): {result.stderr.strip()}"
-        )
-        raise OpencodePluginError(msg)
-    if result.stdout.strip().lower() != "no plugins found":
-        msg = (
-            "opencode has one or more plugins installed; refusing to run the opencode backend, since a plugin can "
-            f"act independently of --standalone's session isolation ('opencode plugin list' reported):\n"
-            f"{result.stdout.strip()}"
-        )
-        raise OpencodePluginError(msg)
-
-
-async def _git(working_dir: Path, *args: str) -> RunResult:
-    return await run(["git", "-C", str(working_dir), *args], timeout=_HELPER_TIMEOUT_SECONDS)
-
-
-_ssh_hosts: dict[str, str] = {}
-
-
-async def _resolve_ssh_host(host: str) -> str:
-    """Resolve an SSH config host alias to its real HostName; fall back to the alias (fail closed)."""
-    if host.lower() == "github.com":
-        return "github.com"
-    if host in _ssh_hosts:
-        return _ssh_hosts[host]
-    if host.startswith("-"):
-        # An untrusted remote host must never be parsed by ssh as an option; fail closed.
-        return host
-    resolved = host
-    result = await run(["ssh", "-G", "--", host], timeout=_HELPER_TIMEOUT_SECONDS)
-    if result.returncode == 0:
-        for line in result.stdout.splitlines():
-            if line.startswith("hostname "):
-                resolved = line.split(maxsplit=1)[1].strip()
-                break
-    _ssh_hosts[host] = resolved
-    return resolved
-
-
-def _split_host_and_path(url: str) -> tuple[str, str] | None:
-    normalized = url.strip().removesuffix(".git").rstrip("/")
-    if normalized.startswith(("https://", "ssh://")):
-        authority, sep, path = normalized.split("://", 1)[1].partition("/")
-    else:
-        authority, sep, path = normalized.partition(":")  # scp-style [user@]host:path
-    if not sep or not path:
-        return None
-    return authority.rpartition("@")[2] or authority, path
-
-
-async def _origin_matches_repo(url: str, repo_name: str) -> bool:
-    split = _split_host_and_path(url)
-    if split is None:
-        return False
-    host, path = split
-    return (await _resolve_ssh_host(host)).lower() == "github.com" and path == repo_name
-
-
-async def assert_repo_identity(working_dir: str | Path, expected_repo_name: str) -> None:
-    """Raise ``RepoIdentityError`` unless ``working_dir`` is a git toplevel whose ``origin`` is ``expected_repo_name``.
-
-    ``expected_repo_name`` is an ``owner/repo`` GitHub slug.
-    """
-    directory = Path(working_dir).resolve()
-    toplevel = await _git(directory, "rev-parse", "--show-toplevel")
-    if toplevel.returncode != 0:
-        msg = f"{directory} is not inside a git repository ({toplevel.stderr.strip()})"
-        raise RepoIdentityError(msg)
-    actual = Path(toplevel.stdout.strip()).resolve()
-    if actual != directory:
-        msg = f"{directory} is not itself the toplevel of its git repo (toplevel is {actual})"
-        raise RepoIdentityError(msg)
-    origin = await _git(directory, "remote", "get-url", "origin")
-    if origin.returncode != 0:
-        msg = f"{directory} has no 'origin' remote ({origin.stderr.strip()})"
-        raise RepoIdentityError(msg)
-    if not await _origin_matches_repo(origin.stdout.strip(), expected_repo_name):
-        msg = f"{directory}'s origin does not match the expected repo {expected_repo_name!r}"
-        raise RepoIdentityError(msg)
-
-
-async def _head_sha(working_dir: Path) -> str:
-    result = await _git(working_dir, "rev-parse", "HEAD")
-    if result.returncode != 0:
-        msg = f"could not read HEAD for {working_dir}: {result.stderr.strip()}"
-        raise RepoIdentityError(msg)
-    return result.stdout.strip()
-
-
-async def _discover_repo_root(start: Path) -> Path | None:
-    result = await _git(start, "rev-parse", "--show-toplevel")
-    return Path(result.stdout.strip()).resolve() if result.returncode == 0 else None
-
-
-async def _snapshot_harness_repo(cwd: Path, root: Path | None) -> tuple[Path, str] | None:
-    """(root, HEAD) to watch, or None when there is nothing to watch (no repo found, or ``cwd`` is that repo)."""
-    if root is None:
-        root = await _discover_repo_root(Path(__file__).resolve().parent)
-    if root is None or cwd.resolve() == root.resolve():
-        return None
-    return root, await _head_sha(root)
-
-
-async def _assert_harness_unchanged(snapshot: tuple[Path, str] | None) -> None:
-    if snapshot is None:
-        return
-    root, head = snapshot
-    current = await _head_sha(root)
-    if current != head:
-        msg = f"{root}'s HEAD moved from {head} to {current} during a backend run that was not supposed to touch it"
-        raise RepoIdentityError(msg)
 
 
 def _build_command(text: str, options: BackendOptions) -> list[str]:
@@ -435,12 +257,12 @@ async def _run_monitored(
     cmd: list[str], *, cwd: str, env: dict[str, str], timeout: float, monitor_cwd: bool, prefix: str
 ) -> tuple[RunResult, int | None]:
     """Run ``cmd``; raise ``BackendCwdDivergedError`` if the monitor killed it. Returns the result and the pgid."""
-    state = _Run()
+    state = MonitorState()
 
     def on_start(pid: int) -> None:
         state.pid = pid
         if monitor_cwd:
-            state.monitor = asyncio.create_task(_watch_cwd(state, cwd, prefix))
+            state.monitor = asyncio.create_task(watch_cwd(state, cwd, prefix))
 
     try:
         result = await run(cmd, cwd=cwd, env=env, timeout=timeout, on_start=on_start)
@@ -490,7 +312,7 @@ async def _attempt(
         elif not result.not_found and expected_repo_name is not None:
             await assert_repo_identity(cwd, expected_repo_name)
         if not result.not_found:
-            await _assert_harness_unchanged(harness)
+            await assert_harness_unchanged(harness)
         return result
     finally:
         if prompt_file is not None:
@@ -544,7 +366,7 @@ async def launch(
     harness = None
     if guard_harness_repo:
         root = Path(harness_repo_root) if harness_repo_root is not None else None
-        harness = await _snapshot_harness_repo(Path(cwd_str), root)
+        harness = await snapshot_harness_repo(Path(cwd_str), root)
     for attempt in range(1, total_attempts + 1):
         if expected_repo_name is not None:
             await assert_repo_identity(cwd_str, expected_repo_name)

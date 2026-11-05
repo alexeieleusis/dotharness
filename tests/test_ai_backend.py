@@ -10,19 +10,18 @@ from pathlib import Path
 
 import pytest
 
-from dotharness import ai_backend, subprocess_runner
+from dotharness import ai_backend, opencode_guards, subprocess_runner
 from dotharness.ai_backend import (
-    BackendCwdDivergedError,
     ClaudeOptions,
     OpencodeOptions,
-    OpencodePluginError,
-    RepoIdentityError,
     build_claude_command,
     build_opencode_command,
     launch,
     launch_sync,
     select_backend,
 )
+from dotharness.opencode_guards import BackendCwdDivergedError, OpencodePluginError
+from dotharness.repo_guard import RepoIdentityError
 
 SENTINEL = "tok-SENTINEL-0123456789abcdef"
 
@@ -33,7 +32,7 @@ def fast(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(ai_backend, "TMP_DIR", tmp_path / "tmpdir")
     monkeypatch.setattr(ai_backend, "GROUP_EXIT_WAIT_SECONDS", 3.0)
     monkeypatch.setattr(ai_backend, "GROUP_EXIT_POLL_SECONDS", 0.05)
-    monkeypatch.setattr(ai_backend, "CWD_MONITOR_POLL_SECONDS", 0.1)
+    monkeypatch.setattr(opencode_guards, "CWD_MONITOR_POLL_SECONDS", 0.1)
 
 
 @pytest.fixture
