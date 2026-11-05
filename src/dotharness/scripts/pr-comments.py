@@ -208,7 +208,7 @@ def cmd_fetch(pr_number: int, output_path: str | None) -> None:
 def _post_reply(cmd_path: str, body: str, comment_id: str | int, errors: list[tuple[Any, str]]) -> None:
     """POST a comment body via gh api, printing the outcome and recording failures."""
     result = run(
-        ["gh", "api", cmd_path, "-X", "POST", "-f", "body=@-"],
+        ["gh", "api", cmd_path, "-X", "POST", "-F", "body=@-"],
         check=False,
         stdin_input=body,
     )
