@@ -124,6 +124,24 @@ class TestSonarQubeIssue:
         assert issue.is_fixable is True
 
 
+class TestImpactSeverity:
+    """Severity extraction from new-API impacts."""
+
+    @pytest.mark.parametrize(
+        ("impacts", "expected"),
+        [
+            ([{"severity": "LOW"}, {"severity": "HIGH"}], "CRITICAL"),
+            ([{"severity": "HIGH"}, {"severity": "LOW"}], "CRITICAL"),
+            ([{"severity": "MEDIUM"}], "MAJOR"),
+            ([{"severity": "LOW"}], "MINOR"),
+            ([{"severity": "INFO"}, {"severity": "BLOCKER"}], "BLOCKER"),
+        ],
+    )
+    def test_highest_severity_mapped_to_old_scale(self, impacts: list[dict[str, Any]], expected: str) -> None:
+        issue = SonarQubeIssue(key="k", rule="r", message="m", component="c", impacts=impacts)
+        assert issue.severity == expected
+
+
 class TestIssuesResponse:
     """Tests for IssuesResponse model."""
 

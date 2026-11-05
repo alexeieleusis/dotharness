@@ -6,6 +6,21 @@ from typing import Any, Self
 
 from pydantic import BaseModel, Field, model_validator
 
+# Rank for impact severities; covers both new-API and old-API names.
+_SEVERITY_RANK: dict[str, int] = {
+    "INFO": 1,
+    "LOW": 2,
+    "MINOR": 2,
+    "MEDIUM": 3,
+    "MAJOR": 3,
+    "HIGH": 4,
+    "CRITICAL": 4,
+    "BLOCKER": 5,
+}
+
+# Map new-API impact severities onto the old scale (BLOCKER/CRITICAL/MAJOR/MINOR/INFO).
+_NEW_TO_OLD_SEVERITY: dict[str, str] = {"HIGH": "CRITICAL", "MEDIUM": "MAJOR", "LOW": "MINOR"}
+
 
 class SonarQubeIssue(BaseModel):
     """Represents a SonarQube issue.
@@ -51,8 +66,11 @@ class SonarQubeIssue(BaseModel):
         """Extract severity and status from new API format if needed."""
         # Extract severity from impacts if not already set
         if not self.severity and self.impacts:
-            # Get highest severity from impacts
-            self.severity = self.impacts[0].get("severity", "INFO")
+            # Pick the highest-ranked impact severity (API order is not guaranteed)
+            # and normalize it onto the old BLOCKER..INFO scale used by the filters.
+            severities = [str(i.get("severity", "INFO")).upper() for i in self.impacts]
+            highest = max(severities, key=lambda s: _SEVERITY_RANK.get(s, 0))
+            self.severity = _NEW_TO_OLD_SEVERITY.get(highest, highest)
 
         # Use issueStatus if status not set
         if not self.status and self.issue_status:
