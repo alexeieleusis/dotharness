@@ -1,0 +1,57 @@
+{
+  "nodes": [
+    "01-config-schema-and-docs-leaf",
+    "02-marker-and-comment-poster-leaf",
+    "03-blame-and-pr-resolver-leaf",
+    "04-comment-fetch-and-hunk-match-leaf",
+    "05-backend-judgment-and-instructions-leaf",
+    "06-self-review-wiring-leaf",
+    "07-review-requested-wiring-leaf"
+  ],
+  "edges": [
+    [
+      "02-marker-and-comment-poster-leaf",
+      "01-config-schema-and-docs-leaf"
+    ],
+    [
+      "03-blame-and-pr-resolver-leaf",
+      "01-config-schema-and-docs-leaf"
+    ],
+    [
+      "03-blame-and-pr-resolver-leaf",
+      "02-marker-and-comment-poster-leaf"
+    ],
+    [
+      "04-comment-fetch-and-hunk-match-leaf",
+      "02-marker-and-comment-poster-leaf"
+    ],
+    [
+      "04-comment-fetch-and-hunk-match-leaf",
+      "03-blame-and-pr-resolver-leaf"
+    ],
+    [
+      "05-backend-judgment-and-instructions-leaf",
+      "02-marker-and-comment-poster-leaf"
+    ],
+    [
+      "05-backend-judgment-and-instructions-leaf",
+      "03-blame-and-pr-resolver-leaf"
+    ],
+    [
+      "05-backend-judgment-and-instructions-leaf",
+      "04-comment-fetch-and-hunk-match-leaf"
+    ],
+    [
+      "06-self-review-wiring-leaf",
+      "05-backend-judgment-and-instructions-leaf"
+    ],
+    [
+      "07-review-requested-wiring-leaf",
+      "01-config-schema-and-docs-leaf"
+    ],
+    [
+      "07-review-requested-wiring-leaf",
+      "06-self-review-wiring-leaf"
+    ]
+  ]
+}
