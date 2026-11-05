@@ -1,9 +1,12 @@
 """Tests for the synchronous Backend adapter over dotharness.ai_backend.launch_sync."""
 
+import contextlib
 import os
 import shutil
+import signal
 import subprocess
 import textwrap
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -219,7 +222,7 @@ def fake_bin(tmp_path, monkeypatch):
     d = tmp_path / "bin"
     d.mkdir()
     monkeypatch.setenv("PATH", f"{d}:{os.environ['PATH']}")
-    monkeypatch.setattr(subprocess_runner, "KILL_GRACE_SECONDS", 0.3)
+    monkeypatch.setattr(subprocess_runner, "KILL_GRACE_SECONDS", 1.0)
     return d
 
 
@@ -275,12 +278,32 @@ def test_e2e_missing_executable_returns_127(tmp_path, monkeypatch, tmp_xdg):
 
 def test_e2e_timeout_sigterm_then_sigkill_group_and_no_global_lock(tmp_path, fake_bin, tmp_xdg):
     marker = tmp_path / "term"
+    pidfile = tmp_path / "pid"
     # Ignores SIGTERM so the group must be SIGKILLed after the grace period.
-    _exe(fake_bin, "claude", f'trap "echo t >> {marker}" TERM\nwhile true; do sleep 0.1; done\n')
+    _exe(
+        fake_bin,
+        "claude",
+        f'echo $$ > {pidfile}\ntrap "echo t >> {marker}" TERM\nwhile true; do sleep 0.1; done\n',
+    )
     work = tmp_path / "work"
     work.mkdir()
     b = Backend("claude", 1, [], {}, max_retries=0)
-    with pytest.raises(subprocess.TimeoutExpired):
-        b.run("x", str(work))
-    assert marker.exists()  # SIGTERM delivered first
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            b.run("x", str(work))
+        assert marker.exists()  # SIGTERM delivered first
+        pid = int(pidfile.read_text())
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        with pytest.raises(ProcessLookupError):  # SIGKILL escalation took the process down
+            os.kill(pid, 0)
+    finally:
+        if pidfile.exists():
+            with contextlib.suppress(ProcessLookupError, ValueError):
+                os.killpg(int(pidfile.read_text()), signal.SIGKILL)
     assert not list(tmp_xdg.glob("locks/opencode-global*"))
