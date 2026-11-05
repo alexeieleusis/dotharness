@@ -260,7 +260,8 @@ def _patch_content(content: str, new_key: str, new_name: str) -> str:
     if not all_indices:
         if not content.endswith("\n"):
             content += "\n"
-        return content + f"sonar.projectKey={new_key}\n" + f"sonar.projectName={new_name}\n"
+        # Include the recovery header so an interrupted run can be undone by _recover_true_original.
+        return content + "".join(recovery)
 
     first_idx = min(all_indices)
     skip = set(all_indices)

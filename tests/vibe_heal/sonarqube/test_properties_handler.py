@@ -363,6 +363,24 @@ class TestPatched:
             assert "sonar.projectKey=temp-key" in content
             assert "# sonar.projectKey=original" in content
 
+    def test_recovers_pristine_original_after_crash_in_append_branch(
+        self, tmp_path: Path, config: VibeHealConfig
+    ) -> None:
+        original = "sonar.sources=src\n"
+        props = tmp_path / "sonar-project.properties"
+        props.write_text(original)
+        handler = SonarPropertiesHandler(tmp_path, config)
+        # Simulate SIGKILL: enter the patch and never run the restore.
+        cm = handler.patched("old-temp-key", "Old Temp Name")
+        cm.__enter__()
+        assert "sonar.projectKey=old-temp-key" in props.read_text()
+        # A fresh run must recover the pristine original and restore it on exit.
+        with handler.patched("new-temp-key", "New Temp Name"):
+            content = props.read_text()
+            assert "new-temp-key" in content
+            assert "old-temp-key" not in content
+        assert props.read_text() == original
+
     def test_restores_file_after_normal_exit(self, tmp_path: Path, config: VibeHealConfig) -> None:
         original = "sonar.projectKey=original\nsonar.sources=.\n"
         props = tmp_path / "sonar-project.properties"
