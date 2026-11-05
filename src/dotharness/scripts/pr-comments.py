@@ -44,6 +44,30 @@ def gh_json(args: list[str]) -> Any:
     return json.loads(result.stdout)
 
 
+def parse_paginated(text: str) -> list:
+    """Parse `gh api --paginate` output: one JSON array per page, back to back."""
+    decoder = json.JSONDecoder()
+    items: list = []
+    idx = 0
+    text = text.strip()
+    while idx < len(text):
+        page, end = decoder.raw_decode(text, idx)
+        if isinstance(page, list):
+            items.extend(page)
+        else:
+            items.append(page)
+        idx = end
+        while idx < len(text) and text[idx].isspace():
+            idx += 1
+    return items
+
+
+def gh_json_paginated(args: list[str]) -> list:
+    """Run a paginated gh api command and concatenate all pages."""
+    result = run(["gh", *args])
+    return parse_paginated(result.stdout)
+
+
 def get_pr_number() -> int:
     result = run(["gh", "pr", "view", "--json", "number"], check=False)
     if result.returncode != 0:
@@ -168,13 +192,13 @@ def cmd_fetch(pr_number: int, output_path: str | None) -> None:
     pr_info = gh_json(["pr", "view", str(pr_number), "--json", "title,url,headRefName"])
 
     # Inline (file-level) comments
-    raw_inline: list[dict] = gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/comments", "--paginate"])
+    raw_inline: list[dict] = gh_json_paginated(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/comments", "--paginate"])
 
     # PR-level reviews (may contain top-level review body)
-    raw_reviews: list[dict] = gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/reviews", "--paginate"])
+    raw_reviews: list[dict] = gh_json_paginated(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/reviews", "--paginate"])
 
     # Issue comments (general PR timeline comments — where bots like CodeRabbit/Graphite post)
-    raw_issue_comments: list[dict] = gh_json([
+    raw_issue_comments: list[dict] = gh_json_paginated([
         "api",
         f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments",
         "--paginate",

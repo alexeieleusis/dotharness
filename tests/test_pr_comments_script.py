@@ -36,3 +36,15 @@ def test_post_reply_reads_body_from_stdin_with_capital_f():
     assert cmd[cmd.index("-F") + 1] == "body=@-"
     assert captured["stdin"] == "Addressed in X"
     assert errors == []
+
+
+def test_parse_paginated_concatenates_multiple_pages():
+    mod = _load()
+    out = '[{"id": 1}, {"id": 2}]\n[{"id": 3}][]'
+    assert mod.parse_paginated(out) == [{"id": 1}, {"id": 2}, {"id": 3}]
+
+
+def test_parse_paginated_single_page_and_empty():
+    mod = _load()
+    assert mod.parse_paginated('[{"id": 1}]') == [{"id": 1}]
+    assert mod.parse_paginated("") == []
