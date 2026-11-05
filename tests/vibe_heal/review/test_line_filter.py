@@ -182,6 +182,53 @@ class TestIssueLineFilter:
             "https://next.sonarqube.com/sonarqube/coding_rules?open=python:S1481&rule_key=python:S1481"
         )
 
+    def test_strict_changed_lines_marks_trailing_context(self) -> None:
+        """Issues in the trailing window are returned with on_changed_line=False."""
+        issues = [self._make_issue(10), self._make_issue(11)]
+
+        result = IssueLineFilter.filter_issues(issues, {10, 11}, strict_changed_lines={10})
+
+        assert len(result) == 2
+        assert result[0].line == 10
+        assert result[0].on_changed_line is True
+        assert result[1].line == 11
+        assert result[1].on_changed_line is False
+
+    def test_strict_changed_lines_none_marks_all_on_changed_line(self) -> None:
+        """strict_changed_lines=None (default) gives on_changed_line=True for all results."""
+        issues = [self._make_issue(10), self._make_issue(11)]
+
+        result = IssueLineFilter.filter_issues(issues, {10, 11}, strict_changed_lines=None)
+
+        assert len(result) == 2
+        assert all(r.on_changed_line is True for r in result)
+
+    def test_empty_strict_changed_lines_differs_from_none(self) -> None:
+        """An empty strict set marks every issue on_changed_line=False, unlike None."""
+        issues = [self._make_issue(10)]
+
+        result = IssueLineFilter.filter_issues(issues, {10}, strict_changed_lines=set())
+
+        assert len(result) == 1
+        assert result[0].on_changed_line is False
+
+    def test_strict_line_not_in_changed_lines_is_dropped(self) -> None:
+        """An issue in strict_changed_lines but not in changed_lines is dropped."""
+        issues = [self._make_issue(10), self._make_issue(20)]
+
+        result = IssueLineFilter.filter_issues(issues, {10}, strict_changed_lines={10, 20})
+
+        assert len(result) == 1
+        assert result[0].line == 10
+
+    def test_severity_none_falls_back_to_info(self) -> None:
+        """A missing severity falls back to 'INFO'."""
+        issues = [self._make_issue(10, severity=None)]
+
+        result = IssueLineFilter.filter_issues(issues, {10})
+
+        assert result[0].severity == "INFO"
+
     def test_skips_issues_without_line_number(self) -> None:
         """Issues without a line number are skipped (cannot match to changed lines)."""
         issues = [
