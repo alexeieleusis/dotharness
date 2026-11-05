@@ -13,7 +13,6 @@ from pathlib import Path
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
-from dotharness.pr_review.repo_guard import head_sha as read_head_sha
 from dotharness.pr_review.runners.common import (
     build_file_review_section,
     build_subprocess_env,
@@ -69,6 +68,7 @@ from dotharness.pr_review.runners.local_review.types import (
     NothingToReviewError,
     RepoMutatedError,
 )
+from dotharness.repo_guard import RepoIdentityError
 
 logger = logging.getLogger(__name__)
 
@@ -86,11 +86,20 @@ class ReviewResult:
         return not self.failed
 
 
+def _read_head_sha(working_dir: Path) -> str:
+    """Current HEAD sha of `working_dir`'s repo; raises `RepoIdentityError` when unreadable."""
+    result = git(working_dir, "rev-parse", "HEAD")
+    if result.returncode != 0:
+        msg = f"could not read HEAD for {working_dir}: {result.stderr.strip()}"
+        raise RepoIdentityError(msg)
+    return result.stdout.strip()
+
+
 def _guard_violation(working_dir: Path, expected_head: str) -> str | None:
     """Description of what the backend changed, or None. Untracked files are ignored (11.A-10)."""
     problems: list[str] = []
     try:
-        now = read_head_sha(working_dir)
+        now = _read_head_sha(working_dir)
     except Exception as exc:
         now = ""
         problems.append(f"HEAD unreadable ({exc})")
@@ -165,7 +174,7 @@ class _ReviewPasses:
         self.context = build_change_context(config.repo.name, self.wdir, target, description)
         self.vibe = get_vibe_heal_context(config.repo.subdirs, self.wdir_s, target.branch) or None
         self.result = ReviewResult(review_dir=review_dir, manifest=manifest)
-        self.guard_head = read_head_sha(self.wdir)
+        self.guard_head = _read_head_sha(self.wdir)
         self.guard_errors: list[str] = []
         self.diff_cache: dict[str, str] = {}
 

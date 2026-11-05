@@ -4,6 +4,7 @@ import hashlib
 import re
 import tomllib
 from dataclasses import dataclass, field
+from importlib import resources
 from pathlib import Path
 
 from dotharness.pr_review.lock import working_dir_lock_key
@@ -117,12 +118,21 @@ class RepoConfig:
     name_provided: bool = True
 
 
+def default_knowledge_dir() -> Path:
+    """`~/.harness/knowledge` when it exists, else the knowledge shipped inside the dotharness package (D-7)."""
+    user_dir = Path("~/.harness/knowledge").expanduser()
+    if user_dir.is_dir():
+        return user_dir
+    # Plain path from importlib.resources: the wheel is installed unpacked, so the traversable is a real directory.
+    return Path(str(resources.files("dotharness") / "knowledge"))
+
+
 @dataclass
 class HarnessSection:
     backend: str = "opencode"
     gh_token_cmd: str = "gh auth token"  # noqa: S105
     backend_timeout_seconds: int = 900
-    knowledge_dir: Path = field(default_factory=lambda: Path("~/.harness/knowledge").expanduser())
+    knowledge_dir: Path = field(default_factory=default_knowledge_dir)
     path_prepend: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     review_knowledge_file: Path | None = None
@@ -308,7 +318,7 @@ def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
         backend=backend,
         gh_token_cmd=h.get("gh_token_cmd", "gh auth token"),
         backend_timeout_seconds=h.get("backend_timeout_seconds", 900),
-        knowledge_dir=Path(h.get("knowledge_dir", "~/.harness/knowledge")).expanduser(),
+        knowledge_dir=Path(h["knowledge_dir"]).expanduser() if "knowledge_dir" in h else default_knowledge_dir(),
         path_prepend=path_prepend,
         env=h.get("env", {}),
         review_knowledge_file=Path(rkf).expanduser() if rkf else None,

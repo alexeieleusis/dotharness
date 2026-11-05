@@ -1,6 +1,7 @@
 """Tests for the synchronous Backend adapter over dotharness.ai_backend.launch_sync."""
 
 import os
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
@@ -50,6 +51,56 @@ def test_opencode_flag_mapping_and_guards_passed(tmp_path):
     assert kw["context"] == "ctx"
     assert kw["expected_repo_name"] == "acme/web"
     assert kw["guard_harness_repo"] is True
+
+
+def test_harness_root_is_discovered_in_a_checkout_and_passed_explicitly(tmp_path):
+    root = backend_mod.find_harness_checkout()
+    assert root is not None  # the test suite runs from the source checkout
+    assert (root / "src" / "dotharness" / "pr_review" / "backend.py").is_file()
+    with patch(LAUNCH, return_value=RunResult(0, "", "")) as m:
+        _make_backend("claude").run("x", str(tmp_path))
+    assert m.call_args.kwargs["guard_harness_repo"] is True
+    assert m.call_args.kwargs["harness_repo_root"] == root
+
+
+def test_explicit_harness_root_overrides_discovery(tmp_path):
+    with patch(LAUNCH, return_value=RunResult(0, "", "")) as m:
+        _make_backend("claude", harness_repo_root=tmp_path).run("x", str(tmp_path))
+    assert m.call_args.kwargs["guard_harness_repo"] is True
+    assert m.call_args.kwargs["harness_repo_root"] == tmp_path
+
+
+def test_installed_package_skips_harness_guard_instead_of_pinning_wrong_repo(tmp_path, monkeypatch):
+    # Simulate site-packages inside an unrelated git repo: .git exists above, but no src/dotharness/pr_review layout.
+    unrelated = tmp_path / "venv-repo"
+    pkg = unrelated / "lib" / "site-packages" / "dotharness" / "pr_review"
+    pkg.mkdir(parents=True)
+    (unrelated / ".git").mkdir()
+    monkeypatch.setattr(backend_mod, "__file__", str(pkg / "backend.py"))
+    backend_mod.find_harness_checkout.cache_clear()
+    try:
+        assert backend_mod.find_harness_checkout() is None
+        with patch(LAUNCH, return_value=RunResult(0, "", "")) as m:
+            _make_backend("claude").run("x", str(tmp_path))
+    finally:
+        monkeypatch.undo()
+        backend_mod.find_harness_checkout.cache_clear()
+    assert m.call_args.kwargs["guard_harness_repo"] is False
+    assert m.call_args.kwargs["harness_repo_root"] is None
+
+
+def test_source_layout_checkout_is_found(tmp_path, monkeypatch):
+    root = tmp_path / "checkout"
+    pkg = root / "src" / "dotharness" / "pr_review"
+    pkg.mkdir(parents=True)
+    (root / ".git").write_text("gitdir: elsewhere")  # a worktree has a .git file
+    monkeypatch.setattr(backend_mod, "__file__", str(pkg / "backend.py"))
+    backend_mod.find_harness_checkout.cache_clear()
+    try:
+        assert backend_mod.find_harness_checkout() == root.resolve()
+    finally:
+        monkeypatch.undo()
+        backend_mod.find_harness_checkout.cache_clear()
 
 
 def test_claude_flag_mapping(tmp_path):
@@ -193,7 +244,9 @@ def test_e2e_claude_runs_shared_layer_and_removes_prompt_file(tmp_path, fake_bin
 
 
 def test_e2e_missing_executable_returns_127(tmp_path, monkeypatch, tmp_xdg):
-    monkeypatch.setenv("PATH", str(tmp_path))
+    # Only git stays on PATH (the harness-HEAD guard reads the checkout's HEAD); the backend executable is missing.
+    git_dir = Path(shutil.which("git") or "/usr/bin/git").parent
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{git_dir}")
     work = tmp_path / "work"
     work.mkdir()
     result = _make_backend("claude", max_retries=0).run("x", str(work))

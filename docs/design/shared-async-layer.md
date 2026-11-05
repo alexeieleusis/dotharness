@@ -214,3 +214,88 @@ Hardening map (every item found in the old `run_cmd`):
 | `FileNotFoundError` for a missing executable or `cwd` | pr-review policy | `run_cmd` |
 | `shell` mode and `str` command handling | pr-review policy | `_argv` in `runners/common.py` |
 | Timeout values (`TIMEOUT_GH`, `TIMEOUT_GIT`, per-call budgets) | pr-review policy | `runners/common.py` and callers |
+
+## I-3 packaging-sensitive paths and repo guard
+
+The old `tools/pr-review` code assumed it ran from a source checkout. Installed as a wheel, files move into
+`site-packages`, which may sit inside an unrelated git repository. This section records the decisions (D-1, D-2, D-3) and
+the `__file__` audit (baseline `cb0efc1`).
+
+### D-1: harness-repo guard and `harness_repo_root`
+
+Decision: pr-review passes `guard_harness_repo=True` and an explicit `harness_repo_root` whenever it can identify the
+dotharness source checkout, and skips the harness-HEAD guard otherwise.
+
+- The shared `snapshot_harness_repo(cwd, root)` falls back to `git rev-parse --show-toplevel` from
+  `dotharness/repo_guard.py`'s own directory when `root` is None. Installed, that directory is in `site-packages`, so the
+  guard would pin an unrelated repository or silently watch nothing. pr-review therefore never relies on that default.
+- `pr_review.backend.find_harness_checkout()` returns the checkout root, or None. It is pure path inspection (no git, no
+  subprocess): a parent of `backend.py` qualifies only when it has a `.git` entry (directory, or file for a worktree)
+  and `backend.py` lives at `<parent>/src/dotharness/pr_review/`. A `site-packages` install inside an unrelated repo has
+  no such layout, so it returns None. An editable install resolves into the checkout and is found.
+- Source of the root, in precedence order: `Backend(..., harness_repo_root=<Path>)` (explicit, new keyword-only argument,
+  default None), then `find_harness_checkout()`. There is no config key and no environment variable (YAGNI; add a
+  `[harness]` key later if an operator needs to point at a different checkout).
+- Root absent (installed package): the guard is skipped (`guard_harness_repo=False`, `harness_repo_root=None`), logged at
+  debug level. Fail-open is chosen because there is no checkout to watch and failing closed would make every installed
+  package unusable. The primary defence, the repo-identity check (`expected_repo_name`, `assert_repo_identity`), is
+  unaffected and stays enabled.
+- Root present but git cannot read its HEAD: the shared layer raises `RepoIdentityError` (fail closed), as before.
+- The shared layer is unchanged (`src/dotharness/repo_guard.py` still discovers from its module directory when called
+  without a root; other callers may rely on that).
+
+### D-2: `harness.repo_guard` is replaced, not kept
+
+Decision: the pr-review sync module `repo_guard.py` is deleted; `dotharness.repo_guard` (shared, async) replaces it.
+Ledger row `harness.repo_guard` (`tools/pr-review/harness/repo_guard.py`): status is replaced by
+`src/dotharness/repo_guard.py`.
+
+| Old function | Replacement |
+| --- | --- |
+| `RepoIdentityError` | `dotharness.repo_guard.RepoIdentityError` (re-exported by `pr_review.backend`) |
+| `assert_repo_identity` | `dotharness.repo_guard.assert_repo_identity`, called by the shared launcher via `Backend` (phase 05) |
+| `discover_repo_root`, `assert_repo_unchanged` | `snapshot_harness_repo` / `assert_harness_unchanged`, called by the shared launcher (`guard_harness_repo`) |
+| SSH host alias resolution (`_resolve_ssh_host`, `_origin_matches_repo`) | same names in the shared module (async, with a fail-closed fallback) |
+| `head_sha` (used by `local_review/review.py` for its own mutation guard) | `review._read_head_sha`, a 5-line helper over the existing `git()` wrapper; it raises the shared `RepoIdentityError` |
+
+After phase 05 the only remaining user of the sync module was `local_review/review.py`, which needed only `head_sha`, so
+no sync-to-async bridge is required. Keeping the sync module would have left two `RepoIdentityError` classes. The tests
+of the old module moved to `tests/test_repo_guard.py` (async, against the shared layer).
+
+### D-3 and the `Path(__file__)` audit
+
+Every `__file__`-relative lookup in `tools/pr-review` at `cb0efc1` (`git grep __file__`; nothing else in the package uses
+`dirname`, `importlib.resources`, `inspect.getfile` or `.parents[`). D-3 answer: yes, there is one more production lookup
+beyond `_HARNESS_REPO_ROOT`, plus test-only lookups.
+
+| File (old) | Expression | Locates | Disposition |
+| --- | --- | --- | --- |
+| `harness/backend.py:43` | `_HARNESS_REPO_ROOT = discover_repo_root(Path(__file__).resolve().parent)` | the checkout to watch with the harness-HEAD guard | Replace: removed with the Phase 05 adapter; root now comes from `find_harness_checkout()` / `harness_repo_root` (D-1) |
+| `harness/runners/common.py:52` | `PR_COMMENTS_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "pr-comments.py"` | `tools/pr-review/scripts/pr-comments.py`, run as `python3 <script> fetch --pr N` | Replace with a packaged resource or config. NOT done in this phase (see below): in the new tree the expression resolves to a non-existent `src/dotharness/scripts/pr-comments.py` |
+| `tests/runners/test_focused_review.py:220` | `Path(focused_review.__file__).read_text()` | module source, for a static source guard | Keep (module-relative by design; works installed from source) |
+| `tests/runners/test_focused_review.py:720` | `Path(__file__).resolve().parents[4] / "knowledge" / "pr-review" / "focused-review.md"` | repo-root `knowledge/` template | Keep, depth adjusted to `parents[3]` (phase 01); the root `knowledge` is a symlink to the package |
+| `tests/runners/test_local_review.py:40` | `Path(__file__).resolve().parents[4] / "knowledge" / "pr-review"` | repo-root `knowledge/` | Keep, `parents[3]` (phase 01) |
+| `tests/runners/test_local_review.py:559,576` | `Path(lr.__file__).parent` | package dir, for source guards | Keep |
+| `tests/runners/test_local_review_findings.py:43`, `test_local_review_store.py:63` | `Path(<module>.__file__).parent` | package dir, for source guards | Keep |
+| `tests/runners/test_merge.py:264` | `Path(__file__).resolve().parents[3] / "contracts/gate_record_golden.json"` | gate-record fixture | Keep, `parents[2]` into `tests/contracts/` (phase 01) |
+
+Not a `Path(__file__)` lookup but listed for completeness: `src/dotharness/repo_guard.py:108` (shared layer, new tree) uses
+`Path(__file__).resolve().parent` as the discovery fallback in `snapshot_harness_repo`; pr-review avoids it (D-1).
+
+`PR_COMMENTS_SCRIPT_PATH` follow-up: the script is kept as a historical file under `docs/pr_review/` by the docs phase
+and is not packaged, so `address-comments`, `focused-review` and `regret-review` (the three users) cannot find it
+installed. The fix (ship `pr-comments.py` as package data under `src/dotharness/` and resolve it with
+`importlib.resources`, or add a config key) touches `runners/common.py`, which is outside this phase's Scope; it is
+raised as an open question.
+
+### Knowledge and vendor defaults (D-7, D-10)
+
+- `knowledge_dir` (`[harness] knowledge_dir`) defaults to `~/.harness/knowledge`. When the key is not set and that directory
+  does not exist, `config.default_knowledge_dir()` resolves to the packaged `src/dotharness/knowledge/` via
+  `importlib.resources.files("dotharness") / "knowledge"` (a plain path: wheels are installed unpacked). An explicit
+  `knowledge_dir` is never replaced, so `validate` still reports a configured path that does not exist. The fallback
+  applies to `knowledge_dir` only. Note: the `init` template in `cli.py` writes `knowledge_dir = "~/.harness/knowledge"`
+  explicitly, which opts out of the fallback.
+- `vibe_types_repo` (`[focused_review]`) defaults to `~/.harness/vendor/vibe-types` with no packaged fallback: it is an
+  external vendor checkout.
+- `~/.harness/cache/pr-<n>-comments.json` (`fetch_pr_comments`) is unchanged.

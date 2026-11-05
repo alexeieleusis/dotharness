@@ -1,18 +1,6 @@
 import pytest
 
 
-@pytest.fixture(autouse=True)
-def _clear_ssh_host_cache():
-    """`_resolve_ssh_host` is memoized process-wide; clear it so a mocked
-    `ssh -G` result from one test can't leak into another test reusing the
-    same host/alias name."""
-    from dotharness.pr_review.repo_guard import _resolve_ssh_host
-
-    _resolve_ssh_host.cache_clear()
-    yield
-    _resolve_ssh_host.cache_clear()
-
-
 @pytest.fixture
 def tmp_xdg(tmp_path, monkeypatch):
     """Redirect XDG runtime dir to tmp_path for all modules."""

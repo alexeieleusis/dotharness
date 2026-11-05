@@ -1,10 +1,11 @@
 import os
 import re
+from importlib import resources
 from pathlib import Path
 
 import pytest
 
-from dotharness.pr_review.config import CiFixConfig, ConfigError, MergeConfig, PreCommand, load_config
+from dotharness.pr_review.config import CiFixConfig, ConfigError, HarnessSection, MergeConfig, PreCommand, load_config
 from dotharness.pr_review.lock import working_dir_lock_key
 from dotharness.pr_review.runners.common import build_subprocess_env
 
@@ -612,3 +613,58 @@ def test_ci_fix_max_fix_attempts_invalid(tmp_path, bad):
 def test_merge_max_changed_lines_invalid(tmp_path, bad):
     with pytest.raises(ConfigError, match=r"merge\.max_changed_lines"):
         load_config(_merge_toml(tmp_path, f"max_changed_lines = {bad}"))
+
+
+# --- packaging-sensitive path defaults (D-7, D-10) ---------------------------------------------------------------
+
+
+def _write_min(tmp_path, harness_body=""):
+    p = tmp_path / ".harness.toml"
+    p.write_text(f'[harness]\n{harness_body}\n[repo]\nname = "a/b"\nworking_dir = "/tmp"\n')
+    return p
+
+
+def test_knowledge_dir_defaults_to_home_dir_when_it_exists(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".harness" / "knowledge").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    cfg = load_config(_write_min(tmp_path))
+    assert cfg.harness.knowledge_dir == home / ".harness" / "knowledge"
+    assert HarnessSection().knowledge_dir == home / ".harness" / "knowledge"
+
+
+def test_knowledge_dir_falls_back_to_packaged_knowledge_when_home_dir_missing(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    expected = Path(str(resources.files("dotharness") / "knowledge"))
+    cfg = load_config(_write_min(tmp_path))
+    assert cfg.harness.knowledge_dir == expected
+    assert HarnessSection().knowledge_dir == expected
+    assert (cfg.harness.knowledge_dir / "pr-review" / "review-file.md").is_file()
+
+
+def test_explicit_knowledge_dir_is_never_replaced_by_the_fallback(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    cfg = load_config(_write_min(tmp_path, 'knowledge_dir = "~/.harness/knowledge"'))
+    assert cfg.harness.knowledge_dir == home / ".harness" / "knowledge"
+    assert not cfg.harness.knowledge_dir.exists()
+
+
+def test_vibe_types_repo_default_has_no_packaged_fallback(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    cfg = load_config(_write_min(tmp_path))
+    assert cfg.focused_review.vibe_types_repo == home / ".harness" / "vendor" / "vibe-types"
+    assert not cfg.focused_review.vibe_types_repo.exists()
+
+
+def test_comments_cache_path_unchanged(tmp_path, monkeypatch):
+    # fetch_pr_comments reads ~/.harness/cache/pr-<n>-comments.json (path kept as in the old code).
+    from dotharness.pr_review.runners import common
+
+    source = Path(common.__file__).read_text(encoding="utf-8")
+    assert 'Path.home() / ".harness" / "cache" / f"pr-{pr_number}-comments.json"' in source
