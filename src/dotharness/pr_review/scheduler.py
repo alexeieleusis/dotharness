@@ -76,9 +76,9 @@ class ScheduleEntry:
     <array>
         <string>{esc(self.harness_bin)}</string>
         <string>run</string>
-        <string>{esc(self.command)}</string>
         <string>--config</string>
         <string>{esc(self.config_path)}</string>
+        <string>{esc(self.command)}</string>
     </array>
     <key>StartInterval</key><integer>{self.interval_seconds}</integer>
     <key>StandardOutPath</key><string>{esc(log_file)}</string>

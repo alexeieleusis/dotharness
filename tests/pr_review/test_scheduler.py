@@ -470,7 +470,7 @@ def test_cron_line_exact_text(tmp_path, monkeypatch):
 def test_launchd_plist_exact_text(tmp_path, monkeypatch):
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     log_file = tmp_path / ".local/share/dotharness/logs/review-prs/launchd.log"
-    # launchd order: run <command> --config <cfg>
+    # launchd order: run --config <cfg> <command>
     assert (
         _pr_review_entry("launchd").to_launchd_plist()
         == f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -482,9 +482,9 @@ def test_launchd_plist_exact_text(tmp_path, monkeypatch):
     <array>
         <string>/usr/local/bin/pr_review</string>
         <string>run</string>
-        <string>review-prs</string>
         <string>--config</string>
         <string>/c/.harness.toml</string>
+        <string>review-prs</string>
     </array>
     <key>StartInterval</key><integer>7200</integer>
     <key>StandardOutPath</key><string>{log_file}</string>
@@ -516,19 +516,17 @@ def test_cron_edge_cases():
         build_cron_expression(5400)
 
 
-# ── typer: launchd argument order hits the run group's --config trap ──
+# ── typer: --config belongs to the `run` group, before the runner ──
 
 
-def test_run_runner_then_config_is_usage_error(minimal_toml, tmp_xdg):
-    """Observed: `run <runner> --config <cfg>` (launchd order) exits 2 with 'No such option: --config'.
-
-    --config belongs to the `run` group callback, so the runner subcommand rejects it. Documented, not fixed.
-    """
+def test_run_config_then_runner_works_and_runner_then_config_is_usage_error(minimal_toml, tmp_xdg):
+    """`run --config <cfg> <runner>` (cron and launchd order) parses; `run <runner> --config` exits 2."""
     from typer.testing import CliRunner
 
     from dotharness.pr_review.cli import app
 
-    result = CliRunner().invoke(app, ["run", "review-prs", "--config", str(minimal_toml)])
-    assert result.exit_code == 2
-    assert "Error: No such option: --config" in result.output
-    assert "Usage: pr_review run review-prs [OPTIONS]" in result.output
+    bad = CliRunner().invoke(app, ["run", "review-prs", "--config", str(minimal_toml)])
+    assert bad.exit_code == 2
+    assert "No such option: --config" in bad.output
+    good = CliRunner().invoke(app, ["run", "--config", str(minimal_toml), "review-prs", "--help"])
+    assert good.exit_code == 0

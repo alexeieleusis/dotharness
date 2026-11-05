@@ -423,7 +423,7 @@ def schedule_install(
     from dotharness.pr_review.scheduler import ScheduleEntry, install_cron, install_launchd, parse_duration
 
     cfg = load_config(Path(config_path).resolve())
-    harness_bin = shutil.which("harness") or "harness"
+    harness_bin = shutil.which("pr_review") or "pr_review"
     entry = ScheduleEntry(
         command=command,
         repo_slug=cfg.repo_slug,
