@@ -5,7 +5,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dotharness.vibe_heal.review.github import _MAX_INLINE_COMMENTS, GitHubReviewClient, GitHubReviewError
+from dotharness.vibe_heal.review.github import (
+    _MAX_INLINE_COMMENTS,
+    _MAX_REVIEW_BODY_CHARS,
+    GitHubReviewClient,
+    GitHubReviewError,
+    GitHubTimeoutError,
+)
 from dotharness.vibe_heal.review.models import FileReview, ReviewIssue, ReviewResult
 
 
@@ -377,6 +383,45 @@ class TestPostReview:
         mock_run.assert_called()
         call_args = mock_run.call_args[0][0]
         assert call_args[0] == "gh"
+
+    @pytest.mark.asyncio
+    async def test_timeout_does_not_trigger_fallback(self, sample_report, mocker) -> None:
+        """A timed-out inline post may have succeeded, so no fallback review is posted."""
+        mocker.patch(
+            "dotharness.vibe_heal.review.github.run_command",
+            new_callable=AsyncMock,
+            return_value=mocker.MagicMock(success=True, stdout="myorg/myrepo"),
+        )
+        client = GitHubReviewClient()
+        post = mocker.patch.object(
+            client,
+            "_post_json",
+            new_callable=AsyncMock,
+            side_effect=GitHubTimeoutError("gh API call timed out after 60s"),
+        )
+        with pytest.raises(GitHubTimeoutError):
+            await client.post_review(42, sample_report)
+        assert post.await_count == 1
+
+    def test_oversized_bodies_are_truncated(self) -> None:
+        """Both payload builders cap the body at GitHub's size limit."""
+        report = ReviewResult(
+            project_key="p",
+            branch="b",
+            base_branch="main",
+            files=[
+                FileReview(
+                    file_path="a.py",
+                    issues=[
+                        ReviewIssue(rule="python:S1", message="x" * 500, line=i, on_changed_line=False)
+                        for i in range(1, 400)
+                    ],
+                )
+            ],
+        )
+        client = GitHubReviewClient()
+        assert len(client.build_payload(report)["body"]) <= _MAX_REVIEW_BODY_CHARS
+        assert len(client._build_fallback_payload(report)["body"]) <= _MAX_REVIEW_BODY_CHARS
 
     @pytest.mark.asyncio
     async def test_raises_when_fallback_also_fails(self, sample_report, mocker) -> None:

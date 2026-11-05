@@ -23,7 +23,24 @@ class NoOpenPrError(GitHubReviewError):
     """Raised when there is no open PR for the current branch."""
 
 
+class GitHubTimeoutError(GitHubReviewError):
+    """Raised when a gh API call times out.
+
+    The request may already have been processed by GitHub, so callers must not
+    blindly retry (e.g. via a fallback post) as that could duplicate the review.
+    """
+
+
 _MAX_INLINE_COMMENTS = 50
+_MAX_REVIEW_BODY_CHARS = 60_000  # GitHub's limit is ~65536; leave headroom
+_TRUNCATION_NOTICE = "\n\n_...review body truncated to fit GitHub's size limit._"
+
+
+def _truncate_body(body: str) -> str:
+    """Truncate a review body so it fits within GitHub's size limit."""
+    if len(body) <= _MAX_REVIEW_BODY_CHARS:
+        return body
+    return body[: _MAX_REVIEW_BODY_CHARS - len(_TRUNCATION_NOTICE)] + _TRUNCATION_NOTICE
 _MAX_OVERFLOW_BODY_LINES = 100
 
 
@@ -127,6 +144,7 @@ class GitHubReviewClient:
 
         Raises:
             OSError: If gh CLI is not installed.
+            GitHubTimeoutError: If the inline post times out (no fallback, to avoid duplicates).
             GitHubReviewError: If both the inline review and fallback fail.
         """
         await self.validate_installed()
@@ -146,6 +164,9 @@ class GitHubReviewClient:
                 ],
                 payload,
             )
+        except GitHubTimeoutError:
+            # The review may already exist on GitHub; falling back would risk a duplicate.
+            raise
         except GitHubReviewError as inline_err:
             logger.warning(
                 "Inline review failed (%s) — falling back to top-level comment",
@@ -216,7 +237,7 @@ class GitHubReviewClient:
         files_with_coverage = [fr for fr in report.files if fr.coverage_pct is not None]
         if files_with_coverage:
             body_parts.append("**Coverage on changed lines:**\n\n" + format_coverage_table(files_with_coverage))
-        return {"event": "COMMENT", "body": "\n\n".join(body_parts), "comments": comments}
+        return {"event": "COMMENT", "body": _truncate_body("\n\n".join(body_parts)), "comments": comments}
 
     def _build_issue_body(self, issue: ReviewIssue) -> str:
         body = f"**{issue.rule}** {issue.message}"
@@ -295,7 +316,7 @@ class GitHubReviewClient:
             lines.extend(["", "**Coverage on changed lines:**\n\n" + format_coverage_table(files_with_coverage)])
         return {
             "event": "COMMENT",
-            "body": "\n".join(lines),
+            "body": _truncate_body("\n".join(lines)),
             "comments": [],
         }
 
@@ -327,7 +348,7 @@ class GitHubReviewClient:
             process.kill()
             await process.wait()
             msg = "gh API call timed out after 60s"
-            raise GitHubReviewError(msg) from None
+            raise GitHubTimeoutError(msg) from None
         if process.returncode != 0:
             stderr_msg = stderr_bytes.decode().strip()
             stdout_msg = stdout_bytes.decode().strip()
