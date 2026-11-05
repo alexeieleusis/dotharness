@@ -92,6 +92,16 @@ async def _drain(comm: "asyncio.Future[tuple[bytes, bytes]]", wait: float) -> tu
     return b"", b""
 
 
+async def _wait_exit(proc: asyncio.subprocess.Process) -> None:
+    """Return once the child exited, without waiting for pipe EOF.
+
+    ``Process.wait()`` on Python < 3.12 only resolves after the stdio pipes close, which a grandchild
+    holding them can delay indefinitely; ``returncode`` is set as soon as asyncio reaps the child.
+    """
+    while proc.returncode is None:
+        await asyncio.sleep(0.01)
+
+
 async def _cancel_pending(*futs: "asyncio.Future[object]") -> None:
     for fut in futs:
         if not fut.done():
@@ -134,7 +144,7 @@ async def run(
             await _cleanup_shielded(proc, pgid)
             raise
     comm = asyncio.ensure_future(proc.communicate(stdin.encode() if stdin is not None else None))
-    waiter = asyncio.ensure_future(proc.wait())
+    waiter = asyncio.ensure_future(_wait_exit(proc))
     try:
         # Wait on the child's exit, not on pipe EOF: a grandchild may keep the pipes open.
         done, _ = await asyncio.wait({waiter}, timeout=timeout)
