@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.cli import cli
 from dotharness.pr_review.config import HarnessConfig, HarnessSection, LocalReviewConfig, RepoConfig
+from dotharness.pr_review.runners import common
 from dotharness.pr_review.runners import local_review as lr
 from dotharness.pr_review.runners.local_review import LocalReviewError, LocalReviewTarget, read_manifest, review_dir_for
 from dotharness.pr_review.runners.local_review import address as lr_address
@@ -860,14 +861,16 @@ def test_full_command_without_remotes_or_gh(
     )
     CliStub.calls = []
     git_calls: list[list[str]] = []
-    real_popen = subprocess.Popen
+    real_run = common.run
 
-    def spy(args, *a, **kw):
-        if isinstance(args, list) and args and args[0] == "git":
-            git_calls.append([str(a) for a in args])
-        return real_popen(args, *a, **kw)
+    async def spy(cmd, *a, **kw):
+        # Production git goes through common.run_cmd -> common.run (asyncio subprocesses), not subprocess.Popen.
+        # The test's own git() helper uses subprocess.run, so only production calls are recorded here.
+        if cmd and cmd[0] == "git":
+            git_calls.append([str(arg) for arg in cmd])
+        return await real_run(cmd, *a, **kw)
 
-    monkeypatch.setattr(subprocess, "Popen", spy)
+    monkeypatch.setattr(common, "run", spy)
     monkeypatch.setattr("dotharness.pr_review.runners.local_review.address.Backend", CliStub)  # `_make_backend` owner
     r = CliRunner().invoke(cli, ["run", "--config", str(cfg_path), "local-review", "--address"])
     assert r.exit_code == 0, r.output
@@ -876,7 +879,7 @@ def test_full_command_without_remotes_or_gh(
     assert git(env.repo, "log", "--oneline", "-n1").endswith("change a.py")
     assert git(env.repo, "rev-list", "--count", "main..HEAD") == str(len(env.shas) + 1)
     forbidden = {"fetch", "pull", "push", "clone", "ls-remote"}
-    assert git_calls
+    assert any("rev-parse" in c or "status" in c for c in git_calls), "spy saw no production git calls"
     assert not [c for c in git_calls if forbidden & set(c)]
     assert git(env.repo, "remote") == ""
 
