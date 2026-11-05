@@ -1,7 +1,6 @@
 import os
-import signal
 import subprocess
-from contextlib import contextmanager
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,49 +18,105 @@ from dotharness.pr_review.runners.common import (
 )
 
 
-def test_run_cmd_success(tmp_path):
-    result = run_cmd(["echo", "hello"], cwd=str(tmp_path), env=os.environ.copy(), timeout=5)
+def _run(cmd, tmp_path, **kw):
+    kw.setdefault("timeout", 5)
+    return run_cmd(cmd, cwd=str(tmp_path), env=os.environ.copy(), **kw)
+
+
+def test_run_cmd_success_returns_bytes(tmp_path):
+    result = _run(["sh", "-c", "printf out; printf err >&2"], tmp_path)
     assert result.returncode == 0
+    assert result.stdout == b"out"
+    assert result.stderr == b"err"
+    assert isinstance(result.stdout, bytes)
+    assert isinstance(result.stderr, bytes)
+
+
+def test_run_cmd_newline_preserved_in_bytes(tmp_path):
+    assert _run(["sh", "-c", "printf 'a\\n'"], tmp_path).stdout == b"a\n"
 
 
 def test_run_cmd_nonzero_raises(tmp_path):
-    with pytest.raises(subprocess.CalledProcessError):
-        run_cmd(["false"], cwd=str(tmp_path), env=os.environ.copy(), timeout=5)
+    with pytest.raises(subprocess.CalledProcessError) as exc:
+        _run(["sh", "-c", "printf out; printf err >&2; exit 3"], tmp_path)
+    assert exc.value.returncode == 3
+    assert exc.value.stdout == b"out"
+    assert exc.value.stderr == b"err"
+    assert exc.value.cmd == ["sh", "-c", "printf out; printf err >&2; exit 3"]
 
 
-@contextmanager
-def _patched_timeout_kill(communicate_side_effect):
-    mock_proc = MagicMock()
-    mock_proc.communicate.side_effect = communicate_side_effect
-    mock_proc.pid = os.getpid()
+def test_run_cmd_nonzero_without_check_returns(tmp_path):
+    result = _run(["sh", "-c", "printf x; exit 2"], tmp_path, check=False)
+    assert result.returncode == 2
+    assert result.stdout == b"x"
+
+
+def test_run_cmd_timeout_raises_timeout_expired_with_bytes(tmp_path):
     with (
-        patch("subprocess.Popen", return_value=mock_proc),
-        patch("os.getpgid", return_value=1234),
-        patch("os.killpg") as mock_kill,
+        patch("dotharness.subprocess_runner.KILL_GRACE_SECONDS", 1.0),
+        pytest.raises(subprocess.TimeoutExpired) as exc,
     ):
-        yield mock_kill
+        _run(["sh", "-c", "printf partial; sleep 30"], tmp_path, timeout=1)
+    assert exc.value.timeout == 1
+    assert exc.value.cmd == ["sh", "-c", "printf partial; sleep 30"]
+    assert exc.value.stdout in (None, b"partial")
+    assert isinstance(exc.value.stderr, bytes)
 
 
-def test_run_cmd_timeout_sends_sigterm_first(tmp_path):
+def test_run_cmd_timeout_kills_grandchildren(tmp_path):
+    pidfile = tmp_path / "pid"
+    script = f"sleep 60 & echo $! > {pidfile}; wait"
     with (
-        _patched_timeout_kill([subprocess.TimeoutExpired([], 1), (b"", b"")]) as mock_kill,
+        patch("dotharness.subprocess_runner.KILL_GRACE_SECONDS", 1.0),
         pytest.raises(subprocess.TimeoutExpired),
     ):
-        run_cmd(["sleep", "999"], cwd=str(tmp_path), env={}, timeout=1)
-    mock_kill.assert_called_once_with(1234, signal.SIGTERM)
+        _run(["sh", "-c", script], tmp_path, timeout=1)
+    pid = int(pidfile.read_text())
+    for _ in range(50):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    pytest.fail("grandchild survived the timeout kill")
 
 
-def test_run_cmd_timeout_sigkills_if_still_alive_after_grace_period(tmp_path):
-    side_effect = [subprocess.TimeoutExpired([], 1), subprocess.TimeoutExpired([], 10), (b"", b"")]
-    with (
-        _patched_timeout_kill(side_effect) as mock_kill,
-        pytest.raises(subprocess.TimeoutExpired),
-    ):
-        run_cmd(["sleep", "999"], cwd=str(tmp_path), env={}, timeout=1)
-    assert mock_kill.call_args_list == [
-        ((1234, signal.SIGTERM),),
-        ((1234, signal.SIGKILL),),
-    ]
+def test_run_cmd_missing_executable_raises_file_not_found(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        _run(["definitely-not-a-real-binary-xyz"], tmp_path)
+
+
+def test_run_cmd_missing_cwd_raises_file_not_found(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        _run(["true"], tmp_path / "nope")
+
+
+def test_run_cmd_shell_string(tmp_path):
+    result = _run("echo a && echo b >&2", tmp_path, shell=True)  # noqa: S604 - exercises run_cmd shell mode
+    assert result.stdout == b"a\n"
+    assert result.stderr == b"b\n"
+
+
+def test_run_cmd_shell_missing_command_is_exit_127_not_exception(tmp_path):
+    with pytest.raises(subprocess.CalledProcessError) as exc:
+        _run("definitely-not-a-real-binary-xyz", tmp_path, shell=True)  # noqa: S604 - exercises run_cmd shell mode
+    assert exc.value.returncode == 127
+
+
+def test_run_cmd_passes_env_and_cwd(tmp_path):
+    result = run_cmd(["sh", "-c", 'printf \'%s %s\' "$FOO" "$PWD"'], cwd=str(tmp_path), env={"FOO": "bar"}, timeout=5)
+    assert result.stdout.startswith(b"bar ")
+
+
+def test_run_cmd_has_no_process_code_of_its_own():
+    import inspect
+
+    from dotharness.pr_review.runners import common
+
+    src = inspect.getsource(common)
+    assert "killpg" not in src
+    assert "start_new_session" not in src
+    assert "Popen(" not in src
 
 
 def test_git_detach_records_sha(tmp_path):

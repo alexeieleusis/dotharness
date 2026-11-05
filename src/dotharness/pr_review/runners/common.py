@@ -1,8 +1,8 @@
+import asyncio
 import json
 import logging
 import os
 import re
-import signal
 import subprocess
 import time
 from collections.abc import Callable, Iterator
@@ -12,13 +12,13 @@ from pathlib import Path
 
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig, RepoConfig, SubDir
+from dotharness.subprocess_runner import run
 
 logger = logging.getLogger(__name__)
 
 TIMEOUT_GH = 30
 TIMEOUT_GIT = 60
 TIMEOUT_FETCH_COMMENTS = 120
-GRACE_PERIOD_SECONDS = 10
 
 
 def resolve_env_file(repo: RepoConfig, subdir: SubDir) -> Path | None:
@@ -109,6 +109,13 @@ def log_called_process_output(e: subprocess.CalledProcessError, log_func: Callab
         log_func("%s stderr: %s", label, e.stderr.decode("utf-8", errors="replace"))
 
 
+def _argv(cmd: list[str] | str, shell: bool) -> list[str]:
+    """Map ``Popen``'s ``(args, shell)`` pair onto the exec-style argv the shared runner takes (POSIX)."""
+    if shell:
+        return ["/bin/sh", "-c", cmd] if isinstance(cmd, str) else ["/bin/sh", "-c", *cmd]
+    return [cmd] if isinstance(cmd, str) else list(cmd)
+
+
 def run_cmd(
     cmd: list[str] | str,
     cwd: str,
@@ -117,31 +124,23 @@ def run_cmd(
     check: bool = True,
     shell: bool = False,
 ) -> subprocess.CompletedProcess:
-    proc = subprocess.Popen(  # noqa: S603
-        cmd,
-        cwd=cwd,
-        env=env,
-        start_new_session=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        shell=shell,
-    )
-    try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-        result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
-        if check and proc.returncode != 0:
-            raise subprocess.CalledProcessError(proc.returncode, cmd, stdout, stderr)
-        else:
-            return result
-    except subprocess.TimeoutExpired:
-        pgid = os.getpgid(proc.pid)
-        os.killpg(pgid, signal.SIGTERM)
-        try:
-            proc.communicate(timeout=GRACE_PERIOD_SECONDS)
-        except subprocess.TimeoutExpired:
-            os.killpg(pgid, signal.SIGKILL)
-            proc.communicate()
-        raise
+    """Run ``cmd`` through ``dotharness.subprocess_runner.run`` with the old ``subprocess`` contract.
+
+    Process-group kill and the SIGTERM-then-SIGKILL policy live in the shared runner. This wrapper only maps
+    its ``RunResult`` back: bytes stdout/stderr, ``TimeoutExpired`` on timeout, ``CalledProcessError`` when
+    ``check`` and the exit code is non-zero, ``FileNotFoundError`` when the program cannot be started.
+    Must not be called from async code (``asyncio.run``). Nothing is logged, so no argv or env leaks.
+    """
+    result = asyncio.run(run(_argv(cmd, shell), cwd=cwd, env=env, timeout=timeout))
+    if result.not_found:
+        raise FileNotFoundError(result.stderr)
+    stdout = result.stdout.encode()
+    stderr = result.stderr.encode()
+    if result.timed_out:
+        raise subprocess.TimeoutExpired(cmd, timeout, output=stdout or None, stderr=stderr or None)
+    if check and result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, cmd, stdout, stderr)
+    return subprocess.CompletedProcess(cmd, result.returncode, stdout, stderr)
 
 
 def git_detach_and_record(cwd: str, env: dict) -> str:

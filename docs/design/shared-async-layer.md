@@ -62,7 +62,7 @@ instance and cwd); the survivor check logs pids only, never command lines.
 - spec-prism-flow `claude_backend.py` / `opencode_backend.py` and sisyphus
   `cli.py` / `subproc.py`: not migrated, edited or deprecated in #164. They stay as they
   are until I-3, I-4 and I-5 move each tool onto this layer.
-- pr-review `backend.py`: replaced in I-3 by a synchronous adapter over `launch_sync` (see "I-3 adapter contract"). pr-review `runners/common.py` `run_cmd` (generic `gh`/`git` runner, not a backend launcher) is not part of that change.
+- pr-review `backend.py`: replaced in I-3 by a synchronous adapter over `launch_sync` (see "I-3 adapter contract"). pr-review `runners/common.py` `run_cmd` (generic `gh`/`git` runner, not a backend launcher) is rebuilt in I-3 as a sync wrapper over `subprocess_runner.run` (see "I-3 `run_cmd` replacement").
 - vibe-heal `ai_tools/`: migrated in the next leaf of #164.
 
 ## Contract for I-3, I-4 and I-5
@@ -168,3 +168,49 @@ Hardening map (every retained item from the old `Backend`):
 | Timeout value and `TimeoutExpired` / `CompletedProcess` result shape | pr-review policy | `Backend.run` |
 | Per-working-dir `fcntl.flock` lock files | pr-review policy | `pr_review/lock.py` (kept) |
 | Global opencode lock | dropped (D-1) | opencode 2.0 no longer needs it |
+
+## I-3 `run_cmd` replacement
+
+Decision OD-1: option (a). `dotharness.pr_review.runners.common.run_cmd` keeps its signature
+`run_cmd(cmd, cwd, env, timeout, check=True, shell=False)` but is a thin sync wrapper over `subprocess_runner.run`
+(through `asyncio.run`, so it must not be called from async code). Option (b) was rejected: it would keep a second
+`Popen`/`killpg` implementation, the duplication ticket #62 names, and the shared runner covers every old behaviour
+except the gaps listed below. `GRACE_PERIOD_SECONDS` is deleted. `src/dotharness/pr_review` contains no `os.killpg`
+and no `start_new_session` (AC-2).
+
+Mapping of `RunResult` back to the old contract:
+
+- Bytes vs text (OD-3): every caller of `run_cmd` received bytes (`.stdout.decode(...)`, `text(...)`); callers are not
+  edited. The wrapper encodes the shared text result to UTF-8. Bytes that are not valid UTF-8 were already replaced
+  with U+FFFD by the shared layer, so such output is lossy where the old code returned the raw bytes.
+- `timed_out`: raises `subprocess.TimeoutExpired(cmd, timeout, output=<bytes or None>, stderr=<bytes or None>)`.
+  `stderr` now ends with the shared `timed out after {timeout}s` line.
+- Non-zero exit with `check`: raises `subprocess.CalledProcessError(returncode, cmd, stdout, stderr)`; without `check`
+  the `CompletedProcess` is returned. A child killed by a signal has a negative code, as before.
+- `not_found` (OD-2): the old `Popen` raised `FileNotFoundError` (an `OSError`) for a missing executable or a missing
+  `cwd`, not a `CalledProcessError`. The wrapper raises `FileNotFoundError(<error text>)`. The shared layer folds every
+  `OSError` into `not_found`, so a `PermissionError` on exec now also surfaces as `FileNotFoundError`. With
+  `shell=True` a missing command is still a shell exit code 127, as before.
+- `shell=True`: mapped to `["/bin/sh", "-c", cmd]` (a list `cmd` becomes `["/bin/sh", "-c", *cmd]`, as `Popen` does on
+  POSIX). A `str` `cmd` without `shell` is a single program name, as with `Popen`.
+- Accepted differences: the grace period is 5 s (`KILL_GRACE_SECONDS`), not 10 s (FR-3, not reintroduced); stdin is
+  `/dev/null` (old: inherited); a `SIGKILL` sweep of the process group also runs after a normal exit, so a background
+  process a command started on purpose no longer outlives the call.
+- Logging (D-9): the wrapper logs nothing; the shared runner never carries argv or env.
+
+Hardening map (every item found in the old `run_cmd`):
+
+| Item | Class | Where |
+| --- | --- | --- |
+| Child in its own session (`start_new_session`) so it leads a process group | shared layer | `subprocess_runner.run` |
+| Timeout: SIGTERM to the group, grace period, SIGKILL to the group, reap the child | shared layer | `subprocess_runner._kill_group` |
+| Exceptions are raised only after the child is reaped (no zombie, no orphan group on timeout) | shared layer | `subprocess_runner.run` |
+| stdout and stderr captured through pipes | shared layer | `subprocess_runner.run` |
+| `cwd` and explicit `env` passed to the child | shared layer | `subprocess_runner.run` |
+| Grace period length | shared layer | `KILL_GRACE_SECONDS = 5` (replaces `GRACE_PERIOD_SECONDS = 10`) |
+| `TimeoutExpired` raised on timeout | pr-review policy | `run_cmd` |
+| `CalledProcessError` when `check` and exit code is non-zero | pr-review policy | `run_cmd` |
+| Bytes `CompletedProcess` result shape | pr-review policy | `run_cmd` |
+| `FileNotFoundError` for a missing executable or `cwd` | pr-review policy | `run_cmd` |
+| `shell` mode and `str` command handling | pr-review policy | `_argv` in `runners/common.py` |
+| Timeout values (`TIMEOUT_GH`, `TIMEOUT_GIT`, per-call budgets) | pr-review policy | `runners/common.py` and callers |
