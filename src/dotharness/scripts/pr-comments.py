@@ -192,10 +192,18 @@ def cmd_fetch(pr_number: int, output_path: str | None) -> None:
     pr_info = gh_json(["pr", "view", str(pr_number), "--json", "title,url,headRefName"])
 
     # Inline (file-level) comments
-    raw_inline: list[dict] = gh_json_paginated(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/comments", "--paginate"])
+    raw_inline: list[dict] = gh_json_paginated([
+        "api",
+        f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/comments",
+        "--paginate",
+    ])
 
     # PR-level reviews (may contain top-level review body)
-    raw_reviews: list[dict] = gh_json_paginated(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/reviews", "--paginate"])
+    raw_reviews: list[dict] = gh_json_paginated([
+        "api",
+        f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/reviews",
+        "--paginate",
+    ])
 
     # Issue comments (general PR timeline comments — where bots like CodeRabbit/Graphite post)
     raw_issue_comments: list[dict] = gh_json_paginated([
@@ -256,11 +264,16 @@ def _post_reply(cmd_path: str, body: str, comment_id: str | int, errors: list[tu
 
 
 def _already_replied(comment: dict, current_user: str) -> bool:
-    """Return True if the current user already posted an 'Addressed in' reply."""
-    return any(
-        r.get("author") == current_user and r.get("body", "").startswith("Addressed in")
-        for r in comment.get("replies", [])
-    )
+    """Return True if the current user already replied in the thread (any reply body)."""
+    return any(r.get("author") == current_user for r in comment.get("replies", []))
+
+
+def _issue_comment_handled(comment: dict, all_issue_comments: list[dict], current_user: str) -> bool:
+    """Return True if an issue comment is our own, or one of our comments already quotes its URL."""
+    if comment.get("author") == current_user:
+        return True
+    quote = f"> {comment['url']}"
+    return any(o.get("author") == current_user and o.get("body", "").startswith(quote) for o in all_issue_comments)
 
 
 def _collect_reviewers(pr_data: dict) -> set[str]:
@@ -344,7 +357,11 @@ def cmd_reply(pr_number: int, commit_hash: str, input_path: str | None) -> None:
         )
 
     # Issue comments — reply by posting a new issue comment quoting the original URL
-    for c in data.get("issue_comments", data.get("bot_issue_comments", [])):
+    issue_comments = data.get("issue_comments", data.get("bot_issue_comments", []))
+    for c in issue_comments:
+        if _issue_comment_handled(c, issue_comments, current_user):
+            print(f"Skipping issue comment {c['id']} — own comment or already replied.")
+            continue
         label = "bot" if c.get("author_type") == "Bot" else "user"
         print(f"Replying to issue comment {c['id']} (@{c['author']}, {label}) …", end=" ")
         _post_reply(
