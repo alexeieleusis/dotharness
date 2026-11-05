@@ -94,7 +94,7 @@ def test_parse_real_sonarqube_response() -> None:
     assert issue.component == "com.github.kevinsawicki:http-request:com.github.kevinsawicki.http.HttpRequest"
 
     # Check that severity is extracted from impacts
-    assert issue.severity == "HIGH"
+    assert issue.severity == "CRITICAL"  # HIGH impact mapped to old scale
 
     # Check that status is read from issueStatus
     assert issue.status == "ACCEPTED"
