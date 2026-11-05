@@ -157,16 +157,42 @@ def test_project_key_with_slash_is_rejected(tmp_path):
     assert result == ""
 
 
-def test_branch_with_path_traversal_segments_returns_empty(tmp_path):
+def _setup_fe_project(tmp_path):
     (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=fe\n", encoding="utf-8")
     home = tmp_path / "home"
-    home.mkdir()
+    reviews = home / ".vibe-heal" / "reviews"
+    (reviews / "fe").mkdir(parents=True)
+    return home, reviews
+
+
+def test_branch_with_path_traversal_segments_returns_empty(tmp_path):
+    home, _ = _setup_fe_project(tmp_path)
+    # reviews/fe/../../../secret/review.md resolves to home/secret/review.md (a real file)
     secret_dir = home / "secret"
     secret_dir.mkdir()
-    (secret_dir / "secret.txt").write_text("classified", encoding="utf-8")
-    review_base = home / ".vibe-heal" / "reviews" / "fe"
-    review_base.mkdir(parents=True)
+    (secret_dir / "review.md").write_text("classified", encoding="utf-8")
     with patch("pathlib.Path.home", return_value=home):
-        result = get_vibe_heal_context([SubDir(path=".")], str(tmp_path), "../../../secret/secret.txt")
+        result = get_vibe_heal_context([SubDir(path=".")], str(tmp_path), "../../../secret")
     assert result == ""
-    assert "classified" not in result
+
+
+def test_branch_escaping_into_sibling_project_returns_empty(tmp_path):
+    home, reviews = _setup_fe_project(tmp_path)
+    # reviews/fe/../other-project/main/review.md stays inside reviews/ but outside reviews/fe
+    other = reviews / "other-project" / "main"
+    other.mkdir(parents=True)
+    (other / "review.md").write_text("classified", encoding="utf-8")
+    with patch("pathlib.Path.home", return_value=home):
+        result = get_vibe_heal_context([SubDir(path=".")], str(tmp_path), "../other-project/main")
+    assert result == ""
+
+
+def test_symlinked_branch_dir_pointing_outside_returns_empty(tmp_path):
+    home, reviews = _setup_fe_project(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "review.md").write_text("classified", encoding="utf-8")
+    (reviews / "fe" / "linked").symlink_to(outside, target_is_directory=True)
+    with patch("pathlib.Path.home", return_value=home):
+        result = get_vibe_heal_context([SubDir(path=".")], str(tmp_path), "linked")
+    assert result == ""
