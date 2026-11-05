@@ -27,7 +27,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from itertools import pairwise
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
@@ -637,13 +637,14 @@ def _agent_fix_and_push(
         # Free of the fix budget, but bounded: skip this (head SHA, check) until the head moves.
         _record_noop(config.repo_slug, number, pre_sha, check.name)
 
-    after = _run_step(step, wdir, env)
-    if after.returncode != 0:
-        _digest(OUTCOME_STILL_FAILING, number, check.name, f"step {step.name!r} still fails (exit {after.returncode})")
-        return False
+    # Vet the agent's changes before running anything from the modified tree with the token env.
     unsafe = _unsafe_change(wdir, env, pre_sha)
     if unsafe:
         _digest(OUTCOME_UNSAFE_CHANGE, number, check.name, unsafe)
+        return False
+    after = _run_step(step, wdir, env)
+    if after.returncode != 0:
+        _digest(OUTCOME_STILL_FAILING, number, check.name, f"step {step.name!r} still fails (exit {after.returncode})")
         return False
     _commit_if_dirty(check, wdir, env)
     if _head(wdir, env) == pre_sha:
@@ -662,14 +663,23 @@ def _status(wdir: str, env: dict) -> str:
     return _text(result.stdout)
 
 
+def _git_paths(wdir: str, env: dict, args: list[str]) -> list[str]:
+    """Paths printed by a git command run with ``-z`` (NUL-separated, never quoted)."""
+    result = run_cmd(["git", *args], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
+    return [p for p in _text(result.stdout).split("\0") if p]
+
+
 def _unsafe_change(wdir: str, env: dict, pre_sha: str) -> str | None:
-    """Why the result must not be pushed: untracked files, or a change under ``.github/``; else None."""
-    untracked = run_cmd(["git", "ls-files", "--others", "--exclude-standard"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
-    files = _text(untracked.stdout).split()
+    """Why the result must not be pushed: untracked files, or a change under ``.github/``; else None.
+
+    ``-z`` keeps non-ASCII paths unquoted, and ``--no-renames`` lists both sides of a move, so a file moved
+    out of ``.github/`` is still reported under its old path.
+    """
+    files = _git_paths(wdir, env, ["ls-files", "-z", "--others", "--exclude-standard"])
     if files:
         return f"untracked files left in the tree: {', '.join(files[:10])}"
-    changed = run_cmd(["git", "diff", "--name-only", pre_sha], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
-    protected = [f for f in _text(changed.stdout).split() if f.startswith(".github/")]
+    changed = _git_paths(wdir, env, ["diff", "-z", "--name-only", "--no-renames", pre_sha])
+    protected = [f for f in changed if PurePosixPath(f).parts[:1] == (".github",)]
     if protected:
         return f"change touches .github/: {', '.join(protected[:10])}"
     return None

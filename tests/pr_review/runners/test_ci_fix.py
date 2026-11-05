@@ -635,3 +635,73 @@ def test_fix_check_uses_api_step_when_log_says_unknown_step(tmp_path):
     api.assert_called_once()
     assert find.call_args.args[1] == "Run checks"
     assert m.pushes
+
+
+def _git_repo(tmp_path):
+    import subprocess
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)  # noqa: S607
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    (tmp_path / ".github" / "workflows" / "ci.yml").write_text("name: ci\n" * 20, encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    git("add", "-A")
+    git("commit", "-qm", "init")
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],  # noqa: S607
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return git, sha
+
+
+def test_unsafe_change_flags_workflow_moved_out_of_github(tmp_path):
+    git, sha = _git_repo(tmp_path)
+    git("mv", ".github/workflows/ci.yml", "docs/ci.yml")
+    result = ci_fix._unsafe_change(str(tmp_path), {}, sha)
+    assert result is not None
+    assert ".github/workflows/ci.yml" in result
+
+
+def test_unsafe_change_flags_non_ascii_workflow_path(tmp_path):
+    git, sha = _git_repo(tmp_path)
+    (tmp_path / ".github" / "workflows" / "\u00e9.yml").write_text("x\n", encoding="utf-8")
+    git("add", "-A")
+    result = ci_fix._unsafe_change(str(tmp_path), {}, sha)
+    assert result is not None
+    assert ".github/workflows/\u00e9.yml" in result
+
+
+def test_unsafe_change_reports_unquoted_untracked_non_ascii_path(tmp_path):
+    _, sha = _git_repo(tmp_path)
+    (tmp_path / "docs" / "\u00e9 file.txt").write_text("x\n", encoding="utf-8")
+    result = ci_fix._unsafe_change(str(tmp_path), {}, sha)
+    assert result is not None
+    assert "docs/\u00e9 file.txt" in result
+
+
+def test_unsafe_change_allows_ordinary_tracked_edit(tmp_path):
+    _, sha = _git_repo(tmp_path)
+    (tmp_path / "docs" / "a.md").write_text("x\n", encoding="utf-8")
+    import subprocess
+
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)  # noqa: S607
+    assert ci_fix._unsafe_change(str(tmp_path), {}, sha) is None
+
+
+def test_unsafe_change_runs_before_the_post_fix_step(tmp_path, caplog):
+    with (
+        _mocks(tmp_path) as m,
+        patch(P + "_unsafe_change", return_value="change touches .github/: x"),
+        caplog.at_level(logging.INFO),
+    ):
+        ci_fix.run(_cfg(tmp_path))
+    assert m.run_step.call_count == 1  # only the reproduction run; the agent's tree was never executed
+    assert m.pushes == []
+    assert any("unsafe-change" in d for d in _digests(caplog))
