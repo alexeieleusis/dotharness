@@ -484,3 +484,35 @@ def test_get_replied_comment_keys_returns_empty_for_corrupted_state(tmp_path, mo
     state.record_replied_comment("acme-frontend", 1, "issue:10")
     state._state_path("acme-frontend", state.ADDRESS_COMMENTS_FILE).write_text("{not json", encoding="utf-8")
     assert state.get_replied_comment_keys("acme-frontend", 1) == set()
+
+
+@pytest.mark.parametrize("raw", ["[]", "null", '"x"', "{", b"\xff\xfe"])
+@pytest.mark.parametrize(
+    ("reader", "filename"),
+    [
+        (state.read_vibe_heal_state, "vibe_heal.json"),
+        (state.read_self_review_state, "self_review.json"),
+        (state.read_address_comments_state, "address_comments.json"),
+    ],
+)
+def test_read_state_malformed_file_returns_defaults(tmp_xdg, reader, filename, raw):
+    path = tmp_xdg / "state" / "acme-frontend" / filename
+    path.parent.mkdir(parents=True)
+    path.write_bytes(raw if isinstance(raw, bytes) else raw.encode())
+    result = reader("acme-frontend")
+    assert result["version"] == 1
+
+
+def test_read_state_wrong_typed_fields_are_coerced(tmp_xdg):
+    import json
+
+    d = tmp_xdg / "state" / "acme-frontend"
+    d.mkdir(parents=True)
+    (d / "vibe_heal.json").write_text(json.dumps({"reviewed_shas": None, "last_main_sha": 5}))
+    (d / "self_review.json").write_text(json.dumps({"reviewed_prs": {}, "partial_reviews": []}))
+    (d / "address_comments.json").write_text(json.dumps({"replied": []}))
+    assert state.read_vibe_heal_state("acme-frontend")["reviewed_shas"] == {}
+    assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == ""
+    sr = state.read_self_review_state("acme-frontend")
+    assert sr["reviewed_prs"] == [] and sr["partial_reviews"] == {}
+    assert state.read_address_comments_state("acme-frontend")["replied"] == {}

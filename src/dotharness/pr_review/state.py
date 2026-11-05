@@ -1,3 +1,4 @@
+import copy
 import fcntl
 import json
 import logging
@@ -63,18 +64,29 @@ class _state_lock:
         self._fd.close()
 
 
-def read_vibe_heal_state(repo_slug: str) -> dict:
-    defaults = {"version": 1, "reviewed_shas": {}, "last_main_sha": ""}
-    p = _state_path(repo_slug, VIBE_HEAL_FILE)
+def _load_json_dict(p: Path, defaults: dict) -> dict:
+    """Load a state file, falling back to `defaults` when it is missing, unreadable, corrupt,
+    or not a JSON object. Each key in `defaults` is coerced to the default's type, so a
+    wrong-shaped value (e.g. `"reviewed_shas": null`) can't crash every later run."""
     if not p.exists():
-        return defaults
+        return copy.deepcopy(defaults)
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
         logger.warning(_CORRUPTED_STATE_MSG, p, exc)
-        return defaults
-    data.setdefault("last_main_sha", "")
-    data.setdefault("reviewed_shas", {})
+        return copy.deepcopy(defaults)
+    if not isinstance(data, dict):
+        logger.warning(_CORRUPTED_STATE_MSG, p, f"expected a JSON object, got {type(data).__name__}")
+        return copy.deepcopy(defaults)
+    for key, default in defaults.items():
+        if not isinstance(data.get(key), type(default)):
+            data[key] = copy.deepcopy(default)
+    return data
+
+
+def read_vibe_heal_state(repo_slug: str) -> dict:
+    defaults = {"version": 1, "reviewed_shas": {}, "last_main_sha": ""}
+    data = _load_json_dict(_state_path(repo_slug, VIBE_HEAL_FILE), defaults)
     if any(not isinstance(entry, dict) for entry in data["reviewed_shas"].values()):
         data["reviewed_shas"] = {
             pr: (entry if isinstance(entry, dict) else {"sha": entry, "reviewed_at": 0})
@@ -146,20 +158,7 @@ def read_self_review_state(repo_slug: str) -> dict:
         "traceability_reviewed_prs": [],
         "regret_reviewed_prs": [],
     }
-    p = _state_path(repo_slug, SELF_REVIEW_FILE)
-    if not p.exists():
-        return defaults
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        logger.warning(_CORRUPTED_STATE_MSG, p, exc)
-        return defaults
-    data.setdefault("reviewed_prs", [])
-    data.setdefault("partial_reviews", {})
-    data.setdefault("design_reviewed_prs", [])
-    data.setdefault("traceability_reviewed_prs", [])
-    data.setdefault("regret_reviewed_prs", [])
-    return data
+    return _load_json_dict(_state_path(repo_slug, SELF_REVIEW_FILE), defaults)
 
 
 def write_self_review_state(repo_slug: str, reviewed_prs: list[int], partial_reviews: dict | None = None) -> None:
@@ -276,16 +275,7 @@ def add_regret_reviewed_pr(repo_slug: str, pr_number: int) -> None:
 
 def read_address_comments_state(repo_slug: str) -> dict:
     defaults = {"version": 1, "replied": {}}
-    p = _state_path(repo_slug, ADDRESS_COMMENTS_FILE)
-    if not p.exists():
-        return defaults
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        logger.warning(_CORRUPTED_STATE_MSG, p, exc)
-        return defaults
-    data.setdefault("replied", {})
-    return data
+    return _load_json_dict(_state_path(repo_slug, ADDRESS_COMMENTS_FILE), defaults)
 
 
 def get_replied_comment_keys(repo_slug: str, pr_number: int) -> set[str]:
