@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -1393,23 +1394,26 @@ def fetch_pr_comments(pr_number: int, script_path: Path, wdir: str, env: dict) -
     Returns a flat list of dicts, each tagged with a "type" key ("inline", "review", or
     "issue"). Bot-authored issue comments are excluded; inline and review comments are not.
     """
-    result = run_cmd(
-        ["python3", str(script_path), "fetch", "--pr", str(pr_number)],
-        cwd=wdir,
-        env=env,
-        timeout=TIMEOUT_FETCH_COMMENTS,
-        check=False,
-    )
-    if result.returncode != 0:
-        logger.warning("PR #%d: failed to fetch comments: %s", pr_number, result.stderr)
-        return []
+    # A per-call temp file (not the shared ~/.harness/cache/pr-<n>-comments.json, which has no repo
+    # component) so concurrent runs on different repos with the same PR number can't read each other's data.
+    with tempfile.TemporaryDirectory(prefix="harness-pr-comments-") as tmp_dir:
+        output_file = Path(tmp_dir) / "comments.json"
+        result = run_cmd(
+            ["python3", str(script_path), "fetch", "--pr", str(pr_number), "--output", str(output_file)],
+            cwd=wdir,
+            env=env,
+            timeout=TIMEOUT_FETCH_COMMENTS,
+            check=False,
+        )
+        if result.returncode != 0:
+            logger.warning("PR #%d: failed to fetch comments: %s", pr_number, result.stderr)
+            return []
 
-    cache_file = Path.home() / ".harness" / "cache" / f"pr-{pr_number}-comments.json"
-    if not cache_file.exists():
-        logger.warning("PR #%d: comments cache file not found after fetch", pr_number)
-        return []
+        if not output_file.exists():
+            logger.warning("PR #%d: comments output file not found after fetch", pr_number)
+            return []
 
-    data = json.loads(cache_file.read_text(encoding="utf-8"))
+        data = json.loads(output_file.read_text(encoding="utf-8"))
     comments: list[dict] = []
 
     for c in data.get("inline_comments", []):
