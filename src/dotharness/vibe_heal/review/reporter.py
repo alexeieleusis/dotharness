@@ -35,10 +35,18 @@ def write_report_to_file(result: ReviewResult, json_path: Path) -> None:
     """Write review JSON to an exact path and markdown alongside it (same stem, .md).
 
     Creates the parent directory if it doesn't exist.
+
+    Raises:
+        ValueError: If ``json_path`` already ends in ``.md``, since the markdown
+            companion would overwrite the JSON report.
     """
+    md_path = json_path.parent / (json_path.stem + ".md")
+    if md_path == json_path:
+        msg = f"Report file must not end in .md (markdown would overwrite the JSON report): {json_path}"
+        raise ValueError(msg)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(result, json_path)
-    _write_markdown(result, json_path.parent / (json_path.stem + ".md"))
+    _write_markdown(result, md_path)
 
 
 def load_report(report_dir: Path) -> ReviewResult:

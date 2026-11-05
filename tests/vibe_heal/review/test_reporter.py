@@ -3,8 +3,16 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from dotharness.vibe_heal.review.models import FileReview, ReviewIssue, ReviewResult
-from dotharness.vibe_heal.review.reporter import default_report_dir, format_coverage_table, load_report, write_reports
+from dotharness.vibe_heal.review.reporter import (
+    default_report_dir,
+    format_coverage_table,
+    load_report,
+    write_report_to_file,
+    write_reports,
+)
 
 
 def _make_result() -> ReviewResult:
@@ -201,6 +209,18 @@ class TestWriteReports:
         assert "<p>Unused variables clutter code.</p>" in md
         assert "<p>Magic numbers reduce readability.</p>" in md
         assert "python:S999" not in md.split("<details>")[1] if "<details>" in md else True
+
+
+class TestWriteReportToFile:
+    def test_writes_json_and_markdown(self, tmp_path: Path) -> None:
+        write_report_to_file(_make_result(), tmp_path / "out" / "report.json")
+        assert (tmp_path / "out" / "report.json").exists()
+        assert (tmp_path / "out" / "report.md").exists()
+
+    def test_md_suffix_raises_without_writing(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match=r"\.md"):
+            write_report_to_file(_make_result(), tmp_path / "report.md")
+        assert not (tmp_path / "report.md").exists()
 
 
 class TestCoverageInMarkdown:
