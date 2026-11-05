@@ -9,7 +9,7 @@ prefix so existing setups keep working.
 
 ## Pages
 
-- [Overview](pr_review/index.md): what the tool does and a quick start
+- [Overview](pr_review/overview.md): what the tool does and a quick start
 - [Modules](pr_review/modules.md): the generated API reference and the command module layout
 
 ## Commands

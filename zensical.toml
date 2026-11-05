@@ -4,7 +4,6 @@ repo_url = "https://github.com/alexeieleusis/dotharness"
 site_url = "https://alexeieleusis.github.io/dotharness"
 site_description = "Personal AI tooling for automating recurring engineering workflows"
 site_author = "Alexei Diaz"
-use_directory_urls = false
 edit_uri = "edit/main/docs/"
 repo_name = "alexeieleusis/dotharness"
 copyright = 'Maintained by <a href="https://github.com/alexeieleusis">alexeieleusis</a>.'
@@ -21,7 +20,7 @@ nav = [
     ] },
     { "pr-review" = [
         "pr_review.md",
-        { "Overview" = "pr_review/index.md" },
+        { "Overview" = "pr_review/overview.md" },
         { "Commands" = [
             { "review-prs" = "pr_review/commands/review-prs.md" },
             { "focused-review" = "pr_review/commands/focused-review.md" },
