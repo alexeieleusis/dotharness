@@ -29,6 +29,8 @@ from dotharness.pr_review.runners.common import (
 
 logger = logging.getLogger(__name__)
 
+VIBE_HEAL_MODULE = "dotharness.vibe_heal"
+
 
 class BaseAnalysisError(RuntimeError):
     """A git step of the base analysis failed or timed out; the run must skip PR review."""
@@ -226,7 +228,7 @@ def _process_subdir(pr_number: int, subdir, config: HarnessConfig, env: dict) ->
     if not _run_pre_commands(subdir, config, env):
         return False
 
-    vh_cmd = [config.vibe_heal.python, "-m", "dotharness.vibe_heal", "review", "--pr", str(pr_number)]
+    vh_cmd = [config.vibe_heal.python, "-m", VIBE_HEAL_MODULE, "review", "--pr", str(pr_number)]
     if subdir.coverage:
         vh_cmd.append("--coverage")
     vh_cmd += env_file_args(config.repo, subdir)
@@ -238,7 +240,7 @@ def _process_subdir(pr_number: int, subdir, config: HarnessConfig, env: dict) ->
         logger.info("PR #%d: closed or merged during review, skipping post", pr_number)
         return False
 
-    vh_post = [config.vibe_heal.python, "-m", "dotharness.vibe_heal", "review", "--post", "--pr", str(pr_number)]
+    vh_post = [config.vibe_heal.python, "-m", VIBE_HEAL_MODULE, "review", "--post", "--pr", str(pr_number)]
     vh_post += env_file_args(config.repo, subdir)
     logger.info("Running vibe_heal review --post in %s for PR #%d", subdir_path, pr_number)
     return _run_vh_command(
@@ -255,7 +257,7 @@ def _run_base_subdir(subdir, config: HarnessConfig, env: dict) -> bool:
         return False
 
     subdir_path = str(config.repo.working_dir / subdir.path)
-    vh_cmd = [config.vibe_heal.python, "-m", "dotharness.vibe_heal", "review", "--baseline"]
+    vh_cmd = [config.vibe_heal.python, "-m", VIBE_HEAL_MODULE, "review", "--baseline"]
     vh_cmd += env_file_args(config.repo, subdir)
     logger.info("Running vibe_heal base analysis in %s", subdir_path)
     return _run_vh_command(vh_cmd, "vibe_heal base analysis", subdir_path, config.vibe_heal.vibe_heal_timeout, env)
