@@ -87,12 +87,17 @@ class TestHasAuthConfigured:
         handler = SonarPropertiesHandler(tmp_path, config)
         assert handler._has_auth_configured() is True
 
-    def test_true_via_sonarqube_token_env(
+    def test_false_via_sonarqube_token_env(
         self, tmp_path: Path, config: VibeHealConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        for v in ("SONAR_TOKEN", "SONAR_LOGIN"):
+            monkeypatch.delenv(v, raising=False)
         monkeypatch.setenv("SONARQUBE_TOKEN", "secret")
+        (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=orig\n")
         handler = SonarPropertiesHandler(tmp_path, config)
-        assert handler._has_auth_configured() is True
+        assert handler._has_auth_configured() is False
+        cmd = handler.build_command("key", "Name")
+        assert any(arg.startswith("-Dsonar.token=") for arg in cmd)
 
     def test_true_via_sonar_login_env(
         self, tmp_path: Path, config: VibeHealConfig, monkeypatch: pytest.MonkeyPatch

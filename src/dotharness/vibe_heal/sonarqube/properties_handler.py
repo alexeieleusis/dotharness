@@ -19,8 +19,8 @@ _KEY_RE = re.compile(r"^\s*sonar\.projectKey\s*=", re.IGNORECASE)
 _NAME_RE = re.compile(r"^\s*sonar\.projectName\s*=", re.IGNORECASE)
 _AUTH_PROPS_RE = re.compile(r"^\s*sonar\.(token|login|password)\s*=\s*.+", re.IGNORECASE)
 _AUTH_REDACT_RE = re.compile(r"^\s*[#!]?\s*sonar\.(token|login|password)\s*=\s*.+", re.IGNORECASE)
-_AUTH_ENV_VARS = ("SONAR_TOKEN", "SONARQUBE_TOKEN", "SONAR_LOGIN")
-_HOST_URL_ENV_VARS = ("SONAR_HOST_URL", "SONARQUBE_HOST_URL")
+_AUTH_ENV_VARS = ("SONAR_TOKEN", "SONAR_LOGIN")
+_HOST_URL_ENV_VARS = ("SONAR_HOST_URL",)
 _HOST_URL_RE = re.compile(r"^\s*sonar\.host\.url\s*=\s*.+", re.IGNORECASE)
 _RECOVERY_HEADER_MARKER = "vibe-heal: temporary analysis project"
 

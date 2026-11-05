@@ -22,7 +22,7 @@ _SERVER_ANALYSIS_TIMEOUT_SECONDS = 300
 _AUTH_ERROR_RE = re.compile(r"401|403|unauthorized|authentication", re.IGNORECASE)
 _AUTH_HINT = (
     "\nHint: authentication may be configured via environment variable "
-    "(SONAR_TOKEN, SONARQUBE_TOKEN) or the central scanner settings "
+    "(SONAR_TOKEN, SONAR_LOGIN) or the central scanner settings "
     "(~/.sonar/sonar-scanner.properties). Check these if you expected "
     "auth to be picked up automatically."
 )
