@@ -216,7 +216,7 @@ class TestWriteReports:
         assert "python:S1192 — why this matters" in md
         assert "<p>Unused variables clutter code.</p>" in md
         assert "<p>Magic numbers reduce readability.</p>" in md
-        assert "python:S999" not in md.split("<details>")[1] if "<details>" in md else True
+        assert "python:S999 — why this matters" not in md
 
 
 class TestWriteReportToFile:
