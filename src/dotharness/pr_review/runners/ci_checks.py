@@ -55,7 +55,7 @@ def gh(args: list[str], env: dict) -> subprocess.CompletedProcess:
     try:
         return run_cmd(["gh", *args], cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
     except subprocess.TimeoutExpired:
-        logger.error("gh %s timed out after %ss", " ".join(args[:2]), TIMEOUT_GH)
+        logger.exception("gh %s timed out after %ss", " ".join(args[:2]), TIMEOUT_GH)
         return subprocess.CompletedProcess(["gh", *args], _TIMEOUT_EXIT, stdout="", stderr="timed out")
 
 
