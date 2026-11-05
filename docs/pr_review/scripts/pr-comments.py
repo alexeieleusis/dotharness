@@ -241,10 +241,9 @@ def cmd_reply(pr_number: int, commit_hash: str, input_path: str | None) -> None:
                 "-X",
                 "POST",
                 "-f",
-                "body=@-",
+                f"body={build_body(c['id'])}",
             ],
             check=False,
-            stdin_input=build_body(c["id"]),
         )
         if result.returncode == 0:
             # Verify the API actually returned a reply object (has an "id" field)
@@ -276,10 +275,9 @@ def cmd_reply(pr_number: int, commit_hash: str, input_path: str | None) -> None:
                 "-X",
                 "POST",
                 "-f",
-                "body=@-",
+                f"body={body}",
             ],
             check=False,
-            stdin_input=body,
         )
         if result.returncode == 0:
             try:
