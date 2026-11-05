@@ -1,9 +1,11 @@
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
+from dotharness.opencode_guards import BackendCwdDivergedError, OpencodePluginError
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.runners import address_comments
 from dotharness.pr_review.runners.address_comments import (
@@ -11,6 +13,7 @@ from dotharness.pr_review.runners.address_comments import (
     _address_single_comment,
 )
 from dotharness.pr_review.runners.common import FOCUSED_REVIEW_MARKER
+from dotharness.repo_guard import RepoIdentityError
 
 
 def _state(*unresolved, minimized=()):
@@ -978,6 +981,77 @@ def test_address_single_comment_does_not_record_when_backend_raises(monkeypatch)
         _ISSUE_COMMENT, 7, "tmpl", boom, "/w", "acme/frontend", {}, "sha", None, None, "acme-frontend"
     )
     assert recorded == []
+
+
+_BACKEND_FAILURES = [
+    pytest.param(RuntimeError("boom"), id="generic"),
+    pytest.param(subprocess.TimeoutExpired(cmd=["opencode"], timeout=10), id="timeout"),
+    pytest.param(OpencodePluginError("plugin installed"), id="opencode-plugin"),
+    pytest.param(BackendCwdDivergedError("cwd diverged"), id="cwd-diverged"),
+    pytest.param(RepoIdentityError("wrong repo"), id="repo-identity"),
+]
+
+
+@pytest.mark.parametrize("failure", _BACKEND_FAILURES)
+def test_backend_failure_is_swallowed_and_loop_continues_and_pushes(failure, tmp_xdg, tmp_path):
+    """Pins today's behaviour: `_address_single_comment` catches *every* backend exception
+    (including the shared-layer guards, which the Backend adapter propagates unchanged),
+    so a failed run that left a commit behind is still pushed, the next comment is still
+    processed, and the HEAD is restored at the end. If the guards should abort the loop
+    instead, this test is where that change must be made deliberately."""
+    cfg = _cfg(tmp_path)
+    (tmp_path / "k" / "pr-review").mkdir(parents=True)
+    (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
+    comment_2 = {**_FAKE_COMMENT, "id": 43}
+    with (
+        patch("dotharness.pr_review.runners.address_comments.get_gh_token", return_value="tok"),
+        patch(
+            "dotharness.pr_review.runners.address_comments._list_prs_to_check",
+            return_value=[{"number": 2, "headRefName": "my-branch"}],
+        ),
+        patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
+        patch(
+            "dotharness.pr_review.runners.address_comments.fetch_pr_comments", return_value=[_FAKE_COMMENT, comment_2]
+        ),
+        patch("dotharness.pr_review.runners.address_comments.git_detach_and_record", return_value="sha"),
+        patch("dotharness.pr_review.runners.address_comments.git_fetch_and_checkout"),
+        patch("dotharness.pr_review.runners.address_comments.git_restore") as mock_restore,
+        # HEAD moves after every (failed) run: the partial commit is a clean fast-forward
+        patch(
+            "dotharness.pr_review.runners.address_comments.get_head_sha",
+            side_effect=["sha-0", "sha-1", "sha-2"],
+        ),
+        patch("dotharness.pr_review.runners.address_comments._is_ancestor", return_value=True),
+        patch("dotharness.pr_review.runners.address_comments._push_branch", return_value=True) as mock_push,
+        patch("dotharness.pr_review.runners.address_comments.run_cmd") as mock_run,
+        patch("dotharness.pr_review.runners.common.run_cmd", mock_run),
+        patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        mock_be.return_value.run.side_effect = failure
+        address_comments._run_locked(cfg)
+    assert mock_be.return_value.run.call_count == 2  # next comment still processed
+    assert mock_push.call_count == 2  # partial commit from the failed run is pushed
+    mock_restore.assert_called()
+
+
+@pytest.mark.parametrize("failure", _BACKEND_FAILURES)
+def test_address_single_comment_does_not_record_for_any_backend_failure(failure, monkeypatch):
+    recorded = []
+    monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
+    # HEAD moved, so a commit exists; only `clean_run` may keep the comment from being recorded
+    monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha-after")
+    monkeypatch.setattr(address_comments, "_is_ancestor", lambda *a, **k: True)
+
+    backend = MagicMock(spec=Backend)
+    backend.run.side_effect = failure
+
+    post_sha, rewritten = address_comments._address_single_comment(
+        _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, None, "acme-frontend"
+    )
+    assert recorded == []
+    assert post_sha == "sha-after"
+    assert rewritten is False
 
 
 def test_address_single_comment_does_not_record_when_no_commit_and_no_reply_observed(monkeypatch):
