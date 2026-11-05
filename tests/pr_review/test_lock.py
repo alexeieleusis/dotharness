@@ -11,10 +11,13 @@ from dotharness.pr_review.lock import acquire_lock, working_dir_lock_key
 _FORK = get_context("fork")
 
 
-def _child_acquire(xdg_path):
-    lock.XDG_RUNTIME = xdg_path
-    with acquire_lock("acme-frontend"):
-        pass
+def _child_acquire(xdg_path, marker_path):
+    lock.XDG_RUNTIME = Path(xdg_path)
+    try:
+        with acquire_lock("acme-frontend"):
+            pass
+    except SystemExit as ex:
+        Path(marker_path).write_text(str(ex.code))
 
 
 def _child_acquire_blocking(xdg_path, marker_path):
@@ -29,12 +32,14 @@ def test_lock_acquired(tmp_xdg):
         assert lock_file.exists()
 
 
-def test_concurrent_lock_raises(tmp_xdg):
+def test_concurrent_lock_raises(tmp_xdg, tmp_path):
+    marker = tmp_path / "marker"
     with acquire_lock("acme-frontend"):
-        p = _FORK.Process(target=_child_acquire, args=(str(tmp_xdg),))
+        p = _FORK.Process(target=_child_acquire, args=(str(tmp_xdg), str(marker)))
         p.start()
         p.join()
-        assert p.exitcode == 1
+    assert p.exitcode == 0  # child caught SystemExit itself; any other crash would be nonzero
+    assert marker.read_text() == "Another instance is already running for acme-frontend"
 
 
 def test_lock_released_after_context(tmp_xdg):
