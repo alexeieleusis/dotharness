@@ -209,46 +209,42 @@ class GitHubReviewClient:
         for file_review in report.files:
             self._collect_file_comments(file_review, report.base_branch, comments, nearby_lines)
 
-        total_before_cap = len(comments)
-        if total_before_cap > _MAX_INLINE_COMMENTS:
-            overflow: list[dict[str, Any]] = comments[_MAX_INLINE_COMMENTS:]
-            comments = comments[:_MAX_INLINE_COMMENTS]
-        else:
-            overflow = []
+        comments, overflow = comments[:_MAX_INLINE_COMMENTS], comments[_MAX_INLINE_COMMENTS:]
 
-        total_findings = total_before_cap + len(nearby_lines)
-        label_suffix = f" [{report.project_label}]" if report.project_label else ""
-        sha_suffix = f" (commit {report.head_sha[:7]})" if report.head_sha else ""
-        if total_findings:
-            breakdown = []
-            if comments:
-                breakdown.append(f"{len(comments)} inline")
-            if overflow:
-                breakdown.append(f"{len(overflow)} capped")
-            if nearby_lines:
-                breakdown.append(f"{len(nearby_lines)} near changed lines")
-            summary = f"SonarQube{label_suffix}: {total_findings} finding(s) ({', '.join(breakdown)}).{sha_suffix}"
-        else:
-            summary = f"SonarQube{label_suffix}: no findings on or near changed lines.{sha_suffix}"
-        body_parts = [summary]
+        body_parts = [self._build_summary(report, len(comments), len(overflow), len(nearby_lines))]
         if nearby_lines:
             body_parts.append(
                 "**Issues near changed lines** (outside diff — shown here instead of inline):\n"
                 + "\n".join(nearby_lines)
             )
         if overflow:
-            visible = overflow[:_MAX_OVERFLOW_BODY_LINES]
-            overflow_lines = [f"- **{c['path']}:{c['line']}** {c['body'].splitlines()[0]}" for c in visible]
-            extra = len(overflow) - len(visible)
-            suffix = f"\n_...and {extra} more not shown._" if extra else ""
-            body_parts.append(
-                f"**{len(overflow)} finding(s) over the {_MAX_INLINE_COMMENTS}-comment inline limit**"
-                f" (capped to avoid GitHub rate limits):\n" + "\n".join(overflow_lines) + suffix
-            )
+            body_parts.append(self._build_overflow_section(overflow))
         files_with_coverage = [fr for fr in report.files if fr.coverage_pct is not None]
         if files_with_coverage:
             body_parts.append("**Coverage on changed lines:**\n\n" + format_coverage_table(files_with_coverage))
         return {"event": "COMMENT", "body": _truncate_body("\n\n".join(body_parts)), "comments": comments}
+
+    @staticmethod
+    def _build_summary(report: ReviewResult, inline: int, capped: int, nearby: int) -> str:
+        label_suffix = f" [{report.project_label}]" if report.project_label else ""
+        sha_suffix = f" (commit {report.head_sha[:7]})" if report.head_sha else ""
+        total = inline + capped + nearby
+        if not total:
+            return f"SonarQube{label_suffix}: no findings on or near changed lines.{sha_suffix}"
+        counts = [(inline, "inline"), (capped, "capped"), (nearby, "near changed lines")]
+        breakdown = ", ".join(f"{n} {name}" for n, name in counts if n)
+        return f"SonarQube{label_suffix}: {total} finding(s) ({breakdown}).{sha_suffix}"
+
+    @staticmethod
+    def _build_overflow_section(overflow: list[dict[str, Any]]) -> str:
+        visible = overflow[:_MAX_OVERFLOW_BODY_LINES]
+        overflow_lines = [f"- **{c['path']}:{c['line']}** {c['body'].splitlines()[0]}" for c in visible]
+        extra = len(overflow) - len(visible)
+        suffix = f"\n_...and {extra} more not shown._" if extra else ""
+        return (
+            f"**{len(overflow)} finding(s) over the {_MAX_INLINE_COMMENTS}-comment inline limit**"
+            f" (capped to avoid GitHub rate limits):\n" + "\n".join(overflow_lines) + suffix
+        )
 
     def _build_issue_body(self, issue: ReviewIssue) -> str:
         body = f"**{issue.rule}** {issue.message}"
