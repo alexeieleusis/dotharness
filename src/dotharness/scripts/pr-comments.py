@@ -205,7 +205,76 @@ def cmd_fetch(pr_number: int, output_path: str | None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def cmd_reply(pr_number: int, commit_hash: str, input_path: str | None) -> None:  # noqa: C901
+def _post_reply(cmd_path: str, body: str, comment_id: str | int, errors: list[tuple[Any, str]]) -> None:
+    """POST a comment body via gh api, printing the outcome and recording failures."""
+    result = run(
+        ["gh", "api", cmd_path, "-X", "POST", "-f", "body=@-"],
+        check=False,
+        stdin_input=body,
+    )
+    if result.returncode != 0:
+        msg = (result.stderr or result.stdout).strip()
+        print(f"✗  {msg}")
+        errors.append((comment_id, msg))
+        return
+    # Verify the API actually returned a reply object (has an "id" field)
+    try:
+        resp = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        print("✓ (non-JSON response)")
+        return
+    if "id" in resp:
+        print("✓")
+    else:
+        msg = f"unexpected response: {result.stdout[:200]}"
+        print(f"✗  {msg}")
+        errors.append((comment_id, msg))
+
+
+def _already_replied(comment: dict, current_user: str) -> bool:
+    """Return True if the current user already posted an 'Addressed in' reply."""
+    return any(
+        r.get("author") == current_user and r.get("body", "").startswith("Addressed in")
+        for r in comment.get("replies", [])
+    )
+
+
+def _collect_reviewers(pr_data: dict) -> set[str]:
+    reviewers: set[str] = set()
+    for rr in pr_data.get("reviewRequests", []):
+        login = rr.get("login") or (rr.get("author") or {}).get("login")
+        if login:
+            reviewers.add(login)
+    for rv in pr_data.get("reviews", []):
+        login = (rv.get("author") or {}).get("login")
+        if login:
+            reviewers.add(login)
+    # Remove bots
+    return {r for r in reviewers if not r.endswith("[bot]")}
+
+
+def _request_re_review(pr_number: int) -> None:
+    """Request re-review only if the PR is not already approved."""
+    pr_data = gh_json(["pr", "view", str(pr_number), "--json", "reviewDecision,reviewRequests,reviews"])
+    if pr_data.get("reviewDecision") == "APPROVED":
+        print("\nPR is already approved — skipping re-review request.")
+        return
+    print("\nRequesting re-review …", end=" ")
+    reviewers = _collect_reviewers(pr_data)
+    if not reviewers:
+        print("(no reviewers found)")
+        return
+    result = run(
+        ["gh", "pr", "edit", str(pr_number), "--add-reviewer", ",".join(reviewers)],
+        check=False,
+    )
+    if result.returncode == 0:
+        print(f"✓  ({', '.join(sorted(reviewers))})")
+    else:
+        print(f"✗  {result.stderr.strip()}")
+
+
+def cmd_reply(pr_number: int, commit_hash: str, input_path: str | None) -> None:
     src = Path(input_path) if input_path else cache_file(pr_number)
     if not src.exists():
         print(f"Error: comments file not found: {src}", file=sys.stderr)
@@ -236,126 +305,37 @@ def cmd_reply(pr_number: int, commit_hash: str, input_path: str | None) -> None:
             return f"{per_comment_replies[key]}\n\n_{commit_url}_"
         return f"Addressed in {commit_url}"
 
-    def already_replied(comment: dict) -> bool:
-        """Return True if the current user already posted an 'Addressed in' reply."""
-        for r in comment.get("replies", []):
-            if r.get("author") == current_user and r.get("body", "").startswith("Addressed in"):
-                return True
-        return False
-
-    errors = []
+    errors: list[tuple[Any, str]] = []
 
     for c in data["inline_comments"]:
-        if already_replied(c):
+        if _already_replied(c, current_user):
             print(f"Skipping inline comment {c['id']} — already replied.")
             continue
         print(f"Replying to inline comment {c['id']} ({c['path']}:{c['line']}) …", end=" ")
-        result = run(
-            [
-                "gh",
-                "api",
-                f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/comments/{c['id']}/replies",
-                "-X",
-                "POST",
-                "-f",
-                "body=@-",
-            ],
-            check=False,
-            stdin_input=build_body(c["id"]),
+        _post_reply(
+            f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/comments/{c['id']}/replies",
+            build_body(c["id"]),
+            c["id"],
+            errors,
         )
-        if result.returncode == 0:
-            # Verify the API actually returned a reply object (has an "id" field)
-            try:
-                resp = json.loads(result.stdout)
-                if "id" in resp:
-                    print("✓")
-                else:
-                    msg = f"unexpected response: {result.stdout[:200]}"
-                    print(f"✗  {msg}")
-                    errors.append((c["id"], msg))
-            except json.JSONDecodeError:
-                print("✓ (non-JSON response)")
-        else:
-            msg = (result.stderr or result.stdout).strip()
-            print(f"✗  {msg}")
-            errors.append((c["id"], msg))
 
     # Issue comments — reply by posting a new issue comment quoting the original URL
     for c in data.get("issue_comments", data.get("bot_issue_comments", [])):
         label = "bot" if c.get("author_type") == "Bot" else "user"
         print(f"Replying to issue comment {c['id']} (@{c['author']}, {label}) …", end=" ")
-        body = f"> {c['url']}\n\n{build_body(c['id'])}"
-        result = run(
-            [
-                "gh",
-                "api",
-                f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments",
-                "-X",
-                "POST",
-                "-f",
-                "body=@-",
-            ],
-            check=False,
-            stdin_input=body,
+        _post_reply(
+            f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments",
+            f"> {c['url']}\n\n{build_body(c['id'])}",
+            c["id"],
+            errors,
         )
-        if result.returncode == 0:
-            try:
-                resp = json.loads(result.stdout)
-                if "id" in resp:
-                    print("✓")
-                else:
-                    msg = f"unexpected response: {result.stdout[:200]}"
-                    print(f"✗  {msg}")
-                    errors.append((c["id"], msg))
-            except json.JSONDecodeError:
-                print("✓ (non-JSON response)")
-        else:
-            msg = (result.stderr or result.stdout).strip()
-            print(f"✗  {msg}")
-            errors.append((c["id"], msg))
 
-    # Request re-review only if the PR is not already approved
-    pr_data = gh_json(["pr", "view", str(pr_number), "--json", "reviewDecision,reviewRequests,reviews"])
-    if pr_data.get("reviewDecision") == "APPROVED":
-        print("\nPR is already approved — skipping re-review request.")
-    else:
-        print("\nRequesting re-review …", end=" ")
-        reviewers: set[str] = set()
-        for rr in pr_data.get("reviewRequests", []):
-            login = rr.get("login") or (rr.get("author") or {}).get("login")
-            if login:
-                reviewers.add(login)
-        for rv in pr_data.get("reviews", []):
-            login = (rv.get("author") or {}).get("login")
-            if login:
-                reviewers.add(login)
-        # Remove bots / empty
-        reviewers = {r for r in reviewers if r and not r.endswith("[bot]")}
-
-        if reviewers:
-            result = run(
-                [
-                    "gh",
-                    "pr",
-                    "edit",
-                    str(pr_number),
-                    "--add-reviewer",
-                    ",".join(reviewers),
-                ],
-                check=False,
-            )
-            if result.returncode == 0:
-                print(f"✓  ({', '.join(sorted(reviewers))})")
-            else:
-                print(f"✗  {result.stderr.strip()}")
-        else:
-            print("(no reviewers found)")
+    _request_re_review(pr_number)
 
     if errors:
         print(f"\n{len(errors)} reply(ies) failed — see above.")
         sys.exit(1)
-    else:
-        print("\nAll done!")
+    print("\nAll done!")
 
 
 # ---------------------------------------------------------------------------
