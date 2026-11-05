@@ -75,6 +75,7 @@ enabled = false
 
 HARNESS_CONFIG = ".harness.toml"
 XDG_LOGS = Path.home() / ".local/share/dotharness/logs"
+RUNNER_FAILED_MSG = "Runner %s failed: %s"
 
 
 def _setup_logging(command: str, verbose: bool = False) -> None:
@@ -193,7 +194,7 @@ def run_review_prs(
     try:
         review_prs.run(cfg, pr_url=pr_url)
     except review_prs.BaseAnalysisError as exc:
-        logging.getLogger(__name__).error("Runner %s failed: %s", "review_prs", exc)  # noqa: TRY400
+        logging.getLogger(__name__).error(RUNNER_FAILED_MSG, "review_prs", exc)  # noqa: TRY400
         sys.exit(1)
 
 
@@ -366,10 +367,10 @@ def run_all(ctx: typer.Context) -> None:
         try:
             fn()
         except review_prs.BaseAnalysisError as exc:
-            log.error("Runner %s failed: %s", name, exc)  # noqa: TRY400
+            log.error(RUNNER_FAILED_MSG, name, exc)  # noqa: TRY400
             failed.append(name)
         except Exception as exc:
-            log.error("Runner %s failed: %s", name, exc, exc_info=True)
+            log.error(RUNNER_FAILED_MSG, name, exc, exc_info=True)
             failed.append(name)
 
     if failed:
