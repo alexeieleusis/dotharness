@@ -5,11 +5,19 @@ from pathlib import Path
 
 import pytest
 
-from dotharness.vibe_heal.review.models import FileReview, ReviewIssue, ReviewResult
+from dotharness.vibe_heal.review.models import (
+    DuplicationLocation,
+    FileReview,
+    ResolvedDuplication,
+    ReviewDuplication,
+    ReviewIssue,
+    ReviewResult,
+)
 from dotharness.vibe_heal.review.reporter import (
     default_report_dir,
     format_coverage_table,
     load_report,
+    load_report_from_path,
     write_report_to_file,
     write_reports,
 )
@@ -221,6 +229,95 @@ class TestWriteReportToFile:
         with pytest.raises(ValueError, match=r"\.md"):
             write_report_to_file(_make_result(), tmp_path / "report.md")
         assert not (tmp_path / "report.md").exists()
+
+    def test_markdown_uses_same_stem_not_review_md(self, tmp_path: Path) -> None:
+        write_report_to_file(_make_result(), tmp_path / "r.json")
+        assert (tmp_path / "r.md").exists()
+        assert not (tmp_path / "review.md").exists()
+
+    def test_creates_missing_parent_dir(self, tmp_path: Path) -> None:
+        write_report_to_file(_make_result(), tmp_path / "a" / "b" / "r.json")
+        assert (tmp_path / "a" / "b" / "r.json").exists()
+        assert (tmp_path / "a" / "b" / "r.md").exists()
+
+
+class TestLoadReport:
+    def test_missing_file_raises_file_not_found(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError, match=r"review\.json"):
+            load_report(tmp_path)
+
+    def test_malformed_json_raises_value_error_with_path(self, tmp_path: Path) -> None:
+        (tmp_path / "review.json").write_text("{not json", encoding="utf-8")
+        with pytest.raises(ValueError, match=r"review\.json"):
+            load_report(tmp_path)
+
+    def test_round_trip(self, tmp_path: Path) -> None:
+        original = _make_result()
+        write_reports(original, tmp_path)
+        assert load_report(tmp_path) == original
+
+
+class TestLoadReportFromPath:
+    def test_missing_file_raises_file_not_found(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError, match=r"missing\.json"):
+            load_report_from_path(tmp_path / "missing.json")
+
+    def test_malformed_json_raises_value_error_with_path(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad.json"
+        path.write_text("{not json", encoding="utf-8")
+        with pytest.raises(ValueError, match=r"bad\.json"):
+            load_report_from_path(path)
+
+    def test_round_trip_with_write_report_to_file(self, tmp_path: Path) -> None:
+        original = _make_result()
+        write_report_to_file(original, tmp_path / "out" / "r.json")
+        assert load_report_from_path(tmp_path / "out" / "r.json") == original
+
+
+class TestMarkdownRendering:
+    def test_message_pipe_and_newline_escaped(self, tmp_path: Path) -> None:
+        result = ReviewResult(
+            project_key="p",
+            branch="b",
+            base_branch="main",
+            generated_at=datetime(2025, 1, 1, tzinfo=UTC),
+            files=[
+                FileReview(
+                    file_path="src/a.py",
+                    issues=[ReviewIssue(rule="r:1", message="a|b\nc", line=1, severity="MAJOR")],
+                )
+            ],
+        )
+        write_reports(result, tmp_path)
+        assert "| a\\|b c |" in (tmp_path / "review.md").read_text()
+
+    def test_duplication_sections_rendered(self, tmp_path: Path) -> None:
+        other = DuplicationLocation(file_path="src/other.py", from_line=3, to_line=9)
+        result = ReviewResult(
+            project_key="p",
+            branch="b",
+            base_branch="main",
+            generated_at=datetime(2025, 1, 1, tzinfo=UTC),
+            files=[
+                FileReview(
+                    file_path="src/a.py",
+                    duplications=[ReviewDuplication(from_line=1, to_line=7, other_locations=[other])],
+                    resolved_duplications=[
+                        ResolvedDuplication(
+                            main_from_line=10, main_to_line=20, other_locations=[other], anchor_new_line=12
+                        )
+                    ],
+                )
+            ],
+        )
+        write_reports(result, tmp_path)
+        md = (tmp_path / "review.md").read_text()
+        assert "### Active Duplications" in md
+        assert "### Resolved Duplications" in md
+        assert "lines 1-7" in md
+        assert "`src/other.py` lines 3-9" in md
+        assert "lines 10-20" in md
+        assert "**Duplication findings: 2**" in md
 
 
 class TestCoverageInMarkdown:
