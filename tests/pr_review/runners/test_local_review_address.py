@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import ClassVar, cast
 
 import pytest
-from click.testing import CliRunner
+from typer.testing import CliRunner
 
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.cli import cli

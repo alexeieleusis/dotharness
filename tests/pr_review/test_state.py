@@ -276,7 +276,7 @@ import subprocess  # noqa: E402
 from pathlib import Path  # noqa: E402
 from unittest.mock import patch  # noqa: E402
 
-from click.testing import CliRunner  # noqa: E402
+from typer.testing import CliRunner  # noqa: E402
 
 from dotharness.pr_review.cli import cli  # noqa: E402
 from dotharness.pr_review.config import load_config  # noqa: E402

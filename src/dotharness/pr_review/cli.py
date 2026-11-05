@@ -1,10 +1,12 @@
+import enum
 import logging
 import shutil
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Annotated, NoReturn
 
-import click
+import typer
 
 from dotharness.pr_review import state as state_mod
 from dotharness.pr_review.config import load_config
@@ -86,34 +88,53 @@ def _setup_logging(command: str, verbose: bool = False) -> None:
     logging.basicConfig(level=level, handlers=handlers, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
-@click.group()
-def cli():
-    pass  # Click group container; subcommands are registered via @cli.command()
+app = typer.Typer(
+    name="pr_review", add_completion=False, no_args_is_help=True, rich_markup_mode=None, pretty_exceptions_enable=False
+)
+cli = app  # alias kept for dotharness.cli (``from dotharness.pr_review.cli import cli as pr_review``)
+
+run_app = typer.Typer(no_args_is_help=True, rich_markup_mode=None)
+state_app = typer.Typer(no_args_is_help=True, rich_markup_mode=None)
+schedule_app = typer.Typer(no_args_is_help=True, rich_markup_mode=None)
+app.add_typer(run_app, name="run")
+app.add_typer(state_app, name="state")
+app.add_typer(schedule_app, name="schedule")
 
 
-@cli.command("init")
-@click.argument("directory", default=".", required=False)
-def cmd_init(directory):
+class Scheduler(enum.StrEnum):
+    cron = "cron"
+    launchd = "launchd"
+
+
+def _fail(message: str) -> NoReturn:
+    """Typer equivalent of ``click.ClickException``: ``Error: <message>`` on stderr, exit code 1."""
+    typer.echo(f"Error: {message}", err=True)
+    raise typer.Exit(1)
+
+
+@app.command("init")
+def cmd_init(directory: Annotated[str, typer.Argument(metavar="DIRECTORY")] = ".") -> None:
     """Write a .harness.toml template to DIRECTORY (default: current directory)."""
     p = Path(directory) / HARNESS_CONFIG
     if p.exists():
-        raise click.ClickException(f"{HARNESS_CONFIG} already exists in {Path(directory).resolve()}")  # noqa: TRY003
+        _fail(f"{HARNESS_CONFIG} already exists in {Path(directory).resolve()}")
     p.write_text(TEMPLATE)
-    click.echo(f"Created {p.resolve()}")
+    typer.echo(f"Created {p.resolve()}")
 
 
-@cli.command("validate")
-@click.argument("directory", default=".", required=False)
-@click.option("--config", "config_path", default=None, type=click.Path())
-def cmd_validate(directory, config_path):
+@app.command("validate")
+def cmd_validate(
+    directory: Annotated[str, typer.Argument(metavar="DIRECTORY")] = ".",
+    config_path: Annotated[Path | None, typer.Option("--config", metavar="PATH")] = None,
+) -> None:
     """Validate .harness.toml in DIRECTORY (default: current directory)."""
     if config_path is None:
-        config_path = str(Path(directory) / HARNESS_CONFIG)
+        config_path = Path(directory) / HARNESS_CONFIG
     errors = []
     try:
         cfg = load_config(Path(config_path))
     except Exception as e:
-        click.echo(str(e), err=True)
+        typer.echo(str(e), err=True)
         sys.exit(1)
 
     if not cfg.repo.working_dir.exists():
@@ -130,38 +151,42 @@ def cmd_validate(directory, config_path):
 
     if errors:
         for e in errors:
-            click.echo(e, err=True)
+            typer.echo(e, err=True)
         sys.exit(1)
-    click.echo(f"Config valid: {cfg.repo.name} backend={cfg.harness.backend}")
+    typer.echo(f"Config valid: {cfg.repo.name} backend={cfg.harness.backend}")
     sys.exit(0)
 
 
-@cli.group("run")
-@click.option("--config", "config_path", default=None, type=click.Path(), is_eager=True)
-@click.option("--verbose", is_flag=True, default=False, help="Enable DEBUG-level logging.")
-@click.pass_context
-def cmd_run(ctx, config_path, verbose):
+@run_app.callback()
+def cmd_run(
+    ctx: typer.Context,
+    config_path: Annotated[Path | None, typer.Option("--config", metavar="PATH", is_eager=True)] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", help="Enable DEBUG-level logging.")] = False,
+) -> None:
     ctx.ensure_object(dict)
     if config_path is None:
-        config_path = str(Path(".") / HARNESS_CONFIG)
+        config_path = Path(".") / HARNESS_CONFIG
     ctx.obj["config_path"] = Path(config_path).resolve()
     ctx.obj["verbose"] = verbose
 
 
-@cmd_run.command("review-prs")
-@click.option(
-    "--pr",
-    "pr_url",
-    default=None,
-    help=(
-        "Review a single PR URL instead of discovering open PRs automatically. "
-        "Bypasses state entirely: the per-PR reviewed-SHA record is neither read nor "
-        "updated, so this PR can be re-run any number of times without affecting future "
-        "review-prs runs."
-    ),
-)
-@click.pass_context
-def run_review_prs(ctx, pr_url):
+@run_app.command("review-prs")
+def run_review_prs(
+    ctx: typer.Context,
+    pr_url: Annotated[
+        str | None,
+        typer.Option(
+            "--pr",
+            metavar="TEXT",
+            help=(
+                "Review a single PR URL instead of discovering open PRs automatically. "
+                "Bypasses state entirely: the per-PR reviewed-SHA record is neither read nor "
+                "updated, so this PR can be re-run any number of times without affecting future "
+                "review-prs runs."
+            ),
+        ),
+    ] = None,
+) -> None:
     """Run vibe_heal static analysis review over open PRs (or a single PR with --pr)."""
     _setup_logging("review-prs", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
@@ -172,135 +197,151 @@ def run_review_prs(ctx, pr_url):
         sys.exit(1)
 
 
-@cmd_run.command("focused-review")
-@click.pass_context
-def run_focused_review(ctx):
+@run_app.command("focused-review")
+def run_focused_review(ctx: typer.Context) -> None:
     _setup_logging("focused-review", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
     focused_review.run(cfg)
 
 
-@cmd_run.command("review-requested")
-@click.option(
-    "--pr",
-    "pr_url",
-    default=None,
-    help="Review a single PR URL instead of discovering PRs where you're a requested reviewer.",
-)
-@click.pass_context
-def run_review_requested(ctx, pr_url):
+@run_app.command("review-requested")
+def run_review_requested(
+    ctx: typer.Context,
+    pr_url: Annotated[
+        str | None,
+        typer.Option(
+            "--pr",
+            metavar="TEXT",
+            help="Review a single PR URL instead of discovering PRs where you're a requested reviewer.",
+        ),
+    ] = None,
+) -> None:
     """Post a dotharness-review on PRs where you're a requested reviewer (or a single PR with --pr)."""
     _setup_logging("review-requested", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
     review_requested.run(cfg, pr_url=pr_url)
 
 
-@cmd_run.command("self-review")
-@click.pass_context
-def run_self_review(ctx):
+@run_app.command("self-review")
+def run_self_review(ctx: typer.Context) -> None:
     _setup_logging("self-review", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
     self_review.run(cfg)
 
 
-@cmd_run.command("local-review")
-@click.option("--base", "base", default=None, help="Base ref to compare against (default: config, origin/HEAD, main).")
-@click.option("--output-dir", "output_dir", default=None, type=click.Path(), help="Output root override.")
-@click.option("--force", is_flag=True, default=False, help="Ignore the manifest and re-run every pass for this head.")
-@click.option("--address", is_flag=True, default=False, help="After the review phase, address open findings.")
-@click.option(
-    "--skip-review", is_flag=True, default=False, help="With --address: skip the review, address an earlier one."
-)
-@click.option(
-    "--review-dir",
-    "review_dir",
-    default=None,
-    type=click.Path(),
-    help="With --address --skip-review: review directory.",
-)
-@click.pass_context
-def run_local_review(ctx, base, output_dir, force, address, skip_review, review_dir):
+@run_app.command("local-review")
+def run_local_review(
+    ctx: typer.Context,
+    base: Annotated[
+        str | None,
+        typer.Option(
+            "--base", metavar="TEXT", help="Base ref to compare against (default: config, origin/HEAD, main)."
+        ),
+    ] = None,
+    output_dir: Annotated[
+        Path | None, typer.Option("--output-dir", metavar="PATH", help="Output root override.")
+    ] = None,
+    force: Annotated[
+        bool, typer.Option("--force", help="Ignore the manifest and re-run every pass for this head.")
+    ] = False,
+    address: Annotated[bool, typer.Option("--address", help="After the review phase, address open findings.")] = False,
+    skip_review: Annotated[
+        bool, typer.Option("--skip-review", help="With --address: skip the review, address an earlier one.")
+    ] = False,
+    review_dir: Annotated[
+        Path | None,
+        typer.Option("--review-dir", metavar="PATH", help="With --address --skip-review: review directory."),
+    ] = None,
+) -> None:
     """Review the current checkout against its base, offline; write findings under the output root."""
-    usage_error = local_review.address_usage_error(address, skip_review, review_dir)
+    # local_review is typed on str paths (click.Path() yielded str); keep that contract.
+    output_dir_arg = None if output_dir is None else str(output_dir)
+    review_dir_arg = None if review_dir is None else str(review_dir)
+    usage_error = local_review.address_usage_error(address, skip_review, review_dir_arg)
     if usage_error:
-        raise click.UsageError(usage_error)
+        raise typer.BadParameter(usage_error)
     _setup_logging("local-review", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"], require_repo_name=False)
     code = local_review.run_local_review(
         cfg,
         base=base,
-        output_dir=output_dir,
+        output_dir=output_dir_arg,
         force=force,
         address=address,
         skip_review=skip_review,
-        review_dir=review_dir,
+        review_dir=review_dir_arg,
     )
     sys.exit(code)
 
 
-@cmd_run.command("address-comments")
-@click.pass_context
-def run_address_comments(ctx):
+@run_app.command("address-comments")
+def run_address_comments(ctx: typer.Context) -> None:
     _setup_logging("address-comments", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
     address_comments.run(cfg)
 
 
-@cmd_run.command("auto-approve")
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    default=False,
-    help="Evaluate and log what would be marked viewed or approved, without any GitHub write.",
-)
-@click.pass_context
-def run_auto_approve(ctx, dry_run):
+@run_app.command("auto-approve")
+def run_auto_approve(
+    ctx: typer.Context,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Evaluate and log what would be marked viewed or approved, without any GitHub write.",
+        ),
+    ] = False,
+) -> None:
     """Mark small files viewed and approve small PRs once the author has followed up on review comments."""
     _setup_logging("auto-approve", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
     auto_approve.run(cfg, dry_run=dry_run)
 
 
-def _dry_run_and_pr_options(dry_run_help: str):
-    """The ``--dry-run`` and ``--pr N`` options shared by the ``ci-fix`` and ``merge`` commands."""
-
-    def decorator(f):
-        f = click.option(
-            "--pr",
-            "pr",
-            type=click.INT,
-            default=None,
-            metavar="N",
-            help="Only process the PR with this number (default: all of your open PRs).",
-        )(f)
-        return click.option("--dry-run", is_flag=True, default=False, help=dry_run_help)(f)
-
-    return decorator
+PrOption = Annotated[
+    int | None,
+    typer.Option(
+        "--pr",
+        metavar="N",
+        help="Only process the PR with this number (default: all of your open PRs).",
+    ),
+]
 
 
-@cmd_run.command("ci-fix")
-@_dry_run_and_pr_options("Reproduce and log what would be fixed, without any push or GitHub write.")
-@click.pass_context
-def run_ci_fix(ctx, dry_run, pr):
+@run_app.command("ci-fix")
+def run_ci_fix(
+    ctx: typer.Context,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Reproduce and log what would be fixed, without any push or GitHub write."),
+    ] = False,
+    pr: PrOption = None,
+) -> None:
     """Fix failing required CI checks on your own PRs and push the fix to the PR branch. Off unless [ci_fix].enabled."""
     _setup_logging("ci-fix", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
     ci_fix.run(cfg, dry_run=dry_run, pr=pr)
 
 
-@cmd_run.command("merge")
-@_dry_run_and_pr_options("Evaluate and log whether each PR would be merged, without any merge or GitHub write.")
-@click.pass_context
-def run_merge(ctx, dry_run, pr):
+@run_app.command("merge")
+def run_merge(
+    ctx: typer.Context,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run", help="Evaluate and log whether each PR would be merged, without any merge or GitHub write."
+        ),
+    ] = False,
+    pr: PrOption = None,
+) -> None:
     """Squash-merge your own PRs once every merge condition holds. Never approves. Off unless [merge].enabled."""
     _setup_logging("merge", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
     merge.run(cfg, dry_run=dry_run, pr=pr)
 
 
-@cmd_run.command("all")
-@click.pass_context
-def run_all(ctx):
+@run_app.command("all")
+def run_all(ctx: typer.Context) -> None:
     """Run all runners in sequence: review-prs, focused-review, self-review, review-requested, address-comments, auto-approve, ci-fix, merge.
 
     ci-fix and merge are no-ops unless [ci_fix].enabled / [merge].enabled is set.
@@ -335,56 +376,50 @@ def run_all(ctx):
         sys.exit(1)
 
 
-@cli.group("state")
-def cmd_state():
-    pass  # Intentionally empty; Click group container for subcommands
-
-
 def _reset_local_review(config_path: Path, yes: bool) -> None:
     cfg = load_config(config_path, require_repo_name=False)
     try:
         review_root = local_review.review_root_for_reset(cfg)
     except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
+        _fail(str(exc))
     if not review_root.exists():
-        click.echo(f"Nothing to reset: {review_root} does not exist")
+        typer.echo(f"Nothing to reset: {review_root} does not exist")
         return
     if not yes:
-        click.confirm(f"Delete review directory {review_root} (all reviews for {cfg.repo_slug})?", abort=True)
+        typer.confirm(f"Delete review directory {review_root} (all reviews for {cfg.repo_slug})?", abort=True)
     local_review.reset(review_root)
-    click.echo(f"State reset for local-review/{cfg.repo_slug}: deleted {review_root}")
+    typer.echo(f"State reset for local-review/{cfg.repo_slug}: deleted {review_root}")
 
 
 # Commands whose state is not a JSON file under state/ and so can't go through state.delete_state.
 _CUSTOM_RESETS = {"local-review": _reset_local_review}
 
+ConfigOption = Annotated[Path, typer.Option("--config", metavar="PATH")]
 
-@cmd_state.command("reset")
-@click.argument("command")
-@click.option("--config", "config_path", default=HARNESS_CONFIG, type=click.Path())
-@click.option("--yes", is_flag=True)
-def state_reset(command, config_path, yes):
+
+@state_app.command("reset")
+def state_reset(
+    command: Annotated[str, typer.Argument(metavar="COMMAND")],
+    config_path: ConfigOption = Path(HARNESS_CONFIG),
+    yes: Annotated[bool, typer.Option("--yes")] = False,
+) -> None:
     if command in _CUSTOM_RESETS:
         _CUSTOM_RESETS[command](Path(config_path).resolve(), yes)
         return
     cfg = load_config(Path(config_path).resolve())
     if not yes:
-        click.confirm(f"Delete state for {command}/{cfg.repo_slug}?", abort=True)
+        typer.confirm(f"Delete state for {command}/{cfg.repo_slug}?", abort=True)
     state_mod.delete_state(cfg.repo_slug, command)
-    click.echo(f"State reset for {command}/{cfg.repo_slug}")
+    typer.echo(f"State reset for {command}/{cfg.repo_slug}")
 
 
-@cli.group("schedule")
-def cmd_schedule():
-    pass  # Click group handler; subcommands are attached via @cmd_schedule.command()
-
-
-@cmd_schedule.command("install")
-@click.argument("command")
-@click.option("--config", "config_path", default=HARNESS_CONFIG, type=click.Path())
-@click.option("--every", required=True)
-@click.option("--scheduler", default="cron", type=click.Choice(["cron", "launchd"]))
-def schedule_install(command, config_path, every, scheduler):
+@schedule_app.command("install")
+def schedule_install(
+    command: Annotated[str, typer.Argument(metavar="COMMAND")],
+    every: Annotated[str, typer.Option("--every", metavar="TEXT")],
+    config_path: ConfigOption = Path(HARNESS_CONFIG),
+    scheduler: Annotated[Scheduler, typer.Option("--scheduler", metavar="[cron|launchd]")] = Scheduler.cron,
+) -> None:
     from dotharness.pr_review.scheduler import ScheduleEntry, install_cron, install_launchd, parse_duration
 
     cfg = load_config(Path(config_path).resolve())
@@ -392,35 +427,36 @@ def schedule_install(command, config_path, every, scheduler):
     entry = ScheduleEntry(
         command=command,
         repo_slug=cfg.repo_slug,
-        scheduler=scheduler,
+        scheduler=scheduler.value,
         interval_seconds=parse_duration(every),
         config_path=str(Path(config_path).resolve()),
         harness_bin=harness_bin,
     )
-    if scheduler == "cron":
+    if scheduler is Scheduler.cron:
         install_cron(entry)
     else:
         install_launchd(entry)
-    click.echo(f"Installed {scheduler} schedule for {command}/{cfg.repo_slug}")
+    typer.echo(f"Installed {scheduler.value} schedule for {command}/{cfg.repo_slug}")
 
 
-@cmd_schedule.command("uninstall")
-@click.argument("command")
-@click.option("--config", "config_path", default=HARNESS_CONFIG, type=click.Path())
-@click.option("--scheduler", default="cron", type=click.Choice(["cron", "launchd"]))
-def schedule_uninstall(command, config_path, scheduler):
+@schedule_app.command("uninstall")
+def schedule_uninstall(
+    command: Annotated[str, typer.Argument(metavar="COMMAND")],
+    config_path: ConfigOption = Path(HARNESS_CONFIG),
+    scheduler: Annotated[Scheduler, typer.Option("--scheduler", metavar="[cron|launchd]")] = Scheduler.cron,
+) -> None:
     from dotharness.pr_review.scheduler import uninstall_cron, uninstall_launchd
 
     cfg = load_config(Path(config_path).resolve())
-    if scheduler == "cron":
+    if scheduler is Scheduler.cron:
         uninstall_cron(command, cfg.repo_slug)
     else:
         uninstall_launchd(command, cfg.repo_slug)
-    click.echo(f"Uninstalled {scheduler} schedule for {command}/{cfg.repo_slug}")
+    typer.echo(f"Uninstalled {scheduler.value} schedule for {command}/{cfg.repo_slug}")
 
 
-@cmd_schedule.command("list")
-def schedule_list():
+@schedule_app.command("list")
+def schedule_list() -> None:
     import subprocess
 
     from dotharness.pr_review.scheduler import find_harness_cron_entries
@@ -443,8 +479,8 @@ def schedule_list():
         label = plist.stem.replace("com.harness.", "")
         rows.append({"command": label, "slug": "", "scheduler": "launchd", "interval": "?", "config": str(plist)})
     if not rows:
-        click.echo("No harness schedules found.")
+        typer.echo("No harness schedules found.")
         return
-    click.echo(f"{'COMMAND':<22} {'SLUG':<22} {'SCHEDULER':<10} {'EVERY':<8} CONFIG")
+    typer.echo(f"{'COMMAND':<22} {'SLUG':<22} {'SCHEDULER':<10} {'EVERY':<8} CONFIG")
     for r in rows:
-        click.echo(f"{r['command']:<22} {r['slug']:<22} {r['scheduler']:<10} {r['interval']:<8} {r['config']}")
+        typer.echo(f"{r['command']:<22} {r['slug']:<22} {r['scheduler']:<10} {r['interval']:<8} {r['config']}")

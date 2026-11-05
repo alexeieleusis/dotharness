@@ -4,7 +4,7 @@ import tomllib
 from unittest.mock import patch
 
 import pytest
-from click.testing import CliRunner
+from typer.testing import CliRunner
 
 from dotharness.pr_review.cli import TEMPLATE, cli
 from dotharness.pr_review.runners.review_prs import BaseAnalysisError
