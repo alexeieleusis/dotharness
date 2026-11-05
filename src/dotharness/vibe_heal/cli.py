@@ -57,6 +57,24 @@ STATUS_SUCCESS = "[green]✓[/green]"
 STATUS_FAILURE = "[red]✗[/red]"
 PER_FILE_RESULTS_HEADER = "\n[bold]Per-File Results:[/bold]"
 
+# Shared option type aliases (avoid duplicating option declarations across commands)
+FilePatternsOption = Annotated[
+    list[str] | None,
+    typer.Option("--pattern", "-p", help=FILE_PATTERN_HELP),
+]
+AIToolOption = Annotated[
+    AIToolType | None,
+    typer.Option("--ai-tool", help=AI_TOOL_OVERRIDE_HELP),
+]
+EnvFileOption = Annotated[
+    str | None,
+    typer.Option("--env-file", help=ENV_FILE_HELP),
+]
+VerboseOption = Annotated[
+    bool,
+    typer.Option("--verbose", "-v", help=VERBOSE_OUTPUT_HELP),
+]
+
 
 def setup_logging(verbose: bool) -> None:
     """Setup logging configuration.
@@ -365,32 +383,10 @@ def cleanup(
         "-i",
         help="Maximum fix iterations per file",
     ),
-    file_patterns: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--pattern",
-            "-p",
-            help=FILE_PATTERN_HELP,
-        ),
-    ] = None,
-    ai_tool: Annotated[
-        AIToolType | None,
-        typer.Option(
-            "--ai-tool",
-            help=AI_TOOL_OVERRIDE_HELP,
-        ),
-    ] = None,
-    env_file: str | None = typer.Option(
-        None,
-        "--env-file",
-        help=ENV_FILE_HELP,
-    ),
-    verbose: bool = typer.Option(
-        False,
-        "--verbose",
-        "-v",
-        help=VERBOSE_OUTPUT_HELP,
-    ),
+    file_patterns: FilePatternsOption = None,
+    ai_tool: AIToolOption = None,
+    env_file: EnvFileOption = None,
+    verbose: VerboseOption = False,
 ) -> None:
     """Clean up all modified files in current branch.
 
@@ -717,32 +713,10 @@ def dedupe_branch(
         "-i",
         help="Maximum dedup iterations per file",
     ),
-    file_patterns: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--pattern",
-            "-p",
-            help=FILE_PATTERN_HELP,
-        ),
-    ] = None,
-    ai_tool: Annotated[
-        AIToolType | None,
-        typer.Option(
-            "--ai-tool",
-            help=AI_TOOL_OVERRIDE_HELP,
-        ),
-    ] = None,
-    env_file: str | None = typer.Option(
-        None,
-        "--env-file",
-        help=ENV_FILE_HELP,
-    ),
-    verbose: bool = typer.Option(
-        False,
-        "--verbose",
-        "-v",
-        help=VERBOSE_OUTPUT_HELP,
-    ),
+    file_patterns: FilePatternsOption = None,
+    ai_tool: AIToolOption = None,
+    env_file: EnvFileOption = None,
+    verbose: VerboseOption = False,
 ) -> None:
     """Remove code duplications from all modified files in current branch.
 
