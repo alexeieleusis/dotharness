@@ -137,14 +137,22 @@ def _run_locked(config: HarnessConfig) -> None:
         state.prune_address_comments_state(config.repo_slug, open_numbers)
 
     logger.info("Found %d open PR(s) to check", len(prs))
-    for pr in prs:
-        number = pr["number"]
-        branch = pr["headRefName"]
-        logger.debug("PR #%d (branch=%s): checking for pending feedback", number, branch)
-        if not _has_pending_feedback(number, config.repo.name, env):
-            logger.info("PR #%d: no pending feedback, skipping", number)
-            continue
-        _process_single_pr(number, branch, ctx)
+    try:
+        for pr in prs:
+            number = pr["number"]
+            branch = pr["headRefName"]
+            logger.debug("PR #%d (branch=%s): checking for pending feedback", number, branch)
+            try:
+                has_feedback = _has_pending_feedback(number, config.repo.name, env)
+            except Exception:
+                logger.exception("PR #%d: pending-feedback check failed, skipping", number)
+                continue
+            if not has_feedback:
+                logger.info("PR #%d: no pending feedback, skipping", number)
+                continue
+            _process_single_pr(number, branch, ctx)
+    finally:
+        git_restore(original_sha, "", wdir, env)
 
 
 @dataclass
@@ -734,7 +742,12 @@ def _list_prs(repo: str, env: dict, filter_flag: str) -> list[dict]:
     )
     if result.returncode != 0:
         return []
-    return json.loads(result.stdout)
+    try:
+        prs = json.loads(result.stdout)
+        return [pr for pr in prs if isinstance(pr, dict) and "number" in pr and "headRefName" in pr]
+    except (ValueError, AttributeError, KeyError, TypeError):
+        logger.warning("Could not parse `gh pr list %s` output; treating as no PRs", filter_flag)
+        return []
 
 
 def _get_unresolved_comment_ids(pr_number: int, repo: str, env: dict) -> ThreadState | None:
@@ -786,12 +799,20 @@ def _check_gql_unresolved_threads(pr_number: int, repo: str, env: dict) -> tuple
         if gql_result.returncode != 0:
             logger.debug("PR #%d: GraphQL review threads query failed (rc=%d)", pr_number, gql_result.returncode)
             return total_threads, total_unresolved, False
-        data = json.loads(gql_result.stdout)
-        threads_page = data.get("data", {}).get("repository", {}).get("pullRequest", {}).get("reviewThreads", {})
-        nodes = threads_page.get("nodes", [])
+        try:
+            data = json.loads(gql_result.stdout) or {}
+            repository = (data.get("data") or {}).get("repository") or {}
+            threads_page = (repository.get("pullRequest") or {}).get("reviewThreads")
+            if threads_page is None:
+                raise ValueError("missing reviewThreads in GraphQL response")
+            nodes = threads_page.get("nodes") or []
+            page_unresolved = sum(1 for t in nodes if not t.get("isResolved", False))
+            page_info = threads_page.get("pageInfo") or {}
+        except (ValueError, AttributeError, KeyError, TypeError):
+            logger.warning("PR #%d: malformed GraphQL review threads response", pr_number, exc_info=True)
+            return total_threads, total_unresolved, False
         total_threads += len(nodes)
-        total_unresolved += sum(1 for t in nodes if not t["isResolved"])
-        page_info = threads_page.get("pageInfo", {})
+        total_unresolved += page_unresolved
         if not page_info.get("hasNextPage"):
             break
         cursor = page_info.get("endCursor")
@@ -811,9 +832,13 @@ def _check_human_issue_comments(pr_number: int, repo: str, env: dict) -> bool:
     if comments_result.returncode != 0:
         logger.debug("PR #%d: issue comments query failed (rc=%d)", pr_number, comments_result.returncode)
         return False
-    comments = json.loads(comments_result.stdout)
     bot_logins = {"github-actions[bot]", "dependabot[bot]"}
-    human_comments = [c for c in comments if c.get("user", {}).get("login") not in bot_logins]
+    try:
+        comments = json.loads(comments_result.stdout)
+        human_comments = [c for c in comments if ((c.get("user") or {}).get("login")) not in bot_logins]
+    except (ValueError, AttributeError, KeyError, TypeError):
+        logger.warning("PR #%d: malformed issue comments response", pr_number, exc_info=True)
+        return False
     logger.debug("PR #%d: %d issue comment(s), %d from humans", pr_number, len(comments), len(human_comments))
     return len(human_comments) > 0
 

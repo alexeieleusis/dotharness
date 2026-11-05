@@ -1188,3 +1188,25 @@ def test_build_comment_instructions_fences_replies_and_original():
     begins = [ln for ln in instructions.splitlines() if ln.startswith("-- USER-SUPPLIED CONTENT BEGINS [")]
     ends = [ln for ln in instructions.splitlines() if ln.startswith("-- USER-SUPPLIED CONTENT ENDS [")]
     assert len(begins) == len(ends) == 3  # body, reply, original finding
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [b'{"data": {"repository": null}}', b"null", b"not json", b'{"data": {"repository": {"pullRequest": null}}}'],
+)
+def test_check_gql_unresolved_threads_malformed_payload_fails_soft(stdout):
+    result = MagicMock(returncode=0, stdout=stdout)
+    with patch("dotharness.pr_review.runners.address_comments.run_cmd", return_value=result):
+        assert address_comments._check_gql_unresolved_threads(1, "o/r", {}) == (0, 0, False)
+
+
+def test_check_human_issue_comments_malformed_payload_returns_false():
+    result = MagicMock(returncode=0, stdout=b"{truncated")
+    with patch("dotharness.pr_review.runners.address_comments.run_cmd", return_value=result):
+        assert address_comments._check_human_issue_comments(1, "o/r", {}) is False
+
+
+def test_list_prs_malformed_payload_returns_empty():
+    result = MagicMock(returncode=0, stdout=b"{truncated")
+    with patch("dotharness.pr_review.runners.address_comments.run_cmd", return_value=result):
+        assert address_comments._list_prs("o/r", {}, "--author") == []
