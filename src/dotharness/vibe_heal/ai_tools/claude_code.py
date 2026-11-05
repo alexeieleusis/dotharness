@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 
 CLAUDE_TIMEOUT_SECONDS = 1200
+CLAUDE_NOT_FOUND_MESSAGE = "Claude CLI not found. Please install Claude Code first."
 
 
 class ClaudeCodeTool(AITool):
@@ -68,7 +69,7 @@ class ClaudeCodeTool(AITool):
         if not self.is_available():
             return FixResult(
                 success=False,
-                error_message="Claude CLI not found. Please install Claude Code first.",
+                error_message=CLAUDE_NOT_FOUND_MESSAGE,
             )
 
         # Verify file exists
@@ -109,7 +110,7 @@ class ClaudeCodeTool(AITool):
         if not self.is_available():
             return FixResult(
                 success=False,
-                error_message="Claude CLI not found. Please install Claude Code first.",
+                error_message=CLAUDE_NOT_FOUND_MESSAGE,
             )
 
         # Verify file exists
@@ -165,7 +166,7 @@ class ClaudeCodeTool(AITool):
         if result.not_found:
             return FixResult(
                 success=False,
-                error_message="Claude CLI not found. Please install Claude Code first.",
+                error_message=CLAUDE_NOT_FOUND_MESSAGE,
             )
         if result.returncode == 0:
             # Parse JSON response to extract information
