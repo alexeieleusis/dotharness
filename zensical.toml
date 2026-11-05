@@ -4,6 +4,7 @@ repo_url = "https://github.com/alexeieleusis/dotharness"
 site_url = "https://alexeieleusis.github.io/dotharness"
 site_description = "Personal AI tooling for automating recurring engineering workflows"
 site_author = "Alexei Diaz"
+use_directory_urls = false
 edit_uri = "edit/main/docs/"
 repo_name = "alexeieleusis/dotharness"
 copyright = 'Maintained by <a href="https://github.com/alexeieleusis">alexeieleusis</a>.'
@@ -18,7 +19,22 @@ nav = [
         { "Architecture" = "vibe_heal/architecture.md" },
         { "API reference" = "vibe_heal/api.md" },
     ] },
-    { "pr-review" = "pr_review.md" },
+    { "pr-review" = [
+        "pr_review.md",
+        { "Overview" = "pr_review/index.md" },
+        { "Commands" = [
+            { "review-prs" = "pr_review/commands/review-prs.md" },
+            { "focused-review" = "pr_review/commands/focused-review.md" },
+            { "review-requested" = "pr_review/commands/review-requested.md" },
+            { "self-review" = "pr_review/commands/self-review.md" },
+            { "address-comments" = "pr_review/commands/address-comments.md" },
+            { "auto-approve" = "pr_review/commands/auto-approve.md" },
+            { "local-review" = "pr_review/commands/local-review.md" },
+            { "ci-fix" = "pr_review/commands/ci-fix.md" },
+            { "merge" = "pr_review/commands/merge.md" },
+        ] },
+        { "Modules" = "pr_review/modules.md" },
+    ] },
     { "spec-prism-flow" = "spec_prism_flow.md" },
     { "sisyphus" = "sisyphus.md" },
     { "Contributing" = "contributing.md" },
