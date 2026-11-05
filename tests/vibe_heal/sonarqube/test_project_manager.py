@@ -385,6 +385,27 @@ class TestFindStaleProjects:
         assert result == []
 
     @pytest.mark.asyncio
+    async def test_skips_project_of_other_base_key_sharing_prefix(
+        self, project_manager: ProjectManager, mock_client: AsyncMock
+    ) -> None:
+        """A temp project of base "app_v2" is not selected when sweeping base "app"."""
+        mock_client.search_projects = AsyncMock(
+            return_value=[{"key": "app_v2_bob_main_250101-0000", "name": "app_v2 analysis bob main"}]
+        )
+        mock_client.get_project_analyses_count = AsyncMock(return_value=0)
+
+        result = await project_manager.find_stale_projects("app", older_than_minutes=60)
+
+        assert result == []
+        mock_client.get_project_analyses_count.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_positive_threshold(self, project_manager: ProjectManager) -> None:
+        """older_than_minutes below 1 is rejected so in-flight projects are never flagged."""
+        with pytest.raises(ValueError, match="at least 1"):
+            await project_manager.find_stale_projects("my_project", older_than_minutes=0)
+
+    @pytest.mark.asyncio
     async def test_skips_project_younger_than_threshold(
         self, project_manager: ProjectManager, mock_client: AsyncMock
     ) -> None:

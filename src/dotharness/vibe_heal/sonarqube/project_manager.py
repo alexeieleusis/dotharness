@@ -163,11 +163,17 @@ class ProjectManager:
         ({base_key}_{sanitized_email}_{sanitized_branch}_{timestamp}) and only
         considers projects older than older_than_minutes (parsed from the
         timestamp embedded in the key) so a project whose analysis is still
-        in flight is never flagged.
+        in flight is never flagged. The project name must also start with
+        "{base_key} " (the format used by create_temp_project), so projects of a
+        different base key sharing a key prefix (e.g. "app_v2" vs "app") or
+        unrelated projects with a timestamp-like suffix are never selected.
 
         Args:
             base_key: Base project key whose temp projects should be swept
-            older_than_minutes: Minimum age in minutes before a project is considered stale
+            older_than_minutes: Minimum age in minutes (>= 1) before a project is considered stale
+
+        Raises:
+            ValueError: If older_than_minutes is less than 1
 
         Returns:
             List of stale temp projects with zero finished analyses
@@ -175,7 +181,11 @@ class ProjectManager:
         Raises:
             SonarQubeAPIError: If a search or analyses-count request fails
         """
+        if older_than_minutes < 1:
+            raise ValueError("older_than_minutes must be at least 1")
+
         pattern = re.compile(rf"^{re.escape(base_key)}_.+_({self._TIMESTAMP_PATTERN})$")
+        name_prefix = f"{base_key} "
         now = datetime.now(UTC)
 
         candidates = await self.client.search_projects(query=base_key)
@@ -185,6 +195,9 @@ class ProjectManager:
             key = project.get("key", "")
             match = pattern.match(key)
             if not match:
+                continue
+
+            if not project.get("name", "").startswith(name_prefix):
                 continue
 
             try:
