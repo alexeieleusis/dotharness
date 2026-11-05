@@ -84,6 +84,22 @@ def _text(data: bytes) -> str:
     return data.decode(errors="replace")
 
 
+async def _drain(comm: "asyncio.Future[tuple[bytes, bytes]]", wait: float) -> tuple[bytes, bytes]:
+    """Return the communicate() output if it finishes within ``wait`` seconds, else empty output."""
+    done, _ = await asyncio.wait({comm}, timeout=wait)
+    if comm in done and not comm.cancelled() and comm.exception() is None:
+        return comm.result()
+    return b"", b""
+
+
+async def _cancel_pending(*futs: "asyncio.Future[object]") -> None:
+    for fut in futs:
+        if not fut.done():
+            fut.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await fut
+
+
 async def run(
     cmd: list[str],
     *,
@@ -124,17 +140,11 @@ async def run(
         done, _ = await asyncio.wait({waiter}, timeout=timeout)
         if waiter in done:
             _killpg(pgid, signal.SIGKILL)  # sweep any grandchildren left behind; closes their pipe ends
-            out, err = b"", b""
-            done, _ = await asyncio.wait({comm}, timeout=DRAIN_SECONDS)
-            if comm in done and not comm.cancelled() and comm.exception() is None:
-                out, err = comm.result()
+            out, err = await _drain(comm, DRAIN_SECONDS)
             return RunResult(returncode=proc.returncode or 0, stdout=_text(out), stderr=_text(err))
 
         await _kill_group(proc, pgid)
-        out, err = b"", b""
-        done, _ = await asyncio.wait({comm}, timeout=KILL_GRACE_SECONDS)
-        if comm in done and not comm.cancelled() and comm.exception() is None:
-            out, err = comm.result()
+        out, err = await _drain(comm, KILL_GRACE_SECONDS)
         message = f"timed out after {timeout}s"
         stderr = f"{_text(err)}\n{message}" if err else message
         return RunResult(returncode=TIMEOUT_RETURNCODE, stdout=_text(out), stderr=stderr, timed_out=True)
@@ -142,8 +152,4 @@ async def run(
         await _cleanup_shielded(proc, pgid)
         raise
     finally:
-        for fut in (comm, waiter):
-            if not fut.done():
-                fut.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await fut
+        await _cancel_pending(comm, waiter)
