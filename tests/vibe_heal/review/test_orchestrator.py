@@ -341,7 +341,7 @@ class TestRunAnalysis:
             patch.object(
                 orchestrator.project_manager,
                 "copy_exclusion_settings",
-                return_value=([], 0),
+                return_value=([], 0, 0),
             ),
             patch.object(
                 orchestrator.analysis_runner,
@@ -382,7 +382,7 @@ class TestRunAnalysis:
             patch.object(
                 orchestrator.project_manager,
                 "copy_exclusion_settings",
-                return_value=([], 0),
+                return_value=([], 0, 0),
             ),
             patch.object(
                 orchestrator.analysis_runner,
@@ -430,7 +430,7 @@ class TestRunAnalysis:
             patch.object(
                 orchestrator.project_manager,
                 "copy_exclusion_settings",
-                return_value=([], 0),
+                return_value=([], 0, 0),
             ),
             patch.object(
                 orchestrator.analysis_runner,
@@ -486,7 +486,7 @@ class TestRunAnalysis:
             patch.object(
                 orchestrator.project_manager,
                 "copy_exclusion_settings",
-                return_value=([], 0),
+                return_value=([], 0, 0),
             ),
             patch.object(
                 orchestrator.analysis_runner,
@@ -644,7 +644,7 @@ class TestRunAnalysis:
             patch.object(
                 orchestrator.project_manager,
                 "copy_exclusion_settings",
-                return_value=([], 0),
+                return_value=([], 0, 0),
             ),
             patch.object(
                 orchestrator.analysis_runner,
@@ -685,6 +685,64 @@ class TestRunAnalysis:
         assert diag.sonar_issue_count == 1
         assert diag.sonar_issue_lines == [10]
         assert diag.changed_lines == [10]
+
+
+class TestCreateTempProjectExclusions:
+    """Tests for exclusion-setting reporting in ReviewOrchestrator._create_temp_project()."""
+
+    @pytest.fixture
+    def orchestrator(self, config: VibeHealConfig):
+        """Create ReviewOrchestrator with mocked git dependencies."""
+        from dotharness.vibe_heal.review.orchestrator import ReviewOrchestrator
+
+        mock_analyzer = MagicMock()
+        mock_analyzer.get_current_branch.return_value = "feature/test"
+        mock_analyzer.get_user_email.return_value = "user@example.com"
+        return ReviewOrchestrator(config, AsyncMock(), mock_analyzer, MagicMock())
+
+    async def _run(self, orchestrator, **copy_kwargs):
+        temp_project = MagicMock()
+        temp_project.project_key = "temp-key"
+        with (
+            patch.object(
+                orchestrator.project_manager,
+                "create_temp_project",
+                new_callable=AsyncMock,
+                return_value=temp_project,
+            ),
+            patch.object(
+                orchestrator.project_manager,
+                "copy_exclusion_settings",
+                new_callable=AsyncMock,
+                **copy_kwargs,
+            ),
+            patch("dotharness.vibe_heal.review.orchestrator.dim") as mock_dim,
+            patch("dotharness.vibe_heal.review.orchestrator.warn") as mock_warn,
+        ):
+            result = await orchestrator._create_temp_project()
+        assert result is temp_project
+        return mock_dim, mock_warn
+
+    @pytest.mark.asyncio
+    async def test_none_configured(self, orchestrator) -> None:
+        mock_dim, mock_warn = await self._run(orchestrator, return_value=([], 0, 0))
+        mock_dim.assert_any_call("No exclusion settings configured on source project")
+        mock_warn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_copied_inherited_and_failed(self, orchestrator) -> None:
+        mock_dim, mock_warn = await self._run(
+            orchestrator, return_value=(["sonar.exclusions", "sonar.test.exclusions"], 3, 2)
+        )
+        mock_dim.assert_any_call("Copied 2 exclusion setting(s): sonar.exclusions, sonar.test.exclusions")
+        mock_dim.assert_any_call("Skipped 3 inherited setting(s)")
+        mock_warn.assert_called_once_with("2 exclusion setting(s) failed to apply")
+        assert ("No exclusion settings configured on source project",) not in [c.args for c in mock_dim.call_args_list]
+
+    @pytest.mark.asyncio
+    async def test_copy_raises_run_still_succeeds(self, orchestrator) -> None:
+        _, mock_warn = await self._run(orchestrator, side_effect=RuntimeError("boom"))
+        mock_warn.assert_called_once_with("Warning: Could not copy exclusion settings: boom")
 
 
 class TestRunPost:
@@ -1268,7 +1326,7 @@ class TestRunAnalysisCoverage:
             patch.object(
                 orchestrator.project_manager,
                 "copy_exclusion_settings",
-                return_value=([], 0),
+                return_value=([], 0, 0),
             ),
             patch.object(
                 orchestrator.analysis_runner,
