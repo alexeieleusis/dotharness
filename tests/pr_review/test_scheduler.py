@@ -504,7 +504,8 @@ def test_cron_line_exact_text(tmp_path, monkeypatch):
 def test_launchd_plist_exact_text(tmp_path, monkeypatch):
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     log_file = tmp_path / ".local/share/dotharness/logs/review-prs/launchd.log"
-    # launchd order: run --config <cfg> <command>
+    # launchd plists now use the cron order (deliberate deviation from the baseline launchd order,
+    # which exits 2; see docs/migration-ledger.md "Cron versus launchd argument order")
     assert (
         _pr_review_entry("launchd").to_launchd_plist()
         == f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -554,7 +555,10 @@ def test_cron_edge_cases():
 
 
 def test_run_config_then_runner_works_and_runner_then_config_is_usage_error(minimal_toml, tmp_xdg):
-    """`run --config <cfg> <runner>` (cron and launchd order) parses; `run <runner> --config` exits 2."""
+    """`run --config <cfg> <runner>` (written by `schedule install` for cron and launchd) parses.
+
+    `run <runner> --config` (the old launchd order) exits 2, which is why the plist no longer uses it.
+    """
     from typer.testing import CliRunner
 
     from dotharness.pr_review.cli import app
