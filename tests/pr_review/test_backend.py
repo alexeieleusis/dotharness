@@ -261,9 +261,12 @@ def test_retry_on_nonzero_not_enabled_by_adapter(tmp_path):
 
 
 def test_e2e_missing_executable_returns_127(tmp_path, monkeypatch, tmp_xdg):
-    # Only git stays on PATH (the harness-HEAD guard reads the checkout's HEAD); the backend executable is missing.
-    git_dir = Path(shutil.which("git") or "/usr/bin/git").parent
-    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{git_dir}")
+    # PATH holds only a symlink to git (the harness-HEAD guard reads the checkout's HEAD). Reusing git's own directory
+    # could also expose a real `claude` (e.g. /opt/homebrew/bin), making the test non-hermetic.
+    only_git = tmp_path / "only-git"
+    only_git.mkdir()
+    (only_git / "git").symlink_to(shutil.which("git") or "/usr/bin/git")
+    monkeypatch.setenv("PATH", str(only_git))
     work = tmp_path / "work"
     work.mkdir()
     result = _make_backend("claude", max_retries=0).run("x", str(work))
