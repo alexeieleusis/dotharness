@@ -319,6 +319,58 @@ async def _attempt(
             prompt_file.unlink(missing_ok=True)
 
 
+async def _run_attempts(
+    backend: BackendName,
+    prompt: str,
+    total_attempts: int,
+    *,
+    cwd: str,
+    env: dict[str, str],
+    timeout: float,
+    prompt_via_file: bool,
+    options: BackendOptions,
+    prefix: str,
+    expected_repo_name: str | None,
+    harness: tuple[Path, str] | None,
+) -> RunResult:
+    """Run up to ``total_attempts`` attempts, stopping at the first success or ``not_found``; return the last result."""
+    for attempt in range(1, total_attempts + 1):
+        if expected_repo_name is not None:
+            await assert_repo_identity(cwd, expected_repo_name)
+        logger.info("%sRunning %s backend (attempt %d/%d, cwd=%s)", prefix, backend, attempt, total_attempts, cwd)
+        result = await _attempt(
+            backend,
+            prompt,
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            prompt_via_file=prompt_via_file,
+            options=options,
+            prefix=prefix,
+            expected_repo_name=expected_repo_name,
+            harness=harness,
+        )
+        if result.not_found or (not result.timed_out and result.returncode == 0):
+            break
+        if attempt < total_attempts:
+            logger.warning(
+                "%sBackend %s (exit %d), retrying (attempt %d/%d)",
+                prefix,
+                "timed out" if result.timed_out else "failed",
+                result.returncode,
+                attempt + 1,
+                total_attempts,
+            )
+    return result
+
+
+async def _log_identity_failure_after_timeout(cwd: str, expected_repo_name: str, prefix: str) -> None:
+    try:
+        await assert_repo_identity(cwd, expected_repo_name)
+    except RepoIdentityError:
+        logger.exception("%sRepo identity check failed after a timeout-kill", prefix)
+
+
 async def launch(
     backend: str,
     prompt: str,
@@ -360,46 +412,26 @@ async def launch(
     if isinstance(options, OpencodeOptions) and options.check_plugins:
         await assert_no_opencode_plugins(cwd_str, full_env)
 
-    total_attempts = max_retries + 1
-    result: RunResult | None = None
     # Snapshot once: re-snapshotting per attempt would adopt a HEAD an earlier attempt moved as the new baseline.
     harness = None
     if guard_harness_repo:
         root = Path(harness_repo_root) if harness_repo_root is not None else None
         harness = await snapshot_harness_repo(Path(cwd_str), root)
-    for attempt in range(1, total_attempts + 1):
-        if expected_repo_name is not None:
-            await assert_repo_identity(cwd_str, expected_repo_name)
-        logger.info("%sRunning %s backend (attempt %d/%d, cwd=%s)", prefix, name, attempt, total_attempts, cwd_str)
-        result = await _attempt(
-            name,
-            prompt,
-            cwd=cwd_str,
-            env=full_env,
-            timeout=timeout,
-            prompt_via_file=prompt_via_file,
-            options=options,
-            prefix=prefix,
-            expected_repo_name=expected_repo_name,
-            harness=harness,
-        )
-        if result.not_found or (not result.timed_out and result.returncode == 0):
-            break
-        if attempt < total_attempts:
-            logger.warning(
-                "%sBackend %s (exit %d), retrying (attempt %d/%d)",
-                prefix,
-                "timed out" if result.timed_out else "failed",
-                result.returncode,
-                attempt + 1,
-                total_attempts,
-            )
-    assert result is not None  # noqa: S101 - the loop runs at least once
+    result = await _run_attempts(
+        name,
+        prompt,
+        max_retries + 1,
+        cwd=cwd_str,
+        env=full_env,
+        timeout=timeout,
+        prompt_via_file=prompt_via_file,
+        options=options,
+        prefix=prefix,
+        expected_repo_name=expected_repo_name,
+        harness=harness,
+    )
     if result.timed_out and expected_repo_name is not None:
-        try:
-            await assert_repo_identity(cwd_str, expected_repo_name)
-        except RepoIdentityError:
-            logger.exception("%sRepo identity check failed after a timeout-kill", prefix)
+        await _log_identity_failure_after_timeout(cwd_str, expected_repo_name, prefix)
     return result
 
 
