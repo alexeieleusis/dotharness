@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from dotharness.pr_review.runners.common import (
@@ -23,10 +24,7 @@ def test_fetch_pr_comments_returns_empty_when_cache_missing(tmp_path, monkeypatc
     assert result == []
 
 
-def test_fetch_pr_comments_tags_types_and_filters_bots(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    cache_dir = home / ".harness" / "cache"
-    cache_dir.mkdir(parents=True)
+def test_fetch_pr_comments_tags_types_and_filters_bots(tmp_path):
     data = {
         "inline_comments": [{"id": 1, "body": "x"}],
         "review_comments": [{"id": "review-2", "body": "y"}],
@@ -36,10 +34,12 @@ def test_fetch_pr_comments_tags_types_and_filters_bots(tmp_path, monkeypatch):
             {"id": 5, "author": "alice", "body": "mentions bot] inline"},
         ],
     }
-    (cache_dir / "pr-9-comments.json").write_text(json.dumps(data))
-    monkeypatch.setattr("pathlib.Path.home", lambda: home)
-    with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    def fake_run(cmd, **_kwargs):
+        Path(cmd[cmd.index("--output") + 1]).write_text(json.dumps(data))
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=fake_run):
         result = fetch_pr_comments(9, tmp_path / "pr-comments.py", str(tmp_path), {})
     types = {c["id"]: c["type"] for c in result}
     assert types[1] == "inline"
