@@ -13,6 +13,8 @@ VIBE_HEAL_FILE = "vibe_heal.json"
 SELF_REVIEW_FILE = "self_review.json"
 ADDRESS_COMMENTS_FILE = "address_comments.json"
 
+_CORRUPTED_STATE_MSG = "Corrupted state file %s: %s — returning defaults"
+
 _COMMAND_FILES = {
     "review-prs": VIBE_HEAL_FILE,
     "self-review": SELF_REVIEW_FILE,
@@ -69,7 +71,7 @@ def read_vibe_heal_state(repo_slug: str) -> dict:
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        logger.warning("Corrupted state file %s: %s — returning defaults", p, exc)
+        logger.warning(_CORRUPTED_STATE_MSG, p, exc)
         return defaults
     data.setdefault("last_main_sha", "")
     data.setdefault("reviewed_shas", {})
@@ -150,7 +152,7 @@ def read_self_review_state(repo_slug: str) -> dict:
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        logger.warning("Corrupted state file %s: %s — returning defaults", p, exc)
+        logger.warning(_CORRUPTED_STATE_MSG, p, exc)
         return defaults
     data.setdefault("reviewed_prs", [])
     data.setdefault("partial_reviews", {})
@@ -280,7 +282,7 @@ def read_address_comments_state(repo_slug: str) -> dict:
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        logger.warning("Corrupted state file %s: %s — returning defaults", p, exc)
+        logger.warning(_CORRUPTED_STATE_MSG, p, exc)
         return defaults
     data.setdefault("replied", {})
     return data
