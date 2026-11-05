@@ -210,14 +210,20 @@ class TestFetchUrlContent:
         assert await fetch_url_content("https://example.com/loop") is None
 
     @pytest.mark.asyncio
+    @respx.mock
     async def test_ssrf_localhost_returns_none(self) -> None:
+        route = respx.route().mock(return_value=httpx.Response(200, text="secret"))
         content = await fetch_url_content("http://localhost/secret")
         assert content is None
+        assert not route.called
 
     @pytest.mark.asyncio
+    @respx.mock
     async def test_ssrf_private_ip_returns_none(self) -> None:
+        route = respx.route().mock(return_value=httpx.Response(200, text="secret"))
         content = await fetch_url_content("http://192.168.1.1/secret")
         assert content is None
+        assert not route.called
 
     @pytest.mark.asyncio
     @respx.mock
