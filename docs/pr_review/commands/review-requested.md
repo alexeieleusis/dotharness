@@ -72,9 +72,11 @@ The CLI name is `pr_review`; the config file names (`.harness*.toml`) keep the o
       outstanding parts.
     - The runner skips the file+summary part if the current user already left
       an `APPROVED` review on the PR. It also skips it if the current user
-      already posted a comment whose body starts with `[bot]dotharness-review` or
-      `Review Summary` (after stripping leading `#`/whitespace). These checks
-      prevent re-reviewing the same PR revision.
+      already posted a comment whose body contains `review summary` or
+      `dotharness-review` (case-insensitive substring match, anywhere in the
+      body), other than the design/traceability/regret/inline marker comments,
+      which are excluded. These checks prevent re-reviewing the same PR
+      revision.
     - Otherwise, the runner fetches and checks out the PR's head branch
       (using the shared rebase/reset behavior — see
       [Shared behavior](index.md#shared-behavior)). It collects any cached
@@ -201,7 +203,10 @@ duplicate work using live signals read from GitHub on every run:
 1. It skips the file+summary part if the current user already has an
    `APPROVED` review on the PR.
 2. It skips the file+summary part if the current user already posted a
-   comment starting with `[bot]dotharness-review` or `Review Summary`.
+   comment whose body contains `review summary` or `dotharness-review`
+   (case-insensitive substring match), other than the design/traceability/
+   regret/inline marker comments, which are excluded so those passes stay
+   independent of this check.
 3. It skips the design pass, independently of (1) and (2), if the current
    user already posted a comment containing `<!-- dotharness-review-design -->`.
    This marker is the design pass's *only* idempotency signal. Its fate is
