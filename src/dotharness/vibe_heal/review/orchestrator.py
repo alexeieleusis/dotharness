@@ -568,7 +568,7 @@ class ReviewOrchestrator:
 
         findings: list[ReviewDuplication] = []
         for group in response.duplications:
-            finding = self._build_active_finding(group, target_ref, new_changed_lines, response)
+            finding = self._build_active_finding(group, target_ref, new_changed_lines, response, project_key)
             if finding is not None:
                 diag.active_dup_blocks_intersecting += 1
                 findings.append(finding)
@@ -580,6 +580,7 @@ class ReviewOrchestrator:
         target_ref: str,
         new_changed_lines: set[int],
         response: DuplicationsResponse,
+        project_key: str,
     ) -> ReviewDuplication | None:
         target_block = group.get_target_block(target_ref)
         if target_block is None:
@@ -590,7 +591,7 @@ class ReviewOrchestrator:
         # Use the lowest changed line in the block as the anchor so the GitHub
         # PR comment is attached to a line that is actually in the diff.
         anchor_line = min(changed_in_block)
-        other_locations = build_other_locations(group, target_block, response)
+        other_locations = build_other_locations(group, target_block, response, project_key)
         return ReviewDuplication(
             from_line=target_block.from_line,
             to_line=target_block.to_line,

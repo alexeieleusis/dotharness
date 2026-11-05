@@ -292,7 +292,7 @@ class TestActiveFindingBehaviorUnchanged:
         """A block covering strict lines still yields a ReviewDuplication with the lowest strict line as anchor."""
         group = _make_group(10, 15)  # block lines 10-24; strict lines {10, 14} inside
 
-        finding = orchestrator._build_active_finding(group, "1", STRICT_LINES, self._make_response())
+        finding = orchestrator._build_active_finding(group, "1", STRICT_LINES, self._make_response(), "temp-project")
 
         assert finding is not None
         assert finding.from_line == 10
@@ -302,14 +302,14 @@ class TestActiveFindingBehaviorUnchanged:
     def test_no_finding_when_block_misses_strict_lines(self, orchestrator) -> None:
         group = _make_group(100, 10)  # block lines 100-109
 
-        finding = orchestrator._build_active_finding(group, "1", STRICT_LINES, self._make_response())
+        finding = orchestrator._build_active_finding(group, "1", STRICT_LINES, self._make_response(), "temp-project")
 
         assert finding is None
 
     def test_no_finding_when_block_touches_only_window(self, orchestrator) -> None:
         group = _make_group(15, 3)  # block lines 15-17: window only, not strict
 
-        finding = orchestrator._build_active_finding(group, "1", STRICT_LINES, self._make_response())
+        finding = orchestrator._build_active_finding(group, "1", STRICT_LINES, self._make_response(), "temp-project")
 
         assert finding is None
 
@@ -319,9 +319,32 @@ class TestActiveFindingBehaviorUnchanged:
         result = select_in_scope_duplications(groups, "1", STRICT_LINES)
 
         finding_decisions = [
-            orchestrator._build_active_finding(group, "1", STRICT_LINES, self._make_response()) is not None
+            orchestrator._build_active_finding(group, "1", STRICT_LINES, self._make_response(), "temp-project")
+            is not None
             for group in groups
         ]
 
         assert result.in_scope == [groups[0]]
         assert finding_decisions == [True, False, False]
+
+
+class TestBuildOtherLocationsColonProjectKey:
+    """build_other_locations strips the known project-key prefix, even if the key has ':'."""
+
+    def test_project_key_containing_colon(self) -> None:
+        from dotharness.vibe_heal.deduplication.models import DuplicationFileInfo
+        from dotharness.vibe_heal.review.duplication_scope import build_other_locations
+
+        response = DuplicationsResponse(
+            files={
+                "1": DuplicationFileInfo(key="org:repo:src/a.py", name="a.py", projectName="p"),
+                "2": DuplicationFileInfo(key="org:repo:src/b.py", name="b.py", projectName="p"),
+            }
+        )
+        target = DuplicationBlock(**{"from": 1, "size": 5, "_ref": "1"})
+        other = DuplicationBlock(**{"from": 10, "size": 5, "_ref": "2"})
+        group = DuplicationGroup(blocks=[target, other])
+
+        locations = build_other_locations(group, target, response, "org:repo")
+
+        assert [loc.file_path for loc in locations] == ["src/b.py"]

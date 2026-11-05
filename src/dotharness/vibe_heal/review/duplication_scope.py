@@ -30,11 +30,15 @@ def build_other_locations(
     group: DuplicationGroup,
     target_block: DuplicationBlock,
     response: DuplicationsResponse,
+    project_key: str,
 ) -> list[DuplicationLocation]:
     """Build other_locations by iterating all blocks and skipping only the target block.
 
     Preserves same-file duplicates by skipping only the specific target block
     instance (by identity) rather than excluding all blocks with the same ref.
+
+    The ``<project_key>:`` prefix is stripped using the known project key, so
+    project keys that themselves contain ``:`` yield the correct repo path.
     """
     other_locations: list[DuplicationLocation] = []
     for block in group.blocks:
@@ -43,7 +47,7 @@ def build_other_locations(
         file_info = response.get_file_info(block.ref)
         if file_info is None:
             continue
-        block_file_path = file_info.key.split(":", 1)[1] if ":" in file_info.key else file_info.key
+        block_file_path = file_info.key.removeprefix(f"{project_key}:")
         other_locations.append(
             DuplicationLocation(
                 file_path=block_file_path,
@@ -117,7 +121,9 @@ async def get_resolved_duplications(
 
     findings: list[ResolvedDuplication] = []
     for group in response.duplications:
-        resolved = _resolve_group(group, target_ref, response, old_changed_lines, active_dup_ranges, new_changed_lines)
+        resolved = _resolve_group(
+            group, target_ref, response, old_changed_lines, active_dup_ranges, new_changed_lines, original_project_key
+        )
         if resolved is not None:
             findings.append(resolved)
     return findings
@@ -130,6 +136,7 @@ def _resolve_group(
     old_changed_lines: set[int],
     active_dup_ranges: set[tuple[int, int]],
     new_changed_lines: set[int],
+    project_key: str,
 ) -> ResolvedDuplication | None:
     target_block = group.get_target_block(target_ref)
     if target_block is None:
@@ -141,7 +148,7 @@ def _resolve_group(
     # the ranges are unlikely to match exactly after edits).
     if any(a_from <= target_block.to_line and a_to >= target_block.from_line for a_from, a_to in active_dup_ranges):
         return None
-    other_locations = build_other_locations(group, target_block, response)
+    other_locations = build_other_locations(group, target_block, response, project_key)
     # Choose the new-side anchor closest to the block so the GitHub PR comment
     # is attached near the relevant change rather than an unrelated hunk.
     anchor_new_line = min(new_changed_lines, key=lambda ln: abs(ln - target_block.from_line))
