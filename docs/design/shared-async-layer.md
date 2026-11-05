@@ -62,7 +62,7 @@ instance and cwd); the survivor check logs pids only, never command lines.
 - spec-prism-flow `claude_backend.py` / `opencode_backend.py` and sisyphus
   `cli.py` / `subproc.py`: not migrated, edited or deprecated in #164. They stay as they
   are until I-3, I-4 and I-5 move each tool onto this layer.
-- pr-review `backend.py` and `runners/common.py`: not changed; I-3 replaces them.
+- pr-review `backend.py`: replaced in I-3 by a synchronous adapter over `launch_sync` (see "I-3 adapter contract"). pr-review `runners/common.py` `run_cmd` (generic `gh`/`git` runner, not a backend launcher) is not part of that change.
 - vibe-heal `ai_tools/`: migrated in the next leaf of #164.
 
 ## Contract for I-3, I-4 and I-5
@@ -115,3 +115,56 @@ and is not wired into any of them yet.
 - Neither argv nor env is logged or placed in exception text. Callers must keep to this.
 - Not provided: lock files, `gh`, config loading, `build_subprocess_env`.
 - Decision D-6: the Claude timeout in vibe-heal is one value, 1200 s (`CLAUDE_TIMEOUT_SECONDS` in `ClaudeCodeTool`). It is passed to the launcher, which enforces it, and printed in the timeout message. The old 300 s constructor default and the literal 600 s wrapper are removed. `ClaudeCodeTool` and `OpenCodeTool` call `launch` only; their prompt files now live under `~/.local/share/dotharness/tmp` instead of the working tree.
+
+## I-3 adapter contract and hardening map
+
+`dotharness.pr_review.backend.Backend` keeps its constructor
+`Backend(backend, timeout, path_prepend, env_vars, max_retries=1, *, expected_repo_name=None)` and
+`run(instructions, cwd, opencode_dir, context)`. Internally it calls `launch_sync` only; `_cmd_for`, `_build_command` and
+the Popen/killpg code are deleted. It must not be called from async code.
+
+Adapter contract:
+
+- Flags: claude `skip_permissions=True, disable_slash_commands=True`; opencode `standalone=True, auto=True,
+  monitor_cwd=True, check_plugins=True` (+ `opencode_dir`). The adapter also passes `expected_repo_name` and
+  `guard_harness_repo=True`, because guards are opt-in in the shared layer. Argv is pinned in tests through
+  `build_claude_command` and `build_opencode_command`; it equals the old argv.
+- Retry default: the adapter keeps `max_retries=1` (old) and passes `max_retries` to `launch_sync` explicitly; the shared
+  default is 0.
+- Bytes vs text: the shared `RunResult` is text; the adapter returns `subprocess.CompletedProcess` with stdout/stderr
+  encoded to UTF-8 bytes (`args` holds only the backend name; the shared layer never exposes argv).
+- Timeout (`timed_out`, 124): raises `subprocess.TimeoutExpired` (old behaviour).
+- Non-zero exit: returned as `CompletedProcess` with that return code (old behaviour: `_execute` returned it; old callers
+  check `returncode`). `CalledProcessError` is never raised.
+- Missing executable (`not_found`, 127): returned as `CompletedProcess(returncode=127)`. The old code let `Popen` raise
+  `FileNotFoundError`; every old caller of `Backend.run` either checks `returncode` or catches `Exception`, so a returned 127
+  is handled the same way as any failed run. This is a deliberate change.
+- Propagated unchanged: `ValueError`, `TypeError`, `OpencodePluginError`, `BackendCwdDivergedError`, `RepoIdentityError`
+  (`dotharness.repo_guard`; re-exported from `pr_review.backend`).
+- Accepted I-2 differences (see "Decisions per difference"): SIGTERM to the group then SIGKILL after
+  `KILL_GRACE_SECONDS = 5` (old: SIGKILL); retries also cover non-zero exit; plugin check once per launch call; survivor
+  check logs pids only; prompt files use the `dotharness_` prefix in a 0700 directory.
+- Logging (D-9): the adapter logs no argv, env, or backend stdout/stderr. The old log of up to 2000 characters of failed-run
+  output is dropped.
+
+Hardening map (every retained item from the old `Backend`):
+
+| Item | Class | Where |
+| --- | --- | --- |
+| Process-group SIGTERM, grace, SIGKILL on timeout and cancellation | shared layer | `subprocess_runner.run` |
+| Prompt written to a private temp file, removed after each attempt | shared layer | `ai_backend._write_prompt_file` |
+| `PWD` pinned to `cwd` | shared layer | `ai_backend._build_env` |
+| `path_prepend` and extra env merged into the child env | shared layer | `ai_backend._build_env` |
+| Wait (bounded) for the process group to exit; warn on survivors | shared layer | `ai_backend._wait_for_group_exit` |
+| By-name survivor check after a timeout-kill (pids only) | shared layer | `ai_backend._warn_if_backend_survived` |
+| cwd-divergence monitor (`lsof`) and `BackendCwdDivergedError` (not retried) | shared layer | `opencode_guards.watch_cwd` |
+| `opencode plugin list` check | shared layer | `opencode_guards.assert_no_opencode_plugins` |
+| Repo-identity check before and after each attempt; logged after a timeout-kill | shared layer | `repo_guard.assert_repo_identity` |
+| Harness-repo HEAD unchanged guard | shared layer | `repo_guard.assert_harness_unchanged` |
+| Retry loop mechanics | shared layer | `ai_backend._run_attempts` |
+| Choice of flags: `skip_permissions`, `disable_slash_commands`, `standalone`, `auto`, `monitor_cwd`, `check_plugins` | pr-review policy | `Backend.run` |
+| Enabling guards: `expected_repo_name`, `guard_harness_repo` | pr-review policy | `Backend.run` |
+| Retry count (`max_retries`, adapter default 1) | pr-review policy | `Backend.__init__` |
+| Timeout value and `TimeoutExpired` / `CompletedProcess` result shape | pr-review policy | `Backend.run` |
+| Per-working-dir `fcntl.flock` lock files | pr-review policy | `pr_review/lock.py` (kept) |
+| Global opencode lock | dropped (D-1) | opencode 2.0 no longer needs it |

@@ -2,34 +2,6 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def no_harness_repo_root(monkeypatch):
-    """Tests exercise Backend.run() with synthetic cwds like "/tmp" that have
-    nothing to do with this checkout. Without this, the harness-repo-unchanged
-    guard would shell out to git against dotharness's real checkout and collide
-    with tests that mock subprocess.Popen for the backend invocation itself."""
-    monkeypatch.setattr("dotharness.pr_review.backend._HARNESS_REPO_ROOT", None)
-
-
-@pytest.fixture(autouse=True)
-def no_opencode_plugin_check(monkeypatch):
-    """Tests mock the backend subprocess directly rather than exercising a real
-    opencode install. Without this, Backend.run() would shell out to a real
-    `opencode plugin list` (or fail outright if opencode isn't installed on the
-    test host) before ever reaching the mocked Popen call."""
-    monkeypatch.setattr("dotharness.pr_review.backend.assert_no_opencode_plugins", lambda cwd: None)
-
-
-@pytest.fixture(autouse=True)
-def no_backend_group_wait(monkeypatch):
-    """Tests mock the backend subprocess directly rather than spawning a real one.
-    Without this, the post-run process-group check would shell out to a real
-    `pgrep` for every test that exercises Backend.run()'s success path. Default to
-    "no survivors" so that stays a no-op; tests of the wait/timeout behavior itself
-    override this fixture's patch with their own."""
-    monkeypatch.setattr("dotharness.pr_review.backend.Backend._processes_in_group", staticmethod(lambda pgid: ""))
-
-
-@pytest.fixture(autouse=True)
 def _clear_ssh_host_cache():
     """`_resolve_ssh_host` is memoized process-wide; clear it so a mocked
     `ssh -G` result from one test can't leak into another test reusing the
@@ -46,7 +18,7 @@ def tmp_xdg(tmp_path, monkeypatch):
     """Redirect XDG runtime dir to tmp_path for all modules."""
     xdg = tmp_path / "dotharness"
     xdg.mkdir()
-    monkeypatch.setattr("dotharness.pr_review.backend.XDG_DATA", xdg)
+    monkeypatch.setattr("dotharness.ai_backend.TMP_DIR", xdg / "tmp")
     monkeypatch.setattr("dotharness.pr_review.state.XDG_DATA", xdg)
     monkeypatch.setattr("dotharness.pr_review.lock.XDG_RUNTIME", xdg)
     monkeypatch.setattr("dotharness.pr_review.cli.XDG_LOGS", tmp_path / "logs")
