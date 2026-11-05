@@ -74,6 +74,17 @@ class TestIsSafeUrl:
         assert not _is_safe_url("http://0.0.0.0/")
         assert not _is_safe_url("http://100.64.0.1/")
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[fe80::1]/",
+            "http://[fd00::1]/",
+        ],
+    )
+    def test_link_local_and_unique_local_blocked(self, url: str) -> None:
+        assert not _is_safe_url(url)
+
     def test_decimal_ip_blocked(self) -> None:
         assert not _is_safe_url("http://2130706433/")
 
