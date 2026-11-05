@@ -22,6 +22,7 @@ nav = [
         "pr_review.md",
         { "Overview" = "pr_review/overview.md" },
         { "Configuration" = "pr_review/configuration.md" },
+        { "Config format recommendation" = "pr_review/config-format-recommendation.md" },
         { "Commands" = [
             { "Overview" = "pr_review/commands/index.md" },
             { "review-prs" = "pr_review/commands/review-prs.md" },
