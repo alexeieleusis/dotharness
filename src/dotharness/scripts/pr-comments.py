@@ -67,23 +67,7 @@ def replies_file(pr_number: int) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def cmd_fetch(pr_number: int, output_path: str | None) -> None:
-    pr_info = gh_json(["pr", "view", str(pr_number), "--json", "title,url,headRefName"])
-
-    # Inline (file-level) comments
-    raw_inline: list[dict] = gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/comments", "--paginate"])
-
-    # PR-level reviews (may contain top-level review body)
-    raw_reviews: list[dict] = gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/reviews", "--paginate"])
-
-    # Issue comments (general PR timeline comments — where bots like CodeRabbit/Graphite post)
-    raw_issue_comments: list[dict] = gh_json([
-        "api",
-        f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments",
-        "--paginate",
-    ])
-
-    # Separate top-level threads from replies
+def _build_inline_comments(raw_inline: list[dict]) -> list[dict]:
     top_level = [c for c in raw_inline if not c.get("in_reply_to_id")]
     replies_map: dict[int, list[dict]] = {}
     for c in raw_inline:
@@ -91,7 +75,7 @@ def cmd_fetch(pr_number: int, output_path: str | None) -> None:
         if parent:
             replies_map.setdefault(parent, []).append(c)
 
-    inline_comments = [
+    return [
         {
             "id": c["id"],
             "author": c["user"]["login"],
@@ -108,8 +92,10 @@ def cmd_fetch(pr_number: int, output_path: str | None) -> None:
         for c in top_level
     ]
 
+
+def _build_review_comments(raw_reviews: list[dict]) -> list[dict]:
     # Only include review-level comments that have a body and are change requests
-    review_comments = [
+    return [
         {
             "id": f"review-{r['id']}",
             "author": r["user"]["login"],
@@ -121,8 +107,10 @@ def cmd_fetch(pr_number: int, output_path: str | None) -> None:
         if r.get("body", "").strip() and r["state"] == "CHANGES_REQUESTED"
     ]
 
+
+def _build_issue_comments(raw_issue_comments: list[dict]) -> list[dict]:
     # Issue comments — bots (CodeRabbit, Graphite, etc.) and humans alike
-    issue_comments = [
+    return [
         {
             "id": f"issue-comment-{c['id']}",
             "author": c["user"]["login"],
@@ -134,20 +122,15 @@ def cmd_fetch(pr_number: int, output_path: str | None) -> None:
         if c.get("body", "").strip()
     ]
 
-    data = {
-        "pr_number": pr_number,
-        "pr_title": pr_info["title"],
-        "pr_url": pr_info["url"],
-        "branch": pr_info["headRefName"],
-        "inline_comments": inline_comments,
-        "review_comments": review_comments,
-        "issue_comments": issue_comments,
-    }
 
-    dest = Path(output_path) if output_path else cache_file(pr_number)
-    dest.write_text(json.dumps(data, indent=2))
-
-    # Human-readable summary
+def _print_fetch_summary(
+    pr_info: dict,
+    dest: Path,
+    pr_number: int,
+    inline_comments: list[dict],
+    review_comments: list[dict],
+    issue_comments: list[dict],
+) -> None:
     print(f"PR #{pr_number}: {pr_info['title']}")
     print(f"URL:    {pr_info['url']}")
     print(f"Saved:  {dest}")
@@ -162,9 +145,8 @@ def cmd_fetch(pr_number: int, output_path: str | None) -> None:
         print(f"File   : {c['path']}:{c['line']}")
         print(f"Author : @{c['author']}")
         print(f"Comment: {c['body']}")
-        if c["replies"]:
-            for r in c["replies"]:
-                print(f"  ↳ @{r['author']}: {r['body']}")
+        for r in c["replies"]:
+            print(f"  ↳ @{r['author']}: {r['body']}")
         print()
 
     for i, c in enumerate(review_comments, 1):
@@ -180,6 +162,42 @@ def cmd_fetch(pr_number: int, output_path: str | None) -> None:
         print(f"URL    : {c['url']}")
         print(f"Comment: {c['body']}")
         print()
+
+
+def cmd_fetch(pr_number: int, output_path: str | None) -> None:
+    pr_info = gh_json(["pr", "view", str(pr_number), "--json", "title,url,headRefName"])
+
+    # Inline (file-level) comments
+    raw_inline: list[dict] = gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/comments", "--paginate"])
+
+    # PR-level reviews (may contain top-level review body)
+    raw_reviews: list[dict] = gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/reviews", "--paginate"])
+
+    # Issue comments (general PR timeline comments — where bots like CodeRabbit/Graphite post)
+    raw_issue_comments: list[dict] = gh_json([
+        "api",
+        f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments",
+        "--paginate",
+    ])
+
+    inline_comments = _build_inline_comments(raw_inline)
+    review_comments = _build_review_comments(raw_reviews)
+    issue_comments = _build_issue_comments(raw_issue_comments)
+
+    data = {
+        "pr_number": pr_number,
+        "pr_title": pr_info["title"],
+        "pr_url": pr_info["url"],
+        "branch": pr_info["headRefName"],
+        "inline_comments": inline_comments,
+        "review_comments": review_comments,
+        "issue_comments": issue_comments,
+    }
+
+    dest = Path(output_path) if output_path else cache_file(pr_number)
+    dest.write_text(json.dumps(data, indent=2))
+
+    _print_fetch_summary(pr_info, dest, pr_number, inline_comments, review_comments, issue_comments)
 
 
 # ---------------------------------------------------------------------------
