@@ -13,6 +13,7 @@ from dotharness.subprocess_runner import RunResult, run
 logger = logging.getLogger(__name__)
 
 _HELPER_TIMEOUT_SECONDS = 30.0
+_GITHUB_HOST = "github.com"
 
 
 class RepoIdentityError(RuntimeError):
@@ -28,8 +29,8 @@ _ssh_hosts: dict[str, str] = {}
 
 async def _resolve_ssh_host(host: str) -> str:
     """Resolve an SSH config host alias to its real HostName; fall back to the alias (fail closed)."""
-    if host.lower() == "github.com":
-        return "github.com"
+    if host.lower() == _GITHUB_HOST:
+        return _GITHUB_HOST
     if host in _ssh_hosts:
         return _ssh_hosts[host]
     if host.startswith("-"):
@@ -62,7 +63,7 @@ async def _origin_matches_repo(url: str, repo_name: str) -> bool:
     if split is None:
         return False
     host, path = split
-    return (await _resolve_ssh_host(host)).lower() == "github.com" and path == repo_name
+    return (await _resolve_ssh_host(host)).lower() == _GITHUB_HOST and path == repo_name
 
 
 async def assert_repo_identity(working_dir: str | Path, expected_repo_name: str) -> None:
