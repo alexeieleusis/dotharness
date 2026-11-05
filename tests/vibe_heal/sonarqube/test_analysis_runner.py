@@ -2,14 +2,22 @@
 
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from dotharness.subprocess_runner import RunResult
 from dotharness.vibe_heal.config import VibeHealConfig
 from dotharness.vibe_heal.sonarqube.analysis_runner import AnalysisResult, AnalysisRunner
 from dotharness.vibe_heal.sonarqube.client import SonarQubeClient
 from dotharness.vibe_heal.sonarqube.exceptions import SonarQubeAPIError
+
+_RUN_PATH = "dotharness.vibe_heal.sonarqube.analysis_runner.run"
+
+
+def _fake_run(returncode: int, stdout: bytes, stderr: bytes) -> AsyncMock:
+    """Stand-in for the shared subprocess runner returning a fixed RunResult."""
+    return AsyncMock(return_value=RunResult(returncode=returncode, stdout=stdout.decode(), stderr=stderr.decode()))
 
 
 @pytest.fixture
@@ -213,13 +221,11 @@ INFO: Analysis total time: 10.234 s
 """
 
         # Mock subprocess
-        mock_process = AsyncMock()
-        mock_process.returncode = 0
-        mock_process.communicate = AsyncMock(return_value=(scanner_output, b""))
+        mock_run = _fake_run(0, scanner_output, b"")
 
         with (
             patch.object(analysis_runner, "validate_scanner_available", return_value=True),
-            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch(_RUN_PATH, mock_run),
             patch.object(analysis_runner, "_wait_for_analysis", return_value=(True, None)),
         ):
             result = await analysis_runner.run_analysis(
@@ -238,22 +244,15 @@ INFO: Analysis total time: 10.234 s
         self, analysis_runner: AnalysisRunner, tmp_path: Path
     ) -> None:
         """A scanner subprocess that never completes must be killed, not awaited forever."""
-        import asyncio
-
-        async def hang() -> tuple[bytes, bytes]:
-            await asyncio.sleep(3600)
-            return b"", b""
-
-        mock_process = AsyncMock()
-        mock_process.returncode = None
-        mock_process.communicate = AsyncMock(side_effect=hang)
-        mock_process.kill = Mock()  # Process.kill() is synchronous in the real API
+        mock_run = AsyncMock(
+            return_value=RunResult(returncode=124, stdout="", stderr="timed out after 0.05s", timed_out=True)
+        )
 
         cast("Any", analysis_runner.config).scanner_timeout_seconds = 0.05
 
         with (
             patch.object(analysis_runner, "validate_scanner_available", return_value=True),
-            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch(_RUN_PATH, mock_run),
         ):
             result = await analysis_runner.run_analysis(
                 project_key="test-key",
@@ -264,19 +263,17 @@ INFO: Analysis total time: 10.234 s
         assert result.success is False
         assert result.retryable is False
         assert "did not complete" in (result.error_message or "")
-        mock_process.kill.assert_called_once()
-        mock_process.wait.assert_awaited_once()
+        mock_run.assert_awaited_once()
+        assert mock_run.await_args.kwargs["timeout"] == 0.05
 
     @pytest.mark.asyncio
     async def test_scanner_execution_fails(self, analysis_runner: AnalysisRunner, tmp_path: Path) -> None:
         """Test when scanner execution fails."""
-        mock_process = AsyncMock()
-        mock_process.returncode = 1
-        mock_process.communicate = AsyncMock(return_value=(b"", b"ERROR: Analysis failed"))
+        mock_run = _fake_run(1, b"", b"ERROR: Analysis failed")
 
         with (
             patch.object(analysis_runner, "validate_scanner_available", return_value=True),
-            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch(_RUN_PATH, mock_run),
         ):
             result = await analysis_runner.run_analysis(
                 project_key="test-key",
@@ -291,13 +288,11 @@ INFO: Analysis total time: 10.234 s
     @pytest.mark.asyncio
     async def test_no_task_id_in_output(self, analysis_runner: AnalysisRunner, tmp_path: Path) -> None:
         """Test when task ID cannot be extracted from output."""
-        mock_process = AsyncMock()
-        mock_process.returncode = 0
-        mock_process.communicate = AsyncMock(return_value=(b"No task ID here", b""))
+        mock_run = _fake_run(0, b"No task ID here", b"")
 
         with (
             patch.object(analysis_runner, "validate_scanner_available", return_value=True),
-            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch(_RUN_PATH, mock_run),
         ):
             result = await analysis_runner.run_analysis(
                 project_key="test-key",
@@ -315,13 +310,11 @@ INFO: Analysis total time: 10.234 s
 INFO: More about the report processing at https://sonar.test.com/api/ce/task?id=AY123
 """
 
-        mock_process = AsyncMock()
-        mock_process.returncode = 0
-        mock_process.communicate = AsyncMock(return_value=(scanner_output, b""))
+        mock_run = _fake_run(0, scanner_output, b"")
 
         with (
             patch.object(analysis_runner, "validate_scanner_available", return_value=True),
-            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch(_RUN_PATH, mock_run),
             patch.object(analysis_runner, "_wait_for_analysis", return_value=(False, "Out of memory")),
         ):
             result = await analysis_runner.run_analysis(
@@ -342,13 +335,11 @@ INFO: More about the report processing at https://sonar.test.com/api/ce/task?id=
         scanner_output = b"""
 INFO: More about the report processing at https://sonar.test.com/api/ce/task?id=AY123
 """
-        mock_process = AsyncMock()
-        mock_process.returncode = 0
-        mock_process.communicate = AsyncMock(return_value=(scanner_output, b""))
+        mock_run = _fake_run(0, scanner_output, b"")
 
         with (
             patch.object(analysis_runner, "validate_scanner_available", return_value=True),
-            patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_create,
+            patch(_RUN_PATH, mock_run),
             patch.object(
                 analysis_runner,
                 "_wait_for_analysis",
@@ -365,7 +356,7 @@ INFO: More about the report processing at https://sonar.test.com/api/ce/task?id=
 
         assert result.success is True
         assert result.task_id == "AY123"
-        assert mock_create.call_count == 2
+        assert mock_run.call_count == 2
 
     @pytest.mark.asyncio
     async def test_analysis_exhausts_retries(self, analysis_runner: AnalysisRunner, tmp_path: Path) -> None:
@@ -373,13 +364,11 @@ INFO: More about the report processing at https://sonar.test.com/api/ce/task?id=
         scanner_output = b"""
 INFO: More about the report processing at https://sonar.test.com/api/ce/task?id=AY123
 """
-        mock_process = AsyncMock()
-        mock_process.returncode = 0
-        mock_process.communicate = AsyncMock(return_value=(scanner_output, b""))
+        mock_run = _fake_run(0, scanner_output, b"")
 
         with (
             patch.object(analysis_runner, "validate_scanner_available", return_value=True),
-            patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_create,
+            patch(_RUN_PATH, mock_run),
             patch.object(
                 analysis_runner,
                 "_wait_for_analysis",
@@ -397,7 +386,7 @@ INFO: More about the report processing at https://sonar.test.com/api/ce/task?id=
         assert result.success is False
         assert "failed on server" in (result.error_message or "")
         assert "Fail to extract report from database" in (result.error_message or "")
-        assert mock_create.call_count == 3
+        assert mock_run.call_count == 3
 
     @pytest.mark.asyncio
     async def test_analysis_timeout_on_server(self, analysis_runner: AnalysisRunner, tmp_path: Path) -> None:
@@ -408,9 +397,7 @@ INFO: More about the report processing at https://sonar.test.com/api/ce/task?id=
 INFO: More about the report processing at https://sonar.test.com/api/ce/task?id=AY123
 """
 
-        mock_process = AsyncMock()
-        mock_process.returncode = 0
-        mock_process.communicate = AsyncMock(return_value=(scanner_output, b""))
+        mock_run = _fake_run(0, scanner_output, b"")
 
         # Mock _wait_for_analysis to sleep forever (simulating timeout)
         async def wait_forever(task_id: str) -> tuple[bool, str | None]:
@@ -421,7 +408,7 @@ INFO: More about the report processing at https://sonar.test.com/api/ce/task?id=
 
         with (
             patch.object(analysis_runner, "validate_scanner_available", return_value=True),
-            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch(_RUN_PATH, mock_run),
             patch.object(analysis_runner, "_wait_for_analysis", side_effect=wait_forever),
             # Fresh Timeout instance per call — asyncio.Timeout can't be entered twice, and
             # this function now opens a timeout around both the scanner wait and this one.
@@ -442,10 +429,7 @@ INFO: More about the report processing at https://sonar.test.com/api/ce/task?id=
         """Test handling of subprocess exceptions."""
         with (
             patch.object(analysis_runner, "validate_scanner_available", return_value=True),
-            patch(
-                "asyncio.create_subprocess_exec",
-                side_effect=Exception("Subprocess error"),
-            ),
+            patch(_RUN_PATH, side_effect=Exception("Subprocess error")),
         ):
             result = await analysis_runner.run_analysis(
                 project_key="test-key",
@@ -503,12 +487,10 @@ class TestAuthHint:
         self, analysis_runner: AnalysisRunner, tmp_path: Path
     ) -> None:
         (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=orig\n")
-        mock_process = AsyncMock()
-        mock_process.returncode = 1
-        mock_process.communicate = AsyncMock(return_value=(b"", b"ERROR: 401 Unauthorized"))
+        mock_run = _fake_run(1, b"", b"ERROR: 401 Unauthorized")
         with (
             patch.object(analysis_runner, "validate_scanner_available", return_value=True),
-            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch(_RUN_PATH, mock_run),
         ):
             result = await analysis_runner.run_analysis(
                 project_key="temp-key",
@@ -520,12 +502,10 @@ class TestAuthHint:
 
     @pytest.mark.asyncio
     async def test_no_auth_hint_without_properties_file(self, analysis_runner: AnalysisRunner, tmp_path: Path) -> None:
-        mock_process = AsyncMock()
-        mock_process.returncode = 1
-        mock_process.communicate = AsyncMock(return_value=(b"", b"ERROR: 401 Unauthorized"))
+        mock_run = _fake_run(1, b"", b"ERROR: 401 Unauthorized")
         with (
             patch.object(analysis_runner, "validate_scanner_available", return_value=True),
-            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch(_RUN_PATH, mock_run),
         ):
             result = await analysis_runner.run_analysis(
                 project_key="test-key",
@@ -538,12 +518,10 @@ class TestAuthHint:
     @pytest.mark.asyncio
     async def test_no_auth_hint_for_non_auth_failure(self, analysis_runner: AnalysisRunner, tmp_path: Path) -> None:
         (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=orig\n")
-        mock_process = AsyncMock()
-        mock_process.returncode = 1
-        mock_process.communicate = AsyncMock(return_value=(b"", b"ERROR: Project not found"))
+        mock_run = _fake_run(1, b"", b"ERROR: Project not found")
         with (
             patch.object(analysis_runner, "validate_scanner_available", return_value=True),
-            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch(_RUN_PATH, mock_run),
         ):
             result = await analysis_runner.run_analysis(
                 project_key="temp-key",

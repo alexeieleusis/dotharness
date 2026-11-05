@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from dotharness.subprocess_runner import run
 from dotharness.vibe_heal.config import VibeHealConfig
 from dotharness.vibe_heal.output import dim, error, success, warn
 from dotharness.vibe_heal.sonarqube.client import SonarQubeClient
@@ -114,39 +115,33 @@ class AnalysisRunner:
     ) -> AnalysisResult:
         """Execute sonar-scanner once and wait for server-side completion."""
         dim(f"    Executing: sonar-scanner (project: {project_key})")
-        proc = await asyncio.create_subprocess_exec(
-            *command,
-            cwd=str(project_dir),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
         dim("    Waiting for scanner to complete...")
         timeout_seconds = self.config.scanner_timeout_seconds
-        try:
-            async with asyncio.timeout(timeout_seconds):
-                stdout, stderr = await proc.communicate()
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
+        # Shared runner: own process group, SIGTERM->SIGKILL of the whole group (the sonar-scanner
+        # wrapper's JVM child included) on timeout and on task cancellation.
+        run_result = await run(command, cwd=project_dir, timeout=timeout_seconds)
+        if run_result.not_found:
+            return AnalysisResult(success=False, error_message=f"Failed to run analysis: {run_result.stderr}")
+        if run_result.timed_out:
             error(f"    Scanner did not complete after {timeout_seconds}s — killed")
             return AnalysisResult(
                 success=False,
                 error_message=f"sonar-scanner did not complete after {timeout_seconds}s — killed",
             )
-        dim(f"    Scanner finished with exit code: {proc.returncode}")
+        returncode = run_result.returncode
+        stdout_text = run_result.stdout
+        stderr_text = run_result.stderr
+        dim(f"    Scanner finished with exit code: {returncode}")
 
-        if proc.returncode != 0:
-            stdout_text = stdout.decode() if stdout else ""
-            stderr_text = stderr.decode() if stderr else ""
+        if returncode != 0:
             combined = "\n".join(o for o in (stderr_text, stdout_text) if o)
             error(f"    Scanner error: {combined[:500]}")
-            error_msg = f"sonar-scanner failed with exit code {proc.returncode}: {combined}"
+            error_msg = f"sonar-scanner failed with exit code {returncode}: {combined}"
             if handler.exists and _AUTH_ERROR_RE.search(combined):
                 error_msg += _AUTH_HINT
             return AnalysisResult(success=False, error_message=error_msg)
 
-        scanner_output = stdout.decode()
+        scanner_output = stdout_text
         dim("    Extracting task ID from scanner output...")
         task_id = self._extract_task_id(scanner_output)
 
