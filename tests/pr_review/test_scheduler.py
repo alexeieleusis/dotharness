@@ -440,3 +440,95 @@ class TestUninstallLaunchd:
             uninstall_launchd("review-prs", "acme-frontend")
 
         assert len(commands) == 0
+
+
+# ── pinned generated text (binary name pr_review, both argument orders) ──
+
+
+def _pr_review_entry(scheduler: str = "cron") -> ScheduleEntry:
+    return ScheduleEntry(
+        command="review-prs",
+        repo_slug="acme-frontend",
+        scheduler=scheduler,
+        interval_seconds=7200,
+        config_path="/c/.harness.toml",
+        harness_bin="/usr/local/bin/pr_review",
+    )
+
+
+def test_cron_line_exact_text(tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    log_dir = tmp_path / ".local/share/dotharness/logs/review-prs"
+    # cron order: run --config <cfg> <command>
+    assert _pr_review_entry().to_cron_line() == (
+        f"0 */2 * * * /usr/local/bin/pr_review run --config /c/.harness.toml review-prs "
+        f">> {log_dir}/$(date +\\%F).log 2>&1\n"
+        "# harness: review-prs acme-frontend 7200 /c/.harness.toml"
+    )
+
+
+def test_launchd_plist_exact_text(tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    log_file = tmp_path / ".local/share/dotharness/logs/review-prs/launchd.log"
+    # launchd order: run <command> --config <cfg>
+    assert (
+        _pr_review_entry("launchd").to_launchd_plist()
+        == f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.harness.review-prs-acme-frontend</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/pr_review</string>
+        <string>run</string>
+        <string>review-prs</string>
+        <string>--config</string>
+        <string>/c/.harness.toml</string>
+    </array>
+    <key>StartInterval</key><integer>7200</integer>
+    <key>StandardOutPath</key><string>{log_file}</string>
+    <key>StandardErrorPath</key><string>{log_file}</string>
+    <key>RunAtLoad</key><false/>
+</dict>
+</plist>"""
+    )
+
+
+def test_plist_xml_escapes_values():
+    entry = ScheduleEntry("review-prs", "slug", "launchd", 60, "/c/a&b<.toml", "/bin/pr_review")
+    assert "<string>/c/a&amp;b&lt;.toml</string>" in entry.to_launchd_plist()
+
+
+def test_cron_marker_round_trips_through_list_regex():
+    marker = _pr_review_entry().to_cron_line().splitlines()[1]
+    assert find_harness_cron_entries(marker) == [
+        {"command": "review-prs", "slug": "acme-frontend", "interval_seconds": 7200, "config_path": "/c/.harness.toml"}
+    ]
+
+
+def test_cron_edge_cases():
+    assert build_cron_expression(60) == "*/1 * * * *"
+    assert build_cron_expression(3600) == "0 */1 * * *"
+    with pytest.raises(ValueError, match="Minimum interval"):
+        build_cron_expression(59)
+    with pytest.raises(ValueError, match="does not divide evenly"):
+        build_cron_expression(5400)
+
+
+# ── typer: launchd argument order hits the run group's --config trap ──
+
+
+def test_run_runner_then_config_is_usage_error(minimal_toml, tmp_xdg):
+    """Observed: `run <runner> --config <cfg>` (launchd order) exits 2 with 'No such option: --config'.
+
+    --config belongs to the `run` group callback, so the runner subcommand rejects it. Documented, not fixed.
+    """
+    from typer.testing import CliRunner
+
+    from dotharness.pr_review.cli import app
+
+    result = CliRunner().invoke(app, ["run", "review-prs", "--config", str(minimal_toml)])
+    assert result.exit_code == 2
+    assert "Error: No such option: --config" in result.output
+    assert "Usage: pr_review run review-prs [OPTIONS]" in result.output

@@ -10,24 +10,24 @@ def parse_duration(s: str) -> int:
     if s.endswith("h") and s[:-1].isdigit():
         val = int(s[:-1])
         if val == 0:
-            raise ValueError(f"Invalid duration '{s}': interval must be greater than 0")  # noqa: TRY003
+            raise ValueError(f"Invalid duration '{s}': interval must be greater than 0")  # noqa: TRY003  # user-facing message, no custom exception class
         return val * 3600
     if s.endswith("m") and s[:-1].isdigit():
         val = int(s[:-1])
         if val == 0:
-            raise ValueError(f"Invalid duration '{s}': interval must be greater than 0")  # noqa: TRY003
+            raise ValueError(f"Invalid duration '{s}': interval must be greater than 0")  # noqa: TRY003  # user-facing message, no custom exception class
         return val * 60
-    raise ValueError(f"Invalid duration '{s}': use <N>h or <N>m (e.g. 2h, 30m)")  # noqa: TRY003
+    raise ValueError(f"Invalid duration '{s}': use <N>h or <N>m (e.g. 2h, 30m)")  # noqa: TRY003  # user-facing message, no custom exception class
 
 
 def build_cron_expression(interval_seconds: int) -> str:
     if interval_seconds < 60:
-        raise ValueError("Minimum interval is 60 seconds for cron scheduler")  # noqa: TRY003
+        raise ValueError("Minimum interval is 60 seconds for cron scheduler")  # noqa: TRY003  # user-facing message, no custom exception class
     minutes = interval_seconds // 60
     if minutes >= 60:
         remainder = minutes % 60
         if remainder != 0:
-            raise ValueError(  # noqa: TRY003
+            raise ValueError(  # noqa: TRY003  # user-facing message, no custom exception class
                 f"Interval {interval_seconds}s ({minutes}min) does not divide evenly into hours. "
                 f"Cannot represent remainder of {remainder}min in hour-based cron expression."
             )
@@ -121,7 +121,7 @@ def _remove_cron_entry(text: str, command: str, slug: str) -> str:
 
 
 def install_cron(entry: ScheduleEntry) -> None:
-    result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)  # noqa: S607
+    result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)  # noqa: S607  # crontab resolved via PATH, fixed argv
     current = result.stdout if result.returncode == 0 else ""
 
     # Duplicate detection: if command+slug already exists, replace instead of appending
@@ -132,11 +132,11 @@ def install_cron(entry: ScheduleEntry) -> None:
             break
 
     new_crontab = current.rstrip("\n") + "\n" + entry.to_cron_line() + "\n"
-    subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=True)  # noqa: S607
+    subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=True)  # noqa: S607  # crontab resolved via PATH, fixed argv
 
 
 def uninstall_cron(command: str, repo_slug: str) -> None:
-    result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)  # noqa: S607
+    result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)  # noqa: S607  # crontab resolved via PATH, fixed argv
     if result.returncode != 0:
         return
     marker_prefix = f"# harness: {command} {repo_slug} "  # prefix match (interval+config follow)
@@ -152,7 +152,7 @@ def uninstall_cron(command: str, repo_slug: str) -> None:
             continue
         filtered.append(line)
     new_crontab = "".join(reversed(filtered))
-    subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=True)  # noqa: S607
+    subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=True)  # noqa: S607  # crontab resolved via PATH, fixed argv
 
 
 def install_launchd(entry: ScheduleEntry) -> None:
@@ -162,12 +162,12 @@ def install_launchd(entry: ScheduleEntry) -> None:
     plist_dir.mkdir(parents=True, exist_ok=True)
     plist_path = plist_dir / f"{entry.launchd_label}.plist"
     plist_path.write_text(entry.to_launchd_plist())
-    subprocess.run(["launchctl", "load", str(plist_path)], check=True)  # noqa: S603, S607
+    subprocess.run(["launchctl", "load", str(plist_path)], check=True)  # noqa: S603, S607  # launchctl via PATH, fixed argv plus our own plist path
 
 
 def uninstall_launchd(command: str, repo_slug: str) -> None:
     label = f"com.harness.{command}-{repo_slug}"
     plist_path = Path.home() / "Library/LaunchAgents" / f"{label}.plist"
     if plist_path.exists():
-        subprocess.run(["launchctl", "unload", str(plist_path)], check=False)  # noqa: S603, S607
+        subprocess.run(["launchctl", "unload", str(plist_path)], check=False)  # noqa: S603, S607  # launchctl via PATH, fixed argv plus our own plist path
         plist_path.unlink()
