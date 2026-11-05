@@ -243,6 +243,23 @@ def test_e2e_claude_runs_shared_layer_and_removes_prompt_file(tmp_path, fake_bin
     assert list((tmp_xdg / "tmp").glob("*")) == []
 
 
+def test_e2e_failing_backend_launched_once_with_default_retries(tmp_path, fake_bin, tmp_xdg):
+    # Runs are not idempotent (replies, pushes): a non-zero exit must not be retried, only timeouts are.
+    count = tmp_path / "count"
+    _exe(fake_bin, "claude", f"echo x >> {count}\nexit 1\n")
+    work = tmp_path / "work"
+    work.mkdir()
+    result = _make_backend("claude").run("x", str(work))
+    assert result.returncode == 1
+    assert len(count.read_text().splitlines()) == 1
+
+
+def test_retry_on_nonzero_not_enabled_by_adapter(tmp_path):
+    with patch(LAUNCH, return_value=RunResult(0, "", "")) as m:
+        _make_backend().run("x", str(tmp_path))
+    assert not m.call_args.kwargs.get("retry_on_nonzero", False)
+
+
 def test_e2e_missing_executable_returns_127(tmp_path, monkeypatch, tmp_xdg):
     # Only git stays on PATH (the harness-HEAD guard reads the checkout's HEAD); the backend executable is missing.
     git_dir = Path(shutil.which("git") or "/usr/bin/git").parent

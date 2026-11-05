@@ -171,8 +171,8 @@ The CLI is `pr_review` (typer). Differences observed from the click `harness` CL
 
 ### Behavior differences from the shared-layer adapters
 
-`Backend` (adapter over `launch_sync`): prompt files use the prefix `dotharness_`; retries now also
-cover a non-zero exit; argv is no longer logged and the 2000-character failed-run log is dropped; a
+`Backend` (adapter over `launch_sync`): prompt files use the prefix `dotharness_`; retries still cover
+timeouts only (`retry_on_nonzero` stays off); argv is no longer logged and the 2000-character failed-run log is dropped; a
 missing executable returns `CompletedProcess(127)` instead of raising `FileNotFoundError`. The harness-repo
 guard runs only for a source checkout (`find_harness_checkout()`); an installed package skips it.
 

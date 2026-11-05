@@ -53,8 +53,8 @@ cwd-divergence monitor (`monitor_cwd`, uses `lsof`), `opencode plugin list` chec
 (with a warning when members survive, and a by-name check for escaped daemonised children
 after a timeout-kill).
 
-Changes from pr-review worth knowing: retries also cover a non-zero exit (pr-review retried
-timeouts only); the plugin check runs once per `launch` call (pr-review: once per `Backend`
+Changes from pr-review worth knowing: retries cover timeouts only unless `retry_on_nonzero=True` is passed
+(same as pr-review; a failed run can already have posted replies or pushed commits, so re-running it is opt-in); the plugin check runs once per `launch` call (pr-review: once per `Backend`
 instance and cwd); the survivor check logs pids only, never command lines.
 
 ## Treatment of the other copies
@@ -82,6 +82,7 @@ async def launch(
     prompt_via_file: bool = True,
     context: str | None = None,                 # log prefix only
     max_retries: int = 0,
+    retry_on_nonzero: bool = False,    # retry also after a non-zero exit; timeouts are always retried
     expected_repo_name: str | None = None,      # "owner/repo"
     guard_harness_repo: bool = False,
     harness_repo_root: str | Path | None = None,
@@ -100,8 +101,8 @@ and is not wired into any of them yet.
 - Result: `RunResult(returncode, stdout, stderr, timed_out=False, not_found=False)`, the
   last attempt's. It never carries argv or env.
 - Plain non-zero exit, timeout (`timed_out`, 124) and missing executable (`not_found`, 127)
-  are returned, not raised. Retries (`max_retries`) re-run after a timeout or non-zero exit,
-  not after `not_found`; the last result is returned.
+  are returned, not raised. Retries (`max_retries`) re-run after a timeout, and after a non-zero exit
+  only with `retry_on_nonzero=True` (default `False`); never after `not_found`; the last result is returned.
 - Raised: `ValueError` (unknown backend, option of the other backend), `OpencodePluginError`,
   `BackendCwdDivergedError` (not retried), `RepoIdentityError`.
 - A caller must pass `backend`, `prompt`, `cwd` and `timeout`, and choose every permission
@@ -130,7 +131,8 @@ Adapter contract:
   `guard_harness_repo=True`, because guards are opt-in in the shared layer. Argv is pinned in tests through
   `build_claude_command` and `build_opencode_command`; it equals the old argv.
 - Retry default: the adapter keeps `max_retries=1` (old) and passes `max_retries` to `launch_sync` explicitly; the shared
-  default is 0.
+  default is 0. It leaves `retry_on_nonzero` at `False`, so only timeouts are retried (old behaviour). A non-zero exit is
+  run once: `address-comments` and `auto-approve` are not idempotent (replies, pushes) and must not run twice.
 - Bytes vs text: the shared `RunResult` is text; the adapter returns `subprocess.CompletedProcess` with stdout/stderr
   encoded to UTF-8 bytes (`args` holds only the backend name; the shared layer never exposes argv).
 - Timeout (`timed_out`, 124): raises `subprocess.TimeoutExpired` (old behaviour).
@@ -142,7 +144,7 @@ Adapter contract:
 - Propagated unchanged: `ValueError`, `TypeError`, `OpencodePluginError`, `BackendCwdDivergedError`, `RepoIdentityError`
   (`dotharness.repo_guard`; re-exported from `pr_review.backend`).
 - Accepted I-2 differences (see "Decisions per difference"): SIGTERM to the group then SIGKILL after
-  `KILL_GRACE_SECONDS = 5` (old: SIGKILL); retries also cover non-zero exit; plugin check once per launch call; survivor
+  `KILL_GRACE_SECONDS = 5` (old: SIGKILL); plugin check once per launch call; survivor
   check logs pids only; prompt files use the `dotharness_` prefix in a 0700 directory.
 - Logging (D-9): the adapter logs no argv, env, or backend stdout/stderr. The old log of up to 2000 characters of failed-run
   output is dropped.
