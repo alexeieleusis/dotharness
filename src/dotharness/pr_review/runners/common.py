@@ -266,12 +266,16 @@ def get_gh_token(gh_token_cmd: str) -> str:
     returns something truthy, so silently returning "" here would silently drop back
     to whatever account `gh auth status` currently has active — precisely the
     cross-loop account drift `gh_token_cmd` exists to avoid (see .harness.toml)."""
-    result = subprocess.run(gh_token_cmd, shell=True, capture_output=True, text=True, timeout=TIMEOUT_GH)  # noqa: S602
-    token = result.stdout.strip()
+    try:
+        result = run_cmd(gh_token_cmd, cwd="/", env=os.environ.copy(), timeout=TIMEOUT_GH, check=False, shell=True)  # noqa: S604
+    except subprocess.TimeoutExpired:
+        # Re-raise without the command: TimeoutExpired stringifies it, and it may embed a credential.
+        raise RuntimeError(f"gh_token_cmd timed out after {TIMEOUT_GH}s") from None  # noqa: TRY003
+    token = result.stdout.decode("utf-8", errors="replace").strip()
     if result.returncode != 0 or not token:
         raise RuntimeError(  # noqa: TRY003
-            f"gh_token_cmd ({gh_token_cmd!r}) did not produce a token "
-            f"(exit {result.returncode}): {result.stderr.strip()}"
+            f"gh_token_cmd did not produce a token "
+            f"(exit {result.returncode}): {result.stderr.decode('utf-8', errors='replace').strip()}"
         )
     return token
 

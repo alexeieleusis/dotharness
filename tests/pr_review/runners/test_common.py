@@ -170,34 +170,38 @@ def test_build_env_sets_github_token():
 
 
 def test_get_gh_token_strips_whitespace():
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout="  tok123\n  ")
-        tok = get_gh_token("echo tok123")
-    assert tok == "tok123"
+    assert get_gh_token("printf '  tok123\\n  '") == "tok123"
 
 
 def test_get_gh_token_nonzero_exit_raises_even_with_partial_stdout():
     # A nonzero exit means gh_token_cmd itself failed — trusting stray stdout here
     # (e.g. a warning banner some wrapper printed before failing) would silently hand
     # back a bogus "token" instead of surfacing the failure.
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=1, stdout="partial-token", stderr="auth error")
-        with pytest.raises(RuntimeError, match="auth error"):
-            get_gh_token("fail_cmd")
+    with pytest.raises(RuntimeError, match="auth error") as exc:
+        get_gh_token("printf partial-token; printf 'auth error' >&2; exit 1")
+    assert "exit 1" in str(exc.value)
 
 
 def test_get_gh_token_nonzero_exit_empty_stdout_raises():
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="auth failed")
-        with pytest.raises(RuntimeError, match="auth failed"):
-            get_gh_token("fail_cmd")
+    with pytest.raises(RuntimeError, match="auth failed"):
+        get_gh_token("printf 'auth failed' >&2; exit 1")
 
 
-def test_get_gh_token_timeout_raises():
-    with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = subprocess.TimeoutExpired("gh_token_cmd", 10)
-        with pytest.raises(subprocess.TimeoutExpired):
-            get_gh_token("gh_token_cmd")
+def test_get_gh_token_error_does_not_leak_command():
+    # gh_token_cmd is user config and may embed a literal credential (decision D-9).
+    with pytest.raises(RuntimeError) as exc:
+        get_gh_token("echo SECRET-LITERAL >/dev/null; exit 3")
+    assert "SECRET-LITERAL" not in str(exc.value)
+
+
+def test_get_gh_token_timeout_raises_without_command_and_without_hanging():
+    # A backgrounded grandchild keeps the pipe open; the shared runner's process-group kill must still return.
+    with (
+        patch("dotharness.pr_review.runners.common.TIMEOUT_GH", 1),
+        pytest.raises(RuntimeError, match="timed out") as exc,
+    ):
+        get_gh_token("sleep 30 & echo SECRET-LITERAL; sleep 30")
+    assert "SECRET-LITERAL" not in str(exc.value)
 
 
 def test_get_gh_token_stderr_only_raises():
@@ -205,10 +209,8 @@ def test_get_gh_token_stderr_only_raises():
     # and silently skip setting GITHUB_TOKEN, so this must raise rather than return ""
     # — an unset GITHUB_TOKEN makes every subsequent `gh` call fall back to whichever
     # account `gh auth status` currently has active, not the one gh_token_cmd names.
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="token not configured")
-        with pytest.raises(RuntimeError, match="token not configured"):
-            get_gh_token("echo")
+    with pytest.raises(RuntimeError, match="token not configured"):
+        get_gh_token("printf 'token not configured' >&2")
 
 
 def test_add_reviewer_logs_error_on_failure(caplog):
