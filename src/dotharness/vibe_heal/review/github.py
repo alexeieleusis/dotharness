@@ -44,6 +44,19 @@ def _truncate_body(body: str) -> str:
 _MAX_OVERFLOW_BODY_LINES = 100
 
 
+async def _run_with_timeout(cmd: list[str], timeout: float) -> CommandResult:
+    """Run a command, converting a deadline expiry into GitHubReviewError.
+
+    run_command kills the child on timeout/cancellation, so nothing is orphaned.
+    """
+    try:
+        async with asyncio.timeout(timeout):
+            return await run_command(cmd)
+    except TimeoutError:
+        msg = f"`{cmd[0]} {cmd[1] if len(cmd) > 1 else ''}`".strip() + f" timed out after {timeout:g}s"
+        raise GitHubReviewError(msg) from None
+
+
 class GitHubReviewClient:
     """Posts SonarQube review results as inline comments on GitHub PRs.
 
@@ -57,8 +70,7 @@ class GitHubReviewClient:
             OSError: If gh is not installed or not in PATH.
         """
         try:
-            async with asyncio.timeout(10):
-                result = await run_command(["gh", "--version"])
+            result = await _run_with_timeout(["gh", "--version"], 10)
         except OSError as exc:
             msg = "gh CLI is not installed or not in PATH. Install it from https://cli.github.com/"
             raise OSError(msg) from exc
@@ -68,8 +80,7 @@ class GitHubReviewClient:
 
     async def _view_pr_field(self, field: str) -> CommandResult:
         """Run `gh pr view --json <field>` for the current branch's PR."""
-        async with asyncio.timeout(30):
-            return await run_command(["gh", "pr", "view", "--json", field])
+        return await _run_with_timeout(["gh", "pr", "view", "--json", field], 30)
 
     async def detect_pr(self, pr_number: int | None = None) -> int:
         """Get the PR number for review posting.
@@ -345,10 +356,13 @@ class GitHubReviewClient:
             async with asyncio.timeout(60):
                 stdout_bytes, stderr_bytes = await process.communicate(stdin_data)
         except TimeoutError:
-            process.kill()
-            await process.wait()
             msg = "gh API call timed out after 60s"
             raise GitHubTimeoutError(msg) from None
+        finally:
+            # Covers timeout and cancellation (Ctrl-C, outer asyncio.timeout): never leave gh running.
+            if process.returncode is None:
+                process.kill()
+                await asyncio.shield(process.wait())
         if process.returncode != 0:
             stderr_msg = stderr_bytes.decode().strip()
             stdout_msg = stdout_bytes.decode().strip()
@@ -364,30 +378,21 @@ class GitHubReviewClient:
         Returns:
             String in 'owner/repo' format.
         """
-        async with asyncio.timeout(15):
-            result = await run_command(
-                ["gh", "repo", "view", "--json", "owner,name", "--jq", '"\\(.owner.login)/\\(.name)"'],
-            )
+        result = await _run_with_timeout(
+            ["gh", "repo", "view", "--json", "owner,name", "--jq", '"\\(.owner.login)/\\(.name)"'],
+            15,
+        )
         if result.success and result.stdout.strip():
             return result.stdout.strip()
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "git",
-                "remote",
-                "get-url",
-                "origin",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            stdout, _ = await proc.communicate()
-            if proc.returncode == 0:
-                remote_url = stdout.decode().strip()
-                owner_repo = self._parse_remote_url(remote_url)
-                if owner_repo:
-                    return owner_repo
-        except OSError:
-            pass
+            git_result = await _run_with_timeout(["git", "remote", "get-url", "origin"], 10)
+        except (OSError, GitHubReviewError):
+            git_result = None
+        if git_result is not None and git_result.success:
+            owner_repo = self._parse_remote_url(git_result.stdout.strip())
+            if owner_repo:
+                return owner_repo
 
         msg = "Could not detect GitHub owner/repo"
         raise GitHubReviewError(msg)
