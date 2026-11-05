@@ -178,9 +178,16 @@ def get_head_sha(wdir: str, env: dict) -> str:
 
 
 def git_restore(original_sha: str, branch: str, cwd: str, env: dict) -> None:
-    try:
-        if branch:
+    preserved = True
+    if branch:
+        try:
             _preserve_unpushed_commits(branch, cwd, env)
+        except Exception:
+            # Preservation failing (timeout, OSError, ...) must not leave the checkout on the
+            # PR branch: still attempt the checkout, but keep the branch so no work is lost.
+            preserved = False
+            logger.exception("git_restore: could not preserve unpushed commits on %s; keeping the local branch", branch)
+    try:
         run_cmd(
             ["git", "checkout", "--recurse-submodules", "-f", original_sha],
             cwd=cwd,
@@ -188,7 +195,7 @@ def git_restore(original_sha: str, branch: str, cwd: str, env: dict) -> None:
             timeout=TIMEOUT_GIT,
             check=False,
         )
-        if branch:
+        if branch and preserved:
             run_cmd(["git", "branch", "-D", branch], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
     except Exception:
         logger.exception("git restore failed")
