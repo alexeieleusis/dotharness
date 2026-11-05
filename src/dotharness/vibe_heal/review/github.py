@@ -41,6 +41,8 @@ def _truncate_body(body: str) -> str:
     if len(body) <= _MAX_REVIEW_BODY_CHARS:
         return body
     return body[: _MAX_REVIEW_BODY_CHARS - len(_TRUNCATION_NOTICE)] + _TRUNCATION_NOTICE
+
+
 _MAX_OVERFLOW_BODY_LINES = 100
 
 

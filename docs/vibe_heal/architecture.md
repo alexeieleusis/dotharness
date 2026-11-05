@@ -117,9 +117,9 @@ class VibeHealConfig(BaseSettings):
     pre_commit_command: str | None = None  # auto-detect if None
 
     model_config = SettingsConfigDict(
-        env_file=['.env.vibeheal', '.env'],
-        env_file_encoding='utf-8',
-        env_prefix='',
+        env_file=[".env.vibeheal", ".env"],
+        env_file_encoding="utf-8",
+        env_prefix="",
     )
 ```
 
@@ -220,11 +220,7 @@ class VibeHealConfig(BaseSettings):
           """Check if tool is installed and accessible"""
 
       @abstractmethod
-      async def fix_issue(
-          self,
-          issue: SonarQubeIssue,
-          file_path: str
-      ) -> FixResult:
+      async def fix_issue(self, issue: SonarQubeIssue, file_path: str) -> FixResult:
           """Attempt to fix the issue"""
   ```
 

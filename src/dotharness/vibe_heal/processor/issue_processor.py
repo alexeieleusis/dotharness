@@ -44,7 +44,7 @@ class IssueProcessor:
 
         if min_severity and min_severity.upper() not in self._severity_rank:
             valid = ", ".join(sorted(self._severity_rank, key=self._severity_rank.__getitem__, reverse=True))
-            raise ValueError(f"Invalid min_severity {min_severity!r}; expected one of: {valid}")
+            raise ValueError(f"Invalid min_severity {min_severity!r}; expected one of: {valid}")  # noqa: TRY003
 
     def process(self, issues: list[SonarQubeIssue]) -> ProcessingResult:
         """Process issues: filter, sort, and limit."""

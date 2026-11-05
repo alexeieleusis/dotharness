@@ -499,7 +499,7 @@ def test_claude_accept_edits_can_read_prompt_outside_cwd(tmp_path):
     prompt = ai_backend._write_prompt_file("The magic word is PINEAPPLE-7. Reply with only the magic word.")
     try:
         result = subprocess.run(
-            [
+            [  # noqa: S607
                 "claude",
                 "--print",
                 f"Read {prompt} and follow the instructions exactly.",

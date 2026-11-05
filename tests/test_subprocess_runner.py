@@ -144,7 +144,7 @@ async def test_on_start_exception_kills_group(monkeypatch: pytest.MonkeyPatch) -
 
     def boom(pid: int) -> None:
         pids.append(pid)
-        raise RuntimeError("hook failed")
+        raise RuntimeError("hook failed")  # noqa: TRY003
 
     with pytest.raises(RuntimeError, match="hook failed"):
         await run(["sleep", "60"], timeout=5, on_start=boom)
