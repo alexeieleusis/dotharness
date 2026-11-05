@@ -217,27 +217,26 @@ class TestInstallCron:
         assert "/usr/bin/cleanup" in stdin
         assert "harness: review-prs acme-frontend" in stdin
 
-    def test_crontab_l_failure_starts_fresh(self):
-        """When crontab -l fails for any reason, install_cron starts with empty crontab."""
+    def test_crontab_l_unexpected_failure_raises_and_does_not_write(self):
+        """A non-'no crontab' failure must not overwrite the user's crontab."""
         entry = self._make_entry()
         called_with = []
 
         def fake_run(cmd, **kwargs):
-            called_with.append((cmd, kwargs))
-            if cmd == ["crontab", "-l"]:
-                from subprocess import CompletedProcess
-
-                return CompletedProcess(cmd, returncode=2, stdout="", stderr="permission denied")
+            called_with.append(cmd)
             from subprocess import CompletedProcess
 
+            if cmd == ["crontab", "-l"]:
+                return CompletedProcess(cmd, returncode=1, stdout="", stderr="crontab: must be privileged to use -l")
             return CompletedProcess(cmd, returncode=0)
 
-        with patch("dotharness.pr_review.scheduler.subprocess.run", side_effect=fake_run):
+        with (
+            patch("dotharness.pr_review.scheduler.subprocess.run", side_effect=fake_run),
+            pytest.raises(RuntimeError, match="must be privileged"),
+        ):
             install_cron(entry)
 
-        stdin = called_with[1][1]["input"]
-        assert "harness: review-prs acme-frontend" in stdin
-        assert stdin.strip().startswith("\n") or stdin.startswith("\n")
+        assert ["crontab", "-"] not in called_with
 
     def test_replaces_duplicate_entry(self):
         """If command+slug already exists, the old entry is replaced."""
@@ -313,6 +312,41 @@ class TestUninstallCron:
             uninstall_cron("review-prs", "acme-frontend")
 
         assert call_count[0] == 1
+
+    def test_unexpected_failure_raises(self):
+        def fake_run(cmd, **kwargs):
+            from subprocess import CompletedProcess
+
+            return CompletedProcess(cmd, returncode=2, stdout="", stderr="permission denied")
+
+        with (
+            patch("dotharness.pr_review.scheduler.subprocess.run", side_effect=fake_run),
+            pytest.raises(RuntimeError, match="permission denied"),
+        ):
+            uninstall_cron("review-prs", "acme-frontend")
+
+    def test_orphaned_marker_keeps_unrelated_comment_line(self):
+        crontab = (
+            "0 3 * * * /usr/bin/backup\n"
+            "# my own note\n"
+            "# harness: review-prs acme-frontend 7200 /c/.harness.toml\n"
+        )
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            from subprocess import CompletedProcess
+
+            if cmd == ["crontab", "-l"]:
+                return CompletedProcess(cmd, returncode=0, stdout=crontab)
+            captured["input"] = kwargs["input"]
+            return CompletedProcess(cmd, returncode=0)
+
+        with patch("dotharness.pr_review.scheduler.subprocess.run", side_effect=fake_run):
+            uninstall_cron("review-prs", "acme-frontend")
+
+        assert "# my own note" in captured["input"]
+        assert "/usr/bin/backup" in captured["input"]
+        assert "harness: review-prs" not in captured["input"]
 
     def test_preserves_other_harness_entries(self):
         """Only the matching command+slug is removed; other harness entries survive."""

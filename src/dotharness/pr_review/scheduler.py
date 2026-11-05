@@ -103,26 +103,49 @@ def find_harness_cron_entries(crontab_text: str) -> list[dict]:
     return entries
 
 
+def _is_command_line(line: str) -> bool:
+    stripped = line.strip()
+    return bool(stripped) and not stripped.startswith("#")
+
+
 def _remove_cron_entry(text: str, command: str, slug: str) -> str:
-    """Remove the cron line and marker for a given command+slug from crontab text."""
+    """Remove the cron line and marker for a given command+slug from crontab text.
+
+    The line before the marker is dropped only if it is a command line, so an
+    orphaned marker never takes an unrelated comment/blank line with it.
+    """
     marker_prefix = f"# harness: {command} {slug} "
     lines = text.splitlines(keepends=True)
     filtered = []
-    skip_next = False
+    after_marker = False
     for line in reversed(lines):
         if line.strip().startswith(marker_prefix):
-            skip_next = True
+            after_marker = True
             continue
-        if skip_next:
-            skip_next = False
-            continue
+        if after_marker:
+            after_marker = False
+            if _is_command_line(line):
+                continue
         filtered.append(line)
     return "".join(reversed(filtered))
 
 
-def install_cron(entry: ScheduleEntry) -> None:
+def _read_crontab() -> str | None:
+    """Return the current crontab text, or None if the user has no crontab.
+
+    Raises RuntimeError for any other `crontab -l` failure so callers never
+    overwrite a crontab they could not read.
+    """
     result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)  # noqa: S607  # crontab resolved via PATH, fixed argv
-    current = result.stdout if result.returncode == 0 else ""
+    if result.returncode == 0:
+        return result.stdout
+    if result.returncode == 1 and "no crontab" in (result.stderr or "").lower():
+        return None
+    raise RuntimeError(f"crontab -l failed (exit {result.returncode}): {(result.stderr or '').strip()}")  # noqa: TRY003  # user-facing message, no custom exception class
+
+
+def install_cron(entry: ScheduleEntry) -> None:
+    current = _read_crontab() or ""
 
     # Duplicate detection: if command+slug already exists, replace instead of appending
     existing = find_harness_cron_entries(current)
@@ -136,22 +159,10 @@ def install_cron(entry: ScheduleEntry) -> None:
 
 
 def uninstall_cron(command: str, repo_slug: str) -> None:
-    result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)  # noqa: S607  # crontab resolved via PATH, fixed argv
-    if result.returncode != 0:
+    current = _read_crontab()
+    if current is None:
         return
-    marker_prefix = f"# harness: {command} {repo_slug} "  # prefix match (interval+config follow)
-    lines = result.stdout.splitlines(keepends=True)
-    filtered = []
-    skip_next = False
-    for line in reversed(lines):
-        if line.strip().startswith(marker_prefix):
-            skip_next = True
-            continue
-        if skip_next:
-            skip_next = False
-            continue
-        filtered.append(line)
-    new_crontab = "".join(reversed(filtered))
+    new_crontab = _remove_cron_entry(current, command, repo_slug)
     subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=True)  # noqa: S607  # crontab resolved via PATH, fixed argv
 
 
