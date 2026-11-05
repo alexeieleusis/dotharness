@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from dotharness.vibe_heal.ai_tools.base import AIToolType
@@ -1252,3 +1253,71 @@ class TestConvertReportCommand:
         # and _extract_position catches KeyError — so malformed diagnostics
         # are handled gracefully rather than raising KeyError.
         assert result.exit_code == 0
+
+
+_AI_TOOL_COMMANDS: list[tuple[list[str], str]] = [
+    (["fix", "test.py"], "VibeHealOrchestrator"),
+    (["dedupe", "test.py"], "DeduplicationOrchestrator"),
+    (["cleanup"], "CleanupOrchestrator"),
+    (["cleanup-pr"], "CleanupPrOrchestrator"),
+    (["dedupe-branch"], "DedupeBranchOrchestrator"),
+]
+
+
+class TestAiToolChoices:
+    """The supported --ai-tool values are exactly claude-code and opencode (AC4)."""
+
+    @pytest.mark.parametrize("removed_tool", ["aider", "gemini"])
+    @pytest.mark.parametrize(("args", "orchestrator"), _AI_TOOL_COMMANDS)
+    def test_removed_tool_is_rejected(self, args: list[str], orchestrator: str, removed_tool: str) -> None:
+        """aider and gemini are rejected, naming the valid choices, before any work starts."""
+        with (
+            patch("dotharness.vibe_heal.cli.VibeHealConfig") as mock_config_class,
+            patch(f"dotharness.vibe_heal.cli.{orchestrator}") as mock_orchestrator_class,
+        ):
+            result = runner.invoke(app, [*args, "--ai-tool", removed_tool])
+
+        assert result.exit_code != 0
+        assert "claude-code" in result.output
+        assert "opencode" in result.output
+        mock_orchestrator_class.assert_not_called()
+        mock_config_class.assert_not_called()
+
+    @pytest.mark.parametrize(("args", "orchestrator"), _AI_TOOL_COMMANDS)
+    def test_opencode_is_accepted(self, args: list[str], orchestrator: str) -> None:
+        """--ai-tool opencode is parsed and applied to the config."""
+        with (
+            patch("dotharness.vibe_heal.cli.VibeHealConfig") as mock_config_class,
+            patch("dotharness.vibe_heal.cli.initialize_ai_tool"),
+            patch("dotharness.vibe_heal.cli.SonarQubeClient"),
+            patch(f"dotharness.vibe_heal.cli.{orchestrator}"),
+        ):
+            mock_config = MagicMock(spec=VibeHealConfig)
+            mock_config_class.return_value = mock_config
+            runner.invoke(app, [*args, "--ai-tool", "opencode"])
+
+        assert mock_config.ai_tool == AIToolType.OPENCODE
+
+    def test_enum_has_only_supported_tools(self) -> None:
+        """AIToolType exposes exactly claude-code and opencode."""
+        assert {t.value for t in AIToolType} == {"claude-code", "opencode"}
+
+    @pytest.mark.parametrize("removed_tool", ["aider", "gemini"])
+    def test_config_rejects_removed_tool_from_environment(
+        self, removed_tool: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """AI_TOOL=gemini raises InvalidConfigurationError and `config` exits 1."""
+        from dotharness.vibe_heal.config.exceptions import InvalidConfigurationError
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("SONARQUBE_URL", "https://sonar.example.com")
+        monkeypatch.setenv("SONARQUBE_TOKEN", "token")
+        monkeypatch.setenv("SONARQUBE_PROJECT_KEY", "proj")
+        monkeypatch.setenv("AI_TOOL", removed_tool)
+
+        with pytest.raises(InvalidConfigurationError, match="Invalid AI tool"):
+            VibeHealConfig()
+
+        result = runner.invoke(app, ["config"])
+        assert result.exit_code == 1
+        assert "Invalid AI tool" in result.output
