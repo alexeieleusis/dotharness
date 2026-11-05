@@ -649,7 +649,7 @@ def _agent_fix_and_push(
     if _head(wdir, env) == pre_sha:
         _digest(OUTCOME_NOT_REPRODUCED, number, check.name, "command passes with no change to the branch")
         return False
-    return _push(number, check, branch, config, wdir, env)
+    return _push(number, check, branch, wdir, env)
 
 
 def _head(wdir: str, env: dict) -> str:
@@ -683,7 +683,7 @@ def _commit_if_dirty(check: _Check, wdir: str, env: dict) -> None:
     run_cmd(["git", "commit", "-m", f"ci-fix: {check.name}"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
 
 
-def _push(number: int, check: _Check, branch: str, config: HarnessConfig, wdir: str, env: dict) -> bool:
+def _push(number: int, check: _Check, branch: str, wdir: str, env: dict) -> bool:
     """Plain ``git push origin <branch>`` (never force, never another ref)."""
     result = run_cmd(["git", "push", "origin", branch], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
     if result.returncode != 0:
