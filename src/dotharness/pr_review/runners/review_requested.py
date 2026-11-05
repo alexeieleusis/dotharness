@@ -257,6 +257,8 @@ def _process_pr(
                 _run_regret_review(
                     pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, regret_done, ctx
                 )
+    except FatalGitError:
+        raise
     except Exception:
         logger.exception("PR #%d: error", pr_number)
     finally:

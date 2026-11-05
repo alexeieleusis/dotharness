@@ -576,3 +576,20 @@ def test_re_requests_review_even_when_fully_done(tmp_xdg, tmp_path):
         mocks.get_requested.return_value = True
         review_requested._run_locked(cfg, pr_url=None)
     mocks.add_reviewer.assert_called_once_with(1, "acme/frontend", "bot", ANY)
+
+
+def test_fatal_git_error_stops_loop_and_restores(tmp_xdg, tmp_path):
+    """FatalGitError must propagate out of _process_pr (not be swallowed by the generic
+    handler) so _run_locked aborts the loop; git_restore still runs via finally."""
+    from dotharness.pr_review.runners.common import FatalGitError
+
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    prs = [
+        {"number": n, "url": f"u{n}", "headRefName": f"b{n}", "createdAt": "2024-01-01T00:00:00Z"} for n in (1, 2, 3)
+    ]
+    with _full_run_mocks(prs=prs) as mocks:
+        mocks.fetch_checkout.side_effect = FatalGitError("boom")
+        review_requested._run_locked(cfg, pr_url=None)
+    assert mocks.fetch_checkout.call_count == 1
+    mocks.restore.assert_called_once()
