@@ -7,6 +7,7 @@ from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock, working_dir_lock_key
 from dotharness.pr_review.runners.common import (
     FOCUSED_REVIEW_MARKER,
+    INLINE_REVIEW_MARKER,
     PR_COMMENTS_SCRIPT_PATH,
     TIMEOUT_GIT,
     FatalGitError,
@@ -73,7 +74,7 @@ def _run_locked(config: HarnessConfig) -> None:
         checkout_attempted = False
         try:
             comments = fetch_pr_comments(number, script_path, wdir, env)
-            matches = _matching_comments(comments)
+            matches = _matching_comments(comments, current_user)
             if not matches:
                 continue
             threads = fetch_review_threads(number, config.repo.name, env)
@@ -83,7 +84,7 @@ def _run_locked(config: HarnessConfig) -> None:
             merge_thread_state([c for c, _commit, _path in matches], threads)
             # The first pass ran before thread state was known; re-apply the filters now
             # that resolved/minimised flags are merged so those comments are skipped.
-            matches = _matching_comments([c for c, _commit, _path in matches])
+            matches = _matching_comments([c for c, _commit, _path in matches], current_user)
             if not matches:
                 continue
             logger.info("PR #%d: starting", number)
@@ -135,13 +136,19 @@ def _process_matches(
             logger.exception("PR #%d comment %s: backend error", number, comment.get("id", "?"))
 
 
-def _matching_comments(comments: list[dict]) -> list[tuple[dict, str, str]]:
+def _matching_comments(comments: list[dict], current_user: str) -> list[tuple[dict, str, str]]:
     """Return (comment, commit, path) triples for inline comments citing a vibe-types
     knowledge URL that don't already carry a focused-review reply and are neither in a
-    resolved thread nor minimised (per merged thread-state keys, absent means neither)."""
+    resolved thread nor minimised (per merged thread-state keys, absent means neither).
+
+    Only comments authored by current_user and carrying INLINE_REVIEW_MARKER (i.e. this
+    tool's own review comments) are eligible: the body is fed to a privileged backend, so
+    a third party must not be able to trigger it by pasting a knowledge URL."""
     matches: list[tuple[dict, str, str]] = []
     for c in comments:
         if c.get("type") != "inline":
+            continue
+        if c.get("author") != current_user or INLINE_REVIEW_MARKER not in c.get("body", ""):
             continue
         m = KNOWLEDGE_URL_RE.search(c.get("body", ""))
         if not m:

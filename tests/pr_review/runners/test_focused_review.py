@@ -13,6 +13,8 @@ from dotharness.pr_review.runners.focused_review import (
     _resolve_knowledge_file,
 )
 
+_USER = "bot"
+_MARK = "<!-- dotharness-review-inline -->"
 _URL = (
     "https://raw.githubusercontent.com/jpablo/vibe-types/"
     "7891def9e1b66bebd95a393b42f3401eba697cd5/"
@@ -21,8 +23,8 @@ _URL = (
 
 
 def test_matches_inline_comment_with_knowledge_url():
-    comments = [{"type": "inline", "body": f"Flatten into a single union instead. See: {_URL}", "replies": []}]
-    result = _matching_comments(comments)
+    comments = [{"type": "inline", "author": _USER, "body": f"Flatten into a single union instead. See: {_URL} {_MARK}", "replies": []}]
+    result = _matching_comments(comments, _USER)
     assert len(result) == 1
     _comment, commit, path = result[0]
     assert commit == "7891def9e1b66bebd95a393b42f3401eba697cd5"
@@ -30,8 +32,8 @@ def test_matches_inline_comment_with_knowledge_url():
 
 
 def test_ignores_url_with_trailing_sentence_punctuation():
-    comments = [{"type": "inline", "body": f"See: {_URL}.", "replies": []}]
-    result = _matching_comments(comments)
+    comments = [{"type": "inline", "author": _USER, "body": f"See: {_URL}. {_MARK}", "replies": []}]
+    result = _matching_comments(comments, _USER)
     assert len(result) == 1
     _comment, _commit, path = result[0]
     assert path == "plugin/skills/typescript/catalog/T02-union-intersection.md"
@@ -39,61 +41,71 @@ def test_ignores_url_with_trailing_sentence_punctuation():
 
 def test_ignores_non_inline_comments():
     comments = [{"type": "review", "body": _URL, "replies": []}]
-    assert _matching_comments(comments) == []
+    assert _matching_comments(comments, _USER) == []
 
 
 def test_ignores_comments_without_knowledge_url():
-    comments = [{"type": "inline", "body": "just SonarQube noise", "replies": []}]
-    assert _matching_comments(comments) == []
+    comments = [{"type": "inline", "author": _USER, "body": f"just SonarQube noise {_MARK}", "replies": []}]
+    assert _matching_comments(comments, _USER) == []
 
 
 def test_skips_comment_already_marked():
     comments = [
         {
             "type": "inline",
-            "body": _URL,
+            "author": _USER,
+            "body": f"{_URL} {_MARK}",
             "replies": [{"author": "bot", "body": f"some reply\n\n{FOCUSED_REVIEW_MARKER}"}],
         }
     ]
-    assert _matching_comments(comments) == []
+    assert _matching_comments(comments, _USER) == []
 
 
 def test_does_not_skip_when_replies_lack_marker():
     comments = [
         {
             "type": "inline",
-            "body": _URL,
+            "author": _USER,
+            "body": f"{_URL} {_MARK}",
             "replies": [{"author": "alice", "body": "unrelated reply"}],
         }
     ]
-    assert len(_matching_comments(comments)) == 1
+    assert len(_matching_comments(comments, _USER)) == 1
 
 
 def _target(**extra):
-    return {"type": "inline", "id": 1, "body": _URL, "replies": [], **extra}
+    return {"type": "inline", "id": 1, "author": _USER, "body": f"{_URL} {_MARK}", "replies": [], **extra}
 
 
 def test_skips_comment_in_resolved_thread():
-    assert _matching_comments([_target(thread_resolved=True)]) == []
+    assert _matching_comments([_target(thread_resolved=True)], _USER) == []
 
 
 def test_skips_minimised_comment_in_unresolved_thread():
-    assert _matching_comments([_target(thread_resolved=False, is_minimized=True)]) == []
+    assert _matching_comments([_target(thread_resolved=False, is_minimized=True)], _USER) == []
 
 
 def test_skips_resolved_thread_that_also_has_marker_reply():
     replies = [{"author": "bot", "body": f"x\n\n{FOCUSED_REVIEW_MARKER}"}]
-    assert _matching_comments([_target(thread_resolved=True, replies=replies)]) == []
+    assert _matching_comments([_target(thread_resolved=True, replies=replies)], _USER) == []
 
 
 def test_comment_without_thread_state_keys_still_matches():
-    assert len(_matching_comments([_target()])) == 1
+    assert len(_matching_comments([_target()], _USER)) == 1
+
+
+def test_skips_foreign_author_comment():
+    assert _matching_comments([_target(author="mallory")], _USER) == []
+
+
+def test_skips_own_comment_without_inline_marker():
+    assert _matching_comments([_target(body=_URL)], _USER) == []
 
 
 def test_recreated_comment_matched_next_to_old_resolved_comment():
     old = _target(id=1, thread_resolved=True, is_minimized=False)
     new = _target(id=2, thread_resolved=False, is_minimized=False)
-    result = _matching_comments([old, new])
+    result = _matching_comments([old, new], _USER)
     assert [c["id"] for c, _commit, _path in result] == [2]
 
 
@@ -241,11 +253,12 @@ def _setup_knowledge(tmp_path):
 
 _MATCHING_COMMENT = {
     "type": "inline",
+    "author": "bot",
     "id": 1,
     "path": "a.ts",
     "line": 5,
     "url": "http://x",
-    "body": f"Flatten into a single union instead. See: {_URL}",
+    "body": f"Flatten into a single union instead. See: {_URL} {_MARK}",
     "diff_hunk": "",
     "replies": [],
 }
