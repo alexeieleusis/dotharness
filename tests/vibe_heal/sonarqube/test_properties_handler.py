@@ -13,6 +13,13 @@ from dotharness.vibe_heal.sonarqube.properties_handler import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _clean_sonar_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear ambient SonarQube env vars so each test opts in explicitly via setenv."""
+    for var in ("SONAR_TOKEN", "SONARQUBE_TOKEN", "SONAR_LOGIN", "SONAR_HOST_URL", "SONARQUBE_HOST_URL"):
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest.fixture
 def config() -> VibeHealConfig:
     return VibeHealConfig(
@@ -75,8 +82,6 @@ class TestHasAuthConfigured:
     def test_false_when_nothing_set(
         self, tmp_path: Path, config: VibeHealConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        for v in ("SONAR_TOKEN", "SONARQUBE_TOKEN", "SONAR_LOGIN"):
-            monkeypatch.delenv(v, raising=False)
         handler = SonarPropertiesHandler(tmp_path, config)
         assert handler._has_auth_configured() is False
 
@@ -109,8 +114,6 @@ class TestHasAuthConfigured:
     def test_true_via_token_in_file(
         self, tmp_path: Path, config: VibeHealConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        for v in ("SONAR_TOKEN", "SONARQUBE_TOKEN", "SONAR_LOGIN"):
-            monkeypatch.delenv(v, raising=False)
         (tmp_path / "sonar-project.properties").write_text("sonar.token=file-token\n")
         handler = SonarPropertiesHandler(tmp_path, config)
         assert handler._has_auth_configured() is True
@@ -118,8 +121,6 @@ class TestHasAuthConfigured:
     def test_true_via_login_in_file(
         self, tmp_path: Path, config: VibeHealConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        for v in ("SONAR_TOKEN", "SONARQUBE_TOKEN", "SONAR_LOGIN"):
-            monkeypatch.delenv(v, raising=False)
         (tmp_path / "sonar-project.properties").write_text("sonar.login=user\n")
         handler = SonarPropertiesHandler(tmp_path, config)
         assert handler._has_auth_configured() is True
@@ -127,8 +128,6 @@ class TestHasAuthConfigured:
     def test_commented_token_line_not_counted(
         self, tmp_path: Path, config: VibeHealConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        for v in ("SONAR_TOKEN", "SONARQUBE_TOKEN", "SONAR_LOGIN"):
-            monkeypatch.delenv(v, raising=False)
         (tmp_path / "sonar-project.properties").write_text("# sonar.token=commented\n")
         handler = SonarPropertiesHandler(tmp_path, config)
         assert handler._has_auth_configured() is False
@@ -138,8 +137,6 @@ class TestBuildCommandWithFile:
     def test_minimal_command_when_auth_in_file(
         self, tmp_path: Path, config: VibeHealConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        for v in ("SONAR_TOKEN", "SONARQUBE_TOKEN", "SONAR_LOGIN"):
-            monkeypatch.delenv(v, raising=False)
         (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=orig\nsonar.token=file-token\n")
         handler = SonarPropertiesHandler(tmp_path, config)
         cmd = handler.build_command("temp-key", "Temp Name")
@@ -157,8 +154,6 @@ class TestBuildCommandWithFile:
     def test_injects_token_fallback_when_no_auth(
         self, tmp_path: Path, config: VibeHealConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        for v in ("SONAR_TOKEN", "SONARQUBE_TOKEN", "SONAR_LOGIN"):
-            monkeypatch.delenv(v, raising=False)
         (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=orig\n")
         handler = SonarPropertiesHandler(tmp_path, config)
         cmd = handler.build_command("temp-key", "Temp Name")
@@ -167,8 +162,6 @@ class TestBuildCommandWithFile:
     def test_injects_basic_auth_fallback_when_no_auth(
         self, tmp_path: Path, basic_auth_config: VibeHealConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        for v in ("SONAR_TOKEN", "SONARQUBE_TOKEN", "SONAR_LOGIN"):
-            monkeypatch.delenv(v, raising=False)
         (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=orig\n")
         handler = SonarPropertiesHandler(tmp_path, basic_auth_config)
         cmd = handler.build_command("temp-key", "Temp Name")
