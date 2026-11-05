@@ -328,7 +328,7 @@ def _diff_files_within_gate(
                 result.returncode,
             )
             continue
-        diff = result.stdout.decode("utf-8")
+        diff = result.stdout.decode("utf-8", errors="replace")
         diffs[file] = diff
         total_diff_lines += count_diff_lines(diff)
         if total_diff_lines > max_diff_lines:
@@ -510,7 +510,7 @@ def find_introducing_prs(
     if merge_base is None:
         return []
     if merge_base.returncode == 0:
-        blame_ref = merge_base.stdout.decode("utf-8").strip()
+        blame_ref = merge_base.stdout.decode("utf-8", errors="replace").strip()
     else:
         logger.debug("PR #%d: merge-base resolution failed — blaming origin/%s instead", number, base_branch)
         blame_ref = f"origin/{base_branch}"
@@ -685,7 +685,7 @@ def _introducing_hunk_windows(
                 result.returncode,
             )
             continue
-        windows[(sha, path)] = _hunk_line_ranges(result.stdout.decode("utf-8"))
+        windows[(sha, path)] = _hunk_line_ranges(result.stdout.decode("utf-8", errors="replace"))
     return windows
 
 

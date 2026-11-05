@@ -1358,3 +1358,25 @@ def test_is_complete_judgment_response_missing_rationale_is_inconclusive():
 
 def test_is_complete_judgment_response_no_candidates_is_inconclusive():
     assert is_complete_judgment_response("CANDIDATE 1: YES — nobody to map to", []) is False
+
+
+def test_find_introducing_prs_non_utf8_diff_and_merge_base_do_not_raise(tmp_path):
+    diff = b"@@ -1 +1 @@\n-caf\xe9\n+cafe\n"
+    blame = b"abc123def456 (alice 2026-01-01 10:00:00 +0000   1) caf\xe9\n"
+
+    def side_effect(cmd, cwd, env, timeout, check=False):
+        if cmd[1] == "merge-base":
+            return _run(0, b"mb\xe9123mb123\n")
+        if cmd[1] == "diff":
+            return _run(0, diff)
+        if cmd[1] == "blame":
+            return _run(0, blame)
+        return _run(0, json.dumps([{"number": 7}]).encode())
+
+    with (
+        patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
+        patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
+        patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
+    ):
+        hunks = find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+    assert [(h.old_start, h.introducing_pr_number) for h in hunks] == [(1, 7)]
