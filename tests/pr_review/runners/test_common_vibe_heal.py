@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+import pytest
+
 from dotharness.pr_review.config import SubDir
 from dotharness.pr_review.runners.common import get_vibe_heal_context
 
@@ -139,21 +141,31 @@ def test_nested_details_tags_stripped_completely(tmp_path):
     assert "</details>" not in result
 
 
-def test_project_key_with_path_traversal_is_rejected(tmp_path):
-    (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=../../../../tmp/evil\n", encoding="utf-8")
-    result = get_vibe_heal_context([SubDir(path=".")], str(tmp_path), "main")
-    assert result == ""
-
-
-def test_project_key_with_backslash_is_rejected(tmp_path):
-    (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=fe..\\..\\tmp\\evil\n", encoding="utf-8")
-    result = get_vibe_heal_context([SubDir(path=".")], str(tmp_path), "main")
-    assert result == ""
-
-
-def test_project_key_with_slash_is_rejected(tmp_path):
-    (tmp_path / "sonar-project.properties").write_text("sonar.projectKey=fe/evil\n", encoding="utf-8")
-    result = get_vibe_heal_context([SubDir(path=".")], str(tmp_path), "main")
+@pytest.mark.parametrize(
+    ("key", "planted_rel"),
+    [
+        ("../../../../tmp/evil", None),
+        ("fe..\\..\\tmp\\evil", None),
+        ("fe/evil", "fe/evil"),
+        ("a..b", "a..b"),
+        ("", None),
+    ],
+)
+def test_unsafe_project_key_is_rejected(tmp_path, key, planted_rel):
+    (tmp_path / "sonar-project.properties").write_text(f"sonar.projectKey={key}\n", encoding="utf-8")
+    home = tmp_path / "home"
+    reviews = home / ".vibe-heal" / "reviews"
+    reviews.mkdir(parents=True)
+    # Plant a review where the unsanitised key would resolve, so only rejection yields "".
+    planted_dirs = [reviews / "fe" / "evil" / "main", reviews / "a..b" / "main", reviews / "main"]
+    if planted_rel:
+        planted_dirs.append(reviews / planted_rel / "main")
+    for d in planted_dirs:
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "review.md").write_text("PLANTED", encoding="utf-8")
+    with patch("pathlib.Path.home", return_value=home):
+        result = get_vibe_heal_context([SubDir(path=".")], str(tmp_path), "main")
+    assert "PLANTED" not in result
     assert result == ""
 
 
