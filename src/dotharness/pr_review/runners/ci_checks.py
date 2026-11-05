@@ -47,8 +47,16 @@ class CheckRead(NamedTuple):
     missing: list[str]  # required names (stack root) with no run on the PR
 
 
+_TIMEOUT_EXIT = 124  # synthetic exit code for a timed-out gh call (as coreutils ``timeout``)
+
+
 def gh(args: list[str], env: dict) -> subprocess.CompletedProcess:
-    return run_cmd(["gh", *args], cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
+    """Run gh; a timeout becomes a synthetic failed result so every caller fails closed the same way."""
+    try:
+        return run_cmd(["gh", *args], cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
+    except subprocess.TimeoutExpired:
+        logger.error("gh %s timed out after %ss", " ".join(args[:2]), TIMEOUT_GH)
+        return subprocess.CompletedProcess(["gh", *args], _TIMEOUT_EXIT, stdout="", stderr="timed out")
 
 
 def text(data: bytes | str | None) -> str:
@@ -174,11 +182,7 @@ def _read_default_branch(repo: str, env: dict) -> str | None:
 
     Failure means a non-zero exit, a timeout, unparseable JSON, or a missing or empty ``defaultBranchRef.name``.
     """
-    try:
-        result = gh(["repo", "view", repo, "--json", "defaultBranchRef"], env)
-    except subprocess.TimeoutExpired:
-        logger.exception("gh repo view timed out for %s", repo)
-        return None
+    result = gh(["repo", "view", repo, "--json", "defaultBranchRef"], env)
     if result.returncode != 0:
         logger.error("gh repo view failed for %s (exit %d): %s", repo, result.returncode, text(result.stderr).strip())
         return None
@@ -192,11 +196,7 @@ def _read_default_branch(repo: str, env: dict) -> str | None:
 def _open_prs_with_head(repo: str, branch: str, env: dict) -> list[dict] | None:
     """Open PRs whose head branch is ``branch`` (name only, D-5), as ``{number, baseRefName}``; None on failure."""
     args = ["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number,baseRefName"]
-    try:
-        result = gh(args, env)
-    except subprocess.TimeoutExpired:
-        logger.exception("gh pr list timed out for head %s", branch)
-        return None
+    result = gh(args, env)
     if result.returncode != 0:
         logger.error(
             "gh pr list --head %s failed (exit %d): %s", branch, result.returncode, text(result.stderr).strip()
@@ -243,11 +243,7 @@ def _find_stack_root(repo: str, base_branch: str, default_branch: str, env: dict
 def _read_root_required_names(repo: str, root: int, env: dict) -> set[str] | None:
     """Required check names of the root PR. Empty set = no required checks. None = read failure (incl. pending)."""
     args = ["pr", "checks", str(root), "--repo", repo, "--required", "--json", "name"]
-    try:
-        result = gh(args, env)
-    except subprocess.TimeoutExpired:
-        logger.exception("gh pr checks timed out for stack root #%d", root)
-        return None
+    result = gh(args, env)
     stderr = text(result.stderr)
     if result.returncode == 1 and _NO_REQUIRED_CHECKS_TEXT in stderr:
         return set()
