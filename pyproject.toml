@@ -9,6 +9,7 @@ readme = "README.md"
 keywords = ['python']
 requires-python = ">=3.11,<4.0"
 dependencies = [
+    "click>=8.1",
     "gitpython>=3.1.59",
     "httpx>=0.28.1",
     "pydantic>=2.13.4",

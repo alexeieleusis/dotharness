@@ -404,6 +404,7 @@ name = "dotharness"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "gitpython" },
     { name = "httpx" },
     { name = "pydantic" },
@@ -431,6 +432,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.1" },
     { name = "gitpython", specifier = ">=3.1.59" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pydantic", specifier = ">=2.13.4" },
