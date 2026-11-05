@@ -36,6 +36,7 @@ from dotharness.pr_review.runners.local_review import (
 )
 from dotharness.pr_review.runners.local_review import findings as lr_findings
 from dotharness.pr_review.runners.local_review import prompts as lr_prompts
+from dotharness.repo_guard import RepoIdentityError
 
 KNOWLEDGE = Path(__file__).resolve().parents[3] / "knowledge" / "pr-review"
 
@@ -450,6 +451,19 @@ def test_timeout_marks_failed_and_continues(env) -> None:
     backend, res = _run(env, FakeBackend(lambda: env[3], script))
     assert res.failed == ["file:a.py", "summary"]
     assert "local-review design" in backend.labels
+
+
+def test_repo_identity_error_stops_run_after_first_backend_call(env, capsys: pytest.CaptureFixture[str]) -> None:
+    cfg, _target, root, rdir, _ = env
+
+    def script(label, cwd):
+        raise RepoIdentityError("wrong repo")  # noqa: TRY003
+
+    backend = FakeBackend(lambda: rdir, script)
+    code = lr.run_local_review(cfg, output_dir=root, backend=cast(Backend, backend))
+    assert code == 1
+    assert backend.labels == ["local-review file a.py"]
+    assert "wrong repo" in capsys.readouterr().err
 
 
 def test_missing_file_output_gets_no_findings_line_and_empty_summary_fails(env) -> None:

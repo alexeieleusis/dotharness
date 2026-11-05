@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotharness.opencode_guards import BackendCwdDivergedError, OpencodePluginError
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
@@ -195,8 +196,6 @@ class _ReviewPasses:
                 logger.error("%s: backend exited %d", label, proc.returncode)
         except subprocess.TimeoutExpired:
             logger.exception("%s: backend timed out", label)
-        except Exception:
-            logger.exception("%s: backend call failed", label)
         violation = _guard_violation(self.wdir, self.guard_head)
         if violation:
             msg = f"{label}: backend modified the repository: {violation}"
@@ -480,6 +479,7 @@ def _run_locked(
         return _run_phases(
             config, base, output_dir, force, backend, address=address, skip_review=skip_review, review_dir=review_dir
         )
-    except LocalReviewError as exc:
+    except (LocalReviewError, OpencodePluginError, BackendCwdDivergedError, RepoIdentityError) as exc:
+        # shared-layer safety aborts stop the whole run instead of failing one pass at a time
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
