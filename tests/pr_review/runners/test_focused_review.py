@@ -1,4 +1,5 @@
 import json
+from importlib.resources import files
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
@@ -728,9 +729,9 @@ def test_runner_passes_node_ids_to_backend_prompt(tmp_xdg, tmp_path):
     assert "Comment node ID: PRRC_C1" in prompt
 
 
-# --- Template string assertions (read the real template at the repo root) ---
+# --- Template string assertions (read the template shipped in the package) ---
 
-_TEMPLATE_PATH = Path(__file__).resolve().parents[3] / "knowledge" / "pr-review" / "focused-review.md"
+_TEMPLATE_PATH = Path(str(files("dotharness") / "knowledge" / "pr-review" / "focused-review.md"))
 
 _RESOLVE_MUTATION = (
     "gh api graphql -f query='mutation($threadId:ID!){ resolveReviewThread(input:{threadId:$threadId})"
