@@ -39,7 +39,7 @@ def test_runs_prune_command_per_subdir(tmp_path):
         assert cmd == [
             "/venv/bin/python3",
             "-m",
-            "vibe_heal",
+            "dotharness.vibe_heal",
             "prune-projects",
             "--yes",
             "--older-than",
@@ -99,7 +99,7 @@ def test_env_file_passed_only_to_subdir_that_sets_it(tmp_path):
     with patch("dotharness.pr_review.runners.prune_projects.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
         prune_projects.run(cfg, {})
-    base = ["/venv/bin/python3", "-m", "vibe_heal", "prune-projects", "--yes", "--older-than", "90"]
+    base = ["/venv/bin/python3", "-m", "dotharness.vibe_heal", "prune-projects", "--yes", "--older-than", "90"]
     assert [c.args[0] for c in mock_run.call_args_list] == [[*base, "--env-file", env_path], base]
 
 

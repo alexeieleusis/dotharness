@@ -36,7 +36,7 @@ def _prune_subdir(subdir: SubDir, config: HarnessConfig, env: dict) -> None:
     cmd = [
         config.vibe_heal.python,
         "-m",
-        "vibe_heal",
+        "dotharness.vibe_heal",
         "prune-projects",
         "--yes",
         "--older-than",

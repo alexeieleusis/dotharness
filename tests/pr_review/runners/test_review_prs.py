@@ -995,7 +995,7 @@ def test_run_locked_calls_git_restore_when_process_pr_raises(tmp_xdg, tmp_path):
 
 
 def _vibe_cmds(mock_run):
-    return [c.args[0] for c in mock_run.call_args_list if "vibe_heal" in c.args[0]]
+    return [c.args[0] for c in mock_run.call_args_list if "dotharness.vibe_heal" in c.args[0]]
 
 
 def test_resolve_env_file_none_when_unset(tmp_path):
@@ -1068,7 +1068,7 @@ def test_base_subdir_argv_with_and_without_env_file(tmp_path):
         review_prs._run_base_subdir(SubDir(path="a", env_file=p), cfg, {})
         review_prs._run_base_subdir(SubDir(path="b"), cfg, {})
     with_env, without = _vibe_cmds(mock_run)
-    base = ["/venv/bin/python3", "-m", "vibe_heal", "review", "--baseline"]
+    base = ["/venv/bin/python3", "-m", "dotharness.vibe_heal", "review", "--baseline"]
     assert with_env == [*base, "--env-file", p]
     assert without == base
 
@@ -1083,7 +1083,7 @@ def test_process_subdir_argv_with_and_without_env_file(tmp_path, coverage):
         review_prs._process_subdir(7, SubDir(path="a", coverage=coverage, env_file=p), cfg, {})
         review_prs._process_subdir(7, SubDir(path="b", coverage=coverage), cfg, {})
     review_a, post_a, review_b, post_b = _vibe_cmds(mock_run)
-    py = ["/venv/bin/python3", "-m", "vibe_heal"]
+    py = ["/venv/bin/python3", "-m", "dotharness.vibe_heal"]
     cov = ["--coverage"] if coverage else []
     assert review_a == [*py, "review", "--pr", "7", *cov, "--env-file", p]
     assert post_a == [*py, "review", "--post", "--pr", "7", "--env-file", p]
