@@ -132,6 +132,25 @@ class TestHasAuthConfigured:
         handler = SonarPropertiesHandler(tmp_path, config)
         assert handler._has_auth_configured() is False
 
+    def test_bang_commented_token_line_not_counted(
+        self, tmp_path: Path, config: VibeHealConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for v in ("SONAR_TOKEN", "SONARQUBE_TOKEN", "SONAR_LOGIN"):
+            monkeypatch.delenv(v, raising=False)
+        (tmp_path / "sonar-project.properties").write_text("! sonar.token=commented\n")
+        handler = SonarPropertiesHandler(tmp_path, config)
+        assert handler._has_auth_configured() is False
+
+    @pytest.mark.parametrize("line", ["sonar.token: abc\n", "sonar.token abc\n", "sonar.token = abc\n"])
+    def test_alternate_separators_counted(
+        self, tmp_path: Path, config: VibeHealConfig, monkeypatch: pytest.MonkeyPatch, line: str
+    ) -> None:
+        for v in ("SONAR_TOKEN", "SONARQUBE_TOKEN", "SONAR_LOGIN"):
+            monkeypatch.delenv(v, raising=False)
+        (tmp_path / "sonar-project.properties").write_text(line)
+        handler = SonarPropertiesHandler(tmp_path, config)
+        assert handler._has_auth_configured() is True
+
 
 class TestBuildCommandWithFile:
     def test_minimal_command_when_auth_in_file(
@@ -482,3 +501,50 @@ class TestRedactAuthProperties:
         assert "secret123" not in result
         assert "oldpass" not in result
         assert result.count("<redacted>") == 2
+
+    @pytest.mark.parametrize(
+        ("line", "expected"),
+        [
+            ("sonar.token: s3cret\n", "sonar.token: <redacted>\n"),
+            ("sonar.password s3cret\n", "sonar.password <redacted>\n"),
+            ("sonar.token\t=\ts3cret\n", "sonar.token\t=\t<redacted>\n"),
+            ("sonar.token=x\r\n", "sonar.token=<redacted>\r\n"),
+            ("sonar.token=x\r", "sonar.token=<redacted>\r"),
+            ("sonar.token=x", "sonar.token=<redacted>"),
+            ("SONAR.TOKEN=s3cret\n", "SONAR.TOKEN=<redacted>\n"),
+        ],
+    )
+    def test_separator_line_ending_and_case_variants(self, line: str, expected: str) -> None:
+        assert _redact_auth_properties(line) == expected
+
+    def test_empty_value_left_unchanged(self) -> None:
+        assert _redact_auth_properties("sonar.token=\n") == "sonar.token=\n"
+
+    def test_similarly_prefixed_key_not_redacted(self) -> None:
+        assert _redact_auth_properties("sonar.tokenFile=/tmp/x\n") == "sonar.tokenFile=/tmp/x\n"
+
+
+class TestRestoreFailureLogging:
+    def test_restore_failure_logs_redacted_content(
+        self, tmp_path: Path, config: VibeHealConfig, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        original = "sonar.projectKey=original\nsonar.token=super-secret-token\n"
+        props = tmp_path / "sonar-project.properties"
+        props.write_text(original)
+        handler = SonarPropertiesHandler(tmp_path, config)
+
+        real_write_text = Path.write_text
+        calls = {"n": 0}
+
+        def flaky_write_text(self: Path, *args: object, **kwargs: object) -> int:
+            calls["n"] += 1
+            if calls["n"] == 2:  # first write patches, second is the restore
+                raise OSError("disk full")  # noqa: TRY003
+            return real_write_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "write_text", flaky_write_text)
+        with caplog.at_level("ERROR"), handler.patched("temp-key", "Temp Name"):
+            pass
+
+        assert "<redacted>" in caplog.text
+        assert "super-secret-token" not in caplog.text

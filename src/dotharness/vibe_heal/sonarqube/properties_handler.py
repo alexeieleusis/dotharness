@@ -17,8 +17,13 @@ PROPERTIES_FILENAME = "sonar-project.properties"
 
 _KEY_RE = re.compile(r"^\s*sonar\.projectKey\s*=", re.IGNORECASE)
 _NAME_RE = re.compile(r"^\s*sonar\.projectName\s*=", re.IGNORECASE)
-_AUTH_PROPS_RE = re.compile(r"^\s*sonar\.(token|login|password)\s*=\s*.+", re.IGNORECASE)
-_AUTH_REDACT_RE = re.compile(r"^\s*[#!]?\s*sonar\.(token|login|password)\s*=\s*.+", re.IGNORECASE)
+# Java .properties allow "=", ":" or plain whitespace as the key/value separator.
+_AUTH_SEP = r"(?:\s*[=:]\s*|\s+)"
+_AUTH_PROPS_RE = re.compile(rf"^\s*sonar\.(token|login|password){_AUTH_SEP}\S", re.IGNORECASE)
+_AUTH_REDACT_RE = re.compile(
+    rf"^(?P<prefix>\s*[#!]?\s*sonar\.(?:token|login|password){_AUTH_SEP})\S.*?(?P<eol>\r\n|\n|\r)?$",
+    re.IGNORECASE | re.DOTALL,
+)
 _AUTH_ENV_VARS = ("SONAR_TOKEN", "SONAR_LOGIN")
 _HOST_URL_ENV_VARS = ("SONAR_HOST_URL",)
 _HOST_URL_RE = re.compile(r"^\s*sonar\.host\.url\s*=\s*.+", re.IGNORECASE)
@@ -86,7 +91,7 @@ class SonarPropertiesHandler:
         if self.exists:
             content = self.properties_file.read_text(encoding="utf-8")
             for line in content.splitlines():
-                if line.lstrip().startswith("#"):
+                if line.lstrip().startswith(("#", "!")):
                     continue
                 if _AUTH_PROPS_RE.match(line):
                     return True
@@ -194,16 +199,9 @@ def _redact_auth_properties(content: str) -> str:
 
     redacted_lines: list[str] = []
     for line in content.splitlines(keepends=True):
-        if _AUTH_REDACT_RE.match(line):
-            key, sep, remainder = line.partition("=")
-            line_ending = ""
-            if remainder.endswith("\r\n"):
-                line_ending = "\r\n"
-            elif remainder.endswith("\n"):
-                line_ending = "\n"
-            elif remainder.endswith("\r"):
-                line_ending = "\r"
-            redacted_lines.append(f"{key}{sep}<redacted>{line_ending}")
+        m = _AUTH_REDACT_RE.match(line)
+        if m:
+            redacted_lines.append(f"{m.group('prefix')}<redacted>{m.group('eol') or ''}")
         else:
             redacted_lines.append(line)
     return "".join(redacted_lines)
