@@ -3,6 +3,7 @@ import logging
 import os
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -529,28 +530,49 @@ def _run_summary(
     return False
 
 
+@dataclass
+class _CycleContext:
+    """Fields that stay constant across every PR processed in a single `_run_locked` pass."""
+
+    config: HarnessConfig
+    wdir: str
+    env: dict
+    backend: Backend
+    file_instructions: str
+    summary_instructions: str
+    design_instructions: str
+    traceability_instructions: str
+    regret_instructions: str
+    extra_knowledge: str | None
+    reviewed: set
+    original_sha: str
+    current_user: str
+
+
+@dataclass
+class _PassFlags:
+    """Which review passes to run for a single PR this cycle."""
+
+    files_summary: bool
+    design: bool
+    traceability: bool
+    regret: bool
+
+
 def _process_single_pr(
     pr: dict,
     number: int,
-    config,
-    wdir: str,
-    env: dict,
-    backend: Backend,
-    file_instructions: str,
-    summary_instructions: str,
-    design_instructions: str,
-    traceability_instructions: str,
-    regret_instructions: str,
-    extra_knowledge: str | None,
-    reviewed: set,
-    original_sha: str,
+    cycle: _CycleContext,
     partial_files: set[str],
-    current_user: str,
-    run_files_summary: bool,
-    run_design: bool,
-    run_traceability: bool,
-    run_regret: bool,
+    flags: _PassFlags,
 ) -> None:
+    config = cycle.config
+    wdir = cycle.wdir
+    env = cycle.env
+    backend = cycle.backend
+    extra_knowledge = cycle.extra_knowledge
+    reviewed = cycle.reviewed
+    current_user = cycle.current_user
     try:
         # A PR can be assigned to the user (not just authored by them — see
         # _list_my_prs), in which case GitHub *does* allow the assignor to also
@@ -561,13 +583,13 @@ def _process_single_pr(
         # requested-reviewers list.
         with preserve_reviewer_request(number, config.repo.name, current_user, env):
             ctx = _gather_pr_context(pr, number, config, wdir, env)
-            if run_files_summary:
+            if flags.files_summary:
                 file_failure, partial_files = _review_files(
                     ctx,
                     wdir,
                     env,
                     backend,
-                    file_instructions,
+                    cycle.file_instructions,
                     extra_knowledge,
                     pr,
                     number,
@@ -576,7 +598,7 @@ def _process_single_pr(
                     config.repo_slug,
                 )
                 summary_failure = _run_summary(
-                    summary_instructions,
+                    cycle.summary_instructions,
                     extra_knowledge,
                     pr,
                     number,
@@ -596,13 +618,9 @@ def _process_single_pr(
                     state.write_self_review_state(config.repo_slug, list(reviewed), sr_state["partial_reviews"])
                 elif not file_failure:
                     state.set_partial_reviewed_files(config.repo_slug, number, list(partial_files))
-            if run_design:
+            if flags.design:
                 _run_design_review(
-                    design_instructions, extra_knowledge, pr, number, config, ctx, backend, wdir, current_user, env
-                )
-            if run_traceability:
-                _run_traceability_review(
-                    traceability_instructions,
+                    cycle.design_instructions,
                     extra_knowledge,
                     pr,
                     number,
@@ -613,14 +631,36 @@ def _process_single_pr(
                     current_user,
                     env,
                 )
-            if run_regret:
+            if flags.traceability:
+                _run_traceability_review(
+                    cycle.traceability_instructions,
+                    extra_knowledge,
+                    pr,
+                    number,
+                    config,
+                    ctx,
+                    backend,
+                    wdir,
+                    current_user,
+                    env,
+                )
+            if flags.regret:
                 _run_regret_review(
-                    regret_instructions, extra_knowledge, pr, number, config, ctx, backend, wdir, current_user, env
+                    cycle.regret_instructions,
+                    extra_knowledge,
+                    pr,
+                    number,
+                    config,
+                    ctx,
+                    backend,
+                    wdir,
+                    current_user,
+                    env,
                 )
     except Exception:
         logger.exception("PR #%d: error", number)
     finally:
-        git_restore(original_sha, pr["headRefName"], wdir, env)
+        git_restore(cycle.original_sha, pr["headRefName"], wdir, env)
 
 
 def _run_locked(config: HarnessConfig) -> None:
@@ -650,6 +690,21 @@ def _run_locked(config: HarnessConfig) -> None:
     backend = _build_backend(config, env)
     wdir = str(config.repo.working_dir)
     original_sha = git_detach_and_record(wdir, env)
+    cycle = _CycleContext(
+        config=config,
+        wdir=wdir,
+        env=env,
+        backend=backend,
+        file_instructions=file_instructions,
+        summary_instructions=summary_instructions,
+        design_instructions=design_instructions,
+        traceability_instructions=traceability_instructions,
+        regret_instructions=regret_instructions,
+        extra_knowledge=extra_knowledge,
+        reviewed=reviewed,
+        original_sha=original_sha,
+        current_user=current_user,
+    )
 
     for pr in prs:
         number = pr["number"]
@@ -678,24 +733,9 @@ def _run_locked(config: HarnessConfig) -> None:
         _process_single_pr(
             pr,
             number,
-            config,
-            wdir,
-            env,
-            backend,
-            file_instructions,
-            summary_instructions,
-            design_instructions,
-            traceability_instructions,
-            regret_instructions,
-            extra_knowledge,
-            reviewed,
-            original_sha,
+            cycle,
             partial_files,
-            current_user,
-            run_files_summary,
-            run_design,
-            run_traceability,
-            run_regret,
+            _PassFlags(run_files_summary, run_design, run_traceability, run_regret),
         )
 
 
