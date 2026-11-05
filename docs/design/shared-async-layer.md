@@ -68,7 +68,7 @@ instance and cwd); the survivor check logs pids only, never command lines.
 ## Contract for I-3, I-4 and I-5
 
 ```python
-from dotharness.ai_backend import launch, launch_sync
+from dotharness.ai_backend import ClaudeOptions, OpencodeOptions, launch, launch_sync
 from dotharness.subprocess_runner import RunResult, run
 
 async def launch(
@@ -85,17 +85,13 @@ async def launch(
     expected_repo_name: str | None = None,      # "owner/repo"
     guard_harness_repo: bool = False,
     harness_repo_root: str | Path | None = None,
-    # claude only
-    print_mode: bool = True, print_flag: str = "-p",
-    skip_permissions: bool = False, permission_mode: str | None = None,
-    disable_slash_commands: bool = False, output_format: str | None = None,
-    allowed_tools: str | None = None,
-    # opencode only
-    standalone: bool = False, auto: bool = False,
-    opencode_dir: str | Path | None = None, model: str | None = None,
-    monitor_cwd: bool = False, check_plugins: bool = False,
+    backend_options: ClaudeOptions | OpencodeOptions | None = None,  # type must match `backend`; TypeError otherwise
 ) -> RunResult
 ```
+
+`ClaudeOptions` (`print_mode`, `print_flag`, `skip_permissions`, `permission_mode`, `disable_slash_commands`,
+`output_format`, `allowed_tools`) and `OpencodeOptions` (`standalone`, `auto`, `opencode_dir`, `model`,
+`monitor_cwd`, `check_plugins`) are frozen dataclasses; every flag is off by default.
 
 `launch_sync` has the same signature and calls `launch` through `asyncio.run`; it must not
 be called from a running event loop. It is documented for the sync tools (I-3, I-4, I-5)

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pytest_mock import MockerFixture
 
+from dotharness.ai_backend import ClaudeOptions
 from dotharness.subprocess_runner import RunResult
 from dotharness.vibe_heal.ai_tools import ClaudeCodeTool
 from dotharness.vibe_heal.ai_tools.claude_code import CLAUDE_TIMEOUT_SECONDS
@@ -107,10 +108,9 @@ class TestClaudeCodeTool:
         kwargs = launch.call_args.kwargs
         assert kwargs["cwd"] == Path.cwd()
         assert kwargs["timeout"] == 1200
-        assert kwargs["print_flag"] == "--print"
-        assert kwargs["output_format"] == "json"
-        assert kwargs["permission_mode"] == "acceptEdits"
-        assert kwargs["allowed_tools"] == "Edit,Read"
+        assert kwargs["backend_options"] == ClaudeOptions(
+            print_flag="--print", output_format="json", permission_mode="acceptEdits", allowed_tools="Edit,Read"
+        )
 
     @pytest.mark.asyncio
     async def test_nonzero_exit(self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path) -> None:

@@ -13,6 +13,8 @@ import pytest
 from dotharness import ai_backend, subprocess_runner
 from dotharness.ai_backend import (
     BackendCwdDivergedError,
+    ClaudeOptions,
+    OpencodeOptions,
     OpencodePluginError,
     RepoIdentityError,
     build_claude_command,
@@ -81,11 +83,11 @@ async def test_launch_unknown_backend_raises(work: Path) -> None:
         await launch("gemini", "hi", cwd=work, timeout=5)
 
 
-async def test_launch_rejects_other_backend_flags(work: Path) -> None:
-    with pytest.raises(ValueError, match="do not apply to the claude"):
-        await launch("claude", "hi", cwd=work, timeout=5, standalone=True)
-    with pytest.raises(ValueError, match="do not apply to the opencode"):
-        await launch("opencode", "hi", cwd=work, timeout=5, skip_permissions=True)
+async def test_launch_rejects_other_backend_options(work: Path) -> None:
+    with pytest.raises(TypeError, match="does not apply to the claude"):
+        await launch("claude", "hi", cwd=work, timeout=5, backend_options=OpencodeOptions(standalone=True))
+    with pytest.raises(TypeError, match="does not apply to the opencode"):
+        await launch("opencode", "hi", cwd=work, timeout=5, backend_options=ClaudeOptions(skip_permissions=True))
 
 
 def test_argv_pr_review_claude() -> None:
@@ -122,7 +124,8 @@ def test_argv_vibe_heal_opencode() -> None:
 async def test_launch_argv_end_to_end(bin_dir: Path, work: Path, tmp_path: Path) -> None:
     log = tmp_path / "argv.log"
     recorder(bin_dir, "claude", log, "echo out")
-    result = await launch("claude", "do it", cwd=work, timeout=10, skip_permissions=True, disable_slash_commands=True)
+    claude_opts = ClaudeOptions(skip_permissions=True, disable_slash_commands=True)
+    result = await launch("claude", "do it", cwd=work, timeout=10, backend_options=claude_opts)
     assert result.returncode == 0
     assert result.stdout.strip() == "out"
     lines = log.read_text().splitlines()
@@ -132,7 +135,8 @@ async def test_launch_argv_end_to_end(bin_dir: Path, work: Path, tmp_path: Path)
 
     log.unlink()
     recorder(bin_dir, "opencode", log)
-    await launch("opencode", "do it", cwd=work, timeout=10, standalone=True, auto=True, opencode_dir="/x", model="m")
+    opencode_opts = OpencodeOptions(standalone=True, auto=True, opencode_dir="/x", model="m")
+    await launch("opencode", "do it", cwd=work, timeout=10, backend_options=opencode_opts)
     lines = log.read_text().splitlines()
     assert lines[:5] == ["run", "--standalone", "--auto", "--dir", "/x"]
     assert lines[5].startswith("Read ")
@@ -382,16 +386,16 @@ async def test_harness_repo_guard(bin_dir: Path, tmp_path: Path, work: Path) -> 
 
 async def test_plugin_check(bin_dir: Path, work: Path) -> None:
     make_exe(bin_dir, "opencode", '[ "$1" = plugin ] && { echo "No plugins found"; exit 0; }\necho ran\n')
-    result = await launch("opencode", "p", cwd=work, timeout=10, check_plugins=True)
+    result = await launch("opencode", "p", cwd=work, timeout=10, backend_options=OpencodeOptions(check_plugins=True))
     assert result.stdout.strip() == "ran"
 
     make_exe(bin_dir, "opencode", '[ "$1" = plugin ] && { echo "some-plugin"; exit 0; }\necho ran\n')
     with pytest.raises(OpencodePluginError, match="plugins installed"):
-        await launch("opencode", "p", cwd=work, timeout=10, check_plugins=True)
+        await launch("opencode", "p", cwd=work, timeout=10, backend_options=OpencodeOptions(check_plugins=True))
 
     make_exe(bin_dir, "opencode", '[ "$1" = plugin ] && { echo bad >&2; exit 2; }\necho ran\n')
     with pytest.raises(OpencodePluginError, match="could not verify"):
-        await launch("opencode", "p", cwd=work, timeout=10, check_plugins=True)
+        await launch("opencode", "p", cwd=work, timeout=10, backend_options=OpencodeOptions(check_plugins=True))
     assert prompt_files() == []
 
 
@@ -400,7 +404,9 @@ async def test_cwd_divergence_monitor(bin_dir: Path, work: Path) -> None:
     make_exe(bin_dir, "opencode", "sleep 30\n")
     started = time.monotonic()
     with pytest.raises(BackendCwdDivergedError, match="diverged"):
-        await launch("opencode", "p", cwd=work, timeout=20, monitor_cwd=True, context="c")
+        await launch(
+            "opencode", "p", cwd=work, timeout=20, backend_options=OpencodeOptions(monitor_cwd=True), context="c"
+        )
     assert time.monotonic() - started < 10
     assert prompt_files() == []
 
@@ -408,7 +414,7 @@ async def test_cwd_divergence_monitor(bin_dir: Path, work: Path) -> None:
 async def test_cwd_monitor_quiet_when_cwd_matches(bin_dir: Path, work: Path) -> None:
     make_exe(bin_dir, "lsof", f'echo "p1"\necho "n{work.resolve()}"\n')
     make_exe(bin_dir, "opencode", "sleep 0.6\necho done\n")
-    result = await launch("opencode", "p", cwd=work, timeout=20, monitor_cwd=True)
+    result = await launch("opencode", "p", cwd=work, timeout=20, backend_options=OpencodeOptions(monitor_cwd=True))
     assert result.stdout.strip() == "done"
 
 
@@ -425,14 +431,32 @@ async def test_no_argv_or_env_in_logs_results_or_errors(
     texts: list[str] = []
     with caplog.at_level(logging.DEBUG):
         failed = await launch(
-            "claude", "p", cwd=work, timeout=10, env={"API_TOKEN": SENTINEL}, allowed_tools=SENTINEL, max_retries=1
+            "claude",
+            "p",
+            cwd=work,
+            timeout=10,
+            env={"API_TOKEN": SENTINEL},
+            backend_options=ClaudeOptions(allowed_tools=SENTINEL),
+            max_retries=1,
         )
         texts += [failed.stdout, failed.stderr]
-        timed = await launch("opencode", "p", cwd=work, timeout=0.5, env={"API_TOKEN": SENTINEL}, model=SENTINEL)
+        timed = await launch(
+            "opencode",
+            "p",
+            cwd=work,
+            timeout=0.5,
+            env={"API_TOKEN": SENTINEL},
+            backend_options=OpencodeOptions(model=SENTINEL),
+        )
         texts += [timed.stdout, timed.stderr]
         with pytest.raises(BackendCwdDivergedError) as div:
             await launch(
-                "opencode", "p", cwd=work, timeout=20, env={"API_TOKEN": SENTINEL}, monitor_cwd=True, model=SENTINEL
+                "opencode",
+                "p",
+                cwd=work,
+                timeout=20,
+                env={"API_TOKEN": SENTINEL},
+                backend_options=OpencodeOptions(monitor_cwd=True, model=SENTINEL),
             )
         with pytest.raises(RepoIdentityError) as ident:
             await launch(
@@ -476,9 +500,22 @@ def test_claude_accept_edits_can_read_prompt_outside_cwd(tmp_path):
     prompt = ai_backend._write_prompt_file("The magic word is PINEAPPLE-7. Reply with only the magic word.")
     try:
         result = subprocess.run(
-            ["claude", "--print", f"Read {prompt} and follow the instructions exactly.", "--output-format", "json",
-             "--permission-mode", "acceptEdits", "--allowedTools", "Edit,Read"],
-            cwd=repo, capture_output=True, text=True, timeout=120, check=False,
+            [
+                "claude",
+                "--print",
+                f"Read {prompt} and follow the instructions exactly.",
+                "--output-format",
+                "json",
+                "--permission-mode",
+                "acceptEdits",
+                "--allowedTools",
+                "Edit,Read",
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
         )
     finally:
         prompt.unlink(missing_ok=True)

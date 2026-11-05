@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from dotharness.ai_backend import launch
+from dotharness.ai_backend import OpencodeOptions, launch
 from dotharness.vibe_heal.ai_tools.base import AITool, AIToolType
 from dotharness.vibe_heal.ai_tools.models import FixResult
 
@@ -140,7 +140,7 @@ class OpenCodeTool(AITool):
             prompt,
             cwd=Path.cwd(),
             timeout=self.timeout,
-            model=self.model,
+            backend_options=OpencodeOptions(model=self.model),
         )
         if result.timed_out:
             return FixResult(

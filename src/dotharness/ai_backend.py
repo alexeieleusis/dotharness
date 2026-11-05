@@ -12,7 +12,7 @@ Result and error convention:
 
 * The ``RunResult`` of the last attempt is returned for a plain non-zero exit, a timeout (``timed_out``) and a
   missing executable (``not_found``); the launcher never raises for those.
-* ``ValueError``: unknown backend name, or an option that belongs to the other backend.
+* ``ValueError``: unknown backend name. ``TypeError``: ``backend_options`` of the other backend's type.
 * ``OpencodePluginError``, ``BackendCwdDivergedError`` and ``RepoIdentityError`` are raised by the optional guards.
 
 Neither argv nor env is ever logged, put in an exception message or kept in a result.
@@ -51,9 +51,6 @@ CWD_MONITOR_POLL_SECONDS = 3.0
 _HELPER_TIMEOUT_SECONDS = 30.0
 _LSOF_TIMEOUT_SECONDS = 10.0
 
-_CLAUDE_ONLY = ("skip_permissions", "permission_mode", "disable_slash_commands", "output_format", "allowed_tools")
-_OPENCODE_ONLY = ("standalone", "auto", "opencode_dir", "model", "monitor_cwd", "check_plugins")
-
 
 class OpencodePluginError(RuntimeError):
     """opencode has a plugin installed, which can act independently of the session isolation ``--standalone`` gives."""
@@ -68,6 +65,34 @@ class BackendCwdDivergedError(RuntimeError):
 
 class RepoIdentityError(RuntimeError):
     """``cwd`` is not the git repo ``expected_repo_name`` says it is, or the harness repo's HEAD moved."""
+
+
+@dataclass(frozen=True)
+class ClaudeOptions:
+    """Flags for the ``claude`` backend. Callers choose every flag; nothing is on by default."""
+
+    print_mode: bool = True
+    print_flag: str = "-p"
+    skip_permissions: bool = False
+    permission_mode: str | None = None
+    disable_slash_commands: bool = False
+    output_format: str | None = None
+    allowed_tools: str | None = None
+
+
+@dataclass(frozen=True)
+class OpencodeOptions:
+    """Flags and guards for the ``opencode`` backend. Callers choose every flag; nothing is on by default."""
+
+    standalone: bool = False
+    auto: bool = False
+    opencode_dir: str | Path | None = None
+    model: str | None = None
+    monitor_cwd: bool = False
+    check_plugins: bool = False
+
+
+BackendOptions = ClaudeOptions | OpencodeOptions
 
 
 @dataclass
@@ -141,12 +166,14 @@ def build_opencode_command(
     return cmd
 
 
-def _validate_options(backend: BackendName, options: Mapping[str, object]) -> None:
-    foreign = _OPENCODE_ONLY if backend == "claude" else _CLAUDE_ONLY
-    bad = [name for name in foreign if options.get(name)]
-    if bad:
-        msg = f"Option(s) {', '.join(bad)} do not apply to the {backend} backend"
-        raise ValueError(msg)
+def _resolve_options(backend: BackendName, options: BackendOptions | None) -> BackendOptions:
+    expected = ClaudeOptions if backend == "claude" else OpencodeOptions
+    if options is None:
+        return expected()
+    if not isinstance(options, expected):
+        msg = f"{type(options).__name__} does not apply to the {backend} backend (expected {expected.__name__})"
+        raise TypeError(msg)
+    return options
 
 
 def _build_env(cwd: str, env: Mapping[str, str] | None, path_prepend: Sequence[str]) -> dict[str, str]:
@@ -383,24 +410,24 @@ async def _assert_harness_unchanged(snapshot: tuple[Path, str] | None) -> None:
         raise RepoIdentityError(msg)
 
 
-def _build_command(backend: BackendName, text: str, options: Mapping[str, object]) -> list[str]:
-    if backend == "claude":
+def _build_command(text: str, options: BackendOptions) -> list[str]:
+    if isinstance(options, ClaudeOptions):
         return build_claude_command(
             text,
-            print_mode=bool(options["print_mode"]),
-            print_flag=str(options["print_flag"]),
-            skip_permissions=bool(options["skip_permissions"]),
-            permission_mode=_opt_str(options["permission_mode"]),
-            disable_slash_commands=bool(options["disable_slash_commands"]),
-            output_format=_opt_str(options["output_format"]),
-            allowed_tools=_opt_str(options["allowed_tools"]),
+            print_mode=options.print_mode,
+            print_flag=options.print_flag,
+            skip_permissions=options.skip_permissions,
+            permission_mode=options.permission_mode,
+            disable_slash_commands=options.disable_slash_commands,
+            output_format=options.output_format,
+            allowed_tools=options.allowed_tools,
         )
     return build_opencode_command(
         text,
-        standalone=bool(options["standalone"]),
-        auto=bool(options["auto"]),
-        opencode_dir=_opt_str(options["opencode_dir"]),
-        model=_opt_str(options["model"]),
+        standalone=options.standalone,
+        auto=options.auto,
+        opencode_dir=options.opencode_dir,
+        model=options.model,
     )
 
 
@@ -439,7 +466,7 @@ async def _attempt(
     env: dict[str, str],
     timeout: float,
     prompt_via_file: bool,
-    options: Mapping[str, object],
+    options: BackendOptions,
     prefix: str,
     expected_repo_name: str | None,
     harness: tuple[Path, str] | None,
@@ -447,9 +474,14 @@ async def _attempt(
     prompt_file = _write_prompt_file(prompt) if prompt_via_file else None
     try:
         text = f"Read {prompt_file} and follow the instructions exactly." if prompt_file else prompt
-        cmd = _build_command(backend, text, options)
+        cmd = _build_command(text, options)
         result, pgid = await _run_monitored(
-            cmd, cwd=cwd, env=env, timeout=timeout, monitor_cwd=bool(options["monitor_cwd"]), prefix=prefix
+            cmd,
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            monitor_cwd=isinstance(options, OpencodeOptions) and options.monitor_cwd,
+            prefix=prefix,
         )
         if pgid is not None:
             await _wait_for_group_exit(pgid, prefix)
@@ -463,10 +495,6 @@ async def _attempt(
     finally:
         if prompt_file is not None:
             prompt_file.unlink(missing_ok=True)
-
-
-def _opt_str(value: object) -> str | None:
-    return None if value is None else str(value)
 
 
 async def launch(
@@ -483,21 +511,7 @@ async def launch(
     expected_repo_name: str | None = None,
     guard_harness_repo: bool = False,
     harness_repo_root: str | Path | None = None,
-    # claude only
-    print_mode: bool = True,
-    print_flag: str = "-p",
-    skip_permissions: bool = False,
-    permission_mode: str | None = None,
-    disable_slash_commands: bool = False,
-    output_format: str | None = None,
-    allowed_tools: str | None = None,
-    # opencode only
-    standalone: bool = False,
-    auto: bool = False,
-    opencode_dir: str | Path | None = None,
-    model: str | None = None,
-    monitor_cwd: bool = False,
-    check_plugins: bool = False,
+    backend_options: BackendOptions | None = None,
 ) -> RunResult:
     """Run ``prompt`` through ``backend`` (``claude`` or ``opencode``) and return the last attempt's ``RunResult``.
 
@@ -509,32 +523,19 @@ async def launch(
     ``max_retries``: extra attempts after a timeout or a non-zero exit (not after ``not_found``). Guards:
     ``expected_repo_name`` (``owner/repo``) checks the identity of ``cwd`` before and after each attempt;
     ``guard_harness_repo`` checks this checkout's HEAD did not move (``harness_repo_root`` overrides discovery);
-    ``monitor_cwd`` (opencode) kills the run if its real cwd diverges; ``check_plugins`` (opencode) raises
-    ``OpencodePluginError`` when ``opencode plugin list`` reports plugins. Flags of the other backend raise
-    ``ValueError``. See the module docstring for the result and error convention.
+    ``OpencodeOptions.monitor_cwd`` kills the run if its real cwd diverges; ``OpencodeOptions.check_plugins``
+    raises ``OpencodePluginError`` when ``opencode plugin list`` reports plugins.
+
+    ``backend_options`` is a ``ClaudeOptions`` or ``OpencodeOptions`` (default: all flags off); the type must match
+    ``backend`` or ``TypeError`` is raised. See the module docstring for the result and error convention.
     """
     name = select_backend(backend)
-    options: dict[str, object] = {
-        "print_mode": print_mode,
-        "print_flag": print_flag,
-        "skip_permissions": skip_permissions,
-        "permission_mode": permission_mode,
-        "disable_slash_commands": disable_slash_commands,
-        "output_format": output_format,
-        "allowed_tools": allowed_tools,
-        "standalone": standalone,
-        "auto": auto,
-        "opencode_dir": opencode_dir,
-        "model": model,
-        "monitor_cwd": monitor_cwd,
-        "check_plugins": check_plugins,
-    }
-    _validate_options(name, options)
+    options = _resolve_options(name, backend_options)
 
     cwd_str = str(cwd)
     prefix = f"{context}: " if context else ""
     full_env = _build_env(cwd_str, env, path_prepend)
-    if check_plugins:
+    if isinstance(options, OpencodeOptions) and options.check_plugins:
         await assert_no_opencode_plugins(cwd_str, full_env)
 
     total_attempts = max_retries + 1

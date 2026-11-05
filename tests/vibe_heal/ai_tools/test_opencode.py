@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pytest_mock import MockerFixture
 
+from dotharness.ai_backend import OpencodeOptions
 from dotharness.subprocess_runner import RunResult
 from dotharness.vibe_heal.ai_tools import OpenCodeTool
 from dotharness.vibe_heal.sonarqube.models import SonarQubeIssue
@@ -106,7 +107,7 @@ class TestOpenCodeTool:
         kwargs = launch.call_args.kwargs
         assert kwargs["cwd"] == Path.cwd()
         assert kwargs["timeout"] == 1200
-        assert kwargs["model"] == "anthropic/claude-sonnet-4-5"
+        assert kwargs["backend_options"] == OpencodeOptions(model="anthropic/claude-sonnet-4-5")
 
     @pytest.mark.asyncio
     async def test_nonzero_exit(self, mocker: MockerFixture, sample_issue: SonarQubeIssue, source_file: Path) -> None:
@@ -200,4 +201,4 @@ class TestOpenCodeTool:
 
         await OpenCodeTool().fix_duplication("p", str(source_file))
 
-        assert launch.call_args.kwargs["model"] is None
+        assert launch.call_args.kwargs["backend_options"].model is None

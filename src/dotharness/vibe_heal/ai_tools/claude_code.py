@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from dotharness.ai_backend import launch
+from dotharness.ai_backend import ClaudeOptions, launch
 from dotharness.vibe_heal.ai_tools.base import AITool, AIToolType
 from dotharness.vibe_heal.ai_tools.models import FixResult
 
@@ -149,10 +149,12 @@ class ClaudeCodeTool(AITool):
             prompt,
             cwd=Path.cwd(),
             timeout=self.timeout,
-            print_flag="--print",
-            output_format="json",
-            permission_mode="acceptEdits",
-            allowed_tools="Edit,Read",
+            backend_options=ClaudeOptions(
+                print_flag="--print",
+                output_format="json",
+                permission_mode="acceptEdits",
+                allowed_tools="Edit,Read",
+            ),
         )
         if result.timed_out:
             return FixResult(
