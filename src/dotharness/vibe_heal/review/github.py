@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -49,7 +49,7 @@ _MAX_OVERFLOW_BODY_LINES = 100
 
 
 @asynccontextmanager
-async def _deadline(cmd: list[str], seconds: float) -> AsyncIterator[None]:
+async def _deadline(cmd: list[str], seconds: float) -> AsyncGenerator[None]:
     """Bound the enclosed block by a deadline, converting expiry into GitHubReviewError.
 
     The caller owns the timeout; run_command kills the child on timeout/cancellation,
