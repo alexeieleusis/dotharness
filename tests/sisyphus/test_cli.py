@@ -669,6 +669,7 @@ def test_missing_backend_when_work_exists(tmp_path: Path, fake_run_item: dict[st
     result = env.invoke("run", "--config", str(env.config), "--base", "b")
     assert result.exit_code == 1
     assert "backend is not set" in result.output
+    assert result.stderr.count("Error:") == 1
     assert fake_run_item["calls"] == []
 
 

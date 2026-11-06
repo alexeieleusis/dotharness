@@ -483,7 +483,7 @@ def _phase_and_digest(
         phase()
     except Exception as exc:
         error = exc
-        if not state.notes:
+        if not state.notes and not isinstance(exc, typer.Exit):  # a typer.Exit already printed its message
             state.notes.append(f"run failed: {exc}")
     return error, _write_digest(config, services, state) if state.has_content else None
 
@@ -508,6 +508,8 @@ def _run_locked(
             error, digest_error = _phase_and_digest(config, services, state, phase)
     except LockHeld:
         return
+    if isinstance(error, typer.Exit):
+        raise error
     if error is not None:
         raise _fail(str(error)) from error
     if digest_error is not None:
