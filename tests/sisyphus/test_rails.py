@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 import pytest
@@ -16,6 +15,7 @@ from dotharness.sisyphus.rails import (
     parse_push_argv,
     push_guard,
 )
+from tests.sisyphus.conftest import forbidden_imports
 
 CREATED = {"sisyphus/eng-1"}
 
@@ -153,14 +153,7 @@ def test_checkpoints_c1_to_c8() -> None:
 def test_no_harness_imports() -> None:
     for name in ("paths", "lock", "rails"):
         src = (Path(__file__).parents[2] / "src" / "dotharness" / "sisyphus" / f"{name}.py").read_text()
-        for node in ast.walk(ast.parse(src)):
-            mods = []
-            if isinstance(node, ast.Import):
-                mods = [a.name for a in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                mods = [node.module or ""]
-            for m in mods:
-                assert not m.startswith(("harness", "dotharness.spec_prism_flow", "spec_prism_flow"))
+        assert not forbidden_imports(src)
 
 
 @pytest.mark.parametrize("flag", ["--force-with", "--force-i", "--dele", "--prun", "--mirr", "--unknown", "-x"])

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import json
 import os
 import re
@@ -19,6 +18,7 @@ from dotharness.sisyphus.runrecord import (
     fold_item,
     record_path,
 )
+from tests.sisyphus.conftest import forbidden_imports
 
 
 def test_default_state_dir() -> None:
@@ -206,11 +206,4 @@ def test_non_str_stored_item_raises_run_record_error(tmp_path: Path) -> None:
 
 
 def test_module_has_no_forbidden_imports() -> None:
-    tree = ast.parse(Path(runrecord.__file__).read_text())
-    mods = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            mods.update(a.name for a in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            mods.add(node.module or "")
-    assert not {m for m in mods if "config" in m or "sisyphus" in m or "harness" in m or "spec_prism_flow" in m}
+    assert not forbidden_imports(Path(runrecord.__file__).read_text())

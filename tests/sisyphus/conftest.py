@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 from typing import Any
 
@@ -40,3 +41,24 @@ def fake_run_item(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     monkeypatch.setattr(cli, "run_item", fake)
     return state
+
+
+FORBIDDEN_IMPORTS = (
+    "dotharness.pr_review",
+    "dotharness.vibe_heal",
+    "dotharness.spec_prism_flow",
+    "harness",
+    "spec_prism_flow",
+)
+
+
+def forbidden_imports(source: str) -> set[str]:
+    """Imported names in ``source`` that equal or sit under a forbidden package."""
+    mods: set[str] = set()
+    for n in ast.walk(ast.parse(source)):
+        if isinstance(n, ast.ImportFrom) and n.module:
+            mods.add(n.module)
+            mods |= {f"{n.module}.{a.name}" for a in n.names}
+        elif isinstance(n, ast.Import):
+            mods |= {a.name for a in n.names}
+    return {m for m in mods if any(m == f or m.startswith(f + ".") for f in FORBIDDEN_IMPORTS)}

@@ -30,6 +30,7 @@ from dotharness.sisyphus.pick import (
     pick_items,
 )
 from dotharness.sisyphus.runrecord import RunRecord
+from tests.sisyphus.conftest import forbidden_imports
 
 GH = WorkItemSource(kind="github", assignee="me", pick_label="sisyphus")
 LIN = WorkItemSource(kind="linear", assignee="me@x.io", pick_state="Todo")
@@ -327,10 +328,7 @@ def test_linear_tracker_display_name_assignee_filter() -> None:
 
 
 def test_no_harness_or_spec_prism_flow_import() -> None:
-    tree = ast.parse(Path(pick.__file__).read_text())
-    names = {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
-    names |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
-    assert not any(n.split(".")[0] in ("harness", "spec_prism_flow") for n in names)
+    assert not forbidden_imports(Path(pick.__file__).read_text())
 
 
 def test_gh_cli_run_returns_the_raw_result_with_cwd_and_env(tmp_path: Path) -> None:

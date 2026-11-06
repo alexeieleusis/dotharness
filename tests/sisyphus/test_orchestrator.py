@@ -7,7 +7,6 @@ No test runs an agent, harness, spec-prism-flow, gh or ``git push``.
 # ruff: noqa: TRY003
 from __future__ import annotations
 
-import ast
 import json
 import re
 import subprocess
@@ -54,6 +53,7 @@ from dotharness.sisyphus.paths import knowledge_file
 from dotharness.sisyphus.rails import Checkpoint
 from dotharness.sisyphus.runrecord import RunRecord
 from dotharness.sisyphus.stoprecord import build_abandoned_record, read_stop_record, write_stop_record
+from tests.sisyphus.conftest import forbidden_imports
 
 ITEM = "ENG-1"
 SHA1 = "1" * 40
@@ -1142,16 +1142,9 @@ def test_pr_client_protocol_is_satisfied_by_the_fake(world: World) -> None:
 # -------------------------------------------------- AC7 / checklist: static guarantees
 
 
-def _imports(path: str) -> set[str]:
-    tree = ast.parse(Path(path).read_text())
-    names = {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
-    names |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
-    return {n.split(".")[0] for n in names}
-
-
 def test_orchestrator_does_not_import_harness_or_spec_prism_flow() -> None:
-    assert not _imports(orchestrator.__file__) & {"harness", "spec_prism_flow"}
     text = Path(orchestrator.__file__).read_text()
+    assert not forbidden_imports(text)
     assert "import harness" not in text
     assert "spec_prism_flow" not in text
 

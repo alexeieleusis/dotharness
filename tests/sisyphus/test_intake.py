@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import json
 import re
 import subprocess
@@ -26,6 +25,7 @@ from dotharness.sisyphus.intake import (
 from dotharness.sisyphus.paths import knowledge_file
 from dotharness.sisyphus.rails import Checkpoint
 from dotharness.sisyphus.runrecord import RunRecord
+from tests.sisyphus.conftest import forbidden_imports
 
 BRIEF_NONE = "# Brief\n\n## Open decisions log\n\nNone\n\n## Next step\n\nGo.\n"
 BRIEF_OPEN = (
@@ -480,7 +480,4 @@ def test_required_config(config: SisyphusConfig) -> None:
 
 
 def test_no_harness_imports() -> None:
-    tree = ast.parse(Path(intake.__file__).read_text())
-    mods = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
-    mods |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
-    assert not {m for m in mods if m.split(".")[0] in ("harness", "spec_prism_flow")}
+    assert not forbidden_imports(Path(intake.__file__).read_text())
