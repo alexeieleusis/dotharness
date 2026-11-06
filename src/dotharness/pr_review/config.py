@@ -4,9 +4,9 @@ import hashlib
 import re
 import tomllib
 from dataclasses import dataclass, field
-from importlib import resources
 from pathlib import Path
 
+from dotharness.paths import default_knowledge_dir
 from dotharness.pr_review.lock import working_dir_lock_key
 
 
@@ -116,15 +116,6 @@ class RepoConfig:
     subdirs: list[SubDir] = field(default_factory=list)
     opencode_dir: Path | None = None
     name_provided: bool = True
-
-
-def default_knowledge_dir() -> Path:
-    """`~/.harness/knowledge` when it exists, else the knowledge shipped inside the dotharness package (D-7)."""
-    user_dir = Path("~/.harness/knowledge").expanduser()
-    if user_dir.is_dir():
-        return user_dir
-    # Plain path from importlib.resources: the wheel is installed unpacked, so the traversable is a real directory.
-    return Path(str(resources.files("dotharness") / "knowledge"))
 
 
 @dataclass
