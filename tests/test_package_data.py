@@ -34,9 +34,9 @@ KNOWLEDGE_SHA256 = {
     "sisyphus/linear-feed-prompt.md": "e76652507f9fdb9aaafc933dadb1c9c76eef4597791203dcade167e70fb3eddc",
     "sisyphus/orchestration-prompt.md": "88a4f099b9d494ab527421aa797772bd032a2b28ac1768e4f64b1ed98c894cb4",
     "sisyphus/sizing-rules.md": "cceb3146e013221e4165c961136290051ff260f5bc3af63659b3ad169ddb8f2e",
-    "spec-prism-flow/build-execution-prompt.md": "d93c162cc9c7781ccdb2e3f8f201231db7049e217611405123cfe1425b78a4f9",
-    "spec-prism-flow/plan-generation-prompt.md": "5756c4a751264b096cd84e2879a2310619729f4f34534bf1345bda6a4606d833",
-    "spec-prism-flow/requirements-doc-drafting-prompt.md": "f79153d1e5cd9ed1d21c7944a03c79fd6074b722d34201f6a7cb95cba3d9fc18",
+    "spec-prism-flow/build-execution-prompt.md": "f2864d9fe423244d6b8ca8600b15167e62ce781d2b3b5d9bd12b96d44ae94237",
+    "spec-prism-flow/plan-generation-prompt.md": "a107aa7e542738e560ec636f452e6a93b1913728014744cbb9edc2ca029f4676",
+    "spec-prism-flow/requirements-doc-drafting-prompt.md": "72524c62db898e102e06b33645bee7a129d2ab7ce5a018e5a1b49fa86f31a95c",
 }
 
 

@@ -5,7 +5,7 @@
 > below). It asks the user only when it genuinely cannot resolve something. It then
 > drives `spec-prism-flow`'s `plan` stage end-to-end: one sub-agent per step, strictly
 > sequential, pausing only at the human checkpoints the cheat sheet names. This prompt
-> pairs with `tools/spec-prism-flow/docs/lifecycle-cheat-sheet.md`, which stays the
+> pairs with `docs/spec_prism_flow/lifecycle-cheat-sheet.md`, which stays the
 > source of truth for every command, flag, and gotcha below.
 
 ## Resolve the parameters yourself — do not ask to have them pre-filled
@@ -34,7 +34,7 @@ yourself, in this order. Ask the user only when a step genuinely cannot resolve:
 
 ## Your task
 
-Read `<tool repo>/docs/lifecycle-cheat-sheet.md` in full before you do anything else. It
+Read `<tool repo>/docs/spec_prism_flow/lifecycle-cheat-sheet.md` in full before you do anything else. It
 is the source of truth for every command, flag, and gotcha below. If anything here
 conflicts with it, the cheat sheet wins. Treat this prompt as an index into the cheat
 sheet, not a replacement for it.

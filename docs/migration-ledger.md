@@ -169,6 +169,23 @@ The CLI is `pr_review` (typer). Differences observed from the click `harness` CL
 8. `click` is not a direct dependency (typer is); a module-level alias `cli = app` keeps the wiring
    `from dotharness.pr_review.cli import cli as pr_review` working.
 
+### Typer versus click behavior differences for spec_prism_flow
+
+The CLI is `spec_prism_flow` (typer). Differences observed by running the click `spec-prism-flow` CLI and the typer one side by side:
+
+1. There is no root `build` group, so `spec_prism_flow build run` fails with `No such command 'build'` and exit code 2. The
+   root help lists only `plan`.
+2. Missing positional argument: the usage line shows `{brief_path}` where click showed `BRIEF_PATH`, and the message is
+   `Missing argument 'brief_path'.` where click said `'BRIEF_PATH'`. Exit code stays 2.
+3. Unknown option: the message is `No such option: --bogus` where click said `No such option '--bogus'`. Exit code stays 2.
+4. `--help` lists arguments in an `Arguments:` section (`brief_path  [required]`), which click did not, and shows option metavars
+   as `<path>` and `<str>` where click showed `PATH` and `TEXT`.
+5. `plan --help` lists the commands in definition order (`init`, `draft-overview`, ...) instead of alphabetically, and the
+   group descriptions drop the "(Feature A)" suffix.
+6. Runtime errors raised through `_fail()` keep exit code 1 and `Error: <msg>`; `plan init` of a missing brief prints
+   `Error: BRIEF_PATH does not exist: <path>`, as before.
+7. `plan` with no command prints help and exits 2, as in click.
+
 ### Behavior differences from the shared-layer adapters
 
 `Backend` (adapter over `launch_sync`): prompt files use the prefix `dotharness_`; retries still cover
@@ -258,6 +275,30 @@ migrated as historical files under `docs/pr_review/`; they have no ledger row be
 only Python modules under `harness/` (`pr-comments.py` is also shipped as
 `src/dotharness/scripts/pr-comments.py`).
 
+## Tests dropped or rewritten in I-4
+
+Tests are not ledger modules and have no row. This section records what happened to the
+spec-prism-flow tests in I-4 (#166). `tools/spec-prism-flow/tests` has 17 top-level `test_*.py` files
+and `tests/build/` (21 files: `conftest.py` plus 20 test files).
+
+Dropped:
+
+- `tests/build/*`: all 21 files, with the build command group (`build command group not migrated
+  (#166, D master 4.2)`).
+- The build-only assertions in `test_cli.py` and `test_config.py` (build group, `[build]` config).
+
+Rewritten:
+
+- `test_prose_review.py`: rewritten for the shared `launch_sync` backend launcher and
+  `dotharness.git_utils.git_toplevel`.
+
+Migrated to `tests/spec_prism_flow/` (17 files): `test_chunk`, `test_cli`, `test_config`,
+`test_decompose_journal`, `test_decompose`, `test_draft_phases`, `test_generator`, `test_graph`,
+`test_handoff`, `test_linearize`, `test_overview_stage`, `test_phase_file`, `test_prose_review`,
+`test_requirements_stage`, `test_review`, `test_sizing`, `test_workspace`. `test_cli.py` and
+`test_config.py` are migrated with the build assertions removed; `test_prose_review.py` is migrated as
+rewritten. `markdown_utils` and `errors` have no top-level test file, as in the original.
+
 ## Rows
 
 | module | origin tool | origin path | status | shared module reused or extended | issue that moved it |
@@ -291,45 +332,45 @@ only Python modules under `harness/` (`pr-comments.py` is also shipped as
 | `harness.runners.self_review` | pr-review | `tools/pr-review/harness/runners/self_review.py` | migrated | none: pr-review specific | #165 |
 | `harness.scheduler` | pr-review | `tools/pr-review/harness/scheduler.py` | migrated | none: pr-review specific (launchd argument order fixed to match cron) | #165 |
 | `harness.state` | pr-review | `tools/pr-review/harness/state.py` | migrated | none: pr-review specific | #165 |
-| `spec_prism_flow.build.agent_instructions` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/agent_instructions.py` | not migrated | | |
-| `spec_prism_flow.build.agent_runner` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/agent_runner.py` | not migrated | | |
-| `spec_prism_flow.build.claude_backend` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/claude_backend.py` | not migrated | | |
-| `spec_prism_flow.build.completion_log` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/completion_log.py` | not migrated | | |
-| `spec_prism_flow.build.errors` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/errors.py` | not migrated | | |
-| `spec_prism_flow.build.gh_ops` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/gh_ops.py` | not migrated | | |
-| `spec_prism_flow.build.git_ops` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/git_ops.py` | not migrated | | |
-| `spec_prism_flow.build.harness_integration` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/harness_integration.py` | not migrated | | |
-| `spec_prism_flow.build.manual_test` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/manual_test.py` | not migrated | | |
-| `spec_prism_flow.build.merge_gates` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/merge_gates.py` | not migrated | | |
-| `spec_prism_flow.build.opencode_backend` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/opencode_backend.py` | not migrated | | |
-| `spec_prism_flow.build.parallel_runner` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/parallel_runner.py` | not migrated | | |
-| `spec_prism_flow.build.phase_corpus` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/phase_corpus.py` | not migrated | | |
-| `spec_prism_flow.build.phase_runner` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/phase_runner.py` | not migrated | | |
-| `spec_prism_flow.build.resume_state` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/resume_state.py` | not migrated | | |
-| `spec_prism_flow.build.retry_budget` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/retry_budget.py` | not migrated | | |
-| `spec_prism_flow.build.scope_guard` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/scope_guard.py` | not migrated | | |
-| `spec_prism_flow.build.toolchain` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/toolchain.py` | not migrated | | |
-| `spec_prism_flow.build.track_runner` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/track_runner.py` | not migrated | | |
-| `spec_prism_flow.build.vibe_heal_integration` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/vibe_heal_integration.py` | not migrated | | |
-| `spec_prism_flow.chunk` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/chunk.py` | not migrated | | |
-| `spec_prism_flow.cli` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/cli.py` | not migrated | | |
-| `spec_prism_flow.config` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/config.py` | not migrated | | |
-| `spec_prism_flow.decompose` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/decompose.py` | not migrated | | |
-| `spec_prism_flow.decompose_journal` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/decompose_journal.py` | not migrated | | |
-| `spec_prism_flow.draft_phases` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/draft_phases.py` | not migrated | | |
-| `spec_prism_flow.errors` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/errors.py` | not migrated | | |
-| `spec_prism_flow.generator` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/generator.py` | not migrated | | |
-| `spec_prism_flow.graph` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/graph.py` | not migrated | | |
-| `spec_prism_flow.handoff` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/handoff.py` | not migrated | | |
-| `spec_prism_flow.linearize` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/linearize.py` | not migrated | | |
-| `spec_prism_flow.markdown_utils` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/markdown_utils.py` | not migrated | | |
-| `spec_prism_flow.overview_stage` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/overview_stage.py` | not migrated | | |
-| `spec_prism_flow.phase_file` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/phase_file.py` | not migrated | | |
-| `spec_prism_flow.prose_review` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/prose_review.py` | not migrated | | |
-| `spec_prism_flow.requirements_stage` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/requirements_stage.py` | not migrated | | |
-| `spec_prism_flow.review` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/review.py` | not migrated | | |
-| `spec_prism_flow.sizing` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/sizing.py` | not migrated | | |
-| `spec_prism_flow.workspace` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/workspace.py` | not migrated | | |
+| `spec_prism_flow.build.agent_instructions` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/agent_instructions.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.agent_runner` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/agent_runner.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.claude_backend` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/claude_backend.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.completion_log` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/completion_log.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.errors` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/errors.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.gh_ops` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/gh_ops.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.git_ops` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/git_ops.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.harness_integration` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/harness_integration.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.manual_test` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/manual_test.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.merge_gates` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/merge_gates.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.opencode_backend` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/opencode_backend.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.parallel_runner` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/parallel_runner.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.phase_corpus` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/phase_corpus.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.phase_runner` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/phase_runner.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.resume_state` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/resume_state.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.retry_budget` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/retry_budget.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.scope_guard` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/scope_guard.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.toolchain` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/toolchain.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.track_runner` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/track_runner.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.build.vibe_heal_integration` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/vibe_heal_integration.py` | dropped | | build command group not migrated (#166, D master 4.2) |
+| `spec_prism_flow.chunk` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/chunk.py` | migrated | | #166 |
+| `spec_prism_flow.cli` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/cli.py` | migrated | | #166 |
+| `spec_prism_flow.config` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/config.py` | migrated | `dotharness.paths` (`default_knowledge_dir`) | #166 |
+| `spec_prism_flow.decompose` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/decompose.py` | migrated | | #166 |
+| `spec_prism_flow.decompose_journal` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/decompose_journal.py` | migrated | | #166 |
+| `spec_prism_flow.draft_phases` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/draft_phases.py` | migrated | | #166 |
+| `spec_prism_flow.errors` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/errors.py` | migrated | | #166 |
+| `spec_prism_flow.generator` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/generator.py` | migrated | | #166 |
+| `spec_prism_flow.graph` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/graph.py` | migrated | | #166 |
+| `spec_prism_flow.handoff` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/handoff.py` | migrated | | #166 |
+| `spec_prism_flow.linearize` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/linearize.py` | migrated | | #166 |
+| `spec_prism_flow.markdown_utils` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/markdown_utils.py` | migrated | | #166 |
+| `spec_prism_flow.overview_stage` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/overview_stage.py` | migrated | | #166 |
+| `spec_prism_flow.phase_file` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/phase_file.py` | migrated | | #166 |
+| `spec_prism_flow.prose_review` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/prose_review.py` | migrated | `dotharness.ai_backend` (`launch_sync`), `dotharness.git_utils` (`git_toplevel`) | #166 |
+| `spec_prism_flow.requirements_stage` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/requirements_stage.py` | migrated | | #166 |
+| `spec_prism_flow.review` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/review.py` | migrated | | #166 |
+| `spec_prism_flow.sizing` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/sizing.py` | migrated | | #166 |
+| `spec_prism_flow.workspace` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/workspace.py` | migrated | | #166 |
 | `sisyphus.archive` | sisyphus | `tools/sisyphus/sisyphus/archive.py` | not migrated | | |
 | `sisyphus.cleanup` | sisyphus | `tools/sisyphus/sisyphus/cleanup.py` | not migrated | | |
 | `sisyphus.cli` | sisyphus | `tools/sisyphus/sisyphus/cli.py` | not migrated | | |
