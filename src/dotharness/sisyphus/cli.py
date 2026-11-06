@@ -589,6 +589,24 @@ def _check_resumable(rec: RunRecord, again: bool) -> None:
         raise _fail(f"{rec.item} is not stopped (stage {rec.stage}, {rec.stage_status}); nothing to resume")
 
 
+def _prepare_resume(
+    config: SisyphusConfig, services: Services, work_item_ref: str, *, again: bool, reset_retries: bool
+) -> None:
+    """Under the lock: require a resumable record, then optionally zero the recorded stage's retry counters."""
+    assert config.project.workspace_dir  # noqa: S101
+    workspace = Path(config.project.workspace_dir).expanduser()
+    if not record_path(workspace, work_item_ref).exists():
+        raise _fail(f"no run record for {work_item_ref}; nothing to resume")
+    rec = RunRecord.open(workspace, work_item_ref)
+    _check_resumable(rec, again)
+    if reset_retries:
+        changed = reset_stage_retries(rec, services.now())
+        typer.echo(
+            f"{work_item_ref}: reset retries at stage {rec.stage or 'none'}: "
+            + (", ".join(f"{k} {v}->0" for k, v in changed.items()) or "nothing to reset")
+        )
+
+
 @app.command("resume")
 def resume_item_command(
     ctx: typer.Context,
@@ -618,18 +636,7 @@ def resume_item_command(
     state = _RunState()
 
     def prepare() -> None:
-        assert config.project.workspace_dir  # noqa: S101
-        workspace = Path(config.project.workspace_dir).expanduser()
-        if not record_path(workspace, work_item_ref).exists():
-            raise _fail(f"no run record for {work_item_ref}; nothing to resume")
-        rec = RunRecord.open(workspace, work_item_ref)
-        _check_resumable(rec, again)
-        if reset_retries:
-            changed = reset_stage_retries(rec, services.now())
-            typer.echo(
-                f"{work_item_ref}: reset retries at stage {rec.stage or 'none'}: "
-                + (", ".join(f"{k} {v}->0" for k, v in changed.items()) or "nothing to reset")
-            )
+        _prepare_resume(config, services, work_item_ref, again=again, reset_retries=reset_retries)
 
     def phase() -> None:
         _run_phase([Candidate(work_item_ref)], config, services, base, state, config_path)
