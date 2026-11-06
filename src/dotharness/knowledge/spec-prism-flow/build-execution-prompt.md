@@ -31,7 +31,8 @@ own:
   - If `plan init` ran with `--code`, that path is the target repo.
   - If the `"code"` field is null or missing, **ask the user** for the git checkout to
     build in. Never guess this value.
-  - Never use the dotharness repo (the `spec_prism_flow` tool) as the target repo. Never use the project's
+  - Never fall back to the dotharness checkout (the `spec_prism_flow` tool) as the target repo
+    implicitly. Use it only when `init_manifest.json` explicitly names it in `code`. Never use the project's
     own planning directory either — that directory holds planning files only, and git
     does not track it.
 
