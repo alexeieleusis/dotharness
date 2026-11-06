@@ -143,11 +143,11 @@ def _validate(source: WorkItemSource | None) -> WorkItemSource:
     if source.kind == "file":
         if not source.dir:
             raise PickError('[source.work_item] dir is required for kind = "file"')
-        return source
-    if not source.assignee:
-        raise PickError("[source.work_item] assignee is required to pick work")
-    if source.kind == "linear" and not source.pick_state:
-        raise PickError('[source.work_item] pick_state is required for kind = "linear"')
+    else:
+        if not source.assignee:
+            raise PickError("[source.work_item] assignee is required to pick work")
+        if source.kind == "linear" and not source.pick_state:
+            raise PickError('[source.work_item] pick_state is required for kind = "linear"')
     return source
 
 
