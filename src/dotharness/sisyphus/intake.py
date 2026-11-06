@@ -126,7 +126,7 @@ def resolve_brief_path(config: SisyphusConfig, item: str) -> Path:
 # ------------------------------------------------------- open-decisions log
 
 _HEADING = re.compile(
-    r"^(?:(#{1,6})\s*(?:\d+\.\s*)?|\*\*\s*)open[- ](?:decisions?|questions?)\b.*$",
+    r"^(?:(#{1,6})\s*(?:\d+\.\s*)?|\*\*\s*)open[- ](?:decision|question)s?\b",
     re.IGNORECASE,
 )
 _ANY_HEADING = re.compile(r"^(#{1,6})\s")
