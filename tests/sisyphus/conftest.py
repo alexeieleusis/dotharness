@@ -56,9 +56,12 @@ def forbidden_imports(source: str) -> set[str]:
     """Imported names in ``source`` that equal or sit under a forbidden package."""
     mods: set[str] = set()
     for n in ast.walk(ast.parse(source)):
-        if isinstance(n, ast.ImportFrom) and n.module:
-            mods.add(n.module)
-            mods |= {f"{n.module}.{a.name}" for a in n.names}
+        if isinstance(n, ast.ImportFrom) and (n.module or n.level):
+            # Relative imports resolve against dotharness.sisyphus (level 1 = that package).
+            base = ".".join(["dotharness", "sisyphus"][: max(0, 3 - n.level)]) if n.level else ""
+            mod = ".".join(p for p in (base, n.module) if p)
+            mods.add(mod)
+            mods |= {f"{mod}.{a.name}" for a in n.names}
         elif isinstance(n, ast.Import):
             mods |= {a.name for a in n.names}
     return {m for m in mods if any(m == f or m.startswith(f + ".") for f in FORBIDDEN_IMPORTS)}

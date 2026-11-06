@@ -151,9 +151,27 @@ def test_checkpoints_c1_to_c8() -> None:
 
 
 def test_no_harness_imports() -> None:
-    for name in ("paths", "lock", "rails"):
-        src = (Path(__file__).parents[2] / "src" / "dotharness" / "sisyphus" / f"{name}.py").read_text()
-        assert not forbidden_imports(src)
+    pkg = Path(__file__).parents[2] / "src" / "dotharness" / "sisyphus"
+    for path in pkg.glob("*.py"):
+        assert not forbidden_imports(path.read_text()), path.name
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "from dotharness.pr_review.lock import x",
+        "from dotharness import vibe_heal",
+        "import dotharness.spec_prism_flow",
+        "from .. import pr_review",
+        "from ..vibe_heal import x",
+    ],
+)
+def test_import_guard_catches_forbidden(src: str) -> None:
+    assert forbidden_imports(src)
+
+
+def test_import_guard_allows_sisyphus_relative() -> None:
+    assert not forbidden_imports("from . import paths\nfrom .lock import x\nfrom dotharness.sisyphus import config")
 
 
 @pytest.mark.parametrize("flag", ["--force-with", "--force-i", "--dele", "--prun", "--mirr", "--unknown", "-x"])
