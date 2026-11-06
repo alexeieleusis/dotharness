@@ -324,6 +324,7 @@ async def _run_attempts(
     prompt: str,
     total_attempts: int,
     *,
+    retry_on_nonzero: bool,
     cwd: str,
     env: dict[str, str],
     timeout: float,
@@ -333,7 +334,7 @@ async def _run_attempts(
     expected_repo_name: str | None,
     harness: tuple[Path, str] | None,
 ) -> RunResult:
-    """Run up to ``total_attempts`` attempts, stopping at the first success or ``not_found``; return the last result."""
+    """Run up to ``total_attempts`` attempts, stopping at the first success, ``not_found`` or (unless ``retry_on_nonzero``) non-zero exit; return the last result."""
     for attempt in range(1, total_attempts + 1):
         if expected_repo_name is not None:
             await assert_repo_identity(cwd, expected_repo_name)
@@ -350,7 +351,7 @@ async def _run_attempts(
             expected_repo_name=expected_repo_name,
             harness=harness,
         )
-        if result.not_found or (not result.timed_out and result.returncode == 0):
+        if result.not_found or (not result.timed_out and (result.returncode == 0 or not retry_on_nonzero)):
             break
         if attempt < total_attempts:
             logger.warning(
@@ -382,6 +383,7 @@ async def launch(
     prompt_via_file: bool = True,
     context: str | None = None,
     max_retries: int = 0,
+    retry_on_nonzero: bool = False,
     expected_repo_name: str | None = None,
     guard_harness_repo: bool = False,
     harness_repo_root: str | Path | None = None,
@@ -394,7 +396,9 @@ async def launch(
     With ``prompt_via_file`` (default) the prompt is written to a temp file under ``TMP_DIR`` and the backend is
     told to read it; the file is removed after every attempt, also on cancellation.
 
-    ``max_retries``: extra attempts after a timeout or a non-zero exit (not after ``not_found``). Guards:
+    ``max_retries``: extra attempts after a timeout; also after a non-zero exit only with ``retry_on_nonzero=True``
+    (default off: a failed run may already have had side effects such as posted replies or pushed commits, so
+    re-running it is opt-in). Never after ``not_found``. Guards:
     ``expected_repo_name`` (``owner/repo``) checks the identity of ``cwd`` before and after each attempt;
     ``guard_harness_repo`` checks this checkout's HEAD did not move (``harness_repo_root`` overrides discovery);
     ``OpencodeOptions.monitor_cwd`` kills the run if its real cwd diverges; ``OpencodeOptions.check_plugins``
@@ -421,6 +425,7 @@ async def launch(
         name,
         prompt,
         max_retries + 1,
+        retry_on_nonzero=retry_on_nonzero,
         cwd=cwd_str,
         env=full_env,
         timeout=timeout,

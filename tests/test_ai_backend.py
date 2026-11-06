@@ -232,7 +232,7 @@ async def test_retries_until_success(bin_dir: Path, work: Path, tmp_path: Path) 
         exit 1
         """,
     )
-    result = await launch("claude", "p", cwd=work, timeout=10, max_retries=2)
+    result = await launch("claude", "p", cwd=work, timeout=10, max_retries=2, retry_on_nonzero=True)
     assert result.returncode == 0
     assert len(counter.read_text().splitlines()) == 3
 
@@ -240,11 +240,19 @@ async def test_retries_until_success(bin_dir: Path, work: Path, tmp_path: Path) 
 async def test_retries_exhausted_returns_last_failure(bin_dir: Path, work: Path, tmp_path: Path) -> None:
     counter = tmp_path / "count"
     make_exe(bin_dir, "claude", f"echo x >> {counter}\nexit 4\n")
-    result = await launch("claude", "p", cwd=work, timeout=10, max_retries=1)
+    result = await launch("claude", "p", cwd=work, timeout=10, max_retries=1, retry_on_nonzero=True)
     assert result.returncode == 4
     assert len(counter.read_text().splitlines()) == 2
     counter.unlink()
     result = await launch("claude", "p", cwd=work, timeout=10)
+    assert len(counter.read_text().splitlines()) == 1
+
+
+async def test_nonzero_exit_not_retried_by_default(bin_dir: Path, work: Path, tmp_path: Path) -> None:
+    counter = tmp_path / "count"
+    make_exe(bin_dir, "claude", f"echo x >> {counter}\nexit 1\n")
+    result = await launch("claude", "p", cwd=work, timeout=10, max_retries=2)
+    assert result.returncode == 1
     assert len(counter.read_text().splitlines()) == 1
 
 

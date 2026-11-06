@@ -1,0 +1,132 @@
+import subprocess
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from dotharness.pr_review.config import HarnessConfig, HarnessSection, RepoConfig, SubDir, VibehealConfig
+from dotharness.pr_review.runners import prune_projects
+
+
+def _make_config(tmp_path, subdirs, **vibe_heal_kwargs):
+    return HarnessConfig(
+        harness=HarnessSection(),
+        repo=RepoConfig(name="acme/frontend", working_dir=tmp_path, subdirs=subdirs),
+        vibe_heal=VibehealConfig(enabled=True, python="/venv/bin/python3", **vibe_heal_kwargs),
+    )
+
+
+def test_noop_when_disabled(tmp_path):
+    cfg = _make_config(tmp_path, [SubDir(path=".")], prune_projects_enabled=False)
+    with patch("dotharness.pr_review.runners.prune_projects.run_cmd") as mock_run:
+        prune_projects.run(cfg, {})
+    mock_run.assert_not_called()
+
+
+def test_runs_prune_command_per_subdir(tmp_path):
+    cfg = _make_config(
+        tmp_path,
+        [SubDir(path="a"), SubDir(path="b")],
+        prune_projects_enabled=True,
+        prune_older_than_minutes=90,
+        prune_projects_timeout=45,
+    )
+    with patch("dotharness.pr_review.runners.prune_projects.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        prune_projects.run(cfg, {"FOO": "bar"})
+    assert mock_run.call_count == 2
+    for call, expected_path in zip(mock_run.call_args_list, ["a", "b"], strict=True):
+        cmd = call.args[0]
+        assert cmd == [
+            "/venv/bin/python3",
+            "-m",
+            "dotharness.vibe_heal",
+            "prune-projects",
+            "--yes",
+            "--older-than",
+            "90",
+        ]
+        assert call.kwargs["cwd"] == str(tmp_path / expected_path)
+        assert call.kwargs["env"] == {"FOO": "bar"}
+        assert call.kwargs["timeout"] == 45
+
+
+def test_no_op_with_no_subdirs(tmp_path):
+    cfg = _make_config(tmp_path, [], prune_projects_enabled=True)
+    with patch("dotharness.pr_review.runners.prune_projects.run_cmd") as mock_run:
+        prune_projects.run(cfg, {})
+    mock_run.assert_not_called()
+
+
+def test_failure_in_one_subdir_does_not_stop_the_next(tmp_path):
+    cfg = _make_config(tmp_path, [SubDir(path="a"), SubDir(path="b")], prune_projects_enabled=True)
+    with patch("dotharness.pr_review.runners.prune_projects.run_cmd") as mock_run:
+        mock_run.side_effect = [
+            subprocess.CalledProcessError(1, "vibe_heal", output=b"out", stderr=b"err"),
+            MagicMock(returncode=0, stdout=b"", stderr=b""),
+        ]
+        prune_projects.run(cfg, {})
+    assert mock_run.call_count == 2
+
+
+def test_timeout_is_caught_and_logged(tmp_path):
+    cfg = _make_config(tmp_path, [SubDir(path=".")], prune_projects_enabled=True)
+    with patch("dotharness.pr_review.runners.prune_projects.run_cmd") as mock_run:
+        mock_run.side_effect = subprocess.TimeoutExpired("vibe_heal", 45)
+        prune_projects.run(cfg, {})
+    mock_run.assert_called_once()
+
+
+def test_os_error_in_one_subdir_does_not_stop_the_next(tmp_path):
+    cfg = _make_config(tmp_path, [SubDir(path="a"), SubDir(path="b")], prune_projects_enabled=True)
+    with patch("dotharness.pr_review.runners.prune_projects.run_cmd") as mock_run:
+        mock_run.side_effect = [
+            FileNotFoundError("/venv/bin/python3"),
+            MagicMock(returncode=0, stdout=b"", stderr=b""),
+        ]
+        prune_projects.run(cfg, {})
+    assert mock_run.call_count == 2
+
+
+def test_env_file_passed_only_to_subdir_that_sets_it(tmp_path):
+    (tmp_path / ".env").write_text("X=1\n")
+    env_path = str(tmp_path / ".env")
+    cfg = _make_config(
+        tmp_path,
+        [SubDir(path="a", env_file=env_path), SubDir(path="b")],
+        prune_projects_enabled=True,
+        prune_older_than_minutes=90,
+    )
+    with patch("dotharness.pr_review.runners.prune_projects.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        prune_projects.run(cfg, {})
+    base = ["/venv/bin/python3", "-m", "dotharness.vibe_heal", "prune-projects", "--yes", "--older-than", "90"]
+    assert [c.args[0] for c in mock_run.call_args_list] == [[*base, "--env-file", env_path], base]
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory"])
+def test_bad_env_file_warns_skips_subdir_and_continues(tmp_path, caplog, kind):
+    bad = tmp_path / "envs" / ".env"
+    if kind == "directory":
+        bad.mkdir(parents=True)
+    cfg = _make_config(
+        tmp_path,
+        [SubDir(path="a", env_file=str(bad)), SubDir(path="b")],
+        prune_projects_enabled=True,
+    )
+    with patch("dotharness.pr_review.runners.prune_projects.run_cmd") as mock_run, caplog.at_level("DEBUG"):
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        prune_projects.run(cfg, {})
+    assert mock_run.call_count == 1
+    assert mock_run.call_args.kwargs["cwd"] == str(tmp_path / "b")
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "a" in warnings[0] and str(bad) in warnings[0]
+
+
+def test_unset_env_file_logs_no_env_file_message(tmp_path, caplog):
+    cfg = _make_config(tmp_path, [SubDir(path="a")], prune_projects_enabled=True)
+    with patch("dotharness.pr_review.runners.prune_projects.run_cmd") as mock_run, caplog.at_level("DEBUG"):
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        prune_projects.run(cfg, {})
+    assert mock_run.call_count == 1
+    assert not [r for r in caplog.records if "regular file" in r.getMessage()]

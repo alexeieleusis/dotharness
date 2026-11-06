@@ -89,39 +89,208 @@ Rewritten for the claude-code and opencode backends and the shared AI backend la
 New tests for the shared layer: `tests/test_subprocess_runner.py`, `tests/test_ai_backend.py`
 and `tests/vibe_heal/test_cli_surface.py`.
 
+## Tests dropped or rewritten in I-3
+
+Tests are not ledger modules and have no row. This section records what happened to the
+pr-review tests in I-3 (#165).
+
+Counts, recounted at the baseline `cb0efc1` (`git ls-tree`, not taken from the ticket):
+`tools/pr-review/tests` has 34 `test_*.py` files (7 at the top level: `test_backend`,
+`test_cli`, `test_config`, `test_lock`, `test_repo_guard`, `test_scheduler`, `test_state`; 27 under
+`runners/`), plus `__init__.py` and `runners/__init__.py`, plus `conftest.py`. The migrated tree
+`tests/pr_review` has 35 `test_*.py` files: 34, minus `test_repo_guard.py` (moved, see below), plus
+`test_layout_sample.py` (I-1) and the new `runners/test_local_review_head_sha.py`.
+
+Dropped:
+
+- Global opencode lock tests (D-1): `test_opencode_run_acquires_global_lock` and
+  `test_claude_run_does_not_acquire_global_lock` in `test_backend.py`. The global lock
+  (`_OPENCODE_GLOBAL_LOCK_KEY`) was removed from `Backend`; `test_removed_internals_are_gone`
+  pins that it is gone.
+- The other `test_backend.py` tests of internals that moved into the shared layer (temp-file
+  handling, process-group wait, cwd-divergence monitor, `lsof` parsing, opencode plugin check,
+  harness-repo snapshot). `test_backend.py` went from 44 to 19 tests; the behavior is covered by
+  `tests/test_ai_backend.py` and `tests/test_subprocess_runner.py` (I-2).
+- `test_repo_guard.py`: the pr-review `repo_guard` module was replaced by `dotharness.repo_guard`
+  (D-2), so its tests moved to `tests/test_repo_guard.py`.
+
+Rewritten:
+
+- `test_cli.py`: rewritten from click (`click.testing.CliRunner`) to typer (`typer.testing.CliRunner`),
+  same assertions. `test_state.py` and `runners/test_local_review_address.py` only switched the
+  `CliRunner` import.
+- `test_backend.py`: rewritten for the `launch_sync` adapter (19 tests, 3 of them end to end against
+  a fake executable).
+- `runners/test_common.py`: real-subprocess tests for the new `run_cmd` (bytes output,
+  `CalledProcessError` fields, `check=False`, timeout, grandchild killed, missing executable and cwd,
+  shell mode and exit 127, env and cwd passthrough, and a source guard against `killpg`,
+  `start_new_session` and `Popen`).
+- `test_scheduler.py`: the 31 existing tests kept; new exact-text tests for the cron line and the
+  launchd plist, XML escaping, marker round trip, cron edge cases, and
+  `test_run_config_then_runner_works_and_runner_then_config_is_usage_error`.
+- `test_config.py`: tests for `default_knowledge_dir()` and the `vibe_types_repo` default.
+- `runners/test_review_prs.py` and `runners/test_prune_projects.py`: pin the full argv with
+  `-m dotharness.vibe_heal` and the `--env-file` position.
+- `runners/test_merge.py`: fixture path `parents[2]` (the golden record moved to
+  `tests/contracts/gate_record_golden.json`); `runners/test_focused_review.py` and
+  `runners/test_local_review.py`: `parents[4]` became `parents[3]` for the knowledge symlink path.
+- `test_lock.py`: uses `get_context("fork")` because spawn children cannot import the module under
+  pytest's importlib mode (the lock is POSIX-only anyway).
+- `conftest.py` (disposition: kept, edited): the autouse fixtures that patched removed internals
+  (`_HARNESS_REPO_ROOT`, `assert_no_opencode_plugins`, `Backend._processes_in_group`, the
+  `repo_guard` SSH cache) were removed; `tmp_xdg` now patches `dotharness.ai_backend.TMP_DIR`,
+  `dotharness.pr_review.state.XDG_DATA` and `dotharness.pr_review.lock.XDG_RUNTIME`.
+- `__init__.py` (both, empty): kept as `tests/pr_review/__init__.py` and
+  `tests/pr_review/runners/__init__.py`, so test module names are `pr_review.*`.
+
+New tests outside `tests/pr_review`: `tests/contracts/test_gate_record_fixture.py` (golden record is
+byte-identical to the copy under `tools/`), and `tests/test_stubs.py` no longer lists `pr_review`.
+
+`test_layout_sample.py` (kept): it does not exist at `cb0efc1`; it was added to the dotharness
+repository by I-1 (#163, `838494f`) to prove that a same-basename test collects under pytest's
+importlib mode. It was kept in `tests/pr_review/`. It can be removed in a later PR.
+
+### Typer versus click behavior differences
+
+The CLI is `pr_review` (typer). Differences observed from the click `harness` CLI:
+
+1. `click.UsageError` became `typer.BadParameter`: the exit code stays 2, but the message is shown
+   as a rich "Error" box with `Invalid value: <msg>` instead of `Error: <msg>`.
+2. `click.ClickException` became a local `_fail()`: exit code 1 and `Error: <msg>` are identical.
+3. Usage line: positional arguments show `{COMMAND}` instead of `COMMAND`; `init --help` shows
+   `DIRECTORY  [default: .]` where click showed `[DIRECTORY]`. Metavars `PATH`, `TEXT`, `N` and
+   `[cron|launchd]` are set explicitly to match click.
+4. `--config` after a runner name fails with `No such option`, exit 2, as in click.
+5. Group help is rendered in typer's plain style, and command descriptions are truncated with `...`
+   in the group listing. `focused-review`, `self-review` and `address-comments` still have no help text.
+6. `rich_markup_mode=None` (the default rich markup dropped `[ci_fix]` and `[merge]` from help) and
+   `pretty_exceptions_enable=False` (plain tracebacks as in click).
+7. `no_args_is_help=True` on the groups mimics click; `sys.exit(...)` is kept where the source used it.
+8. `click` is not a direct dependency (typer is); a module-level alias `cli = app` keeps the wiring
+   `from dotharness.pr_review.cli import cli as pr_review` working.
+
+### Behavior differences from the shared-layer adapters
+
+`Backend` (adapter over `launch_sync`): prompt files use the prefix `dotharness_`; retries still cover
+timeouts only (`retry_on_nonzero` stays off); argv is no longer logged and the 2000-character failed-run log is dropped; a
+missing executable returns `CompletedProcess(127)` instead of raising `FileNotFoundError`. The harness-repo
+guard runs only for a source checkout (`find_harness_checkout()`); an installed package skips it.
+
+`run_cmd` (sync wrapper over `subprocess_runner.run` through `asyncio.run`; do not call it from async
+code): the grace period is 5 s instead of 10 s; stdin is `/dev/null` instead of inherited; non-UTF-8
+output is lossy (U+FFFD); `TimeoutExpired.stderr` ends with the shared "timed out after Ns" line;
+`PermissionError` on exec surfaces as `FileNotFoundError`; the process group gets a SIGKILL sweep after
+a normal exit. A missing executable or cwd still raises `FileNotFoundError`, as the baseline `Popen` did.
+
+### Cron versus launchd argument order
+
+At the baseline `cb0efc1` the two scheduler forms differed:
+
+- cron: `<bin> run --config <cfg> <command>`
+- launchd: `<bin> run <command> --config <cfg>`
+
+The typer test written in I-3 shows that the launchd form fails: `run review-prs --config <cfg>` exits 2
+with `Usage: pr_review run review-prs [OPTIONS]` and `Error: No such option: --config`
+(`test_run_config_then_runner_works_and_runner_then_config_is_usage_error` in
+`tests/pr_review/test_scheduler.py`). This was probably already broken at the baseline (D-8). I-3
+fixed it with user approval: `schedule install` now writes the cron order for launchd entries too, and
+the binary is looked up as `shutil.which("pr_review")`. Schedules installed by the old `harness` binary
+(old crontab entries and old launchd plists) must be reinstalled; I-7 owns that.
+
+### External reference inventory (seed for I-7)
+
+Command word `harness` outside `tools/pr-review` and outside the migrated pr-review code. Fact labels:
+[R] read from the repository, [B] taken from the brief or ticket only, not read.
+`tools/pr-review` itself stays until I-8. No file below was edited by I-3, except where marked.
+
+Repository files that invoke or name the command `harness` or its install directory [R]:
+
+| File | Matched text |
+|---|---|
+| `README.md` | `uv tool install --editable ~/.harness/tools/pr-review/`; `harness init          # in each repo you want to automate`; `harness validate      # confirm config is correct`; link ``[`tools/pr-review/`](tools/pr-review/README.md)`` and `[docs](tools/pr-review/docs/index.md)` |
+| `tools/spec-prism-flow/spec_prism_flow/config.py` | `DEFAULT_REVIEW_COMMAND = "harness"`; `DEFAULT_REVIEW_TOOL_DIR = "~/.harness/tools/pr-review"` |
+| `tools/spec-prism-flow/spec_prism_flow/build/harness_integration.py` | runs `uv run --project <config.tool_dir> <config.command> run --config <config.harness_config> <subcommand>` (docstring: ``"""A `harness run` subprocess exited non-zero ...``) |
+| `tools/spec-prism-flow/tests/test_config.py` | `assert cfg.review.command == "harness"` |
+| `tools/spec-prism-flow/tests/build/test_harness_integration.py` | `command="harness",` and `"harness",` in the expected argv |
+| `tools/spec-prism-flow/docs/phases/01-config-and-phase-file-leaf.md` | `command = "harness"` |
+| `tools/spec-prism-flow/docs/phases/09-build-static-analysis-review-integration-leaf.md` | ``uv run --project <harness_tool_dir> harness run --config <harness_co...`` |
+| `tools/spec-prism-flow/docs/lifecycle-cheat-sheet.md` | `` `harness run all` already runs on a repeating cycle ``; ``See `pr-review`'s command docs for what each `harness run all` step does``; ``isn't** already swept by `harness run`` |
+| `tools/spec-prism-flow/docs/lifecycle-cheat-sheet.md`, `tools/spec-prism-flow/docs/requirements.md`, `tools/sisyphus/docs/safety-rails.md`, `tools/sisyphus/sisyphus/paths.py` | `~/.harness/tools/spec-prism-flow` and `~/.harness/knowledge` (install directory, not the command) |
+| `tools/sisyphus/tests/test_orchestrator.py` | `("harness", "run", "ci-fix")`, `("harness", "run", "merge")`, `assert argv[0] in {"git", "harness", "make"}`, and a forbidden-word list containing `"harness"` |
+| `tools/sisyphus/tests/test_cli.py`, `test_digest.py`, `test_intake.py`, `test_pick.py`, `test_prbody.py`, `test_rails.py`, `test_runrecord.py` | import guards: `("harness", "spec_prism_flow")` as forbidden top-level module names |
+| `tools/sisyphus/tests/test_paths.py` | `home / ".harness/tools/spec-prism-flow"` |
+| `.github/workflows/main.yml` | `paths: "tools/pr-review/**"` (push and pull_request) and `working-directory: tools/pr-review`; `hashFiles('tools/pr-review/.pre-commit-config.yaml')` |
+| `.github/workflows/docs.yml` | path filters `tools/pr-review/docs/**`, `tools/pr-review/zensical.toml`, `tools/pr-review/harness/**`; `working-directory: tools/pr-review`; `cp -r tools/pr-review/site/. combined-site/` |
+| `.github/actions/setup-python-env/action.yml` | `default: "tools/pr-review"` |
+| `docs/design/shared-async-layer.md` | ``pr-review `_cmd_for` \| `tools/pr-review/harness/backend.py` `` and the `run_cmd` row `tools/pr-review/harness/runners/common.py` (historical description of the baseline) |
+
+Migrated copies that still say `harness` as a command or install path on purpose (history, or
+quoted from the old tool) [R]:
+
+- `docs/pr_review/design-review-requirements.md` and `docs/pr_review/requirement-traceability-requirements.md`:
+  ``Drafted per `~/.harness/tools/requirements-doc-drafting-prompt.md` ``, `` `harness validate` ``,
+  `` `harness run self-review` / `harness run review-requested` `` (marked Historical).
+- `docs/pr_review/.spec-prism-flow.toml.template`: `command = "harness"` and
+  `tool_dir = "~/.harness/tools/pr-review"` (marked Historical; copied as-is).
+- `docs/pr_review/scripts/pr-comments.py`: historical copy; the shipped script is
+  `src/dotharness/scripts/pr-comments.py`.
+
+Identifiers that contain `harness` but are not references to the command, kept on purpose [R]: the
+`[harness]` config section and `cfg.harness.*` fields (`harness.backend`, `harness.knowledge_dir`, ...); the
+config file names `.harness*.toml`; the directory `~/.harness/...`; the cron marker `# harness: <command> ...`
+in `src/dotharness/pr_review/scheduler.py`; the launchd label `com.harness.<command>-<slug>` in
+`scheduler.py` and `src/dotharness/pr_review/cli.py`; the ref `refs/harness-recovery`; the message
+`harness.backend: binary '<bin>' not found on PATH` in `pr_review validate` and
+`No harness schedules found.` in `pr_review schedule list`. Changing the cron marker or the launchd label
+would orphan existing schedules, so they stay until I-7 decides.
+
+Outside the repository [B]: wrapper scripts under `~/development/dotharness-work/bin/` call `harness`.
+This comes from the ticket only; the files were not read and are not edited here. Live config files
+(`.harness*.toml`) were not read either.
+
+### Files not migrated
+
+`tools/pr-review/.projects/` (`README.md` and `regret-review/`: 18 files, the spec-prism-flow working
+tree used to design the regret review) is not migrated, by human decision. The original stays in
+`tools/pr-review` until I-8. The other historical non-code files (`design-review-requirements.md`,
+`requirement-traceability-requirements.md`, `scripts/pr-comments.py`, `.spec-prism-flow.toml.template`) are
+migrated as historical files under `docs/pr_review/`; they have no ledger row because the ledger counts
+only Python modules under `harness/` (`pr-comments.py` is also shipped as
+`src/dotharness/scripts/pr-comments.py`).
+
 ## Rows
 
 | module | origin tool | origin path | status | shared module reused or extended | issue that moved it |
 |---|---|---|---|---|---|
-| `harness.backend` | pr-review | `tools/pr-review/harness/backend.py` | not migrated | | |
-| `harness.cli` | pr-review | `tools/pr-review/harness/cli.py` | not migrated | | |
-| `harness.config` | pr-review | `tools/pr-review/harness/config.py` | not migrated | | |
-| `harness.lock` | pr-review | `tools/pr-review/harness/lock.py` | not migrated | | |
-| `harness.repo_guard` | pr-review | `tools/pr-review/harness/repo_guard.py` | not migrated | | |
-| `harness.runners.address_comments` | pr-review | `tools/pr-review/harness/runners/address_comments.py` | not migrated | | |
-| `harness.runners.auto_approve` | pr-review | `tools/pr-review/harness/runners/auto_approve.py` | not migrated | | |
-| `harness.runners.auto_approve_github` | pr-review | `tools/pr-review/harness/runners/auto_approve_github.py` | not migrated | | |
-| `harness.runners.auto_approve_size` | pr-review | `tools/pr-review/harness/runners/auto_approve_size.py` | not migrated | | |
-| `harness.runners.ci_checks` | pr-review | `tools/pr-review/harness/runners/ci_checks.py` | not migrated | | |
-| `harness.runners.ci_fix` | pr-review | `tools/pr-review/harness/runners/ci_fix.py` | not migrated | | |
-| `harness.runners.common` | pr-review | `tools/pr-review/harness/runners/common.py` | not migrated | | |
-| `harness.runners.focused_review` | pr-review | `tools/pr-review/harness/runners/focused_review.py` | not migrated | | |
-| `harness.runners.local_review` | pr-review | `tools/pr-review/harness/runners/local_review/__init__.py` | not migrated | | |
-| `harness.runners.local_review.address` | pr-review | `tools/pr-review/harness/runners/local_review/address.py` | not migrated | | |
-| `harness.runners.local_review.findings` | pr-review | `tools/pr-review/harness/runners/local_review/findings.py` | not migrated | | |
-| `harness.runners.local_review.git` | pr-review | `tools/pr-review/harness/runners/local_review/git.py` | not migrated | | |
-| `harness.runners.local_review.prompts` | pr-review | `tools/pr-review/harness/runners/local_review/prompts.py` | not migrated | | |
-| `harness.runners.local_review.review` | pr-review | `tools/pr-review/harness/runners/local_review/review.py` | not migrated | | |
-| `harness.runners.local_review.store` | pr-review | `tools/pr-review/harness/runners/local_review/store.py` | not migrated | | |
-| `harness.runners.local_review.types` | pr-review | `tools/pr-review/harness/runners/local_review/types.py` | not migrated | | |
-| `harness.runners.merge` | pr-review | `tools/pr-review/harness/runners/merge.py` | not migrated | | |
-| `harness.runners.prune_projects` | pr-review | `tools/pr-review/harness/runners/prune_projects.py` | not migrated | | |
-| `harness.runners.regret_review` | pr-review | `tools/pr-review/harness/runners/regret_review.py` | not migrated | | |
-| `harness.runners.review_prs` | pr-review | `tools/pr-review/harness/runners/review_prs.py` | not migrated | | |
-| `harness.runners.review_requested` | pr-review | `tools/pr-review/harness/runners/review_requested.py` | not migrated | | |
-| `harness.runners.self_review` | pr-review | `tools/pr-review/harness/runners/self_review.py` | not migrated | | |
-| `harness.scheduler` | pr-review | `tools/pr-review/harness/scheduler.py` | not migrated | | |
-| `harness.state` | pr-review | `tools/pr-review/harness/state.py` | not migrated | | |
+| `harness.backend` | pr-review | `tools/pr-review/harness/backend.py` | migrated | `dotharness.ai_backend` (`launch_sync`), `dotharness.subprocess_runner`, `dotharness.repo_guard` | #165 (now a thin adapter over `launch_sync`; global opencode lock dropped per D-1; missing executable returns exit 127) |
+| `harness.cli` | pr-review | `tools/pr-review/harness/cli.py` | migrated | none: pr-review specific (click converted to typer; wired as `pr_review` in `dotharness.cli`) | #165 |
+| `harness.config` | pr-review | `tools/pr-review/harness/config.py` | migrated | none: pr-review specific (adds packaged `default_knowledge_dir()` fallback and a `vibe_types_repo` default) | #165 |
+| `harness.lock` | pr-review | `tools/pr-review/harness/lock.py` | migrated | none: pr-review specific | #165 |
+| `harness.repo_guard` | pr-review | `tools/pr-review/harness/repo_guard.py` | dropped | replaced by `dotharness.repo_guard` (D-2: the pr-review copy was deleted; `local_review.review` raises the shared `RepoIdentityError`) | #165 (module replaced by the shared one, not copied) |
+| `harness.runners.address_comments` | pr-review | `tools/pr-review/harness/runners/address_comments.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.auto_approve` | pr-review | `tools/pr-review/harness/runners/auto_approve.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.auto_approve_github` | pr-review | `tools/pr-review/harness/runners/auto_approve_github.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.auto_approve_size` | pr-review | `tools/pr-review/harness/runners/auto_approve_size.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.ci_checks` | pr-review | `tools/pr-review/harness/runners/ci_checks.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.ci_fix` | pr-review | `tools/pr-review/harness/runners/ci_fix.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.common` | pr-review | `tools/pr-review/harness/runners/common.py` | migrated | `dotharness.subprocess_runner` (`run_cmd` is a sync wrapper over `subprocess_runner.run`) | #165 (`run_cmd` replaced, option (a); see "Behavior differences" below) |
+| `harness.runners.focused_review` | pr-review | `tools/pr-review/harness/runners/focused_review.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.local_review` | pr-review | `tools/pr-review/harness/runners/local_review/__init__.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.local_review.address` | pr-review | `tools/pr-review/harness/runners/local_review/address.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.local_review.findings` | pr-review | `tools/pr-review/harness/runners/local_review/findings.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.local_review.git` | pr-review | `tools/pr-review/harness/runners/local_review/git.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.local_review.prompts` | pr-review | `tools/pr-review/harness/runners/local_review/prompts.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.local_review.review` | pr-review | `tools/pr-review/harness/runners/local_review/review.py` | migrated | `dotharness.repo_guard` (`RepoIdentityError`) | #165 |
+| `harness.runners.local_review.store` | pr-review | `tools/pr-review/harness/runners/local_review/store.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.local_review.types` | pr-review | `tools/pr-review/harness/runners/local_review/types.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.merge` | pr-review | `tools/pr-review/harness/runners/merge.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.prune_projects` | pr-review | `tools/pr-review/harness/runners/prune_projects.py` | migrated | none: pr-review specific (spawns `python -m dotharness.vibe_heal`) | #165 |
+| `harness.runners.regret_review` | pr-review | `tools/pr-review/harness/runners/regret_review.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.review_prs` | pr-review | `tools/pr-review/harness/runners/review_prs.py` | migrated | none: pr-review specific (spawns `python -m dotharness.vibe_heal`) | #165 |
+| `harness.runners.review_requested` | pr-review | `tools/pr-review/harness/runners/review_requested.py` | migrated | none: pr-review specific | #165 |
+| `harness.runners.self_review` | pr-review | `tools/pr-review/harness/runners/self_review.py` | migrated | none: pr-review specific | #165 |
+| `harness.scheduler` | pr-review | `tools/pr-review/harness/scheduler.py` | migrated | none: pr-review specific (launchd argument order fixed to match cron) | #165 |
+| `harness.state` | pr-review | `tools/pr-review/harness/state.py` | migrated | none: pr-review specific | #165 |
 | `spec_prism_flow.build.agent_instructions` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/agent_instructions.py` | not migrated | | |
 | `spec_prism_flow.build.agent_runner` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/agent_runner.py` | not migrated | | |
 | `spec_prism_flow.build.claude_backend` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/build/claude_backend.py` | not migrated | | |

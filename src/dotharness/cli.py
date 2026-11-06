@@ -2,6 +2,7 @@
 
 import typer
 
+from dotharness.pr_review.cli import cli as pr_review
 from dotharness.vibe_heal.cli import app as vibe_heal
 
 STUB_MESSAGE = "{name}: not yet migrated, see docs/migration-ledger.md"
@@ -17,7 +18,6 @@ def _make_stub(name: str) -> typer.Typer:
     return app
 
 
-pr_review = _make_stub("pr_review")
 spec_prism_flow = _make_stub("spec_prism_flow")
 sisyphus = _make_stub("sisyphus")
 
