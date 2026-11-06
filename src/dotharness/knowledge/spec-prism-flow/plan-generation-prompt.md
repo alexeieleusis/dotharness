@@ -3,9 +3,9 @@
 > Point a coding-agent session (e.g. Claude Code) at this file. No parameters need
 > pre-filling. The agent resolves the project, its config, and its brief itself (see
 > below). It asks the user only when it genuinely cannot resolve something. It then
-> drives `spec-prism-flow`'s `plan` stage end-to-end: one sub-agent per step, strictly
+> drives the `plan` stage of `spec_prism_flow` end-to-end: one sub-agent per step, strictly
 > sequential, pausing only at the human checkpoints the cheat sheet names. This prompt
-> pairs with `docs/spec_prism_flow/lifecycle-cheat-sheet.md`, which stays the
+> pairs with `lifecycle-cheat-sheet.md` (next to this file), which stays the
 > source of truth for every command, flag, and gotcha below.
 
 ## Resolve the parameters yourself — do not ask to have them pre-filled
@@ -14,9 +14,10 @@ Whoever invokes you will point you at a project: a directory, a name, or a path 
 `.spec-prism-flow.toml`. They will not hand you a filled-in list. Work these out
 yourself, in this order. Ask the user only when a step genuinely cannot resolve:
 
-- **Tool repo**: resolve per lifecycle-cheat-sheet.md §0. If both copies exist, ask
-  the invoker which to use. Whichever you pick, state it out loud so a stale install
-  isn't silently used.
+- **Tool**: the `spec_prism_flow` script (underscore) installed from the dotharness
+  project. Run `command -v spec_prism_flow`; if it is not on `PATH`, use
+  `uv --directory <dotharness repo> run spec_prism_flow ...`. State out loud which one
+  you use so a stale install isn't silently used.
 - **Config file**: the `.spec-prism-flow.toml` you were pointed at, or pointed near (for
   example, under `.spec-prism-flow_projects/<project>/`). If more than one plausible
   match exists, or none does, ask which project or config to use. Do not guess.
@@ -30,11 +31,11 @@ yourself, in this order. Ask the user only when a step genuinely cannot resolve:
   yourself before you continue to `draft-overview`.
 - **Invocation pattern** for every `plan` command (the current directory does not matter
   for `plan`):
-  `uv --directory <tool repo> run spec-prism-flow plan <subcommand> --config <config file>`
+  `spec_prism_flow plan <subcommand> --config <config file>`
 
 ## Your task
 
-Read `<tool repo>/docs/spec_prism_flow/lifecycle-cheat-sheet.md` in full before you do anything else. It
+Read the lifecycle cheat sheet in full (`lifecycle-cheat-sheet.md`, in the same directory as this prompt) before you do anything else. It
 is the source of truth for every command, flag, and gotcha below. If anything here
 conflicts with it, the cheat sheet wins. Treat this prompt as an index into the cheat
 sheet, not a replacement for it.
