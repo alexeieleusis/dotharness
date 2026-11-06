@@ -5,7 +5,7 @@
 > when it cannot resolve something on its own. It then implements an already-generated
 > phase corpus one phase at a time, instead of using `spec-prism-flow build run`.
 >
-> This pairs with `tools/spec-prism-flow/docs/lifecycle-cheat-sheet.md`. That guide's
+> This pairs with `docs/spec_prism_flow/lifecycle-cheat-sheet.md`. That guide's
 > "Drive this yourself" section explains why: `build run`'s own orchestration is the
 > least mature part of the tool. This prompt is a deliberately thin, honest manual
 > stand-in for it. The steps are: implement, check against acceptance criteria, commit,
