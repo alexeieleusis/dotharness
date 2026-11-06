@@ -35,7 +35,7 @@ KNOWLEDGE_SHA256 = {
     "sisyphus/linear-feed-prompt.md": "e76652507f9fdb9aaafc933dadb1c9c76eef4597791203dcade167e70fb3eddc",
     "sisyphus/orchestration-prompt.md": "88a4f099b9d494ab527421aa797772bd032a2b28ac1768e4f64b1ed98c894cb4",
     "sisyphus/sizing-rules.md": "953ed3e744d39f8fbe7196303fd3dcad4eae70f98d49adbccb5530532260cc36",
-    "spec-prism-flow/build-execution-prompt.md": "02df3b895138827c9d1c162ba69e03b845b0b4ff99ff2b09f69c1bec1c3949ab",
+    "spec-prism-flow/build-execution-prompt.md": "417f7e6998d8b7e8ee60ea4b78dfe76ace82de15b7587ecb005f13bd95b9ef60",
     "spec-prism-flow/lifecycle-cheat-sheet.md": "3ed0b34ac35997cce8f34e5d013b608ba46b24f2f749ef0e5dc9e740d1bccbf5",
     "spec-prism-flow/plan-generation-prompt.md": "4651068890fe6b2bd948e3ab6e3b7eed442aec6a1d8f33dfd0b6e74489982041",
     "spec-prism-flow/requirements-doc-drafting-prompt.md": "72524c62db898e102e06b33645bee7a129d2ab7ce5a018e5a1b49fa86f31a95c",
