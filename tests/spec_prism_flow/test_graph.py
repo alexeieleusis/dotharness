@@ -1,4 +1,6 @@
-from dotharness.spec_prism_flow.graph import Graph, load_graph, validate_graph, write_graph
+import pytest
+
+from dotharness.spec_prism_flow.graph import Graph, GraphError, load_graph, validate_graph, write_graph
 from dotharness.spec_prism_flow.phase_file import PhaseFile
 
 
@@ -154,3 +156,12 @@ def test_linear_chain_check_does_not_assume_numeric_predecessor():
     violations = validate_graph(graph, phase_files)
 
     assert violations == []
+
+
+@pytest.mark.parametrize("content", ['{"nodes": []}', '{"nodes": [', "[]", '{"edges": []}'])
+def test_load_graph_malformed_file_raises_graph_error(tmp_path, content):
+    p = tmp_path / "graph.json"
+    p.write_text(content)
+
+    with pytest.raises(GraphError):
+        load_graph(p)

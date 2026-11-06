@@ -21,13 +21,18 @@ class Graph:
 
 
 def load_graph(path: Path) -> Graph:
-    data = json.loads(path.read_text())
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        raise GraphError(f"graph file is not valid JSON: {e}") from e  # noqa: TRY003
+    if not isinstance(data, dict):
+        raise GraphError("graph must be a JSON object")  # noqa: TRY003
 
-    nodes = data["nodes"]
+    nodes = data.get("nodes")
     if not isinstance(nodes, list) or not all(isinstance(n, str) for n in nodes):
         raise GraphError("graph 'nodes' must be a list of strings")  # noqa: TRY003
 
-    edges = data["edges"]
+    edges = data.get("edges")
     if not isinstance(edges, list) or not all(
         isinstance(e, list) and len(e) == 2 and all(isinstance(n, str) for n in e) for e in edges
     ):
