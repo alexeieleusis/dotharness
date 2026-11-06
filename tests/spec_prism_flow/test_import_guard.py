@@ -33,7 +33,7 @@ def find_violations(source: str) -> list[str]:
     """Return a description of each forbidden construct found in ``source``."""
     violations: list[str] = []
     for node in ast.walk(ast.parse(source)):
-        if _imports_build(node):
+        if isinstance(node, ast.Import | ast.ImportFrom) and _imports_build(node):
             violations.append(f"line {node.lineno}: imports build")
         elif isinstance(node, ast.ImportFrom):
             violations.extend(f"line {node.lineno}: imports {a.name}" for a in node.names if a.name in FORBIDDEN_NAMES)
