@@ -14,8 +14,9 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
-from dotharness.pr_review.runners.common import build_subprocess_env, run_cmd
+from dotharness.pr_review.runners.common import run_cmd
 from dotharness.pr_review.runners.local_review.types import LocalReviewError, LocalReviewTarget, NothingToReviewError
+from dotharness.subprocess_runner import build_subprocess_env
 
 _GIT_TIMEOUT_SECONDS = 30
 _GIT_TIMEOUT_RETURNCODE = 124  # same convention as timeout(1)

@@ -16,7 +16,6 @@ from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
     build_file_review_section,
-    build_subprocess_env,
     get_changed_files,
     get_file_diff,
     get_vibe_heal_context,
@@ -70,6 +69,7 @@ from dotharness.pr_review.runners.local_review.types import (
     RepoMutatedError,
 )
 from dotharness.repo_guard import RepoIdentityError
+from dotharness.subprocess_runner import build_subprocess_env
 
 logger = logging.getLogger(__name__)
 

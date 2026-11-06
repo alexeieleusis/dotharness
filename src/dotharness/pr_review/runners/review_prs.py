@@ -10,7 +10,6 @@ from dotharness.pr_review.runners import prune_projects
 from dotharness.pr_review.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
-    build_subprocess_env,
     env_file_args,
     env_file_error,
     get_changed_files,
@@ -26,6 +25,7 @@ from dotharness.pr_review.runners.common import (
     preserve_reviewer_request,
     run_cmd,
 )
+from dotharness.subprocess_runner import build_subprocess_env
 
 logger = logging.getLogger(__name__)
 

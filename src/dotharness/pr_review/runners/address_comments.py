@@ -14,7 +14,6 @@ from dotharness.pr_review.runners.common import (
     PR_COMMENTS_SCRIPT_PATH,
     TIMEOUT_GH,
     TIMEOUT_GIT,
-    build_subprocess_env,
     fetch_all_pages,
     fetch_pr_comments,
     fetch_review_threads,
@@ -29,6 +28,7 @@ from dotharness.pr_review.runners.common import (
     preserve_reviewer_request,
     run_cmd,
 )
+from dotharness.subprocess_runner import build_subprocess_env
 
 logger = logging.getLogger(__name__)
 

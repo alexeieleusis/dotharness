@@ -16,7 +16,6 @@ from dotharness.pr_review.runners.common import (
     build_design_review_prompt,
     build_early_comment_context,
     build_file_review_section,
-    build_subprocess_env,
     build_traceability_review_prompt,
     check_design_review_comment_status,
     check_regret_review_comment_status,
@@ -55,6 +54,7 @@ from dotharness.pr_review.runners.regret_review import (
     parse_regret_judgment,
     post_regret_comment,
 )
+from dotharness.subprocess_runner import build_subprocess_env
 
 logger = logging.getLogger(__name__)
 

@@ -8,7 +8,6 @@ import pytest
 from dotharness.pr_review.runners.common import (
     FatalGitError,
     add_reviewer,
-    build_subprocess_env,
     get_current_user,
     get_gh_token,
     git_detach_and_record,
@@ -16,6 +15,7 @@ from dotharness.pr_review.runners.common import (
     git_restore,
     run_cmd,
 )
+from dotharness.subprocess_runner import build_subprocess_env
 
 
 def _run(cmd, tmp_path, **kw):

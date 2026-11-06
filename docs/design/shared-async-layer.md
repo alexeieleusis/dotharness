@@ -113,7 +113,7 @@ and is not wired into any of them yet.
 - Prompt file outside cwd: verified with a real `claude --print --permission-mode acceptEdits --allowedTools Edit,Read` run (cwd = a repo, prompt under `~/.local/share/dotharness/tmp`): the `Read` is not denied, because `--allowedTools Read` pre-approves it for any path. So no `add_dirs` parameter and no prompt file in cwd; I-3/I-4/I-5 copy the reference mappings as written. A caller that omits `Read` from `allowed_tools` and has no `skip_permissions` would be denied. Opt-in live test: `DOTHARNESS_LIVE_CLAUDE=1 pytest tests/test_ai_backend.py -k outside_cwd`.
 - Cancelling the task kills the process group and removes the prompt file.
 - Neither argv nor env is logged or placed in exception text. Callers must keep to this.
-- Not provided: lock files, `gh`, config loading, `build_subprocess_env`.
+- Not provided: lock files, `gh`, config loading. `build_subprocess_env` lives in `subprocess_runner.py` (F-DUP-7).
 - Decision D-6: the Claude timeout in vibe-heal is one value, 1200 s (`CLAUDE_TIMEOUT_SECONDS` in `ClaudeCodeTool`). It is passed to the launcher, which enforces it, and printed in the timeout message. The old 300 s constructor default and the literal 600 s wrapper are removed. `ClaudeCodeTool` and `OpenCodeTool` call `launch` only; their prompt files now live under `~/.local/share/dotharness/tmp` instead of the working tree.
 
 ## I-3 adapter contract and hardening map

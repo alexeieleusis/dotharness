@@ -243,18 +243,6 @@ def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:
         )
 
 
-def build_subprocess_env(
-    path_prepend: list[str], env_vars: dict[str, str], gh_token: str | None = None
-) -> dict[str, str]:
-    env = os.environ.copy()
-    if path_prepend:
-        env["PATH"] = ":".join(path_prepend) + ":" + env.get("PATH", "")
-    env.update(env_vars)
-    if gh_token:
-        env["GITHUB_TOKEN"] = gh_token
-    return env
-
-
 def get_gh_token(gh_token_cmd: str) -> str:
     """Resolve the GitHub token `gh_token_cmd` (e.g. `gh auth token --user <login>`)
     prints, so the caller can pin every subsequent `gh`/backend call to that specific

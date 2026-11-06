@@ -7,7 +7,7 @@ import pytest
 
 from dotharness.pr_review.config import CiFixConfig, ConfigError, HarnessSection, MergeConfig, PreCommand, load_config
 from dotharness.pr_review.lock import working_dir_lock_key
-from dotharness.pr_review.runners.common import build_subprocess_env
+from dotharness.subprocess_runner import build_subprocess_env
 
 
 def test_load_minimal(minimal_toml):

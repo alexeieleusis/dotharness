@@ -47,7 +47,6 @@ from dotharness.pr_review.runners.ci_checks import text as _text
 from dotharness.pr_review.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
-    build_subprocess_env,
     get_current_user,
     get_gh_token,
     git_detach_and_record,
@@ -56,6 +55,7 @@ from dotharness.pr_review.runners.common import (
     run_cmd,
 )
 from dotharness.pr_review.state import _state_path, _update_state
+from dotharness.subprocess_runner import build_subprocess_env
 
 logger = logging.getLogger(__name__)
 

@@ -55,7 +55,6 @@ from dotharness.pr_review.runners.common import (
     TIMEOUT_GH,
     TIMEOUT_GIT,
     FatalGitError,
-    build_subprocess_env,
     get_current_user,
     get_gh_token,
     get_head_sha,
@@ -63,6 +62,7 @@ from dotharness.pr_review.runners.common import (
     git_restore,
     run_cmd,
 )
+from dotharness.subprocess_runner import build_subprocess_env
 
 logger = logging.getLogger(__name__)
 
