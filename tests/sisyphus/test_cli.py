@@ -20,6 +20,7 @@ from typer.testing import CliRunner
 
 from dotharness.ai_backend import ClaudeOptions, OpencodeOptions, RunResult
 from dotharness.sisyphus import cli
+from dotharness.sisyphus.agent import AgentError, make_agent_runner
 from dotharness.sisyphus.cleanup import PrInfo
 from dotharness.sisyphus.cli import Services, app
 from dotharness.sisyphus.config import ConfigError, WorkItemSource, load_config
@@ -38,7 +39,6 @@ from dotharness.sisyphus.pick import Candidate, ExecResult, GhCli, GhPullRequest
 from dotharness.sisyphus.rails import Checkpoint
 from dotharness.sisyphus.runrecord import RunRecord, record_path
 from dotharness.sisyphus.stoprecord import build_abandoned_record, build_stop_record, write_stop_record
-from dotharness.sisyphus.subproc import AgentError, make_agent_runner
 
 TODAY = datetime(2026, 1, 2, tzinfo=UTC)
 

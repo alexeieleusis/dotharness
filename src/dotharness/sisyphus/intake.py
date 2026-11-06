@@ -18,12 +18,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from dotharness.sisyphus.agent import AgentRunner
 from dotharness.sisyphus.config import SisyphusConfig
 from dotharness.sisyphus.paths import knowledge_file
 from dotharness.sisyphus.rails import Checkpoint
 from dotharness.sisyphus.runrecord import RunRecord, encode_item
 from dotharness.sisyphus.stages import INTAKE_STAGE
-from dotharness.sisyphus.subproc import AgentRunner
 from dotharness.sisyphus.ticketfile import ticket_path, valid_file_ref
 
 PROMPT_FILE = "sisyphus/intake-prompt.md"

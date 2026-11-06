@@ -30,6 +30,7 @@ from typing import Annotated, Any
 
 import typer
 
+from dotharness.sisyphus.agent import make_agent_runner
 from dotharness.sisyphus.archive import archive_item, check_archive_dir, resolve_archive_dir
 from dotharness.sisyphus.cleanup import PrInfo
 from dotharness.sisyphus.config import ConfigError, SisyphusConfig, load_config
@@ -91,7 +92,6 @@ from dotharness.sisyphus.stoprecord import (
     read_stop_record,
     write_stop_record,
 )
-from dotharness.sisyphus.subproc import make_agent_runner
 from dotharness.sisyphus.subproc import run_command as run_subprocess
 
 TOKEN_CMD_TIMEOUT = 30
