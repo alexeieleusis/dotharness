@@ -181,7 +181,7 @@ def _resets(records: Sequence[RunRecord]) -> list[str]:
     return [describe_reset(rec.item, e) for rec in records for e in rec.resets]
 
 
-def _done(records: Sequence[RunRecord], report: DigestReport) -> list[str]:
+def _done(report: DigestReport) -> list[str]:
     lines: list[str] = []
     for entry in report.done:
         evidence = "; ".join(entry.evidence) if entry.evidence else "no evidence supplied"
@@ -225,7 +225,7 @@ def render_digest(records: Sequence[RunRecord], report: DigestReport | None = No
     report = report or DigestReport()
     bodies = [
         _numbered(_needs_you(records, report)),
-        _bullets(_done(records, report)),
+        _bullets(_done(report)),
         _bullets(_declined(records, report)),
         _bullets([*report.deviations, *_abandoned(records), *_resets(records)]),
         _bullets(_limits(records, report)),
