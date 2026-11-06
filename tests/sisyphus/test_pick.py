@@ -554,3 +554,20 @@ def test_label_removal_number_gating() -> None:
     assert label_removal_number(_cfg(kind="linear"), "#12") is None
     assert label_removal_number(_cfg(kind="file"), "#12") is None
     assert label_removal_number(SisyphusConfig(project=ProjectConfig()), "#12") is None
+
+
+def test_default_gh_cli_maps_missing_gh_to_127(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert GhCli().run("--version").returncode == 127
+
+
+def test_default_gh_cli_maps_hung_gh_to_124(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = tmp_path / "gh"
+    fake.write_text("#!/bin/sh\nexec /bin/sleep 30\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    # default_exec passes no timeout; shrink the shared default so the test stays fast.
+    monkeypatch.setattr("dotharness.sisyphus.subproc.DEFAULT_COMMAND_TIMEOUT", 0.5)
+    res = GhCli().run("--version")
+    assert res.returncode == 124
+    assert "timed out after 0.5s" in res.stderr
