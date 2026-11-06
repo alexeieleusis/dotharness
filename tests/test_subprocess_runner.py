@@ -160,3 +160,32 @@ async def test_background_grandchild_holding_pipes_does_not_cause_timeout() -> N
     assert result.returncode == 0
     assert not result.timed_out
     assert result.stdout == "done\n"
+
+
+def test_killpg_suppresses_only_process_lookup_error(monkeypatch):
+    from dotharness import subprocess_runner as sr
+
+    def gone(_pgid, _sig):
+        raise ProcessLookupError
+
+    def denied(_pgid, _sig):
+        raise PermissionError
+
+    monkeypatch.setattr(sr.os, "killpg", gone)
+    sr.killpg(1, sr.signal.SIGKILL)
+    monkeypatch.setattr(sr.os, "killpg", denied)
+    with pytest.raises(PermissionError):
+        sr.killpg(1, sr.signal.SIGKILL)
+
+
+@pytest.mark.parametrize(("exc", "alive"), [(None, True), (ProcessLookupError, False), (PermissionError, True)])
+def test_group_alive_outcomes(monkeypatch, exc, alive):
+    from dotharness import subprocess_runner as sr
+
+    def probe(_pgid, sig):
+        assert sig == 0
+        if exc:
+            raise exc
+
+    monkeypatch.setattr(sr.os, "killpg", probe)
+    assert sr.group_alive(1) is alive

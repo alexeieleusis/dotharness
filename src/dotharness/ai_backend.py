@@ -46,6 +46,7 @@ from dotharness.repo_guard import (
     snapshot_harness_repo,
 )
 from dotharness.subprocess_runner import RunResult, run
+from dotharness.subprocess_runner import group_alive as _group_alive  # tests patch this name
 
 logger = logging.getLogger(__name__)
 
@@ -187,16 +188,6 @@ def _write_prompt_file(prompt: str) -> Path:
         path.unlink(missing_ok=True)
         raise
     return path
-
-
-def _group_alive(pgid: int) -> bool:
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 async def _wait_for_group_exit(pgid: int, prefix: str) -> None:
