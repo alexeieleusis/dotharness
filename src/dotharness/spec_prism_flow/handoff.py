@@ -51,7 +51,7 @@ def run_handoff(
     if os.environ.get("TMUX"):
         _run_best_effort(["tmux", "load-buffer", "-"], str(prompt_path), "tmux load-buffer")
 
-    wait_for_confirmation("Agent finished writing output? ")
+    wait_for_confirmation("Agent finished writing output?")
 
     if not output_path.exists():
         raise HandoffError(f"Expected output file not found: {output_path}")  # noqa: TRY003

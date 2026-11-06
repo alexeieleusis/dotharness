@@ -1,3 +1,4 @@
+import io
 import subprocess
 
 import pytest
@@ -170,3 +171,27 @@ def test_tmux_failure_is_caught_and_does_not_raise(tmp_path, monkeypatch):
     result = run_handoff("prompt", tmp_path, "stage")
 
     assert result == "output content"
+
+
+def test_handoff_contract_strings_with_real_confirm(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(subprocess, "run", _ok_run)
+    monkeypatch.delenv("TMUX", raising=False)
+    output_path = tmp_path / "stage_output.md"
+    monkeypatch.setattr("sys.stdin", io.StringIO("n\ny\n"))
+
+    real_confirm = handoff.typer.confirm
+
+    def _confirm(*args, **kwargs):
+        result = real_confirm(*args, **kwargs)
+        if result:
+            output_path.write_text("output content")
+        return result
+
+    monkeypatch.setattr(handoff.typer, "confirm", _confirm)
+
+    run_handoff("prompt", tmp_path, "stage")
+
+    out = capsys.readouterr().out
+    assert f"Prompt written to: {tmp_path / 'stage_prompt.md'}" in out
+    assert f"Expected output at: {output_path}" in out
+    assert out.count("Agent finished writing output? [y/N]") == 2
