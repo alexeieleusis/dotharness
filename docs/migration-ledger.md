@@ -371,26 +371,26 @@ rewritten. `markdown_utils` and `errors` have no top-level test file, as in the 
 | `spec_prism_flow.review` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/review.py` | migrated | | #166 |
 | `spec_prism_flow.sizing` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/sizing.py` | migrated | | #166 |
 | `spec_prism_flow.workspace` | spec-prism-flow | `tools/spec-prism-flow/spec_prism_flow/workspace.py` | migrated | | #166 |
-| `sisyphus.archive` | sisyphus | `tools/sisyphus/sisyphus/archive.py` | not migrated | | |
-| `sisyphus.cleanup` | sisyphus | `tools/sisyphus/sisyphus/cleanup.py` | not migrated | | |
-| `sisyphus.cli` | sisyphus | `tools/sisyphus/sisyphus/cli.py` | not migrated | | |
-| `sisyphus.config` | sisyphus | `tools/sisyphus/sisyphus/config.py` | not migrated | | |
-| `sisyphus.digest` | sisyphus | `tools/sisyphus/sisyphus/digest.py` | not migrated | | |
-| `sisyphus.intake` | sisyphus | `tools/sisyphus/sisyphus/intake.py` | not migrated | | |
-| `sisyphus.lock` | sisyphus | `tools/sisyphus/sisyphus/lock.py` | not migrated | | |
-| `sisyphus.orchestrator` | sisyphus | `tools/sisyphus/sisyphus/orchestrator.py` | not migrated | | |
-| `sisyphus.paths` | sisyphus | `tools/sisyphus/sisyphus/paths.py` | not migrated | | |
-| `sisyphus.pick` | sisyphus | `tools/sisyphus/sisyphus/pick.py` | not migrated | | |
-| `sisyphus.plan` | sisyphus | `tools/sisyphus/sisyphus/plan.py` | not migrated | | |
-| `sisyphus.prbody` | sisyphus | `tools/sisyphus/sisyphus/prbody.py` | not migrated | | |
-| `sisyphus.rails` | sisyphus | `tools/sisyphus/sisyphus/rails.py` | not migrated | | |
-| `sisyphus.resume` | sisyphus | `tools/sisyphus/sisyphus/resume.py` | not migrated | | |
-| `sisyphus.runrecord` | sisyphus | `tools/sisyphus/sisyphus/runrecord.py` | not migrated | | |
-| `sisyphus.settled` | sisyphus | `tools/sisyphus/sisyphus/settled.py` | not migrated | | |
-| `sisyphus.stages` | sisyphus | `tools/sisyphus/sisyphus/stages.py` | not migrated | | |
-| `sisyphus.stoprecord` | sisyphus | `tools/sisyphus/sisyphus/stoprecord.py` | not migrated | | |
-| `sisyphus.subproc` | sisyphus | `tools/sisyphus/sisyphus/subproc.py` | not migrated | | |
-| `sisyphus.ticketfile` | sisyphus | `tools/sisyphus/sisyphus/ticketfile.py` | not migrated | | |
+| `sisyphus.archive` | sisyphus | `tools/sisyphus/sisyphus/archive.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.cleanup` | sisyphus | `tools/sisyphus/sisyphus/cleanup.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.cli` | sisyphus | `tools/sisyphus/sisyphus/cli.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.config` | sisyphus | `tools/sisyphus/sisyphus/config.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.digest` | sisyphus | `tools/sisyphus/sisyphus/digest.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.intake` | sisyphus | `tools/sisyphus/sisyphus/intake.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.lock` | sisyphus | `tools/sisyphus/sisyphus/lock.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.orchestrator` | sisyphus | `tools/sisyphus/sisyphus/orchestrator.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.paths` | sisyphus | `tools/sisyphus/sisyphus/paths.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.pick` | sisyphus | `tools/sisyphus/sisyphus/pick.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.plan` | sisyphus | `tools/sisyphus/sisyphus/plan.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.prbody` | sisyphus | `tools/sisyphus/sisyphus/prbody.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.rails` | sisyphus | `tools/sisyphus/sisyphus/rails.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.resume` | sisyphus | `tools/sisyphus/sisyphus/resume.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.runrecord` | sisyphus | `tools/sisyphus/sisyphus/runrecord.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.settled` | sisyphus | `tools/sisyphus/sisyphus/settled.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.stages` | sisyphus | `tools/sisyphus/sisyphus/stages.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.stoprecord` | sisyphus | `tools/sisyphus/sisyphus/stoprecord.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.subproc` | sisyphus | `tools/sisyphus/sisyphus/subproc.py` | migrated | none: sisyphus specific | #175 |
+| `sisyphus.ticketfile` | sisyphus | `tools/sisyphus/sisyphus/ticketfile.py` | migrated | none: sisyphus specific | #175 |
 | `vibe_heal` | vibe-heal | `src/vibe_heal/__init__.py` | migrated | none: vibe-heal specific | #164 |
 | `vibe_heal.__main__` | vibe-heal | `src/vibe_heal/__main__.py` | migrated | none: vibe-heal specific | #164 |
 | `vibe_heal.ai_tools` | vibe-heal | `src/vibe_heal/ai_tools/__init__.py` | migrated | none: vibe-heal specific | #164 |
