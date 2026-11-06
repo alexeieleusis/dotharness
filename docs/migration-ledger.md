@@ -199,6 +199,10 @@ output is lossy (U+FFFD); `TimeoutExpired.stderr` ends with the shared "timed ou
 `PermissionError` on exec surfaces as `FileNotFoundError`; the process group gets a SIGKILL sweep after
 a normal exit. A missing executable or cwd still raises `FileNotFoundError`, as the baseline `Popen` did.
 
+The same differences apply to `git_toplevel`, `vibe_heal` `run_command` and `GitHubReviewClient._post_json`, which now run
+through `subprocess_runner.run` (Phase 07, D-15 in `docs/design/shared-async-layer.md`). `git_toplevel` is a sync bridge
+(`asyncio.run`) and raises `RuntimeError` inside a running event loop.
+
 ### Cron versus launchd argument order
 
 At the baseline `cb0efc1` the two scheduler forms differed:
