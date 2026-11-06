@@ -137,8 +137,8 @@ introduced.
 | Input | A rough brief, optional existing docs/code, optional conventions doc | The phase corpus `plan` produced (or any corpus meeting the Phase-File Spec) |
 | Output | `overview.md`, `requirements.md`, `docs/phases/NN-name-leaf.md` files, an open-decisions log | Merged PRs (or local commits), one per phase, plus a per-phase completion log |
 
-Both live under one CLI, one repo (§10) — `spec_prism_flow plan ...` / `spec-prism-flow build ...`
-(§11 #8, resolved).
+Both originally lived under one CLI, one repo (§10) — `spec_prism_flow plan ...` / `build ...`
+(not migrated) (§11 #8, resolved). In `dotharness` only `plan` ships.
 
 ## 6. Phase-File Spec (the shared contract between A and B)
 
@@ -203,12 +203,12 @@ go-ahead.
 
 **Human ↔ agent-harness hand-off (§11 #7, resolved for v1):** every stage below that needs an
 actual agent run follows the same protocol. The coding-agent harness (Claude Code or opencode) is
-an interactive CLI that the tool can't call as a library. `spec-prism-flow` prints the prompt
+an interactive CLI that the tool can't call as a library. `spec_prism_flow` prints the prompt
 file's path and the expected output file's path to the console. It copies the prompt file's path
 to both the system clipboard and the current tmux paste buffer, covering both local/GUI clipboard
 use and SSH/tmux-only sessions. Then it waits. The human starts the coding-agent harness and
 pastes the prompt file path into it. The harness reads the prompt and begins. The agent writes its
-result to the specified output file. `spec-prism-flow` reads it from there once the human signals
+result to the specified output file. `spec_prism_flow` reads it from there once the human signals
 the stage is done. This protocol is expected to iterate if it proves too manual in practice.
 
 1. **`spec_prism_flow plan init`** — it takes a rough brief (a text/markdown file the human wrote)
@@ -374,7 +374,7 @@ specific to the Neighboku two-track experiment.
   halts only the leaves that depend on it, not the whole run. **Branch/stack organization and
   merge order are left to the human (§11 #5, resolved).** This is expected to be rare enough to
   not warrant automation. Dedicated stacked-branch tooling (e.g. git-spice) serves it better than
-  `spec-prism-flow` reinventing the logic. The tool's own responsibility ends at surfacing the
+  `spec_prism_flow` reinventing the logic. The tool's own responsibility ends at surfacing the
   order (the linear DFS chain and `graph.json`, §6) a human uses to organize that stack.
 
 **The workflow per phase (either mode):**
@@ -433,6 +433,11 @@ In parallel mode this pipeline runs once per concurrently-eligible leaf.
 
 ## 10. Tool shape
 
+> **Migration note.** In `dotharness` the CLI is `spec_prism_flow` (typer-based, `plan` group only;
+> there is no `build` group). The location, bootstrap and house-style bullets below describe the
+> original standalone repo and are historical; do not scaffold anything from them. The shipped CLI
+> shape is specified in §7.1 of the I-4 requirements.
+
 - **Location:** `~/.harness/tools/spec-prism-flow/`, a new `uv`-managed Python CLI.
 - **Bootstrap:** `~/.cookiecutters/cookiecutter-uv`, replaying the same option set already used for
   `pr-review` and `refactor-hotspots`: `layout=flat`, `include_github_actions=y`,
@@ -442,9 +447,8 @@ In parallel mode this pipeline runs once per concurrently-eligible leaf.
   output dir `~/.harness/tools`.
 - **CLI shape:** one CLI, two command groups mirroring the two features (§11 #8, resolved as one
   unified tool rather than a split) — `spec_prism_flow plan <subcommand>` (§7.2's stages) and
-  `spec-prism-flow build <subcommand>` (mirroring `orchestrate run-phase`/`run-track`/`status`).
-  The CLI is `click`-based, matching `pr-review`/`refactor-hotspots`'s house style.
-  `scripts/orchestrate` used `typer`+`rich`. House style has since settled on `click`.
+  `build <subcommand>` (not migrated; mirroring `orchestrate run-phase`/`run-track`/`status`).
+  Historically the CLI was `click`-based; the `dotharness` port is typer-based and `plan`-only.
 - **Config:** a per-target-project TOML (analogous to `.harness.toml`) declaring:
   - the agent backend (Claude Code default, or opencode)
   - whether `harness`/`vibe-heal` integration is active, and how to reach it
@@ -463,7 +467,7 @@ used. They were resolved by a human before or during Spec Prism Flow's own imple
 than decided unilaterally by an agent building it:
 
 1. ~~**Tool name.**~~ **Resolved:** the tool is named **Spec Prism Flow**. The package/CLI name is
-   `spec-prism-flow`. The earlier working names — "phaseforge," then briefly "Spec Prism" — were
+   `spec-prism-flow` (in `dotharness`, the command is `spec_prism_flow`). The earlier working names — "phaseforge," then briefly "Spec Prism" — were
    discarded during drafting. They are recorded here only as history.
 2. ~~**Manual-test-checklist gate strength.**~~ **Resolved:** the checklist gate is advisory by
    default (the agent proceeds, and the checklist is logged but not enforced), with a `--strict`
@@ -478,7 +482,7 @@ than decided unilaterally by an agent building it:
    `.harness.toml` pattern. `plan init` never assumes it can create a `docs/` tree, since the user
    may be contributing to a project whose layout they don't control.
 5. ~~**Parallel-mode git/branching strategy.**~~ **Resolved:** left entirely to the human (§8).
-   `spec-prism-flow` limits itself to surfacing task order (the linear DFS chain and `graph.json`,
+   `spec_prism_flow` limits itself to surfacing task order (the linear DFS chain and `graph.json`,
    §6). Branch stacking and merge-order decisions across concurrently-eligible leaves are
    expected to be rare enough to hand off to dedicated tooling (e.g. git-spice), rather than
    building and maintaining that logic in-house.
@@ -490,8 +494,8 @@ than decided unilaterally by an agent building it:
    coding-agent harness and paste the path in. This design is explicitly expected to iterate if it
    proves too manual in practice.
 8. ~~**Does `build` (Feature B) stay part of the tool?**~~ **Resolved: yes, unified.** Both
-   features ship as one tool, one CLI, one repo — `spec_prism_flow plan` and `spec-prism-flow
-   build` (§5, §10). The alternative was considered and rejected: split into a `spec-prism`
+   features ship as one tool, one CLI, one repo — `spec_prism_flow plan` and `build`
+   (not migrated) (§5, §10). The alternative was considered and rejected: split into a `spec-prism`
    frontend and a `spec-flow` backend behind a shared library, so either half could be swapped
    independently. With the user as the only current consumer of either half, the shared-library
    overhead a clean split would need is overkill (§3). The name's "before a single line of
@@ -499,6 +503,10 @@ than decided unilaterally by an agent building it:
    scope boundary excluding `build`.
 
 ## 12. Next step
+
+> **Migration note.** Historical. This section scaffolded the original standalone repo, which no
+> longer applies; in `dotharness` the tool is already migrated (`plan` only, `build` not migrated).
+> Do not scaffold `~/.harness/tools/spec-prism-flow/`.
 
 Once this draft is reviewed, with all of §11's open decisions now resolved:
 1. Scaffold `~/.harness/tools/spec-prism-flow/` via the cookiecutter-uv recipe in §10.
