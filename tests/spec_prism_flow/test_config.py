@@ -1,3 +1,4 @@
+from importlib import resources
 from pathlib import Path
 
 import pytest
@@ -124,11 +125,29 @@ def test_invalid_prose_review_backend_raises(tmp_path):
         load_config(p)
 
 
-def test_harness_knowledge_dir_default(tmp_path):
+@pytest.fixture
+def fake_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return home
+
+
+def test_harness_knowledge_dir_default_is_packaged_without_user_dir(tmp_path, fake_home):
     cfg = load_config(_write(tmp_path, MINIMAL_TOML))
 
     assert not str(cfg.harness.knowledge_dir).startswith("~")
-    assert str(cfg.harness.knowledge_dir).endswith(".harness/knowledge")
+    assert cfg.harness.knowledge_dir == Path(str(resources.files("dotharness") / "knowledge"))
+
+
+def test_harness_knowledge_dir_default_prefers_user_dir_when_present(tmp_path, fake_home):
+    user_dir = fake_home / ".harness" / "knowledge"
+    user_dir.mkdir(parents=True)
+
+    cfg = load_config(_write(tmp_path, MINIMAL_TOML))
+
+    assert cfg.harness.knowledge_dir == user_dir
 
 
 def test_harness_knowledge_dir_parsed(tmp_path):
@@ -147,7 +166,7 @@ knowledge_dir = "~/custom/knowledge"
     assert str(cfg.harness.knowledge_dir).endswith("custom/knowledge")
 
 
-def test_harness_knowledge_dir_default_uses_shared_helper(tmp_path):
+def test_harness_knowledge_dir_default_uses_shared_helper(tmp_path, fake_home):
     from dotharness.paths import default_knowledge_dir
 
     cfg = load_config(_write(tmp_path, MINIMAL_TOML))
