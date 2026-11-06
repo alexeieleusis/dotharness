@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any, cast
 from urllib.parse import urlparse
 
@@ -46,17 +48,25 @@ def _truncate_body(body: str) -> str:
 _MAX_OVERFLOW_BODY_LINES = 100
 
 
-async def _run_with_timeout(cmd: list[str], timeout: float) -> CommandResult:
-    """Run a command, converting a deadline expiry into GitHubReviewError.
+@asynccontextmanager
+async def _deadline(cmd: list[str], seconds: float) -> AsyncIterator[None]:
+    """Bound the enclosed block by a deadline, converting expiry into GitHubReviewError.
 
-    run_command kills the child on timeout/cancellation, so nothing is orphaned.
+    The caller owns the timeout; run_command kills the child on timeout/cancellation,
+    so nothing is orphaned.
     """
     try:
-        async with asyncio.timeout(timeout):
-            return await run_command(cmd)
+        async with asyncio.timeout(seconds):
+            yield
     except TimeoutError:
-        msg = f"`{cmd[0]} {cmd[1] if len(cmd) > 1 else ''}`".strip() + f" timed out after {timeout:g}s"
+        msg = f"`{cmd[0]} {cmd[1] if len(cmd) > 1 else ''}`".strip() + f" timed out after {seconds:g}s"
         raise GitHubReviewError(msg) from None
+
+
+async def _run_gh(cmd: list[str], seconds: float) -> CommandResult:
+    """Run a command under a caller-chosen deadline."""
+    async with _deadline(cmd, seconds):
+        return await run_command(cmd)
 
 
 class GitHubReviewClient:
@@ -72,7 +82,7 @@ class GitHubReviewClient:
             OSError: If gh is not installed or not in PATH.
         """
         try:
-            result = await _run_with_timeout(["gh", "--version"], 10)
+            result = await _run_gh(["gh", "--version"], 10)
         except OSError as exc:
             msg = "gh CLI is not installed or not in PATH. Install it from https://cli.github.com/"
             raise OSError(msg) from exc
@@ -82,7 +92,7 @@ class GitHubReviewClient:
 
     async def _view_pr_field(self, field: str) -> CommandResult:
         """Run `gh pr view --json <field>` for the current branch's PR."""
-        return await _run_with_timeout(["gh", "pr", "view", "--json", field], 30)
+        return await _run_gh(["gh", "pr", "view", "--json", field], 30)
 
     async def detect_pr(self, pr_number: int | None = None) -> int:
         """Get the PR number for review posting.
@@ -376,7 +386,7 @@ class GitHubReviewClient:
         Returns:
             String in 'owner/repo' format.
         """
-        result = await _run_with_timeout(
+        result = await _run_gh(
             ["gh", "repo", "view", "--json", "owner,name", "--jq", '"\\(.owner.login)/\\(.name)"'],
             15,
         )
@@ -384,7 +394,7 @@ class GitHubReviewClient:
             return result.stdout.strip()
 
         try:
-            git_result = await _run_with_timeout(["git", "remote", "get-url", "origin"], 10)
+            git_result = await _run_gh(["git", "remote", "get-url", "origin"], 10)
         except (OSError, GitHubReviewError):
             git_result = None
         if git_result is not None and git_result.success:
