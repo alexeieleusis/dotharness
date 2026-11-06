@@ -1,6 +1,11 @@
-from dotharness.spec_prism_flow import generator
-from dotharness.spec_prism_flow.chunk import Chunk
+import contextlib
+import json
+
+from dotharness.spec_prism_flow import decompose, generator
+from dotharness.spec_prism_flow.chunk import Chunk, load_tree
 from dotharness.spec_prism_flow.decompose_journal import JOURNAL_FILENAME, DecomposeJournal
+from dotharness.spec_prism_flow.workspace import init_workspace
+from tests.spec_prism_flow.test_decompose import _in_band_doc, _in_band_scope, _make_cfg
 
 
 def _oversized_doc() -> str:
@@ -80,3 +85,174 @@ def test_journal_discard_removes_file(tmp_path):
 
     assert not path.exists()
     assert not journal.tree_written
+
+
+# --- run_decompose resume ----------------------------------------------------------------------
+
+
+def _setup(tmp_path, monkeypatch, confirmations=None):
+    cfg = _make_cfg(tmp_path)
+    brief = tmp_path / "brief.md"
+    brief.write_text("brief")
+    init_workspace(cfg.plan.workspace_dir, brief, None, None, [])
+    (cfg.plan.workspace_dir / "requirements.md").write_text("root requirements")
+    monkeypatch.setattr(decompose.handoff, "wait_for_confirmation", lambda prompt: None)
+    return cfg
+
+
+def _two_leaf_generator(calls, fail_on=None):
+    def _fake(chunk, cfg, *, forced_split=False):
+        calls.append(chunk.path)
+        if chunk.path == fail_on:
+            raise KeyboardInterrupt
+        if chunk.path == "A":
+            return generator.Split(
+                children=[
+                    Chunk("A-1", "one", _in_band_scope("f"), "s1", 1),
+                    Chunk("A-2", "two", _in_band_scope("g"), "s2", 1),
+                ]
+            )
+        return generator.Leaf(_in_band_doc())
+
+    return _fake
+
+
+def test_resume_skips_recorded_generator_calls(tmp_path, monkeypatch):
+    cfg = _setup(tmp_path, monkeypatch)
+    first_calls: list[str] = []
+    monkeypatch.setattr(decompose.generator, "run_generator", _two_leaf_generator(first_calls, fail_on="A-2"))
+    with contextlib.suppress(KeyboardInterrupt):
+        decompose.run_decompose(cfg)
+    assert first_calls == ["A", "A-1", "A-2"]
+
+    second_calls: list[str] = []
+    monkeypatch.setattr(decompose.generator, "run_generator", _two_leaf_generator(second_calls))
+    tree_path, graph_path = decompose.run_decompose(cfg, resume=True)
+
+    assert second_calls == ["A-2"]
+    assert graph_path.exists()
+    assert [c.chunk.path for c in load_tree(tree_path).children or []] == ["A-1", "A-2"]
+    assert not (cfg.plan.workspace_dir / JOURNAL_FILENAME).exists()
+
+
+def test_without_resume_discards_journal_and_regenerates(tmp_path, monkeypatch):
+    cfg = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(decompose.generator, "run_generator", _two_leaf_generator([], fail_on="A-2"))
+    with contextlib.suppress(KeyboardInterrupt):
+        decompose.run_decompose(cfg)
+
+    calls: list[str] = []
+    monkeypatch.setattr(decompose.generator, "run_generator", _two_leaf_generator(calls))
+    decompose.run_decompose(cfg)
+
+    assert calls == ["A", "A-1", "A-2"]
+
+
+def test_resume_does_not_duplicate_log_entries(tmp_path, monkeypatch):
+    cfg = _setup(tmp_path, monkeypatch)
+
+    def _make(interrupt):
+        def _fake(chunk, cfg_arg, *, forced_split=False):
+            if chunk.path == "A":
+                return generator.Split(
+                    children=[
+                        Chunk("A-1", "one", _in_band_scope("f"), "s1", 1),
+                        Chunk("A-2", "two", _in_band_scope("g"), "s2", 1),
+                    ]
+                )
+            if chunk.path == "A-1" and not forced_split:
+                return generator.Leaf(_oversized_doc())
+            if chunk.path == "A-1":
+                return generator.Split(
+                    children=[
+                        Chunk("A-1-1", "x", _in_band_scope("h"), "s3", 2),
+                        Chunk("A-1-2", "y", _in_band_scope("i"), "s4", 2),
+                    ]
+                )
+            if chunk.path == "A-2" and interrupt:
+                raise KeyboardInterrupt
+            return generator.Leaf(_in_band_doc())
+
+        return _fake
+
+    monkeypatch.setattr(decompose.generator, "run_generator", _make(interrupt=True))
+    with contextlib.suppress(KeyboardInterrupt):
+        decompose.run_decompose(cfg)
+    monkeypatch.setattr(decompose.generator, "run_generator", _make(interrupt=False))
+    decompose.run_decompose(cfg, resume=True)
+
+    entries = [
+        json.loads(line)
+        for line in (cfg.plan.workspace_dir / decompose.DECOMPOSE_LOG_FILENAME).read_text().splitlines()
+    ]
+    assert [(e["chunk_path"], e["event"]) for e in entries] == [("A-1", "retry")]
+
+
+def test_resume_after_tree_written_keeps_hand_edited_tree(tmp_path, monkeypatch):
+    cfg = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(decompose.generator, "run_generator", _two_leaf_generator([]))
+
+    def _die_at_review(prompt):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(decompose.handoff, "wait_for_confirmation", _die_at_review)
+    with contextlib.suppress(KeyboardInterrupt):
+        decompose.run_decompose(cfg)
+
+    tree_path = cfg.plan.workspace_dir / decompose.TREE_FILENAME
+    data = json.loads(tree_path.read_text())
+    data["children"].reverse()
+    tree_path.write_text(json.dumps(data))
+
+    calls: list[str] = []
+    monkeypatch.setattr(decompose.generator, "run_generator", _two_leaf_generator(calls))
+    monkeypatch.setattr(decompose.handoff, "wait_for_confirmation", lambda prompt: None)
+    decompose.run_decompose(cfg, resume=True)
+
+    assert calls == []
+    assert [c["chunk"]["path"] for c in json.loads(tree_path.read_text())["children"]] == ["A-2", "A-1"]
+
+
+def test_resume_rebuilds_tree_when_requirements_edited_after_tree_written(tmp_path, monkeypatch):
+    cfg = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(decompose.generator, "run_generator", _two_leaf_generator([]))
+
+    def _die_at_review(prompt):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(decompose.handoff, "wait_for_confirmation", _die_at_review)
+    with contextlib.suppress(KeyboardInterrupt):
+        decompose.run_decompose(cfg)
+
+    requirements_path = cfg.plan.workspace_dir / decompose.REQUIREMENTS_FILENAME
+    requirements_path.write_text(requirements_path.read_text() + "\nA new requirement.\n")
+
+    calls: list[str] = []
+    monkeypatch.setattr(decompose.generator, "run_generator", _two_leaf_generator(calls))
+    monkeypatch.setattr(decompose.handoff, "wait_for_confirmation", lambda prompt: None)
+    decompose.run_decompose(cfg, resume=True)
+
+    assert calls != []
+
+
+def test_resume_rebuilds_tree_when_depth_cap_changed(tmp_path, monkeypatch):
+    cfg = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(decompose.generator, "run_generator", _two_leaf_generator([]))
+
+    def _die_at_review(prompt):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(decompose.handoff, "wait_for_confirmation", _die_at_review)
+    with contextlib.suppress(KeyboardInterrupt):
+        decompose.run_decompose(cfg, depth_cap=4)
+
+    journal = DecomposeJournal(cfg.plan.workspace_dir / JOURNAL_FILENAME)
+    root = Chunk(
+        path="A",
+        name="root",
+        file_scope_estimate=[],
+        requirements_slice=(cfg.plan.workspace_dir / decompose.REQUIREMENTS_FILENAME).read_text(),
+        depth=0,
+    )
+    assert journal.tree_matches(root, 4)
+    assert not journal.tree_matches(root, 3)
