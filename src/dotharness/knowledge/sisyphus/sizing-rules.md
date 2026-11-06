@@ -14,4 +14,4 @@ This file is the single source for leaf sizing bands. Read this before sizing or
 
 ## Source
 
-These bands come from `tools/spec-prism-flow/docs/requirements.md` (section 9, "Non-functional requirements") and from `lifecycle-cheat-sheet.md`. Consult those documents for rationale and any further detail. This file does not restate numbers beyond the bands above.
+These bands come from `docs/spec_prism_flow/requirements.md` (section 9, "Non-functional requirements") and from `lifecycle-cheat-sheet.md`. Consult those documents for rationale and any further detail. This file does not restate numbers beyond the bands above.

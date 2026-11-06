@@ -14,8 +14,6 @@ from enum import Enum
 
 from dotharness.sisyphus.config import LimitsConfig
 
-# FR-R5: accepted (D-11). The boundary is the dedicated clone and the push guard below.
-PERMISSION_FLAG = "--dangerously-skip-permissions"
 DEFAULT_MAX_RETRY_CYCLES = 3
 
 

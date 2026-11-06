@@ -39,7 +39,7 @@ from dotharness.sisyphus.digest import (
 )
 from dotharness.sisyphus.intake import AgentRunner, BoundaryViolation, resolve_brief_path, run_intake
 from dotharness.sisyphus.lock import clone_lock
-from dotharness.sisyphus.paths import knowledge_file, tool_dir
+from dotharness.sisyphus.paths import knowledge_file
 from dotharness.sisyphus.pick import LabelRemover, label_removal_number
 from dotharness.sisyphus.plan import leaf_stems, plan_path
 from dotharness.sisyphus.plan import read_spf_config as _read_spf_config
@@ -77,7 +77,7 @@ from dotharness.sisyphus.stoprecord import (
 from dotharness.sisyphus.subproc import CommandResult, run_command
 
 PROMPT_FILE = "sisyphus/orchestration-prompt.md"
-CHEAT_SHEET = Path("docs") / "lifecycle-cheat-sheet.md"
+CHEAT_SHEET = "spec-prism-flow/lifecycle-cheat-sheet.md"
 PLAN_PROMPT_FILE = "spec-prism-flow/plan-generation-prompt.md"
 BUILD_PROMPT_FILE = "spec-prism-flow/build-execution-prompt.md"
 SPF_CONFIG_NAME = ".spec-prism-flow.toml"
@@ -148,8 +148,6 @@ class OrchestratorOptions:
     spf_config_path: Path | None = None
     phase_dir: Path | None = None
     lock_dir: Path | None = None
-    home: Path | None = None
-    checkout_root: Path | None = None
     resume_command: str | None = None
 
 
@@ -641,8 +639,6 @@ class _Run:
                 self.config,
                 self.agent,
                 self.rec,
-                self.opt.home,
-                self.opt.checkout_root,
                 reparse_only=reparse,
             )
         except BoundaryViolation as exc:
@@ -658,7 +654,6 @@ class _Run:
     # -- agent stages (plan, build)
 
     def prompt_values(self, stage: str) -> dict[str, str]:
-        home, root = self.opt.home, self.opt.checkout_root
         return {
             "stage": stage,
             "work-item reference": self.item,
@@ -667,9 +662,9 @@ class _Run:
             "target repo dir": str(self.repo),
             "target branch": self.branch,
             "phase config path": str(self.spf),
-            "cheat sheet path": str(tool_dir(home, root) / CHEAT_SHEET),
-            "plan prompt path": str(knowledge_file(PLAN_PROMPT_FILE, home, root)),
-            "build prompt path": str(knowledge_file(BUILD_PROMPT_FILE, home, root)),
+            "cheat sheet path": str(knowledge_file(CHEAT_SHEET)),
+            "plan prompt path": str(knowledge_file(PLAN_PROMPT_FILE)),
+            "build prompt path": str(knowledge_file(BUILD_PROMPT_FILE)),
             "max retry cycles": str(DEFAULT_MAX_RETRY_CYCLES),
             "stop report path": str(stop_report_path(self.rec)),
         }
@@ -692,7 +687,7 @@ class _Run:
         self.write_item_config()
         if stage == BUILD_STAGE:
             self.handoff_dir.mkdir(parents=True, exist_ok=True)
-        template = knowledge_file(PROMPT_FILE, self.opt.home, self.opt.checkout_root).read_text(encoding="utf-8")
+        template = knowledge_file(PROMPT_FILE).read_text(encoding="utf-8")
         prompt = build_orchestration_prompt(template, self.prompt_values(stage))
         stop_file = stop_report_path(self.rec)
         stop_file.unlink(missing_ok=True)

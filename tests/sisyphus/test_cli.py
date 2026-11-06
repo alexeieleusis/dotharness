@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from dotharness.ai_backend import ClaudeOptions, OpencodeOptions, RunResult
 from dotharness.sisyphus import cli
 from dotharness.sisyphus.cleanup import PrInfo
 from dotharness.sisyphus.cli import Services, app
@@ -37,6 +38,7 @@ from dotharness.sisyphus.pick import Candidate, ExecResult, GhCli, GhPullRequest
 from dotharness.sisyphus.rails import Checkpoint
 from dotharness.sisyphus.runrecord import RunRecord, record_path
 from dotharness.sisyphus.stoprecord import build_abandoned_record, build_stop_record, write_stop_record
+from dotharness.sisyphus.subproc import AgentError, make_agent_runner
 
 TODAY = datetime(2026, 1, 2, tzinfo=UTC)
 
@@ -715,31 +717,44 @@ class Proc:
         self.stdout = stdout
 
 
-def test_agent_runner_commands(tmp_path: Path) -> None:
-    calls: list[tuple[list[str], dict[str, Any]]] = []
+def _result(returncode: int = 0, *, timed_out: bool = False, not_found: bool = False, stderr: str = "") -> RunResult:
+    return RunResult(returncode, "", stderr, timed_out=timed_out, not_found=not_found)
 
-    def fake_run(argv: list[str], **kw: Any) -> Proc:
-        calls.append((argv, kw))
-        return Proc(0)
 
-    cli.make_agent_runner("claude", tmp_path, fake_run)("do it")
-    cli.make_agent_runner("opencode", tmp_path, fake_run)("do it")
-    assert calls[0][0] == ["claude", "-p", "do it", "--dangerously-skip-permissions"]
-    assert calls[1][0] == ["opencode", "run", "do it"]
+def test_agent_runner_launch_arguments(tmp_path: Path) -> None:
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def fake_run(*args: Any, **kw: Any) -> RunResult:
+        calls.append((args, kw))
+        return _result()
+
+    make_agent_runner("claude", tmp_path, fake_run, timeout_minutes=3)("do it")
+    make_agent_runner("opencode", tmp_path, fake_run, timeout_minutes=3)("do it")
+    assert calls[0][0] == ("claude", "do it")
+    assert calls[0][1]["backend_options"] == ClaudeOptions(skip_permissions=True)
+    assert calls[1][0] == ("opencode", "do it")
+    assert calls[1][1]["backend_options"] == OpencodeOptions()  # no --standalone (D-4)
     assert calls[0][1]["cwd"] == tmp_path
+    assert calls[0][1]["timeout"] == 180
 
 
 def test_agent_runner_failures(tmp_path: Path) -> None:
-    with pytest.raises(cli.AgentError, match="status 3"):
-        cli.make_agent_runner("claude", tmp_path, lambda *_a, **_k: Proc(3))("x")
+    def runner(result: RunResult) -> Any:
+        return make_agent_runner("claude", tmp_path, lambda *_a, **_k: result, timeout_minutes=1)
 
-    def missing(*_a: Any, **_k: Any) -> Proc:
-        raise FileNotFoundError("claude")
-
-    with pytest.raises(cli.AgentError, match="cannot start"):
-        cli.make_agent_runner("opencode", tmp_path, missing)("x")
+    with pytest.raises(AgentError, match="the claude backend exited with status 3"):
+        runner(_result(3))("x")
+    with pytest.raises(AgentError, match="cannot start the claude backend: no such file"):
+        runner(_result(127, not_found=True, stderr="no such file"))("x")
+    with pytest.raises(AgentError, match="the claude backend timed out after 1 minutes"):
+        runner(_result(124, timed_out=True))("x")
     with pytest.raises(ConfigError):
-        cli.make_agent_runner(None, tmp_path)
+        make_agent_runner(None, tmp_path, timeout_minutes=1)
+
+
+def test_agent_runner_requires_timeout(tmp_path: Path) -> None:
+    with pytest.raises(TypeError):
+        make_agent_runner("claude", tmp_path)  # ty: ignore[missing-argument]
 
 
 def test_token_cmd() -> None:
@@ -861,12 +876,12 @@ def test_default_path_without_linear_key_is_a_config_error(tmp_path: Path, monke
 def test_agent_runner_timeout(tmp_path: Path) -> None:
     seen: dict[str, Any] = {}
 
-    def hung(argv: list[str], **kw: Any) -> Proc:
+    def hung(*_a: Any, **kw: Any) -> RunResult:
         seen.update(kw)
-        raise subprocess.TimeoutExpired(argv, kw["timeout"])
+        return _result(124, timed_out=True)
 
-    with pytest.raises(cli.AgentError, match="timed out after 2 minutes"):
-        cli.make_agent_runner("claude", tmp_path, hung, timeout_minutes=2)("x")
+    with pytest.raises(AgentError, match="timed out after 2 minutes"):
+        make_agent_runner("claude", tmp_path, hung, timeout_minutes=2)("x")
     assert seen["timeout"] == 120
 
 

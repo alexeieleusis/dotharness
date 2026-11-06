@@ -13,7 +13,7 @@ import hashlib
 import json
 import re
 import subprocess
-from collections.abc import Callable, Generator, Iterable
+from collections.abc import Generator, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +23,7 @@ from dotharness.sisyphus.paths import knowledge_file
 from dotharness.sisyphus.rails import Checkpoint
 from dotharness.sisyphus.runrecord import RunRecord, encode_item
 from dotharness.sisyphus.stages import INTAKE_STAGE
+from dotharness.sisyphus.subproc import AgentRunner
 from dotharness.sisyphus.ticketfile import ticket_path, valid_file_ref
 
 PROMPT_FILE = "sisyphus/intake-prompt.md"
@@ -30,8 +31,6 @@ DRAFTING_PROMPT_FILE = "spec-prism-flow/requirements-doc-drafting-prompt.md"
 ITEM_PLACEHOLDER = "<work-item reference>"
 PATH_PLACEHOLDER = "<brief path>"
 SIDECAR_SUFFIX = ".intake.json"
-
-AgentRunner = Callable[[str], None]
 
 
 class IntakeError(Exception):
@@ -364,8 +363,6 @@ def run_intake(
     config: SisyphusConfig,
     runner: AgentRunner,
     record: RunRecord | None = None,
-    home: Path | None = None,
-    checkout_root: Path | None = None,
     reparse_only: bool = False,
 ) -> IntakeResult:
     """Run the intake stage for ``item`` and report open decisions.
@@ -384,8 +381,8 @@ def run_intake(
     repo = Path(config.project.repo_dir).expanduser()
     ticket = resolve_ticket_path(config, item)
     brief = resolve_brief_path(config, item)
-    template = knowledge_file(PROMPT_FILE, home, checkout_root).read_text(encoding="utf-8")
-    prompt = build_prompt(template, item, brief, knowledge_file(DRAFTING_PROMPT_FILE, home, checkout_root), ticket)
+    template = knowledge_file(PROMPT_FILE).read_text(encoding="utf-8")
+    prompt = build_prompt(template, item, brief, knowledge_file(DRAFTING_PROMPT_FILE), ticket)
     digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     rec = record or RunRecord.open(Path(config.project.workspace_dir).expanduser(), item)
 

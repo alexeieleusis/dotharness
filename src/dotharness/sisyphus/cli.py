@@ -69,7 +69,7 @@ from dotharness.sisyphus.pick import (
     label_removal_number,
     pick_items,
 )
-from dotharness.sisyphus.rails import PERMISSION_FLAG, LimitTracker
+from dotharness.sisyphus.rails import LimitTracker
 from dotharness.sisyphus.resume import (
     AUTO_RETRY_KEY,
     cleared,
@@ -91,18 +91,11 @@ from dotharness.sisyphus.stoprecord import (
     read_stop_record,
     write_stop_record,
 )
+from dotharness.sisyphus.subproc import make_agent_runner
 from dotharness.sisyphus.subproc import run_command as run_subprocess
 
-AGENT_COMMANDS = {
-    "claude": lambda prompt: ["claude", "-p", prompt, PERMISSION_FLAG],
-    "opencode": lambda prompt: ["opencode", "run", prompt],
-}
 TOKEN_CMD_TIMEOUT = 30
 DEFAULT_BASE_BRANCH = "main"
-
-
-class AgentError(Exception):
-    """The agent backend exited non-zero or could not be started."""
 
 
 # ------------------------------------------------------------- real services
@@ -119,35 +112,6 @@ def run_token_cmd(token_cmd: str | None, run: Callable[..., Any] = subprocess.ru
     if proc.returncode != 0 or not proc.stdout.strip():
         raise ConfigError(f"[source.host] token_cmd failed (exit {proc.returncode}) or printed no token")
     return proc.stdout.strip()
-
-
-def make_agent_runner(
-    backend: str | None,
-    cwd: Path,
-    run: Callable[..., Any] = subprocess.run,
-    timeout_minutes: float | None = None,
-) -> AgentRunner:
-    """Subprocess wrapper for the configured agent backend, run in ``cwd`` (the dedicated clone).
-
-    ``claude`` runs ``claude -p <prompt> --dangerously-skip-permissions``; ``opencode`` runs
-    ``opencode run <prompt>`` (D-11). A non-zero exit or a run past ``timeout_minutes`` raises
-    :class:`AgentError`, so a hung agent stops at a checkpoint and the clone lock is released.
-    """
-    if backend not in AGENT_COMMANDS:
-        raise ConfigError("[agent] backend must be set to 'claude' or 'opencode' to run an agent")
-    build = AGENT_COMMANDS[backend]
-
-    def runner(prompt: str) -> None:
-        try:
-            proc = run(build(prompt), cwd=cwd, check=False, timeout=timeout_minutes * 60 if timeout_minutes else None)
-        except subprocess.TimeoutExpired as exc:
-            raise AgentError(f"the {backend} backend timed out after {timeout_minutes} minutes") from exc
-        except OSError as exc:
-            raise AgentError(f"cannot start the {backend} backend: {exc}") from exc
-        if proc.returncode != 0:
-            raise AgentError(f"the {backend} backend exited with status {proc.returncode}")
-
-    return runner
 
 
 _PR_URL = re.compile(r"/pull/(\d+)")

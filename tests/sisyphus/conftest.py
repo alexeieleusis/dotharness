@@ -13,6 +13,12 @@ from dotharness.sisyphus.orchestrator import PullRequest, RunResult
 from dotharness.sisyphus.runrecord import RunRecord
 
 
+@pytest.fixture(autouse=True)
+def _isolated_home(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An installed ``~/.harness/knowledge`` must not shadow the packaged prompts under test."""
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+
+
 @pytest.fixture
 def fake_run_item(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     state: dict[str, Any] = {"calls": [], "checkpoint": {}, "raise": {}, "hook": None}

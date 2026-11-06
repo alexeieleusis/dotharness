@@ -5,87 +5,62 @@ from pathlib import Path
 
 import pytest
 
-from dotharness.sisyphus.paths import (
-    PathResolutionError,
-    find_checkout_root,
-    knowledge_dir,
-    knowledge_file,
-    tool_dir,
-)
+from dotharness.sisyphus.paths import PathResolutionError, knowledge_file
+
+PACKAGED = Path(__file__).parents[2] / "src" / "dotharness" / "knowledge"
 
 
-def _installed(home: Path) -> None:
-    (home / ".harness" / "tools" / "spec-prism-flow").mkdir(parents=True)
-    (home / ".harness" / "knowledge" / "sisyphus").mkdir(parents=True)
-    (home / ".harness" / "knowledge" / "sisyphus" / "a.md").write_text("x")
+def test_packaged_file_resolves_when_no_user_dir() -> None:
+    # conftest points HOME at an empty dir, so there is no ~/.harness/knowledge
+    path = knowledge_file("sisyphus/intake-prompt.md")
+    assert path == (PACKAGED / "sisyphus/intake-prompt.md").resolve()
+    assert knowledge_file("knowledge/sisyphus/intake-prompt.md") == path
 
 
-def _checkout(root: Path) -> None:
-    (root / "tools" / "spec-prism-flow").mkdir(parents=True)
-    (root / "knowledge" / "sisyphus").mkdir(parents=True)
-    (root / "knowledge" / "sisyphus" / "a.md").write_text("x")
+def test_cheat_sheet_is_packaged() -> None:
+    assert knowledge_file("spec-prism-flow/lifecycle-cheat-sheet.md").is_file()
 
 
-def test_installed_first(tmp_path: Path) -> None:
-    home, root = tmp_path / "h", tmp_path / "r"
-    _installed(home)
-    _checkout(root)
-    assert tool_dir(home, root) == (home / ".harness/tools/spec-prism-flow").resolve()
-    assert knowledge_dir(home, root) == (home / ".harness/knowledge").resolve()
-    assert knowledge_file("sisyphus/a.md", home, root) == (home / ".harness/knowledge/sisyphus/a.md").resolve()
-    assert tool_dir(home, root).is_absolute()
+def test_user_dir_wins_then_falls_back_to_packaged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    user = tmp_path / ".harness" / "knowledge" / "sisyphus"
+    user.mkdir(parents=True)
+    (user / "intake-prompt.md").write_text("mine")
+    assert knowledge_file("sisyphus/intake-prompt.md") == (user / "intake-prompt.md").resolve()
+    # a user dir that lacks a file must not hide the packaged copy
+    assert knowledge_file("sisyphus/sizing-rules.md") == (PACKAGED / "sisyphus/sizing-rules.md").resolve()
 
 
-def test_checkout_fallback(tmp_path: Path) -> None:
-    home, root = tmp_path / "h", tmp_path / "r"
-    home.mkdir()
-    _checkout(root)
-    assert tool_dir(home, root) == (root / "tools/spec-prism-flow").resolve()
-    assert knowledge_dir(home, root) == (root / "knowledge").resolve()
-    assert knowledge_file("knowledge/sisyphus/a.md", home, root) == (root / "knowledge/sisyphus/a.md").resolve()
-
-
-def test_neither_names_all_tried(tmp_path: Path) -> None:
-    home, root = tmp_path / "h", tmp_path / "r"
-    home.mkdir()
-    root.mkdir()
+def test_missing_names_every_path_tried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".harness" / "knowledge").mkdir(parents=True)
     with pytest.raises(PathResolutionError) as exc:
-        tool_dir(home, root)
-    assert str(home / ".harness/tools/spec-prism-flow") in str(exc.value)
-    assert str(root / "tools/spec-prism-flow") in str(exc.value)
+        knowledge_file("sisyphus/missing.md")
+    assert str(tmp_path / ".harness/knowledge/sisyphus/missing.md") in str(exc.value)
+    assert str(PACKAGED / "sisyphus/missing.md") in str(exc.value)
+
+
+def test_knowledge_file_rejects_escape() -> None:
     with pytest.raises(PathResolutionError):
-        knowledge_file("sisyphus/missing.md", home, root)
-
-
-def test_knowledge_file_rejects_escape(tmp_path: Path) -> None:
+        knowledge_file("../x")
     with pytest.raises(PathResolutionError):
-        knowledge_file("../x", tmp_path, tmp_path)
-    with pytest.raises(PathResolutionError):
-        knowledge_file("/etc/passwd", tmp_path, tmp_path)
+        knowledge_file("/etc/passwd")
 
 
-def test_find_checkout_root(tmp_path: Path) -> None:
-    _checkout(tmp_path)
-    deep = tmp_path / "tools" / "sisyphus" / "sisyphus" / "x.py"
-    deep.parent.mkdir(parents=True)
-    deep.write_text("")
-    assert find_checkout_root(deep) == tmp_path.resolve()
-
-
-def test_real_checkout_resolves(tmp_path: Path) -> None:
-    root = find_checkout_root()
-    assert root is not None
-    assert knowledge_dir(tmp_path, root) == (root / "knowledge").resolve()
-
-
-def test_linear_feed_prompt_resolves_with_one_placeholder(tmp_path: Path) -> None:
-    root = find_checkout_root()
-    assert root is not None
-    path = knowledge_file("sisyphus/linear-feed-prompt.md", tmp_path, root)
-    assert path == (root / "knowledge/sisyphus/linear-feed-prompt.md").resolve()
+def test_linear_feed_prompt_resolves_with_one_placeholder() -> None:
+    path = knowledge_file("sisyphus/linear-feed-prompt.md")
     text = path.read_text()
     assert text.count("<config path>") == 1
     assert re.findall(r"<[^>\n]+>", text) == ["<config path>"]
     for name in ("dir", "assignee", "pick_state", "pick_label"):
         assert f"`{name}`" in text
     assert "[source.work_item]" in text
+
+
+@pytest.mark.parametrize("name", ["plan-generation-prompt.md", "build-execution-prompt.md", "lifecycle-cheat-sheet.md"])
+def test_packaged_spec_prism_flow_files_use_migrated_names(name: str) -> None:
+    text = knowledge_file(f"spec-prism-flow/{name}").read_text()
+    assert "spec-prism-flow plan" not in text
+    assert "spec-prism-flow build" not in text
+    assert "~/.harness/tools" not in text
+    assert "<tool repo>" not in text

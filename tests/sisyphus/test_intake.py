@@ -23,7 +23,7 @@ from dotharness.sisyphus.intake import (
     snapshot_git_status,
     split_resolved_decision,
 )
-from dotharness.sisyphus.paths import find_checkout_root, knowledge_file
+from dotharness.sisyphus.paths import knowledge_file
 from dotharness.sisyphus.rails import Checkpoint
 from dotharness.sisyphus.runrecord import RunRecord
 
@@ -78,22 +78,18 @@ class FakeRunner:
 
 
 def test_prompt_file_has_exactly_two_placeholders() -> None:
-    root = find_checkout_root()
-    text = knowledge_file("sisyphus/intake-prompt.md", checkout_root=root).read_text()
+    text = knowledge_file("sisyphus/intake-prompt.md").read_text()
     assert text.count("<work-item reference>") == 1
     assert text.count("<brief path>") == 1
     assert len(re.findall(r"<[^>\n]+>", text)) == 2
-    drafting = knowledge_file("spec-prism-flow/requirements-doc-drafting-prompt.md", checkout_root=root).read_text()
+    drafting = knowledge_file("spec-prism-flow/requirements-doc-drafting-prompt.md").read_text()
     for line in drafting.splitlines():
         if len(line.strip()) > 40:
             assert line.strip() not in text
 
 
 def test_prompt_file_forbids_uv_and_virtualenvs_in_repo() -> None:
-    # Read the checkout copy: an installed copy under ~/.harness would shadow it via knowledge_file.
-    root = find_checkout_root()
-    assert root is not None
-    text = (root / "knowledge" / "sisyphus" / "intake-prompt.md").read_text()
+    text = knowledge_file("sisyphus/intake-prompt.md").read_text()
     assert "`uv`" in text
     assert "uv run" in text
     assert "virtualenvs" in text
@@ -152,8 +148,8 @@ def test_other_kinds_prompt_unchanged(config: SisyphusConfig, tmp_path: Path, ki
     cfg = _file_config(config, tmp_path, kind)
     run_intake("ENG-1", cfg, runner)
     (prompt,) = runner.prompts
-    drafting = knowledge_file(intake.DRAFTING_PROMPT_FILE, checkout_root=find_checkout_root())
-    template = knowledge_file(intake.PROMPT_FILE, checkout_root=find_checkout_root()).read_text()
+    drafting = knowledge_file(intake.DRAFTING_PROMPT_FILE)
+    template = knowledge_file(intake.PROMPT_FILE).read_text()
     assert prompt == build_prompt(template, "ENG-1", resolve_brief_path(cfg, "ENG-1"), drafting)
     assert "ticket file" not in runner.prompts[0]
     assert resolve_ticket_path(cfg, "../x") is None

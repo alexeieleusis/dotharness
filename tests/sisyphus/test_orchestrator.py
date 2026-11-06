@@ -50,7 +50,7 @@ from dotharness.sisyphus.orchestrator import (
     run_item,
     stop_report_path,
 )
-from dotharness.sisyphus.paths import find_checkout_root, knowledge_file, tool_dir
+from dotharness.sisyphus.paths import knowledge_file
 from dotharness.sisyphus.rails import Checkpoint
 from dotharness.sisyphus.runrecord import RunRecord
 from dotharness.sisyphus.stoprecord import build_abandoned_record, read_stop_record, write_stop_record
@@ -160,7 +160,6 @@ class World:
             base_branch="base-branch",
             phase_dir=self.phases,
             lock_dir=self.tmp / "locks",
-            home=self.tmp / "nohome",
         )
         return replace(base, **kw)
 
@@ -379,22 +378,19 @@ def test_base_branch_is_a_parameter_not_a_literal() -> None:
 def test_prompts_carry_resolved_paths(world: World) -> None:
     world.run()
     plan, build = world.agent_prompts[1], world.agent_prompts[2]
-    root = find_checkout_root()
-    assert root is not None
-    cheat = str(tool_dir(world.tmp / "nohome", root) / "docs" / "lifecycle-cheat-sheet.md")
+    cheat = str(knowledge_file("spec-prism-flow/lifecycle-cheat-sheet.md"))
+    assert cheat.endswith("knowledge/spec-prism-flow/lifecycle-cheat-sheet.md")
     for prompt, stage in ((plan, "plan"), (build, "build")):
         assert f"Stage to run now: `{stage}`" in prompt
         assert cheat in prompt
-        assert str(knowledge_file("spec-prism-flow/plan-generation-prompt.md", world.tmp / "nohome", root)) in prompt
-        assert str(knowledge_file("spec-prism-flow/build-execution-prompt.md", world.tmp / "nohome", root)) in prompt
+        assert str(knowledge_file("spec-prism-flow/plan-generation-prompt.md")) in prompt
+        assert str(knowledge_file("spec-prism-flow/build-execution-prompt.md")) in prompt
         assert f"Target branch (already checked out in that checkout): {branch_name(ITEM)}" in prompt
         assert not re.search(r"<(stage|brief path|handoff dir|target repo dir|target branch|stop report path)>", prompt)
 
 
 def test_build_prompt_carries_the_test_only_deviation_rule() -> None:
-    root = find_checkout_root()
-    assert root is not None
-    text = " ".join((root / "knowledge" / "spec-prism-flow" / "build-execution-prompt.md").read_text().split())
+    text = " ".join(knowledge_file("spec-prism-flow/build-execution-prompt.md").read_text().split())
     assert re.search(r"A test-only deviation does not trigger the rules above\.", text)
     assert re.search(r"A test-only deviation is made only of new or changed test files", text)
     assert re.search(r"If a phase's deviations include anything besides such tests, the rules above apply", text)
@@ -1169,7 +1165,7 @@ def test_tests_never_invoke_real_tools(world: World) -> None:
 
 # ------------------------------------------------------------ AC10: prompt file
 
-PROMPT = Path(find_checkout_root() or ".") / "knowledge" / "sisyphus" / "orchestration-prompt.md"
+PROMPT = Path(__file__).parents[2] / "src" / "dotharness" / "knowledge" / "sisyphus" / "orchestration-prompt.md"
 PARAMS = [
     "stage",
     "work-item reference",
@@ -1221,12 +1217,10 @@ def test_prompt_references_but_does_not_restate() -> None:
     assert "Delegating plan and build to sub-agents" in " ".join(text.split())
     assert "plan prompt" in text.lower()
     assert "build prompt" in text.lower()
-    root = find_checkout_root()
-    assert root is not None
     sources = [
-        root / "knowledge" / "spec-prism-flow" / "plan-generation-prompt.md",
-        root / "knowledge" / "spec-prism-flow" / "build-execution-prompt.md",
-        root / "tools" / "spec-prism-flow" / "docs" / "lifecycle-cheat-sheet.md",
+        knowledge_file("spec-prism-flow/plan-generation-prompt.md"),
+        knowledge_file("spec-prism-flow/build-execution-prompt.md"),
+        knowledge_file("spec-prism-flow/lifecycle-cheat-sheet.md"),
     ]
     corpus = "\n".join(s.read_text() for s in sources)
     for line in text.splitlines():
