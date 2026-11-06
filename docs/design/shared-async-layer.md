@@ -300,3 +300,158 @@ Not a `Path(__file__)` lookup but listed for completeness: `src/dotharness/repo_
 - `vibe_types_repo` (`[focused_review]`) defaults to `~/.harness/vendor/vibe-types` with no packaged fallback: it is an
   external vendor checkout.
 - `~/.harness/cache/pr-<n>-comments.json` (`fetch_pr_comments`) is unchanged.
+
+## I-6 analysis (#168, R1)
+
+Scope: analysis only, no source change (G4). Tree read: dotharness `77aa8b7` (I-5 merged). Evidence is a path plus matched
+text, re-greppable with `grep -rn '<text>' <path>`. No secret file was read and no secret value is quoted (NG6).
+
+Finding IDs are `F-<area>-<n>`. Verdicts are exactly `apply now`, `defer` or `no action (justified)`. An `apply now`
+finding names the implementing phase of the I-6 plan (Phase NN). Behaviour differences accepted in I-3 (grace 5 s, stdin
+`/dev/null`, `PermissionError` surfacing as `FileNotFoundError`, see `docs/migration-ledger.md`) are not re-opened (NG8).
+Open defects #87-#92, #107-#117, #127, #136, #161 are out of scope (NG2).
+
+Shared layer after I-6 (module names fixed here, D-6): `subprocess_runner.py` (extended with the group-kill helper),
+`ai_backend.py`, `paths.py` (data directory), plus new modules created by the named phases: a `gh` wrapper, a file-lock
+module, an atomic-write helper, a TOML loader and the env builder. Each phase states the exact file name in its own
+handoff; the AC3 table below lists the allowed files by finding ID.
+
+Sonar duplication figure (D-9): not measurable here (no scanner access in this slice). It is recorded at the triage
+checkpoint (Phase 03) next to this manual inventory, which is the other input.
+
+### a. Duplicates
+
+| ID | Evidence | Verdict |
+| --- | --- | --- |
+| F-DUP-1 | Process-group kill: `subprocess_runner.py` `os.killpg(pgid, sig)` in `_killpg`; `opencode_guards.py` `os.killpg(pgid, sig)` in `_kill_group`; `ai_backend.py` `os.killpg(pgid, 0)` in `_group_alive`. The first two are identical (suppress `ProcessLookupError`, then `killpg`). The `0` probe is a liveness check, not a kill, with a different `PermissionError` rule (alive). | apply now (Phase 04): one public kill helper in `subprocess_runner.py`, used by `opencode_guards.py`; the probe moves next to it as a sibling helper in the same module (one `os.killpg` home). |
+| F-DUP-2 | `gh` invocation: `pr_review/runners/*.py` (`common.py`, `ci_checks.py`, `auto_approve.py`, `auto_approve_github.py`, `address_comments.py`, `review_requested.py`, `self_review.py`, `regret_review.py`) match `"gh",` via `run_cmd`; `vibe_heal/review/github.py` `async def _run_gh` and `_post_json` (own `create_subprocess_exec`, 60 s `asyncio.timeout`); `sisyphus/pick.py` `class GhCli`; `scripts/pr-comments.py` `run(["gh", *args])`; `pr_review/cli.py` `shutil.which("gh")`. | apply now (Phase 06): one `gh` wrapper over `subprocess_runner.run`. `scripts/pr-comments.py` is a special case, see F-DUP-8. |
+| F-DUP-3 | File locks: `pr_review/lock.py` `fcntl.flock(fd, fcntl.LOCK_EX)`; `pr_review/state.py` `class _state_lock` `fcntl.flock(self._fd, fcntl.LOCK_EX)`; `sisyphus/lock.py` `fcntl.flock(fd, fcntl.LOCK_EX \| fcntl.LOCK_NB)`. Variations: blocking vs `LOCK_NB`; contention raises `SystemExit` (pr_review) vs `LockHeld` (sisyphus); lock dir `<data>/locks` vs `<data>/sisyphus/locks`; `open("w")` vs `os.open(..., 0o600)`. | apply now (Phase 09): one lock implementation with blocking and non-blocking modes and a typed contention error; callers keep their current exit behaviour. |
+| F-DUP-4 | Data directory literal: `ai_backend.py` `TMP_DIR = Path.home() / ".local/share/dotharness/tmp"`; `pr_review/lock.py` `XDG_RUNTIME = Path.home() / ".local/share/dotharness"`; `pr_review/state.py` `XDG_DATA = ...`; `pr_review/cli.py` `XDG_LOGS = ...`; `pr_review/scheduler.py` `log_dir = Path.home() / ".local/share/dotharness/logs"` (twice); `pr_review/runners/local_review/store.py` `DEFAULT_OUTPUT_ROOT = Path("~/.local/share/dotharness/reviews")`; `sisyphus/lock.py` `DEFAULT_LOCK_DIR`; `sisyphus/runrecord.py` `DEFAULT_STATE_DIR`. `paths.py` has only `default_knowledge_dir()`. The name `XDG_RUNTIME` is also wrong (it is the data dir). | apply now (Phase 09): one `data_dir()` in `paths.py`; all eight sites derive from it. |
+| F-DUP-5 | Atomic writes: `pr_review/state.py` `def _atomic_write` (`tmp.rename`, no fsync); `pr_review/runners/local_review/store.py` `def _atomic_write_text` (`tmp.replace`, no fsync); `sisyphus/runrecord.py` `def atomic_write_json` (`mkstemp`, `fsync`, `os.replace`). | apply now (Phase 09): one helper, the `sisyphus/runrecord.py` semantics (fsync, `os.replace`, cleanup on failure). This strengthens durability of the two weaker copies and changes no format; logged as a behaviour note. |
+| F-DUP-6 | TOML loading: `tomllib.load` in `pr_review/config.py`, `spec_prism_flow/config.py`, `sisyphus/config.py`; `tomllib.loads` in `sisyphus/plan.py` (`read_spf_config`) and `sisyphus/orchestrator.py` (re-reads `.spec-prism-flow.toml`). Each wraps `TOMLDecodeError` into its own `ConfigError`. | apply now (Phase 10): one loader returning the dict or raising one error type; the three `ConfigError` classes stay and wrap it. `sisyphus/orchestrator.py` and `plan.py` share one spf-config read. |
+| F-DUP-7 | Env building: `def build_subprocess_env` in `pr_review/runners/common.py`, imported by 12 modules, all under `pr_review`. Other env merges: `sisyphus/subproc.py` `{**os.environ, **env}`, `vibe_heal/git/branch_analyzer.py` `{**os.environ, "GIT_TERMINAL_PROMPT": "0"}`. | apply now (Phase 05): move `build_subprocess_env` to the shared layer; `pr_review/runners/common.py` re-exports nothing. The two inline merges are covered by F-DUP-9. |
+| F-DUP-8 | Special cases kept outside the shared runner, each justified: `pr_review/scheduler.py` and `pr_review/cli.py` `subprocess.run(["crontab", ...])` and `launchctl` (fixed argv, sync, no timeout needed, setup commands run once interactively); `spec_prism_flow/handoff.py` `subprocess.run(cmd, input=text.encode(), capture_output=True, timeout=3)` (best-effort clipboard, 3 s bound); `scripts/pr-comments.py` (standalone stdlib script run as a child process, `src/dotharness/scripts/pr-comments.py`, must not import `dotharness`). | no action (justified), grep-allowed `subprocess.run` files: `pr_review/scheduler.py`, `pr_review/cli.py`, `spec_prism_flow/handoff.py`, `scripts/pr-comments.py`. |
+| F-DUP-9 | Subprocess invocation outside the runner: `subprocess.run` in `git_utils.py` (`git_toplevel`), `vibe_heal/git/branch_analyzer.py` (`_run_git`, `stdin=subprocess.DEVNULL`), `vibe_heal/git/manager.py` (pre-commit hook), `sisyphus/intake.py` (`def _git`), `sisyphus/cli.py` (`run_token_cmd(... run: Callable = subprocess.run)`). `create_subprocess_exec` in `vibe_heal/review/github.py` (`_post_json`) and `vibe_heal/ai_tools/utils.py` (`async def run_command`, a third `run_command` next to `sisyphus/subproc.py` and `run_cmd`). `vibe_heal/sonarqube/analysis_runner.py` already uses `run`. | apply now: core modules and `vibe_heal` Phase 07; `pr_review`, `spec_prism_flow`, `sisyphus` Phase 08. Justified exceptions are listed in F-DUP-8. |
+| F-DUP-10 | Backend selection: validation of `claude`/`opencode` repeated in `pr_review/config.py` (`if backend not in ("opencode", "claude")`), `pr_review/backend.py` (`raise ValueError(f"Unknown backend`), `spec_prism_flow/config.py` (`def parse_backend`), `sisyphus/config.py` (`AGENT_BACKENDS = ("claude", "opencode")`); `vibe_heal/ai_tools/factory.py` selects by `AIToolType` and builds its own tools over `launch`. Dispatch itself is central in `ai_backend.py`. | apply now (Phase 10): one backend-name tuple and validator in `ai_backend.py`; `vibe_heal` factory stays (it selects tool classes, not backends): no action (justified) for the factory. |
+
+AC3 allowed files (finding IDs), per pattern over `src/dotharness`:
+
+- `os.killpg`: `subprocess_runner.py` only (F-DUP-1).
+- `fcntl`: the one lock module (F-DUP-3).
+- `local/share/dotharness`: `paths.py` only (F-DUP-4).
+- `tomllib`: the one loader (F-DUP-6).
+- `"gh"`: the `gh` wrapper (F-DUP-2) and `pr_review/cli.py` `shutil.which("gh")` precheck (kept, F-DUP-2 resolves it through the wrapper if trivial, otherwise listed here).
+- `subprocess.run`: `pr_review/scheduler.py`, `pr_review/cli.py`, `spec_prism_flow/handoff.py`, `scripts/pr-comments.py` (F-DUP-8).
+- `create_subprocess_exec`: `subprocess_runner.py` only (F-DUP-9).
+- `def _atomic_write|def atomic_write`: the one helper (F-DUP-5).
+- `def build_subprocess_env`: the shared-layer module (F-DUP-7).
+
+### b. Sync versus async
+
+Measured sizes (lines, `src/dotharness`): `pr_review/runners` 9,591 (largest `common.py` 1,566, `regret_review.py` 973), `pr_review` core 1,535, `spec_prism_flow` 2,243, `sisyphus` 5,464 (`orchestrator.py` 1,018, `cli.py` 874), `vibe_heal` 11,588, shared layer 898 (`ai_backend.py` 455, `subprocess_runner.py` 166).
+
+Adapters, each running a fresh event loop per call: `pr_review/backend.py` (`launch_sync`), `pr_review/runners/common.py` `run_cmd` (`asyncio.run(run(_argv(cmd, shell), ...))`), `sisyphus/subproc.py` `run_command` (`asyncio.run(`), `spec_prism_flow/prose_review.py` (`launch_sync`). `ai_backend.py` `launch_sync` raises when called inside a running loop.
+
+Wall-clock of one adapter call path, current tree, `["true"]`, mean of 30 calls on the analysis host [I: only a before figure is possible now]:
+
+| Path | ms per call |
+| --- | --- |
+| `sisyphus.subproc.run_command` (new loop per call) | 13.7 |
+| `pr_review.runners.common.run_cmd` (new loop per call) | 13.4 |
+| `subprocess_runner.run` awaited in one loop | 13.0 |
+
+The loop-per-call cost is about 0.5 ms, below the process spawn cost. Conversion is therefore not a speed fix. It removes the "must not be called from a running loop" restriction, the sync-to-async wrapper layer and makes concurrency possible; the owner decision is to convert (brief, open question 2). The "after" column is measured by Phase 12 on the same script.
+
+| ID | Group | Evidence | Verdict |
+| --- | --- | --- | --- |
+| F-ASYNC-1 | shared layer | `ai_backend.py` `def launch_sync` and `asyncio.run(func(*args, **kwargs))` | apply now (Phase 12): `launch`/`run` stay async; `launch_sync` and the adapters are removed once the last sync caller is converted (kept until Phases 13-17 land). |
+| F-ASYNC-2 | `pr_review/runners` | `common.py` `asyncio.run(run(_argv(cmd, shell)` in `run_cmd`; sync `def` throughout the runners | apply now (Phases 13 common and small runners, 14 large runners). |
+| F-ASYNC-3 | `pr_review` core | `pr_review/backend.py` `from dotharness.ai_backend import ClaudeOptions, OpencodeOptions, launch_sync`; `cli.py` calls runners synchronously | apply now (Phase 15): one `asyncio.run` at the CLI boundary. `scheduler.py` crontab/launchctl calls stay sync (F-DUP-8). |
+| F-ASYNC-4 | `spec_prism_flow` | `prose_review.py` `result = launch_sync(`; `handoff.py` sync clipboard | apply now (Phase 17); `handoff.py` stays sync (F-DUP-8). |
+| F-ASYNC-5 | `sisyphus` | `subproc.py` `result = asyncio.run(`; `orchestrator.py` and `cli.py` sync | apply now (Phase 16). |
+| F-ASYNC-6 | `vibe_heal` | `async def` in 17 modules; `vibe_heal/cli.py` ten `asyncio.run(` calls, one per command (the boundary) | no action (justified): already async at the boundary. Residual sync `subprocess.run` is F-DUP-9. |
+
+### c. Naming, layout and module placement
+
+| ID | Evidence | Verdict |
+| --- | --- | --- |
+| F-NAME-1 | Three subprocess helpers with near-identical names: `run_cmd` (`pr_review/runners/common.py`), `run_command` (`sisyphus/subproc.py`), `run_command` (`vibe_heal/ai_tools/utils.py`). | apply now, resolved by F-DUP-9 (Phases 07, 08, 13): the adapters disappear, `subprocess_runner.run` remains. |
+| F-NAME-2 | `XDG_RUNTIME`, `XDG_DATA`, `XDG_LOGS` all name `Path.home() / ".local/share/dotharness"` subdirectories (`pr_review/lock.py`, `state.py`, `cli.py`); none uses `XDG_*` environment variables. | apply now, resolved by F-DUP-4 (Phase 09). |
+| F-NAME-3 | Root-level modules of one family: `ai_backend.py`, `opencode_guards.py`, `repo_guard.py`, `git_utils.py`, `subprocess_runner.py`, `paths.py` sit flat beside four tool packages; `sisyphus` keeps `lock.py`, `subproc.py`, `runrecord.py` that duplicate them (F-DUP-3, F-DUP-5, F-DUP-9). | defer: flat root is acceptable for six small modules; moving them churns imports and the ledger, which is not asked for. Revisit if the shared layer grows past about 10 modules. |
+| F-NAME-4 | Hyphenated module `src/dotharness/scripts/pr-comments.py` is not importable; it is referenced by path (`PR_COMMENTS_SCRIPT_PATH`, `tests/test_package_data.py` `test_pr_comments_script_is_package_data_and_matches_runner_path`). | no action (justified): the path-run script needs no import, and renaming changes the runner path contract. |
+| F-NAME-5 | Package names are underscored (`pr_review`, `spec_prism_flow`, `vibe_heal`), console scripts match (`[project.scripts]`), docs and ledger use hyphens in prose (`pr-review`, `spec-prism-flow`) and `zensical.toml` nav (`"pr-review"`, `"spec-prism-flow"`). | no action (justified): module names are Python identifiers; prose names are historical project names. Phase 20 states the mapping once in the docs. |
+
+### d. Dependency hygiene (G5)
+
+| ID | Evidence | Verdict |
+| --- | --- | --- |
+| F-DEP-1 | `uv run deptry src`: "No dependency issues found" (138 files). `uv lock --locked`: "Resolved 81 packages". `grep -rn "import click\|from click" src`: empty. | no action (justified): G5 holds on the current tree. |
+| F-DEP-2 | `Makefile` `check` runs `uv run deptry src`; `.github/workflows/dotharness-main.yml` runs `uv run deptry . --extend-exclude "tools\|vendor"` (scans 140 files, including `tests` and `scripts`). Two commands, two scopes. `[tool.deptry]` has only `known_first_party`. | apply now (Phase 18): one command, `uv run deptry src`, in `make check` and CI. |
+| F-DEP-3 | Dev-group `ruff==0.17.3` equals `.pre-commit-config.yaml` `rev: "v0.17.3"`; `tox.ini` `uv run --active ty check`. | no action (justified): versions agree. |
+| F-DEP-4 | `tools/` and `vendor/` directories remain (`tools/pr-review`, `tools/sisyphus`, `tools/spec-prism-flow`, `tools/contracts`; `vendor/vibe-types` and others), excluded by `pyproject.toml` `[tool.ruff]` `extend-exclude`, `[tool.ty.src]` `exclude`, `.pre-commit-config.yaml` `exclude: ^(tools\|vendor)/`, `sonar-project.properties` `sonar.exclusions`. Removal of old trees belongs to I-7/I-8. | defer: record for the I-7 hand-off list (R7); not removed here. |
+
+### e. CLI error and exit conventions
+
+Counts per CLI module (`grep -c`): `vibe_heal/cli.py` `sys.exit(` 41, `typer.Exit` 0; `pr_review/cli.py` `sys.exit(` 6, `typer.Exit` 1, `_fail(` 3; `spec_prism_flow/cli.py` `sys.exit(` 0, `typer.Exit` 2, `_fail(` 10; `sisyphus/cli.py` `sys.exit(` 0, `typer.Exit` 6, `_fail(` 15.
+
+Proposed convention: `def _fail(message) -> NoReturn` printing `Error: <message>` to stderr and raising `typer.Exit(1)`, as in `spec_prism_flow/cli.py`. `sisyphus/cli.py` returns the exception for `raise _fail(...)` and keeps its text.
+
+| ID | Evidence | Verdict |
+| --- | --- | --- |
+| F-CLI-1 | `sisyphus/cli.py` `def _fail(message: str) -> typer.Exit` (returns) vs `spec_prism_flow/cli.py` and `pr_review/cli.py` `def _fail(message: str) -> NoReturn` (raises). Same text and exit code 1. | apply now (Phase 11): one shared `fail` in a small CLI helper module; output text unchanged. |
+| F-CLI-2 | `pr_review/cli.py` `sys.exit(1)` at 6 sites next to `typer.Exit`/`_fail`. | apply now (Phase 11): convert to the convention where stdout/stderr text and exit code are unchanged. `sys.exit(code)` that forwards a runner status stays. |
+| F-CLI-3 | `vibe_heal/cli.py` 41 `sys.exit(` sites, messages printed through rich helpers. `tests/vibe_heal/test_cli_surface.py` pins command names, options and defaults only, and its `exit_code` appears 3 times; `tests/vibe_heal/test_cli.py` asserts `exit_code` 44 times but does not assert the stderr text of the failing paths. Exit code and text equality is therefore not provable by those two files. | defer: convert only after those tests pin stdout/stderr text for the failing paths; list it for the I-7 hand-off. |
+| F-CLI-4 | `pr_review/lock.py` `raise SystemExit(f"Another instance is already running for {lock_key}")` in a library function, documented in its docstring as escaping `except Exception` on purpose. | no action (justified) for the exit mechanism; the lock moves under F-DUP-3 with the same behaviour. |
+
+### f. Test layout and helpers
+
+Layout: 151 files under `tests/`; `tests/pr_review`, `tests/sisyphus`, `tests/spec_prism_flow`, `tests/vibe_heal` mirror the packages; root files `test_ai_backend.py`, `test_subprocess_runner.py`, `test_repo_guard.py`, `test_git_utils.py`, `test_paths.py`, `test_package_data.py`, `test_pr_comments_script.py`, `test_ledger_modules.py`; `tests/contracts/`. `pytest` runs with `--import-mode=importlib` and `asyncio_mode = "auto"` (`pyproject.toml`), so same-basename files across tool directories collect (`test_layout_sample.py` in two directories).
+
+| ID | Evidence | Verdict |
+| --- | --- | --- |
+| F-TEST-1 | `conftest.py` files: `tests/conftest.py` (7 lines, `runner` fixture), `tests/pr_review/conftest.py` (`tmp_xdg`, `minimal_toml`), `tests/sisyphus/conftest.py` (`_isolated_home`, `fake_run_item`), `tests/vibe_heal/conftest.py` (3 lines); `tests/spec_prism_flow` has none. `tests/vibe_heal/shared_orchestrator_tests.py` is a helper module with a `_tests.py` suffix that pytest does not collect by the default pattern. Home isolation exists only for sisyphus. | defer: after F-DUP-4 lands, one autouse home isolation in `tests/conftest.py` is possible; not needed for any apply-now change. |
+| F-TEST-2 | Git repo setup helper copied: `def _git(` in `tests/test_ledger_modules.py`, `tests/pr_review/test_state.py`, `tests/pr_review/runners/test_local_review.py`, `test_local_review_head_sha.py`, `test_auto_approve_size.py`, `tests/sisyphus/test_orchestrator.py`, `test_intake.py`; `def _init_repo(` in `tests/test_repo_guard.py`. Per-test `def fake_run(cmd, **kwargs)` / `def fake_run_cmd(cmd, **kwargs)` stubs are repeated in `tests/pr_review/test_scheduler.py` (13 times), `tests/pr_review/runners/test_review_prs.py` (7), `tests/vibe_heal/git/test_manager.py`, `tests/vibe_heal/cleanup_pr/test_orchestrator.py`, `tests/test_pr_comments_script.py` and others. | defer: a shared `tests/helpers` module is useful, but moving 8 copies is test churn with no behaviour effect. Revisit after Phases 13-17, which rewrite many of these fakes anyway. |
+| F-TEST-3 | Each phase changes tests with its code; `tests/sisyphus/test_atomic_write.py`, `tests/sisyphus/test_lock.py`, `tests/pr_review/test_lock.py`, `tests/pr_review/test_state.py` cover the pieces F-DUP-3 and F-DUP-5 merge. | apply now (Phases 09): their assertions move to one test file for the shared helper; the old files keep behaviour tests of their callers. |
+
+### g. Docs and ledger consistency
+
+| ID | Evidence | Verdict |
+| --- | --- | --- |
+| F-DOC-1 | `docs/contributing.md`: "I-6 to I-8 target `main` after I-5 merges." `README.md`: "I-6 to I-8 target `main` after I-5 merges." For this issue the base branch is `sisyphus/164-c86e8a65` (D-5), so the rule text is misleading. | apply now (Phase 20). |
+| F-DOC-2 | `docs/contributing.md` "Coverage policy": "the floor is set in I-6 ... at the level then reached"; table of per-tool figures; `codecov.yml` header repeats it and `flags: sisyphus: paths: - tools/sisyphus/`. | apply now (Phase 18): replace with the project floor of the section h and drop the stale per-tool figures. |
+| F-DOC-3 | Every tool has a page: `docs/pr_review.md`, `docs/spec_prism_flow.md`, `docs/sisyphus.md`, `docs/vibe_heal.md`; nav in `zensical.toml` lists `{ "sisyphus" = "sisyphus.md" }` with no subpages while the other three have subtrees; `docs/design/shared-async-layer.md` is not in the nav. | defer: not a consistency defect; Phase 20 decides whether to add the design page to the nav. |
+| F-DOC-4 | Conventions live only in `docs/contributing.md` and `docs/design/shared-async-layer.md`; no `AGENTS.md`, `CLAUDE.md` or ADR. `docs/contributing.md` "Excludes for tools and vendor" says "Later phases may remove these excludes". | apply now (Phase 20): add a conventions section (CLI convention F-CLI-1, shared-layer module list, finding-ID rule). No ADR directory is created. |
+| F-DOC-5 | `docs/migration-ledger.md`: Phase 01 set the 20 `sisyphus.*` rows to `migrated`. The ledger has no value for "duplicate remaining" (brief open question 9: owner left tracking to the SonarQube figure). | defer: Phase 20 freezes the ledger as is; remaining duplicates are tracked by this document and Sonar. |
+
+### h. CI, gates and coverage
+
+State: `ruff` rules YTT, S, B, A, C4, T10, SIM, I, C90, E, W, F, PGH, UP, RUF, TRY with ignores E501, E731, `target-version = "py311"`, `line-length = 120`; per-file ignore `tests/*` = S101, S603; `ty` `python-version = "3.11"`. `.github/workflows/dotharness-main.yml` matrix 3.11, 3.12, 3.13, 3.14; coverage uploaded from 3.12 only.
+
+Gates run on this tree: `uv run ruff check` all passed; `uv run ruff format --check` 355 files already formatted; `uv run ty check` all passed; `uv run deptry src` no issues; `uv lock --locked` resolved; `uv run python -m pytest` 3448 passed, 2 skipped (about 4 min 47 s).
+
+Measured project-wide coverage (`pytest --cov --cov-config=pyproject.toml --cov-report=xml`, `branch = true`, source `dotharness`): lines 13,279 of 14,373 covered, branches 3,853 of 4,382, combined (coverage.py `TOTAL`) 91.35 %, line-rate 0.9239, branch-rate 0.8793. **Recommended `fail_under = 91`** in `[tool.coverage.report]` (integer below 91.35). The Phase 18 sibling re-measures in CI before applying; if the CI figure is below 91.0 it uses the integer below that figure, and never lowers it afterwards.
+
+| ID | Evidence | Verdict |
+| --- | --- | --- |
+| F-CI-1 | `pyproject.toml` `[tool.coverage.report]` has `skip_empty = true` and no `fail_under`; `Makefile` `test` and the `Run tests` step have no threshold. | apply now (Phase 18): `fail_under = 91`, wired through the existing `--cov` commands. |
+| F-CI-2 | `codecov.yml` `status: project: dotharness: informational: true` and the `sisyphus` flag at `tools/sisyphus/`. | apply now (Phase 18): header and statuses match F-CI-1; the `sisyphus` status stays until I-8 as the file says. |
+| F-CI-3 | Old per-tool workflows still exist: `.github/workflows/main.yml` (`working-directory: tools/pr-review`), `sisyphus-main.yml` (`tools/sisyphus`), `spec-prism-flow-main.yml` (`tools/spec-prism-flow`), `docs.yml` (builds three `tools/*` sites). | defer: they belong to the old trees (F-DEP-4); I-7/I-8 hand-off list. |
+| F-CI-4 | CI `quality` job has no explicit `ruff format --check`; `pre-commit run -a` runs `ruff-format` (`.pre-commit-config.yaml`). | no action (justified): format is enforced through pre-commit. |
+| F-CI-5 | `tox.ini` runs `pytest --doctest-modules tests`, CI runs `pytest tests` without it. | no action (justified): tox is a local convenience; no doctests live under `tests`. |
+| F-CI-6 | Any new `# noqa` or per-file ignore needs a finding ID. `grep -rn "noqa" src` finds 169 lines today, each with a rule code. | apply now (every phase): new suppressions cite an `F-` ID in the PR description. |
+
+### i. Packaging and install
+
+| ID | Evidence | Verdict |
+| --- | --- | --- |
+| F-PKG-1 | `pyproject.toml` `[tool.hatch.build.targets.wheel] packages = ["src/dotharness"]`; `[project.scripts]` `vibe_heal = "dotharness.cli:vibe_heal"` and three others. `Makefile` `build` runs `pyproject-build`; no test builds a wheel or installs it. | apply now (Phase 19): wheel build and clean-environment install smoke test per tool. |
+| F-PKG-2 | `tests/test_package_data.py` sets `PACKAGE_DIR = REPO_ROOT / "src" / "dotharness"` and `resources.files("dotharness")`; under an editable install both resolve to the source tree, so the test proves repository layout, not installed resources. | apply now (Phase 19): the smoke test checks `knowledge/`, `skills/` and `scripts/pr-comments.py` inside the installed wheel. |
+| F-PKG-3 | Root `knowledge` and `skills` are symlinks into `src/dotharness/` (`test_root_knowledge_is_symlink_to_package`). Hatch packages the real directories. | no action (justified): verified by F-PKG-2 once the smoke test exists. |
+
+### j. Security findings (record only, NG7)
+
+| ID | Evidence (paths only, no values) | Verdict |
+| --- | --- | --- |
+| F-SEC-1 | #136: `vibe_heal/ai_tools/claude_code.py` `error_message=f"Claude failed with exit code {result.returncode}: {result.stderr}"` and `vibe_heal/ai_tools/opencode.py` the same for OpenCode; `vibe_heal/sonarqube/analysis_runner.py` `error(f"    Scanner error: {combined[:500]}")` and `error_msg = f"sonar-scanner failed with exit code {returncode}: {combined}"`. Backend or scanner output reaches logs and messages unredacted. | defer: tracked by #136 (NG2). |
+| F-SEC-2 | SonarQube token on the scanner argv: `vibe_heal/sonarqube/properties_handler.py` `command.append(f"-Dsonar.token={self.config.sonarqube_token}")` (and `-Dsonar.password=`), run through `analysis_runner.py` `await run(command, cwd=project_dir, ...)`. The value is visible in the process table while the scanner runs. | defer: needs a scanner properties file or environment variable instead of argv; changes behaviour, not part of this pass. |
+| F-SEC-3 | `ai_backend.py` `cmd.append("--dangerously-skip-permissions")`; `sisyphus/agent.py` docstring: "accepted risk: the boundary is the dedicated clone". | no action (justified): documented, accepted risk in a dedicated clone. |
