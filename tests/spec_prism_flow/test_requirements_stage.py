@@ -3,6 +3,7 @@ import logging
 import pytest
 
 from dotharness.spec_prism_flow import handoff, prose_review, requirements_stage
+from dotharness.spec_prism_flow.cli import cli
 from dotharness.spec_prism_flow.config import (
     AgentConfig,
     HarnessSection,
@@ -201,3 +202,114 @@ def test_run_draft_requirements_logs_no_warning_when_review_preserves_document(t
         run_draft_requirements(cfg)
 
     assert "left the requirements document empty or missing" not in caplog.text
+
+
+MINIMAL_TOML = """
+[plan]
+workspace_dir = "workspace"
+phase_dir = "phases"
+
+[harness]
+knowledge_dir = "knowledge"
+"""
+
+
+def test_cli_draft_requirements_writes_requirements_and_prints_next_step(tmp_path, monkeypatch, runner):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+    brief = tmp_path / "brief.md"
+    brief.write_text("brief content")
+    init_workspace(tmp_path / "workspace", brief, None, None, [])
+    (tmp_path / "workspace" / OVERVIEW_FILENAME).write_text("overview body")
+    (tmp_path / "knowledge" / "spec-prism-flow").mkdir(parents=True)
+    (tmp_path / "knowledge" / "spec-prism-flow" / TEMPLATE_FILENAME).write_text(TEMPLATE_TEXT)
+
+    def _fake_run_handoff(prompt_text, workspace_dir, stage_name, output_filename=None):
+        (workspace_dir / REQUIREMENTS_FILENAME).write_text("requirements")
+
+    monkeypatch.setattr(requirements_stage.handoff, "run_handoff", _fake_run_handoff)
+
+    result = runner.invoke(cli, ["plan", "draft-requirements"])
+
+    assert result.exit_code == 0, result.output
+    assert "plan decompose" in result.output
+
+
+def test_cli_draft_requirements_fails_clearly_when_overview_missing(tmp_path, monkeypatch, runner):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+    brief = tmp_path / "brief.md"
+    brief.write_text("brief content")
+    init_workspace(tmp_path / "workspace", brief, None, None, [])
+
+    result = runner.invoke(cli, ["plan", "draft-requirements"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "Overview not found" in result.output
+
+
+def test_cli_draft_requirements_fails_clearly_when_real_handoff_error_raised(tmp_path, monkeypatch, runner):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+    brief = tmp_path / "brief.md"
+    brief.write_text("brief content")
+    init_workspace(tmp_path / "workspace", brief, None, None, [])
+    (tmp_path / "workspace" / OVERVIEW_FILENAME).write_text("overview body")
+    (tmp_path / "knowledge" / "spec-prism-flow").mkdir(parents=True)
+    (tmp_path / "knowledge" / "spec-prism-flow" / TEMPLATE_FILENAME).write_text(TEMPLATE_TEXT)
+
+    def _raise_handoff_error(*a, **k):
+        raise handoff.HandoffError("Expected output file not found: /nowhere")  # noqa: TRY003
+
+    monkeypatch.setattr(requirements_stage.handoff, "run_handoff", _raise_handoff_error)
+
+    result = runner.invoke(cli, ["plan", "draft-requirements"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "Error:" in result.output
+
+
+def test_cli_draft_requirements_prompts_before_overwriting_existing_requirements(tmp_path, monkeypatch, runner):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+    brief = tmp_path / "brief.md"
+    brief.write_text("brief content")
+    init_workspace(tmp_path / "workspace", brief, None, None, [])
+    (tmp_path / "workspace" / OVERVIEW_FILENAME).write_text("overview body")
+    (tmp_path / "knowledge" / "spec-prism-flow").mkdir(parents=True)
+    (tmp_path / "knowledge" / "spec-prism-flow" / TEMPLATE_FILENAME).write_text(TEMPLATE_TEXT)
+    (tmp_path / "workspace" / REQUIREMENTS_FILENAME).write_text("existing requirements")
+
+    def _fake_run_handoff(prompt_text, workspace_dir, stage_name, output_filename=None):
+        (workspace_dir / REQUIREMENTS_FILENAME).write_text("new requirements")
+
+    monkeypatch.setattr(requirements_stage.handoff, "run_handoff", _fake_run_handoff)
+
+    result = runner.invoke(cli, ["plan", "draft-requirements"], input="n\n")
+
+    assert result.exit_code != 0
+    assert (tmp_path / "workspace" / REQUIREMENTS_FILENAME).read_text() == "existing requirements"
+
+
+def test_cli_draft_requirements_yes_skips_confirmation(tmp_path, monkeypatch, runner):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+    brief = tmp_path / "brief.md"
+    brief.write_text("brief content")
+    init_workspace(tmp_path / "workspace", brief, None, None, [])
+    (tmp_path / "workspace" / OVERVIEW_FILENAME).write_text("overview body")
+    (tmp_path / "knowledge" / "spec-prism-flow").mkdir(parents=True)
+    (tmp_path / "knowledge" / "spec-prism-flow" / TEMPLATE_FILENAME).write_text(TEMPLATE_TEXT)
+    (tmp_path / "workspace" / REQUIREMENTS_FILENAME).write_text("existing requirements")
+
+    def _fake_run_handoff(prompt_text, workspace_dir, stage_name, output_filename=None):
+        (workspace_dir / REQUIREMENTS_FILENAME).write_text("new requirements")
+
+    monkeypatch.setattr(requirements_stage.handoff, "run_handoff", _fake_run_handoff)
+
+    result = runner.invoke(cli, ["plan", "draft-requirements", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "workspace" / REQUIREMENTS_FILENAME).read_text() == "new requirements"

@@ -8,6 +8,7 @@ import pytest
 
 from dotharness.spec_prism_flow import decompose, generator, prose_review
 from dotharness.spec_prism_flow.chunk import Chunk, ChunkNode, write_tree
+from dotharness.spec_prism_flow.cli import cli
 from dotharness.spec_prism_flow.config import (
     AgentConfig,
     HarnessSection,
@@ -282,6 +283,61 @@ def test_valid_post_review_file_is_kept(tmp_path, monkeypatch):
 
     text = (cfg.plan.phase_dir / "01-only-leaf.md").read_text()
     assert "Only goal, done well." in text  # reviewed content kept, not reverted
+
+
+# --- CLI overwrite guard ---------------------------------------------------------------------------
+
+MINIMAL_TOML = """
+[plan]
+workspace_dir = "workspace"
+phase_dir = "phases"
+"""
+
+
+def _write_cli_tree(tmp_path) -> None:
+    leaf = ChunkNode(chunk=_chunk("A-1", "only", ["a.py"], 1), leaf_doc=_goals_doc("Only goal."))
+    root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
+    (tmp_path / "workspace").mkdir(parents=True, exist_ok=True)
+    write_tree(root, tmp_path / "workspace" / TREE_FILENAME)
+
+
+def test_cli_draft_phases_prompts_before_overwriting_existing_phase_file(tmp_path, monkeypatch, runner):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+    _write_cli_tree(tmp_path)
+    phase_dir = tmp_path / "phases"
+    phase_dir.mkdir()
+    (phase_dir / "01-only-leaf.md").write_text("hand-edited content")
+
+    result = runner.invoke(cli, ["plan", "draft-phases"], input="n\n")
+
+    assert result.exit_code != 0
+    assert (phase_dir / "01-only-leaf.md").read_text() == "hand-edited content"
+
+
+def test_cli_draft_phases_yes_skips_confirmation(tmp_path, monkeypatch, runner):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+    _write_cli_tree(tmp_path)
+    phase_dir = tmp_path / "phases"
+    phase_dir.mkdir()
+    (phase_dir / "01-only-leaf.md").write_text("hand-edited content")
+
+    result = runner.invoke(cli, ["plan", "draft-phases", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert (phase_dir / "01-only-leaf.md").read_text() != "hand-edited content"
+
+
+def test_cli_draft_phases_no_prompt_when_nothing_exists_yet(tmp_path, monkeypatch, runner):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+    _write_cli_tree(tmp_path)
+
+    result = runner.invoke(cli, ["plan", "draft-phases"])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "phases" / "01-only-leaf.md").exists()
 
 
 # --- issue #77 -------------------------------------------------------------------------------------

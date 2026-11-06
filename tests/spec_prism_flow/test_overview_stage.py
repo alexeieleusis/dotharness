@@ -1,6 +1,7 @@
 import pytest
 
 from dotharness.spec_prism_flow import handoff, overview_stage
+from dotharness.spec_prism_flow.cli import cli
 from dotharness.spec_prism_flow.config import (
     AgentConfig,
     HarnessSection,
@@ -132,3 +133,97 @@ def test_run_draft_overview_translates_real_handoff_error_cleanly(tmp_path, monk
 
     with pytest.raises(OverviewError):
         run_draft_overview(cfg)
+
+
+MINIMAL_TOML = """
+[plan]
+workspace_dir = "workspace"
+phase_dir = "phases"
+"""
+
+
+def test_cli_draft_overview_writes_overview_and_prints_next_step(tmp_path, monkeypatch, runner):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+    brief = tmp_path / "brief.md"
+    brief.write_text("brief content")
+    init_workspace(tmp_path / "workspace", brief, None, None, [])
+
+    def _fake_run_handoff(prompt_text, workspace_dir, stage_name, output_filename=None):
+        (workspace_dir / OVERVIEW_FILENAME).write_text("overview")
+
+    monkeypatch.setattr(overview_stage.handoff, "run_handoff", _fake_run_handoff)
+
+    result = runner.invoke(cli, ["plan", "draft-overview"])
+
+    assert result.exit_code == 0, result.output
+    assert "plan draft-requirements" in result.output
+    assert "No open questions raised." in result.output
+
+
+def test_cli_draft_overview_fails_clearly_when_real_handoff_error_raised(tmp_path, monkeypatch, runner):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+    brief = tmp_path / "brief.md"
+    brief.write_text("brief content")
+    init_workspace(tmp_path / "workspace", brief, None, None, [])
+
+    def _raise_handoff_error(*a, **k):
+        raise handoff.HandoffError("Expected output file not found: /nowhere")  # noqa: TRY003
+
+    monkeypatch.setattr(overview_stage.handoff, "run_handoff", _raise_handoff_error)
+
+    result = runner.invoke(cli, ["plan", "draft-overview"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "Error:" in result.output
+
+
+def test_cli_draft_overview_rejects_missing_manifest(tmp_path, monkeypatch, runner):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+
+    result = runner.invoke(cli, ["plan", "draft-overview"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "Manifest not found" in result.output
+
+
+def test_cli_draft_overview_prompts_before_overwriting_existing_overview(tmp_path, monkeypatch, runner):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+    brief = tmp_path / "brief.md"
+    brief.write_text("brief content")
+    init_workspace(tmp_path / "workspace", brief, None, None, [])
+    (tmp_path / "workspace" / OVERVIEW_FILENAME).write_text("existing overview")
+
+    def _fake_run_handoff(prompt_text, workspace_dir, stage_name, output_filename=None):
+        (workspace_dir / OVERVIEW_FILENAME).write_text("new overview")
+
+    monkeypatch.setattr(overview_stage.handoff, "run_handoff", _fake_run_handoff)
+
+    result = runner.invoke(cli, ["plan", "draft-overview"], input="n\n")
+
+    assert result.exit_code != 0
+    assert (tmp_path / "workspace" / OVERVIEW_FILENAME).read_text() == "existing overview"
+
+
+def test_cli_draft_overview_yes_skips_confirmation(tmp_path, monkeypatch, runner):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spec-prism-flow.toml").write_text(MINIMAL_TOML)
+    brief = tmp_path / "brief.md"
+    brief.write_text("brief content")
+    init_workspace(tmp_path / "workspace", brief, None, None, [])
+    (tmp_path / "workspace" / OVERVIEW_FILENAME).write_text("existing overview")
+
+    def _fake_run_handoff(prompt_text, workspace_dir, stage_name, output_filename=None):
+        (workspace_dir / OVERVIEW_FILENAME).write_text("new overview")
+
+    monkeypatch.setattr(overview_stage.handoff, "run_handoff", _fake_run_handoff)
+
+    result = runner.invoke(cli, ["plan", "draft-overview", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "workspace" / OVERVIEW_FILENAME).read_text() == "new overview"
