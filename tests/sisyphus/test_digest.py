@@ -122,8 +122,26 @@ def test_unwritable_path_raises(tmp_path: Path) -> None:
         ro.chmod(0o755)
 
 
+FORBIDDEN_IMPORTS = ("dotharness.pr_review", "dotharness.vibe_heal", "dotharness.spec_prism_flow")
+
+
+def _forbidden_imports(source: str) -> set[str]:
+    mods: set[str] = set()
+    for n in ast.walk(ast.parse(source)):
+        if isinstance(n, ast.ImportFrom) and n.module:
+            mods.add(n.module)
+            mods |= {f"{n.module}.{a.name}" for a in n.names}
+        elif isinstance(n, ast.Import):
+            mods |= {a.name for a in n.names}
+    return {m for m in mods if any(m == f or m.startswith(f + ".") for f in FORBIDDEN_IMPORTS)}
+
+
 def test_no_harness_imports() -> None:
-    tree = ast.parse(Path(digest.__file__).read_text())
-    mods = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
-    mods |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
-    assert not {m for m in mods if m.split(".")[0] in ("harness", "spec_prism_flow")}
+    assert not _forbidden_imports(Path(digest.__file__).read_text())
+
+
+def test_forbidden_import_guard_flags_violations() -> None:
+    assert _forbidden_imports("from dotharness.pr_review import backend")
+    assert _forbidden_imports("from dotharness import vibe_heal")
+    assert _forbidden_imports("import dotharness.spec_prism_flow.config")
+    assert not _forbidden_imports("from dotharness.sisyphus import config")

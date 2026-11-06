@@ -6,7 +6,7 @@ that failed early still produces a complete document. Evidence strings, PRs, com
 are supplied by the caller (the run record does not carry them); the digest renders them verbatim
 and defines no gate-record format.
 
-Imports only Package A modules (never ``harness`` or ``spec_prism_flow``).
+Imports only Package A modules (never ``dotharness.pr_review``, ``dotharness.vibe_heal`` or ``dotharness.spec_prism_flow``).
 """
 
 # ruff: noqa: TRY003
