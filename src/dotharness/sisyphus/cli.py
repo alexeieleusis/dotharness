@@ -108,7 +108,9 @@ def run_token_cmd(token_cmd: str | None, run: Callable[..., Any] = subprocess.ru
     try:
         proc = run(shlex.split(token_cmd), capture_output=True, text=True, check=False, timeout=TOKEN_CMD_TIMEOUT)
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
-        raise ConfigError(f"[source.host] token_cmd failed to run: {exc}") from exc
+        # Never interpolate str(exc): TimeoutExpired/FileNotFoundError embed argv, which may hold a secret.
+        why = type(exc).__name__ + (f": {exc.strerror}" if isinstance(exc, OSError) and exc.strerror else "")
+        raise ConfigError(f"[source.host] token_cmd failed to run ({why})") from None
     if proc.returncode != 0 or not proc.stdout.strip():
         raise ConfigError(f"[source.host] token_cmd failed (exit {proc.returncode}) or printed no token")
     return proc.stdout.strip()

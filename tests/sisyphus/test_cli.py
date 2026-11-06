@@ -780,6 +780,19 @@ def test_token_cmd() -> None:
         cli.run_token_cmd("x", timeout)
 
 
+def test_token_cmd_error_hides_argv() -> None:
+    def timeout(*_a: Any, **_k: Any) -> Proc:
+        raise subprocess.TimeoutExpired(["sleep", "s3cret"], 1)
+
+    def missing(*_a: Any, **_k: Any) -> Proc:
+        raise FileNotFoundError(2, "No such file or directory", "s3cret-prog")
+
+    for fn in (timeout, missing):
+        with pytest.raises(ConfigError) as ei:
+            cli.run_token_cmd("s3cret", fn)
+        assert "s3cret" not in str(ei.value)
+
+
 def test_gh_pull_request_client() -> None:
     replies = [
         ExecResult(0, json.dumps([{"number": 4, "url": "u"}])),
