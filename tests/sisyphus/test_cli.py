@@ -872,11 +872,34 @@ def test_default_services_file_kind_builds_file_tracker(tmp_path: Path, monkeypa
     assert isinstance(services.tracker, cli.FileTracker)
 
 
-def test_no_harness_or_spec_prism_flow_import() -> None:
-    tree = ast.parse(Path(cli.__file__).read_text())
-    names = {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
-    names |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
-    assert not any(n.split(".")[0] in ("harness", "spec_prism_flow") for n in names)
+FORBIDDEN_IMPORTS = ("dotharness.pr_review", "dotharness.vibe_heal", "dotharness.spec_prism_flow")
+
+
+def _forbidden_imports(source: str) -> list[str]:
+    names: list[str] = []
+    for n in ast.walk(ast.parse(source)):
+        if isinstance(n, ast.Import):
+            names += [a.name for a in n.names]
+        elif isinstance(n, ast.ImportFrom) and n.module and not n.level:
+            names += [n.module, *(f"{n.module}.{a.name}" for a in n.names)]
+    return [n for n in names if any(n == p or n.startswith(p + ".") for p in FORBIDDEN_IMPORTS)]
+
+
+@pytest.mark.parametrize("path", sorted(Path(cli.__file__).parent.glob("*.py")), ids=lambda p: p.name)
+def test_no_pr_review_vibe_heal_or_spec_prism_flow_import(path: Path) -> None:
+    assert _forbidden_imports(path.read_text()) == []
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "import dotharness.pr_review",
+        "from dotharness.spec_prism_flow import config",
+        "from dotharness import vibe_heal",
+    ],
+)
+def test_import_guard_detects_forbidden_import(snippet: str) -> None:
+    assert _forbidden_imports(snippet)
 
 
 def test_default_path_without_linear_key_is_a_config_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
