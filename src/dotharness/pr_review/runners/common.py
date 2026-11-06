@@ -13,7 +13,7 @@ from pathlib import Path
 
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig, RepoConfig, SubDir
-from dotharness.subprocess_runner import run
+from dotharness.subprocess_runner import gh_argv, run
 
 logger = logging.getLogger(__name__)
 
@@ -279,7 +279,7 @@ def is_pr_open(pr_number: int, repo: str, env: dict) -> bool:
     post a review to a PR that may have been closed or merged while it was processing.
     """
     result = run_cmd(
-        ["gh", "pr", "view", str(pr_number), "--repo", repo, "--json", "state", "--jq", ".state"],
+        gh_argv("pr", "view", str(pr_number), "--repo", repo, "--json", "state", "--jq", ".state"),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -298,7 +298,7 @@ def get_current_user(env: dict) -> str:
     preserve_reviewer_request, skips its reviewer check entirely on a falsy login rather
     than querying GitHub for one that could never match. Logged so a persistently blank
     current_user (e.g. GITHUB_TOKEN pointing at a revoked token) is still visible."""
-    result = run_cmd(["gh", "api", "user", "--jq", ".login"], cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
+    result = run_cmd(gh_argv("api", "user", "--jq", ".login"), cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
     login = result.stdout.decode("utf-8", errors="replace").strip()
     if result.returncode != 0 or not login:
         logger.error(
@@ -312,7 +312,7 @@ def get_current_user(env: dict) -> str:
 def pr_from_url(url: str, repo: str, env: dict, fields: str) -> dict:
     number = int(url.rstrip("/").split("/")[-1])
     result = run_cmd(
-        ["gh", "pr", "view", str(number), "--repo", repo, "--json", fields],
+        gh_argv("pr", "view", str(number), "--repo", repo, "--json", fields),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -326,7 +326,7 @@ def pr_from_url(url: str, repo: str, env: dict, fields: str) -> dict:
 
 def get_requested_reviewers(pr_number: int, repo: str, env: dict) -> list[str]:
     result = run_cmd(
-        ["gh", "pr", "view", str(pr_number), "--repo", repo, "--json", "reviewRequests"],
+        gh_argv("pr", "view", str(pr_number), "--repo", repo, "--json", "reviewRequests"),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -352,7 +352,7 @@ def was_review_requested(pr_number: int, repo: str, login: str, env: dict) -> bo
 
 def add_reviewer(pr_number: int, repo: str, login: str, env: dict) -> None:
     result = run_cmd(
-        ["gh", "pr", "edit", str(pr_number), "--repo", repo, "--add-reviewer", login],
+        gh_argv("pr", "edit", str(pr_number), "--repo", repo, "--add-reviewer", login),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -410,7 +410,7 @@ def _fetch_page(path: str, page: int, env: dict) -> list[dict] | None:
     """One page of a REST list endpoint. Retries transient gh failures; None if all attempts fail."""
     for attempt in range(1, _PAGE_ATTEMPTS + 1):
         result = run_cmd(
-            ["gh", "api", "--method", "GET", path, "-F", "per_page=100", "-F", f"page={page}"],
+            gh_argv("api", "--method", "GET", path, "-F", "per_page=100", "-F", f"page={page}"),
             cwd="/",
             env=env,
             timeout=TIMEOUT_GH,
@@ -679,7 +679,7 @@ def _fetch_issue(number: int, repo: str, env: dict) -> dict | None:
     repo). Raises _IssueFetchError for any other failure, since that's inconclusive rather
     than a confirmed absence."""
     result = run_cmd(
-        ["gh", "issue", "view", str(number), "--repo", repo, "--json", "number,title,body"],
+        gh_argv("issue", "view", str(number), "--repo", repo, "--json", "number,title,body"),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -875,7 +875,7 @@ def post_no_linked_ticket_comment(pr_number: int, repo: str, env: dict) -> bool:
         f"{TRACEABILITY_REVIEW_MARKER}"
     )
     result = run_cmd(
-        ["gh", "pr", "comment", str(pr_number), "--repo", repo, "--body", body],
+        gh_argv("pr", "comment", str(pr_number), "--repo", repo, "--body", body),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -1048,8 +1048,7 @@ def list_open_prs_matching_authors(repo: str, authors_config: str | list, cwd: s
     authoritative empty set.
     """
     result = run_cmd(
-        [
-            "gh",
+        gh_argv(
             "pr",
             "list",
             "--repo",
@@ -1060,7 +1059,7 @@ def list_open_prs_matching_authors(repo: str, authors_config: str | list, cwd: s
             "number,headRefName,author,isDraft,baseRefName,headRefOid",
             "--limit",
             "500",
-        ],
+        ),
         cwd=cwd,
         env=env,
         timeout=TIMEOUT_GH,
@@ -1076,8 +1075,7 @@ def list_open_prs_matching_authors(repo: str, authors_config: str | list, cwd: s
 
 def _list_prs_by_flag(repo: str, cwd: str, env: dict, filter_flag: str) -> list[dict]:
     result = run_cmd(
-        [
-            "gh",
+        gh_argv(
             "pr",
             "list",
             "--repo",
@@ -1090,7 +1088,7 @@ def _list_prs_by_flag(repo: str, cwd: str, env: dict, filter_flag: str) -> list[
             "number,headRefName,isDraft",
             "--limit",
             "500",
-        ],
+        ),
         cwd=cwd,
         env=env,
         timeout=TIMEOUT_GH,
@@ -1105,8 +1103,7 @@ def _list_review_requested_prs(repo: str, cwd: str, env: dict) -> list[dict]:
     # gh search prs does not support headRefName/isDraft in --json; fetch numbers first,
     # then hydrate each with the fields we need via gh pr view.
     result = run_cmd(
-        [
-            "gh",
+        gh_argv(
             "search",
             "prs",
             "user-review-requested:@me",
@@ -1118,7 +1115,7 @@ def _list_review_requested_prs(repo: str, cwd: str, env: dict) -> list[dict]:
             "number",
             "--limit",
             "500",
-        ],
+        ),
         cwd=cwd,
         env=env,
         timeout=TIMEOUT_GH,
@@ -1130,7 +1127,7 @@ def _list_review_requested_prs(repo: str, cwd: str, env: dict) -> list[dict]:
     prs = []
     for stub in stubs:
         detail = run_cmd(
-            ["gh", "pr", "view", str(stub["number"]), "--repo", repo, "--json", "number,headRefName,isDraft"],
+            gh_argv("pr", "view", str(stub["number"]), "--repo", repo, "--json", "number,headRefName,isDraft"),
             cwd=cwd,
             env=env,
             timeout=TIMEOUT_GH,
@@ -1156,7 +1153,7 @@ def list_open_prs_for_current_user(repo: str, cwd: str, env: dict) -> list[dict]
 
 def get_pr_base_branch(pr_number: int, repo: str, env: dict) -> str:
     result = run_cmd(
-        ["gh", "pr", "view", str(pr_number), "--repo", repo, "--json", "baseRefName", "--jq", ".baseRefName"],
+        gh_argv("pr", "view", str(pr_number), "--repo", repo, "--json", "baseRefName", "--jq", ".baseRefName"),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -1169,7 +1166,7 @@ def get_pr_base_branch(pr_number: int, repo: str, env: dict) -> str:
 
 def get_pr_head_sha(pr_number: int, repo: str, env: dict) -> str:
     result = run_cmd(
-        ["gh", "pr", "view", str(pr_number), "--repo", repo, "--json", "headRefOid", "--jq", ".headRefOid"],
+        gh_argv("pr", "view", str(pr_number), "--repo", repo, "--json", "headRefOid", "--jq", ".headRefOid"),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -1182,8 +1179,7 @@ def get_pr_head_sha(pr_number: int, repo: str, env: dict) -> str:
 
 def get_pr_description(pr_number: int, repo: str, env: dict) -> str:
     result = run_cmd(
-        [
-            "gh",
+        gh_argv(
             "pr",
             "view",
             str(pr_number),
@@ -1193,7 +1189,7 @@ def get_pr_description(pr_number: int, repo: str, env: dict) -> str:
             "title,body",
             "--jq",
             '"## PR Description\n**Title:** " + .title + "\n\n" + (.body // "")',
-        ],
+        ),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -1459,8 +1455,7 @@ def _fetch_review_threads_page(pr_number: int, repo: str, cursor: str | None, en
     """Fetch one page of review threads. Returns the `reviewThreads` object, or None on
     any failure (non-zero exit, unparsable JSON, missing data)."""
     owner, repo_name = repo.split("/")
-    cmd = [
-        "gh",
+    cmd = gh_argv(
         "api",
         "graphql",
         "-f",
@@ -1471,7 +1466,7 @@ def _fetch_review_threads_page(pr_number: int, repo: str, cursor: str | None, en
         f"repo={repo_name}",
         "-F",
         f"number={pr_number}",
-    ]
+    )
     if cursor:
         cmd += ["-f", f"cursor={cursor}"]
     result = run_cmd(cmd, cwd="/", env=env, timeout=TIMEOUT_GH, check=False)

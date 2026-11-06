@@ -51,7 +51,7 @@ from dotharness.pr_review.runners.regret_review import (
     parse_regret_judgment,
     post_regret_comment,
 )
-from dotharness.subprocess_runner import build_subprocess_env
+from dotharness.subprocess_runner import build_subprocess_env, gh_argv
 
 logger = logging.getLogger(__name__)
 
@@ -136,8 +136,7 @@ def _get_prs(repo: str, env: dict) -> list[dict]:
     # .authors gate (regret_review.find_introducing_prs) reads it from the PR dict and
     # treats an authorless PR as non-matching (fail-closed), so the field must be here.
     result = run_cmd(
-        [
-            "gh",
+        gh_argv(
             "pr",
             "list",
             "--repo",
@@ -150,7 +149,7 @@ def _get_prs(repo: str, env: dict) -> list[dict]:
             "number,url,headRefName,createdAt,closingIssuesReferences,author",
             "--limit",
             "500",
-        ],
+        ),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -165,8 +164,7 @@ def _has_user_approved(pr_number: int, repo: str, current_user: str, env: dict) 
     page = 1
     while True:
         result = run_cmd(
-            [
-                "gh",
+            gh_argv(
                 "api",
                 "--method",
                 "GET",
@@ -175,7 +173,7 @@ def _has_user_approved(pr_number: int, repo: str, current_user: str, env: dict) 
                 "per_page=100",
                 "-F",
                 f"page={page}",
-            ],
+            ),
             cwd="/",
             env=env,
             timeout=TIMEOUT_GH,

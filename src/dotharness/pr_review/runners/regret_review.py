@@ -19,6 +19,7 @@ from dotharness.pr_review.runners.common import (
     get_pr_base_branch,
     run_cmd,
 )
+from dotharness.subprocess_runner import gh_argv
 
 logger = logging.getLogger(__name__)
 
@@ -407,7 +408,7 @@ def _resolve_commit_prs(
     prs_by_sha: dict[str, list[int]] = {}
     for sha in shas:
         result = _run_within_budget(
-            ["gh", "api", f"repos/{repo}/commits/{sha}/pulls"],
+            gh_argv("api", f"repos/{repo}/commits/{sha}/pulls"),
             "/",
             env,
             number,
@@ -930,7 +931,7 @@ def post_regret_comment(number: int, repo: str, body: str, env: dict) -> bool:
     §7.6). True if gh accepted it, mirroring common.post_no_linked_ticket_comment's
     shape."""
     result = run_cmd(
-        ["gh", "pr", "comment", str(number), "--repo", repo, "--body", body],
+        gh_argv("pr", "comment", str(number), "--repo", repo, "--body", body),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,

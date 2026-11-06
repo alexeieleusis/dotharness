@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Any, cast
 from urllib.parse import urlparse
 
+from dotharness.subprocess_runner import gh_argv
 from dotharness.vibe_heal.ai_tools.utils import CommandResult, run_command
 from dotharness.vibe_heal.output import warn
 from dotharness.vibe_heal.review.models import FileReview, ReviewIssue, ReviewResult
@@ -82,7 +83,7 @@ class GitHubReviewClient:
             OSError: If gh is not installed or not in PATH.
         """
         try:
-            result = await _run_gh(["gh", "--version"], 10)
+            result = await _run_gh(gh_argv("--version"), 10)
         except OSError as exc:
             msg = "gh CLI is not installed or not in PATH. Install it from https://cli.github.com/"
             raise OSError(msg) from exc
@@ -92,7 +93,7 @@ class GitHubReviewClient:
 
     async def _view_pr_field(self, field: str) -> CommandResult:
         """Run `gh pr view --json <field>` for the current branch's PR."""
-        return await _run_gh(["gh", "pr", "view", "--json", field], 30)
+        return await _run_gh(gh_argv("pr", "view", "--json", field), 30)
 
     async def detect_pr(self, pr_number: int | None = None) -> int:
         """Get the PR number for review posting.
@@ -176,15 +177,14 @@ class GitHubReviewClient:
 
         try:
             await self._post_json(
-                [
-                    "gh",
+                gh_argv(
                     "api",
                     "--method",
                     "POST",
                     f"/repos/{owner_repo}/pulls/{pr_number}/reviews",
                     "--input",
                     "-",
-                ],
+                ),
                 payload,
             )
         except GitHubTimeoutError:
@@ -199,15 +199,14 @@ class GitHubReviewClient:
             fallback = self._build_fallback_payload(report)
             try:
                 await self._post_json(
-                    [
-                        "gh",
+                    gh_argv(
                         "api",
                         "--method",
                         "POST",
                         f"/repos/{owner_repo}/pulls/{pr_number}/reviews",
                         "--input",
                         "-",
-                    ],
+                    ),
                     fallback,
                 )
             except GitHubReviewError as e:
@@ -387,7 +386,7 @@ class GitHubReviewClient:
             String in 'owner/repo' format.
         """
         result = await _run_gh(
-            ["gh", "repo", "view", "--json", "owner,name", "--jq", '"\\(.owner.login)/\\(.name)"'],
+            gh_argv("repo", "view", "--json", "owner,name", "--jq", '"\\(.owner.login)/\\(.name)"'),
             15,
         )
         if result.success and result.stdout.strip():

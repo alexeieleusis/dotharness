@@ -54,7 +54,7 @@ from dotharness.pr_review.runners.regret_review import (
     parse_regret_judgment,
     post_regret_comment,
 )
-from dotharness.subprocess_runner import build_subprocess_env
+from dotharness.subprocess_runner import build_subprocess_env, gh_argv
 
 logger = logging.getLogger(__name__)
 
@@ -744,8 +744,7 @@ def _list_prs_by_flag(repo: str, env: dict, filter_flag: str) -> list[dict] | No
     failed" from "confirmed zero open PRs" instead of treating a transient API hiccup as an
     authoritative empty set."""
     result = run_cmd(
-        [
-            "gh",
+        gh_argv(
             "pr",
             "list",
             "--repo",
@@ -758,7 +757,7 @@ def _list_prs_by_flag(repo: str, env: dict, filter_flag: str) -> list[dict] | No
             "number,url,headRefName,createdAt,closingIssuesReferences,author",
             "--limit",
             "500",
-        ],
+        ),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,

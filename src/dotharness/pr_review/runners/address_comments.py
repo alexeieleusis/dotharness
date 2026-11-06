@@ -28,7 +28,7 @@ from dotharness.pr_review.runners.common import (
     preserve_reviewer_request,
     run_cmd,
 )
-from dotharness.subprocess_runner import build_subprocess_env
+from dotharness.subprocess_runner import build_subprocess_env, gh_argv
 
 logger = logging.getLogger(__name__)
 
@@ -711,7 +711,7 @@ def _list_prs_to_check(repo: str, env: dict) -> list[dict]:
 def _list_all_open_pr_numbers(repo: str, env: dict) -> set[int] | None:
     """Numbers of every open PR in the repo, or None if the fetch failed (caller must not prune)."""
     result = run_cmd(
-        ["gh", "pr", "list", "--repo", repo, "--state", "open", "--json", "number", "--limit", "1000"],
+        gh_argv("pr", "list", "--repo", repo, "--state", "open", "--json", "number", "--limit", "1000"),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -727,8 +727,7 @@ def _list_all_open_pr_numbers(repo: str, env: dict) -> set[int] | None:
 
 def _list_prs(repo: str, env: dict, filter_flag: str) -> list[dict]:
     result = run_cmd(
-        [
-            "gh",
+        gh_argv(
             "pr",
             "list",
             "--repo",
@@ -741,7 +740,7 @@ def _list_prs(repo: str, env: dict, filter_flag: str) -> list[dict]:
             "number,headRefName,isDraft",
             "--limit",
             "500",
-        ],
+        ),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -787,8 +786,7 @@ def _check_gql_unresolved_threads(pr_number: int, repo: str, env: dict) -> tuple
     total_unresolved = 0
 
     while True:
-        cmd = [
-            "gh",
+        cmd = gh_argv(
             "api",
             "graphql",
             "-f",
@@ -799,7 +797,7 @@ def _check_gql_unresolved_threads(pr_number: int, repo: str, env: dict) -> tuple
             f"repo={repo_name}",
             "-F",
             f"number={pr_number}",
-        ]
+        )
         if cursor:
             cmd += ["-f", f"cursor={cursor}"]
         gql_result = run_cmd(cmd, cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
@@ -831,7 +829,7 @@ def _check_gql_unresolved_threads(pr_number: int, repo: str, env: dict) -> tuple
 def _check_human_issue_comments(pr_number: int, repo: str, env: dict) -> bool:
     """Return True if the PR has any non-bot issue comments."""
     comments_result = run_cmd(
-        ["gh", "api", f"repos/{repo}/issues/{pr_number}/comments", "--paginate"],
+        gh_argv("api", f"repos/{repo}/issues/{pr_number}/comments", "--paginate"),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,

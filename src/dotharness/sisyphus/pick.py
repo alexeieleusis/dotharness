@@ -35,6 +35,7 @@ from dotharness.sisyphus.ticketfile import (
     ticket_dir,
     valid_file_ref,
 )
+from dotharness.subprocess_runner import gh_argv
 
 LINEAR_API_URL = "https://api.linear.app/graphql"
 GITHUB_OPEN_STATE = "OPEN"
@@ -226,7 +227,7 @@ class GhCli:
 
     def run(self, *args: str) -> ExecResult:
         """Run ``gh <args>`` in the configured directory and environment; the caller inspects the result."""
-        return self._run(["gh", *args], self.cwd, self.env)
+        return self._run(gh_argv(*args), self.cwd, self.env)
 
     def json(self, *args: str) -> Any:
         res = self.run(*args)

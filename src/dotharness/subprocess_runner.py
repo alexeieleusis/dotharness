@@ -47,6 +47,14 @@ NOT_FOUND_RETURNCODE = 127
 TIMEOUT_RETURNCODE = 124
 
 
+GH = "gh"
+
+
+def gh_argv(*args: str) -> list[str]:
+    """The one place that names the GitHub CLI: argv for ``gh <args>``, run through ``run`` by the caller's adapter."""
+    return [GH, *args]
+
+
 @dataclass(frozen=True)
 class RunResult:
     """Outcome of ``run``. Carries no argv or env."""

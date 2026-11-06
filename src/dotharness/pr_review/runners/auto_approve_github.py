@@ -62,6 +62,7 @@ from dotharness.pr_review.runners.common import (
     is_traceability_review_comment,
     run_cmd,
 )
+from dotharness.subprocess_runner import gh_argv
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +98,7 @@ def _is_author_activity(item: dict, pr_author: str, acting: str) -> bool:
 
 def _fetch_pr_commits(repo: str, pr_number: int, env: dict) -> list[dict] | None:
     result = run_cmd(
-        ["gh", "pr", "view", str(pr_number), "--repo", repo, "--json", "commits"],
+        gh_argv("pr", "view", str(pr_number), "--repo", repo, "--json", "commits"),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,

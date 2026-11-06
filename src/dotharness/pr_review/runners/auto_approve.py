@@ -62,7 +62,7 @@ from dotharness.pr_review.runners.common import (
     git_restore,
     run_cmd,
 )
-from dotharness.subprocess_runner import build_subprocess_env
+from dotharness.subprocess_runner import build_subprocess_env, gh_argv
 
 logger = logging.getLogger(__name__)
 
@@ -113,8 +113,7 @@ def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
 
 def _list_prs(repo: str, env: dict) -> list[dict]:
     result = run_cmd(
-        [
-            "gh",
+        gh_argv(
             "pr",
             "list",
             "--repo",
@@ -127,7 +126,7 @@ def _list_prs(repo: str, env: dict) -> list[dict]:
             "number,headRefName,baseRefName,isDraft,isCrossRepository,state,author",
             "--limit",
             "500",
-        ],
+        ),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,

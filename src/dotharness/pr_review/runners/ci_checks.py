@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from typing import NamedTuple
 
 from dotharness.pr_review.runners.common import TIMEOUT_GH, run_cmd
+from dotharness.subprocess_runner import gh_argv
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +54,10 @@ _TIMEOUT_EXIT = 124  # synthetic exit code for a timed-out gh call (as coreutils
 def gh(args: list[str], env: dict) -> subprocess.CompletedProcess:
     """Run gh; a timeout becomes a synthetic failed result so every caller fails closed the same way."""
     try:
-        return run_cmd(["gh", *args], cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
+        return run_cmd(gh_argv(*args), cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
     except subprocess.TimeoutExpired:
         logger.exception("gh %s timed out after %ss", " ".join(args[:2]), TIMEOUT_GH)
-        return subprocess.CompletedProcess(["gh", *args], _TIMEOUT_EXIT, stdout="", stderr="timed out")
+        return subprocess.CompletedProcess(gh_argv(*args), _TIMEOUT_EXIT, stdout="", stderr="timed out")
 
 
 def text(data: bytes | str | None) -> str:

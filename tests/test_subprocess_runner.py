@@ -189,3 +189,10 @@ def test_group_alive_outcomes(monkeypatch, exc, alive):
 
     monkeypatch.setattr(sr.os, "killpg", probe)
     assert sr.group_alive(1) is alive
+
+
+def test_gh_argv_is_gh_plus_args() -> None:
+    from dotharness.subprocess_runner import gh_argv
+
+    assert gh_argv("pr", "view") == ["gh", "pr", "view"]
+    assert gh_argv() == ["gh"]
