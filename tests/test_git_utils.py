@@ -21,3 +21,9 @@ def test_non_git_directory_raises(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
     with pytest.raises(GitError):
         git_toplevel(tmp_path)
+
+
+def test_missing_git_binary_raises_git_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(GitError, match="could not run git"):
+        git_toplevel(tmp_path)
