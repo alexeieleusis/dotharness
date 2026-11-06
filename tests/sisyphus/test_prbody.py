@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import json
 from pathlib import Path
 
@@ -30,15 +29,13 @@ from dotharness.sisyphus.prbody import (
     sanitise,
     select_handoffs,
 )
+from tests.sisyphus.conftest import forbidden_imports
 
 STEMS = ["01-alpha-leaf", "02-beta-leaf"]
 
 
 def test_module_imports_neither_harness_nor_spec_prism() -> None:
-    tree = ast.parse(Path(prbody.__file__).read_text())
-    mods = {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
-    mods |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
-    assert not [m for m in mods if not m.startswith("dotharness.sisyphus") and ("harness" in m or "spec_prism" in m)]
+    assert not forbidden_imports(Path(prbody.__file__).read_text())
     assert PLAN_NOT_MATCHED_NOTE.startswith("Note:")
 
 
