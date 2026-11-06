@@ -188,3 +188,27 @@ def test_render_leaves_headings_inside_code_fences_alone():
     )
 
     assert "## not a heading" in render_phase_file(phase)
+
+
+@pytest.mark.parametrize(
+    "requirements",
+    [
+        "Example:\n```md\n## Scope\n```\n",
+        "Example:\n```md\n~~~\n## Scope\n~~~\n```\n",
+        "Example:\n~~~~md\n```\n## Scope\n```\n~~~~\n",
+    ],
+)
+def test_round_trip_with_fenced_h2_line(requirements):
+    phase = PhaseFile(
+        number=1,
+        name="x",
+        scope=["a"],
+        requirements=requirements,
+        acceptance_criteria=["b"],
+        manual_test_checklist=["c"],
+        depends_on="None",
+    )
+
+    parsed = parse_phase_file_text("01-x-leaf.md", render_phase_file(phase))
+
+    assert parsed.requirements == requirements.strip("\n")

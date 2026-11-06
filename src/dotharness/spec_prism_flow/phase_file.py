@@ -80,7 +80,8 @@ def parse_phase_file_text(file_name: str, text: str) -> PhaseFile:
     name = name_match.group(2)
 
     lines = text.splitlines()
-    header_indices = [i for i, line in enumerate(lines) if line.startswith("## ")]
+    outside_fence = _outside_fence_flags(lines)
+    header_indices = [i for i, line in enumerate(lines) if outside_fence[i] and line.startswith("## ")]
     headers = [lines[i][3:].strip() for i in header_indices]
 
     if headers != list(_SECTION_HEADERS):
@@ -112,22 +113,45 @@ def parse_phase_file_text(file_name: str, text: str) -> PhaseFile:
     )
 
 
-_FENCE_PATTERN = re.compile(r"^\s*(```|~~~)")
+_FENCE_PATTERN = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 _SHALLOW_HEADING_PATTERN = re.compile(r"^#{1,2}(?=\s)")
+
+
+def _outside_fence_flags(lines: list[str]) -> list[bool]:
+    """For each line, True when it is outside fenced code. Fence lines themselves count as
+    inside. A fence closes only on a bare marker of the same character and at least the
+    opening length, so a ```` ``` ```` fence containing `~~~` stays open."""
+    flags = []
+    open_marker: str | None = None
+    for line in lines:
+        match = _FENCE_PATTERN.match(line)
+        if open_marker is None:
+            if match:
+                open_marker = match.group(1)
+                flags.append(False)
+            else:
+                flags.append(True)
+        else:
+            flags.append(False)
+            if (
+                match
+                and match.group(1)[0] == open_marker[0]
+                and len(match.group(1)) >= len(open_marker)
+                and not match.group(2).strip()
+            ):
+                open_marker = None
+    return flags
 
 
 def _demote_shallow_headings(markdown: str) -> str:
     """Rewrite every `#`/`##` heading (outside fenced code) as `###`, so an embedded mini-doc
     can't add `##` headers that break the phase file's five-header contract."""
-    out = []
-    in_fence = False
-    for line in markdown.splitlines():
-        if _FENCE_PATTERN.match(line):
-            in_fence = not in_fence
-        elif not in_fence:
-            line = _SHALLOW_HEADING_PATTERN.sub("###", line)
-        out.append(line)
-    return "\n".join(out)
+    lines = markdown.splitlines()
+    outside_fence = _outside_fence_flags(lines)
+    return "\n".join(
+        _SHALLOW_HEADING_PATTERN.sub("###", line) if outside else line
+        for line, outside in zip(lines, outside_fence, strict=True)
+    )
 
 
 def render_phase_file(phase: PhaseFile) -> str:
