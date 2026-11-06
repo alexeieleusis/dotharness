@@ -189,9 +189,8 @@ def _done(report: DigestReport) -> list[str]:
     return lines
 
 
-def _declined(records: Sequence[RunRecord], report: DigestReport) -> list[str]:
-    lines = [f"{d.summary} (why: {d.reason})" for d in report.declined]
-    return lines
+def _declined(report: DigestReport) -> list[str]:
+    return [f"{d.summary} (why: {d.reason})" for d in report.declined]
 
 
 def _limits(records: Sequence[RunRecord], report: DigestReport) -> list[str]:
@@ -226,7 +225,7 @@ def render_digest(records: Sequence[RunRecord], report: DigestReport | None = No
     bodies = [
         _numbered(_needs_you(records, report)),
         _bullets(_done(report)),
-        _bullets(_declined(records, report)),
+        _bullets(_declined(report)),
         _bullets([*report.deviations, *_abandoned(records), *_resets(records)]),
         _bullets(_limits(records, report)),
         _bullets(_cost(records, report)),
