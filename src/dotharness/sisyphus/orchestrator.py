@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import shlex
 import time
@@ -221,7 +222,7 @@ def _toml_value(value: object) -> str:
     if isinstance(value, int):
         return repr(value)
     if isinstance(value, float):
-        if value != value:
+        if math.isnan(value):
             return "nan"
         return {float("inf"): "inf", float("-inf"): "-inf"}.get(value, repr(value))
     if isinstance(value, str):
