@@ -131,7 +131,7 @@ _HEADING = re.compile(
 )
 _ANY_HEADING = re.compile(r"^(#{1,6})\s")
 _ENTRY = re.compile(r"^\s*(?:(\d+)[.)]|[-*+]\s+D-(\d+)\s*[:.)]?)\s+(.*)$")
-_RESOLVED = re.compile(r"(?:^\W*resolved\b)|(?:\bstatus:\s*resolved\b)", re.IGNORECASE)
+_RESOLVED = re.compile(r"^\W*resolved\b|\bstatus:\s*resolved\b", re.IGNORECASE)
 _NONE = re.compile(r"^\W*(?:none|n/?a|nothing|no (?:open )?(?:decisions?|questions?))\b\W*$", re.IGNORECASE)
 _MENTION = re.compile(r"open[- ]decisions?", re.IGNORECASE)
 
