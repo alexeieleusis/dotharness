@@ -777,18 +777,23 @@ class _Run:
         self.git("fetch", "origin", self.branch, network=True)
         return self.git("merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD", ok=False).returncode != 0
 
+    def check_push_guard(self, request: Any) -> None:
+        """Refuse the push (stop or error) if it would touch a protected branch."""
+        protected = {self.opt.base_branch, *([self.opt.default_branch] if self.opt.default_branch else [])}
+        for default in sorted(protected):
+            decision = push_guard(request, default, self.created_branches())
+            if decision.allowed:
+                continue
+            if decision.checkpoint is not None:
+                raise _Stop(decision.checkpoint, decision.reason)
+            raise OrchestratorError(f"push refused: {decision.reason}")
+
     def stage_push(self) -> None:
         with self.rec.stage_scope(PUSH_STAGE):
             request = parse_push_argv(
                 ["push", "origin", self.branch], history_rewrite=False, needs_rebase=self.needs_rebase()
             )
-            protected = {self.opt.base_branch, *([self.opt.default_branch] if self.opt.default_branch else [])}
-            for default in sorted(protected):
-                decision = push_guard(request, default, self.created_branches())
-                if not decision.allowed:
-                    if decision.checkpoint is not None:
-                        raise _Stop(decision.checkpoint, decision.reason)
-                    raise OrchestratorError(f"push refused: {decision.reason}")
+            self.check_push_guard(request)
             res = self.git("push", "origin", self.branch, ok=False)
             if res.returncode != 0:
                 raise _Stop(Checkpoint.C8, f"git push failed (exit {res.returncode}): {_tail(res.stderr)}")
