@@ -51,6 +51,12 @@ subprocesses and launch `claude` or `opencode`. The comparison of the old copies
 decisions and the contract for I-3 to I-5 are in
 [`design/shared-async-layer.md`](design/shared-async-layer.md).
 
+## Finding and decision IDs
+
+I-6 findings are `F-<area>-<n>` and carry a verdict (`apply now`, `defer`, `no action (justified)`). Triage table, I-7
+hand-off list and fixture decision IDs are in `docs/design/shared-async-layer.md` (sections k to m). Decisions from D-13 on
+record any fixture edit or any later-added item; no apply-now PR merges before the user approves the triage table (D-1).
+
 ## Tooling provenance
 
 These choices were made in I-1 and are recorded here because no other file records

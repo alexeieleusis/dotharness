@@ -455,3 +455,101 @@ Measured project-wide coverage (`pytest --cov --cov-config=pyproject.toml --cov-
 | F-SEC-1 | #136: `vibe_heal/ai_tools/claude_code.py` `error_message=f"Claude failed with exit code {result.returncode}: {result.stderr}"` and `vibe_heal/ai_tools/opencode.py` the same for OpenCode; `vibe_heal/sonarqube/analysis_runner.py` `error(f"    Scanner error: {combined[:500]}")` and `error_msg = f"sonar-scanner failed with exit code {returncode}: {combined}"`. Backend or scanner output reaches logs and messages unredacted. | defer: tracked by #136 (NG2). |
 | F-SEC-2 | SonarQube token on the scanner argv: `vibe_heal/sonarqube/properties_handler.py` `command.append(f"-Dsonar.token={self.config.sonarqube_token}")` (and `-Dsonar.password=`), run through `analysis_runner.py` `await run(command, cwd=project_dir, ...)`. The value is visible in the process table while the scanner runs. | defer: needs a scanner properties file or environment variable instead of argv; changes behaviour, not part of this pass. |
 | F-SEC-3 | `ai_backend.py` `cmd.append("--dangerously-skip-permissions")`; `sisyphus/agent.py` docstring: "accepted risk: the boundary is the dedicated clone". | no action (justified): documented, accepted risk in a dedicated clone. |
+
+### k. Triage table and approval checkpoint (R2, D-1)
+
+Verdict is exactly `apply now`, `defer` or `no action (justified)`. PR cites the implementing plan phase; one concern per
+PR, titles and bodies cite finding IDs, base branch `sisyphus/164-c86e8a65` (D-5, PR rules: `docs/contributing.md`). #80 and
+#82 are folded in as findings (D-4). The Sonar duplication figure (D-9) was not obtainable in this pass (no scanner access);
+Sonar stays the duplicate tracker and no ledger status or column is added.
+
+| Finding | Verdict | Estimated PR |
+| --- | --- | --- |
+| F-DUP-1 | apply now | Phase 04 |
+| F-DUP-2 | apply now | Phase 06 |
+| F-DUP-3 | apply now | Phase 09 |
+| F-DUP-4 | apply now | Phase 09 |
+| F-DUP-5 | apply now | Phase 09 |
+| F-DUP-6 | apply now | Phase 10 |
+| F-DUP-7 | apply now | Phase 05 |
+| F-DUP-8 | no action (justified): fixed-argv setup commands, best-effort clipboard and a stdlib-only child script stay outside the runner | none |
+| F-DUP-9 | apply now | Phases 07, 08 |
+| F-DUP-10 | apply now | Phase 10 |
+| F-ASYNC-1 | apply now | Phase 12 |
+| F-ASYNC-2 | apply now | Phases 13, 14 |
+| F-ASYNC-3 | apply now | Phase 15 |
+| F-ASYNC-4 | apply now | Phase 17 |
+| F-ASYNC-5 | apply now | Phase 16 |
+| F-ASYNC-6 | no action (justified): `vibe_heal` is already async at the CLI boundary | none |
+| F-NAME-1 | apply now | Phases 07, 08, 13 (via F-DUP-9) |
+| F-NAME-2 | apply now | Phase 09 (via F-DUP-4) |
+| F-NAME-3 | defer | none (revisit if the shared layer passes about 10 modules) |
+| F-NAME-4 | no action (justified): the path-run script needs no import and a rename changes the runner path contract | none |
+| F-NAME-5 | no action (justified): module names are identifiers, prose names are historical | none (mapping in Phase 20 docs) |
+| F-DEP-1 | no action (justified): G5 holds on the current tree | none |
+| F-DEP-2 | apply now | Phase 18 |
+| F-DEP-3 | no action (justified): ruff and ty versions agree | none |
+| F-DEP-4 | defer | none (I-7 hand-off, R7.1) |
+| F-CLI-1 | apply now | Phase 11 |
+| F-CLI-2 | apply now | Phase 11 |
+| F-CLI-3 | defer | none (I-7 hand-off, R7.5) |
+| F-CLI-4 | no action (justified): exit mechanism kept, lock moves under F-DUP-3 | none |
+| F-TEST-1 | defer | none |
+| F-TEST-2 | defer | none |
+| F-TEST-3 | apply now | Phase 09 |
+| F-DOC-1 | apply now | Phase 20 |
+| F-DOC-2 | apply now | Phase 18 |
+| F-DOC-3 | defer | none (Phase 20 may decide the nav) |
+| F-DOC-4 | apply now | Phase 20 |
+| F-DOC-5 | defer | none |
+| F-CI-1 | apply now | Phase 18 |
+| F-CI-2 | apply now | Phase 18 |
+| F-CI-3 | defer | none (I-7 hand-off, R7.2) |
+| F-CI-4 | no action (justified): format is enforced through pre-commit | none |
+| F-CI-5 | no action (justified): tox is a local convenience and no doctests live under `tests` | none |
+| F-CI-6 | apply now | every phase (rule, no own PR) |
+| F-PKG-1 | apply now | Phase 19 |
+| F-PKG-2 | apply now | Phase 19 |
+| F-PKG-3 | no action (justified): verified by the F-PKG-2 smoke test | none |
+| F-SEC-1 | defer | none (#136, NG2/NG7, D-3) |
+| F-SEC-2 | defer | none (NG7, D-3) |
+| F-SEC-3 | no action (justified): documented accepted risk in a dedicated clone | none |
+
+Approval record (D-1):
+
+- This list goes to the user. No apply-now PR merges before the user explicitly approves it.
+- Approval status: **pending**. Approved by / date: not yet recorded.
+- A finding added after approval needs a new approval, recorded as a D-ID from D-13 onward (R2.4).
+
+### l. I-7 hand-off list (R7)
+
+Facts and leftovers only. Nothing here is resolved, deleted or fixed by I-6.
+
+- R7.1 Remaining `tools/*` references: `tools/` has 281 tracked files (`tools/contracts`, `tools/pr-review`,
+  `tools/sisyphus`, `tools/spec-prism-flow`). References remain in `pyproject.toml` (`[tool.ruff]` `extend-exclude`,
+  `[tool.ty.src]` `exclude`), `.pre-commit-config.yaml` (`exclude: ^(tools|vendor)/`), `sonar-project.properties`
+  (`sonar.exclusions`), `codecov.yml` (`sisyphus` flag path `tools/sisyphus/`) and the CI `deptry` command (F-DEP-4, F-DEP-2).
+- R7.2 Old workflows: `.github/workflows/main.yml`, `sisyphus-main.yml`, `spec-prism-flow-main.yml`, `docs.yml` (F-CI-3).
+- R7.3 `.orig` files: the only tracked `*.orig` is `tools/pr-review/docs/commands/auto-approve.md.orig`; none under `src/`.
+  Not migrated (NG5).
+- R7.4 Install and entry-point differences. Old tools: `dotharness-pr-review` with script `harness = "harness.cli:cli"`;
+  `sisyphus` with `sisyphus = "sisyphus.cli:main"`; `spec-prism-flow` with `spec-prism-flow = "spec_prism_flow.cli:cli"`
+  (hyphenated command). dotharness: one distribution with `[project.scripts]` `vibe_heal`, `pr_review`, `spec_prism_flow`,
+  `sisyphus`, all `dotharness.cli:<name>` (underscored commands; `harness` and `spec-prism-flow` are not provided).
+  `sisyphus` declares `requires-python = ">=3.11,<4.0"` against `>=3.11` elsewhere. Wheel install is covered by Phase 19.
+- R7.5 Deferred findings by ID: F-NAME-3, F-DEP-4, F-CLI-3, F-TEST-1, F-TEST-2, F-DOC-3, F-DOC-5, F-CI-3, and under D-3 and
+  NG7 the security findings F-SEC-1 (#136) and F-SEC-2. Open defects #87-#92, #107-#117, #127, #136, #161 stay deferred (D-3).
+
+### m. Fixture decision IDs (D-13 onward)
+
+Golden tests run unmodified (G4, AC5, D-7, D-10): `tests/pr_review/test_cli.py`, `tests/spec_prism_flow/test_cli.py`,
+`tests/sisyphus/test_cli.py`, `tests/vibe_heal/test_cli_surface.py`, `tests/contracts/test_gate_record_fixture.py` and
+`tests/contracts/gate_record_golden.json`. Fixtures are not golden tests. No new snapshots for other tools (NG9).
+
+Fixture patch targets that may be edited, each edit citing a D-ID: `dotharness.pr_review.state.XDG_DATA`,
+`dotharness.pr_review.lock.XDG_RUNTIME`, `dotharness.ai_backend.TMP_DIR`, used in `tests/pr_review/conftest.py`,
+`tests/pr_review/test_lock.py`, `tests/pr_review/test_state.py`, `tests/test_ai_backend.py`.
+
+- D-13 (reserved for F-DUP-3, F-DUP-4, F-DUP-5, Phase 09): the data-directory and lock move re-points the three patch targets
+  above. Status: no fixture edited yet at this checkpoint. Phase 09 fills in the exact edited fixtures under this ID. A
+  fixture edit for any other reason takes D-14 onward.
