@@ -16,7 +16,12 @@ from dotharness.spec_prism_flow.config import (
     SpecPrismFlowConfig,
 )
 from dotharness.spec_prism_flow.decompose import TREE_FILENAME
-from dotharness.spec_prism_flow.draft_phases import DraftPhasesError, run_draft_phases, target_phase_paths
+from dotharness.spec_prism_flow.draft_phases import (
+    DraftPhasesError,
+    run_draft_phases,
+    stale_phase_paths,
+    target_phase_paths,
+)
 from dotharness.spec_prism_flow.phase_file import parse_phase_file
 from dotharness.spec_prism_flow.review import _check_section_coverage
 from dotharness.spec_prism_flow.workspace import init_workspace
@@ -137,6 +142,37 @@ def test_target_phase_paths_matches_what_run_draft_phases_writes(tmp_path):
     result = run_draft_phases(cfg)
 
     assert paths_before_write == result.written
+
+
+def test_failure_during_rendering_leaves_existing_corpus_intact(tmp_path, monkeypatch):
+    cfg = _make_cfg(tmp_path)
+    leaf = ChunkNode(chunk=_chunk("A-1", "first", ["a.py"], 1), leaf_doc=_goals_doc("Goal."))
+    root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
+    _write_tree(cfg, root)
+    cfg.plan.phase_dir.mkdir(parents=True, exist_ok=True)
+    old = cfg.plan.phase_dir / "01-old-leaf.md"
+    old.write_text("hand-reviewed")
+    monkeypatch.setattr("dotharness.spec_prism_flow.draft_phases.PHASE_FILE_NAME_PATTERN", re.compile(r"^never$"))
+
+    with pytest.raises(DraftPhasesError):
+        run_draft_phases(cfg)
+
+    assert old.read_text() == "hand-reviewed"
+
+
+def test_stale_phase_files_are_removed_after_successful_run(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    leaf = ChunkNode(chunk=_chunk("A-1", "first", ["a.py"], 1), leaf_doc=_goals_doc("Goal."))
+    root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
+    _write_tree(cfg, root)
+    cfg.plan.phase_dir.mkdir(parents=True, exist_ok=True)
+    old = cfg.plan.phase_dir / "02-old-leaf.md"
+    old.write_text("stale")
+
+    assert stale_phase_paths(cfg) == [old]
+    run_draft_phases(cfg)
+
+    assert not old.exists()
 
 
 # --- sizing outliers -----------------------------------------------------------------------------

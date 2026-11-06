@@ -167,22 +167,34 @@ def target_phase_paths(cfg: SpecPrismFlowConfig) -> list[Path]:
     return paths
 
 
+def _stale_phase_paths(phase_dir: Path, keep_names: set[str]) -> list[Path]:
+    if not phase_dir.is_dir():
+        return []
+    return sorted(
+        path
+        for path in phase_dir.glob("*-leaf.md")
+        if PHASE_FILE_NAME_PATTERN.match(path.name) and path.name not in keep_names
+    )
+
+
+def stale_phase_paths(cfg: SpecPrismFlowConfig) -> list[Path]:
+    """Existing phase files a `run_draft_phases` call would delete because no new leaf targets them."""
+    keep = {path.name for path in target_phase_paths(cfg)}
+    return _stale_phase_paths(cfg.plan.phase_dir, keep)
+
+
 def run_draft_phases(cfg: SpecPrismFlowConfig) -> DraftPhasesResult:
     tree, result = _load_linearized(cfg)
 
     internal_nodes_skipped = _count_total_nodes(tree) - len(result.leaves)
-
-    cfg.plan.phase_dir.mkdir(parents=True, exist_ok=True)
-    for stale_path in cfg.plan.phase_dir.glob("*-leaf.md"):
-        if PHASE_FILE_NAME_PATTERN.match(stale_path.name):
-            stale_path.unlink()
 
     requirements_path = cfg.plan.workspace_dir / REQUIREMENTS_FILENAME
     headings = parse_numbered_headings(requirements_path.read_text()) if requirements_path.exists() else []
     titles = {number: title for number, title, _ in headings}
     source_sections = _source_section_numbers(headings, result.leaves)
 
-    written: list[Path] = []
+    # Validate and render everything in memory first, so a failure never touches the existing corpus.
+    rendered_files: list[tuple[str, str]] = []
     outliers: list[str] = []
     # result.graph.nodes is built by linearize() from the same `leaves` list, in the same
     # order (one stem per leaf) — see linearize.py's `stems` computation. Reusing that stem
@@ -215,12 +227,20 @@ def run_draft_phases(cfg: SpecPrismFlowConfig) -> DraftPhasesResult:
         if not word_count_result.in_band:
             outliers.append(f"{label}: {word_count_result.note}")
 
-        out_path = cfg.plan.phase_dir / label
         rendered = render_phase_file(phase)
         try:
             parse_phase_file_text(label, rendered)
         except PhaseFileError as exc:
             raise DraftPhasesError(f"Rendered phase file {label} failed validation: {exc}") from exc  # noqa: TRY003
+        rendered_files.append((label, rendered))
+
+    cfg.plan.phase_dir.mkdir(parents=True, exist_ok=True)
+    for stale_path in _stale_phase_paths(cfg.plan.phase_dir, {label for label, _ in rendered_files}):
+        stale_path.unlink()
+
+    written: list[Path] = []
+    for label, rendered in rendered_files:
+        out_path = cfg.plan.phase_dir / label
         out_path.write_text(rendered)
         prose_review.review_document(cfg.prose_review, out_path)
         try:

@@ -171,6 +171,7 @@ def plan_draft_phases(config: ConfigOption = None, yes: YesOption = False) -> No
 
     try:
         target_paths = draft_phases.target_phase_paths(cfg)
+        stale_paths = draft_phases.stale_phase_paths(cfg)
     except draft_phases.DraftPhasesError as e:
         _fail(str(e))
 
@@ -178,6 +179,9 @@ def plan_draft_phases(config: ConfigOption = None, yes: YesOption = False) -> No
     if existing_paths and not yes:
         names = ", ".join(path.name for path in existing_paths)
         typer.confirm(f"Overwrite existing phase file(s) ({names})?", abort=True)
+    if stale_paths and not yes:
+        stale_names = ", ".join(path.name for path in stale_paths)
+        typer.confirm(f"Delete stale phase file(s) no longer produced by the tree ({stale_names})?", abort=True)
 
     try:
         result = draft_phases.run_draft_phases(cfg)
