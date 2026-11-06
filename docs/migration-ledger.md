@@ -169,6 +169,23 @@ The CLI is `pr_review` (typer). Differences observed from the click `harness` CL
 8. `click` is not a direct dependency (typer is); a module-level alias `cli = app` keeps the wiring
    `from dotharness.pr_review.cli import cli as pr_review` working.
 
+### Typer versus click behavior differences for spec_prism_flow
+
+The CLI is `spec_prism_flow` (typer). Differences observed by running the click `spec-prism-flow` CLI and the typer one side by side:
+
+1. There is no root `build` group, so `spec_prism_flow build run` fails with `No such command 'build'` and exit code 2. The
+   root help lists only `plan`.
+2. Missing positional argument: the usage line shows `{brief_path}` where click showed `BRIEF_PATH`, and the message is
+   `Missing argument 'brief_path'.` where click said `'BRIEF_PATH'`. Exit code stays 2.
+3. Unknown option: the message is `No such option: --bogus` where click said `No such option '--bogus'`. Exit code stays 2.
+4. `--help` lists arguments in an `Arguments:` section (`brief_path  [required]`), which click did not, and shows option metavars
+   as `<path>` and `<str>` where click showed `PATH` and `TEXT`.
+5. `plan --help` lists the commands in definition order (`init`, `draft-overview`, ...) instead of alphabetically, and the
+   group descriptions drop the "(Feature A)" suffix.
+6. Runtime errors raised through `_fail()` keep exit code 1 and `Error: <msg>`; `plan init` of a missing brief prints
+   `Error: BRIEF_PATH does not exist: <path>`, as before.
+7. `plan` with no command prints help and exits 2, as in click.
+
 ### Behavior differences from the shared-layer adapters
 
 `Backend` (adapter over `launch_sync`): prompt files use the prefix `dotharness_`; retries still cover
