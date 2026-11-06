@@ -148,7 +148,7 @@ def _validate(source: WorkItemSource | None) -> WorkItemSource:
             raise PickError("[source.work_item] assignee is required to pick work")
         if source.kind == "linear" and not source.pick_state:
             raise PickError('[source.work_item] pick_state is required for kind = "linear"')
-    return source
+    return source  # NOSONAR python:S3516 - validator: every non-raising path returns `source` by design
 
 
 def pick_items(
