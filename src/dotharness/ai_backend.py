@@ -275,7 +275,7 @@ async def _attempt(
     *,
     cwd: str,
     env: dict[str, str],
-    timeout: float,
+    timeout: float,  # NOSONAR python:S7483 - run() must kill the group and return RunResult(timed_out)
     prompt_via_file: bool,
     options: BackendOptions,
     prefix: str,
