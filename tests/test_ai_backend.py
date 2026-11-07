@@ -527,3 +527,10 @@ def test_claude_accept_edits_can_read_prompt_outside_cwd(tmp_path):
     finally:
         prompt.unlink(missing_ok=True)
     assert "PINEAPPLE-7" in result.stdout
+
+
+def test_config_modules_share_backend_names() -> None:
+    from dotharness.ai_backend import BACKEND_NAMES
+    from dotharness.sisyphus.config import AGENT_BACKENDS
+
+    assert AGENT_BACKENDS == BACKEND_NAMES

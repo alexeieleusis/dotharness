@@ -7,19 +7,20 @@ No imports from either of them.
 from __future__ import annotations
 
 import json
-import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+from dotharness.fileio import load_toml
 
 LEAF_GLOB = "*-leaf.md"
 
 
 def read_spf_config(path: Path) -> dict[str, Any] | None:
-    """Parse ``.spec-prism-flow.toml``; ``None`` when absent. Raises ``OSError``/``tomllib.TOMLDecodeError``."""
+    """Parse ``.spec-prism-flow.toml``; ``None`` when absent. Raises ``OSError``/``TOMLDecodeError``."""
     if not path.is_file():
         return None
-    return tomllib.loads(path.read_text(encoding="utf-8"))
+    return load_toml(path)
 
 
 def plan_path(data: Mapping[str, Any] | None, repo: Path, key: str) -> Path | None:

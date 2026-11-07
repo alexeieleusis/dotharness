@@ -18,7 +18,6 @@ import math
 import re
 import shlex
 import time
-import tomllib
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext, suppress
 from dataclasses import dataclass
@@ -27,6 +26,7 @@ from datetime import time as dtime
 from pathlib import Path
 from typing import Any, Protocol
 
+from dotharness.fileio import TOMLDecodeError
 from dotharness.sisyphus import prbody
 from dotharness.sisyphus.cleanup import DELETED, KEPT, PrInfo, cleanup_branch
 from dotharness.sisyphus.config import SisyphusConfig
@@ -273,10 +273,10 @@ def stop_report_path(record: RunRecord) -> Path:
 
 
 def read_spf_config(path: Path) -> dict[str, Any] | None:
-    """Read ``.spec-prism-flow.toml`` with ``tomllib``; ``None`` when the file is absent."""
+    """Read ``.spec-prism-flow.toml`` via the shared loader; ``None`` when the file is absent."""
     try:
         return _read_spf_config(path)
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+    except (OSError, TOMLDecodeError) as exc:
         raise OrchestratorError(f"cannot read {path}: {exc}") from exc
 
 

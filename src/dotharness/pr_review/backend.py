@@ -19,7 +19,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from dotharness.ai_backend import ClaudeOptions, OpencodeOptions, launch_sync
+from dotharness.ai_backend import BACKEND_NAMES, ClaudeOptions, OpencodeOptions, launch_sync
 from dotharness.opencode_guards import BackendCwdDivergedError, OpencodePluginError
 from dotharness.repo_guard import RepoIdentityError
 
@@ -55,7 +55,7 @@ class Backend:
         expected_repo_name: str | None = None,
         harness_repo_root: Path | None = None,
     ):
-        if backend not in ("opencode", "claude"):
+        if backend not in BACKEND_NAMES:
             raise ValueError(f"Unknown backend: {backend}")  # noqa: TRY003
         self.backend_name = backend
         self.timeout = timeout

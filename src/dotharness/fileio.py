@@ -6,10 +6,23 @@ import fcntl
 import json
 import os
 import tempfile
+import tomllib
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+TOMLDecodeError = tomllib.TOMLDecodeError
+
+
+def load_toml(path: Path) -> dict[str, Any]:
+    """Parse the TOML file at ``path`` (the one loader, F-DUP-6).
+
+    Raises ``OSError`` (including ``FileNotFoundError``) when unreadable and ``TOMLDecodeError`` on bad syntax;
+    callers keep their own missing-file handling and error wrapping.
+    """
+    with path.open("rb") as fh:
+        return tomllib.load(fh)
 
 
 def atomic_write_text(path: Path, text: str, *, suffix: str = ".tmp") -> None:

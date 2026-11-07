@@ -74,3 +74,17 @@ def test_file_lock_blocking_waits_for_holder(tmp_path: Path) -> None:
         assert not marker.exists()
     proc.join(5)
     assert marker.read_text() == "acquired"
+
+
+def test_load_toml_parses_and_propagates_errors(tmp_path: Path) -> None:
+    from dotharness.fileio import TOMLDecodeError, load_toml
+
+    good = tmp_path / "a.toml"
+    good.write_text('[x]\nk = "v"\n', encoding="utf-8")
+    assert load_toml(good) == {"x": {"k": "v"}}
+    bad = tmp_path / "b.toml"
+    bad.write_text("= nope", encoding="utf-8")
+    with pytest.raises(TOMLDecodeError):
+        load_toml(bad)
+    with pytest.raises(FileNotFoundError):
+        load_toml(tmp_path / "missing.toml")
