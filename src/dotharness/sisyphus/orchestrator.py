@@ -967,6 +967,8 @@ def run_item(
             try:
                 digest_path = write_digest([run.rec], config, report, today)
             except Exception as exc:
+                if error is None:
+                    raise
                 raise exc from error
         if error is not None:
             raise error
