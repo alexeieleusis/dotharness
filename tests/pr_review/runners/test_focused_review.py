@@ -295,10 +295,10 @@ async def test_matching_comment_invokes_backend(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
         await focused_review._run_locked(cfg)
-    mock_be.return_value.run.assert_called_once()
+    mock_be.return_value.run.assert_awaited_once()
 
 
 async def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
@@ -323,10 +323,10 @@ async def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
         await focused_review._run_locked(cfg)
-    mock_be.return_value.run.assert_called_once()
+    mock_be.return_value.run.assert_awaited_once()
     mock_was_requested.assert_called_once_with(1, "acme/frontend", "bot", ANY)
     mock_add_reviewer.assert_called_once_with(1, "acme/frontend", "bot", mock_add_reviewer.call_args.args[3])
 
@@ -348,7 +348,7 @@ async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, t
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend"),
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True),
     ):
         await focused_review._run_locked(cfg)
     mock_add_reviewer.assert_not_called()
@@ -372,7 +372,7 @@ async def test_already_marked_comment_skips_backend(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout") as mock_checkout,
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
         await focused_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
@@ -394,7 +394,7 @@ async def test_non_matching_comment_skips_backend(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
         await focused_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
@@ -415,7 +415,7 @@ async def test_non_matching_pr_skips_restore(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore") as mock_restore,
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
         await focused_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
@@ -438,7 +438,7 @@ async def test_unresolvable_knowledge_file_skips_comment_but_continues(tmp_xdg, 
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore") as mock_restore,
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value=None),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
         await focused_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
@@ -461,7 +461,7 @@ async def test_restores_working_dir_even_on_backend_failure(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore") as mock_restore,
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
         mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.side_effect = Exception("backend exploded")
@@ -490,7 +490,7 @@ async def test_fatal_git_error_continues_to_remaining_prs(tmp_xdg, tmp_path):
         ) as mock_checkout,
         patch("dotharness.pr_review.runners.focused_review.git_restore") as mock_restore,
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
         await focused_review._run_locked(cfg)
     assert mock_checkout.call_count == 2
@@ -517,10 +517,10 @@ async def test_non_fatal_error_continues_to_next_pr(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
         await focused_review._run_locked(cfg)
-    mock_be.return_value.run.assert_called_once()
+    mock_be.return_value.run.assert_awaited_once()
 
 
 @pytest.fixture(autouse=True)
@@ -649,7 +649,7 @@ async def _run_with_threads(tmp_path, comments, threads):
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout") as mock_checkout,
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
         await focused_review._run_locked(cfg)
     return mock_threads, mock_checkout, mock_be
@@ -680,10 +680,10 @@ async def test_thread_fetch_failure_does_not_stop_other_prs(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
         await focused_review._run_locked(cfg)
-    mock_be.return_value.run.assert_called_once()
+    mock_be.return_value.run.assert_awaited_once()
 
 
 async def test_no_target_comment_makes_no_thread_fetch(tmp_xdg, tmp_path):
@@ -698,14 +698,14 @@ async def test_run_merges_thread_state_into_target_comment(tmp_xdg, tmp_path):
     _t, _c, mock_be = await _run_with_threads(tmp_path, [comment], threads)
     assert comment["thread_id"] == "T1"
     assert comment["node_id"] == "C1"
-    mock_be.return_value.run.assert_called_once()
+    mock_be.return_value.run.assert_awaited_once()
 
 
 async def test_target_without_matching_thread_is_still_processed(tmp_xdg, tmp_path):
     comment = dict(_MATCHING_COMMENT)
     _t, _c, mock_be = await _run_with_threads(tmp_path, [comment], [])
     assert "thread_id" not in comment
-    mock_be.return_value.run.assert_called_once()
+    mock_be.return_value.run.assert_awaited_once()
 
 
 async def test_resolved_thread_target_skips_backend_end_to_end(tmp_xdg, tmp_path):
@@ -731,7 +731,7 @@ async def test_runner_passes_node_ids_to_backend_prompt(tmp_xdg, tmp_path):
     comment = dict(_MATCHING_COMMENT)
     threads = [_thread("PRRT_T1", False, [("PRRC_C1", 1, False)])]
     _t, _c, mock_be = await _run_with_threads(tmp_path, [comment], threads)
-    mock_be.return_value.run.assert_called_once()
+    mock_be.return_value.run.assert_awaited_once()
     prompt = mock_be.return_value.run.call_args.args[0]
     assert "Thread node ID: PRRT_T1" in prompt
     assert "Comment node ID: PRRC_C1" in prompt
