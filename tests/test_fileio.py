@@ -66,14 +66,20 @@ def _child_blocking(path: str, marker: str) -> None:
 
 def test_file_lock_blocking_waits_for_holder(tmp_path: Path) -> None:
     lock, marker = tmp_path / "k.lock", tmp_path / "m"
-    with file_lock(lock):
-        proc = _FORK.Process(target=_child_blocking, args=(str(lock), str(marker)))
-        proc.start()
-        proc.join(0.3)
-        assert proc.is_alive()
-        assert not marker.exists()
-    proc.join(5)
-    assert marker.read_text() == "acquired"
+    proc = _FORK.Process(target=_child_blocking, args=(str(lock), str(marker)))
+    try:
+        with file_lock(lock):
+            proc.start()
+            proc.join(0.3)
+            assert proc.is_alive()
+            assert not marker.exists()
+        proc.join(5)
+        assert marker.read_text() == "acquired"
+    finally:  # never leave a live non-daemon child to hang interpreter shutdown
+        if proc.is_alive():
+            proc.terminate()
+        if proc.pid is not None:
+            proc.join(5)
 
 
 def test_load_toml_parses_and_propagates_errors(tmp_path: Path) -> None:
