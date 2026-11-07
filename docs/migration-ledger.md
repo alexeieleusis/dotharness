@@ -1,5 +1,7 @@
 # Migration ledger
 
+Frozen at I-6: this ledger is a historical migration record; SonarQube is the duplicate tracker.
+
 This ledger tracks every module of the four tools that are consolidated into the
 `dotharness` project (issues I-2 to I-8 of #163). There is one row per module.
 

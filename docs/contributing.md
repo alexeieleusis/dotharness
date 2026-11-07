@@ -7,7 +7,8 @@ merges.
 
 - I-1 targets `main`.
 - I-2 to I-5 target `consolidation`.
-- I-6 to I-8 target `main` after I-5 merges.
+- I-6 to I-8 target `main` after I-5 merges. This issue's PRs (I-6, #168) target
+  `sisyphus/164-c86e8a65`.
 - `consolidation` lands on `main` as one squash commit. The `main` ruleset (squash
   only, linear history) is not changed.
 
@@ -86,19 +87,9 @@ the tools migrate.
 
 ### Coverage policy
 
-I-1 enforces no project-wide numeric coverage floor (D-6, staged floor). The
-`dotharness` Codecov status is informational. The tools are migrated first, and the
-floor is set in I-6, once all four tools have migrated, at the level then reached.
-A 90% floor would fail as soon as vibe-heal migrates in I-2.
-
-Input figures, from local `coverage.xml` files. They are non-authoritative and are
-recomputed in CI before any floor is set:
-
-| Tool | Coverage |
-| --- | --- |
-| pr-review | 0.9396 |
-| spec-prism-flow | 0.9667 |
-| sisyphus | 0.9675 |
-| vibe-heal | 0.7949 |
+The project-wide branch coverage floor is 91%. It is `fail_under` in
+`[tool.coverage.report]` of `pyproject.toml`, enforced by `make test` and in CI.
+The measured value when it was set was 91.47%. The `dotharness` Codecov status is
+informational.
 
 The existing `sisyphus` status and flag stay untouched until I-8.
