@@ -15,6 +15,7 @@ Imports only Package A modules (never ``harness`` or ``spec_prism_flow``).
 # ruff: noqa: TRY003
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import sys
@@ -368,7 +369,8 @@ class LinearTracker:
         variables = {"state": source.pick_state, "assignee": {field: {"eq": source.assignee}}}
         body = json.dumps({"query": _LINEAR_QUERY, "variables": variables}).encode()
         try:
-            raw = self._post(LINEAR_API_URL, body, {"Content-Type": "application/json", "Authorization": self.token})
+            headers = {"Content-Type": "application/json", "Authorization": self.token}
+            raw = await asyncio.to_thread(self._post, LINEAR_API_URL, body, headers)
             data = json.loads(raw)
         except (OSError, ValueError) as exc:
             raise PickError(f"Linear request failed: {exc}") from exc
