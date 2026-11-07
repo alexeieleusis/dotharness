@@ -392,7 +392,7 @@ async def test_prompts_carry_resolved_paths(world: World) -> None:
 def test_build_prompt_carries_the_test_only_deviation_rule() -> None:
     text = " ".join(knowledge_file("spec-prism-flow/build-execution-prompt.md").read_text().split())
     assert re.search(r"A test-only deviation does not trigger the rules above\.", text)
-    assert re.search(r"A test-only deviation is made only of new or changed test files", text)
+    assert re.search(r"A test-only deviation contains only new or changed test files", text)
     assert re.search(r"If a phase's deviations include anything besides such tests, the rules above apply", text)
     assert re.search(r"Context for later phases: .*list the tests you added or changed", text)
 
