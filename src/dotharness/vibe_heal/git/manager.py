@@ -2,11 +2,11 @@
 
 import shlex
 import shutil
-import subprocess
 from pathlib import Path
 
 import git
 
+from dotharness.subprocess_runner import run
 from dotharness.vibe_heal.ai_tools.base import AIToolType
 from dotharness.vibe_heal.git.exceptions import (
     DirtyWorkingDirectoryError,
@@ -146,7 +146,7 @@ class GitManager:
         staged = [item.a_path for item in self.repo.index.diff("HEAD")]
         return file_path_normalized in staged
 
-    def commit_fix(
+    async def commit_fix(
         self,
         issue: SonarQubeIssue,
         files: list[str] | None,
@@ -204,9 +204,9 @@ class GitManager:
         message = self._create_commit_message(issue, ai_tool_type, rule, file_count_for_message)
 
         # Stage and commit using helper method
-        return self._stage_and_commit(files, message)
+        return await self._stage_and_commit(files, message)
 
-    def create_commit(
+    async def create_commit(
         self,
         message: str,
         files: list[str] | None = None,
@@ -240,7 +240,7 @@ class GitManager:
             raise GitOperationError(msg)
 
         # Stage and commit using helper method
-        return self._stage_and_commit(files, message)
+        return await self._stage_and_commit(files, message)
 
     def _do_commit(self, message: str) -> git.Commit:
         """Delegate to repo.index.commit; extracted for testability.
@@ -253,7 +253,7 @@ class GitManager:
         """
         return self.repo.index.commit(message)
 
-    def _run_pre_commit_hooks(self, files: list[str]) -> list[str]:
+    async def _run_pre_commit_hooks(self, files: list[str]) -> list[str]:
         """Run pre-commit hooks on staged files and return files modified by hooks.
 
         Args:
@@ -275,21 +275,13 @@ class GitManager:
         else:
             cmd = ["git", "hook", "run", "--ignore-missing", "pre-commit"]
 
-        try:
-            subprocess.run(  # noqa: S603
-                cmd,
-                cwd=repo_root,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=self._pre_commit_timeout,
-            )
-        except subprocess.TimeoutExpired as e:
+        result = await run(cmd, cwd=repo_root, timeout=self._pre_commit_timeout)
+        if result.timed_out:
             msg = f"Pre-commit hook timed out after {self._pre_commit_timeout} seconds"
-            raise GitOperationError(msg) from e
-        except OSError as e:
-            msg = f"Pre-commit hook failed to run: {e}"
-            raise GitOperationError(msg) from e
+            raise GitOperationError(msg)
+        if result.not_found:
+            msg = f"Pre-commit hook failed to run: {result.stderr}"
+            raise GitOperationError(msg)
         # Ignore return code; what matters is whether files were modified by hooks
 
         # Detect files modified by hooks (working tree differs from index)
@@ -314,7 +306,7 @@ class GitManager:
             self.repo.index.remove(missing)
         return existing
 
-    def _stage_and_commit(self, files: list[str], message: str) -> str | None:
+    async def _stage_and_commit(self, files: list[str], message: str) -> str | None:
         """Stage files and create a commit if there are changes.
 
         Args:
@@ -332,7 +324,7 @@ class GitManager:
             existing = self._stage_files(files)
 
             # Run pre-commit hooks and re-stage any auto-fixed files
-            hook_modified = self._run_pre_commit_hooks(existing)
+            hook_modified = await self._run_pre_commit_hooks(existing)
             if hook_modified:
                 self.repo.index.add(hook_modified)
 

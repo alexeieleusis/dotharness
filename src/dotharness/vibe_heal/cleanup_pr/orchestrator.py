@@ -170,8 +170,8 @@ class CleanupPrOrchestrator:
         """
         # FR-2 step 1 + 11.A-12: strict preconditions, all before any SonarQube work.
         self._validate_preconditions(base_branch, dry_run)
-        self._fetch_base_branch(base_branch)
-        self._check_up_to_date_with_base(base_branch)
+        await self._fetch_base_branch(base_branch)
+        await self._check_up_to_date_with_base(base_branch)
 
         temp_project: TempProjectMetadata | None = None
         original_project_key: str | None = None
@@ -308,7 +308,7 @@ class CleanupPrOrchestrator:
         # Strict clean working tree (untracked files are fine), checked once up front.
         self.git_manager.require_clean_working_directory()
 
-    def _fetch_base_branch(self, base_branch: str) -> None:
+    async def _fetch_base_branch(self, base_branch: str) -> None:
         """Fetch the base ref's remote ref; refuse to run on any fetch failure.
 
         Runs even in dry-run. On any failure (offline, auth, missing remote) the
@@ -324,14 +324,14 @@ class CleanupPrOrchestrator:
         """
         dim(f"Fetching {base_branch} ...")
         try:
-            fetched = self.branch_analyzer.fetch_remote_ref(base_branch)
+            fetched = await self.branch_analyzer.fetch_remote_ref(base_branch)
         except GitOperationError as e:
             error(str(e))
             raise
         if not fetched:
             warn(f"'{base_branch}' is not a remote-tracking ref; skipping fetch and using the local ref as-is")
 
-    def _check_up_to_date_with_base(self, base_branch: str) -> None:
+    async def _check_up_to_date_with_base(self, base_branch: str) -> None:
         """Ensure HEAD sits on top of the base branch (base is an ancestor of HEAD).
 
         A merged-in base counts; linear history is not required. Refuses to run
@@ -345,7 +345,7 @@ class CleanupPrOrchestrator:
         """
         dim(f"Checking that HEAD is up to date with {base_branch} ...")
         try:
-            up_to_date = self.branch_analyzer.is_ancestor_of_head(base_branch)
+            up_to_date = await self.branch_analyzer.is_ancestor_of_head(base_branch)
         except GitOperationError as e:
             error(str(e))
             raise
@@ -377,7 +377,7 @@ class CleanupPrOrchestrator:
             GitOperationError: If the worktree cannot be created.
         """
         project_key = self.config.sonarqube_project_key
-        with self.branch_analyzer.temporary_worktree(base_branch) as worktree_dir:
+        async with self.branch_analyzer.temporary_worktree(base_branch) as worktree_dir:
             dim(f"Running baseline SonarQube scan of {base_branch} against {project_key}...")
             return await self.analysis_runner.run_analysis(
                 project_key=project_key,
@@ -765,7 +765,7 @@ class CleanupPrOrchestrator:
 
         message = build_main_duplication_commit_message(fresh_task, self.ai_tool.tool_type.display_name)
         try:
-            sha = self.git_manager.create_commit(message, None, include_untracked=True)
+            sha = await self.git_manager.create_commit(message, None, include_untracked=True)
         except Exception as e:
             error(f"  Failed to commit main duplication fix: {e}")
             self._mark_failures(result, 1)

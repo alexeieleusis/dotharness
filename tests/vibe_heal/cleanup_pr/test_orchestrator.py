@@ -1,6 +1,5 @@
 """Tests for CleanupPrOrchestrator class."""
 
-import subprocess
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -10,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from dotharness.subprocess_runner import RunResult
 from dotharness.vibe_heal.ai_tools.base import AITool
 from dotharness.vibe_heal.cleanup_pr.orchestrator import (
     CleanupPrOrchestrator,
@@ -69,9 +69,9 @@ def orchestrator(
     return CleanupPrOrchestrator(config, mock_client, mock_ai_tool)
 
 
-def _git_result(returncode: int, stderr: bytes = b"") -> subprocess.CompletedProcess:
-    """Build a subprocess result with the given exit code and stderr."""
-    return subprocess.CompletedProcess(args=["git"], returncode=returncode, stdout=None, stderr=stderr)
+def _git_result(returncode: int, stderr: str = "", stdout: str = "") -> RunResult:
+    """Build a runner result with the given exit code and stderr."""
+    return RunResult(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 @contextmanager
@@ -91,12 +91,12 @@ def _preconditions_pass(
     """
     commands: list[list[str]] = []
 
-    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+    async def fake_run(cmd: list[str], **kwargs: object) -> RunResult:
         commands.append(cmd)
         if cmd == ["git", "remote"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(remotes).encode(), stderr=b"")
+            return _git_result(0, stdout="\n".join(remotes))
         if "fetch" in cmd:
-            stderr = b"fatal: unable to access 'https://example.com/'" if fetch_rc else b""
+            stderr = "fatal: unable to access 'https://example.com/'" if fetch_rc else ""
             return _git_result(fetch_rc, stderr=stderr)
         if "merge-base" in cmd:
             return _git_result(ancestor_rc)
@@ -111,7 +111,7 @@ def _preconditions_pass(
         patch.object(orchestrator.branch_analyzer, "get_user_email", return_value="u@example.com"),
         patch.object(orchestrator.ai_tool, "is_available", return_value=True),
         patch.object(orchestrator.git_manager, "require_clean_working_directory", side_effect=clean_side_effect),
-        patch("dotharness.vibe_heal.git.branch_analyzer.subprocess.run", side_effect=fake_run),
+        patch("dotharness.vibe_heal.git.branch_analyzer.run", side_effect=fake_run),
     ):
         yield commands
 

@@ -2,15 +2,15 @@
 
 import os
 import shutil
-import subprocess
 import tempfile
-from collections.abc import Generator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from git import GitCommandError, Repo
 from git.exc import InvalidGitRepositoryError
 
+from dotharness.subprocess_runner import RunResult, run
 from dotharness.vibe_heal.git.exceptions import GitOperationError
 from dotharness.vibe_heal.output import warn
 
@@ -249,31 +249,27 @@ class BranchAnalyzer:
             msg = f"Failed to get user email: {e}"
             raise BranchAnalyzerError(msg) from e
 
-    def _run_git(
-        self, args: list[str], *, capture_stdout: bool = False, capture_stderr: bool = False
-    ) -> subprocess.CompletedProcess[bytes]:
+    async def _run_git(self, args: list[str]) -> RunResult:
         """Run a git command with a timeout and without interactive prompts.
 
         Raises:
             GitOperationError: If the command times out.
             OSError: If the git binary cannot be executed.
         """
-        try:
-            return subprocess.run(  # noqa: S603
-                ["git", *args],  # noqa: S607
-                cwd=self.repo_path,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
-                stderr=subprocess.PIPE if capture_stderr else subprocess.DEVNULL,
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-                timeout=GIT_COMMAND_TIMEOUT_SECONDS,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as e:
+        result = await run(
+            ["git", *args],
+            cwd=self.repo_path,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+        )
+        if result.timed_out:
             msg = f"'git {' '.join(args)}' timed out after {GIT_COMMAND_TIMEOUT_SECONDS}s"
-            raise GitOperationError(msg) from e
+            raise GitOperationError(msg)
+        if result.not_found:
+            raise OSError(result.stderr)
+        return result
 
-    def split_remote_ref(self, ref: str) -> tuple[str, str] | None:
+    async def split_remote_ref(self, ref: str) -> tuple[str, str] | None:
         """Split a ref into ``(remote, branch)`` if its prefix is a real remote.
 
         ``origin/main`` -> ``("origin", "main")``. A bare name (``main``) or a local
@@ -284,21 +280,21 @@ class BranchAnalyzer:
             GitOperationError: If ``git remote`` cannot be run or fails.
         """
         try:
-            result = self._run_git(["remote"], capture_stdout=True)
+            result = await self._run_git(["remote"])
         except OSError as e:
             msg = f"Failed to run 'git remote': {e}"
             raise GitOperationError(msg) from e
         if result.returncode != 0:
             msg = f"'git remote' exited with code {result.returncode}"
             raise GitOperationError(msg)
-        remotes = result.stdout.decode(errors="replace").split() if result.stdout else []
+        remotes = result.stdout.split()
         for remote in sorted(remotes, key=len, reverse=True):
             prefix = f"{remote}/"
             if ref.startswith(prefix) and len(ref) > len(prefix):
                 return remote, ref[len(prefix) :]
         return None
 
-    def fetch_remote_ref(self, ref: str) -> bool:
+    async def fetch_remote_ref(self, ref: str) -> bool:
         """Fetch a remote-tracking ref (``<remote>/<branch>``).
 
         Returns:
@@ -307,37 +303,37 @@ class BranchAnalyzer:
         Raises:
             GitOperationError: If the git binary is unavailable or the fetch fails.
         """
-        split = self.split_remote_ref(ref)
+        split = await self.split_remote_ref(ref)
         if split is None:
             return False
         remote, branch = split
         try:
-            result = self._run_git(["fetch", "--", remote, branch], capture_stderr=True)
+            result = await self._run_git(["fetch", "--", remote, branch])
         except OSError as e:
             msg = f"Failed to run 'git fetch {remote} {branch}': {e}"
             raise GitOperationError(msg) from e
         if result.returncode != 0:
-            stderr_text = result.stderr.decode(errors="replace").strip() if result.stderr else ""
+            stderr_text = result.stderr.strip()
             detail = stderr_text or f"'git fetch {remote} {branch}' exited with code {result.returncode}"
             msg = f"Refusing to run: unable to fetch {ref}. {detail}"
             raise GitOperationError(msg)
         return True
 
-    def is_ancestor_of_head(self, ref: str) -> bool:
+    async def is_ancestor_of_head(self, ref: str) -> bool:
         """Check whether ``ref`` is an ancestor of HEAD (a merged-in ref counts).
 
         Raises:
             GitOperationError: If the git binary cannot be run.
         """
         try:
-            result = self._run_git(["merge-base", "--is-ancestor", ref, "HEAD"])
+            result = await self._run_git(["merge-base", "--is-ancestor", ref, "HEAD"])
         except OSError as e:
             msg = f"Failed to check ancestry with {ref}: {e}"
             raise GitOperationError(msg) from e
         return result.returncode == 0
 
-    @contextmanager
-    def temporary_worktree(self, ref: str) -> Generator[Path]:
+    @asynccontextmanager
+    async def temporary_worktree(self, ref: str) -> AsyncGenerator[Path]:
         """Check ``ref`` out into a temporary detached worktree, removed on exit.
 
         The main working tree is untouched. Removal failures are warnings, never errors.
@@ -349,12 +345,12 @@ class BranchAnalyzer:
         created = False
         try:
             try:
-                result = self._run_git(["worktree", "add", "--detach", str(worktree_dir), ref], capture_stderr=True)
+                result = await self._run_git(["worktree", "add", "--detach", str(worktree_dir), ref])
             except OSError as e:
                 msg = f"Failed to create worktree for {ref}: {e}"
                 raise GitOperationError(msg) from e
             if result.returncode != 0:
-                stderr_text = result.stderr.decode(errors="replace").strip() if result.stderr else ""
+                stderr_text = result.stderr.strip()
                 msg = f"Failed to create worktree for {ref}: {stderr_text or f'exit code {result.returncode}'}"
                 raise GitOperationError(msg)
             created = True
@@ -362,7 +358,7 @@ class BranchAnalyzer:
         finally:
             if created:
                 try:
-                    removed = self._run_git(["worktree", "remove", "--force", str(worktree_dir)])
+                    removed = await self._run_git(["worktree", "remove", "--force", str(worktree_dir)])
                     if removed.returncode != 0:
                         warn(f"Warning: Failed to remove worktree {worktree_dir}")
                 except (OSError, GitOperationError) as e:
