@@ -366,7 +366,7 @@ async def launch(
     prompt: str,
     *,
     cwd: str | Path,
-    timeout: float,
+    timeout: float,  # NOSONAR python:S7483 - run() must kill the group and return RunResult(timed_out)
     env: Mapping[str, str] | None = None,
     path_prepend: Sequence[str] = (),
     prompt_via_file: bool = True,
