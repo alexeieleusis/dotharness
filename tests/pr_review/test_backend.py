@@ -1,4 +1,4 @@
-"""Tests for the synchronous Backend adapter over dotharness.ai_backend.launch_sync."""
+"""Tests for the async Backend adapter over dotharness.ai_backend.launch."""
 
 import contextlib
 import os
@@ -28,7 +28,7 @@ from dotharness.pr_review.backend import (
 )
 from dotharness.subprocess_runner import RunResult
 
-LAUNCH = "dotharness.pr_review.backend.launch_sync"
+LAUNCH = "dotharness.pr_review.backend.launch"
 
 
 def _make_backend(backend="opencode", **kwargs):
@@ -38,10 +38,10 @@ def _make_backend(backend="opencode", **kwargs):
 # --- flag mapping and pass-through --------------------------------------------------------------------------------
 
 
-def test_opencode_flag_mapping_and_guards_passed(tmp_path):
+async def test_opencode_flag_mapping_and_guards_passed(tmp_path):
     b = Backend("opencode", 77, ["/x/bin"], {"A": "1"}, expected_repo_name="acme/web")
     with patch(LAUNCH, return_value=RunResult(0, "o", "e")) as m:
-        b.run("do it", str(tmp_path), opencode_dir="/some/dir", context="ctx")
+        await b.run("do it", str(tmp_path), opencode_dir="/some/dir", context="ctx")
     args, kw = m.call_args
     assert args == ("opencode", "do it")
     assert kw["backend_options"] == OpencodeOptions(
@@ -55,22 +55,22 @@ def test_opencode_flag_mapping_and_guards_passed(tmp_path):
     assert kw["expected_repo_name"] == "acme/web"
 
 
-def test_harness_root_is_discovered_in_a_checkout_and_passed_explicitly(tmp_path):
+async def test_harness_root_is_discovered_in_a_checkout_and_passed_explicitly(tmp_path):
     root = backend_mod.find_harness_checkout()
     assert root is not None  # the test suite runs from the source checkout
     assert (root / "src" / "dotharness" / "pr_review" / "backend.py").is_file()
     with patch(LAUNCH, return_value=RunResult(0, "", "")) as m:
-        _make_backend("claude").run("x", str(tmp_path))
+        await _make_backend("claude").run("x", str(tmp_path))
     assert m.call_args.kwargs["harness_repo_root"] == root
 
 
-def test_explicit_harness_root_overrides_discovery(tmp_path):
+async def test_explicit_harness_root_overrides_discovery(tmp_path):
     with patch(LAUNCH, return_value=RunResult(0, "", "")) as m:
-        _make_backend("claude", harness_repo_root=tmp_path).run("x", str(tmp_path))
+        await _make_backend("claude", harness_repo_root=tmp_path).run("x", str(tmp_path))
     assert m.call_args.kwargs["harness_repo_root"] == tmp_path
 
 
-def test_installed_package_skips_harness_guard_instead_of_pinning_wrong_repo(tmp_path, monkeypatch):
+async def test_installed_package_skips_harness_guard_instead_of_pinning_wrong_repo(tmp_path, monkeypatch):
     # Simulate site-packages inside an unrelated git repo: .git exists above, but no src/dotharness/pr_review layout.
     unrelated = tmp_path / "venv-repo"
     pkg = unrelated / "lib" / "site-packages" / "dotharness" / "pr_review"
@@ -81,7 +81,7 @@ def test_installed_package_skips_harness_guard_instead_of_pinning_wrong_repo(tmp
     try:
         assert backend_mod.find_harness_checkout() is None
         with patch(LAUNCH, return_value=RunResult(0, "", "")) as m:
-            _make_backend("claude").run("x", str(tmp_path))
+            await _make_backend("claude").run("x", str(tmp_path))
     finally:
         monkeypatch.undo()
         backend_mod.find_harness_checkout.cache_clear()
@@ -102,19 +102,19 @@ def test_source_layout_checkout_is_found(tmp_path, monkeypatch):
         backend_mod.find_harness_checkout.cache_clear()
 
 
-def test_claude_flag_mapping(tmp_path):
+async def test_claude_flag_mapping(tmp_path):
     with patch(LAUNCH, return_value=RunResult(0, "", "")) as m:
-        _make_backend("claude").run("do it", str(tmp_path))
+        await _make_backend("claude").run("do it", str(tmp_path))
     assert m.call_args.kwargs["backend_options"] == ClaudeOptions(skip_permissions=True, disable_slash_commands=True)
 
 
-def test_max_retries_passed_explicitly_default_one(tmp_path):
+async def test_max_retries_passed_explicitly_default_one(tmp_path):
     with patch(LAUNCH, return_value=RunResult(0, "", "")) as m:
-        _make_backend().run("x", str(tmp_path))
+        await _make_backend().run("x", str(tmp_path))
         assert m.call_args.kwargs["max_retries"] == 1
-        _make_backend(max_retries=0).run("x", str(tmp_path))
+        await _make_backend(max_retries=0).run("x", str(tmp_path))
         assert m.call_args.kwargs["max_retries"] == 0
-        _make_backend(max_retries=3).run("x", str(tmp_path))
+        await _make_backend(max_retries=3).run("x", str(tmp_path))
         assert m.call_args.kwargs["max_retries"] == 3
 
 
@@ -147,34 +147,34 @@ def test_invalid_backend_raises():
 # --- result and exception mapping ---------------------------------------------------------------------------------
 
 
-def test_success_returns_completed_process_with_bytes(tmp_path):
+async def test_success_returns_completed_process_with_bytes(tmp_path):
     with patch(LAUNCH, return_value=RunResult(0, "out é", "err")):
-        result = _make_backend().run("x", str(tmp_path))
+        result = await _make_backend().run("x", str(tmp_path))
     assert isinstance(result, subprocess.CompletedProcess)
     assert result.returncode == 0
     assert result.stdout == "out é".encode()
     assert result.stderr == b"err"
 
 
-def test_nonzero_exit_is_returned_not_raised(tmp_path):
+async def test_nonzero_exit_is_returned_not_raised(tmp_path):
     with patch(LAUNCH, return_value=RunResult(3, "o", "e")):
-        result = _make_backend().run("x", str(tmp_path))
+        result = await _make_backend().run("x", str(tmp_path))
     assert result.returncode == 3
     assert result.stdout == b"o"
 
 
-def test_not_found_is_returned_with_127(tmp_path):
+async def test_not_found_is_returned_with_127(tmp_path):
     with patch(LAUNCH, return_value=RunResult(127, "", "not found", not_found=True)):
-        result = _make_backend().run("x", str(tmp_path))
+        result = await _make_backend().run("x", str(tmp_path))
     assert result.returncode == 127
 
 
-def test_timeout_raises_timeout_expired(tmp_path):
+async def test_timeout_raises_timeout_expired(tmp_path):
     with (
         patch(LAUNCH, return_value=RunResult(124, "partial", "", timed_out=True)),
         pytest.raises(subprocess.TimeoutExpired) as exc,
     ):
-        _make_backend().run("x", str(tmp_path))
+        await _make_backend().run("x", str(tmp_path))
     assert exc.value.timeout == 10
     assert exc.value.output == b"partial"
 
@@ -189,17 +189,17 @@ def test_timeout_raises_timeout_expired(tmp_path):
         RepoIdentityError("r"),
     ],
 )
-def test_shared_layer_errors_propagate_unchanged(tmp_path, exc):
+async def test_shared_layer_errors_propagate_unchanged(tmp_path, exc):
     with patch(LAUNCH, side_effect=exc), pytest.raises(type(exc)) as got:
-        _make_backend().run("x", str(tmp_path))
+        await _make_backend().run("x", str(tmp_path))
     assert got.value is exc
 
 
-def test_no_argv_env_or_output_logged(tmp_path, caplog):
+async def test_no_argv_env_or_output_logged(tmp_path, caplog):
     secret = "SENTINEL-secret-value"  # noqa: S105 - fake sentinel
     b = Backend("claude", 10, [], {"TOKEN": secret})
     with patch(LAUNCH, return_value=RunResult(1, secret, secret)), caplog.at_level("DEBUG"):
-        b.run(f"prompt {secret}", str(tmp_path))
+        await b.run(f"prompt {secret}", str(tmp_path))
     assert secret not in caplog.text
 
 
@@ -210,7 +210,7 @@ def test_removed_internals_are_gone():
     assert not hasattr(backend_mod, "acquire_lock")
 
 
-# --- end to end against a fake executable (real launch_sync) ------------------------------------------------------
+# --- end to end against a fake executable (real launch) ------------------------------------------------------
 
 
 @pytest.fixture
@@ -228,12 +228,12 @@ def _exe(d: Path, name: str, body: str) -> None:
     p.chmod(0o755)
 
 
-def test_e2e_claude_runs_shared_layer_and_removes_prompt_file(tmp_path, fake_bin, tmp_xdg):
+async def test_e2e_claude_runs_shared_layer_and_removes_prompt_file(tmp_path, fake_bin, tmp_xdg):
     log = tmp_path / "argv.log"
     _exe(fake_bin, "claude", f'for a in "$@"; do echo "$a" >> {log}; done\necho hello\nexit 0\n')
     work = tmp_path / "work"
     work.mkdir()
-    result = _make_backend("claude", max_retries=0).run("instructions text", str(work))
+    result = await _make_backend("claude", max_retries=0).run("instructions text", str(work))
     assert result.returncode == 0
     assert result.stdout.strip() == b"hello"
     argv = log.read_text().splitlines()
@@ -242,24 +242,24 @@ def test_e2e_claude_runs_shared_layer_and_removes_prompt_file(tmp_path, fake_bin
     assert list((tmp_xdg / "tmp").glob("*")) == []
 
 
-def test_e2e_failing_backend_launched_once_with_default_retries(tmp_path, fake_bin, tmp_xdg):
+async def test_e2e_failing_backend_launched_once_with_default_retries(tmp_path, fake_bin, tmp_xdg):
     # Runs are not idempotent (replies, pushes): a non-zero exit must not be retried, only timeouts are.
     count = tmp_path / "count"
     _exe(fake_bin, "claude", f"echo x >> {count}\nexit 1\n")
     work = tmp_path / "work"
     work.mkdir()
-    result = _make_backend("claude").run("x", str(work))
+    result = await _make_backend("claude").run("x", str(work))
     assert result.returncode == 1
     assert len(count.read_text().splitlines()) == 1
 
 
-def test_retry_on_nonzero_not_enabled_by_adapter(tmp_path):
+async def test_retry_on_nonzero_not_enabled_by_adapter(tmp_path):
     with patch(LAUNCH, return_value=RunResult(0, "", "")) as m:
-        _make_backend().run("x", str(tmp_path))
+        await _make_backend().run("x", str(tmp_path))
     assert not m.call_args.kwargs.get("retry_on_nonzero", False)
 
 
-def test_e2e_missing_executable_returns_127(tmp_path, monkeypatch, tmp_xdg):
+async def test_e2e_missing_executable_returns_127(tmp_path, monkeypatch, tmp_xdg):
     # PATH holds only a symlink to git (the harness-HEAD guard reads the checkout's HEAD). Reusing git's own directory
     # could also expose a real `claude` (e.g. /opt/homebrew/bin), making the test non-hermetic.
     only_git = tmp_path / "only-git"
@@ -268,11 +268,11 @@ def test_e2e_missing_executable_returns_127(tmp_path, monkeypatch, tmp_xdg):
     monkeypatch.setenv("PATH", str(only_git))
     work = tmp_path / "work"
     work.mkdir()
-    result = _make_backend("claude", max_retries=0).run("x", str(work))
+    result = await _make_backend("claude", max_retries=0).run("x", str(work))
     assert result.returncode == 127
 
 
-def test_e2e_timeout_sigterm_then_sigkill_group_and_no_global_lock(tmp_path, fake_bin, tmp_xdg):
+async def test_e2e_timeout_sigterm_then_sigkill_group_and_no_global_lock(tmp_path, fake_bin, tmp_xdg):
     marker = tmp_path / "term"
     pidfile = tmp_path / "pid"
     # Ignores SIGTERM so the group must be SIGKILLed after the grace period.
@@ -286,7 +286,7 @@ def test_e2e_timeout_sigterm_then_sigkill_group_and_no_global_lock(tmp_path, fak
     b = Backend("claude", 1, [], {}, max_retries=0)
     try:
         with pytest.raises(subprocess.TimeoutExpired):
-            b.run("x", str(work))
+            await b.run("x", str(work))
         assert marker.exists()  # SIGTERM delivered first
         pid = int(pidfile.read_text())
         deadline = time.monotonic() + 1.0

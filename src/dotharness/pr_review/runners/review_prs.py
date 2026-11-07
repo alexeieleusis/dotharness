@@ -39,17 +39,19 @@ class BaseAnalysisError(RuntimeError):
         super().__init__(f"git {cmd_name} {reason}")
 
 
-def run(config: HarnessConfig, pr_url: str | None = None) -> None:
+async def run(config: HarnessConfig, pr_url: str | None = None) -> None:
     with acquire_lock(config.lock_key):
-        _run_locked(config, pr_url)
+        await _run_locked(config, pr_url)
 
 
-def _discover_prs(config: HarnessConfig, pr_url: str | None, env: dict) -> list[dict] | None:
+async def _discover_prs(config: HarnessConfig, pr_url: str | None, env: dict) -> list[dict] | None:
     if pr_url:
-        pr = pr_from_url(pr_url, config.repo.name, env, "number,headRefName,baseRefName,headRefOid")
+        pr = await pr_from_url(pr_url, config.repo.name, env, "number,headRefName,baseRefName,headRefOid")
         return [pr] if pr else []
 
-    return list_open_prs_matching_authors(config.repo.name, config.vibe_heal.authors, str(config.repo.working_dir), env)
+    return await list_open_prs_matching_authors(
+        config.repo.name, config.vibe_heal.authors, str(config.repo.working_dir), env
+    )
 
 
 def _already_reviewed(reviewed_shas: dict, pr: dict, min_interval_seconds: float, now: float) -> bool:
@@ -71,7 +73,7 @@ def _already_reviewed(reviewed_shas: dict, pr: dict, min_interval_seconds: float
     return False
 
 
-def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
+async def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
     if not config.vibe_heal.enabled:
         logger.info("vibe_heal disabled, skipping")
         return
@@ -80,18 +82,18 @@ def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
         logger.error("vibe_heal enabled but repo.subdirs is empty; add a [[repo.subdir]] entry to .harness.toml")
         return
 
-    gh_token = get_gh_token(config.harness.gh_token_cmd)
+    gh_token = await get_gh_token(config.harness.gh_token_cmd)
     env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
 
-    prune_projects.run(config, env)
+    await prune_projects.run(config, env)
 
-    if not _run_base_analysis(config, env):
+    if not await _run_base_analysis(config, env):
         logger.warning("Base analysis failed; skipping PR review for this run")
         return
 
-    current_user = get_current_user(env)
+    current_user = await get_current_user(env)
 
-    candidates = _discover_prs(config, pr_url, env)
+    candidates = await _discover_prs(config, pr_url, env)
 
     if pr_url is not None:
         to_process = candidates
@@ -113,7 +115,7 @@ def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
         return
 
     wdir = str(config.repo.working_dir)
-    original_sha = git_detach_and_record(wdir, env)
+    original_sha = await git_detach_and_record(wdir, env)
 
     # Each PR's success is recorded the moment it happens (via record_reviewed_sha below),
     # independent of every other PR in this batch — so one perpetually-failing PR (e.g. a
@@ -121,7 +123,7 @@ def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
     # A FatalGitError still breaks the loop immediately; PRs processed before it keep their
     # credit regardless.
     for pr in to_process:
-        success, fatal = _process_pr_safely(pr, config, env, current_user, wdir, original_sha)
+        success, fatal = await _process_pr_safely(pr, config, env, current_user, wdir, original_sha)
         if fatal:
             break
 
@@ -129,7 +131,7 @@ def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
             state.record_reviewed_sha(config.repo_slug, pr["number"], pr["headRefOid"], time.time())
 
 
-def _process_pr_safely(
+async def _process_pr_safely(
     pr: dict, config: HarnessConfig, env: dict, current_user: str, wdir: str, original_sha: str
 ) -> tuple[bool, bool]:
     """Run _process_pr for one PR, always restoring HEAD afterward. Returns (success, fatal)."""
@@ -137,24 +139,24 @@ def _process_pr_safely(
     success = False
     fatal = False
     try:
-        success = _process_pr(pr, config, env, current_user, wdir)
+        success = await _process_pr(pr, config, env, current_user, wdir)
     except FatalGitError:
         logger.exception("PR #%d: fatal git error", pr["number"])
         fatal = True
     except Exception:
         logger.exception("PR #%d: error", pr["number"])
     finally:
-        git_restore(original_sha, pr["headRefName"], wdir, env)
+        await git_restore(original_sha, pr["headRefName"], wdir, env)
     return success, fatal
 
 
-def _process_pr(pr: dict, config: HarnessConfig, env: dict, current_user: str, wdir: str) -> bool:
-    if not is_pr_open(pr["number"], config.repo.name, env):
+async def _process_pr(pr: dict, config: HarnessConfig, env: dict, current_user: str, wdir: str) -> bool:
+    if not await is_pr_open(pr["number"], config.repo.name, env):
         logger.info("PR #%d: closed or merged since discovery, skipping", pr["number"])
         return False
 
-    git_fetch_and_checkout(pr["headRefName"], wdir, env)
-    changed_files = _get_changed_files_for_pr(pr, config, wdir, env)
+    await git_fetch_and_checkout(pr["headRefName"], wdir, env)
+    changed_files = await _get_changed_files_for_pr(pr, config, wdir, env)
     subdirs_to_process = []
     for subdir in config.repo.subdirs:
         if not _subdir_has_changes(subdir.path, changed_files):
@@ -169,8 +171,8 @@ def _process_pr(pr: dict, config: HarnessConfig, env: dict, current_user: str, w
     # "user-review-requested:@me" search for the rest of this run_all cycle. We
     # re-add regardless of outcome, since we cannot observe from here whether the
     # subprocess actually posted any comments.
-    with preserve_reviewer_request(pr["number"], config.repo.name, current_user, env):
-        results = [_process_subdir(pr["number"], subdir, config, env) for subdir in subdirs_to_process]
+    async with preserve_reviewer_request(pr["number"], config.repo.name, current_user, env):
+        results = [await _process_subdir(pr["number"], subdir, config, env) for subdir in subdirs_to_process]
     return all(results)
 
 
@@ -178,10 +180,10 @@ def _is_root_subdir(subdir_path: str) -> bool:
     return subdir_path in (".", "")
 
 
-def _get_changed_files_for_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict) -> list[str]:
+async def _get_changed_files_for_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict) -> list[str]:
     if all(_is_root_subdir(s.path) for s in config.repo.subdirs):
         return []
-    return get_changed_files(pr["baseRefName"], wdir, env)
+    return await get_changed_files(pr["baseRefName"], wdir, env)
 
 
 def _subdir_has_changes(subdir_path: str, changed_files: list[str]) -> bool:
@@ -191,14 +193,14 @@ def _subdir_has_changes(subdir_path: str, changed_files: list[str]) -> bool:
     return any(f.startswith(prefix) for f in changed_files)
 
 
-def _run_pre_commands(subdir, config: HarnessConfig, env: dict) -> bool:
+async def _run_pre_commands(subdir, config: HarnessConfig, env: dict) -> bool:
     for pre_command in subdir.pre_commands:
         cmd_str = pre_command.cmd
         logger.info("Running pre-command: %s", cmd_str)
         try:
             has_shell_ops = any(op in cmd_str for op in (">", "|", "&&", ";", "<", "`", "$("))
             cmd = cmd_str if has_shell_ops else shlex.split(cmd_str)
-            run_cmd(cmd, cwd=str(config.repo.working_dir), env=env, timeout=subdir.timeout, shell=has_shell_ops)
+            await run_cmd(cmd, cwd=str(config.repo.working_dir), env=env, timeout=subdir.timeout, shell=has_shell_ops)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
             logger.warning("Pre-command failed '%s': %s", cmd_str, e)
             if isinstance(e, subprocess.CalledProcessError):
@@ -208,9 +210,9 @@ def _run_pre_commands(subdir, config: HarnessConfig, env: dict) -> bool:
     return True
 
 
-def _run_vh_command(cmd: list, label: str, cwd: str, timeout: int, env: dict) -> bool:
+async def _run_vh_command(cmd: list, label: str, cwd: str, timeout: int, env: dict) -> bool:
     try:
-        run_cmd(cmd, cwd=cwd, env=env, timeout=timeout)
+        await run_cmd(cmd, cwd=cwd, env=env, timeout=timeout)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.exception("%s failed", label)
         if isinstance(e, subprocess.CalledProcessError):
@@ -219,13 +221,13 @@ def _run_vh_command(cmd: list, label: str, cwd: str, timeout: int, env: dict) ->
     return True
 
 
-def _process_subdir(pr_number: int, subdir, config: HarnessConfig, env: dict) -> bool:
+async def _process_subdir(pr_number: int, subdir, config: HarnessConfig, env: dict) -> bool:
     subdir_path = str(config.repo.working_dir / subdir.path)
     env_error = env_file_error(config, subdir)
     if env_error:
         logger.error("%s", env_error)
         return False
-    if not _run_pre_commands(subdir, config, env):
+    if not await _run_pre_commands(subdir, config, env):
         return False
 
     vh_cmd = [config.vibe_heal.python, "-m", VIBE_HEAL_MODULE, "review", "--pr", str(pr_number)]
@@ -233,40 +235,42 @@ def _process_subdir(pr_number: int, subdir, config: HarnessConfig, env: dict) ->
         vh_cmd.append("--coverage")
     vh_cmd += env_file_args(config.repo, subdir)
     logger.info("Running vibe_heal review in %s for PR #%d", subdir_path, pr_number)
-    if not _run_vh_command(vh_cmd, "vibe_heal review", subdir_path, config.vibe_heal.vibe_heal_timeout, env):
+    if not await _run_vh_command(vh_cmd, "vibe_heal review", subdir_path, config.vibe_heal.vibe_heal_timeout, env):
         return False
 
-    if not is_pr_open(pr_number, config.repo.name, env):
+    if not await is_pr_open(pr_number, config.repo.name, env):
         logger.info("PR #%d: closed or merged during review, skipping post", pr_number)
         return False
 
     vh_post = [config.vibe_heal.python, "-m", VIBE_HEAL_MODULE, "review", "--post", "--pr", str(pr_number)]
     vh_post += env_file_args(config.repo, subdir)
     logger.info("Running vibe_heal review --post in %s for PR #%d", subdir_path, pr_number)
-    return _run_vh_command(
+    return await _run_vh_command(
         vh_post, "vibe_heal review --post", subdir_path, config.vibe_heal.vibe_heal_post_timeout, env
     )
 
 
-def _run_base_subdir(subdir, config: HarnessConfig, env: dict) -> bool:
+async def _run_base_subdir(subdir, config: HarnessConfig, env: dict) -> bool:
     env_error = env_file_error(config, subdir)
     if env_error:
         logger.error("%s", env_error)
         return False
-    if not _run_pre_commands(subdir, config, env):
+    if not await _run_pre_commands(subdir, config, env):
         return False
 
     subdir_path = str(config.repo.working_dir / subdir.path)
     vh_cmd = [config.vibe_heal.python, "-m", VIBE_HEAL_MODULE, "review", "--baseline"]
     vh_cmd += env_file_args(config.repo, subdir)
     logger.info("Running vibe_heal base analysis in %s", subdir_path)
-    return _run_vh_command(vh_cmd, "vibe_heal base analysis", subdir_path, config.vibe_heal.vibe_heal_timeout, env)
+    return await _run_vh_command(
+        vh_cmd, "vibe_heal base analysis", subdir_path, config.vibe_heal.vibe_heal_timeout, env
+    )
 
 
-def _run_base_git(cmd_name: str, cmd: list[str], wdir: str, env: dict) -> subprocess.CompletedProcess:
+async def _run_base_git(cmd_name: str, cmd: list[str], wdir: str, env: dict) -> subprocess.CompletedProcess:
     """Run one base-analysis git step; timeout or non-zero exit raises BaseAnalysisError."""
     try:
-        result = run_cmd(cmd, cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
+        result = await run_cmd(cmd, cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
     except subprocess.TimeoutExpired as exc:
         logger.warning("Base analysis: git %s timed out after %ds", cmd_name, TIMEOUT_GIT)
         raise BaseAnalysisError(cmd_name, f"timed out after {TIMEOUT_GIT}s") from exc
@@ -276,15 +280,15 @@ def _run_base_git(cmd_name: str, cmd: list[str], wdir: str, env: dict) -> subpro
     return result
 
 
-def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:
+async def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:
     """Analyze origin/main once per new SHA (gated on state.last_main_sha) so vibe_heal has
     a baseline to diff PRs against. Always restores the working dir to where it started,
     regardless of outcome. Raises BaseAnalysisError on a git timeout or non-zero exit."""
     wdir = str(config.repo.working_dir)
 
-    _run_base_git("fetch", ["git", "fetch", "--recurse-submodules", "origin", "main"], wdir, env)
+    await _run_base_git("fetch", ["git", "fetch", "--recurse-submodules", "origin", "main"], wdir, env)
 
-    result = _run_base_git("rev-parse", ["git", "rev-parse", "origin/main"], wdir, env)
+    result = await _run_base_git("rev-parse", ["git", "rev-parse", "origin/main"], wdir, env)
     main_sha = result.stdout.decode("utf-8").strip()
 
     vh_state = state.read_vibe_heal_state(config.repo_slug)
@@ -294,11 +298,15 @@ def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:
 
     original_sha: str | None = None
     try:
-        original_sha = git_detach_and_record(wdir, env)
+        original_sha = await git_detach_and_record(wdir, env)
 
-        _run_base_git("checkout", ["git", "checkout", "--recurse-submodules", "--detach", main_sha], wdir, env)
+        await _run_base_git("checkout", ["git", "checkout", "--recurse-submodules", "--detach", main_sha], wdir, env)
 
-        success = all(_run_base_subdir(s, config, env) for s in config.repo.subdirs)
+        success = True
+        for s in config.repo.subdirs:  # stops at the first failing subdir, like all() did
+            if not await _run_base_subdir(s, config, env):
+                success = False
+                break
         if success:
             state.write_vibe_heal_state(config.repo_slug, last_main_sha=main_sha)
     except FatalGitError:
@@ -308,4 +316,4 @@ def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:
         return success
     finally:
         if original_sha is not None:
-            git_restore(original_sha, "", wdir, env)
+            await git_restore(original_sha, "", wdir, env)

@@ -5,9 +5,8 @@ import os
 import re
 import subprocess
 import tempfile
-import time
-from collections.abc import Callable, Generator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -117,7 +116,7 @@ def _argv(cmd: list[str] | str, shell: bool) -> list[str]:
     return [cmd] if isinstance(cmd, str) else list(cmd)
 
 
-def run_cmd(
+async def run_cmd(
     cmd: list[str] | str,
     cwd: str,
     env: dict,
@@ -130,9 +129,9 @@ def run_cmd(
     Process-group kill and the SIGTERM-then-SIGKILL policy live in the shared runner. This wrapper only maps
     its ``RunResult`` back: bytes stdout/stderr, ``TimeoutExpired`` on timeout, ``CalledProcessError`` when
     ``check`` and the exit code is non-zero, ``FileNotFoundError`` when the program cannot be started.
-    Must not be called from async code (``asyncio.run``). Nothing is logged, so no argv or env leaks.
+    Nothing is logged, so no argv or env leaks.
     """
-    result = asyncio.run(run(_argv(cmd, shell), cwd=cwd, env=env, timeout=timeout))
+    result = await run(_argv(cmd, shell), cwd=cwd, env=env, timeout=timeout)
     if result.not_found:
         raise FileNotFoundError(result.stderr)
     stdout = result.stdout.encode()
@@ -144,19 +143,21 @@ def run_cmd(
     return subprocess.CompletedProcess(cmd, result.returncode, stdout, stderr)
 
 
-def git_detach_and_record(cwd: str, env: dict) -> str:
+async def git_detach_and_record(cwd: str, env: dict) -> str:
     try:
-        run_cmd(["git", "checkout", "--recurse-submodules", "--detach", "HEAD"], cwd=cwd, env=env, timeout=TIMEOUT_GIT)
-        result = run_cmd(["git", "rev-parse", "HEAD"], cwd=cwd, env=env, timeout=TIMEOUT_GIT)
+        await run_cmd(
+            ["git", "checkout", "--recurse-submodules", "--detach", "HEAD"], cwd=cwd, env=env, timeout=TIMEOUT_GIT
+        )
+        result = await run_cmd(["git", "rev-parse", "HEAD"], cwd=cwd, env=env, timeout=TIMEOUT_GIT)
         return result.stdout.decode("utf-8").strip()
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         raise FatalGitError(f"git detach failed: {e}") from e  # noqa: TRY003
 
 
-def git_fetch_and_checkout(branch: str, cwd: str, env: dict) -> None:
+async def git_fetch_and_checkout(branch: str, cwd: str, env: dict) -> None:
     try:
-        run_cmd(["git", "fetch", "origin"], cwd=cwd, env=env, timeout=TIMEOUT_GIT)
-        run_cmd(
+        await run_cmd(["git", "fetch", "origin"], cwd=cwd, env=env, timeout=TIMEOUT_GIT)
+        await run_cmd(
             ["git", "checkout", "--recurse-submodules", "-B", branch, f"origin/{branch}"],
             cwd=cwd,
             env=env,
@@ -170,25 +171,25 @@ def git_fetch_and_checkout(branch: str, cwd: str, env: dict) -> None:
         raise FatalGitError(f"git checkout {branch} failed: {e}") from e  # noqa: TRY003
 
 
-def get_head_sha(wdir: str, env: dict) -> str:
-    result = run_cmd(["git", "rev-parse", "HEAD"], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
+async def get_head_sha(wdir: str, env: dict) -> str:
+    result = await run_cmd(["git", "rev-parse", "HEAD"], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
     if result.returncode != 0:
         return ""
     return result.stdout.decode("utf-8").strip()
 
 
-def git_restore(original_sha: str, branch: str, cwd: str, env: dict) -> None:
+async def git_restore(original_sha: str, branch: str, cwd: str, env: dict) -> None:
     preserved = True
     if branch:
         try:
-            _preserve_unpushed_commits(branch, cwd, env)
+            await _preserve_unpushed_commits(branch, cwd, env)
         except Exception:
             # Preservation failing (timeout, OSError, ...) must not leave the checkout on the
             # PR branch: still attempt the checkout, but keep the branch so no work is lost.
             preserved = False
             logger.exception("git_restore: could not preserve unpushed commits on %s; keeping the local branch", branch)
     try:
-        run_cmd(
+        await run_cmd(
             ["git", "checkout", "--recurse-submodules", "-f", original_sha],
             cwd=cwd,
             env=env,
@@ -196,12 +197,12 @@ def git_restore(original_sha: str, branch: str, cwd: str, env: dict) -> None:
             check=False,
         )
         if branch and preserved:
-            run_cmd(["git", "branch", "-D", branch], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
+            await run_cmd(["git", "branch", "-D", branch], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
     except Exception:
         logger.exception("git restore failed")
 
 
-def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:
+async def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:
     """Before `git_restore` force-checks-out elsewhere and deletes the local `branch`,
     save any commit(s) on it that origin/`branch` doesn't have under a recovery ref.
 
@@ -209,11 +210,11 @@ def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:
     But a backend run can rewrite history mid-run (see address_comments's fast-forward
     check) or a push can simply fail, leaving local-only commits. Deleting the branch in
     that state would silently destroy that work with no trace it ever existed."""
-    head_result = run_cmd(["git", "rev-parse", branch], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
+    head_result = await run_cmd(["git", "rev-parse", branch], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
     if head_result.returncode != 0:
         return
     branch_sha = head_result.stdout.decode("utf-8", errors="replace").strip()
-    is_pushed = run_cmd(
+    is_pushed = await run_cmd(
         ["git", "merge-base", "--is-ancestor", branch_sha, f"origin/{branch}"],
         cwd=cwd,
         env=env,
@@ -223,7 +224,7 @@ def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:
     if is_pushed.returncode == 0:
         return
     recovery_ref = f"refs/harness-recovery/{branch}-{branch_sha[:12]}"
-    save_result = run_cmd(
+    save_result = await run_cmd(
         ["git", "update-ref", recovery_ref, branch_sha], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False
     )
     if save_result.returncode == 0:
@@ -243,7 +244,7 @@ def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:
         )
 
 
-def get_gh_token(gh_token_cmd: str) -> str:
+async def get_gh_token(gh_token_cmd: str) -> str:
     """Resolve the GitHub token `gh_token_cmd` (e.g. `gh auth token --user <login>`)
     prints, so the caller can pin every subsequent `gh`/backend call to that specific
     account via GITHUB_TOKEN (see build_subprocess_env) regardless of which account
@@ -255,7 +256,9 @@ def get_gh_token(gh_token_cmd: str) -> str:
     to whatever account `gh auth status` currently has active — precisely the
     cross-loop account drift `gh_token_cmd` exists to avoid (see .harness.toml)."""
     try:
-        result = run_cmd(gh_token_cmd, cwd="/", env=os.environ.copy(), timeout=TIMEOUT_GH, check=False, shell=True)  # noqa: S604
+        result = await run_cmd(  # noqa: S604
+            gh_token_cmd, cwd="/", env=os.environ.copy(), timeout=TIMEOUT_GH, check=False, shell=True
+        )
     except subprocess.TimeoutExpired:
         # Re-raise without the command: TimeoutExpired stringifies it, and it may embed a credential.
         raise RuntimeError(f"gh_token_cmd timed out after {TIMEOUT_GH}s") from None  # noqa: TRY003
@@ -272,13 +275,13 @@ def is_draft_pr(pr: dict) -> bool:
     return bool(pr.get("isDraft"))
 
 
-def is_pr_open(pr_number: int, repo: str, env: dict) -> bool:
+async def is_pr_open(pr_number: int, repo: str, env: dict) -> bool:
     """Return True if `pr_number` is still open on GitHub right now.
 
     Fails closed (returns False) if the lookup fails — a long-running batch shouldn't
     post a review to a PR that may have been closed or merged while it was processing.
     """
-    result = run_cmd(
+    result = await run_cmd(
         gh_argv("pr", "view", str(pr_number), "--repo", repo, "--json", "state", "--jq", ".state"),
         cwd="/",
         env=env,
@@ -290,7 +293,7 @@ def is_pr_open(pr_number: int, repo: str, env: dict) -> bool:
     return result.stdout.decode("utf-8").strip() == "OPEN"
 
 
-def get_current_user(env: dict) -> str:
+async def get_current_user(env: dict) -> str:
     """Unlike get_gh_token, deliberately fails *open* (returns "" rather than raising)
     on a failed lookup: every caller either treats a blank current_user as "nothing
     matches me" for its idempotency/comment checks (safe no-op, at worst a wasted or
@@ -298,7 +301,7 @@ def get_current_user(env: dict) -> str:
     preserve_reviewer_request, skips its reviewer check entirely on a falsy login rather
     than querying GitHub for one that could never match. Logged so a persistently blank
     current_user (e.g. GITHUB_TOKEN pointing at a revoked token) is still visible."""
-    result = run_cmd(gh_argv("api", "user", "--jq", ".login"), cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
+    result = await run_cmd(gh_argv("api", "user", "--jq", ".login"), cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
     login = result.stdout.decode("utf-8", errors="replace").strip()
     if result.returncode != 0 or not login:
         logger.error(
@@ -309,9 +312,9 @@ def get_current_user(env: dict) -> str:
     return login
 
 
-def pr_from_url(url: str, repo: str, env: dict, fields: str) -> dict:
+async def pr_from_url(url: str, repo: str, env: dict, fields: str) -> dict:
     number = int(url.rstrip("/").split("/")[-1])
-    result = run_cmd(
+    result = await run_cmd(
         gh_argv("pr", "view", str(number), "--repo", repo, "--json", fields),
         cwd="/",
         env=env,
@@ -324,8 +327,8 @@ def pr_from_url(url: str, repo: str, env: dict, fields: str) -> dict:
     return json.loads(result.stdout)
 
 
-def get_requested_reviewers(pr_number: int, repo: str, env: dict) -> list[str]:
-    result = run_cmd(
+async def get_requested_reviewers(pr_number: int, repo: str, env: dict) -> list[str]:
+    result = await run_cmd(
         gh_argv("pr", "view", str(pr_number), "--repo", repo, "--json", "reviewRequests"),
         cwd="/",
         env=env,
@@ -338,7 +341,7 @@ def get_requested_reviewers(pr_number: int, repo: str, env: dict) -> list[str]:
     return [r["login"] for r in data.get("reviewRequests", []) if "login" in r]
 
 
-def was_review_requested(pr_number: int, repo: str, login: str, env: dict) -> bool:
+async def was_review_requested(pr_number: int, repo: str, login: str, env: dict) -> bool:
     """Whether `login` was already a requested reviewer before processing started.
 
     Submitting a review via the GitHub API clears the submitter from a PR's
@@ -347,11 +350,11 @@ def was_review_requested(pr_number: int, repo: str, login: str, env: dict) -> bo
     the reviewer with add_reviewer() afterward so the PR stays visible — none of
     these runners ever remove the reviewer themselves; only the human's own
     submitted review (or GitHub's own bookkeeping around it) does that."""
-    return login in get_requested_reviewers(pr_number, repo, env)
+    return login in await get_requested_reviewers(pr_number, repo, env)
 
 
-def add_reviewer(pr_number: int, repo: str, login: str, env: dict) -> None:
-    result = run_cmd(
+async def add_reviewer(pr_number: int, repo: str, login: str, env: dict) -> None:
+    result = await run_cmd(
         gh_argv("pr", "edit", str(pr_number), "--repo", repo, "--add-reviewer", login),
         cwd="/",
         env=env,
@@ -371,8 +374,8 @@ def add_reviewer(pr_number: int, repo: str, login: str, env: dict) -> None:
         )
 
 
-@contextmanager
-def preserve_reviewer_request(pr_number: int, repo: str, login: str, env: dict) -> Generator[None]:
+@asynccontextmanager
+async def preserve_reviewer_request(pr_number: int, repo: str, login: str, env: dict) -> AsyncGenerator[None]:
     """Wrap a PR-processing block that might submit a GitHub review as a side effect
     (e.g. replying to comments via the backend, or vibe_heal posting a static-analysis
     review), re-adding `login` as a requested reviewer afterward if it held that status
@@ -387,12 +390,12 @@ def preserve_reviewer_request(pr_number: int, repo: str, login: str, env: dict) 
     A falsy `login` (e.g. address_comments's get_current_user lookup failing) skips the
     check entirely rather than querying GitHub with an empty login, which could never match
     a real requested reviewer anyway."""
-    was_requested = bool(login) and was_review_requested(pr_number, repo, login, env)
+    was_requested = bool(login) and await was_review_requested(pr_number, repo, login, env)
     try:
         yield
     finally:
         if was_requested:
-            add_reviewer(pr_number, repo, login, env)
+            await add_reviewer(pr_number, repo, login, env)
 
 
 def is_review_summary_comment(body: str) -> bool:
@@ -406,10 +409,10 @@ _PAGE_ATTEMPTS = 3
 _PAGE_RETRY_DELAY = 2.0
 
 
-def _fetch_page(path: str, page: int, env: dict) -> list[dict] | None:
+async def _fetch_page(path: str, page: int, env: dict) -> list[dict] | None:
     """One page of a REST list endpoint. Retries transient gh failures; None if all attempts fail."""
     for attempt in range(1, _PAGE_ATTEMPTS + 1):
-        result = run_cmd(
+        result = await run_cmd(
             gh_argv("api", "--method", "GET", path, "-F", "per_page=100", "-F", f"page={page}"),
             cwd="/",
             env=env,
@@ -429,11 +432,11 @@ def _fetch_page(path: str, page: int, env: dict) -> list[dict] | None:
             (stderr or "").strip(),
         )
         if attempt < _PAGE_ATTEMPTS:
-            time.sleep(_PAGE_RETRY_DELAY * attempt)
+            await asyncio.sleep(_PAGE_RETRY_DELAY * attempt)
     return None
 
 
-def fetch_all_pages(path: str, env: dict) -> list[dict] | None:
+async def fetch_all_pages(path: str, env: dict) -> list[dict] | None:
     """GET-paginate a GitHub REST list endpoint, returning every item. Unlike
     fetch_pr_comments (which goes through scripts/pr-comments.py's cache), this returns
     raw REST dicts that keep the snake_case `created_at` timestamp the cache drops.
@@ -441,7 +444,7 @@ def fetch_all_pages(path: str, env: dict) -> list[dict] | None:
     items: list[dict] = []
     page = 1
     while True:
-        batch = _fetch_page(path, page, env)
+        batch = await _fetch_page(path, page, env)
         if batch is None:
             return None
         items.extend(batch)
@@ -450,35 +453,35 @@ def fetch_all_pages(path: str, env: dict) -> list[dict] | None:
         page += 1
 
 
-def _fetch_matching_comments(
+async def _fetch_matching_comments(
     comments_path: str, current_user: str, env: dict, predicate: Callable[[str], bool]
 ) -> list[dict] | None:
     """Returns the current_user's comments matching predicate (possibly empty), or None
     if the GitHub API call itself failed (e.g. rate limit, transient 5xx) and the result
     is inconclusive."""
-    comments = fetch_all_pages(comments_path, env)
+    comments = await fetch_all_pages(comments_path, env)
     if comments is None:
         return None
     return [c for c in comments if c.get("user", {}).get("login") == current_user and predicate(c.get("body", ""))]
 
 
-def _has_matching_comment(
+async def _has_matching_comment(
     comments_path: str, current_user: str, env: dict, predicate: Callable[[str], bool]
 ) -> bool | None:
     """Returns True/False for a confirmed match/no-match, or None if the GitHub API
     call itself failed (e.g. rate limit, transient 5xx) and the result is inconclusive."""
-    matches = _fetch_matching_comments(comments_path, current_user, env, predicate)
+    matches = await _fetch_matching_comments(comments_path, current_user, env, predicate)
     return None if matches is None else bool(matches)
 
 
-def has_review_summary_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
-    return bool(check_review_summary_comment_status(pr_number, repo, current_user, env))
+async def has_review_summary_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+    return bool(await check_review_summary_comment_status(pr_number, repo, current_user, env))
 
 
-def check_review_summary_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
+async def check_review_summary_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
     """Tri-state version of has_review_summary_comment: None means the check itself was
     inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return _has_matching_comment(
+    return await _has_matching_comment(
         f"repos/{repo}/issues/{pr_number}/comments", current_user, env, is_review_summary_comment
     )
 
@@ -487,13 +490,15 @@ def is_inline_review_comment(body: str) -> bool:
     return INLINE_REVIEW_MARKER in body
 
 
-def has_inline_review_comments(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+async def has_inline_review_comments(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
     return bool(
-        _has_matching_comment(f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, is_inline_review_comment)
+        await _has_matching_comment(
+            f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, is_inline_review_comment
+        )
     )
 
 
-def has_pr_level_pass_comment(marker: str, pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+async def has_pr_level_pass_comment(marker: str, pr_number: int, repo: str, current_user: str, env: dict) -> bool:
     """Shared by every PR-level pass (design review, requirement-traceability review,
     ...) whose completion signal is "did I already post an issue-level PR comment
     containing this marker" — extracted per requirement-traceability-requirements.md §7.6,
@@ -502,15 +507,15 @@ def has_pr_level_pass_comment(marker: str, pr_number: int, repo: str, current_us
     "nothing to report" quiet path), so checking issue-level comments alone is enough —
     no need to also check the inline pulls/comments endpoint the way
     has_inline_review_comments does."""
-    return bool(check_pr_level_pass_comment_status(marker, pr_number, repo, current_user, env))
+    return bool(await check_pr_level_pass_comment_status(marker, pr_number, repo, current_user, env))
 
 
-def check_pr_level_pass_comment_status(
+async def check_pr_level_pass_comment_status(
     marker: str, pr_number: int, repo: str, current_user: str, env: dict
 ) -> bool | None:
     """Tri-state version of has_pr_level_pass_comment: None means the check itself was
     inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return _has_matching_comment(
+    return await _has_matching_comment(
         f"repos/{repo}/issues/{pr_number}/comments", current_user, env, lambda body: marker in body
     )
 
@@ -519,53 +524,55 @@ def is_design_review_comment(body: str) -> bool:
     return DESIGN_REVIEW_MARKER in body
 
 
-def has_design_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+async def has_design_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
     """This is the design pass's *only* idempotency signal in review-requested (no
     persisted state there); self-review uses it only as defense-in-depth alongside its
     own persisted design_reviewed_prs state."""
-    return has_pr_level_pass_comment(DESIGN_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await has_pr_level_pass_comment(DESIGN_REVIEW_MARKER, pr_number, repo, current_user, env)
 
 
-def check_design_review_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
+async def check_design_review_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
     """Tri-state version of has_design_review_comment: None means the check itself was
     inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return check_pr_level_pass_comment_status(DESIGN_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await check_pr_level_pass_comment_status(DESIGN_REVIEW_MARKER, pr_number, repo, current_user, env)
 
 
 def is_traceability_review_comment(body: str) -> bool:
     return TRACEABILITY_REVIEW_MARKER in body
 
 
-def has_traceability_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+async def has_traceability_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
     """Mirrors has_design_review_comment exactly (see requirement-traceability-requirements.md
     §7.4/§7.5): review-requested's only idempotency signal for this pass; self-review's
     defense-in-depth check alongside its own persisted traceability_reviewed_prs state.
     Also covers the "no linked ticket found" outcome, which is terminal (§7.3/§11.1) —
     any comment carrying this marker, including that one, counts as done."""
-    return has_pr_level_pass_comment(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await has_pr_level_pass_comment(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
 
 
-def check_traceability_review_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
+async def check_traceability_review_comment_status(
+    pr_number: int, repo: str, current_user: str, env: dict
+) -> bool | None:
     """Tri-state version of has_traceability_review_comment: None means the check itself
     was inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return check_pr_level_pass_comment_status(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await check_pr_level_pass_comment_status(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
 
 
-def has_regret_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+async def has_regret_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
     """Mirrors has_design_review_comment / has_traceability_review_comment exactly
     (regret-review-requirements.md §7.4/§7.6): review-requested's only idempotency signal
     for this pass (no persisted state there); self-review's defense-in-depth check
     alongside its own persisted regret_reviewed_prs state (§7.3)."""
-    return has_pr_level_pass_comment(REGRET_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await has_pr_level_pass_comment(REGRET_REVIEW_MARKER, pr_number, repo, current_user, env)
 
 
-def check_regret_review_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
+async def check_regret_review_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
     """Tri-state version of has_regret_review_comment: None means the check itself was
     inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return check_pr_level_pass_comment_status(REGRET_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await check_pr_level_pass_comment_status(REGRET_REVIEW_MARKER, pr_number, repo, current_user, env)
 
 
-def get_pr_level_flagged_locations(
+async def get_pr_level_flagged_locations(
     marker: str, pr_number: int, repo: str, current_user: str, env: dict
 ) -> list[tuple[str, int]]:
     """Shared by every PR-level pass's flagged-locations fetch (design review,
@@ -580,7 +587,7 @@ def get_pr_level_flagged_locations(
     list on an inconclusive API failure, rather than blocking the run — worst case a
     retry re-flags an already-posted location instead of the whole pass silently never
     running."""
-    matches = _fetch_matching_comments(
+    matches = await _fetch_matching_comments(
         f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, lambda body: marker in body
     )
     if not matches:
@@ -593,16 +600,16 @@ def get_pr_level_flagged_locations(
     return locations
 
 
-def get_design_review_flagged_locations(
+async def get_design_review_flagged_locations(
     pr_number: int, repo: str, current_user: str, env: dict
 ) -> list[tuple[str, int]]:
-    return get_pr_level_flagged_locations(DESIGN_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await get_pr_level_flagged_locations(DESIGN_REVIEW_MARKER, pr_number, repo, current_user, env)
 
 
-def get_traceability_review_flagged_locations(
+async def get_traceability_review_flagged_locations(
     pr_number: int, repo: str, current_user: str, env: dict
 ) -> list[tuple[str, int]]:
-    return get_pr_level_flagged_locations(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await get_pr_level_flagged_locations(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
 
 
 def _window_end_iso(pr_created_at: str) -> str | None:
@@ -620,7 +627,7 @@ def _window_end_iso(pr_created_at: str) -> str | None:
     return end.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _fetch_early_window_comments(
+async def _fetch_early_window_comments(
     pr_number: int, repo: str, pr_created_at: str, env: dict, cache: dict | None = None
 ) -> list[dict] | None:
     """All issue-timeline comments on pr_number posted at or before the end of the
@@ -632,7 +639,7 @@ def _fetch_early_window_comments(
     call failed" with "no comments in the window"."""
     if cache is not None and "early_window_comments" in cache:
         return cache["early_window_comments"]
-    comments = fetch_all_pages(f"repos/{repo}/issues/{pr_number}/comments", env)
+    comments = await fetch_all_pages(f"repos/{repo}/issues/{pr_number}/comments", env)
     if comments is None:
         result = None
     else:
@@ -643,7 +650,7 @@ def _fetch_early_window_comments(
     return result
 
 
-def build_early_comment_context(
+async def build_early_comment_context(
     pr_number: int, repo: str, pr_created_at: str, env: dict, cache: dict | None = None
 ) -> str:
     """Concatenated bodies of every issue-timeline comment (any author, including bots)
@@ -655,7 +662,7 @@ def build_early_comment_context(
     degrades the pass's context, not its correctness). Pass the same `cache` dict given to
     resolve_linked_tickets to reuse its comment-scan fallback's fetch instead of repeating
     it."""
-    comments = _fetch_early_window_comments(pr_number, repo, pr_created_at, env, cache)
+    comments = await _fetch_early_window_comments(pr_number, repo, pr_created_at, env, cache)
     if not comments:
         return ""
     return "\n\n".join(body for c in comments if (body := c.get("body", "")))
@@ -671,14 +678,14 @@ class _IssueFetchError(Exception):
 _ISSUE_NOT_FOUND_RE = re.compile(r"could not resolve to an issue", re.IGNORECASE)
 
 
-def _fetch_issue(number: int, repo: str, env: dict) -> dict | None:
+async def _fetch_issue(number: int, repo: str, env: dict) -> dict | None:
     """title/body for a single GitHub issue, or None for a *confirmed* absence — either
     `number` doesn't exist, or it names a pull request rather than an issue, since `gh
     issue view` itself fails to resolve a PR number (GitHub's GraphQL schema treats
     Issue/PullRequest as distinct types even though they share one number sequence per
     repo). Raises _IssueFetchError for any other failure, since that's inconclusive rather
     than a confirmed absence."""
-    result = run_cmd(
+    result = await run_cmd(
         gh_argv("issue", "view", str(number), "--repo", repo, "--json", "number,title,body"),
         cwd="/",
         env=env,
@@ -696,7 +703,7 @@ def _fetch_issue(number: int, repo: str, env: dict) -> dict | None:
         raise _IssueFetchError(str(e)) from e
 
 
-def _resolve_native_linked_tickets(pr: dict, env: dict) -> list[dict] | None:
+async def _resolve_native_linked_tickets(pr: dict, env: dict) -> list[dict] | None:
     """Primary mechanism (§7.2 step 1): resolve every entry in pr["closingIssuesReferences"]
     via `gh issue view`, using each entry's own repository (a closing reference can point at
     a different repo than the PR's own). Entries that are confirmed absent (see
@@ -719,7 +726,7 @@ def _resolve_native_linked_tickets(pr: dict, env: dict) -> list[dict] | None:
         if key in seen:
             continue
         try:
-            issue = _fetch_issue(number, ticket_repo, env)
+            issue = await _fetch_issue(number, ticket_repo, env)
         except _IssueFetchError:
             inconclusive = True
             continue
@@ -774,7 +781,7 @@ def _parse_linear_linkback_comment(body: str) -> dict | None:
     }
 
 
-def _resolve_comment_issue_refs(body: str, repo: str, env: dict, seen: set[tuple[str, int | str]]) -> list[dict]:
+async def _resolve_comment_issue_refs(body: str, repo: str, env: dict, seen: set[tuple[str, int | str]]) -> list[dict]:
     """Scans a single comment body for GitHub issue references and resolves each via `gh
     issue view`, split out of _resolve_comment_linked_tickets purely to keep that
     function's branching complexity down. A match that 404s, names a pull request rather
@@ -794,7 +801,7 @@ def _resolve_comment_issue_refs(body: str, repo: str, env: dict, seen: set[tuple
         if key in seen:
             continue
         try:
-            issue = _fetch_issue(number, ticket_repo, env)
+            issue = await _fetch_issue(number, ticket_repo, env)
         except _IssueFetchError:
             continue
         if issue is None:
@@ -810,7 +817,7 @@ def _resolve_comment_issue_refs(body: str, repo: str, env: dict, seen: set[tuple
     return tickets
 
 
-def _resolve_comment_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | None = None) -> list[dict]:
+async def _resolve_comment_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | None = None) -> list[dict]:
     """Fallback mechanism (§7.2 step 2), only ever called when native linking finds
     nothing: scan every early-window comment (any author, including bots — §1 decision 4)
     for a Linear linkback (_parse_linear_linkback_comment) or a GitHub issue reference
@@ -820,7 +827,7 @@ def _resolve_comment_linked_tickets(pr: dict, repo: str, env: dict, cache: dict 
     pr_number = pr.get("number")
     if pr_number is None:
         return []
-    comments = _fetch_early_window_comments(pr_number, repo, pr.get("createdAt", ""), env, cache)
+    comments = await _fetch_early_window_comments(pr_number, repo, pr.get("createdAt", ""), env, cache)
     if not comments:
         return []
     tickets: list[dict] = []
@@ -834,11 +841,11 @@ def _resolve_comment_linked_tickets(pr: dict, repo: str, env: dict, cache: dict 
                 seen.add(key)
                 tickets.append(linear_ticket)
             continue
-        tickets.extend(_resolve_comment_issue_refs(body, repo, env, seen))
+        tickets.extend(await _resolve_comment_issue_refs(body, repo, env, seen))
     return tickets
 
 
-def resolve_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | None = None) -> list[dict] | None:
+async def resolve_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | None = None) -> list[dict] | None:
     """Resolve the ticket(s) this PR answers (requirement-traceability-requirements.md
     §7.2, §4/G5 update): GitHub's own closing-keyword linking is tried first and, only if
     it finds nothing, an early-comment scan is tried as a fallback — a `linear[bot]`
@@ -854,15 +861,15 @@ def resolve_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | None = 
     case rather than risked as a second source of false negatives. Pass the same `cache`
     dict to a later build_early_comment_context call for this PR so its comment-scan
     fallback's paginated fetch (if it ran) is reused instead of repeated."""
-    tickets = _resolve_native_linked_tickets(pr, env)
+    tickets = await _resolve_native_linked_tickets(pr, env)
     if tickets is None:
         return None
     if tickets:
         return tickets
-    return _resolve_comment_linked_tickets(pr, repo, env, cache)
+    return await _resolve_comment_linked_tickets(pr, repo, env, cache)
 
 
-def post_no_linked_ticket_comment(pr_number: int, repo: str, env: dict) -> bool:
+async def post_no_linked_ticket_comment(pr_number: int, repo: str, env: dict) -> bool:
     """Posts the §7.3 "no linked ticket found" PR-level comment directly — no backend
     invocation, since there's nothing for a model to judge when resolve_linked_tickets
     found nothing via either mechanism. This outcome is terminal (§7.3/§11.1): once
@@ -874,7 +881,7 @@ def post_no_linked_ticket_comment(pr_number: int, repo: str, env: dict) -> bool:
         "first 5 minutes of comments) — skipping scope/gap comparison.\n"
         f"{TRACEABILITY_REVIEW_MARKER}"
     )
-    result = run_cmd(
+    result = await run_cmd(
         gh_argv("pr", "comment", str(pr_number), "--repo", repo, "--body", body),
         cwd="/",
         env=env,
@@ -891,15 +898,15 @@ def post_no_linked_ticket_comment(pr_number: int, repo: str, env: dict) -> bool:
     return True
 
 
-def run_pr_level_pass(
+async def run_pr_level_pass(
     pr_number: int,
     backend: Backend,
     wdir: str,
     is_done: bool,
-    build_prompt: Callable[[], str],
-    has_comment_fn: Callable[[], bool | None],
+    build_prompt: Callable[[], Awaitable[str]],
+    has_comment_fn: Callable[[], Awaitable[bool | None]],
     label: str,
-    short_circuit: Callable[[], bool | None] | None = None,
+    short_circuit: Callable[[], Awaitable[bool | None]] | None = None,
 ) -> bool | None:
     """Shared orchestration skeleton for every PR-level pass (design review, requirement-
     traceability review, ...): noop-if-already-done → optional short-circuit (e.g.
@@ -926,19 +933,19 @@ def run_pr_level_pass(
         logger.info("PR #%d: %s already posted, skipping", pr_number, label)
         return True
     if short_circuit is not None:
-        outcome = short_circuit()
+        outcome = await short_circuit()
         if outcome is not None:
             return outcome
-    prompt = build_prompt()
+    prompt = await build_prompt()
     try:
-        result = backend.run(prompt, cwd=wdir, context=f"PR #{pr_number} {label}")
+        result = await backend.run(prompt, cwd=wdir, context=f"PR #{pr_number} {label}")
         if result.returncode != 0:
             logger.error("PR #%d: %s backend exited %d", pr_number, label, result.returncode)
             return False
     except subprocess.TimeoutExpired:
         logger.exception("PR #%d: %s backend timed out", pr_number, label)
         return False
-    comment_status = has_comment_fn()
+    comment_status = await has_comment_fn()
     if comment_status is None:
         logger.warning(
             "PR #%d: could not confirm %s comment status (comment check failed) — "
@@ -1040,14 +1047,16 @@ def author_matches(login: str, authors_config: str | list) -> bool:
     return login in authors_config
 
 
-def list_open_prs_matching_authors(repo: str, authors_config: str | list, cwd: str, env: dict) -> list[dict] | None:
+async def list_open_prs_matching_authors(
+    repo: str, authors_config: str | list, cwd: str, env: dict
+) -> list[dict] | None:
     """List open, non-draft PRs whose author matches authors_config, sorted ascending by number.
 
     Returns None (rather than []) on fetch failure, so callers can distinguish "gh pr list
     failed" from "confirmed zero open PRs" instead of treating a transient API hiccup as an
     authoritative empty set.
     """
-    result = run_cmd(
+    result = await run_cmd(
         gh_argv(
             "pr",
             "list",
@@ -1073,8 +1082,8 @@ def list_open_prs_matching_authors(repo: str, authors_config: str | list, cwd: s
     return sorted(eligible, key=lambda p: p["number"])
 
 
-def _list_prs_by_flag(repo: str, cwd: str, env: dict, filter_flag: str) -> list[dict]:
-    result = run_cmd(
+async def _list_prs_by_flag(repo: str, cwd: str, env: dict, filter_flag: str) -> list[dict]:
+    result = await run_cmd(
         gh_argv(
             "pr",
             "list",
@@ -1099,10 +1108,10 @@ def _list_prs_by_flag(repo: str, cwd: str, env: dict, filter_flag: str) -> list[
     return json.loads(result.stdout)
 
 
-def _list_review_requested_prs(repo: str, cwd: str, env: dict) -> list[dict]:
+async def _list_review_requested_prs(repo: str, cwd: str, env: dict) -> list[dict]:
     # gh search prs does not support headRefName/isDraft in --json; fetch numbers first,
     # then hydrate each with the fields we need via gh pr view.
-    result = run_cmd(
+    result = await run_cmd(
         gh_argv(
             "search",
             "prs",
@@ -1126,7 +1135,7 @@ def _list_review_requested_prs(repo: str, cwd: str, env: dict) -> list[dict]:
     stubs = json.loads(result.stdout)
     prs = []
     for stub in stubs:
-        detail = run_cmd(
+        detail = await run_cmd(
             gh_argv("pr", "view", str(stub["number"]), "--repo", repo, "--json", "number,headRefName,isDraft"),
             cwd=cwd,
             env=env,
@@ -1138,21 +1147,21 @@ def _list_review_requested_prs(repo: str, cwd: str, env: dict) -> list[dict]:
     return prs
 
 
-def list_open_prs_for_current_user(repo: str, cwd: str, env: dict) -> list[dict]:
+async def list_open_prs_for_current_user(repo: str, cwd: str, env: dict) -> list[dict]:
     """List open PRs (drafts included) where the running user is the author, is assigned, or has a review
     requested from them (union of the three), deduplicated by PR number, sorted ascending."""
     by_number: dict[int, dict] = {}
     for pr in (
-        _list_prs_by_flag(repo, cwd, env, "--author")
-        + _list_prs_by_flag(repo, cwd, env, "--assignee")
-        + _list_review_requested_prs(repo, cwd, env)
+        (await _list_prs_by_flag(repo, cwd, env, "--author"))
+        + (await _list_prs_by_flag(repo, cwd, env, "--assignee"))
+        + (await _list_review_requested_prs(repo, cwd, env))
     ):
         by_number.setdefault(pr["number"], pr)
     return sorted(by_number.values(), key=lambda p: p["number"])
 
 
-def get_pr_base_branch(pr_number: int, repo: str, env: dict) -> str:
-    result = run_cmd(
+async def get_pr_base_branch(pr_number: int, repo: str, env: dict) -> str:
+    result = await run_cmd(
         gh_argv("pr", "view", str(pr_number), "--repo", repo, "--json", "baseRefName", "--jq", ".baseRefName"),
         cwd="/",
         env=env,
@@ -1164,8 +1173,8 @@ def get_pr_base_branch(pr_number: int, repo: str, env: dict) -> str:
     return result.stdout.decode("utf-8").strip()
 
 
-def get_pr_head_sha(pr_number: int, repo: str, env: dict) -> str:
-    result = run_cmd(
+async def get_pr_head_sha(pr_number: int, repo: str, env: dict) -> str:
+    result = await run_cmd(
         gh_argv("pr", "view", str(pr_number), "--repo", repo, "--json", "headRefOid", "--jq", ".headRefOid"),
         cwd="/",
         env=env,
@@ -1177,8 +1186,8 @@ def get_pr_head_sha(pr_number: int, repo: str, env: dict) -> str:
     return result.stdout.decode("utf-8").strip()
 
 
-def get_pr_description(pr_number: int, repo: str, env: dict) -> str:
-    result = run_cmd(
+async def get_pr_description(pr_number: int, repo: str, env: dict) -> str:
+    result = await run_cmd(
         gh_argv(
             "pr",
             "view",
@@ -1200,8 +1209,8 @@ def get_pr_description(pr_number: int, repo: str, env: dict) -> str:
     return result.stdout.decode("utf-8").strip()
 
 
-def is_ancestor(candidate_sha: str, descendant_sha: str, wdir: str, env: dict) -> bool:
-    result = run_cmd(
+async def is_ancestor(candidate_sha: str, descendant_sha: str, wdir: str, env: dict) -> bool:
+    result = await run_cmd(
         ["git", "merge-base", "--is-ancestor", candidate_sha, descendant_sha],
         cwd=wdir,
         env=env,
@@ -1211,16 +1220,16 @@ def is_ancestor(candidate_sha: str, descendant_sha: str, wdir: str, env: dict) -
     return result.returncode == 0
 
 
-def get_changed_files(
+async def get_changed_files(
     base_branch: str, wdir: str, env: dict, expected_sha: str = "", *, rev_range: str | None = None
 ) -> list[str]:
     """Names of files changed in the review range. ``rev_range`` overrides the default
     ``origin/{base_branch}...HEAD`` (local-review passes ``<merge_base>..HEAD``)."""
     if expected_sha:
-        actual = get_head_sha(wdir, env)
+        actual = await get_head_sha(wdir, env)
         if actual and actual != expected_sha:
             logger.warning("get_changed_files: local HEAD %s differs from expected %s", actual, expected_sha)
-    result = run_cmd(
+    result = await run_cmd(
         ["git", "diff", "--name-only", rev_range or f"origin/{base_branch}...HEAD"],
         cwd=wdir,
         env=env,
@@ -1237,12 +1246,12 @@ def get_changed_files(
     return [f for f in result.stdout.decode("utf-8").splitlines() if f.strip()]
 
 
-def get_file_diff(file_path: str, base_branch: str, wdir: str, env: dict, *, rev_range: str | None = None) -> str:
+async def get_file_diff(file_path: str, base_branch: str, wdir: str, env: dict, *, rev_range: str | None = None) -> str:
     """Per-file diff. ``rev_range`` overrides the default ``origin/{base_branch}...HEAD``;
     it is split on whitespace into separate git arguments (local-review passes
     ``"<merge_base> HEAD"``)."""
     range_args = rev_range.split() if rev_range else [f"origin/{base_branch}...HEAD"]
-    result = run_cmd(
+    result = await run_cmd(
         ["git", "diff", *range_args, "--", file_path],
         cwd=wdir,
         env=env,
@@ -1383,7 +1392,7 @@ def _read_sonar_project_key(props_path: Path) -> str | None:
     return None
 
 
-def fetch_pr_comments(pr_number: int, script_path: Path, wdir: str, env: dict) -> list[dict]:
+async def fetch_pr_comments(pr_number: int, script_path: Path, wdir: str, env: dict) -> list[dict]:
     """Run scripts/pr-comments.py fetch for pr_number and return its cached comments.
 
     Returns a flat list of dicts, each tagged with a "type" key ("inline", "review", or
@@ -1393,7 +1402,7 @@ def fetch_pr_comments(pr_number: int, script_path: Path, wdir: str, env: dict) -
     # component) so concurrent runs on different repos with the same PR number can't read each other's data.
     with tempfile.TemporaryDirectory(prefix="harness-pr-comments-") as tmp_dir:
         output_file = Path(tmp_dir) / "comments.json"
-        result = run_cmd(
+        result = await run_cmd(
             ["python3", str(script_path), "fetch", "--pr", str(pr_number), "--output", str(output_file)],
             cwd=wdir,
             env=env,
@@ -1451,7 +1460,7 @@ query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
 """.strip()
 
 
-def _fetch_review_threads_page(pr_number: int, repo: str, cursor: str | None, env: dict) -> dict | None:
+async def _fetch_review_threads_page(pr_number: int, repo: str, cursor: str | None, env: dict) -> dict | None:
     """Fetch one page of review threads. Returns the `reviewThreads` object, or None on
     any failure (non-zero exit, unparsable JSON, missing data)."""
     owner, repo_name = repo.split("/")
@@ -1469,7 +1478,7 @@ def _fetch_review_threads_page(pr_number: int, repo: str, cursor: str | None, en
     )
     if cursor:
         cmd += ["-f", f"cursor={cursor}"]
-    result = run_cmd(cmd, cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
+    result = await run_cmd(cmd, cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
     if result.returncode != 0:
         logger.warning("PR #%d: could not fetch review thread state (rc=%d)", pr_number, result.returncode)
         return None
@@ -1485,13 +1494,13 @@ def _fetch_review_threads_page(pr_number: int, repo: str, cursor: str | None, en
     return threads
 
 
-def fetch_review_threads(pr_number: int, repo: str, env: dict) -> list[dict] | None:
+async def fetch_review_threads(pr_number: int, repo: str, env: dict) -> list[dict] | None:
     """Return the review thread nodes (all pages) of a PR with ids and resolved/minimised
     state, or None if any page fails to fetch or parse."""
     nodes: list[dict] = []
     cursor: str | None = None
     while True:
-        page = _fetch_review_threads_page(pr_number, repo, cursor, env)
+        page = await _fetch_review_threads_page(pr_number, repo, cursor, env)
         if page is None:
             return None
         nodes.extend(page["nodes"])

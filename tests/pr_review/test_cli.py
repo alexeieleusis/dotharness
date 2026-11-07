@@ -220,12 +220,12 @@ def test_run_auto_approve_disabled_is_noop(minimal_toml, tmp_xdg):
     mock_token.assert_not_called()
 
 
-def test_auto_approve_run_takes_lock(minimal_toml, tmp_xdg):
+async def test_auto_approve_run_takes_lock(minimal_toml, tmp_xdg):
     from dotharness.pr_review.config import load_config
     from dotharness.pr_review.runners import auto_approve
 
     with patch("dotharness.pr_review.runners.auto_approve.acquire_lock") as mock_lock:
-        auto_approve.run(load_config(minimal_toml))
+        await auto_approve.run(load_config(minimal_toml))
     mock_lock.assert_called_once()
 
 

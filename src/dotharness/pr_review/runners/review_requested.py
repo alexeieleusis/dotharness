@@ -56,24 +56,24 @@ from dotharness.subprocess_runner import build_subprocess_env, gh_argv
 logger = logging.getLogger(__name__)
 
 
-def run(config: HarnessConfig, pr_url: str | None = None) -> None:
+async def run(config: HarnessConfig, pr_url: str | None = None) -> None:
     with acquire_lock(config.lock_key):
-        _run_locked(config, pr_url)
+        await _run_locked(config, pr_url)
 
 
-def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
-    gh_token = get_gh_token(config.harness.gh_token_cmd)
+async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
+    gh_token = await get_gh_token(config.harness.gh_token_cmd)
     env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
-    current_user = get_current_user(env)
+    current_user = await get_current_user(env)
 
     if pr_url:
         prs = [
-            pr_from_url(
+            await pr_from_url(
                 pr_url, config.repo.name, env, "number,url,headRefName,createdAt,closingIssuesReferences,author"
             )
         ]
     else:
-        prs = [p for p in _get_prs(config.repo.name, env) if p.get("headRefName")]
+        prs = [p for p in await _get_prs(config.repo.name, env) if p.get("headRefName")]
 
     knowledge_dir = Path(config.harness.knowledge_dir) / "pr-review"
     extra_knowledge = (
@@ -92,14 +92,14 @@ def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
 
     for pr in prs:
         pr_number = pr["number"]
-        files_summary_done = _should_skip_pr(pr, config.repo.name, current_user, env)
-        design_done = has_design_review_comment(pr_number, config.repo.name, current_user, env)
-        traceability_done = has_traceability_review_comment(pr_number, config.repo.name, current_user, env)
+        files_summary_done = await _should_skip_pr(pr, config.repo.name, current_user, env)
+        design_done = await has_design_review_comment(pr_number, config.repo.name, current_user, env)
+        traceability_done = await has_traceability_review_comment(pr_number, config.repo.name, current_user, env)
         # The regret pass is the only config-gated PR-level pass here (off by default);
         # when disabled, regret_done is True so the gate below and the call in
         # _process_pr are both unchanged, and no extra gh marker check runs.
         regret_done = (
-            has_regret_review_comment(pr_number, config.repo.name, current_user, env)
+            await has_regret_review_comment(pr_number, config.repo.name, current_user, env)
             if config.regret_review.enabled
             else True
         )
@@ -108,7 +108,7 @@ def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
             # already succeeded for this PR revision — nothing left to do.
             continue
         try:
-            _process_pr(
+            await _process_pr(
                 pr,
                 config,
                 knowledge_dir,
@@ -129,13 +129,13 @@ def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
             logger.exception("PR #%d: error", pr_number)
 
 
-def _get_prs(repo: str, env: dict) -> list[dict]:
+async def _get_prs(repo: str, env: dict) -> list[dict]:
     # Use gh pr list with search predicates to get all fields in a single call,
     # avoiding the N+1 pattern of gh search prs + individual gh pr view calls.
     # author is unused by the other passes; the regret pass's config.regret_review
     # .authors gate (regret_review.find_introducing_prs) reads it from the PR dict and
     # treats an authorless PR as non-matching (fail-closed), so the field must be here.
-    result = run_cmd(
+    result = await run_cmd(
         gh_argv(
             "pr",
             "list",
@@ -160,10 +160,10 @@ def _get_prs(repo: str, env: dict) -> list[dict]:
     return sorted(json.loads(result.stdout), key=lambda p: p["number"])
 
 
-def _has_user_approved(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+async def _has_user_approved(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
     page = 1
     while True:
-        result = run_cmd(
+        result = await run_cmd(
             gh_argv(
                 "api",
                 "--method",
@@ -191,21 +191,21 @@ def _has_user_approved(pr_number: int, repo: str, current_user: str, env: dict) 
         page += 1
 
 
-def _should_skip_pr(pr: dict, repo: str, current_user: str, env: dict) -> bool:
+async def _should_skip_pr(pr: dict, repo: str, current_user: str, env: dict) -> bool:
     pr_number = pr["number"]
-    if _has_user_approved(pr_number, repo, current_user, env):
+    if await _has_user_approved(pr_number, repo, current_user, env):
         logger.info("PR #%d already approved by self, skipping", pr_number)
         return True
-    if has_review_summary_comment(pr_number, repo, current_user, env):
+    if await has_review_summary_comment(pr_number, repo, current_user, env):
         logger.info("PR #%d already has review summary comment, skipping", pr_number)
         return True
-    if has_inline_review_comments(pr_number, repo, current_user, env):
+    if await has_inline_review_comments(pr_number, repo, current_user, env):
         logger.info("PR #%d has partial inline review comments, skipping", pr_number)
         return True
     return False
 
 
-def _process_pr(
+async def _process_pr(
     pr: dict,
     config: HarnessConfig,
     knowledge_dir: Path,
@@ -221,7 +221,7 @@ def _process_pr(
 ) -> None:
     pr_number = pr["number"]
     logger.info("PR #%d: starting", pr_number)
-    original_sha = git_detach_and_record(wdir, env)
+    original_sha = await git_detach_and_record(wdir, env)
     try:
         # The user still reviews and approves the PR themselves — this runner's job is
         # only to post automated findings, not to conclude the review on their behalf.
@@ -230,19 +230,19 @@ def _process_pr(
         # clear the current user from the PR's requested-reviewers list and hide it from
         # this and every other runner's "user-review-requested:@me" search — restore it
         # regardless of outcome, mirroring every other "non-concluding" runner.
-        with preserve_reviewer_request(pr_number, config.repo.name, current_user, env):
-            git_fetch_and_checkout(pr["headRefName"], wdir, env)
+        async with preserve_reviewer_request(pr_number, config.repo.name, current_user, env):
+            await git_fetch_and_checkout(pr["headRefName"], wdir, env)
             # Gathered once and shared by all four passes below (mirrors self_review.py's
             # _gather_pr_context/_cached_file_diff) so a PR needing both the correctness
             # pipeline and a PR-level pass in the same cycle doesn't refetch PR metadata or
             # re-diff every changed file for each pass.
-            ctx = _gather_pr_context(pr, config, wdir, env)
+            ctx = await _gather_pr_context(pr, config, wdir, env)
             if run_files_summary:
                 # Only post the summary when every file review succeeded: the summary comment
                 # is what _should_skip_pr treats as "done", so posting it after a partial
                 # failure would permanently suppress the retry of the failed files.
-                if _run_file_reviews(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, ctx):
-                    _run_summary_review(pr, config, knowledge_dir, extra_knowledge, backend, wdir, ctx)
+                if await _run_file_reviews(pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, ctx):
+                    await _run_summary_review(pr, config, knowledge_dir, extra_knowledge, backend, wdir, ctx)
                 else:
                     logger.warning("PR #%d: file review(s) failed, skipping summary so the next run retries", pr_number)
             # Independent of the correctness pipeline by design: this pass's own fate
@@ -250,14 +250,14 @@ def _process_pr(
             # decoupled from files/summary's, so neither one's retry forces the other's.
             # traceability and regret (when enabled) extend the same decoupling, each
             # with its own noop-if-already-posted check.
-            _run_design_review(
+            await _run_design_review(
                 pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, design_done, ctx
             )
-            _run_traceability_review(
+            await _run_traceability_review(
                 pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, traceability_done, ctx
             )
             if config.regret_review.enabled:
-                _run_regret_review(
+                await _run_regret_review(
                     pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, regret_done, ctx
                 )
     except FatalGitError:
@@ -265,16 +265,16 @@ def _process_pr(
     except Exception:
         logger.exception("PR #%d: error", pr_number)
     finally:
-        git_restore(original_sha, pr["headRefName"], wdir, env)
+        await git_restore(original_sha, pr["headRefName"], wdir, env)
 
 
-def _gather_pr_context(pr: dict, config: HarnessConfig, wdir: str, env: dict) -> dict:
+async def _gather_pr_context(pr: dict, config: HarnessConfig, wdir: str, env: dict) -> dict:
     pr_number = pr["number"]
     vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr["headRefName"])
-    pr_description = get_pr_description(pr_number, config.repo.name, env)
-    base_branch = get_pr_base_branch(pr_number, config.repo.name, env)
-    commit_sha = get_pr_head_sha(pr_number, config.repo.name, env)
-    files = get_changed_files(base_branch, wdir, env, expected_sha=commit_sha)
+    pr_description = await get_pr_description(pr_number, config.repo.name, env)
+    base_branch = await get_pr_base_branch(pr_number, config.repo.name, env)
+    commit_sha = await get_pr_head_sha(pr_number, config.repo.name, env)
+    files = await get_changed_files(base_branch, wdir, env, expected_sha=commit_sha)
     return {
         "vibe_heal_context": vibe_heal_context,
         "pr_description": pr_description,
@@ -285,16 +285,16 @@ def _gather_pr_context(pr: dict, config: HarnessConfig, wdir: str, env: dict) ->
     }
 
 
-def _cached_file_diff(ctx: dict, file: str, wdir: str, env: dict) -> str:
+async def _cached_file_diff(ctx: dict, file: str, wdir: str, env: dict) -> str:
     """The file/summary pass and the design pass both need every changed file's diff;
     caching on ctx means a PR processed by both in the same cycle only runs `git diff`
     once per file instead of twice."""
     if file not in ctx["diff_cache"]:
-        ctx["diff_cache"][file] = get_file_diff(file, ctx["base_branch"], wdir, env)
+        ctx["diff_cache"][file] = await get_file_diff(file, ctx["base_branch"], wdir, env)
     return ctx["diff_cache"][file]
 
 
-def _run_file_reviews(
+async def _run_file_reviews(
     pr: dict,
     config: HarnessConfig,
     knowledge_dir: Path,
@@ -313,7 +313,7 @@ def _run_file_reviews(
 
     all_ok = True
     for file in files:
-        diff = _cached_file_diff(ctx, file, wdir, env)
+        diff = await _cached_file_diff(ctx, file, wdir, env)
         abs_path = os.path.join(wdir, file)
         file_section = build_file_review_section(file, diff, abs_path)
         prompt = _build_file_prompt(
@@ -327,7 +327,7 @@ def _run_file_reviews(
             vibe_heal_context,
         )
         try:
-            result = backend.run(prompt, cwd=wdir, context=f"PR #{pr_number} file {file}")
+            result = await backend.run(prompt, cwd=wdir, context=f"PR #{pr_number} file {file}")
             if result.returncode != 0:
                 logger.error("PR #%d file %s: backend exited %d", pr_number, file, result.returncode)
                 all_ok = False
@@ -358,7 +358,7 @@ def _build_file_prompt(
     )
 
 
-def _run_design_review(
+async def _run_design_review(
     pr: dict,
     config: HarnessConfig,
     knowledge_dir: Path,
@@ -393,13 +393,13 @@ def _run_design_review(
     pr_number = pr["number"]
     repo_name = config.repo.name
 
-    def build_prompt() -> str:
+    async def build_prompt() -> str:
         design_instructions = (knowledge_dir / "review-design.md").read_text(encoding="utf-8")
-        diff_sections = "".join(
-            build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
+        diff_sections = "".join([
+            build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
             for file in ctx["files"]
-        )
-        prior_flagged_locations = get_design_review_flagged_locations(pr_number, repo_name, current_user, env)
+        ])
+        prior_flagged_locations = await get_design_review_flagged_locations(pr_number, repo_name, current_user, env)
         return build_design_review_prompt(
             design_instructions,
             extra_knowledge,
@@ -414,7 +414,7 @@ def _run_design_review(
         )
 
     return bool(
-        run_pr_level_pass(
+        await run_pr_level_pass(
             pr_number,
             backend,
             wdir,
@@ -426,7 +426,7 @@ def _run_design_review(
     )
 
 
-def _run_traceability_review(
+async def _run_traceability_review(
     pr: dict,
     config: HarnessConfig,
     knowledge_dir: Path,
@@ -455,27 +455,29 @@ def _run_traceability_review(
     comment_cache: dict = {}
     resolved: dict = {}
 
-    def short_circuit() -> bool | None:
-        tickets = resolve_linked_tickets(pr, repo_name, env, comment_cache)
+    async def short_circuit() -> bool | None:
+        tickets = await resolve_linked_tickets(pr, repo_name, env, comment_cache)
         if tickets is None:
             logger.info("PR #%d: linked ticket lookup was inconclusive (API failure) — will retry next run", pr_number)
             return False
         if not tickets:
-            if post_no_linked_ticket_comment(pr_number, repo_name, env):
+            if await post_no_linked_ticket_comment(pr_number, repo_name, env):
                 return True
             logger.error("PR #%d: failed to post 'no linked ticket found' comment", pr_number)
             return False
         resolved["tickets"] = tickets
         return None
 
-    def build_prompt() -> str:
+    async def build_prompt() -> str:
         traceability_instructions = (knowledge_dir / "review-traceability.md").read_text(encoding="utf-8")
-        diff_sections = "".join(
-            build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
+        diff_sections = "".join([
+            build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
             for file in ctx["files"]
+        ])
+        prior_flagged_locations = await get_traceability_review_flagged_locations(
+            pr_number, repo_name, current_user, env
         )
-        prior_flagged_locations = get_traceability_review_flagged_locations(pr_number, repo_name, current_user, env)
-        early_comment_context = build_early_comment_context(
+        early_comment_context = await build_early_comment_context(
             pr_number, repo_name, pr.get("createdAt", ""), env, comment_cache
         )
         return build_traceability_review_prompt(
@@ -494,7 +496,7 @@ def _run_traceability_review(
         )
 
     return bool(
-        run_pr_level_pass(
+        await run_pr_level_pass(
             pr_number,
             backend,
             wdir,
@@ -507,7 +509,7 @@ def _run_traceability_review(
     )
 
 
-def _run_regret_review(
+async def _run_regret_review(
     pr: dict,
     config: HarnessConfig,
     knowledge_dir: Path,
@@ -554,22 +556,22 @@ def _run_regret_review(
     candidates: list[RegretCandidate] = []
     reply: dict[str, str] = {}
 
-    def short_circuit() -> bool | None:
+    async def short_circuit() -> bool | None:
         budget_start = time.monotonic()
-        introducing_hunks = find_introducing_prs(pr, config, wdir, env, budget_start)
-        found = find_regret_candidates(introducing_hunks, config, wdir, env, budget_start)
+        introducing_hunks = await find_introducing_prs(pr, config, wdir, env, budget_start)
+        found = await find_regret_candidates(introducing_hunks, config, wdir, env, budget_start)
         if not found:
             logger.debug("PR #%d: no regret candidates — nothing to judge this run", pr_number)
             return True
         candidates.extend(found)
         return None
 
-    def build_prompt() -> str:
+    async def build_prompt() -> str:
         regret_instructions = (knowledge_dir / "review-regret.md").read_text(encoding="utf-8")
-        diff_sections = "".join(
-            build_file_review_section(file, _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
+        diff_sections = "".join([
+            build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
             for file in ctx["files"]
-        )
+        ])
         return build_regret_judgment_prompt(
             regret_instructions,
             extra_knowledge,
@@ -583,18 +585,18 @@ def _run_regret_review(
             ctx["vibe_heal_context"],
         )
 
-    def has_comment_fn() -> bool:
+    async def has_comment_fn() -> bool:
         findings = parse_regret_judgment(reply["reply"], candidates)
         if not findings:
             logger.info("PR #%d: regret review found no confirmed regret — nothing to post", pr_number)
             return True
-        if not post_regret_comment(pr_number, repo_name, build_regret_comment_body(findings), env):
+        if not await post_regret_comment(pr_number, repo_name, build_regret_comment_body(findings), env):
             logger.error("PR #%d: failed to post the regret comment — will retry next run", pr_number)
             return False
-        return has_regret_review_comment(pr_number, repo_name, current_user, env)
+        return await has_regret_review_comment(pr_number, repo_name, current_user, env)
 
     return bool(
-        run_pr_level_pass(
+        await run_pr_level_pass(
             pr_number,
             cast(Backend, RecordingBackend(backend, reply)),
             wdir,
@@ -607,7 +609,7 @@ def _run_regret_review(
     )
 
 
-def _run_summary_review(
+async def _run_summary_review(
     pr: dict,
     config: HarnessConfig,
     knowledge_dir: Path,
@@ -632,7 +634,7 @@ def _run_summary_review(
         + (f"\n\n## Static Analysis\n{vibe_heal_context}" if vibe_heal_context else "")
     )
     try:
-        result = backend.run(summary_prompt, cwd=wdir, context=f"PR #{pr_number} summary")
+        result = await backend.run(summary_prompt, cwd=wdir, context=f"PR #{pr_number} summary")
         if result.returncode != 0:
             logger.error("PR #%d: summary backend exited %d", pr_number, result.returncode)
             return False

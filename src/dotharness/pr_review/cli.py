@@ -1,3 +1,4 @@
+import asyncio
 import enum
 import logging
 import shutil
@@ -188,7 +189,7 @@ def run_review_prs(
     _setup_logging("review-prs", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
     try:
-        review_prs.run(cfg, pr_url=pr_url)
+        asyncio.run(review_prs.run(cfg, pr_url=pr_url))
     except review_prs.BaseAnalysisError as exc:
         logging.getLogger(__name__).error(RUNNER_FAILED_MSG, "review_prs", exc)  # noqa: TRY400
         sys.exit(1)
@@ -198,7 +199,7 @@ def run_review_prs(
 def run_focused_review(ctx: typer.Context) -> None:
     _setup_logging("focused-review", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
-    focused_review.run(cfg)
+    asyncio.run(focused_review.run(cfg))
 
 
 @run_app.command("review-requested")
@@ -216,14 +217,14 @@ def run_review_requested(
     """Post a dotharness-review on PRs where you're a requested reviewer (or a single PR with --pr)."""
     _setup_logging("review-requested", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
-    review_requested.run(cfg, pr_url=pr_url)
+    asyncio.run(review_requested.run(cfg, pr_url=pr_url))
 
 
 @run_app.command("self-review")
 def run_self_review(ctx: typer.Context) -> None:
     _setup_logging("self-review", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
-    self_review.run(cfg)
+    asyncio.run(self_review.run(cfg))
 
 
 @run_app.command("local-review")
@@ -259,14 +260,16 @@ def run_local_review(
         raise typer.BadParameter(usage_error)
     _setup_logging("local-review", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"], require_repo_name=False)
-    code = local_review.run_local_review(
-        cfg,
-        base=base,
-        output_dir=output_dir_arg,
-        force=force,
-        address=address,
-        skip_review=skip_review,
-        review_dir=review_dir_arg,
+    code = asyncio.run(
+        local_review.run_local_review(
+            cfg,
+            base=base,
+            output_dir=output_dir_arg,
+            force=force,
+            address=address,
+            skip_review=skip_review,
+            review_dir=review_dir_arg,
+        )
     )
     sys.exit(code)
 
@@ -275,7 +278,7 @@ def run_local_review(
 def run_address_comments(ctx: typer.Context) -> None:
     _setup_logging("address-comments", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
-    address_comments.run(cfg)
+    asyncio.run(address_comments.run(cfg))
 
 
 @run_app.command("auto-approve")
@@ -292,7 +295,7 @@ def run_auto_approve(
     """Mark small files viewed and approve small PRs once the author has followed up on review comments."""
     _setup_logging("auto-approve", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
-    auto_approve.run(cfg, dry_run=dry_run)
+    asyncio.run(auto_approve.run(cfg, dry_run=dry_run))
 
 
 PrOption = Annotated[
@@ -317,7 +320,7 @@ def run_ci_fix(
     """Fix failing required CI checks on your own PRs and push the fix to the PR branch. Off unless [ci_fix].enabled."""
     _setup_logging("ci-fix", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
-    ci_fix.run(cfg, dry_run=dry_run, pr=pr)
+    asyncio.run(ci_fix.run(cfg, dry_run=dry_run, pr=pr))
 
 
 @run_app.command("merge")
@@ -334,7 +337,7 @@ def run_merge(
     """Squash-merge your own PRs once every merge condition holds. Never approves. Off unless [merge].enabled."""
     _setup_logging("merge", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
-    merge.run(cfg, dry_run=dry_run, pr=pr)
+    asyncio.run(merge.run(cfg, dry_run=dry_run, pr=pr))
 
 
 @run_app.command("all")
@@ -348,14 +351,14 @@ def run_all(ctx: typer.Context) -> None:
     log = logging.getLogger(__name__)
 
     runners = [
-        ("review_prs", lambda: review_prs.run(cfg)),
-        ("focused_review", lambda: focused_review.run(cfg)),
-        ("self_review", lambda: self_review.run(cfg)),
-        ("review_requested", lambda: review_requested.run(cfg)),
-        ("address_comments", lambda: address_comments.run(cfg)),
-        ("auto_approve", lambda: auto_approve.run(cfg)),
-        ("ci_fix", lambda: ci_fix.run(cfg)),
-        ("merge", lambda: merge.run(cfg)),
+        ("review_prs", lambda: asyncio.run(review_prs.run(cfg))),
+        ("focused_review", lambda: asyncio.run(focused_review.run(cfg))),
+        ("self_review", lambda: asyncio.run(self_review.run(cfg))),
+        ("review_requested", lambda: asyncio.run(review_requested.run(cfg))),
+        ("address_comments", lambda: asyncio.run(address_comments.run(cfg))),
+        ("auto_approve", lambda: asyncio.run(auto_approve.run(cfg))),
+        ("ci_fix", lambda: asyncio.run(ci_fix.run(cfg))),
+        ("merge", lambda: asyncio.run(merge.run(cfg))),
     ]
 
     failed = []

@@ -6,7 +6,7 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -87,26 +87,26 @@ class ReviewResult:
         return not self.failed
 
 
-def _read_head_sha(working_dir: Path) -> str:
+async def _read_head_sha(working_dir: Path) -> str:
     """Current HEAD sha of `working_dir`'s repo; raises `RepoIdentityError` when unreadable."""
-    result = git(working_dir, "rev-parse", "HEAD")
+    result = await git(working_dir, "rev-parse", "HEAD")
     if result.returncode != 0:
         msg = f"could not read HEAD for {working_dir}: {result.stderr.strip()}"
         raise RepoIdentityError(msg)
     return result.stdout.strip()
 
 
-def _guard_violation(working_dir: Path, expected_head: str) -> str | None:
+async def _guard_violation(working_dir: Path, expected_head: str) -> str | None:
     """Description of what the backend changed, or None. Untracked files are ignored (11.A-10)."""
     problems: list[str] = []
     try:
-        now = _read_head_sha(working_dir)
+        now = await _read_head_sha(working_dir)
     except Exception as exc:
         now = ""
         problems.append(f"HEAD unreadable ({exc})")
     if now and now != expected_head:
         problems.append(f"HEAD moved from {expected_head} to {now}")
-    status = git(working_dir, "status", "--porcelain", _NO_UNTRACKED_FLAG)
+    status = await git(working_dir, "status", "--porcelain", _NO_UNTRACKED_FLAG)
     if status.returncode != 0:
         problems.append(f"git status failed: {status.stderr.strip()}")
     elif status.stdout.strip():
@@ -157,6 +157,8 @@ class _ReviewPasses:
         env: dict[str, str],
         files: list[str],
         extra_knowledge: str | None,
+        description: str,
+        guard_head: str,
     ) -> None:
         self.target = target
         self.review_dir = review_dir
@@ -171,32 +173,31 @@ class _ReviewPasses:
         self.file_instr = (knowledge / FILE_TEMPLATE).read_text(encoding="utf-8")
         self.summary_instr = (knowledge / SUMMARY_TEMPLATE).read_text(encoding="utf-8")
         self.design_instr = (knowledge / DESIGN_TEMPLATE).read_text(encoding="utf-8")
-        description = build_change_description(self.wdir, target)
         self.context = build_change_context(config.repo.name, self.wdir, target, description)
         self.vibe = get_vibe_heal_context(config.repo.subdirs, self.wdir_s, target.branch) or None
         self.result = ReviewResult(review_dir=review_dir, manifest=manifest)
-        self.guard_head = _read_head_sha(self.wdir)
+        self.guard_head = guard_head
         self.guard_errors: list[str] = []
         self.diff_cache: dict[str, str] = {}
 
-    def section_for(self, f: str) -> str:
+    async def section_for(self, f: str) -> str:
         if f not in self.diff_cache:
-            self.diff_cache[f] = get_file_diff(
+            self.diff_cache[f] = await get_file_diff(
                 f, self.target.base_ref, self.wdir_s, self.env, rev_range=f"{self.target.base_sha} HEAD"
             )
         return build_file_review_section(f, self.diff_cache[f], os.path.join(self.wdir_s, f))
 
-    def call_backend(self, prompt: str, label: str) -> bool:
+    async def call_backend(self, prompt: str, label: str) -> bool:
         """True when the backend exited 0 without timing out and the repo is unchanged."""
         ok = False
         try:
-            proc = self.backend.run(prompt, cwd=self.wdir_s, context=label)
+            proc = await self.backend.run(prompt, cwd=self.wdir_s, context=label)
             ok = proc.returncode == 0
             if not ok:
                 logger.error("%s: backend exited %d", label, proc.returncode)
         except subprocess.TimeoutExpired:
             logger.exception("%s: backend timed out", label)
-        violation = _guard_violation(self.wdir, self.guard_head)
+        violation = await _guard_violation(self.wdir, self.guard_head)
         if violation:
             msg = f"{label}: backend modified the repository: {violation}"
             self.guard_errors.append(msg)
@@ -210,29 +211,29 @@ class _ReviewPasses:
         if not ok:
             self.result.failed.append(name)
 
-    def file_pass(self, f: str) -> None:
+    async def file_pass(self, f: str) -> None:
         if self.manifest["files"].get(f) == STATUS_DONE:
             self.result.skipped.append(f"file:{f}")
             return
         out = _file_output_path(self.review_dir, f)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.unlink(missing_ok=True)
-        section = self.section_for(f)
+        section = await self.section_for(f)
         prompt = build_file_prompt(self.file_instr, out, section, self.context, self.extra_knowledge, self.vibe)
         self.result.ran.append(f"file:{f}")
-        ok = self.call_backend(prompt, f"local-review file {f}")
+        ok = await self.call_backend(prompt, f"local-review file {f}")
         if ok:
             _finish_file_output(out)
         self.record(f"file:{f}", ok, lambda st: self.manifest["files"].__setitem__(f, st))
 
-    def run_file_passes(self) -> None:
+    async def run_file_passes(self) -> None:
         for f in self.files:
             if self.guard_errors:
                 break
-            self.file_pass(f)
+            await self.file_pass(f)
 
-    def single_pass(
-        self, name: str, filename: str, build: Callable[[Path], str], stamp: str | None, files_all_done: bool
+    async def single_pass(
+        self, name: str, filename: str, build: Callable[[Path], Awaitable[str]], stamp: str | None, files_all_done: bool
     ) -> None:
         if self.guard_errors:
             return
@@ -242,40 +243,41 @@ class _ReviewPasses:
         out = self.review_dir / filename
         out.unlink(missing_ok=True)
         self.result.ran.append(name)
-        ok = self.call_backend(build(out), f"local-review {name}")
+        ok = await self.call_backend(await build(out), f"local-review {name}")
         ok = ok and _single_pass_output_ok(name, out, files_all_done)
         if ok and stamp:
             stamp_findings_file(out, stamp)
         self.record(name, ok, lambda st: self.manifest.__setitem__(name, st))
 
-    def run_summary_and_design(self) -> None:
+    async def run_summary_and_design(self) -> None:
         files_all_done = all(self.manifest["files"].get(f) == STATUS_DONE for f in self.files)
-        self.single_pass(
+
+        async def build_summary(out: Path) -> str:
+            return build_summary_prompt(
+                self.summary_instr, out, self.files, self.context, self.extra_knowledge, self.vibe
+            )
+
+        async def build_design(out: Path) -> str:
+            sections = "".join([await self.section_for(f) for f in self.files])
+            return build_design_prompt(self.design_instr, out, sections, self.context, self.extra_knowledge, self.vibe)
+
+        await self.single_pass(
             "summary",
             SUMMARY_NAME,
-            lambda out: build_summary_prompt(
-                self.summary_instr, out, self.files, self.context, self.extra_knowledge, self.vibe
-            ),
+            build_summary,
             None,
             files_all_done,
         )
-        self.single_pass(
+        await self.single_pass(
             "design",
             DESIGN_NAME,
-            lambda out: build_design_prompt(
-                self.design_instr,
-                out,
-                "".join(self.section_for(f) for f in self.files),
-                self.context,
-                self.extra_knowledge,
-                self.vibe,
-            ),
+            build_design,
             "design",
             files_all_done,
         )
 
 
-def run(
+async def run(
     config: HarnessConfig,
     target: LocalReviewTarget,
     *,
@@ -306,15 +308,19 @@ def run(
         _warn_discarded_statuses(review_dir)
     manifest = _seed_manifest(target, previous)
 
-    files = get_changed_files(target.base_ref, str(wdir), env, rev_range=f"{target.base_sha}..HEAD")
+    files = await get_changed_files(target.base_ref, str(wdir), env, rev_range=f"{target.base_sha}..HEAD")
     for f in files:
         _file_output_path(review_dir, f)  # validate before any backend call
     review_dir.mkdir(parents=True, exist_ok=True)
     manifest["files"] = {f: manifest["files"][f] for f in files if f in manifest["files"]}
 
-    passes = _ReviewPasses(config, target, review_dir, manifest, backend, env, files, extra_knowledge)
-    passes.run_file_passes()
-    passes.run_summary_and_design()
+    description = await build_change_description(wdir, target)
+    guard_head = await _read_head_sha(wdir)
+    passes = _ReviewPasses(
+        config, target, review_dir, manifest, backend, env, files, extra_knowledge, description, guard_head
+    )
+    await passes.run_file_passes()
+    await passes.run_summary_and_design()
 
     write_manifest(review_dir, manifest)
     _write_index(review_dir, manifest, files)
@@ -332,7 +338,7 @@ def _pass_lines(result: ReviewResult) -> list[str]:
     return lines
 
 
-def run_local_review(
+async def run_local_review(
     config: HarnessConfig,
     base: str | None = None,
     output_dir: str | Path | None = None,
@@ -354,12 +360,12 @@ def run_local_review(
     if usage_error:
         raise LocalReviewError(usage_error)
     with acquire_lock(config.lock_key):
-        return _run_locked(
+        return await _run_locked(
             config, base, output_dir, force, backend, address=address, skip_review=skip_review, review_dir=review_dir
         )
 
 
-def _run_review_phase(
+async def _run_review_phase(
     config: HarnessConfig,
     target: LocalReviewTarget,
     output_root: Path,
@@ -372,7 +378,7 @@ def _run_review_phase(
     if kfile and kfile.exists():
         extra = kfile.read_text(encoding="utf-8")
     try:
-        result = run(config, target, output_root=output_root, force=force, backend=backend, extra_knowledge=extra)
+        result = await run(config, target, output_root=output_root, force=force, backend=backend, extra_knowledge=extra)
     except RepoMutatedError as exc:
         rdir = review_dir_for(output_root, config.repo_slug, target.branch, target.head_sha)
         print(f"Review directory: {rdir}")
@@ -384,7 +390,7 @@ def _run_review_phase(
     return result
 
 
-def _select_and_address(
+async def _select_and_address(
     config: HarnessConfig,
     target: LocalReviewTarget,
     output_root: Path,
@@ -393,7 +399,7 @@ def _select_and_address(
     skip_review: bool,
     reviewed_dir: Path | None,
 ) -> bool:
-    chosen = select_review_dir(
+    chosen = await select_review_dir(
         config, target, output_root, review_dir=review_dir, skip_review=skip_review, reviewed_dir=reviewed_dir
     )
     print(f"Addressing review: {chosen}")
@@ -402,15 +408,15 @@ def _select_and_address(
         f"Findings to address: {len(collection.open)} open, "
         f"{collection.skipped_not_open} skipped (not open), {collection.unparseable} unparseable"
     )
-    return run_address_phase(config, target, chosen, collection, backend=backend)
+    return await run_address_phase(config, target, chosen, collection, backend=backend)
 
 
-def _check_preconditions_or_none(
+async def _check_preconditions_or_none(
     config: HarnessConfig, base: str | None, output_root: Path, skip_review: bool
 ) -> LocalReviewTarget | None:
     """The review target; None (message printed) when there is nothing to review (exit 0)."""
     try:
-        return check_preconditions(
+        return await check_preconditions(
             Path(config.repo.working_dir),
             base=base,
             config_base=config.local_review.base,
@@ -431,7 +437,7 @@ def _exit_code(review_ok: bool, address_ok: bool = True) -> int:
     return 0 if (review_ok and address_ok) else 1
 
 
-def _run_phases(
+async def _run_phases(
     config: HarnessConfig,
     base: str | None,
     output_dir: str | Path | None,
@@ -444,7 +450,7 @@ def _run_phases(
 ) -> int:
     """Preconditions, templates, review phase, address phase; may raise LocalReviewError."""
     output_root = resolve_output_root(config, output_dir)
-    target = _check_preconditions_or_none(config, base, output_root, skip_review)
+    target = await _check_preconditions_or_none(config, base, output_root, skip_review)
     if target is None:
         return 0
     _check_phase_templates(config, skip_review, address)
@@ -453,18 +459,18 @@ def _run_phases(
     review_ok = True
     reviewed_dir: Path | None = None
     if not skip_review:
-        result = _run_review_phase(config, target, output_root, force, backend)
+        result = await _run_review_phase(config, target, output_root, force, backend)
         if result is None:
             return 1
         review_ok = result.ok
         reviewed_dir = result.review_dir
     if not address:
         return _exit_code(review_ok)
-    address_ok = _select_and_address(config, target, output_root, backend, review_dir, skip_review, reviewed_dir)
+    address_ok = await _select_and_address(config, target, output_root, backend, review_dir, skip_review, reviewed_dir)
     return _exit_code(review_ok, address_ok)
 
 
-def _run_locked(
+async def _run_locked(
     config: HarnessConfig,
     base: str | None,
     output_dir: str | Path | None,
@@ -476,7 +482,7 @@ def _run_locked(
     review_dir: str | Path | None = None,
 ) -> int:
     try:
-        return _run_phases(
+        return await _run_phases(
             config, base, output_dir, force, backend, address=address, skip_review=skip_review, review_dir=review_dir
         )
     except (LocalReviewError, OpencodePluginError, BackendCwdDivergedError, RepoIdentityError) as exc:

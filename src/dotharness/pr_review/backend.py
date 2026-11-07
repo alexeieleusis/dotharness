@@ -1,4 +1,4 @@
-"""Synchronous pr-review adapter over ``dotharness.ai_backend.launch_sync``.
+"""Async pr-review adapter over ``dotharness.ai_backend.launch``.
 
 ``Backend`` keeps pr-review's public contract (constructor, ``run`` returning a ``subprocess.CompletedProcess`` with
 bytes output, ``subprocess.TimeoutExpired`` on timeout) while every launch, kill, retry and guard goes through the
@@ -10,8 +10,7 @@ shared layer. Result mapping (see ``docs/design/shared-async-layer.md``, "I-3 ad
 * ``ValueError``, ``TypeError``, ``OpencodePluginError``, ``BackendCwdDivergedError`` and ``RepoIdentityError`` from the
   shared layer propagate unchanged.
 
-Must not be called from async code: ``launch_sync`` uses ``asyncio.run``. Neither argv, env nor backend output is
-logged here.
+Neither argv, env nor backend output is logged here.
 """
 
 import functools
@@ -19,7 +18,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from dotharness.ai_backend import BACKEND_NAMES, ClaudeOptions, OpencodeOptions, launch_sync
+from dotharness.ai_backend import BACKEND_NAMES, ClaudeOptions, OpencodeOptions, launch
 from dotharness.opencode_guards import BackendCwdDivergedError, OpencodePluginError
 from dotharness.repo_guard import RepoIdentityError
 
@@ -66,7 +65,7 @@ class Backend:
         # Explicit root wins; otherwise the source checkout (None when installed, which skips the harness-HEAD guard).
         self.harness_repo_root = harness_repo_root if harness_repo_root is not None else find_harness_checkout()
 
-    def run(
+    async def run(
         self, instructions: str, cwd: str, opencode_dir: str | None = None, context: str | None = None
     ) -> subprocess.CompletedProcess:
         # Flag mapping per the I-2 "Contract for I-3, I-4 and I-5". The guards are opt-in in the shared layer, so they
@@ -79,7 +78,7 @@ class Backend:
             options = ClaudeOptions(skip_permissions=True, disable_slash_commands=True)
         if self.harness_repo_root is None:
             logger.debug("no dotharness checkout found (installed package); harness-HEAD guard skipped")
-        result = launch_sync(
+        result = await launch(
             self.backend_name,
             instructions,
             cwd=cwd,

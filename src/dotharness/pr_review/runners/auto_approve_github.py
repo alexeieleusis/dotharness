@@ -38,7 +38,7 @@ traceability comments exist.
 import json
 import logging
 import subprocess
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -96,8 +96,8 @@ def _is_author_activity(item: dict, pr_author: str, acting: str) -> bool:
     return login == pr_author and login != acting and not _is_bot(item)
 
 
-def _fetch_pr_commits(repo: str, pr_number: int, env: dict) -> list[dict] | None:
-    result = run_cmd(
+async def _fetch_pr_commits(repo: str, pr_number: int, env: dict) -> list[dict] | None:
+    result = await run_cmd(
         gh_argv("pr", "view", str(pr_number), "--repo", repo, "--json", "commits"),
         cwd="/",
         env=env,
@@ -122,10 +122,10 @@ def _author_commit_after(commits: list[dict], pr_author: str, t: datetime) -> bo
     return False
 
 
-def check_timing_gate(repo: str, pr_number: int, pr_author: str, current_user: str, env: dict) -> GateResult:
+async def check_timing_gate(repo: str, pr_number: int, pr_author: str, current_user: str, env: dict) -> GateResult:
     """Read-only timing gate. Never raises for read problems: returns READ_FAILED."""
     try:
-        result = _check_timing_gate(repo, pr_number, pr_author, current_user, env)
+        result = await _check_timing_gate(repo, pr_number, pr_author, current_user, env)
     except (subprocess.SubprocessError, OSError, ValueError):
         logger.exception("PR #%d: timing gate read raised", pr_number)
         result = GateResult(GateStatus.READ_FAILED, "read raised an exception")
@@ -204,7 +204,7 @@ def _has_activity_after(
     return False
 
 
-def _check_timing_gate(repo: str, pr_number: int, pr_author: str, current_user: str, env: dict) -> GateResult:
+async def _check_timing_gate(repo: str, pr_number: int, pr_author: str, current_user: str, env: dict) -> GateResult:
     failed = GateResult(GateStatus.READ_FAILED, "")
     acting = current_user.lower()
     author = pr_author.lower()
@@ -218,7 +218,7 @@ def _check_timing_gate(repo: str, pr_number: int, pr_author: str, current_user: 
     )
     pages = []
     for label, path in endpoints:
-        data = fetch_all_pages(path, env)
+        data = await fetch_all_pages(path, env)
         if data is None:
             return GateResult(failed.status, f"{label} read failed")
         pages.append(data)
@@ -240,7 +240,7 @@ def _check_timing_gate(repo: str, pr_number: int, pr_author: str, current_user: 
     if _has_activity_after(issue_comments, review_comments, reviews, t, author, acting):
         return GateResult(GateStatus.PASSED, REASON_AUTHOR_ACTIVITY)
 
-    commits = _fetch_pr_commits(repo, pr_number, env)
+    commits = await _fetch_pr_commits(repo, pr_number, env)
     if commits is None:
         return GateResult(failed.status, "commits read failed")
     if _author_commit_after(commits, author, t):
@@ -272,8 +272,8 @@ class SafetyResult:
     head_sha: str = ""
 
 
-def list_own_open_prs(
-    repo: str, only_pr: int | None, env: dict, failures: list[str], fields: str, run_gh: Callable = gh
+async def list_own_open_prs(
+    repo: str, only_pr: int | None, env: dict, failures: list[str], fields: str, run_gh: Callable[..., Awaitable] = gh
 ) -> list[dict]:
     """Open PRs authored by the acting user (``gh``'s ``@me``), or just ``only_pr``, sorted by number.
 
@@ -285,7 +285,7 @@ def list_own_open_prs(
         args += ["--limit", "500"]
     else:
         args = ["pr", "view", str(only_pr), "--repo", repo, "--json", fields]
-    result = run_gh(args, env)
+    result = await run_gh(args, env)
     if result.returncode != 0:
         failures.append(f"gh pr {'list' if only_pr is None else 'view'} failed (exit {result.returncode})")
         return []
@@ -301,13 +301,13 @@ def list_own_open_prs(
     return sorted(prs, key=lambda p: p["number"])
 
 
-def _check_ci(repo: str, pr_number: int, base_branch: str, env: dict) -> SafetyResult | None:
+async def _check_ci(repo: str, pr_number: int, base_branch: str, env: dict) -> SafetyResult | None:
     """None when CI allows approval; otherwise the SKIP or READ_FAILED result (head SHA not set).
 
     ``base_branch`` is the PR's base (``baseRefName``). The checks come from ``read_checks`` with the stack-root
     rule (see ``ci_checks``); an unreadable result is READ_FAILED.
     """
-    read = read_checks(repo, pr_number, base_branch, env)
+    read = await read_checks(repo, pr_number, base_branch, env)
     if read is None:
         return SafetyResult(SafetyStatus.READ_FAILED, "checks read failed")
     checks, missing = read
@@ -315,7 +315,7 @@ def _check_ci(repo: str, pr_number: int, base_branch: str, env: dict) -> SafetyR
         logger.info("PR #%d: required checks with no run: %s", pr_number, ", ".join(missing))
         return SafetyResult(SafetyStatus.SKIP, REASON_CI_BLOCKED)
     if not checks:
-        return _check_no_checks(repo, pr_number, env)
+        return await _check_no_checks(repo, pr_number, env)
     blocking = sorted({c.bucket for c in checks if c.bucket not in PASSING_BUCKETS})
     logger.info("PR #%d: %d checks, blocking buckets: %s", pr_number, len(checks), blocking or "none")
     if blocking:
@@ -324,9 +324,9 @@ def _check_ci(repo: str, pr_number: int, base_branch: str, env: dict) -> SafetyR
     return None
 
 
-def _check_no_checks(repo: str, pr_number: int, env: dict) -> SafetyResult | None:
+async def _check_no_checks(repo: str, pr_number: int, env: dict) -> SafetyResult | None:
     # Empty is also what gh reports before a push's workflows register, so only trust it when no CI exists.
-    has_workflows = repo_has_workflows(repo, env)
+    has_workflows = await repo_has_workflows(repo, env)
     if has_workflows is None:
         return SafetyResult(SafetyStatus.READ_FAILED, "workflows read failed")
     if has_workflows:
@@ -351,8 +351,8 @@ def _log_failing_checks(pr_number: int, checks: list[Check]) -> None:
     logger.info("PR #%d: failing checks: %s%s", pr_number, named, suffix)
 
 
-def _read_pr_state(repo: str, pr_number: int, env: dict) -> dict | None:
-    result = gh(
+async def _read_pr_state(repo: str, pr_number: int, env: dict) -> dict | None:
+    result = await gh(
         [
             "pr",
             "view",
@@ -394,10 +394,10 @@ def _already_approved(reviews: list[dict], acting: str) -> bool:
     return any(r.get("state") == "APPROVED" and _login(r) == acting for r in reviews if isinstance(r, dict))
 
 
-def check_approval_safety(repo: str, pr_number: int, current_user: str, env: dict) -> SafetyResult:
+async def check_approval_safety(repo: str, pr_number: int, current_user: str, env: dict) -> SafetyResult:
     """Read-only approval safety check (FR-8). Never raises for read problems: returns READ_FAILED."""
     try:
-        result = _check_approval_safety(repo, pr_number, current_user, env)
+        result = await _check_approval_safety(repo, pr_number, current_user, env)
     except (subprocess.SubprocessError, OSError, ValueError):
         logger.exception("PR #%d: approval safety read raised", pr_number)
         result = SafetyResult(SafetyStatus.READ_FAILED, "read raised an exception")
@@ -407,11 +407,11 @@ def check_approval_safety(repo: str, pr_number: int, current_user: str, env: dic
     return result
 
 
-def _check_approval_safety(repo: str, pr_number: int, current_user: str, env: dict) -> SafetyResult:
+async def _check_approval_safety(repo: str, pr_number: int, current_user: str, env: dict) -> SafetyResult:
     acting = current_user.lower()
     if not acting:
         return SafetyResult(SafetyStatus.READ_FAILED, "acting account unknown")
-    pr = _read_pr_state(repo, pr_number, env)
+    pr = await _read_pr_state(repo, pr_number, env)
     if pr is None:
         return SafetyResult(SafetyStatus.READ_FAILED, "PR state read failed")
     head = pr["headRefOid"]
@@ -427,13 +427,13 @@ def _check_approval_safety(repo: str, pr_number: int, current_user: str, env: di
     if reason:
         return SafetyResult(SafetyStatus.SKIP, reason, head)
 
-    reviews = fetch_all_pages(f"repos/{repo}/pulls/{pr_number}/reviews", env)
+    reviews = await fetch_all_pages(f"repos/{repo}/pulls/{pr_number}/reviews", env)
     if reviews is None:
         return SafetyResult(SafetyStatus.READ_FAILED, "reviews read failed", head)
     if _already_approved(reviews, acting):
         return SafetyResult(SafetyStatus.SKIP, REASON_ALREADY_APPROVED, head)
 
-    blocked = _check_ci(repo, pr_number, pr.get("baseRefName", ""), env)
+    blocked = await _check_ci(repo, pr_number, pr.get("baseRefName", ""), env)
     if blocked is not None:
         return SafetyResult(blocked.status, blocked.reason, head)
     return SafetyResult(SafetyStatus.SAFE, "all safety checks passed", head)
@@ -511,12 +511,12 @@ def _split_repo(repo: str) -> tuple[str, str] | None:
     return (owner, name) if owner and name else None
 
 
-def _read_files_page(owner: str, name: str, pr_number: int, cursor: str | None, env: dict) -> dict | None:
+async def _read_files_page(owner: str, name: str, pr_number: int, cursor: str | None, env: dict) -> dict | None:
     args = ["api", "graphql", "-f", f"query={_FILES_QUERY}", "-F", f"owner={owner}", "-F", f"repo={name}"]
     args += ["-F", f"number={pr_number}"]
     if cursor:
         args += ["-f", f"cursor={cursor}"]
-    result = gh(args, env)
+    result = await gh(args, env)
     if result.returncode != 0:
         logger.error("PR #%d: files GraphQL read failed (exit %d)", pr_number, result.returncode)
         return None
@@ -531,7 +531,7 @@ def _read_files_page(owner: str, name: str, pr_number: int, cursor: str | None, 
     return pr
 
 
-def read_viewed_states(repo: str, pr_number: int, env: dict) -> tuple[str, dict[str, str]] | None:
+async def read_viewed_states(repo: str, pr_number: int, env: dict) -> tuple[str, dict[str, str]] | None:
     """Return (PR node ID, {path: viewerViewedState}) across all pages, or None on any read failure."""
     parts = _split_repo(repo)
     if parts is None:
@@ -540,7 +540,7 @@ def read_viewed_states(repo: str, pr_number: int, env: dict) -> tuple[str, dict[
     states: dict[str, str] = {}
     cursor: str | None = None
     for _ in range(_MAX_FILE_PAGES):
-        pr = _read_files_page(parts[0], parts[1], pr_number, cursor, env)
+        pr = await _read_files_page(parts[0], parts[1], pr_number, cursor, env)
         if pr is None:
             return None
         node_id = pr["id"]
@@ -557,8 +557,8 @@ def read_viewed_states(repo: str, pr_number: int, env: dict) -> tuple[str, dict[
     return None  # page cap reached: incomplete read
 
 
-def _mark_one(node_id: str, path: str, pr_number: int, env: dict) -> bool:
-    result = gh(
+async def _mark_one(node_id: str, path: str, pr_number: int, env: dict) -> bool:
+    result = await gh(
         [
             "api",
             "graphql",
@@ -593,7 +593,7 @@ def _mark_candidates(file_counts: dict[str, int], viewed_max_lines: int, states:
     return to_mark, already
 
 
-def mark_files_viewed(
+async def mark_files_viewed(
     repo: str,
     pr_number: int,
     file_counts: dict[str, int],
@@ -611,7 +611,7 @@ def mark_files_viewed(
         logger.info("PR #%d: timing gate not passed, not marking files viewed", pr_number)
         return ViewedResult(ViewedStatus.GATE_NOT_PASSED)
     try:
-        read = read_viewed_states(repo, pr_number, env)
+        read = await read_viewed_states(repo, pr_number, env)
     except (subprocess.SubprocessError, OSError, ValueError):
         logger.exception("PR #%d: viewed state read raised", pr_number)
         read = None
@@ -625,7 +625,7 @@ def mark_files_viewed(
         if dry_run:
             logger.info("PR #%d: [dry-run] would mark %s viewed", pr_number, path)
             marked.append(path)
-        elif _mark_one(node_id, path, pr_number, env):
+        elif await _mark_one(node_id, path, pr_number, env):
             logger.info("PR #%d: marked %s viewed", pr_number, path)
             marked.append(path)
         else:
@@ -637,9 +637,9 @@ def mark_files_viewed(
     return ViewedResult(ViewedStatus.DONE, marked=marked, skipped=already, failed=failed, all_viewed=all_viewed)
 
 
-def _read_approval_state(repo: str, pr_number: int, acting: str, env: dict) -> bool | None:
+async def _read_approval_state(repo: str, pr_number: int, acting: str, env: dict) -> bool | None:
     """Tri-state: True = acting account already approved (any commit), False = not, None = read failed."""
-    reviews = fetch_all_pages(f"repos/{repo}/pulls/{pr_number}/reviews", env)
+    reviews = await fetch_all_pages(f"repos/{repo}/pulls/{pr_number}/reviews", env)
     if reviews is None:
         return None
     return _already_approved(reviews, acting)
@@ -659,8 +659,8 @@ def _approval_precheck(
     return None
 
 
-def _post_approval(repo: str, pr_number: int, head_sha: str, env: dict) -> bool:
-    result = gh(
+async def _post_approval(repo: str, pr_number: int, head_sha: str, env: dict) -> bool:
+    result = await gh(
         [
             "api",
             "--method",
@@ -683,16 +683,18 @@ def _post_approval(repo: str, pr_number: int, head_sha: str, env: dict) -> bool:
     return True
 
 
-def _approve(repo: str, pr_number: int, head_sha: str, current_user: str, env: dict, dry_run: bool) -> ApprovalResult:
+async def _approve(
+    repo: str, pr_number: int, head_sha: str, current_user: str, env: dict, dry_run: bool
+) -> ApprovalResult:
     acting = current_user.lower()
     if not acting:
         return ApprovalResult(ApprovalStatus.READ_FAILED, "acting account unknown")
-    approved = _read_approval_state(repo, pr_number, acting, env)
+    approved = await _read_approval_state(repo, pr_number, acting, env)
     if approved is None:
         return ApprovalResult(ApprovalStatus.READ_FAILED, "reviews read failed")
     if approved:
         return ApprovalResult(ApprovalStatus.SKIPPED, REASON_ALREADY_APPROVED)
-    pr = _read_pr_state(repo, pr_number, env)
+    pr = await _read_pr_state(repo, pr_number, env)
     if pr is None:
         return ApprovalResult(ApprovalStatus.READ_FAILED, "PR state read failed")
     if pr["headRefOid"] != head_sha:
@@ -700,13 +702,13 @@ def _approve(repo: str, pr_number: int, head_sha: str, current_user: str, env: d
     if dry_run:
         logger.info("PR #%d: [dry-run] would approve at %s", pr_number, head_sha)
         return ApprovalResult(ApprovalStatus.DRY_RUN, REASON_DRY_RUN)
-    if not _post_approval(repo, pr_number, head_sha, env):
+    if not await _post_approval(repo, pr_number, head_sha, env):
         return ApprovalResult(ApprovalStatus.WRITE_FAILED, "approval POST failed")
     logger.info("PR #%d: approved at %s", pr_number, head_sha)
     return ApprovalResult(ApprovalStatus.APPROVED, "approved")
 
 
-def approve_pr(
+async def approve_pr(
     repo: str,
     pr_number: int,
     gate: GateResult,
@@ -731,7 +733,7 @@ def approve_pr(
     result = _approval_precheck(gate, safety, size.total_lines, approve_max_lines, all_viewed)
     if result is None:
         try:
-            result = _approve(repo, pr_number, safety.head_sha, current_user, env, dry_run)
+            result = await _approve(repo, pr_number, safety.head_sha, current_user, env, dry_run)
         except (subprocess.SubprocessError, OSError, ValueError):
             logger.exception("PR #%d: approval raised", pr_number)
             result = ApprovalResult(ApprovalStatus.READ_FAILED, "approval raised an exception")

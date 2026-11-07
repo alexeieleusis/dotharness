@@ -100,12 +100,12 @@ class _Step:
     working_dir: str  # relative to the repo root; "" for the root
 
 
-def run(config: HarnessConfig, *, dry_run: bool = False, pr: int | None = None) -> None:
+async def run(config: HarnessConfig, *, dry_run: bool = False, pr: int | None = None) -> None:
     if not config.ci_fix.enabled:
         logger.info("ci-fix is disabled, nothing to do")
         return
     with acquire_lock(config.lock_key):
-        _run_locked(config, dry_run, pr)
+        await _run_locked(config, dry_run, pr)
 
 
 _GATE_RE = re.compile(r"(?<![a-z0-9])gate(?![a-z0-9])|merge-reports")
@@ -120,7 +120,7 @@ def _digest(outcome: str, pr_number: int, check: str | None = None, detail: str 
     logger.warning("%s %s pr=%d check=%r %s", DIGEST_PREFIX, outcome, pr_number, check or "", detail)
 
 
-def _process_prs(
+async def _process_prs(
     prs: list[dict], config: HarnessConfig, env: dict, current_user: str, prompt: str, dry_run: bool
 ) -> list[str]:
     """Process each in-scope PR; returns one failure message per PR that errored (stops at a fatal git error)."""
@@ -131,7 +131,7 @@ def _process_prs(
         if not _is_in_scope(pr, current_user):
             continue
         try:
-            _process_pr(pr, config, wdir, env, prompt, dry_run)
+            await _process_pr(pr, config, wdir, env, prompt, dry_run)
         except FatalGitError as e:
             logger.exception("PR #%d: fatal git error", number)
             failures.append(f"#{number}: {e}")
@@ -142,21 +142,21 @@ def _process_prs(
     return failures
 
 
-def _run_locked(config: HarnessConfig, dry_run: bool, only_pr: int | None) -> None:
-    gh_token = get_gh_token(config.harness.gh_token_cmd)
+async def _run_locked(config: HarnessConfig, dry_run: bool, only_pr: int | None) -> None:
+    gh_token = await get_gh_token(config.harness.gh_token_cmd)
     env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
-    current_user = get_current_user(env)
+    current_user = await get_current_user(env)
     repo = config.repo.name
     failures: list[str] = []
 
-    prs = list_own_open_prs(repo, only_pr, env, failures, _PR_FIELDS, _gh)
+    prs = await list_own_open_prs(repo, only_pr, env, failures, _PR_FIELDS, _gh)
     if only_pr is None and not dry_run and not failures:
         _prune_counters(config.repo_slug, {p["number"] for p in prs})
     if not prs and not failures:
         logger.info("ci-fix: no open PRs to check on %s, nothing to do", repo)
 
     prompt = (config.harness.knowledge_dir / "pr-review" / PROMPT_FILE).read_text(encoding="utf-8") if prs else ""
-    failures.extend(_process_prs(prs, config, env, current_user, prompt, dry_run))
+    failures.extend(await _process_prs(prs, config, env, current_user, prompt, dry_run))
     if failures:
         raise CiFixError("ci-fix failed for: " + "; ".join(failures))
 
@@ -281,7 +281,7 @@ def _reset_attempts(repo_slug: str, pr_number: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _read_failing_checks(repo: str, pr_number: int, env: dict) -> list[_Check] | None:
+async def _read_failing_checks(repo: str, pr_number: int, env: dict) -> list[_Check] | None:
     """Failing required checks (all checks when the PR has none required). None = unreadable output.
 
     Only the latest run of each check counts (``read_checks``, the same reader as ``_check_ci``), so a failed
@@ -292,7 +292,7 @@ def _read_failing_checks(repo: str, pr_number: int, env: dict) -> list[_Check] |
     failure. That is harmless: ci-fix only runs after ``_check_ci`` blocked, and fixing a real failing check
     on the PR is still a valid fix. Aligning would add a stack walk and a default-branch lookup here.
     """
-    read = read_checks(repo, pr_number, "", env, stack_root=False)
+    read = await read_checks(repo, pr_number, "", env, stack_root=False)
     if read is None:
         return None
     failing = []
@@ -304,7 +304,7 @@ def _read_failing_checks(repo: str, pr_number: int, env: dict) -> list[_Check] |
     return failing
 
 
-def _read_failed_log(repo: str, link: str, env: dict) -> str | None:
+async def _read_failed_log(repo: str, link: str, env: dict) -> str | None:
     """The failing job's log (``gh run view --log-failed``), or None when it cannot be read."""
     job = _JOB_ID_RE.search(link)
     run_match = _RUN_ID_RE.search(link)
@@ -314,7 +314,7 @@ def _read_failed_log(repo: str, link: str, env: dict) -> str | None:
         args = ["run", "view", run_match.group(1), "--repo", repo, "--log-failed"]
     else:
         return None
-    result = _gh(args, env)
+    result = await _gh(args, env)
     if result.returncode != 0:
         return None
     return _text(result.stdout)
@@ -333,12 +333,12 @@ def _failed_step_name(log: str) -> str | None:
     return None
 
 
-def _failed_step_from_api(repo: str, link: str, env: dict) -> str | None:
+async def _failed_step_from_api(repo: str, link: str, env: dict) -> str | None:
     """Name of the first failed step of the job in ``link``, from the job API; None when unavailable."""
     job = _JOB_ID_RE.search(link)
     if not job:
         return None
-    result = _gh(["api", f"repos/{repo}/actions/jobs/{job.group(1)}"], env)
+    result = await _gh(["api", f"repos/{repo}/actions/jobs/{job.group(1)}"], env)
     if result.returncode != 0:
         return None
     try:
@@ -470,9 +470,9 @@ def _step_in_job(job: list[str], step_name: str, file_wd: str) -> _Step | None:
     return None
 
 
-def _run_step(step: _Step, wdir: str, env: dict) -> subprocess.CompletedProcess:
+async def _run_step(step: _Step, wdir: str, env: dict) -> subprocess.CompletedProcess:
     cwd = str(Path(wdir) / step.working_dir) if step.working_dir else wdir
-    return run_cmd(step.command, cwd=cwd, env=env, timeout=TIMEOUT_REPRO, check=False, shell=True)  # noqa: S604 - runs the repo's own CI step command
+    return await run_cmd(step.command, cwd=cwd, env=env, timeout=TIMEOUT_REPRO, check=False, shell=True)  # noqa: S604 - runs the repo's own CI step command
 
 
 def _output_tail(result: subprocess.CompletedProcess) -> str:
@@ -485,18 +485,18 @@ def _output_tail(result: subprocess.CompletedProcess) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, prompt: str, dry_run: bool) -> None:
+async def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, prompt: str, dry_run: bool) -> None:
     number = pr["number"]
     repo = config.repo.name
     logger.info("PR #%d: starting%s", number, " (dry-run)" if dry_run else "")
 
-    blocked = _check_ci(repo, number, pr.get("baseRefName", ""), env)
+    blocked = await _check_ci(repo, number, pr.get("baseRefName", ""), env)
     if blocked is None:
         logger.info("PR #%d: CI is green, nothing to fix", number)
         if not dry_run:
             _reset_attempts(config.repo_slug, number)
         return
-    state = _read_pr_state(repo, number, env)
+    state = await _read_pr_state(repo, number, env)
     skip = _state_skip_reason(state) if state else None
     if skip in (REASON_NOT_OPEN, REASON_DRAFT):
         logger.info("PR #%d: %s, skipping", number, skip)
@@ -504,7 +504,7 @@ def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, prompt: s
     if skip == REASON_CONFLICTING:
         _digest(OUTCOME_REBASE_NEEDED, number, detail="PR has merge conflicts with its base")
         return
-    failing = _read_failing_checks(repo, number, env)
+    failing = await _read_failing_checks(repo, number, env)
     if failing is None:
         _digest(OUTCOME_PARSE_FAILURE, number, detail="could not read the check status as JSON")
         return
@@ -512,10 +512,10 @@ def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, prompt: s
         logger.info("PR #%d: no failed checks (blocked by: %s), nothing to fix", number, blocked.reason)
         return
 
-    _fix_first_candidate(pr, failing, config, wdir, env, prompt, dry_run)
+    await _fix_first_candidate(pr, failing, config, wdir, env, prompt, dry_run)
 
 
-def _fix_first_candidate(
+async def _fix_first_candidate(
     pr: dict, failing: list[_Check], config: HarnessConfig, wdir: str, env: dict, prompt: str, dry_run: bool
 ) -> None:
     """Try the non-gate failing checks in order, stopping after the first push. Gates are never tried."""
@@ -532,11 +532,11 @@ def _fix_first_candidate(
         if attempts >= max_attempts:
             _digest(OUTCOME_CAP_REACHED, number, check.name, f"attempts={attempts} max={max_attempts}")
             return
-        if _fix_check(pr, check, config, wdir, env, prompt, dry_run):
+        if await _fix_check(pr, check, config, wdir, env, prompt, dry_run):
             return  # one push per PR per run: let CI re-run before trying the next check
 
 
-def _fix_check(
+async def _fix_check(
     pr: dict, check: _Check, config: HarnessConfig, wdir: str, env: dict, prompt: str, dry_run: bool
 ) -> bool:
     """Try to fix one failing check. Returns True when a push was made."""
@@ -544,15 +544,15 @@ def _fix_check(
     repo = config.repo.name
     branch = pr["headRefName"]
 
-    log = _read_failed_log(repo, check.link, env)
-    step_name = (_failed_step_name(log) or _failed_step_from_api(repo, check.link, env)) if log else None
+    log = await _read_failed_log(repo, check.link, env)
+    step_name = (_failed_step_name(log) or await _failed_step_from_api(repo, check.link, env)) if log else None
     if log is None or step_name is None:
         _digest(OUTCOME_PARSE_FAILURE, number, check.name, "could not read the failing job log or its step")
         return False
 
-    original_sha = git_detach_and_record(wdir, env)
+    original_sha = await git_detach_and_record(wdir, env)
     try:
-        git_fetch_and_checkout(branch, wdir, env)
+        await git_fetch_and_checkout(branch, wdir, env)
         # Look the step up only now: the failing run's step name comes from the PR head's workflows.
         step = find_step_command(wdir, step_name, check.workflow)
         if step is None:
@@ -560,7 +560,7 @@ def _fix_check(
                 OUTCOME_PARSE_FAILURE, number, check.name, f"no runnable command for step {step_name!r} in workflows"
             )
             return False
-        before = _run_step(step, wdir, env)
+        before = await _run_step(step, wdir, env)
         if before.returncode == 0:
             _digest(OUTCOME_NOT_REPRODUCED, number, check.name, f"step {step_name!r} passes locally")
             return False
@@ -573,9 +573,9 @@ def _fix_check(
                 branch,
             )
             return False
-        return _agent_fix_and_push(pr, check, step, before, config, wdir, env, prompt, log)
+        return await _agent_fix_and_push(pr, check, step, before, config, wdir, env, prompt, log)
     finally:
-        git_restore(original_sha, branch, wdir, env)
+        await git_restore(original_sha, branch, wdir, env)
 
 
 def _build_instructions(prompt: str, check: _Check, step: _Step, before: subprocess.CompletedProcess, log: str) -> str:
@@ -592,7 +592,7 @@ def _build_instructions(prompt: str, check: _Check, step: _Step, before: subproc
     )
 
 
-def _agent_fix_and_push(
+async def _agent_fix_and_push(
     pr: dict,
     check: _Check,
     step: _Step,
@@ -613,8 +613,8 @@ def _agent_fix_and_push(
         expected_repo_name=config.repo.name,
     )
     opencode_dir = str(config.repo.opencode_dir) if config.repo.opencode_dir else None
-    pre_sha = _head(wdir, env)
-    pre_status = _status(wdir, env)
+    pre_sha = await _head(wdir, env)
+    pre_status = await _status(wdir, env)
     if _was_noop(config.repo_slug, number, pre_sha, check.name):
         _digest(OUTCOME_NOOP_REPEAT, number, check.name, "the agent already changed nothing for this head SHA")
         return False
@@ -622,7 +622,7 @@ def _agent_fix_and_push(
     # changed something, failed to fix it or crashed still counts, so a PR that keeps failing hits the cap.
     # The attempt is recorded after the (expensive) run, and also when the run raises (crash or timeout).
     try:
-        backend.run(
+        await backend.run(
             _build_instructions(prompt, check, step, before, log),
             cwd=wdir,
             opencode_dir=opencode_dir,
@@ -631,71 +631,71 @@ def _agent_fix_and_push(
     except BaseException:
         _record_attempt(config.repo_slug, number)
         raise
-    if _head(wdir, env) != pre_sha or _status(wdir, env) != pre_status:
+    if await _head(wdir, env) != pre_sha or await _status(wdir, env) != pre_status:
         _record_attempt(config.repo_slug, number)
     else:
         # Free of the fix budget, but bounded: skip this (head SHA, check) until the head moves.
         _record_noop(config.repo_slug, number, pre_sha, check.name)
 
     # Vet the agent's changes before running anything from the modified tree with the token env.
-    unsafe = _unsafe_change(wdir, env, pre_sha)
+    unsafe = await _unsafe_change(wdir, env, pre_sha)
     if unsafe:
         _digest(OUTCOME_UNSAFE_CHANGE, number, check.name, unsafe)
         return False
-    after = _run_step(step, wdir, env)
+    after = await _run_step(step, wdir, env)
     if after.returncode != 0:
         _digest(OUTCOME_STILL_FAILING, number, check.name, f"step {step.name!r} still fails (exit {after.returncode})")
         return False
-    _commit_if_dirty(check, wdir, env)
-    if _head(wdir, env) == pre_sha:
+    await _commit_if_dirty(check, wdir, env)
+    if await _head(wdir, env) == pre_sha:
         _digest(OUTCOME_NOT_REPRODUCED, number, check.name, "command passes with no change to the branch")
         return False
-    return _push(number, check, branch, wdir, env)
+    return await _push(number, check, branch, wdir, env)
 
 
-def _head(wdir: str, env: dict) -> str:
-    result = run_cmd(["git", "rev-parse", "HEAD"], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
+async def _head(wdir: str, env: dict) -> str:
+    result = await run_cmd(["git", "rev-parse", "HEAD"], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
     return _text(result.stdout).strip()
 
 
-def _status(wdir: str, env: dict) -> str:
-    result = run_cmd(["git", "status", "--porcelain"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
+async def _status(wdir: str, env: dict) -> str:
+    result = await run_cmd(["git", "status", "--porcelain"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
     return _text(result.stdout)
 
 
-def _git_paths(wdir: str, env: dict, args: list[str]) -> list[str]:
+async def _git_paths(wdir: str, env: dict, args: list[str]) -> list[str]:
     """Paths printed by a git command run with ``-z`` (NUL-separated, never quoted)."""
-    result = run_cmd(["git", *args], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
+    result = await run_cmd(["git", *args], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
     return [p for p in _text(result.stdout).split("\0") if p]
 
 
-def _unsafe_change(wdir: str, env: dict, pre_sha: str) -> str | None:
+async def _unsafe_change(wdir: str, env: dict, pre_sha: str) -> str | None:
     """Why the result must not be pushed: untracked files, or a change under ``.github/``; else None.
 
     ``-z`` keeps non-ASCII paths unquoted, and ``--no-renames`` lists both sides of a move, so a file moved
     out of ``.github/`` is still reported under its old path.
     """
-    files = _git_paths(wdir, env, ["ls-files", "-z", "--others", "--exclude-standard"])
+    files = await _git_paths(wdir, env, ["ls-files", "-z", "--others", "--exclude-standard"])
     if files:
         return f"untracked files left in the tree: {', '.join(files[:10])}"
-    changed = _git_paths(wdir, env, ["diff", "-z", "--name-only", "--no-renames", pre_sha])
+    changed = await _git_paths(wdir, env, ["diff", "-z", "--name-only", "--no-renames", pre_sha])
     protected = [f for f in changed if PurePosixPath(f).parts[:1] == (".github",)]
     if protected:
         return f"change touches .github/: {', '.join(protected[:10])}"
     return None
 
 
-def _commit_if_dirty(check: _Check, wdir: str, env: dict) -> None:
+async def _commit_if_dirty(check: _Check, wdir: str, env: dict) -> None:
     """Commit tracked changes the agent left uncommitted (never untracked files); a no-op when clean."""
-    if not _status(wdir, env).strip():
+    if not (await _status(wdir, env)).strip():
         return
-    run_cmd(["git", "add", "-u"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
-    run_cmd(["git", "commit", "-m", f"ci-fix: {check.name}"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
+    await run_cmd(["git", "add", "-u"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
+    await run_cmd(["git", "commit", "-m", f"ci-fix: {check.name}"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
 
 
-def _push(number: int, check: _Check, branch: str, wdir: str, env: dict) -> bool:
+async def _push(number: int, check: _Check, branch: str, wdir: str, env: dict) -> bool:
     """Plain ``git push origin <branch>`` (never force, never another ref)."""
-    result = run_cmd(["git", "push", "origin", branch], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
+    result = await run_cmd(["git", "push", "origin", branch], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
     if result.returncode != 0:
         stderr = _text(result.stderr)
         if _PUSH_REJECTED_RE.search(stderr):

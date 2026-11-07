@@ -28,7 +28,7 @@ def review(sha=HEAD, login=ME, state="APPROVED"):
     return {"state": state, "commit_id": sha, "user": {"login": login}}
 
 
-def run(
+async def run(
     reviews=(),
     view=None,
     post=None,
@@ -56,13 +56,13 @@ def run(
         gate_result = GateResult(GateStatus.PASSED if gate else GateStatus.NOT_PASSED, "")
         safety = SafetyResult(SafetyStatus.SAFE if safe else SafetyStatus.SKIP, "", sha)
         size = SizeEvaluation(file_counts={"a.py": total}, total_lines=total, small_files=[], pr_is_small=False)
-        result = approve_pr("o/r", 5, gate_result, safety, size, 500, user, {}, dry_run, all_viewed=all_viewed)
+        result = await approve_pr("o/r", 5, gate_result, safety, size, 500, user, {}, dry_run, all_viewed=all_viewed)
     posts = [c for c in calls if "POST" in c]
     return result, calls, posts
 
 
-def test_approves_with_commit_id_and_empty_body():
-    result, _, posts = run()
+async def test_approves_with_commit_id_and_empty_body():
+    result, _, posts = await run()
     assert result.status is ApprovalStatus.APPROVED
     assert len(posts) == 1
     cmd = posts[0]
@@ -70,82 +70,82 @@ def test_approves_with_commit_id_and_empty_body():
     assert "event=APPROVE" in cmd and f"commit_id={HEAD}" in cmd and "body=" in cmd
 
 
-def test_gate_not_passed_no_call():
-    result, calls, _ = run(gate=False)
+async def test_gate_not_passed_no_call():
+    result, calls, _ = await run(gate=False)
     assert result.status is ApprovalStatus.SKIPPED and calls == []
 
 
-def test_safety_not_passed_no_call():
-    result, calls, _ = run(safe=False)
+async def test_safety_not_passed_no_call():
+    result, calls, _ = await run(safe=False)
     assert result.status is ApprovalStatus.SKIPPED and calls == []
 
 
-def test_missing_head_sha_no_call():
-    result, calls, _ = run(sha="")
+async def test_missing_head_sha_no_call():
+    result, calls, _ = await run(sha="")
     assert result.status is ApprovalStatus.SKIPPED and calls == []
 
 
-def test_size_threshold_is_strict():
-    result, calls, _ = run(total=500)
+async def test_size_threshold_is_strict():
+    result, calls, _ = await run(total=500)
     assert result.status is ApprovalStatus.SKIPPED and calls == []
-    assert run(total=499)[0].status is ApprovalStatus.APPROVED
+    assert (await run(total=499))[0].status is ApprovalStatus.APPROVED
 
 
-def test_already_approved_on_head_skips():
-    result, _, posts = run(reviews=[review()])
+async def test_already_approved_on_head_skips():
+    result, _, posts = await run(reviews=[review()])
     assert result.status is ApprovalStatus.SKIPPED and posts == []
 
 
-def test_approval_on_older_commit_skips():
+async def test_approval_on_older_commit_skips():
     # FR-6.4 / D-14: any APPROVED review by the acting account counts; re-approval after a push is manual.
-    result, _, posts = run(reviews=[review(sha="old")])
+    result, _, posts = await run(reviews=[review(sha="old")])
     assert result.status is ApprovalStatus.SKIPPED and result.reason == "already-approved" and posts == []
 
 
-def test_other_user_or_dismissed_approval_does_not_skip():
-    result, _, posts = run(reviews=[review(login="someone"), review(state="DISMISSED")])
+async def test_other_user_or_dismissed_approval_does_not_skip():
+    result, _, posts = await run(reviews=[review(login="someone"), review(state="DISMISSED")])
     assert result.status is ApprovalStatus.APPROVED and len(posts) == 1
 
 
-def test_reviews_read_failure_makes_no_write():
+async def test_reviews_read_failure_makes_no_write():
     # _has_user_approved would return False here; the tri-state helper must not approve.
-    result, _, posts = run(reviews=None)
+    result, _, posts = await run(reviews=None)
     assert result.status is ApprovalStatus.READ_FAILED and posts == []
 
 
-def test_pr_state_read_failure_makes_no_write():
-    result, _, posts = run(view=proc(code=1))
+async def test_pr_state_read_failure_makes_no_write():
+    result, _, posts = await run(view=proc(code=1))
     assert result.status is ApprovalStatus.READ_FAILED and posts == []
 
 
-def test_head_moved_makes_no_write():
-    result, _, posts = run(view=pr_view(head="newer"))
+async def test_head_moved_makes_no_write():
+    result, _, posts = await run(view=pr_view(head="newer"))
     assert result.status is ApprovalStatus.SKIPPED and posts == []
 
 
-def test_unknown_acting_account_makes_no_write():
-    result, _, posts = run(user="")
+async def test_unknown_acting_account_makes_no_write():
+    result, _, posts = await run(user="")
     assert result.status is ApprovalStatus.READ_FAILED and posts == []
 
 
-def test_post_failure_reported():
-    result, _, posts = run(post=proc(code=1))
+async def test_post_failure_reported():
+    result, _, posts = await run(post=proc(code=1))
     assert result.status is ApprovalStatus.WRITE_FAILED and len(posts) == 1
 
 
-def test_dry_run_reads_but_never_posts():
-    result, calls, posts = run(dry_run=True)
+async def test_dry_run_reads_but_never_posts():
+    result, calls, posts = await run(dry_run=True)
     assert result.status is ApprovalStatus.DRY_RUN
     assert posts == [] and len(calls) == 1  # only the head re-read
 
 
-def test_too_large_skipped_unless_all_viewed():
-    result, calls, _ = run(total=900)
+async def test_too_large_skipped_unless_all_viewed():
+    result, calls, _ = await run(total=900)
     assert result.status is ApprovalStatus.SKIPPED and calls == []
-    result, _, posts = run(total=900, all_viewed=True)
+    result, _, posts = await run(total=900, all_viewed=True)
     assert result.status is ApprovalStatus.APPROVED and len(posts) == 1
 
 
-def test_all_viewed_does_not_waive_gate_or_safety():
-    assert run(all_viewed=True, gate=False)[0].status is ApprovalStatus.SKIPPED
-    assert run(all_viewed=True, safe=False)[0].status is ApprovalStatus.SKIPPED
+async def test_all_viewed_does_not_waive_gate_or_safety():
+    assert (await run(all_viewed=True, gate=False))[0].status is ApprovalStatus.SKIPPED
+    assert (await run(all_viewed=True, safe=False))[0].status is ApprovalStatus.SKIPPED

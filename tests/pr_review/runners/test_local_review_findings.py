@@ -37,7 +37,7 @@ NO_LINE = """## Finding: No line
 Body."""
 
 
-def test_isolation_findings_imports_without_backend_lock_or_orchestrators() -> None:
+async def test_isolation_findings_imports_without_backend_lock_or_orchestrators() -> None:
     # The package `__init__` is eager, so load the submodule under a stand-in package (same
     # `__path__`, no `__init__` code) to observe the module's own import graph.
     pkg_dir = str(Path(findings.__file__).parent)
@@ -49,7 +49,7 @@ def test_isolation_findings_imports_without_backend_lock_or_orchestrators() -> N
         "print(bad)\n"
         "sys.exit(1 if bad else 0)"
     )
-    proc = run_cmd([sys.executable, "-c", code], cwd=os.getcwd(), env=dict(os.environ), timeout=60, check=False)
+    proc = await run_cmd([sys.executable, "-c", code], cwd=os.getcwd(), env=dict(os.environ), timeout=60, check=False)
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 

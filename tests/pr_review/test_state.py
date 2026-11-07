@@ -363,7 +363,7 @@ class _StubBackend:
     def __init__(self, *args, **kwargs) -> None:
         pass
 
-    def run(self, prompt, cwd, opencode_dir=None, context=None):
+    async def run(self, prompt, cwd, opencode_dir=None, context=None):
         import re
 
         match = re.search(r"(/\S+\.md)", prompt)
@@ -411,7 +411,7 @@ def test_local_review_cli_failed_pass_exits_nonzero(tmp_xdg, tmp_path):
     cfg_path = _lr_config(tmp_path, repo)
 
     class _Failing(_StubBackend):
-        def run(self, prompt, cwd, opencode_dir=None, context=None):
+        async def run(self, prompt, cwd, opencode_dir=None, context=None):
             return subprocess.CompletedProcess([], 1, "", "boom")
 
     with patch("dotharness.pr_review.runners.local_review.address.Backend", _Failing):

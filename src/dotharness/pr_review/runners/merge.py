@@ -65,26 +65,26 @@ class MergeError(RuntimeError):
     """Raised by run() after the loop when one or more PRs failed."""
 
 
-def run(config: HarnessConfig, *, dry_run: bool = False, pr: int | None = None) -> None:
+async def run(config: HarnessConfig, *, dry_run: bool = False, pr: int | None = None) -> None:
     if not config.merge.enabled:
         logger.info("merge is disabled, nothing to do")
         return
     with acquire_lock(config.lock_key):
-        _run_locked(config, dry_run, pr)
+        await _run_locked(config, dry_run, pr)
 
 
-def _run_locked(config: HarnessConfig, dry_run: bool, pr: int | None) -> None:
-    gh_token = get_gh_token(config.harness.gh_token_cmd)
+async def _run_locked(config: HarnessConfig, dry_run: bool, pr: int | None) -> None:
+    gh_token = await get_gh_token(config.harness.gh_token_cmd)
     env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
-    current_user = get_current_user(env)
+    current_user = await get_current_user(env)
     repo = config.repo.name
     failures: list[str] = []
-    prs = list_own_open_prs(repo, pr, env, failures, "number,author", _gh)
+    prs = await list_own_open_prs(repo, pr, env, failures, "number,author", _gh)
     summary: dict[int, str] = {}
     for item in sorted(prs, key=lambda p: p["number"]):
         number = item["number"]
         try:
-            summary[number] = _process_pr(item, config, env, current_user, dry_run)
+            summary[number] = await _process_pr(item, config, env, current_user, dry_run)
         except Exception as e:
             logger.exception("PR #%d: error", number)
             failures.append(f"#{number}: {e}")
@@ -108,8 +108,8 @@ def read_gate_record(repo_slug: str, pr_number: int) -> str | None:
     return sha if isinstance(sha, str) and sha else None
 
 
-def _read_changed_lines(repo: str, number: int, env: dict) -> int | None:
-    result = _gh(["pr", "view", str(number), "--repo", repo, "--json", "additions,deletions"], env)
+async def _read_changed_lines(repo: str, number: int, env: dict) -> int | None:
+    result = await _gh(["pr", "view", str(number), "--repo", repo, "--json", "additions,deletions"], env)
     if result.returncode != 0:
         return None
     try:
@@ -119,27 +119,29 @@ def _read_changed_lines(repo: str, number: int, env: dict) -> int | None:
         return None
 
 
-def _evaluate(pr: dict, config: HarnessConfig, env: dict, current_user: str) -> tuple[str | None, str]:
+async def _evaluate(pr: dict, config: HarnessConfig, env: dict, current_user: str) -> tuple[str | None, str]:
     """Return (skip reason or None, evaluated head SHA). Stops at the first failed condition."""
     number = pr["number"]
     repo = config.repo.name
     author = (pr.get("author") or {}).get("login", "")
     if not current_user or author != current_user:
         return SKIP_NOT_AUTHOR, ""
-    pr_state = _read_pr_state(repo, number, env)
+    pr_state = await _read_pr_state(repo, number, env)
     if pr_state is None:
         return SKIP_STATE_READ_FAILED, ""
     head_sha = pr_state["headRefOid"]
     reason = _state_skip_reason(pr_state)
     if reason is None:
-        reason = _check_ci_and_record(config, number, head_sha, pr_state.get("baseRefName", ""), env)
+        reason = await _check_ci_and_record(config, number, head_sha, pr_state.get("baseRefName", ""), env)
     if reason is None:
-        reason = _check_size_and_viewed(config, number, env)
+        reason = await _check_size_and_viewed(config, number, env)
     return reason, head_sha
 
 
-def _check_ci_and_record(config: HarnessConfig, number: int, head_sha: str, base_branch: str, env: dict) -> str | None:
-    ci = _check_ci(config.repo.name, number, base_branch, env)
+async def _check_ci_and_record(
+    config: HarnessConfig, number: int, head_sha: str, base_branch: str, env: dict
+) -> str | None:
+    ci = await _check_ci(config.repo.name, number, base_branch, env)
     if ci is not None:
         return SKIP_CHECKS_READ_FAILED if ci.status is SafetyStatus.READ_FAILED else ci.reason
     recorded = read_gate_record(config.repo_slug, number)
@@ -150,15 +152,15 @@ def _check_ci_and_record(config: HarnessConfig, number: int, head_sha: str, base
     return None
 
 
-def _check_size_and_viewed(config: HarnessConfig, number: int, env: dict) -> str | None:
+async def _check_size_and_viewed(config: HarnessConfig, number: int, env: dict) -> str | None:
     repo = config.repo.name
-    lines = _read_changed_lines(repo, number, env)
+    lines = await _read_changed_lines(repo, number, env)
     if lines is None:
         return SKIP_SIZE_READ_FAILED
     if lines > config.merge.max_changed_lines:
         return SKIP_OVER_MAX_CHANGED_LINES
     if config.merge.require_all_files_viewed:
-        viewed = read_viewed_states(repo, number, env)  # always fresh, never cached
+        viewed = await read_viewed_states(repo, number, env)  # always fresh, never cached
         if viewed is None:
             return SKIP_VIEWED_READ_FAILED
         states = viewed[1]
@@ -167,17 +169,17 @@ def _check_size_and_viewed(config: HarnessConfig, number: int, env: dict) -> str
     return None
 
 
-def _process_pr(pr: dict, config: HarnessConfig, env: dict, current_user: str, dry_run: bool) -> str:
+async def _process_pr(pr: dict, config: HarnessConfig, env: dict, current_user: str, dry_run: bool) -> str:
     """Process one PR; return its outcome (a skip reason, MERGED or WOULD_MERGE)."""
     number = pr["number"]
-    reason, head_sha = _evaluate(pr, config, env, current_user)
+    reason, head_sha = await _evaluate(pr, config, env, current_user)
     if reason:
         logger.info("PR #%d: skipped: %s", number, reason)
         return reason
     if dry_run:
         logger.info("PR #%d: would merge (dry-run) at %s", number, head_sha)
         return WOULD_MERGE
-    result = _gh(
+    result = await _gh(
         ["pr", "merge", str(number), "--repo", config.repo.name, "--squash", "--match-head-commit", head_sha],
         env,
     )
