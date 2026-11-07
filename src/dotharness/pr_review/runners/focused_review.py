@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from pathlib import Path
@@ -171,7 +172,16 @@ async def _resolve_knowledge_file(vibe_types_repo: Path, commit: str, rel_path: 
     runs across different repos don't race on the same git working copy.
     """
     repo = str(vibe_types_repo)
-    with acquire_lock(working_dir_lock_key("vibe-types", vibe_types_repo), blocking=True):
+    key = working_dir_lock_key("vibe-types", vibe_types_repo)
+    # Poll non-blocking: a blocking flock would stall the event loop and deadlock same-loop holders.
+    while True:
+        try:
+            lock = acquire_lock(key)
+            lock.__enter__()
+            break
+        except SystemExit:
+            await asyncio.sleep(0.1)
+    try:
         attempts = [(None, commit), (commit, commit), ("main", "origin/main")]
         for fetch_ref, show_ref in attempts:
             if fetch_ref:
@@ -183,6 +193,8 @@ async def _resolve_knowledge_file(vibe_types_repo: Path, commit: str, rel_path: 
             )
             if result.returncode == 0:
                 return result.stdout.decode("utf-8", errors="replace")
+    finally:
+        lock.__exit__(None, None, None)
     return None
 
 
