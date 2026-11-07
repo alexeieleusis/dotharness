@@ -160,11 +160,10 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
       the separate, opt-in [`auto-approve`](auto-approve.md) command. The
       human still reviews and approves the PR themselves, which is what
       actually clears the review request on GitHub. If any pass submits a
-      formal review as a side effect, or races a concurrent runner that does,
-      the PR would otherwise silently leave `user-review-requested:@me`.
-      The example is `review-prs`'s vibe_heal post. The disappearance
-      happens before that submission is intentional. So the whole per-PR block
-      re-adds the reviewer
+      formal review as a side effect, or races a concurrent runner that does
+      (for example `review-prs`'s vibe_heal post), the PR would otherwise
+      leave `user-review-requested:@me` before the user intentionally
+      submitted a review. So the whole per-PR block re-adds the reviewer
       afterward if they held that status going in. This is the same
       `preserve_reviewer_request` guard `review-prs`, `focused-review`, and
       `address-comments` use (see [Shared behavior](index.md#shared-behavior)).
@@ -238,10 +237,10 @@ duplicate work using live signals read from GitHub on every run:
    above (1)-(5) has succeeded. The human still reviews and approves the PR
    themselves, and that (or GitHub's own bookkeeping around a submitted
    review) is what actually clears the request. If a pass submits a formal
-   review as a side effect, or races a concurrent runner that does, the
-   whole per-PR block re-adds the reviewer afterward. It does this only
-   if they held that status going in. The example is `review-prs`'s
-   vibe_heal post. This is the same
+   review as a side effect, or races a concurrent runner that does (for
+   example `review-prs`'s vibe_heal post), the whole per-PR block re-adds
+   the reviewer afterward. It does this only if they held that status
+   going in. This is the same
    `preserve_reviewer_request` guard `review-prs`, `focused-review`, and
    `address-comments` use.
 
