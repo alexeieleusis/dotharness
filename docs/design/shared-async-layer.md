@@ -354,13 +354,13 @@ Adapters, each running a fresh event loop per call: `pr_review/backend.py` (`lau
 
 Wall-clock of one adapter call path, current tree, `["true"]`, mean of 30 calls on the analysis host [I: only a before figure is possible now]:
 
-| Path | ms per call |
-| --- | --- |
-| `sisyphus.subproc.run_command` (new loop per call) | 13.7 |
-| `pr_review.runners.common.run_cmd` (new loop per call) | 13.4 |
-| `subprocess_runner.run` awaited in one loop | 13.0 |
+| Path | ms per call, before | ms per call, after Phase 12 (two runs) |
+| --- | --- | --- |
+| `sisyphus.subproc.run_command` (new loop per call) | 13.7 | 13.7, 13.8 |
+| `pr_review.runners.common.run_cmd` (new loop per call) | 13.4 | 13.6, 13.8 |
+| `subprocess_runner.run` awaited in one loop | 13.0 | 13.6, 13.4 |
 
-The loop-per-call cost is about 0.5 ms, below the process spawn cost. Conversion is therefore not a speed fix. It removes the "must not be called from a running loop" restriction, the sync-to-async wrapper layer and makes concurrency possible; the owner decision is to convert (brief, open question 2). The "after" column is measured by Phase 12 on the same script.
+The loop-per-call cost is about 0.5 ms, below the process spawn cost. Conversion is therefore not a speed fix. It removes the "must not be called from a running loop" restriction, the sync-to-async wrapper layer and makes concurrency possible; the owner decision is to convert (brief, open question 2). The "after" column was measured by Phase 12 with the same script (`["true"]`, 30 calls after one warm-up). The paths are unchanged in Phase 12, so the figures stay within noise (about 0.5 ms). `launch_sync`, `pr_review/backend.py`, `sisyphus/subproc.py` and `spec_prism_flow/prose_review.py` stay until their last sync callers convert in Phases 13-17 (R6); Phase 12 converted only `vibe_heal/git/*` (R10).
 
 | ID | Group | Evidence | Verdict |
 | --- | --- | --- | --- |
