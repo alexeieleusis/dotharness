@@ -403,3 +403,12 @@ def test_run_review_prs_base_analysis_error_exits_1(minimal_toml, tmp_xdg, caplo
     assert len(records) == 1
     assert not records[0].exc_info
     assert "git checkout failed" in records[0].getMessage()
+
+
+def test_init_aborts_if_exists_exact_stderr(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".harness.toml").write_text("existing")
+    result = CliRunner().invoke(cli, ["init"])
+    assert result.exit_code == 1
+    assert result.stderr == f"Error: .harness.toml already exists in {tmp_path.resolve()}\n"
+    assert result.stdout == ""

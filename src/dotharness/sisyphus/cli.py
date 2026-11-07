@@ -30,6 +30,7 @@ from typing import Annotated, Any
 
 import typer
 
+from dotharness.cli_common import fail
 from dotharness.sisyphus.agent import make_agent_runner
 from dotharness.sisyphus.archive import archive_item, check_archive_dir, resolve_archive_dir
 from dotharness.sisyphus.cleanup import PrInfo
@@ -256,30 +257,24 @@ def default_services(config: SisyphusConfig) -> Services:
 # --------------------------------------------------------------------- helpers
 
 
-def _fail(message: str) -> typer.Exit:
-    """Typer equivalent of ``click.ClickException``: ``Error: <message>`` on stderr; the caller raises the exit (code 1)."""
-    typer.echo(f"Error: {message}", err=True)
-    return typer.Exit(1)
-
-
 def _load(config_path: str | Path) -> SisyphusConfig:
     try:
         return load_config(config_path)
     except ConfigError as exc:
-        raise _fail(f"config error: {exc}") from exc
+        fail(f"config error: {exc}")
 
 
 def _require(config: SisyphusConfig, *keys: str) -> None:
     for key in keys:
         if not getattr(config.project, key):
-            raise _fail(f"config error: [project] {key} is required")
+            fail(f"config error: [project] {key} is required")
 
 
 def _services(factory: ServicesFactory | None, config: SisyphusConfig) -> Services:
     try:
         return (factory or default_services)(config)
     except (ConfigError, PickError) as exc:
-        raise _fail(f"config error: {exc}") from exc
+        fail(f"config error: {exc}")
 
 
 def _merge(parts: Sequence[DigestReport], extra: DigestReport) -> DigestReport:
@@ -448,7 +443,7 @@ def _run_phase(
     if not picked:
         return
     if not config.agent.backend:
-        raise _fail("config error: [agent] backend is not set")
+        fail("config error: [agent] backend is not set")
     options = _resolve_options(config, services, base, config_path)
     tracker = LimitTracker(config.limits, services.clock)
     for cand in picked:
@@ -513,7 +508,7 @@ def _run_locked(
     if isinstance(error, typer.Exit):
         raise error
     if error is not None:
-        raise _fail(str(error)) from error
+        fail(str(error))
     if digest_error is not None:
         raise typer.Exit(1)
 
@@ -545,7 +540,7 @@ def intake_command(ctx: typer.Context, work_item_ref: RefArgument, config_path: 
     assert config.project.repo_dir and config.project.workspace_dir  # noqa: S101
     services = _services(factory, config)
     if not config.agent.backend and factory is None:
-        raise _fail("config error: [agent] backend is not set")
+        fail("config error: [agent] backend is not set")
     try:
         with clone_lock(config.project.repo_dir, services.lock_dir):
             record = RunRecord.open(Path(config.project.workspace_dir).expanduser(), work_item_ref)
@@ -553,7 +548,7 @@ def intake_command(ctx: typer.Context, work_item_ref: RefArgument, config_path: 
     except LockHeld:
         return
     except Exception as exc:
-        raise _fail(str(exc)) from exc
+        fail(str(exc))
     rec_path = record_path(Path(config.project.workspace_dir).expanduser(), work_item_ref)
     if result.blocked:
         texts = tuple(f"{d.number}. {d.text}" for d in result.open_decisions)
@@ -582,15 +577,15 @@ def _check_resumable(rec: RunRecord, again: bool) -> None:
     stop = read_stop_record(rec.path)
     if is_abandoned(stop):
         if not again:
-            raise _fail(
+            fail(
                 f"{rec.item} is abandoned; run `sisyphus resume {shlex.quote(rec.item)} --config <config> --again` "
                 "to re-enable it"
             )
         clear_stop_record(rec.path)
     elif again:
-        raise _fail(f"{rec.item} is not abandoned; --again only re-enables an abandoned item")
+        fail(f"{rec.item} is not abandoned; --again only re-enables an abandoned item")
     elif not is_stopped(rec, stop):
-        raise _fail(f"{rec.item} is not stopped (stage {rec.stage}, {rec.stage_status}); nothing to resume")
+        fail(f"{rec.item} is not stopped (stage {rec.stage}, {rec.stage_status}); nothing to resume")
 
 
 def _prepare_resume(
@@ -600,7 +595,7 @@ def _prepare_resume(
     assert config.project.workspace_dir  # noqa: S101
     workspace = Path(config.project.workspace_dir).expanduser()
     if not record_path(workspace, work_item_ref).exists():
-        raise _fail(f"no run record for {work_item_ref}; nothing to resume")
+        fail(f"no run record for {work_item_ref}; nothing to resume")
     rec = RunRecord.open(workspace, work_item_ref)
     _check_resumable(rec, again)
     if reset_retries:
@@ -667,7 +662,7 @@ def abandon_command(ctx: typer.Context, work_item_ref: RefArgument, config_path:
         with clone_lock(config.project.repo_dir, services.lock_dir):
             workspace = Path(config.project.workspace_dir).expanduser()
             if not record_path(workspace, work_item_ref).exists():
-                raise _fail(f"no run record for {work_item_ref}; nothing to abandon")
+                fail(f"no run record for {work_item_ref}; nothing to abandon")
             rec = RunRecord.open(workspace, work_item_ref)
             if is_abandoned(read_stop_record(rec.path)):
                 typer.echo(f"{work_item_ref}: already abandoned")
@@ -742,7 +737,7 @@ def archive_command(ctx: typer.Context, config_path: ConfigOption) -> None:
         archive_dir = resolve_archive_dir(config.archive.dir, config.project.workspace_dir)
         check_archive_dir(archive_dir, config.project.workspace_dir)
     except ConfigError as exc:
-        raise _fail(f"config error: {exc}") from exc
+        fail(f"config error: {exc}")
     services = _services(factory, config)
     workspace = Path(config.project.workspace_dir).expanduser()
     archived = 0
@@ -849,7 +844,7 @@ def status_command(
     assert config.project.workspace_dir  # noqa: S101
     workspace = Path(config.project.workspace_dir).expanduser()
     if work_item_ref is not None and not record_path(workspace, work_item_ref).exists():
-        raise _fail(f"no run record for {work_item_ref}")
+        fail(f"no run record for {work_item_ref}")
     records = [r for r in iter_records(workspace) if work_item_ref in (None, r.item)]
     if not records:
         typer.echo("no items")

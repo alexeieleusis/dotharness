@@ -4,10 +4,11 @@ import shutil
 import sys
 from datetime import date
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated
 
 import typer
 
+from dotharness.cli_common import fail
 from dotharness.paths import data_dir
 from dotharness.pr_review import state as state_mod
 from dotharness.pr_review.config import load_config
@@ -108,18 +109,12 @@ class Scheduler(enum.StrEnum):
     launchd = "launchd"
 
 
-def _fail(message: str) -> NoReturn:
-    """Typer equivalent of ``click.ClickException``: ``Error: <message>`` on stderr, exit code 1."""
-    typer.echo(f"Error: {message}", err=True)
-    raise typer.Exit(1)
-
-
 @app.command("init")
 def cmd_init(directory: Annotated[str, typer.Argument(metavar="DIRECTORY")] = ".") -> None:
     """Write a .harness.toml template to DIRECTORY (default: current directory)."""
     p = Path(directory) / HARNESS_CONFIG
     if p.exists():
-        _fail(f"{HARNESS_CONFIG} already exists in {Path(directory).resolve()}")
+        fail(f"{HARNESS_CONFIG} already exists in {Path(directory).resolve()}")
     p.write_text(TEMPLATE)
     typer.echo(f"Created {p.resolve()}")
 
@@ -383,7 +378,7 @@ def _reset_local_review(config_path: Path, yes: bool) -> None:
     try:
         review_root = local_review.review_root_for_reset(cfg)
     except ValueError as exc:
-        _fail(str(exc))
+        fail(str(exc))
     if not review_root.exists():
         typer.echo(f"Nothing to reset: {review_root} does not exist")
         return

@@ -487,3 +487,14 @@ def test_review_failure_prints_violations_and_exits_1(tmp_path, monkeypatch, run
     assert "deps: FAIL" in result.output
     assert "  - bad edge" in result.output
     assert "naming: PASS" in result.output
+
+
+def test_plan_init_missing_brief_exact_stderr(tmp_path, monkeypatch, runner: CliRunner) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_config(tmp_path)
+
+    result = runner.invoke(cli, ["plan", "init", "missing-brief.md"])
+
+    assert result.exit_code == 1
+    assert result.stderr == "Error: BRIEF_PATH does not exist: missing-brief.md\n"
+    assert result.stdout == ""

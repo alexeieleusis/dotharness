@@ -1,8 +1,9 @@
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated
 
 import typer
 
+from dotharness.cli_common import fail
 from dotharness.spec_prism_flow import decompose, draft_phases, overview_stage, requirements_stage, review, workspace
 from dotharness.spec_prism_flow.config import ConfigError, SpecPrismFlowConfig, load_config, resolve_config_path
 from dotharness.spec_prism_flow.decompose_journal import JOURNAL_FILENAME
@@ -28,14 +29,9 @@ ConfigOption = Annotated[Path | None, typer.Option("--config", help="Config file
 YesOption = Annotated[bool, typer.Option("--yes", help="Skip the overwrite-confirmation prompt.")]
 
 
-def _fail(message: str) -> NoReturn:
-    typer.echo(f"Error: {message}", err=True)
-    raise typer.Exit(1)
-
-
 def _require_existing_path(path: Path, label: str) -> Path:
     if not path.exists():
-        _fail(f"{label} does not exist: {path}")
+        fail(f"{label} does not exist: {path}")
     return path
 
 
@@ -45,7 +41,7 @@ def _require_readable_file(path: Path, label: str) -> Path:
         with path.open("rb") as f:
             f.read(1)
     except OSError as e:
-        _fail(f"{label} is not readable: {path} ({e})")
+        fail(f"{label} is not readable: {path} ({e})")
     return path
 
 
@@ -53,7 +49,7 @@ def _load_cfg_or_raise(config_path: Path | None) -> SpecPrismFlowConfig:
     try:
         return load_config(resolve_config_path(str(config_path) if config_path else None).resolve())
     except ConfigError as e:
-        _fail(str(e))
+        fail(str(e))
 
 
 @plan_app.command("init")
@@ -93,7 +89,7 @@ def plan_draft_overview(config: ConfigOption = None, yes: YesOption = False) -> 
     try:
         overview_path, open_questions_path = overview_stage.run_draft_overview(cfg)
     except overview_stage.OverviewError as e:
-        _fail(str(e))
+        fail(str(e))
 
     typer.echo(f"Wrote {overview_path}")
     typer.echo(f"Open questions: {open_questions_path}" if open_questions_path else "No open questions raised.")
@@ -114,7 +110,7 @@ def plan_draft_requirements(config: ConfigOption = None, yes: YesOption = False)
     try:
         requirements_path = requirements_stage.run_draft_requirements(cfg)
     except requirements_stage.RequirementsError as e:
-        _fail(str(e))
+        fail(str(e))
 
     typer.echo(f"Wrote {requirements_path}")
     typer.echo("Review/edit requirements.md, then proceed to `plan decompose` when ready.")
@@ -157,7 +153,7 @@ def plan_decompose(
     try:
         tree_path, graph_path = decompose.run_decompose(cfg, depth_cap=depth_cap, resume=resume)
     except decompose.DecomposeError as e:
-        _fail(str(e))
+        fail(str(e))
 
     typer.echo(f"Wrote {tree_path}")
     typer.echo(f"Wrote {graph_path}")
@@ -173,7 +169,7 @@ def plan_draft_phases(config: ConfigOption = None, yes: YesOption = False) -> No
         target_paths = draft_phases.target_phase_paths(cfg)
         stale_paths = draft_phases.stale_phase_paths(cfg)
     except draft_phases.DraftPhasesError as e:
-        _fail(str(e))
+        fail(str(e))
 
     existing_paths = [path for path in target_paths if path.exists()]
     if existing_paths and not yes:
@@ -186,7 +182,7 @@ def plan_draft_phases(config: ConfigOption = None, yes: YesOption = False) -> No
     try:
         result = draft_phases.run_draft_phases(cfg)
     except draft_phases.DraftPhasesError as e:
-        _fail(str(e))
+        fail(str(e))
 
     typer.echo(f"{result.leaves_drafted} leaves drafted, {result.internal_nodes_skipped} internal nodes skipped.")
     for path in result.written:
@@ -206,7 +202,7 @@ def plan_review(config: ConfigOption = None) -> None:
     try:
         report = review.run_review(cfg)
     except review.ReviewError as e:
-        _fail(str(e))
+        fail(str(e))
 
     for check in report.checks:
         typer.echo(f"{check.name}: {'PASS' if check.passed else 'FAIL'}")

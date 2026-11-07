@@ -1127,3 +1127,18 @@ def test_dotharness_cli_exposes_sisyphus() -> None:
     from dotharness import cli as top
 
     assert top.sisyphus is app
+
+
+def test_status_unknown_ref_exact_stderr(tmp_path: Path) -> None:
+    env = _status_workspace(tmp_path)
+    result = env.invoke("status", "NOPE-1", "--config", str(env.config))
+    assert result.exit_code == 1
+    assert result.stderr == "Error: no run record for NOPE-1\n"
+    assert result.stdout == ""
+
+
+def test_missing_config_exact_stderr_prefix(tmp_path: Path) -> None:
+    result = CliRunner().invoke(app, ["run", "--config", str(tmp_path / "missing.toml")])
+    assert result.exit_code == 1
+    assert result.stderr.startswith("Error: config error: ")
+    assert result.stderr.count("Error:") == 1
