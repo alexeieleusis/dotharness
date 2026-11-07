@@ -784,6 +784,25 @@ async def _get_unresolved_comment_ids(pr_number: int, repo: str, env: dict) -> T
     return ThreadState(frozenset(ids), frozenset(minimized_ids))
 
 
+def _parse_threads_page(stdout: str, pr_number: int) -> tuple[int, int, str | None] | None:
+    """Parse one reviewThreads page into (count, unresolved, next_cursor); None if malformed."""
+    try:
+        data = json.loads(stdout) or {}
+        repository = (data.get("data") or {}).get("repository") or {}
+        threads_page = (repository.get("pullRequest") or {}).get("reviewThreads")
+        nodes = (threads_page or {}).get("nodes") or []
+        unresolved = sum(1 for t in nodes if not t.get("isResolved", False))
+        page_info = (threads_page or {}).get("pageInfo") or {}
+    except (ValueError, AttributeError, KeyError, TypeError):
+        logger.warning("PR #%d: malformed GraphQL review threads response", pr_number, exc_info=True)
+        return None
+    if threads_page is None:
+        logger.warning("PR #%d: missing reviewThreads in GraphQL response", pr_number)
+        return None
+    next_cursor = page_info.get("endCursor") if page_info.get("hasNextPage") else None
+    return len(nodes), unresolved, next_cursor
+
+
 async def _check_gql_unresolved_threads(pr_number: int, repo: str, env: dict) -> tuple[int, int, bool]:
     """Query review threads via GraphQL and return (total_threads, unresolved, success)."""
     owner, repo_name = repo.split("/")
@@ -810,24 +829,14 @@ async def _check_gql_unresolved_threads(pr_number: int, repo: str, env: dict) ->
         if gql_result.returncode != 0:
             logger.debug("PR #%d: GraphQL review threads query failed (rc=%d)", pr_number, gql_result.returncode)
             return total_threads, total_unresolved, False
-        try:
-            data = json.loads(gql_result.stdout) or {}
-            repository = (data.get("data") or {}).get("repository") or {}
-            threads_page = (repository.get("pullRequest") or {}).get("reviewThreads")
-            nodes = (threads_page or {}).get("nodes") or []
-            page_unresolved = sum(1 for t in nodes if not t.get("isResolved", False))
-            page_info = (threads_page or {}).get("pageInfo") or {}
-        except (ValueError, AttributeError, KeyError, TypeError):
-            logger.warning("PR #%d: malformed GraphQL review threads response", pr_number, exc_info=True)
+        page = _parse_threads_page(gql_result.stdout, pr_number)
+        if page is None:
             return total_threads, total_unresolved, False
-        if threads_page is None:
-            logger.warning("PR #%d: missing reviewThreads in GraphQL response", pr_number)
-            return total_threads, total_unresolved, False
-        total_threads += len(nodes)
+        page_total, page_unresolved, cursor = page
+        total_threads += page_total
         total_unresolved += page_unresolved
-        if not page_info.get("hasNextPage"):
+        if cursor is None:
             break
-        cursor = page_info.get("endCursor")
 
     return total_threads, total_unresolved, True
 
