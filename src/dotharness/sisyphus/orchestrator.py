@@ -996,6 +996,15 @@ async def run_item(
         )
 
 
+def _gate_evidence(run: _Run) -> str:
+    if run.gate_failure is not None:
+        f = run.gate_failure
+        return f"gate failed: {f.command} in {f.directory} (exit {f.returncode})"
+    if run.rec.retries.get(GATE_FAILED_KEY):
+        return "gate failed in an earlier run"
+    return "gate passed" if run.gated else "gate not run"
+
+
 def _report(run: _Run) -> DigestReport:
     needs: tuple[NeedsYou, ...] = ()
     limits: tuple[str, ...] = ()
@@ -1006,13 +1015,7 @@ def _report(run: _Run) -> DigestReport:
     done: tuple[DoneEntry, ...] = ()
     if run.pr is not None:
         evidence = [run.pr.url or f"PR #{run.pr.number}", f"branch {run.branch}"]
-        if run.gate_failure is not None:
-            f = run.gate_failure
-            evidence.append(f"gate failed: {f.command} in {f.directory} (exit {f.returncode})")
-        elif run.rec.retries.get(GATE_FAILED_KEY):
-            evidence.append("gate failed in an earlier run")
-        else:
-            evidence.append("gate passed" if run.gated else "gate not run")
+        evidence.append(_gate_evidence(run))
         if run.cleanup_done:
             evidence.append(run.cleanup_done)
         done = (DoneEntry(f"{run.item}: draft PR #{run.pr.number} opened", tuple(evidence)),)
