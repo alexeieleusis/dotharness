@@ -44,6 +44,13 @@ uv run zensical build -s
 
 Unset `VIRTUAL_ENV` if `uv run` complains about a mismatched environment.
 
+## Shared async layer
+
+`dotharness.subprocess_runner` and `dotharness.ai_backend` are the shared way to run
+subprocesses and launch `claude` or `opencode`. The comparison of the old copies, the
+decisions and the contract for I-3 to I-5 are in
+[`design/shared-async-layer.md`](design/shared-async-layer.md).
+
 ## Tooling provenance
 
 These choices were made in I-1 and are recorded here because no other file records

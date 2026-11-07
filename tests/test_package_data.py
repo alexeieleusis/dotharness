@@ -9,7 +9,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = REPO_ROOT / "src" / "dotharness"
 
-# SHA-256 of each tracked file under the old root knowledge/ at commit cb0efc1 (pre-move).
+# SHA-256 of each tracked file under the old root knowledge/ at commit cb0efc1 (pre-move), except files edited since:
+# the I-5 prompt rewording (spec_prism_flow naming) and the lifecycle cheat sheet added for sisyphus.
 KNOWLEDGE_SHA256 = {
     "patterns/react/COMPONENT_ORGANIZATION_CONVENTION.md": "2c6a3ffcb255055323370074f66511b0c828426cf2ff819a63fd820c9256497e",
     "patterns/react/QUICK_REF_PATTERNS.md": "a862de1be5bf6a93d75a9b08f8f077ad9d00a197185d361877ca1dc5f3376fb4",
@@ -33,10 +34,11 @@ KNOWLEDGE_SHA256 = {
     "sisyphus/intake-prompt.md": "7fb1d907a18bd20f76ccadeea07cd74a588dff330c85225ec331a7229a974046",
     "sisyphus/linear-feed-prompt.md": "e76652507f9fdb9aaafc933dadb1c9c76eef4597791203dcade167e70fb3eddc",
     "sisyphus/orchestration-prompt.md": "88a4f099b9d494ab527421aa797772bd032a2b28ac1768e4f64b1ed98c894cb4",
-    "sisyphus/sizing-rules.md": "cceb3146e013221e4165c961136290051ff260f5bc3af63659b3ad169ddb8f2e",
-    "spec-prism-flow/build-execution-prompt.md": "d93c162cc9c7781ccdb2e3f8f201231db7049e217611405123cfe1425b78a4f9",
-    "spec-prism-flow/plan-generation-prompt.md": "5756c4a751264b096cd84e2879a2310619729f4f34534bf1345bda6a4606d833",
-    "spec-prism-flow/requirements-doc-drafting-prompt.md": "f79153d1e5cd9ed1d21c7944a03c79fd6074b722d34201f6a7cb95cba3d9fc18",
+    "sisyphus/sizing-rules.md": "953ed3e744d39f8fbe7196303fd3dcad4eae70f98d49adbccb5530532260cc36",
+    "spec-prism-flow/build-execution-prompt.md": "417f7e6998d8b7e8ee60ea4b78dfe76ace82de15b7587ecb005f13bd95b9ef60",
+    "spec-prism-flow/lifecycle-cheat-sheet.md": "3ed0b34ac35997cce8f34e5d013b608ba46b24f2f749ef0e5dc9e740d1bccbf5",
+    "spec-prism-flow/plan-generation-prompt.md": "4651068890fe6b2bd948e3ab6e3b7eed442aec6a1d8f33dfd0b6e74489982041",
+    "spec-prism-flow/requirements-doc-drafting-prompt.md": "72524c62db898e102e06b33645bee7a129d2ab7ce5a018e5a1b49fa86f31a95c",
 }
 
 
@@ -44,8 +46,8 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_manifest_has_26_files() -> None:
-    assert len(KNOWLEDGE_SHA256) == 26
+def test_manifest_has_27_files() -> None:
+    assert len(KNOWLEDGE_SHA256) == 27
 
 
 @pytest.mark.parametrize(("rel", "digest"), sorted(KNOWLEDGE_SHA256.items()))
@@ -84,3 +86,11 @@ def test_importlib_resources_resolves_knowledge_and_skills() -> None:
     assert (pkg / "skills").is_dir()
     assert (pkg / "knowledge" / "sisyphus" / "orchestration-prompt.md").is_file()
     assert (pkg / "skills" / "asd-ste100" / "SKILL.md").is_file()
+
+
+def test_pr_comments_script_is_package_data_and_matches_runner_path():
+    from dotharness.pr_review.runners.common import PR_COMMENTS_SCRIPT_PATH
+
+    packaged = PACKAGE_DIR / "scripts" / "pr-comments.py"
+    assert packaged.is_file()
+    assert PR_COMMENTS_SCRIPT_PATH.resolve() == packaged.resolve()

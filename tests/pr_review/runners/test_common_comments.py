@@ -1,0 +1,74 @@
+import json
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from dotharness.pr_review.runners.common import (
+    FOCUSED_REVIEW_MARKER,
+    fetch_pr_comments,
+    find_reply_with_marker,
+)
+
+
+def test_fetch_pr_comments_returns_empty_on_script_failure(tmp_path):
+    with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
+        result = fetch_pr_comments(1, tmp_path / "pr-comments.py", str(tmp_path), {})
+    assert result == []
+
+
+def test_fetch_pr_comments_returns_empty_when_cache_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        result = fetch_pr_comments(1, tmp_path / "pr-comments.py", str(tmp_path), {})
+    assert result == []
+
+
+def test_fetch_pr_comments_tags_types_and_filters_bots(tmp_path):
+    data = {
+        "inline_comments": [{"id": 1, "body": "x"}],
+        "review_comments": [{"id": "review-2", "body": "y"}],
+        "issue_comments": [
+            {"id": 3, "author": "alice", "body": "human comment"},
+            {"id": 4, "author": "some-bot[bot]", "body": "bot comment"},
+            {"id": 5, "author": "alice", "body": "mentions bot] inline"},
+        ],
+    }
+
+    def fake_run(cmd, **_kwargs):
+        Path(cmd[cmd.index("--output") + 1]).write_text(json.dumps(data))
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=fake_run):
+        result = fetch_pr_comments(9, tmp_path / "pr-comments.py", str(tmp_path), {})
+    types = {c["id"]: c["type"] for c in result}
+    assert types[1] == "inline"
+    assert types["review-2"] == "review"
+    assert types[3] == "issue"
+    assert 4 not in types
+    assert types[5] == "issue"
+
+
+def test_find_reply_with_marker_returns_matching_reply():
+    comment = {
+        "replies": [
+            {"author": "alice", "body": "unrelated"},
+            {"author": "bot", "body": f"some suggestion\n\n{FOCUSED_REVIEW_MARKER}"},
+        ]
+    }
+    reply = find_reply_with_marker(comment)
+    assert reply is not None
+    assert reply["author"] == "bot"
+
+
+def test_find_reply_with_marker_returns_none_when_absent():
+    comment = {"replies": [{"author": "alice", "body": "unrelated"}]}
+    assert find_reply_with_marker(comment) is None
+
+
+def test_find_reply_with_marker_handles_missing_replies_key():
+    assert find_reply_with_marker({}) is None
+
+
+def test_find_reply_with_marker_handles_none_replies():
+    assert find_reply_with_marker({"replies": None}) is None

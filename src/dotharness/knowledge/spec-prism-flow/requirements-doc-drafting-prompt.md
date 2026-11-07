@@ -1,6 +1,6 @@
 # Prompt: Draft a Requirements Document
 
-> Originally extracted from an early draft of what is now `spec-prism-flow/docs/requirements.md`,
+> Originally extracted from an early draft of what is now `docs/spec_prism_flow/requirements.md`,
 > which remains a live example of the output this prompt produces (that document's own renumbering
 > since extraction means the original section locator no longer maps cleanly, so it's omitted here
 > rather than guessed). Paste this whole file into a coding session, followed by a rough brief (idea,
