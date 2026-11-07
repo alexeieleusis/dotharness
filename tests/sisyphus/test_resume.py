@@ -402,7 +402,11 @@ def test_intake_command_writes_and_clears_the_c1_stop_record(tmp_path: Path, mon
         IntakeResult(brief, False, (OpenDecision(1, "Which tracker?"),)),
         IntakeResult(brief, False, ()),
     ]
-    monkeypatch.setattr(cli, "run_intake", lambda *a, **k: results.pop(0))
+
+    async def fake_intake(*_a: object, **_k: object) -> IntakeResult:
+        return results.pop(0)
+
+    monkeypatch.setattr(cli, "run_intake", fake_intake)
     assert env.invoke("intake", "ENG-1", "--config", str(env.config)).exit_code == 0
     rec_path = RunRecord.open(tmp_path / "ws", "ENG-1").path
     stop = read_stop_record(rec_path)

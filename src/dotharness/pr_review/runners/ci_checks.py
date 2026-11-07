@@ -23,6 +23,7 @@ import subprocess
 from datetime import UTC, datetime
 from typing import NamedTuple
 
+from dotharness.gh import gh_argv
 from dotharness.pr_review.runners.common import TIMEOUT_GH, run_cmd
 
 logger = logging.getLogger(__name__)
@@ -50,13 +51,13 @@ class CheckRead(NamedTuple):
 _TIMEOUT_EXIT = 124  # synthetic exit code for a timed-out gh call (as coreutils ``timeout``)
 
 
-def gh(args: list[str], env: dict) -> subprocess.CompletedProcess:
+async def gh(args: list[str], env: dict) -> subprocess.CompletedProcess:
     """Run gh; a timeout becomes a synthetic failed result so every caller fails closed the same way."""
     try:
-        return run_cmd(["gh", *args], cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
+        return await run_cmd(gh_argv(*args), cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
     except subprocess.TimeoutExpired:
         logger.exception("gh %s timed out after %ss", " ".join(args[:2]), TIMEOUT_GH)
-        return subprocess.CompletedProcess(["gh", *args], _TIMEOUT_EXIT, stdout="", stderr="timed out")
+        return subprocess.CompletedProcess(gh_argv(*args), _TIMEOUT_EXIT, stdout="", stderr="timed out")
 
 
 def text(data: bytes | str | None) -> str:
@@ -160,10 +161,10 @@ def _parse_buckets(stdout: str) -> list[Check] | None:
     return parsed
 
 
-def _read_buckets(repo: str, pr_number: int, env: dict, required: bool) -> list[Check] | None:
+async def _read_buckets(repo: str, pr_number: int, env: dict, required: bool) -> list[Check] | None:
     """Latest run of each check (name, bucket) for the PR. None = read failure; [] with required=True = no required checks."""
     args = ["pr", "checks", str(pr_number), "--repo", repo, "--json", _CHECK_FIELDS]
-    result = gh([*args, "--required"] if required else args, env)
+    result = await gh([*args, "--required"] if required else args, env)
     stderr = text(result.stderr)
     if required and result.returncode == 1 and _NO_REQUIRED_CHECKS_TEXT in stderr:
         return []
@@ -177,12 +178,12 @@ def _read_buckets(repo: str, pr_number: int, env: dict, required: bool) -> list[
     return _parse_buckets(text(result.stdout))
 
 
-def _read_default_branch(repo: str, env: dict) -> str | None:
+async def _read_default_branch(repo: str, env: dict) -> str | None:
     """The repository default branch (``gh repo view --json defaultBranchRef``), or None on any failure.
 
     Failure means a non-zero exit, a timeout, unparseable JSON, or a missing or empty ``defaultBranchRef.name``.
     """
-    result = gh(["repo", "view", repo, "--json", "defaultBranchRef"], env)
+    result = await gh(["repo", "view", repo, "--json", "defaultBranchRef"], env)
     if result.returncode != 0:
         logger.error("gh repo view failed for %s (exit %d): %s", repo, result.returncode, text(result.stderr).strip())
         return None
@@ -193,10 +194,10 @@ def _read_default_branch(repo: str, env: dict) -> str | None:
     return name if isinstance(name, str) and name else None
 
 
-def _open_prs_with_head(repo: str, branch: str, env: dict) -> list[dict] | None:
+async def _open_prs_with_head(repo: str, branch: str, env: dict) -> list[dict] | None:
     """Open PRs whose head branch is ``branch`` (name only, D-5), as ``{number, baseRefName}``; None on failure."""
     args = ["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number,baseRefName"]
-    result = gh(args, env)
+    result = await gh(args, env)
     if result.returncode != 0:
         logger.error(
             "gh pr list --head %s failed (exit %d): %s", branch, result.returncode, text(result.stderr).strip()
@@ -214,7 +215,7 @@ def _open_prs_with_head(repo: str, branch: str, env: dict) -> list[dict] | None:
     return prs
 
 
-def _find_stack_root(repo: str, base_branch: str, default_branch: str, env: dict) -> tuple[bool, int | None]:
+async def _find_stack_root(repo: str, base_branch: str, default_branch: str, env: dict) -> tuple[bool, int | None]:
     """Walk up the open-PR stack from ``base_branch``. Returns (ok, root PR number or None when there is no stack).
 
     Each step finds the open PR whose head is the current branch and moves to that PR's base. It stops at the
@@ -225,7 +226,7 @@ def _find_stack_root(repo: str, base_branch: str, default_branch: str, env: dict
     for _ in range(_MAX_STACK_DEPTH):
         if not branch or branch == default_branch:
             return True, root
-        prs = _open_prs_with_head(repo, branch, env)
+        prs = await _open_prs_with_head(repo, branch, env)
         if prs is None:
             return False, None
         if not prs:
@@ -240,10 +241,10 @@ def _find_stack_root(repo: str, base_branch: str, default_branch: str, env: dict
     return True, root
 
 
-def _read_root_required_names(repo: str, root: int, env: dict) -> set[str] | None:
+async def _read_root_required_names(repo: str, root: int, env: dict) -> set[str] | None:
     """Required check names of the root PR. Empty set = no required checks. None = read failure (incl. pending)."""
     args = ["pr", "checks", str(root), "--repo", repo, "--required", "--json", "name"]
-    result = gh(args, env)
+    result = await gh(args, env)
     stderr = text(result.stderr)
     if result.returncode == 1 and _NO_REQUIRED_CHECKS_TEXT in stderr:
         return set()
@@ -261,19 +262,21 @@ def _read_root_required_names(repo: str, root: int, env: dict) -> set[str] | Non
     return {e["name"] for e in entries}
 
 
-def _fallback_checks(repo: str, pr_number: int, base_branch: str, default_branch: str, env: dict) -> CheckRead | None:
+async def _fallback_checks(
+    repo: str, pr_number: int, base_branch: str, default_branch: str, env: dict
+) -> CheckRead | None:
     """Checks to judge when the PR's own base has no required checks; None = failure.
 
     With a stack root that has required checks, only those names count (a name with no run on the PR is
     missing). Otherwise all checks of the PR count.
     """
-    ok, root = _find_stack_root(repo, base_branch, default_branch, env)
+    ok, root = await _find_stack_root(repo, base_branch, default_branch, env)
     if not ok:
         return None
-    required = _read_root_required_names(repo, root, env) if root is not None else set()
+    required = await _read_root_required_names(repo, root, env) if root is not None else set()
     if required is None:
         return None
-    checks = _read_buckets(repo, pr_number, env, required=False)
+    checks = await _read_buckets(repo, pr_number, env, required=False)
     if checks is None:
         return None
     if not required:
@@ -282,7 +285,9 @@ def _fallback_checks(repo: str, pr_number: int, base_branch: str, default_branch
     return CheckRead([c for c in checks if c.name in required], sorted(required - {c.name for c in checks}))
 
 
-def read_checks(repo: str, pr_number: int, base_branch: str, env: dict, *, stack_root: bool = True) -> CheckRead | None:
+async def read_checks(
+    repo: str, pr_number: int, base_branch: str, env: dict, *, stack_root: bool = True
+) -> CheckRead | None:
     """The latest run of each check judged for the PR, or None on any read failure (fail closed).
 
     The PR's required checks when it has any. Otherwise, with ``stack_root`` the stack-root rule applies (the
@@ -291,25 +296,25 @@ def read_checks(repo: str, pr_number: int, base_branch: str, env: dict, *, stack
     """
     default_branch = None
     if stack_root:
-        default_branch = _read_default_branch(repo, env)
+        default_branch = await _read_default_branch(repo, env)
         if default_branch is None:
             return None
         logger.debug("PR #%d: reading checks (base %s, default branch %s)", pr_number, base_branch, default_branch)
-    checks = _read_buckets(repo, pr_number, env, required=True)
+    checks = await _read_buckets(repo, pr_number, env, required=True)
     if checks is None:
         return None
     if checks:
         return CheckRead(checks, [])
     if default_branch is None:
-        all_checks = _read_buckets(repo, pr_number, env, required=False)
+        all_checks = await _read_buckets(repo, pr_number, env, required=False)
         return None if all_checks is None else CheckRead(all_checks, [])
     logger.info("PR #%d: no required checks on base, looking for a stack root", pr_number)
-    return _fallback_checks(repo, pr_number, base_branch, default_branch, env)
+    return await _fallback_checks(repo, pr_number, base_branch, default_branch, env)
 
 
-def repo_has_workflows(repo: str, env: dict) -> bool | None:
+async def repo_has_workflows(repo: str, env: dict) -> bool | None:
     """True when the repo has an active workflow; None on read failure."""
-    result = gh(["api", f"repos/{repo}/actions/workflows?per_page=100"], env)
+    result = await gh(["api", f"repos/{repo}/actions/workflows?per_page=100"], env)
     if result.returncode != 0:
         return None
     try:

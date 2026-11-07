@@ -14,7 +14,8 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
-from dotharness.pr_review.runners.common import build_subprocess_env, run_cmd
+from dotharness.gh import build_subprocess_env
+from dotharness.pr_review.runners.common import run_cmd
 from dotharness.pr_review.runners.local_review.types import LocalReviewError, LocalReviewTarget, NothingToReviewError
 
 _GIT_TIMEOUT_SECONDS = 30
@@ -24,7 +25,7 @@ DEFAULT_BASE_FALLBACK = "main"
 _NO_UNTRACKED_FLAG = "--untracked-files=no"
 
 
-def git(working_dir: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+async def git(working_dir: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     """Run `git *args` in `working_dir` through `common.run_cmd`; never raises on failure or timeout.
 
     Contract: 30s timeout (`_GIT_TIMEOUT_SECONDS`), `check=False`, stdout/stderr decoded to text.
@@ -33,7 +34,7 @@ def git(working_dir: Path, *args: str, env: dict[str, str] | None = None) -> sub
     """
     cmd = ["git", *args]
     try:
-        proc = run_cmd(
+        proc = await run_cmd(
             cmd,
             cwd=str(working_dir),
             env=dict(os.environ) if env is None else env,
@@ -59,11 +60,11 @@ def _decode(data: bytes | str | None) -> str:
     return data if isinstance(data, str) else data.decode("utf-8", errors="replace")
 
 
-def _ref_exists(working_dir: Path, ref: str) -> bool:
-    return git(working_dir, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").returncode == 0
+async def _ref_exists(working_dir: Path, ref: str) -> bool:
+    return (await git(working_dir, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")).returncode == 0
 
 
-def resolve_base_ref(working_dir: Path, base: str | None = None, config_base: str | None = None) -> str:
+async def resolve_base_ref(working_dir: Path, base: str | None = None, config_base: str | None = None) -> str:
     """First existing ref in order: `base` (--base), `config_base`, origin/HEAD target, `main`.
 
     An explicit `base` or `config_base` that does not resolve is an error and never
@@ -71,20 +72,20 @@ def resolve_base_ref(working_dir: Path, base: str | None = None, config_base: st
     """
     for label, value in (("--base", base), ("[local_review].base", config_base)):
         if value:
-            if _ref_exists(working_dir, value):
+            if await _ref_exists(working_dir, value):
                 return value
             raise LocalReviewError(f"base ref {value!r} (from {label}) does not resolve to a commit")  # noqa: TRY003
 
     tried: list[str] = []
-    origin_head = git(working_dir, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+    origin_head = await git(working_dir, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
     target = origin_head.stdout.strip() if origin_head.returncode == 0 else ""
     if target:
-        if _ref_exists(working_dir, target):
+        if await _ref_exists(working_dir, target):
             return target
         tried.append(f"{target} (origin/HEAD)")
     else:
         tried.append("origin/HEAD (not set)")
-    if _ref_exists(working_dir, DEFAULT_BASE_FALLBACK):
+    if await _ref_exists(working_dir, DEFAULT_BASE_FALLBACK):
         return DEFAULT_BASE_FALLBACK
     tried.append(DEFAULT_BASE_FALLBACK)
     raise LocalReviewError(
@@ -94,9 +95,9 @@ def resolve_base_ref(working_dir: Path, base: str | None = None, config_base: st
     )
 
 
-def compute_merge_base(working_dir: Path, base_ref: str) -> str:
+async def compute_merge_base(working_dir: Path, base_ref: str) -> str:
     """`git merge-base <base_ref> HEAD`."""
-    result = git(working_dir, "merge-base", base_ref, "HEAD")
+    result = await git(working_dir, "merge-base", base_ref, "HEAD")
     sha = result.stdout.strip()
     if result.returncode != 0 or not sha:
         raise LocalReviewError(  # noqa: TRY003
@@ -123,7 +124,7 @@ def check_templates(knowledge_dir: Path, names: Sequence[str]) -> None:
             raise LocalReviewError(f"prompt template not found: {path}")  # noqa: TRY003
 
 
-def check_preconditions(
+async def check_preconditions(
     working_dir: Path,
     *,
     base: str | None = None,
@@ -140,7 +141,7 @@ def check_preconditions(
     if output_root is not None:
         check_output_dir_outside_repo(working_dir, output_root)
 
-    top = git(working_dir, "rev-parse", "--show-toplevel")
+    top = await git(working_dir, "rev-parse", "--show-toplevel")
     if top.returncode != 0:
         raise LocalReviewError(f"{working_dir} is not inside a git repository")  # noqa: TRY003
     if Path(top.stdout.strip()).resolve() != working_dir:
@@ -148,12 +149,12 @@ def check_preconditions(
             f"repo.working_dir {working_dir} is not the toplevel of its git repo ({top.stdout.strip()})"
         )
 
-    head_ref = git(working_dir, "symbolic-ref", "--short", "HEAD")
+    head_ref = await git(working_dir, "symbolic-ref", "--short", "HEAD")
     branch = head_ref.stdout.strip()
     if head_ref.returncode != 0 or not branch:
         raise LocalReviewError("HEAD is detached; check out a branch to review")  # noqa: TRY003
 
-    status = git(working_dir, "status", "--porcelain", _NO_UNTRACKED_FLAG)
+    status = await git(working_dir, "status", "--porcelain", _NO_UNTRACKED_FLAG)
     if status.returncode != 0:
         raise LocalReviewError(f"git status failed: {status.stderr.strip()}")  # noqa: TRY003
     dirty = [line[3:] for line in status.stdout.splitlines() if line.strip()]
@@ -165,12 +166,12 @@ def check_preconditions(
             "- commit or stash them first"
         )
 
-    base_ref = resolve_base_ref(working_dir, base, config_base)
-    head = git(working_dir, "rev-parse", "HEAD")
+    base_ref = await resolve_base_ref(working_dir, base, config_base)
+    head = await git(working_dir, "rev-parse", "HEAD")
     head_sha = head.stdout.strip()
     if head.returncode != 0 or not head_sha:
         raise LocalReviewError(f"cannot resolve HEAD: {head.stderr.strip()}")  # noqa: TRY003
-    merge_base = compute_merge_base(working_dir, base_ref)
+    merge_base = await compute_merge_base(working_dir, base_ref)
 
     if review_phase and (branch == base_ref or merge_base == head_sha):
         raise NothingToReviewError(f"Nothing to review: {branch} has no commits beyond {base_ref}")  # noqa: TRY003
@@ -182,35 +183,35 @@ def _git_env() -> dict[str, str]:
     return build_subprocess_env([], {})
 
 
-def _commit_time(wdir: Path, sha: str) -> int:
-    proc = git(wdir, "show", "-s", "--format=%ct", sha)
+async def _commit_time(wdir: Path, sha: str) -> int:
+    proc = await git(wdir, "show", "-s", "--format=%ct", sha)
     try:
         return int(proc.stdout.strip()) if proc.returncode == 0 else -1
     except ValueError:
         return -1
 
 
-def _current_branch(wdir: Path) -> str:
-    proc = git(wdir, "symbolic-ref", "--short", "HEAD")
+async def _current_branch(wdir: Path) -> str:
+    proc = await git(wdir, "symbolic-ref", "--short", "HEAD")
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
-def _tracked_dirty(wdir: Path) -> list[str]:
+async def _tracked_dirty(wdir: Path) -> list[str]:
     """Tracked paths with uncommitted changes (untracked files ignored, 11.A-10). Raises on git failure."""
-    proc = git(wdir, "status", "--porcelain", _NO_UNTRACKED_FLAG)
+    proc = await git(wdir, "status", "--porcelain", _NO_UNTRACKED_FLAG)
     if proc.returncode != 0:
         raise LocalReviewError(f"git status failed: {proc.stderr.strip()}")  # noqa: TRY003
     return [ln[3:] for ln in proc.stdout.splitlines() if ln.strip()]
 
 
-def _head(wdir: Path) -> str:
-    proc = git(wdir, "rev-parse", "HEAD")
+async def _head(wdir: Path) -> str:
+    proc = await git(wdir, "rev-parse", "HEAD")
     sha = proc.stdout.strip()
     if proc.returncode != 0 or not sha:
         raise LocalReviewError(f"cannot resolve HEAD: {proc.stderr.strip()}")  # noqa: TRY003
     return sha
 
 
-def _commit_parents(wdir: Path, rev: str) -> list[str]:
-    proc = git(wdir, "rev-list", "--parents", "-n", "1", rev)
+async def _commit_parents(wdir: Path, rev: str) -> list[str]:
+    proc = await git(wdir, "rev-list", "--parents", "-n", "1", rev)
     return proc.stdout.split()[1:] if proc.returncode == 0 else []

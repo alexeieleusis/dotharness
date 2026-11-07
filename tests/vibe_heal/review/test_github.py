@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from dotharness.subprocess_runner import RunResult
 from dotharness.vibe_heal.review.github import (
     _MAX_INLINE_COMMENTS,
     _MAX_REVIEW_BODY_CHARS,
@@ -13,6 +14,15 @@ from dotharness.vibe_heal.review.github import (
     GitHubTimeoutError,
 )
 from dotharness.vibe_heal.review.models import FileReview, ReviewIssue, ReviewResult
+
+
+def _patch_run(mocker, *results: tuple[int, str, str]) -> AsyncMock:
+    """Patch the shared runner used by _post_json; one (returncode, stdout, stderr) per call."""
+    return mocker.patch(
+        "dotharness.vibe_heal.review.github.run",
+        new_callable=AsyncMock,
+        side_effect=[RunResult(*r) for r in results],
+    )
 
 
 @pytest.fixture
@@ -232,13 +242,7 @@ class TestPostReview:
     @pytest.mark.asyncio
     async def test_single_api_call(self, sample_report, mocker) -> None:
         """post_review makes a single gh api POST call."""
-        mock_process = AsyncMock()
-        mock_process.communicate.return_value = (b'{"id": 123}', b"")
-        mock_process.returncode = 0
-        mocker.patch(
-            "dotharness.vibe_heal.review.github.asyncio.create_subprocess_exec",
-            return_value=mock_process,
-        )
+        mock_run = _patch_run(mocker, (0, '{"id": 123}', ""))
         mocker.patch(
             "dotharness.vibe_heal.review.github.run_command",
             new_callable=AsyncMock,
@@ -248,22 +252,15 @@ class TestPostReview:
         client = GitHubReviewClient()
         await client.post_review(42, sample_report)
 
-        assert mock_process.communicate.call_count == 1
-        call_args = mock_process.communicate.call_args
-        stdin_json = json.loads(call_args[0][0])
+        assert mock_run.await_count == 1
+        stdin_json = json.loads(mock_run.call_args.kwargs["stdin"])
         assert stdin_json["event"] == "COMMENT"
         assert len(stdin_json["comments"]) == 2
 
     @pytest.mark.asyncio
     async def test_inline_comment_format(self, sample_report, mocker) -> None:
         """Inline comment body contains rule, message, and doc_url."""
-        mock_process = AsyncMock()
-        mock_process.communicate.return_value = (b"{}", b"")
-        mock_process.returncode = 0
-        mocker.patch(
-            "dotharness.vibe_heal.review.github.asyncio.create_subprocess_exec",
-            return_value=mock_process,
-        )
+        mock_run = _patch_run(mocker, (0, "{}", ""))
         mocker.patch(
             "dotharness.vibe_heal.review.github.run_command",
             new_callable=AsyncMock,
@@ -273,7 +270,7 @@ class TestPostReview:
         client = GitHubReviewClient()
         await client.post_review(42, sample_report)
 
-        stdin_json = json.loads(mock_process.communicate.call_args[0][0])
+        stdin_json = json.loads(mock_run.call_args.kwargs["stdin"])
         comment_with_url = stdin_json["comments"][0]
         assert comment_with_url["body"] == (
             "**python:S1481** Remove unused variable\n\nhttps://rules.example.com/S1481"
@@ -287,21 +284,7 @@ class TestPostReview:
     @pytest.mark.asyncio
     async def test_fallback_comment_for_rejected_lines(self, sample_report, mocker) -> None:
         """When inline review fails, post_review posts a top-level fallback comment."""
-        mock_fail = AsyncMock()
-        mock_fail.communicate.return_value = (
-            b'{"message": "Unprocessable Entity"}',
-            b"",
-        )
-        mock_fail.returncode = 1
-
-        mock_success = AsyncMock()
-        mock_success.communicate.return_value = (b"{}", b"")
-        mock_success.returncode = 0
-
-        mocker.patch(
-            "dotharness.vibe_heal.review.github.asyncio.create_subprocess_exec",
-            side_effect=[mock_fail, mock_success],
-        )
+        mock_run = _patch_run(mocker, (1, '{"message": "Unprocessable Entity"}', ""), (0, "{}", ""))
         mocker.patch(
             "dotharness.vibe_heal.review.github.run_command",
             new_callable=AsyncMock,
@@ -311,9 +294,8 @@ class TestPostReview:
         client = GitHubReviewClient()
         await client.post_review(42, sample_report)
 
-        assert mock_fail.communicate.call_count == 1
-        assert mock_success.communicate.call_count == 1
-        fallback_json = json.loads(mock_success.communicate.call_args[0][0])
+        assert mock_run.await_count == 2
+        fallback_json = json.loads(mock_run.call_args.kwargs["stdin"])
         assert fallback_json["event"] == "COMMENT"
         assert fallback_json["comments"] == []
         assert "python:S1481" in fallback_json["body"]
@@ -322,14 +304,7 @@ class TestPostReview:
     @pytest.mark.asyncio
     async def test_builds_correct_api_endpoint(self, sample_report, mocker) -> None:
         """post_review calls gh api with the correct repository endpoint."""
-        mock_api = AsyncMock()
-        mock_api.communicate.return_value = (b"{}", b"")
-        mock_api.returncode = 0
-
-        mock_create = mocker.patch(
-            "dotharness.vibe_heal.review.github.asyncio.create_subprocess_exec",
-            side_effect=[mock_api],
-        )
+        mock_create = _patch_run(mocker, (0, "{}", ""))
 
         # validate_installed uses run_command; return success=True for --version
         # and success=False for gh repo view to trigger the git-remote fallback.
@@ -349,7 +324,7 @@ class TestPostReview:
         client = GitHubReviewClient()
         await client.post_review(42, sample_report)
 
-        api_call_args = mock_create.call_args_list[0][0]
+        api_call_args = mock_create.call_args_list[0][0][0]
         assert api_call_args[0] == "gh"
         assert "api" in api_call_args
         assert "--method" in api_call_args
@@ -361,13 +336,7 @@ class TestPostReview:
     @pytest.mark.asyncio
     async def test_uses_gh_repo_for_owner_repo(self, sample_report, mocker) -> None:
         """post_review prefers gh CLI for owner/repo detection."""
-        mock_process = AsyncMock()
-        mock_process.communicate.return_value = (b"{}", b"")
-        mock_process.returncode = 0
-        mocker.patch(
-            "dotharness.vibe_heal.review.github.asyncio.create_subprocess_exec",
-            return_value=mock_process,
-        )
+        mock_run = _patch_run(mocker, (0, "{}", ""))
 
         mock_run = mocker.patch(
             "dotharness.vibe_heal.review.github.run_command",
@@ -401,6 +370,23 @@ class TestPostReview:
             await client.post_review(42, sample_report)
         assert post.await_count == 1
 
+    @pytest.mark.asyncio
+    async def test_post_json_maps_runner_flags(self, mocker) -> None:
+        """_post_json maps run() timed_out/not_found to the exceptions callers already handle."""
+        client = GitHubReviewClient()
+        mocker.patch(
+            "dotharness.vibe_heal.review.github.run",
+            new_callable=AsyncMock,
+            side_effect=[
+                RunResult(124, "", "timed out after 60s", timed_out=True),
+                RunResult(127, "", "no gh", not_found=True),
+            ],
+        )
+        with pytest.raises(GitHubTimeoutError, match="timed out after 60s"):
+            await client._post_json(["gh"], {})
+        with pytest.raises(FileNotFoundError):
+            await client._post_json(["gh"], {})
+
     def test_oversized_bodies_are_truncated(self) -> None:
         """Both payload builders cap the body at GitHub's size limit."""
         report = ReviewResult(
@@ -424,23 +410,10 @@ class TestPostReview:
     @pytest.mark.asyncio
     async def test_raises_when_fallback_also_fails(self, sample_report, mocker) -> None:
         """post_review raises GitHubReviewError when both attempts fail."""
-        mock_fail = AsyncMock()
-        mock_fail.communicate.return_value = (
-            b'{"message": "Server error"}',
-            b"internal error",
-        )
-        mock_fail.returncode = 1
-
-        mock_fail2 = AsyncMock()
-        mock_fail2.communicate.return_value = (
-            b'{"message": "Server error"}',
-            b"internal error",
-        )
-        mock_fail2.returncode = 1
-
-        mocker.patch(
-            "dotharness.vibe_heal.review.github.asyncio.create_subprocess_exec",
-            side_effect=[mock_fail, mock_fail2],
+        _patch_run(
+            mocker,
+            (1, '{"message": "Server error"}', "internal error"),
+            (1, '{"message": "Server error"}', "internal error"),
         )
         mocker.patch(
             "dotharness.vibe_heal.review.github.run_command",
@@ -462,13 +435,7 @@ class TestPostReview:
             files=[],
         )
 
-        mock_process = AsyncMock()
-        mock_process.communicate.return_value = (b"{}", b"")
-        mock_process.returncode = 0
-        mocker.patch(
-            "dotharness.vibe_heal.review.github.asyncio.create_subprocess_exec",
-            return_value=mock_process,
-        )
+        mock_run = _patch_run(mocker, (0, "{}", ""))
         mocker.patch(
             "dotharness.vibe_heal.review.github.run_command",
             new_callable=AsyncMock,
@@ -478,7 +445,7 @@ class TestPostReview:
         client = GitHubReviewClient()
         await client.post_review(1, empty_report)
 
-        stdin_json = json.loads(mock_process.communicate.call_args[0][0])
+        stdin_json = json.loads(mock_run.call_args.kwargs["stdin"])
         assert stdin_json["event"] == "COMMENT"
         assert stdin_json["comments"] == []
 
@@ -512,13 +479,7 @@ class TestPostReview:
             ],
         )
 
-        mock_process = AsyncMock()
-        mock_process.communicate.return_value = (b"{}", b"")
-        mock_process.returncode = 0
-        mocker.patch(
-            "dotharness.vibe_heal.review.github.asyncio.create_subprocess_exec",
-            return_value=mock_process,
-        )
+        mock_run = _patch_run(mocker, (0, "{}", ""))
         mocker.patch(
             "dotharness.vibe_heal.review.github.run_command",
             new_callable=AsyncMock,
@@ -528,7 +489,7 @@ class TestPostReview:
         client = GitHubReviewClient()
         await client.post_review(42, report_with_root_cause)
 
-        payload = json.loads(mock_process.communicate.call_args[0][0])
+        payload = json.loads(mock_run.call_args.kwargs["stdin"])
         # root_cause IS in each individual inline comment body
         for comment in payload["comments"]:
             assert "<details>" in comment["body"]
@@ -540,13 +501,7 @@ class TestPostReview:
     @pytest.mark.asyncio
     async def test_inline_payload_includes_nonempty_body(self, sample_report, mocker) -> None:
         """Inline review payload always includes a non-empty body (GitHub rejects empty body for COMMENT reviews)."""
-        mock_process = AsyncMock()
-        mock_process.communicate.return_value = (b"{}", b"")
-        mock_process.returncode = 0
-        mocker.patch(
-            "dotharness.vibe_heal.review.github.asyncio.create_subprocess_exec",
-            return_value=mock_process,
-        )
+        mock_run = _patch_run(mocker, (0, "{}", ""))
         mocker.patch(
             "dotharness.vibe_heal.review.github.run_command",
             new_callable=AsyncMock,
@@ -556,7 +511,7 @@ class TestPostReview:
         client = GitHubReviewClient()
         await client.post_review(42, sample_report)
 
-        stdin_json = json.loads(mock_process.communicate.call_args[0][0])
+        stdin_json = json.loads(mock_run.call_args.kwargs["stdin"])
         assert "body" in stdin_json
         assert stdin_json["body"]  # must be non-empty
 
@@ -596,18 +551,7 @@ class TestPostReview:
             ],
         )
 
-        mock_fail = AsyncMock()
-        mock_fail.communicate.return_value = (b'{"message": "Unprocessable Entity"}', b"")
-        mock_fail.returncode = 1
-
-        mock_success = AsyncMock()
-        mock_success.communicate.return_value = (b"{}", b"")
-        mock_success.returncode = 0
-
-        mocker.patch(
-            "dotharness.vibe_heal.review.github.asyncio.create_subprocess_exec",
-            side_effect=[mock_fail, mock_success],
-        )
+        mock_run = _patch_run(mocker, (1, '{"message": "Unprocessable Entity"}', ""), (0, "{}", ""))
         mocker.patch(
             "dotharness.vibe_heal.review.github.run_command",
             new_callable=AsyncMock,
@@ -617,7 +561,7 @@ class TestPostReview:
         client = GitHubReviewClient()
         await client.post_review(42, report_with_root_cause)
 
-        body = json.loads(mock_success.communicate.call_args[0][0])["body"]
+        body = json.loads(mock_run.call_args.kwargs["stdin"])["body"]
         assert "<details>" in body
         assert "python:S1481 — why this matters" in body
         assert "<p>Unused variables clutter the code.</p>" in body
@@ -632,18 +576,7 @@ class TestPostReview:
         """post_review logs a warning with the inline error reason before falling back."""
         import logging
 
-        mock_fail = AsyncMock()
-        mock_fail.communicate.return_value = (b"", b"validation error: line outside diff")
-        mock_fail.returncode = 1
-
-        mock_success = AsyncMock()
-        mock_success.communicate.return_value = (b"{}", b"")
-        mock_success.returncode = 0
-
-        mocker.patch(
-            "dotharness.vibe_heal.review.github.asyncio.create_subprocess_exec",
-            side_effect=[mock_fail, mock_success],
-        )
+        _patch_run(mocker, (1, "", "validation error: line outside diff"), (0, "{}", ""))
         mocker.patch(
             "dotharness.vibe_heal.review.github.run_command",
             new_callable=AsyncMock,
@@ -679,13 +612,7 @@ class TestPostReview:
             ],
         )
 
-        mock_process = AsyncMock()
-        mock_process.communicate.return_value = (b"{}", b"")
-        mock_process.returncode = 0
-        mocker.patch(
-            "dotharness.vibe_heal.review.github.asyncio.create_subprocess_exec",
-            return_value=mock_process,
-        )
+        mock_run = _patch_run(mocker, (0, "{}", ""))
         mocker.patch(
             "dotharness.vibe_heal.review.github.run_command",
             new_callable=AsyncMock,
@@ -695,7 +622,7 @@ class TestPostReview:
         client = GitHubReviewClient()
         await client.post_review(5, multi_file_report)
 
-        stdin_json = json.loads(mock_process.communicate.call_args[0][0])
+        stdin_json = json.loads(mock_run.call_args.kwargs["stdin"])
         assert len(stdin_json["comments"]) == 3
         paths = {c["path"] for c in stdin_json["comments"]}
         assert "src/a.py" in paths

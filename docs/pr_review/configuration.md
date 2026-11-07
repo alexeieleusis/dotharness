@@ -5,8 +5,8 @@ current directory by default. Override the path with `--config PATH` on the
 `pr_review run` group, or pass a directory as the first argument to `pr_review init` / `pr_review validate`. See the [overview page](overview.md#quick-start) for
 the quick-start commands to scaffold and check one.
 
-The CLI name `pr_review` and the config file names (`.harness*.toml`, `.sisyphus*.toml`, `.env*`) differ on purpose:
-the command was renamed when the tool moved into dotharness, while existing config files keep their names so they
+The CLI name `pr_review` and the config file names (`.harness*.toml`, `.sisyphus*.toml`, `.env*`) differ on purpose.
+The command was renamed when the tool moved into dotharness. Existing config files keep their names so they
 continue to load unchanged. This page describes config files by name only.
 
 This file holds per-repo settings and can contain sensitive values (a
@@ -62,7 +62,7 @@ review or pre-commit step.
 | `pre_commands` | list | `[]` | Commands to run before operating on this subdir. Each entry is either a plain string (shorthand for `{ cmd = "...", critical = false }`) or a table `{ cmd = "...", critical = true/false }`. See below for the two forms. |
 | `coverage` | boolean | `false` | Whether this subdir participates in coverage collection. |
 | `timeout` | integer | `300` | Timeout (seconds) for running this subdir's pre-commands. |
-| `env_file` | string | unset | Optional vibe-heal env file for this subdir, passed to vibe-heal as `--env-file`. Relative paths resolve against `repo.working_dir`; `~` is expanded; the file may be outside the repo. Default: unset (vibe-heal's default lookup of `.env.vibeheal` or `.env` in the subdir cwd). With `--env-file`, vibe-heal's file beats process env vars, so `[harness.env]` `SONARQUBE_*` values no longer override a configured `env_file`. See "`env_file` notes" below for a project-key limitation. |
+| `env_file` | string | unset | Optional vibe-heal env file for this subdir, passed to vibe-heal as `--env-file`. Relative paths resolve against `repo.working_dir`. `~` is expanded. The file may be outside the repo. Default: unset (vibe-heal's default lookup of `.env.vibeheal` or `.env` in the subdir cwd). With `--env-file`, vibe-heal's file beats process env vars, so `[harness.env]` `SONARQUBE_*` values no longer override a configured `env_file`. See "`env_file` notes" below for a project-key limitation. |
 
 `pre_commands` entries may take either of two forms:
 
@@ -71,16 +71,16 @@ review or pre-commit step.
 
 **`env_file` notes**
 
-- **Precedence.** With `--env-file`, vibe-heal's file beats process env vars; without it, env vars beat `.env.vibeheal`. So `[harness.env]` `SONARQUBE_*` values no longer override a configured `env_file`.
-- **Project-key limitation.** With an `env_file`, vibe_heal's project key comes from that file. `get_vibe_heal_context` (in `common.py`; reads `~/.vibe-heal/reviews/<project_key>/<branch>/review.md`) takes the key from each subdir's `sonar-project.properties`, and is used by `self-review` and `review-requested`. If the two differ, the Static Analysis context in those commands is silently empty. This is a known limitation; the harness does not reconcile the keys.
-- **Validation.** A configured `env_file` that is not an existing regular file fails fast, before pre-commands: baseline and per-PR processing fail that subdir; prune logs a warning and continues. `pr_review validate` does not check `env_file`; its list (`repo.working_dir`, `harness.knowledge_dir`) is unchanged.
+- **Precedence.** With `--env-file`, vibe-heal's file beats process env vars. Without it, env vars beat `.env.vibeheal`. So `[harness.env]` `SONARQUBE_*` values no longer override a configured `env_file`.
+- **Project-key limitation.** With an `env_file`, vibe_heal's project key comes from that file. `get_vibe_heal_context` in `common.py` reads `~/.vibe-heal/reviews/<project_key>/<branch>/review.md`. It takes the key from each subdir's `sonar-project.properties` and is used by `self-review` and `review-requested`. If the two differ, the Static Analysis context in those commands is silently empty. This is a known limitation. The harness does not reconcile the keys.
+- **Validation.** A configured `env_file` that is not an existing regular file fails fast, before pre-commands: baseline and per-PR processing fail that subdir. Prune logs a warning and continues. `pr_review validate` does not check `env_file`. Its list (`repo.working_dir`, `harness.knowledge_dir`) is unchanged.
 
 ### `[vibe_heal]`
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | boolean | `false` | Turns on vibe_heal/SonarQube-style review integration. When enabled, `review-prs` invokes vibe_heal to produce per-PR reviews. Other runners can fold matching review output (looked up via each subdir's `sonar-project.properties` → `sonar.projectKey`) into the review context. |
-| `python` | string | `""` (unset) | Path to the Python interpreter used to invoke vibe_heal as `python -m dotharness.vibe_heal`. It must point at an interpreter that has dotharness installed; an interpreter from a separate, older vibe_heal virtualenv will not work. Only checked/required in practice when `enabled = true`. See [Path defaults when installed](#path-defaults-when-installed). |
+| `python` | string | `""` (unset) | Path to the Python interpreter used to invoke vibe_heal as `python -m dotharness.vibe_heal`. It must point at an interpreter that has dotharness installed. An interpreter from a separate, older vibe_heal virtualenv will not work. Only checked/required in practice when `enabled = true`. See [Path defaults when installed](#path-defaults-when-installed). |
 | `authors` | string or list of strings | `"*"` | Which PR authors vibe_heal should apply to in `review-prs`'s batch mode. `"*"` means all authors. Otherwise it is a list of GitHub usernames. Ignored when `review-prs` is run with `--pr`. |
 | `vibe_heal_timeout` | integer | `600` | Timeout (seconds) for the per-PR `vibe_heal review` run. |
 | `vibe_heal_post_timeout` | integer | `120` | Timeout (seconds) for posting/finalizing vibe_heal output (e.g. writing results, comments) after the run itself completes. |
@@ -94,7 +94,7 @@ review or pre-commit step.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | boolean | `false` | Turns on the `focused-review` command, including its resolve and minimise behaviour for false-positive comments (see below). It is independent of `vibe_heal.enabled`. |
-| `vibe_types_repo` | path | `"~/.harness/vendor/vibe-types"` | Local git checkout of `jpablo/vibe-types`, used to resolve knowledge-file content (via `git show <commit>:<path>`) for SonarQube comments that cite it. `~` is expanded. There is no packaged fallback; clone the repository to this path or set the key. |
+| `vibe_types_repo` | path | `"~/.harness/vendor/vibe-types"` | Local git checkout of `jpablo/vibe-types`, used to resolve knowledge-file content (via `git show <commit>:<path>`) for SonarQube comments that cite it. `~` is expanded. There is no packaged fallback. Clone the repository to this path or set the key. |
 
 Enabling `focused_review.enabled` now also enables the resolve and minimise
 behaviour. When the backend judges a target comment a false positive, the harness first posts a reply that states the finding is a false positive and ends with the `[focused-review-bot]` marker. It then resolves the review thread (`resolveReviewThread`). It then minimises the root comment (`minimizeComment`, classifier `RESOLVED`). No new config field exists for this behaviour,
@@ -209,17 +209,17 @@ elsewhere.
 `[harness] knowledge_dir` defaults to `~/.harness/knowledge` (prompt templates at `<knowledge_dir>/pr-review/*.md`).
 When the key is not set and that directory does not exist, the knowledge shipped inside the package
 (`src/dotharness/knowledge/`, found with `importlib.resources`) is used. A `knowledge_dir` set explicitly is used as
-written and never falls back; `pr_review validate` reports it when the path does not exist. This is the only setting
+written and never falls back. `pr_review validate` reports it when the path does not exist. This is the only setting
 with a packaged fallback. Note that the template written by `pr_review init` sets `knowledge_dir` explicitly, which opts
 out of the fallback.
 
 ### Other installed-package notes
 
-- Comments cache: `~/.harness/cache/pr-<n>-comments.json` holds the comments fetched for PR `<n>`; the location is
+- Comments cache: `~/.harness/cache/pr-<n>-comments.json` holds the comments fetched for PR `<n>`. The location is
   unchanged from the original tool.
 - Harness-repo guard: backend runs watch the dotharness source checkout's HEAD to catch a runaway backend that commits
   into it. When the package is installed outside a checkout (for example in `site-packages`) there is nothing to watch
-  and this guard is skipped; the repo-identity check for the configured repository (`[repo] name`) always runs. See
+  and this guard is skipped. The repo-identity check for the configured repository (`[repo] name`) always runs. See
   `docs/design/shared-async-layer.md`, "I-3 packaging-sensitive paths and repo guard".
 
 ## Full example

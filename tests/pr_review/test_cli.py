@@ -220,12 +220,12 @@ def test_run_auto_approve_disabled_is_noop(minimal_toml, tmp_xdg):
     mock_token.assert_not_called()
 
 
-def test_auto_approve_run_takes_lock(minimal_toml, tmp_xdg):
+async def test_auto_approve_run_takes_lock(minimal_toml, tmp_xdg):
     from dotharness.pr_review.config import load_config
     from dotharness.pr_review.runners import auto_approve
 
     with patch("dotharness.pr_review.runners.auto_approve.acquire_lock") as mock_lock:
-        auto_approve.run(load_config(minimal_toml))
+        await auto_approve.run(load_config(minimal_toml))
     mock_lock.assert_called_once()
 
 
@@ -403,3 +403,12 @@ def test_run_review_prs_base_analysis_error_exits_1(minimal_toml, tmp_xdg, caplo
     assert len(records) == 1
     assert not records[0].exc_info
     assert "git checkout failed" in records[0].getMessage()
+
+
+def test_init_aborts_if_exists_exact_stderr(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".harness.toml").write_text("existing")
+    result = CliRunner().invoke(cli, ["init"])
+    assert result.exit_code == 1
+    assert result.stderr == f"Error: .harness.toml already exists in {tmp_path.resolve()}\n"
+    assert result.stdout == ""

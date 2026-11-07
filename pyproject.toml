@@ -132,6 +132,7 @@ preview = true
 known_first_party = ["dotharness"]
 
 [tool.coverage.report]
+fail_under = 91
 skip_empty = true
 
 [tool.coverage.run]

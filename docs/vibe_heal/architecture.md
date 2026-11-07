@@ -160,11 +160,11 @@ class VibeHealConfig(BaseSettings):
   - `build_command(project_key, project_name, sources) -> list[str]` — returns the full scanner command
     - **No file**: passes `projectKey`, `projectName`, `host.url`, auth, and `sources` as `-D` flags
     - **File exists**: starts with `["sonar-scanner"]` and appends only flags missing from both the file and the environment
-  - `patched(project_key, project_name)` — context manager; if the file exists and its project key differs from the requested one, replaces `sonar.projectKey` / `sonar.projectName` for the duration, then restores the original content
+  - `patched(project_key, project_name)` — context manager. If the file exists and its project key differs from the requested one, it replaces `sonar.projectKey` / `sonar.projectName` for the duration, then restores the original content.
     - Writes a recovery comment block before patching so the file can be restored manually if the process is interrupted
     - On `OSError` during restore, logs the original content (auth properties redacted)
 
-**Auth / host-URL detection** — checks environment variables first (`SONAR_TOKEN`, `SONARQUBE_TOKEN`, `SONAR_LOGIN` for auth; `SONAR_HOST_URL`, `SONARQUBE_HOST_URL` for the host URL), then falls back to scanning non-commented lines in the properties file. A flag is only appended when it is absent from both sources.
+**Auth / host-URL detection** — checks environment variables first — `SONAR_TOKEN`, `SONARQUBE_TOKEN`, `SONAR_LOGIN` for auth, and `SONAR_HOST_URL`, `SONARQUBE_HOST_URL` for the host URL — then falls back to scanning non-commented lines in the properties file. The handler appends a flag only when it is absent from both sources.
 
 **`AnalysisRunner` integration** (`sonarqube/analysis_runner.py`):
 - Instantiates `SonarPropertiesHandler` on every `run_analysis` call
@@ -179,7 +179,7 @@ class VibeHealConfig(BaseSettings):
 **Key Classes**:
 - `IssueProcessor`: Business logic for issue processing
   - `sort_issues(issues: list[SonarQubeIssue]) -> list[SonarQubeIssue]`
-    - Sort by line number descending (reverse order)
+    - Sort by line number, descending
     - Handle issues without line numbers (skip or put at end)
   - `filter_fixable(issues: list[SonarQubeIssue]) -> list[SonarQubeIssue]`
     - Remove won't-fix, false-positives
@@ -190,7 +190,7 @@ class VibeHealConfig(BaseSettings):
 **Purpose**: Abstract interface for AI coding tools with multiple implementations.
 
 **Key Classes**:
-- `AIToolType` (Enum): Enum defining supported AI tools
+- `AIToolType`: Enum for supported AI tools
   ```python
   class AIToolType(str, Enum):
       CLAUDE_CODE = "claude-code"
@@ -224,7 +224,7 @@ class VibeHealConfig(BaseSettings):
           """Attempt to fix the issue"""
   ```
 
-- **Shared launcher**: `ClaudeCodeTool` and `OpenCodeTool` do not assemble argv or spawn processes themselves. Both call `launch` in `dotharness/ai_backend.py`, which builds the backend command, runs it asynchronously through `dotharness/subprocess_runner.py`, enforces the timeout and kills the whole process group on expiry. Prompt files are written under `~/.local/share/dotharness/tmp`, not the working tree. See `docs/design/shared-async-layer.md`.
+- **Shared launcher**: `ClaudeCodeTool` and `OpenCodeTool` do not assemble argv or spawn processes themselves. Both call `launch` in `dotharness/ai_backend.py`. It builds the backend command and runs it asynchronously through `dotharness/subprocess_runner.py`. It enforces the timeout and kills the whole process group on expiry. Prompt files are written under `~/.local/share/dotharness/tmp`, not the working tree. See `docs/design/shared-async-layer.md`.
 - **Claude timeout (D-6)**: one value, `CLAUDE_TIMEOUT_SECONDS = 1200` (20 minutes), is passed to the launcher and printed in the timeout message. `OpenCodeTool` also defaults to 1200 seconds.
 
 - `ClaudeCodeTool(AITool)`: Claude Code implementation
@@ -479,8 +479,8 @@ def fix(
 
 ### Rollback Strategy
 - Each fix is a separate commit
-- If something goes wrong, user can `git reset HEAD~N` to undo N fixes
-- In future: Could add `vibe_heal undo` command
+- If something goes wrong, the user can run `git reset HEAD~N` to undo N fixes
+- In the future: could add a `vibe_heal undo` command
 
 ## Configuration Priority
 

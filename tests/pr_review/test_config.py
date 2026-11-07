@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from dotharness.gh import build_subprocess_env
 from dotharness.pr_review.config import CiFixConfig, ConfigError, HarnessSection, MergeConfig, PreCommand, load_config
 from dotharness.pr_review.lock import working_dir_lock_key
-from dotharness.pr_review.runners.common import build_subprocess_env
 
 
 def test_load_minimal(minimal_toml):
@@ -662,7 +662,7 @@ def test_vibe_types_repo_default_has_no_packaged_fallback(tmp_path, monkeypatch)
     assert not cfg.focused_review.vibe_types_repo.exists()
 
 
-def test_fetch_pr_comments_uses_per_call_output_file_not_shared_cache(tmp_path, monkeypatch):
+async def test_fetch_pr_comments_uses_per_call_output_file_not_shared_cache(tmp_path, monkeypatch):
     # The shared ~/.harness/cache/pr-<n>-comments.json has no repo component, so two repos with the same
     # PR number could read each other's comments. fetch_pr_comments must pass its own --output file.
     import json
@@ -676,14 +676,14 @@ def test_fetch_pr_comments_uses_per_call_output_file_not_shared_cache(tmp_path, 
     shared.write_text(json.dumps({"inline_comments": [{"id": "OTHER_REPO"}]}))
     seen = {}
 
-    def fake_run_cmd(cmd, **_kwargs):
+    async def fake_run_cmd(cmd, **_kwargs):
         out = Path(cmd[cmd.index("--output") + 1])
         seen["out"] = out
         out.write_text(json.dumps({"inline_comments": [{"id": "MINE"}]}))
         return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
     monkeypatch.setattr(common, "run_cmd", fake_run_cmd)
-    comments = common.fetch_pr_comments(12, Path("pr-comments.py"), str(tmp_path), {})
+    comments = await common.fetch_pr_comments(12, Path("pr-comments.py"), str(tmp_path), {})
     assert [c["id"] for c in comments] == ["MINE"]
     assert seen["out"] != shared
     assert not seen["out"].exists()  # temp dir cleaned up

@@ -9,7 +9,7 @@ It sits between `review-prs` (which posts the terse SonarQube findings) and the 
 pr_review run [--config PATH] [--verbose] focused-review
 ```
 
-The CLI name is `pr_review`; the config file names (`.harness*.toml`) keep the old prefix on purpose.
+The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the old prefix on purpose.
 
 - `--config PATH` — path to the `.harness.toml` config file. If omitted, it defaults to `./.harness.toml` (resolved relative to the current directory). The option belongs to the `run` group, so it must precede `focused-review` on the command line.
 - `--verbose` — enables DEBUG-level logging. It also mirrors log output to stdout, even when stdout is not a TTY. The command always writes logs to `~/.local/share/dotharness/logs/focused-review/<date>.log`.
@@ -20,7 +20,7 @@ The CLI name is `pr_review`; the config file names (`.harness*.toml`) keep the o
 2. If `focused_review.enabled` is `false`, the command logs and exits. The whole command is a no-op. The two toggles are not linked: `focused_review.enabled` is independent of `vibe_heal.enabled`.
 3. The command resolves a GitHub token via `harness.gh_token_cmd`. It then builds a subprocess environment from `harness.path_prepend` / `harness.env` plus `GITHUB_TOKEN`.
 4. The command loads the prompt template `pr-review/focused-review.md` from `harness.knowledge_dir`. It also constructs a `Backend` for `harness.backend` (`opencode` or `claude`). It merges `GITHUB_TOKEN` into the backend's environment.
-5. The command lists the open PRs, drafts included. It keeps a PR when the currently active `gh` account (`@me`) is the author, assignee, or has a review requested. It deduplicates by PR number and sorts the result ascending. The listing uses `list_open_prs_for_current_user`, which does **not** read `vibe_heal.authors`. `review-prs` uses `list_open_prs_matching_authors` against the configured author list instead. If no PR is eligible, the command exits.
+5. The command lists the open PRs, drafts included. It keeps a PR when the currently active `gh` account (`@me`) is the author or assignee, or has a review requested. It deduplicates by PR number and sorts the result ascending. The listing uses `list_open_prs_for_current_user`, which does **not** read `vibe_heal.authors`. `review-prs` uses `list_open_prs_matching_authors` against the configured author list instead. If no PR is eligible, the command exits.
 6. The command detaches HEAD and records the current commit so it can restore the working tree after each PR.
 7. For each eligible PR, in ascending order:
    - It fetches all comments via `scripts/pr-comments.py fetch --pr <N>` (the same mechanism `address-comments` uses), without checking out the branch yet.
@@ -28,8 +28,8 @@ The CLI name is `pr_review`; the config file names (`.harness*.toml`) keep the o
      - it already has a reply containing the `[focused-review-bot]` marker
      - its thread is resolved
      - its root comment is minimized
-   - If none match, it moves on to the next PR without checking out anything.
-   - It then fetches the PR's review-thread state through the GraphQL `reviewThreads` query: the thread id, `isResolved`, and for each comment its node id, `databaseId` and `isMinimized`. It merges this into the comments fetched by `scripts/pr-comments.py fetch --pr <N>`, matching by `databaseId`. The resolved-thread and minimized-comment skip applies to the merged data, so a resolved thread is skipped whoever resolved it. If the thread-state fetch fails, the command logs a warning and skips that PR for the run. It then moves on to the next PR. The command does not check out the branch at this step, because the fetch precedes the checkout.
+   - If none match, it moves to the next PR without checking out anything.
+   - It then fetches the PR's review-thread state through the GraphQL `reviewThreads` query: the thread id, `isResolved`, and for each comment its node id, `databaseId` and `isMinimized`. It merges this into the comments fetched by `scripts/pr-comments.py fetch --pr <N>`, matching by `databaseId`. The resolved-thread and minimized-comment skip applies to the merged data, so a resolved thread is skipped whoever resolved it. If the thread-state fetch fails, the command logs a warning and skips that PR for the run. It then moves to the next PR. The command does not check out the branch at this step, because the fetch precedes the checkout.
    - Otherwise, it fetches and checks out the PR's head branch (using the shared rebase/reset behavior — see [Shared behavior](index.md#shared-behavior)), then for each matching comment:
      - It resolves the cited knowledge file's content by running `git show <commit>:<path>` inside `focused_review.vibe_types_repo`. If the commit is not available locally, it fetches the commit and retries once. If that still fails, it fetches `origin/main` and tries `git show origin/main:<path>` instead. If all three attempts fail, it logs a warning and skips this comment.
      - It builds a prompt from the `focused-review.md` template, the comment's file/line/URL/body/diff-hunk, and the resolved knowledge-file content. The prompt also carries the thread node id and the comment node id from the thread-state fetch, so the backend can act on them.

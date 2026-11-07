@@ -1,4 +1,4 @@
-"""Subprocess adapter over the shared layer (sync wrapper; never call from a running event loop).
+"""Async subprocess adapter over the shared layer.
 
 ``run_command`` wraps :func:`dotharness.subprocess_runner.run` and keeps the ``CommandResult`` contract the
 orchestrator and the pick clients use. Neither argv nor env is logged here. The agent launcher lives in
@@ -7,7 +7,6 @@ orchestrator and the pick clients use. Neither argv nor env is logged here. The 
 
 from __future__ import annotations
 
-import asyncio
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -28,7 +27,7 @@ class CommandResult:
     stderr: str = ""
 
 
-def run_command(
+async def run_command(
     argv: Sequence[str],
     cwd: Path | None = None,
     env: Mapping[str, str] | None = None,
@@ -40,12 +39,10 @@ def run_command(
     timeout (``DEFAULT_COMMAND_TIMEOUT`` when none is given) as exit code 124 with ``timed out after {timeout}s`` on
     stderr. The child runs in its own process group, which is killed on timeout (SIGTERM, then SIGKILL after 5 s).
     """
-    result = asyncio.run(
-        run(
-            list(argv),
-            cwd=cwd,
-            env={**os.environ, **env} if env else None,
-            timeout=DEFAULT_COMMAND_TIMEOUT if timeout is None else timeout,
-        )
+    result = await run(
+        list(argv),
+        cwd=cwd,
+        env={**os.environ, **env} if env else None,
+        timeout=DEFAULT_COMMAND_TIMEOUT if timeout is None else timeout,
     )
     return CommandResult(result.returncode, result.stdout, result.stderr)

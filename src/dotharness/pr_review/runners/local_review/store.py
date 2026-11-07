@@ -6,12 +6,13 @@ Imports only `types`, `findings` and `config` (type hints); never the backend, l
 from __future__ import annotations
 
 import json
-import os
 import shutil
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from dotharness.fileio import atomic_write_text
+from dotharness.paths import DATA_DIR_TILDE
 from dotharness.pr_review.runners.local_review.findings import (
     _FIELD_RE,
     COMMIT_FIELD_RE,
@@ -24,7 +25,7 @@ from dotharness.pr_review.runners.local_review.types import LocalReviewError, Lo
 if TYPE_CHECKING:
     from dotharness.pr_review.config import HarnessConfig
 
-DEFAULT_OUTPUT_ROOT = Path("~/.local/share/dotharness/reviews")
+DEFAULT_OUTPUT_ROOT = Path(f"{DATA_DIR_TILDE}/reviews")
 MANIFEST_NAME = "manifest.json"
 MANIFEST_VERSION = 1
 INDEX_NAME = "index.md"
@@ -75,13 +76,6 @@ def _file_output_path(review_dir: Path, changed_file: str) -> Path:
     return review_dir / FILES_DIR / (changed_file + ".md")
 
 
-def _atomic_write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(f"{path.suffix}.tmp.{os.getpid()}")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
-
-
 def read_manifest(review_dir: Path) -> dict | None:
     """The manifest, or None when absent, corrupt or of another `version` (all passes then run)."""
     path = review_dir / MANIFEST_NAME
@@ -95,7 +89,7 @@ def read_manifest(review_dir: Path) -> dict | None:
 
 
 def write_manifest(review_dir: Path, manifest: dict) -> None:
-    _atomic_write_text(review_dir / MANIFEST_NAME, json.dumps(manifest, indent=2) + "\n")
+    atomic_write_text(review_dir / MANIFEST_NAME, json.dumps(manifest, indent=2) + "\n")
 
 
 def _new_manifest(target: LocalReviewTarget) -> dict:
@@ -128,7 +122,7 @@ def _write_index(review_dir: Path, manifest: dict, files: Sequence[str]) -> None
         "",
     ]
     lines.extend(f"- [{f}]({FILES_DIR}/{f}.md): {status(manifest['files'].get(f))}" for f in files)
-    _atomic_write_text(review_dir / INDEX_NAME, "\n".join(lines) + "\n")
+    atomic_write_text(review_dir / INDEX_NAME, "\n".join(lines) + "\n")
 
 
 def _count_resolved(review_dir: Path) -> dict[str, int]:
@@ -195,4 +189,4 @@ def write_finding_status(source_file: Path, finding_id: str, status: str, commit
             lines[commit_idx] = f"- commit: {commit}"
         else:
             lines.insert(status_idx + 1, f"- commit: {commit}")
-    _atomic_write_text(source_file, "\n".join(lines))
+    atomic_write_text(source_file, "\n".join(lines))

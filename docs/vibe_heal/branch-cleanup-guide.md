@@ -4,7 +4,7 @@
 
 The `vibe_heal cleanup` command automatically fixes all SonarQube issues in modified files of your feature branch before code review. This ensures pull requests have no new code quality issues.
 
-Two related commands are covered here as well: `dedupe-branch` (duplications) and `cleanup-pr` (only findings on lines your branch changed, see [PR-Scoped Cleanup](#pr-scoped-cleanup-cleanup-pr)).
+This guide also covers two related commands: `dedupe-branch` (duplications) and `cleanup-pr` (only findings on lines your branch changed, see [PR-Scoped Cleanup](#pr-scoped-cleanup-cleanup-pr)).
 
 ## When to Use
 
@@ -75,7 +75,7 @@ AI_TOOL=claude-code  # or "opencode"
 
 ## sonar-project.properties Support
 
-If your project already has a `sonar-project.properties` file at the repository root, vibe_heal detects it automatically and adjusts its scanner invocation accordingly.
+If your project already has a `sonar-project.properties` file at the repository root, vibe_heal detects it automatically and adjusts its scanner invocation.
 
 ### How It Works
 
@@ -91,11 +91,11 @@ sonar-scanner -Dsonar.projectKey=... -Dsonar.projectName=... -Dsonar.host.url=..
 sonar-scanner  # -Dsonar.token=... added only if no auth found in file or env
 ```
 
-Auth presence is checked in both the properties file itself and the environment variables `SONAR_TOKEN`, `SONARQUBE_TOKEN`, `SONAR_LOGIN`. Host URL is similarly checked against `SONAR_HOST_URL` and `SONARQUBE_HOST_URL`.
+vibe_heal checks for auth in both the properties file and the environment variables `SONAR_TOKEN`, `SONARQUBE_TOKEN`, `SONAR_LOGIN`. It checks the host URL against `SONAR_HOST_URL` and `SONARQUBE_HOST_URL` the same way.
 
 ### Temporary Project Patching
 
-`cleanup` (and `dedupe-branch`) create a **temporary** SonarQube project for the analysis run. Because the properties file governs the project key, vibe_heal patches `sonar.projectKey` and `sonar.projectName` in the file for the duration of the analysis, then restores the original content.
+`cleanup` (and `dedupe-branch`) create a **temporary** SonarQube project for the analysis run. The properties file governs the project key. So vibe_heal patches `sonar.projectKey` and `sonar.projectName` in the file for the duration of the analysis, then restores the original content.
 
 Before patching, vibe_heal writes a recovery comment block so the file can be restored manually if the process is interrupted:
 
@@ -108,7 +108,7 @@ sonar.projectKey=my-project_user_example_com_feature_new_api_260525-1430
 sonar.projectName=vibe_heal cleanup: my-project (feature/new-api @ 2026-05-25 14:30)
 ```
 
-On normal completion the original values are restored automatically.
+On normal completion, vibe_heal restores the original values automatically.
 
 ### If sonar-scanner Reports Authentication Errors
 
@@ -310,7 +310,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 
 ## PR-Scoped Cleanup (`cleanup-pr`)
 
-`vibe_heal cleanup-pr` fixes only the findings **your branch introduced**: SonarQube issues and duplications on lines changed relative to the base branch. Pre-existing findings elsewhere in the same files are left alone. Use it when `cleanup` would touch too much of a large, legacy file.
+`vibe_heal cleanup-pr` fixes only the findings **your branch introduced**: SonarQube issues and duplications on lines changed relative to the base branch. It leaves pre-existing findings elsewhere in the same files alone. Use it when `cleanup` would touch too much of a large, legacy file.
 
 `cleanup-pr` does **not** replace `cleanup` or `dedupe-branch`, which keep whole-file semantics. It also does no GitHub interaction and never pushes: commits stay local. To report findings on the PR afterwards, run `vibe_heal review --post`.
 
@@ -334,11 +334,11 @@ vibe_heal cleanup-pr --include-main-duplications
 
 | Flag | Default | Behavior |
 |---|---|---|
-| `--base-branch`, `-b` | `origin/main` | Base to diff against. Plain `origin/main`; no `gh` auto-detection |
+| `--base-branch`, `-b` | `origin/main` | Base to diff against. Plain `origin/main`, no `gh` auto-detection |
 | `--max-iterations`, `-i` | `10` | Maximum analyze -> fix rounds for the whole branch |
 | `--pattern`, `-p` | none | Glob filters (repeatable), same as `cleanup` (matched with `Path.match`) |
-| `--min-severity` | none | Minimum severity (`BLOCKER`, `CRITICAL`, `MAJOR`, `MINOR`, `INFO`); applies to issues only |
-| `--dry-run` | off | Run analysis and scoping, attempt each in-scope fix with the AI tool, and report what would be fixed. No commits are made; the uncommitted edits remain in the working tree (discard with `git checkout -- .`). Runs a single round |
+| `--min-severity` | none | Minimum severity (`BLOCKER`, `CRITICAL`, `MAJOR`, `MINOR`, `INFO`). Applies to issues only |
+| `--dry-run` | off | Run analysis and scoping, attempt each in-scope fix with the AI tool, and report what would be fixed. No commits are made. The uncommitted edits remain in the working tree (discard with `git checkout -- .`). Runs a single round |
 | `--ai-tool` | auto-detect | Same as `cleanup` |
 | `--env-file` | `.env.vibeheal` / `.env` | Same as `cleanup` |
 | `--verbose`, `-v` | off | Same as `cleanup` |
@@ -348,29 +348,29 @@ vibe_heal cleanup-pr --include-main-duplications
 
 ### What "in scope" means
 
-- **Issues** are kept if they sit on lines added or modified by the branch, plus a 3-line trailing window (the same filter `review` uses).
-- **Duplications** are fixed only when the duplicated block in your file intersects lines strictly changed by the branch.
-- Issue fixes stay within one file. A duplication refactor may edit other files (for example when extracting a shared helper); a warning is printed when a refactor touches a file outside the branch diff. Review those commits.
+- **Issues**: cleanup-pr keeps them if they sit on lines added or modified by the branch, plus a 3-line trailing window (the same filter `review` uses).
+- **Duplications**: cleanup-pr fixes them only when the duplicated block in your file intersects lines strictly changed by the branch.
+- Issue fixes stay within one file. A duplication refactor may edit other files (for example when extracting a shared helper). cleanup-pr prints a warning when a refactor touches a file outside the branch diff. Review those commits.
 
 ### Workflow
 
 1. **Preconditions** (all checked before any SonarQube work):
    - You are in a git repository and the base branch exists.
-   - An AI tool is available, even with `--dry-run` (the in-scope fixers invoke it; only the main-duplication counts are reported without an AI call).
+   - An AI tool is available, even with `--dry-run`. The in-scope fixers invoke it. Only the main-duplication counts are reported without an AI call.
    - The working tree has no modified or staged files (untracked files are fine).
-   - The base ref's remote is fetched, also in `--dry-run`. If the fetch fails, the command refuses to run; there is no fallback to the local ref.
+   - The base ref's remote is fetched, also in `--dry-run`. If the fetch fails, it refuses to run. There is no fallback to the local ref.
    - The base tip is an ancestor of `HEAD`. Otherwise it stops with `Branch is not up to date with origin/main; rebase or merge origin/main first`. A branch that merged the base in also passes. The rule applies to any `--base-branch`.
 2. **File selection**: modified files versus the base, then the `--pattern` filter. An empty selection is a success with zero counts.
 3. **Baseline scan** (only with `--include-main-duplications`, see below).
-4. **Temporary project**: a temporary SonarQube project is created for the analysis.
-5. **Iteration loop**, up to `--max-iterations` rounds: analyze the whole repository, recompute the diff against the base, then for each file fix in-scope duplications first and issues second. If a duplication commit landed in a file, that file's issues are deferred to the next round, so they are re-evaluated against the new code. Issues introduced by cleanup-pr's own commits are in scope on the next round. The loop stops early once nothing in scope remains, and waits 5 seconds between rounds.
+4. **Temporary project**: the command creates a temporary SonarQube project for the analysis.
+5. **Iteration loop**, up to `--max-iterations` rounds: analyze the whole repository, recompute the diff against the base, then for each file fix in-scope duplications first and issues second. If a duplication commit lands in a file, the loop defers that file's issues to the next round and re-evaluates them against the new code. Issues introduced by cleanup-pr's own commits are in scope on the next round. The loop stops early once nothing in scope remains. It waits 5 seconds between rounds.
 6. **Cleanup**: the temporary project is always deleted afterwards. A deletion failure is only a warning.
 
 ### Main duplications (`--include-main-duplications`)
 
-> **Warning:** this flag runs a baseline scan of the base ref, in a temporary detached `git worktree`, against your **real** SonarQube project key. This **overwrites the real project's analysis on the SonarQube server, including with `--dry-run`**. With the flag, a run performs two full-repository analyses. The scan is skipped when no files are selected; if it fails the run stops with `Baseline scan failed: ...`.
+> **Warning:** this flag runs a baseline scan of the base ref, in a temporary detached `git worktree`, against your **real** SonarQube project key. This **overwrites the real project's analysis on the SonarQube server, including with `--dry-run`**. With the flag, a run performs two full-repository analyses. The scan is skipped when no files are selected. If it fails, the run stops with `Baseline scan failed: ...`.
 
-A *main duplication* is a duplication that existed in main, was modified or removed by your branch, and is no longer active. For each one, the AI tool is asked to extract the shared code into a helper, update all other locations, and then re-apply your branch's change on top, with no behavior change beyond your diff. Each one gets its own commit. With `--dry-run` they are only counted as would-fix.
+A *main duplication* is a duplication that existed in main, was modified or removed by your branch, and is no longer active. For each one, the command asks the AI tool to extract the shared code into a helper, update all other locations, and then re-apply your branch's change on top, with no behavior change beyond your diff. Each one gets its own commit. With `--dry-run` they are only counted as would-fix.
 
 These mechanics are the least proven part of the command. Review those commits carefully.
 
@@ -408,13 +408,17 @@ Per-File Results:
 ✨ Branch cleanup (PR scope) complete!
 ```
 
-Out-of-scope counts show what was deliberately left alone. With `--dry-run` the summary adds `Dry run: no changes were made`, meaning no commits: in-scope fixes were still attempted by the AI tool, and their uncommitted edits remain in the working tree — discard them with `git checkout -- .` before the next run. The summary also lists the total of main duplications fixed and, when duplication refactors edited files outside the branch diff, those file paths. Per-file lines add `main duplications: N fixed, M skipped` when there is anything to report. The "Max analysis rounds" header line reflects `--max-iterations`.
+Out-of-scope counts show what was deliberately left alone. With `--dry-run` the summary adds `Dry run: no changes were made`, meaning no commits. The AI tool still attempted in-scope fixes. Their uncommitted edits remain in the working tree. Discard them with `git checkout -- .` before the next run. The summary also lists the total of main duplications fixed and, when duplication refactors edited files outside the branch diff, those file paths. Per-file lines add `main duplications: N fixed, M skipped` when there is anything to report. The "Max analysis rounds" header line reflects `--max-iterations`.
 
 ### Failure behavior
 
-- **Nothing is reverted.** A failed AI attempt is counted and processing continues, but its edits stay in the working tree. The next fix attempt then aborts with a dirty-working-tree error, so a single failed fix can end the whole run with a failed result. Commits made earlier are kept. Discard (`git checkout -- .`) or commit the leftover edits by hand before re-running.
+- **Nothing is reverted.** The command counts a failed AI attempt and continues processing. The failed attempt's edits stay in the working tree. The next fix attempt then aborts with a dirty-working-tree error, so a single failed fix can end the whole run with a failed result. The command keeps commits made earlier. Discard (`git checkout -- .`) or commit the leftover edits by hand before re-running.
 - A failed analysis returns a failed result immediately.
-- Exit codes: `Configuration error: ...` exits 1; any other exception prints `Error: ...` and exits 1; a failed result exits 1 after the per-file table; a failed precondition prints `Error: ...` and exits 1.
+- Exit codes:
+  - `Configuration error: ...` exits 1
+  - Any other exception prints `Error: ...` and exits 1
+  - A failed result exits 1 after the per-file table
+  - A failed precondition prints `Error: ...` and exits 1
 
 ## Pre-commit Hook Compatibility
 
@@ -422,7 +426,7 @@ vibe_heal automatically handles projects that use [pre-commit](https://pre-commi
 
 ### The Problem
 
-Hooks like `ruff-format` that auto-fix staged files exit with a non-zero code, which would normally abort the commit and leave orphaned staged changes — interrupting batch commands like `cleanup` and `dedupe-branch`.
+Hooks like `ruff-format` that auto-fix staged files exit with a non-zero code. That would normally abort the commit and leave orphaned staged changes. This interrupts batch commands like `cleanup` and `dedupe-branch`.
 
 ### How vibe_heal Solves It
 
@@ -461,7 +465,7 @@ PRE_COMMIT_COMMAND=my-hook-runner --check
 
 ### If Commits Still Fail Due to Hooks
 
-vibe_heal includes a one-retry safety net: if `git commit` fails, it re-stages any files modified during the commit attempt and tries once more. If the second attempt also fails, a `GitOperationError` is raised with details.
+vibe_heal includes a one-retry safety net: if `git commit` fails, it re-stages any files modified during the commit attempt and tries once more. If the second attempt also fails, it raises a `GitOperationError` with details.
 
 If you're still seeing failures, try disabling hooks temporarily to isolate the issue:
 
@@ -655,7 +659,7 @@ vibe_heal cleanup --pattern "src/**/*.py" --pattern "tests/**/*.py"
 
 ### Dry-run equivalent
 
-There's no dry-run for `cleanup` command, but you can:
+There's no dry-run for the `cleanup` command, but you can:
 
 1. Run analysis manually:
    ```bash
@@ -792,7 +796,7 @@ cleanup:
 
 ### Q: Can I cancel cleanup mid-way?
 
-**A**: Yes, press Ctrl+C. The temporary project will be cleaned up, and commits made so far will remain.
+**A**: Yes, press Ctrl+C. The command cleans up the temporary project. Commits made so far remain.
 
 ### Q: What happens if my internet connection drops?
 

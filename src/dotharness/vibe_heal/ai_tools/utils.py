@@ -1,8 +1,10 @@
 """AI tool utilities."""
 
-import asyncio
+import math
 from pathlib import Path
 from typing import NamedTuple
+
+from dotharness.subprocess_runner import run
 
 
 class CommandResult(NamedTuple):
@@ -27,26 +29,13 @@ async def run_command(
     Returns:
         A CommandResult with the outcome.
     """
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=Path.cwd(),
-    )
-
-    try:
-        stdout_bytes, stderr_bytes = await process.communicate()
-    except (TimeoutError, asyncio.CancelledError):
-        process.kill()
-        await process.wait()
-        raise
-
-    stdout = stdout_bytes.decode() if stdout_bytes else ""
-    stderr = stderr_bytes.decode() if stderr_bytes else ""
-
+    # No own deadline: callers bound the call with asyncio.timeout(), which cancels run() and kills the group.
+    result = await run(cmd, cwd=Path.cwd(), timeout=math.inf)
+    if result.not_found:
+        raise FileNotFoundError(result.stderr)
     return CommandResult(
-        success=process.returncode == 0,
-        stdout=stdout,
-        stderr=stderr,
-        exit_code=process.returncode,
+        success=result.returncode == 0,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        exit_code=result.returncode,
     )

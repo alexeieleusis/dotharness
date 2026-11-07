@@ -9,6 +9,8 @@ from contextlib import asynccontextmanager
 from typing import Any, cast
 from urllib.parse import urlparse
 
+from dotharness.gh import gh_argv
+from dotharness.subprocess_runner import run
 from dotharness.vibe_heal.ai_tools.utils import CommandResult, run_command
 from dotharness.vibe_heal.output import warn
 from dotharness.vibe_heal.review.models import FileReview, ReviewIssue, ReviewResult
@@ -46,6 +48,7 @@ def _truncate_body(body: str) -> str:
 
 
 _MAX_OVERFLOW_BODY_LINES = 100
+_POST_TIMEOUT_SECONDS = 60
 
 
 @asynccontextmanager
@@ -82,7 +85,7 @@ class GitHubReviewClient:
             OSError: If gh is not installed or not in PATH.
         """
         try:
-            result = await _run_gh(["gh", "--version"], 10)
+            result = await _run_gh(gh_argv("--version"), 10)
         except OSError as exc:
             msg = "gh CLI is not installed or not in PATH. Install it from https://cli.github.com/"
             raise OSError(msg) from exc
@@ -92,7 +95,7 @@ class GitHubReviewClient:
 
     async def _view_pr_field(self, field: str) -> CommandResult:
         """Run `gh pr view --json <field>` for the current branch's PR."""
-        return await _run_gh(["gh", "pr", "view", "--json", field], 30)
+        return await _run_gh(gh_argv("pr", "view", "--json", field), 30)
 
     async def detect_pr(self, pr_number: int | None = None) -> int:
         """Get the PR number for review posting.
@@ -176,15 +179,14 @@ class GitHubReviewClient:
 
         try:
             await self._post_json(
-                [
-                    "gh",
+                gh_argv(
                     "api",
                     "--method",
                     "POST",
                     f"/repos/{owner_repo}/pulls/{pr_number}/reviews",
                     "--input",
                     "-",
-                ],
+                ),
                 payload,
             )
         except GitHubTimeoutError:
@@ -199,15 +201,14 @@ class GitHubReviewClient:
             fallback = self._build_fallback_payload(report)
             try:
                 await self._post_json(
-                    [
-                        "gh",
+                    gh_argv(
                         "api",
                         "--method",
                         "POST",
                         f"/repos/{owner_repo}/pulls/{pr_number}/reviews",
                         "--input",
                         "-",
-                    ],
+                    ),
                     fallback,
                 )
             except GitHubReviewError as e:
@@ -353,28 +354,14 @@ class GitHubReviewClient:
         Raises:
             GitHubReviewError: If the command fails or times out.
         """
-        stdin_data = json.dumps(payload).encode()
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            async with asyncio.timeout(60):
-                stdout_bytes, stderr_bytes = await process.communicate(stdin_data)
-        except TimeoutError:
-            msg = "gh API call timed out after 60s"
-            raise GitHubTimeoutError(msg) from None
-        finally:
-            # Covers timeout and cancellation (Ctrl-C, outer asyncio.timeout): never leave gh running.
-            if process.returncode is None:
-                process.kill()
-                await asyncio.shield(process.wait())
-        if process.returncode != 0:
-            stderr_msg = stderr_bytes.decode().strip()
-            stdout_msg = stdout_bytes.decode().strip()
-            parts = [p for p in (stderr_msg, stdout_msg) if p]
+        result = await run(cmd, timeout=_POST_TIMEOUT_SECONDS, stdin=json.dumps(payload))
+        if result.timed_out:
+            msg = f"gh API call timed out after {_POST_TIMEOUT_SECONDS}s"
+            raise GitHubTimeoutError(msg)
+        if result.not_found:
+            raise FileNotFoundError(result.stderr)
+        if result.returncode != 0:
+            parts = [p for p in (result.stderr.strip(), result.stdout.strip()) if p]
             error_msg = " — ".join(parts) if parts else "Unknown error"
             raise GitHubReviewError(error_msg)
 
@@ -387,7 +374,7 @@ class GitHubReviewClient:
             String in 'owner/repo' format.
         """
         result = await _run_gh(
-            ["gh", "repo", "view", "--json", "owner,name", "--jq", '"\\(.owner.login)/\\(.name)"'],
+            gh_argv("repo", "view", "--json", "owner,name", "--jq", '"\\(.owner.login)/\\(.name)"'),
             15,
         )
         if result.success and result.stdout.strip():

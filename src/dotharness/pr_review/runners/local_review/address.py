@@ -8,9 +8,10 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotharness.gh import build_subprocess_env
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
-from dotharness.pr_review.runners.common import build_subprocess_env, get_file_diff, get_vibe_heal_context, is_ancestor
+from dotharness.pr_review.runners.common import get_file_diff, get_vibe_heal_context, is_ancestor
 from dotharness.pr_review.runners.local_review.findings import AddressFinding, parse_findings
 from dotharness.pr_review.runners.local_review.git import (
     MAX_DIRTY_PATHS_SHOWN,
@@ -58,7 +59,7 @@ class FindingCollection:
     unparseable: int
 
 
-def _manifest_matches(manifest: dict | None, target: LocalReviewTarget, wdir: Path) -> bool:
+async def _manifest_matches(manifest: dict | None, target: LocalReviewTarget, wdir: Path) -> bool:
     if manifest is None or manifest.get("branch") != target.branch:
         return False
     sha = manifest.get("head_sha")
@@ -66,10 +67,10 @@ def _manifest_matches(manifest: dict | None, target: LocalReviewTarget, wdir: Pa
         return False
     if sha == target.head_sha:
         return True
-    return is_ancestor(sha, target.head_sha, str(wdir), _git_env())
+    return await is_ancestor(sha, target.head_sha, str(wdir), _git_env())
 
 
-def _check_explicit_review_dir(chosen: Path, target: LocalReviewTarget, wdir: Path) -> Path:
+async def _check_explicit_review_dir(chosen: Path, target: LocalReviewTarget, wdir: Path) -> Path:
     manifest = read_manifest(chosen)
     if manifest is None:
         raise LocalReviewError(f"{chosen} does not contain a usable {MANIFEST_NAME}")  # noqa: TRY003
@@ -77,14 +78,14 @@ def _check_explicit_review_dir(chosen: Path, target: LocalReviewTarget, wdir: Pa
         raise LocalReviewError(  # noqa: TRY003
             f"review in {chosen} is for branch {manifest.get('branch')!r}, not {target.branch!r}"
         )
-    if not _manifest_matches(manifest, target, wdir):
+    if not await _manifest_matches(manifest, target, wdir):
         raise LocalReviewError(  # noqa: TRY003
             f"review in {chosen} was made at {manifest.get('head_sha')}, which is not HEAD or an ancestor of HEAD"
         )
     return chosen
 
 
-def _matching_review_candidates(
+async def _matching_review_candidates(
     branch_dir: Path, target: LocalReviewTarget, wdir: Path
 ) -> list[tuple[int, float, str, Path]]:
     """(commit time, manifest mtime, name, dir) for each review under `branch_dir` that matches `target`."""
@@ -93,18 +94,18 @@ def _matching_review_candidates(
         return candidates
     for cand in sorted(branch_dir.iterdir()):
         manifest = read_manifest(cand) if cand.is_dir() else None
-        if not _manifest_matches(manifest, target, wdir):
+        if not await _manifest_matches(manifest, target, wdir):
             continue
         sha = str((manifest or {}).get("head_sha"))
         try:
             mtime = (cand / MANIFEST_NAME).stat().st_mtime
         except OSError:
             continue
-        candidates.append((_commit_time(wdir, sha), mtime, cand.name, cand))
+        candidates.append((await _commit_time(wdir, sha), mtime, cand.name, cand))
     return candidates
 
 
-def select_review_dir(
+async def select_review_dir(
     config: HarnessConfig,
     target: LocalReviewTarget,
     output_root: Path,
@@ -116,14 +117,14 @@ def select_review_dir(
     """FR-10 step 1 (7.2). Offline; raises LocalReviewError when no review directory qualifies."""
     wdir = Path(config.repo.working_dir).expanduser().resolve()
     if review_dir:
-        return _check_explicit_review_dir(Path(review_dir).expanduser(), target, wdir)
+        return await _check_explicit_review_dir(Path(review_dir).expanduser(), target, wdir)
     if not skip_review:
         chosen = reviewed_dir or review_dir_for(output_root, config.repo_slug, target.branch, target.head_sha)
         if read_manifest(chosen) is None:
             raise LocalReviewError(f"no completed review found in {chosen}")  # noqa: TRY003
         return chosen
     branch_dir = review_dir_for(output_root, config.repo_slug, target.branch, target.head_sha).parent
-    candidates = _matching_review_candidates(branch_dir, target, wdir)
+    candidates = await _matching_review_candidates(branch_dir, target, wdir)
     if not candidates:
         raise LocalReviewError(  # noqa: TRY003
             f"no earlier review found for branch {target.branch!r} under {branch_dir}; run `pr_review run local-review` first"
@@ -188,13 +189,13 @@ class AddressResult:
         return self.stop_reason is not None
 
 
-def _state_problem(wdir: Path, branch: str) -> str | None:
+async def _state_problem(wdir: Path, branch: str) -> str | None:
     """Description of a wrong branch or a dirty tracked tree, or None (FR-2 items 1-3 re-check)."""
     try:
-        current = _current_branch(wdir)
+        current = await _current_branch(wdir)
         if current != branch:
             return f"current branch is {current or '(detached HEAD)'!r}, expected {branch!r}"
-        dirty = _tracked_dirty(wdir)
+        dirty = await _tracked_dirty(wdir)
     except LocalReviewError as exc:
         return str(exc)
     if dirty:
@@ -256,10 +257,10 @@ def _stop_phase(result: AddressResult, finding: AddressFinding, reason: str) -> 
     _fail_finding(result, finding, reason)
 
 
-def _call_address_backend(ctx: _AddressContext, finding: AddressFinding, prompt: str) -> str:
+async def _call_address_backend(ctx: _AddressContext, finding: AddressFinding, prompt: str) -> str:
     """Run the backend for one finding; return an error description, or "" when it exited 0."""
     try:
-        proc = ctx.backend.run(prompt, cwd=ctx.wdir_s, context=f"local-review address {finding.id}")
+        proc = await ctx.backend.run(prompt, cwd=ctx.wdir_s, context=f"local-review address {finding.id}")
     except subprocess.TimeoutExpired:
         return "backend timed out"
     except Exception as exc:
@@ -268,17 +269,17 @@ def _call_address_backend(ctx: _AddressContext, finding: AddressFinding, prompt:
     return "" if proc.returncode == 0 else f"backend exited {proc.returncode}"
 
 
-def _post_call_stop_reasons(ctx: _AddressContext, pre_sha: str) -> tuple[str, list[str]]:
+async def _post_call_stop_reasons(ctx: _AddressContext, pre_sha: str) -> tuple[str, list[str]]:
     """7.4 checks after a backend call; return (new HEAD or "", reasons to stop the phase)."""
     reasons: list[str] = []
     try:
-        new_head = _head(ctx.wdir)
-        if not is_ancestor(pre_sha, new_head, ctx.wdir_s, ctx.env):
+        new_head = await _head(ctx.wdir)
+        if not await is_ancestor(pre_sha, new_head, ctx.wdir_s, ctx.env):
             reasons.append(f"history rewritten: {pre_sha} is not an ancestor of HEAD {new_head}")
-        now_branch = _current_branch(ctx.wdir)
+        now_branch = await _current_branch(ctx.wdir)
         if now_branch != ctx.target.branch:
             reasons.append(f"branch changed from {ctx.target.branch!r} to {now_branch or '(detached HEAD)'!r}")
-        dirty = _tracked_dirty(ctx.wdir)
+        dirty = await _tracked_dirty(ctx.wdir)
         if dirty:
             reasons.append(f"tracked files have uncommitted changes: {', '.join(dirty[:MAX_DIRTY_PATHS_SHOWN])}")
     except LocalReviewError as exc:
@@ -286,7 +287,7 @@ def _post_call_stop_reasons(ctx: _AddressContext, pre_sha: str) -> tuple[str, li
     return new_head, reasons
 
 
-def _verify_resolution(
+async def _verify_resolution(
     ctx: _AddressContext, resolution: Path, pre_sha: str, new_head: str
 ) -> tuple[str, str | None, str]:
     """7.3: cross-check the resolution file against git; return (decision, commit, error)."""
@@ -294,7 +295,7 @@ def _verify_resolution(
     if decision is None:
         return "", None, f"resolution file {resolution} is missing, empty or its first line is not 'decision: ...'"
     if decision == OUTCOME_FIXED:
-        if new_head == pre_sha or _commit_parents(ctx.wdir, new_head) != [pre_sha]:
+        if new_head == pre_sha or await _commit_parents(ctx.wdir, new_head) != [pre_sha]:
             return decision, None, f"decision is fixed but HEAD is not exactly one new commit on {pre_sha[:12]}"
         return decision, new_head, ""
     if new_head != pre_sha:
@@ -302,28 +303,28 @@ def _verify_resolution(
     return decision, None, ""
 
 
-def _pre_call_head(ctx: _AddressContext, finding: AddressFinding, result: AddressResult) -> str | None:
+async def _pre_call_head(ctx: _AddressContext, finding: AddressFinding, result: AddressResult) -> str | None:
     """HEAD before the backend call, or None after stopping the phase on a bad state."""
-    problem = _state_problem(ctx.wdir, ctx.target.branch)
+    problem = await _state_problem(ctx.wdir, ctx.target.branch)
     if problem:
         _stop_phase(result, finding, f"before finding {finding.id}: {problem}")
         return None
     try:
-        return _head(ctx.wdir)
+        return await _head(ctx.wdir)
     except LocalReviewError as exc:
         _stop_phase(result, finding, str(exc))
         return None
 
 
-def _run_address_backend(ctx: _AddressContext, finding: AddressFinding, resolution: Path) -> str:
+async def _run_address_backend(ctx: _AddressContext, finding: AddressFinding, resolution: Path) -> str:
     """Build the address prompt (with the file diff) and run the backend; return its error or ""."""
     diff = ""
     if finding.file:
-        diff = get_file_diff(
+        diff = await get_file_diff(
             finding.file, ctx.target.base_ref, ctx.wdir_s, ctx.env, rev_range=f"{ctx.target.base_sha} HEAD"
         )
     prompt = build_address_prompt(ctx.instructions, finding, resolution.resolve(), ctx.review_head, diff, ctx.vibe)
-    return _call_address_backend(ctx, finding, prompt)
+    return await _call_address_backend(ctx, finding, prompt)
 
 
 def _record_outcome(result: AddressResult, finding: AddressFinding, decision: str, commit: str | None) -> None:
@@ -338,9 +339,9 @@ def _record_outcome(result: AddressResult, finding: AddressFinding, decision: st
     logger.info("finding %s: %s%s", finding.id, outcome, f" ({commit})" if commit else "")
 
 
-def _address_one(ctx: _AddressContext, finding: AddressFinding, result: AddressResult) -> bool:
+async def _address_one(ctx: _AddressContext, finding: AddressFinding, result: AddressResult) -> bool:
     """Address one finding and record its outcome; return False when the phase must stop."""
-    pre_sha = _pre_call_head(ctx, finding, result)
+    pre_sha = await _pre_call_head(ctx, finding, result)
     if pre_sha is None:
         return False
     resolution = ctx.res_dir / f"{finding.id}.md"
@@ -348,10 +349,10 @@ def _address_one(ctx: _AddressContext, finding: AddressFinding, result: AddressR
         _fail_finding(result, finding, "finding id resolves outside the resolutions directory")
         return True
     resolution.unlink(missing_ok=True)  # a stale file must not be mistaken for this run's answer
-    backend_error = _run_address_backend(ctx, finding, resolution)
+    backend_error = await _run_address_backend(ctx, finding, resolution)
 
     # 7.4: stop-the-phase checks, after every call, even a failed one. No repair (G3).
-    new_head, stop_reasons = _post_call_stop_reasons(ctx, pre_sha)
+    new_head, stop_reasons = await _post_call_stop_reasons(ctx, pre_sha)
     if stop_reasons:
         _stop_phase(result, finding, f"after finding {finding.id}: " + "; ".join(stop_reasons))
         return False
@@ -359,7 +360,7 @@ def _address_one(ctx: _AddressContext, finding: AddressFinding, result: AddressR
         _fail_finding(result, finding, backend_error)
         return True
 
-    decision, commit, error = _verify_resolution(ctx, resolution, pre_sha, new_head)
+    decision, commit, error = await _verify_resolution(ctx, resolution, pre_sha, new_head)
     if error:
         _fail_finding(result, finding, error)
     else:
@@ -390,15 +391,15 @@ def _build_address_context(
     )
 
 
-def _address_loop(ctx: _AddressContext, pending: list[AddressFinding], result: AddressResult) -> None:
+async def _address_loop(ctx: _AddressContext, pending: list[AddressFinding], result: AddressResult) -> None:
     """Address each pending finding in order; on a stop, count the rest as not reached."""
     for index, finding in enumerate(pending):
-        if not _address_one(ctx, finding, result):
+        if not await _address_one(ctx, finding, result):
             result.not_reached = len(pending) - index - 1
             break
 
 
-def address_findings(
+async def address_findings(
     config: HarnessConfig,
     target: LocalReviewTarget,
     review_dir: Path,
@@ -416,7 +417,7 @@ def address_findings(
     result = AddressResult()
     pending = list(collection.open)
     ctx.res_dir.mkdir(parents=True, exist_ok=True)
-    _address_loop(ctx, pending, result)
+    await _address_loop(ctx, pending, result)
     return result
 
 
@@ -428,7 +429,7 @@ def address_summary_line(collection: FindingCollection, result: AddressResult) -
     )
 
 
-def run_address_phase(
+async def run_address_phase(
     config: HarnessConfig,
     target: LocalReviewTarget,
     review_dir: Path,
@@ -441,7 +442,7 @@ def run_address_phase(
     False when any finding failed, any block was unparseable, or the phase stopped early.
     Not-reached findings after an early stop count as skipped, not failed.
     """
-    result = address_findings(config, target, review_dir, collection, backend=backend)
+    result = await address_findings(config, target, review_dir, collection, backend=backend)
     print(address_summary_line(collection, result))
     if result.stopped:
         print(f"ERROR: address phase stopped early: {result.stop_reason}", file=sys.stderr)

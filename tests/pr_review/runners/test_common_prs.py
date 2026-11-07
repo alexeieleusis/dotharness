@@ -54,13 +54,13 @@ def test_author_matches_list_allows_known():
         (1, b"", False),  # fails closed when gh lookup fails
     ],
 )
-def test_is_pr_open(returncode, stdout, expected):
+async def test_is_pr_open(returncode, stdout, expected):
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=returncode, stdout=stdout, stderr=b"")
-        assert is_pr_open(8809, "acme/repo", {}) is expected
+        assert (await is_pr_open(8809, "acme/repo", {})) is expected
 
 
-def test_list_open_prs_filters_drafts_and_authors(tmp_path):
+async def test_list_open_prs_filters_drafts_and_authors(tmp_path):
     payload = [
         {"number": 3, "headRefName": "c", "author": {"login": "alice"}, "isDraft": False},
         {"number": 1, "headRefName": "a", "author": {"login": "alice"}, "isDraft": True},
@@ -68,27 +68,27 @@ def test_list_open_prs_filters_drafts_and_authors(tmp_path):
     ]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(payload).encode())
-        result = list_open_prs_matching_authors("acme/repo", ["alice"], str(tmp_path), {})
+        result = await list_open_prs_matching_authors("acme/repo", ["alice"], str(tmp_path), {})
     assert result is not None
     assert [p["number"] for p in result] == [3]
 
 
-def test_list_open_prs_sorted_ascending():
+async def test_list_open_prs_sorted_ascending():
     payload = [
         {"number": 9, "headRefName": "b", "author": {"login": "alice"}, "isDraft": False},
         {"number": 2, "headRefName": "a", "author": {"login": "alice"}, "isDraft": False},
     ]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(payload).encode())
-        result = list_open_prs_matching_authors("acme/repo", "*", "/", {})
+        result = await list_open_prs_matching_authors("acme/repo", "*", "/", {})
     assert result is not None
     assert [p["number"] for p in result] == [2, 9]
 
 
-def test_list_open_prs_returns_none_on_gh_failure():
+async def test_list_open_prs_returns_none_on_gh_failure():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-        result = list_open_prs_matching_authors("acme/repo", "*", "/", {})
+        result = await list_open_prs_matching_authors("acme/repo", "*", "/", {})
     assert result is None
 
 
@@ -112,7 +112,7 @@ def _run_cmd_router(responses):
     return _router
 
 
-def test_list_open_prs_for_current_user_unions_author_assignee_review_requested():
+async def test_list_open_prs_for_current_user_unions_author_assignee_review_requested():
     author_payload = [{"number": 1, "headRefName": "a", "isDraft": False}]
     assignee_payload = [{"number": 2, "headRefName": "b", "isDraft": False}]
     search_payload = [{"number": 3}]
@@ -124,11 +124,11 @@ def test_list_open_prs_for_current_user_unions_author_assignee_review_requested(
         "view": {3: MagicMock(returncode=0, stdout=json.dumps(view_payload[3]).encode())},
     }
     with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=_run_cmd_router(responses)):
-        result = list_open_prs_for_current_user("acme/repo", "/", {})
+        result = await list_open_prs_for_current_user("acme/repo", "/", {})
     assert [p["number"] for p in result] == [1, 2, 3]
 
 
-def test_list_open_prs_for_current_user_dedupes_overlapping_sources():
+async def test_list_open_prs_for_current_user_dedupes_overlapping_sources():
     shared = {"number": 1, "headRefName": "a", "isDraft": False}
     search_payload = [{"number": 1}]
     responses = {
@@ -138,11 +138,11 @@ def test_list_open_prs_for_current_user_dedupes_overlapping_sources():
         "view": {1: MagicMock(returncode=0, stdout=json.dumps(shared).encode())},
     }
     with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=_run_cmd_router(responses)):
-        result = list_open_prs_for_current_user("acme/repo", "/", {})
+        result = await list_open_prs_for_current_user("acme/repo", "/", {})
     assert [p["number"] for p in result] == [1]
 
 
-def test_list_open_prs_for_current_user_includes_drafts():
+async def test_list_open_prs_for_current_user_includes_drafts():
     author_payload = [
         {"number": 1, "headRefName": "a", "isDraft": True},
         {"number": 2, "headRefName": "b", "isDraft": False},
@@ -154,11 +154,11 @@ def test_list_open_prs_for_current_user_includes_drafts():
         "view": {},
     }
     with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=_run_cmd_router(responses)):
-        result = list_open_prs_for_current_user("acme/repo", "/", {})
+        result = await list_open_prs_for_current_user("acme/repo", "/", {})
     assert [p["number"] for p in result] == [1, 2]
 
 
-def test_list_open_prs_for_current_user_handles_gh_failures():
+async def test_list_open_prs_for_current_user_handles_gh_failures():
     responses = {
         "author": MagicMock(returncode=1, stdout=b"", stderr=b"boom"),
         "assignee": MagicMock(returncode=1, stdout=b"", stderr=b"boom"),
@@ -166,14 +166,14 @@ def test_list_open_prs_for_current_user_handles_gh_failures():
         "view": {},
     }
     with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=_run_cmd_router(responses)):
-        result = list_open_prs_for_current_user("acme/repo", "/", {})
+        result = await list_open_prs_for_current_user("acme/repo", "/", {})
     assert result == []
 
 
-def test_get_current_user_returns_login():
+async def test_get_current_user_returns_login():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=b"alice\n")
-        assert get_current_user({}) == "alice"
+        assert (await get_current_user({})) == "alice"
 
 
 @pytest.mark.parametrize(
@@ -183,26 +183,26 @@ def test_get_current_user_returns_login():
         ([{"login": "alice"}, {"slug": "some-team"}], ["alice"]),
     ],
 )
-def test_get_requested_reviewers_returns_logins(review_requests, expected):
+async def test_get_requested_reviewers_returns_logins(review_requests, expected):
     payload = {"reviewRequests": review_requests}
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(payload).encode())
-        assert get_requested_reviewers(1, "acme/repo", {}) == expected
+        assert (await get_requested_reviewers(1, "acme/repo", {})) == expected
 
 
-def test_get_requested_reviewers_returns_empty_on_gh_failure():
+async def test_get_requested_reviewers_returns_empty_on_gh_failure():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-        assert get_requested_reviewers(1, "acme/repo", {}) == []
+        assert (await get_requested_reviewers(1, "acme/repo", {})) == []
 
 
-def test_pr_from_url_parses_number_and_fetches_pr():
+async def test_pr_from_url_parses_number_and_fetches_pr():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=b'{"number": 8484, "headRefName": "feat", "baseRefName": "main"}',
         )
-        pr = pr_from_url(
+        pr = await pr_from_url(
             "https://github.com/acme/frontend/pull/8484/", "acme/frontend", {}, "number,headRefName,baseRefName"
         )
     assert pr == {"number": 8484, "headRefName": "feat", "baseRefName": "main"}
@@ -211,17 +211,17 @@ def test_pr_from_url_parses_number_and_fetches_pr():
     assert "8484" in args
 
 
-def test_pr_from_url_returns_empty_on_gh_failure():
+async def test_pr_from_url_returns_empty_on_gh_failure():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"auth failed")
-        result = pr_from_url("https://github.com/acme/repo/pull/999", "acme/repo", {}, "number")
+        result = await pr_from_url("https://github.com/acme/repo/pull/999", "acme/repo", {}, "number")
     assert result == {}
 
 
-def test_add_reviewer_invokes_gh_pr_edit():
+async def test_add_reviewer_invokes_gh_pr_edit():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0)
-        add_reviewer(1, "acme/repo", "alice", {})
+        await add_reviewer(1, "acme/repo", "alice", {})
     cmd = mock_run.call_args.args[0]
     assert cmd == ["gh", "pr", "edit", "1", "--repo", "acme/repo", "--add-reviewer", "alice"]
 
@@ -265,7 +265,7 @@ def test_is_review_summary_comment_excludes_traceability_no_ticket_comment():
     assert is_review_summary_comment(body) is False
 
 
-def test_has_review_summary_comment_matches_only_current_user():
+async def test_has_review_summary_comment_matches_only_current_user():
     comments = [
         {"user": {"login": "someone-else"}, "body": "# Review Summary\nother account's comment"},
         {"user": {"login": "alice"}, "body": "unrelated comment"},
@@ -273,34 +273,34 @@ def test_has_review_summary_comment_matches_only_current_user():
     ]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_review_summary_comment(1, "acme/repo", "alice", {}) is True
+        assert (await has_review_summary_comment(1, "acme/repo", "alice", {})) is True
 
 
-def test_has_review_summary_comment_false_when_only_other_user_posted():
+async def test_has_review_summary_comment_false_when_only_other_user_posted():
     comments = [{"user": {"login": "someone-else"}, "body": "# Review Summary\nnot alice's comment"}]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_review_summary_comment(1, "acme/repo", "alice", {}) is False
+        assert (await has_review_summary_comment(1, "acme/repo", "alice", {})) is False
 
 
-def test_has_review_summary_comment_returns_false_on_gh_failure():
+async def test_has_review_summary_comment_returns_false_on_gh_failure():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-        assert has_review_summary_comment(1, "acme/repo", "alice", {}) is False
+        assert (await has_review_summary_comment(1, "acme/repo", "alice", {})) is False
 
 
-def test_check_review_summary_comment_status_returns_none_on_gh_failure():
+async def test_check_review_summary_comment_status_returns_none_on_gh_failure():
     # Unlike has_review_summary_comment's collapsed bool, the tri-state check must let
     # callers distinguish "confirmed no comment" from "the API call itself failed".
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-        assert check_review_summary_comment_status(1, "acme/repo", "alice", {}) is None
+        assert (await check_review_summary_comment_status(1, "acme/repo", "alice", {})) is None
 
 
-def test_check_review_summary_comment_status_returns_false_on_confirmed_absence():
+async def test_check_review_summary_comment_status_returns_false_on_confirmed_absence():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps([]).encode())
-        assert check_review_summary_comment_status(1, "acme/repo", "alice", {}) is False
+        assert (await check_review_summary_comment_status(1, "acme/repo", "alice", {})) is False
 
 
 @pytest.mark.parametrize(
@@ -317,36 +317,36 @@ def test_is_inline_review_comment(body, expected):
     assert is_inline_review_comment(body) is expected
 
 
-def test_has_inline_review_comments_true_when_marker_and_user_match():
+async def test_has_inline_review_comments_true_when_marker_and_user_match():
     comments = [
         {"user": {"login": "someone-else"}, "body": "unrelated<!-- dotharness-review-inline -->"},
         {"user": {"login": "alice"}, "body": "Nitpick: rename this.<!-- dotharness-review-inline -->"},
     ]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_inline_review_comments(1, "acme/repo", "alice", {}) is True
+        assert (await has_inline_review_comments(1, "acme/repo", "alice", {})) is True
 
 
-def test_has_inline_review_comments_false_when_same_user_but_no_marker():
+async def test_has_inline_review_comments_false_when_same_user_but_no_marker():
     # Regression test: a vibe-heal/SonarQube review comment posted under the same GitHub
     # account must not be mistaken for a partial review_requested run.
     comments = [{"user": {"login": "alice"}, "body": "**S1234** Refactor this to reduce complexity."}]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_inline_review_comments(1, "acme/repo", "alice", {}) is False
+        assert (await has_inline_review_comments(1, "acme/repo", "alice", {})) is False
 
 
-def test_has_inline_review_comments_false_when_other_user_posted_with_marker():
+async def test_has_inline_review_comments_false_when_other_user_posted_with_marker():
     comments = [{"user": {"login": "someone-else"}, "body": "Nitpick.<!-- dotharness-review-inline -->"}]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_inline_review_comments(1, "acme/repo", "alice", {}) is False
+        assert (await has_inline_review_comments(1, "acme/repo", "alice", {})) is False
 
 
-def test_has_inline_review_comments_returns_false_on_gh_failure():
+async def test_has_inline_review_comments_returns_false_on_gh_failure():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-        assert has_inline_review_comments(1, "acme/repo", "alice", {}) is False
+        assert (await has_inline_review_comments(1, "acme/repo", "alice", {})) is False
 
 
 @pytest.mark.parametrize(
@@ -364,7 +364,7 @@ def test_is_design_review_comment(body, expected):
     assert is_design_review_comment(body) is expected
 
 
-def test_has_design_review_comment_true_when_marker_and_user_match():
+async def test_has_design_review_comment_true_when_marker_and_user_match():
     # The design pass always posts its marked comment at the PR (issue) level, never
     # only inline, so has_design_review_comment only needs to check that endpoint.
     comments = [
@@ -373,32 +373,32 @@ def test_has_design_review_comment_true_when_marker_and_user_match():
     ]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_design_review_comment(1, "acme/repo", "alice", {}) is True
+        assert (await has_design_review_comment(1, "acme/repo", "alice", {})) is True
 
 
-def test_has_design_review_comment_false_when_same_user_but_no_marker():
+async def test_has_design_review_comment_false_when_same_user_but_no_marker():
     # A regular self-review summary comment from the same account must not be mistaken
     # for a completed design review.
     comments = [{"user": {"login": "alice"}, "body": "# Review Summary\nNo blocking issues found."}]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_design_review_comment(1, "acme/repo", "alice", {}) is False
+        assert (await has_design_review_comment(1, "acme/repo", "alice", {})) is False
 
 
-def test_has_design_review_comment_false_when_other_user_posted_with_marker():
+async def test_has_design_review_comment_false_when_other_user_posted_with_marker():
     comments = [{"user": {"login": "someone-else"}, "body": "# Design Review\n...<!-- dotharness-review-design -->"}]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_design_review_comment(1, "acme/repo", "alice", {}) is False
+        assert (await has_design_review_comment(1, "acme/repo", "alice", {})) is False
 
 
-def test_has_design_review_comment_returns_false_on_gh_failure():
+async def test_has_design_review_comment_returns_false_on_gh_failure():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-        assert has_design_review_comment(1, "acme/repo", "alice", {}) is False
+        assert (await has_design_review_comment(1, "acme/repo", "alice", {})) is False
 
 
-def test_has_pr_level_pass_comment_true_when_marker_and_user_match():
+async def test_has_pr_level_pass_comment_true_when_marker_and_user_match():
     # Generic helper design/traceability's has_*_review_comment wrap
     # (requirement-traceability-requirements.md §7.6) — exercised here with an arbitrary
     # marker to prove it isn't hardcoded to one pass's marker.
@@ -409,29 +409,29 @@ def test_has_pr_level_pass_comment_true_when_marker_and_user_match():
     ]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_pr_level_pass_comment(marker, 1, "acme/repo", "alice", {}) is True
+        assert (await has_pr_level_pass_comment(marker, 1, "acme/repo", "alice", {})) is True
 
 
-def test_has_pr_level_pass_comment_false_when_same_user_but_no_marker():
+async def test_has_pr_level_pass_comment_false_when_same_user_but_no_marker():
     marker = "<!-- some-future-pass-marker -->"
     comments = [{"user": {"login": "alice"}, "body": "# Review Summary\nNo blocking issues found."}]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_pr_level_pass_comment(marker, 1, "acme/repo", "alice", {}) is False
+        assert (await has_pr_level_pass_comment(marker, 1, "acme/repo", "alice", {})) is False
 
 
-def test_check_pr_level_pass_comment_status_returns_none_on_gh_failure():
+async def test_check_pr_level_pass_comment_status_returns_none_on_gh_failure():
     marker = "<!-- some-future-pass-marker -->"
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-        assert check_pr_level_pass_comment_status(marker, 1, "acme/repo", "alice", {}) is None
+        assert (await check_pr_level_pass_comment_status(marker, 1, "acme/repo", "alice", {})) is None
 
 
-def test_check_pr_level_pass_comment_status_returns_false_on_confirmed_absence():
+async def test_check_pr_level_pass_comment_status_returns_false_on_confirmed_absence():
     marker = "<!-- some-future-pass-marker -->"
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps([]).encode())
-        assert check_pr_level_pass_comment_status(marker, 1, "acme/repo", "alice", {}) is False
+        assert (await check_pr_level_pass_comment_status(marker, 1, "acme/repo", "alice", {})) is False
 
 
 @pytest.mark.parametrize(
@@ -451,7 +451,7 @@ def test_is_traceability_review_comment(body, expected):
     assert is_traceability_review_comment(body) is expected
 
 
-def test_has_traceability_review_comment_true_when_marker_and_user_match():
+async def test_has_traceability_review_comment_true_when_marker_and_user_match():
     comments = [
         {"user": {"login": "someone-else"}, "body": "unrelated<!-- dotharness-review-traceability -->"},
         {
@@ -461,10 +461,10 @@ def test_has_traceability_review_comment_true_when_marker_and_user_match():
     ]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_traceability_review_comment(1, "acme/repo", "alice", {}) is True
+        assert (await has_traceability_review_comment(1, "acme/repo", "alice", {})) is True
 
 
-def test_has_traceability_review_comment_true_for_terminal_no_ticket_found_comment():
+async def test_has_traceability_review_comment_true_for_terminal_no_ticket_found_comment():
     # The "no linked ticket found" outcome is terminal (requirement-traceability-
     # requirements.md §7.3/§11.1) — it carries the same marker as a completed
     # comparison, so it must also read as "done".
@@ -477,17 +477,17 @@ def test_has_traceability_review_comment_true_for_terminal_no_ticket_found_comme
     ]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_traceability_review_comment(1, "acme/repo", "alice", {}) is True
+        assert (await has_traceability_review_comment(1, "acme/repo", "alice", {})) is True
 
 
-def test_has_traceability_review_comment_false_when_same_user_but_no_marker():
+async def test_has_traceability_review_comment_false_when_same_user_but_no_marker():
     comments = [{"user": {"login": "alice"}, "body": "# Design Review\nNo blocking design/architecture issues found."}]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_traceability_review_comment(1, "acme/repo", "alice", {}) is False
+        assert (await has_traceability_review_comment(1, "acme/repo", "alice", {})) is False
 
 
-def test_has_traceability_review_comment_false_when_other_user_posted_with_marker():
+async def test_has_traceability_review_comment_false_when_other_user_posted_with_marker():
     comments = [
         {
             "user": {"login": "someone-else"},
@@ -496,28 +496,28 @@ def test_has_traceability_review_comment_false_when_other_user_posted_with_marke
     ]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_traceability_review_comment(1, "acme/repo", "alice", {}) is False
+        assert (await has_traceability_review_comment(1, "acme/repo", "alice", {})) is False
 
 
-def test_has_traceability_review_comment_returns_false_on_gh_failure():
+async def test_has_traceability_review_comment_returns_false_on_gh_failure():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-        assert has_traceability_review_comment(1, "acme/repo", "alice", {}) is False
+        assert (await has_traceability_review_comment(1, "acme/repo", "alice", {})) is False
 
 
-def test_check_traceability_review_comment_status_returns_none_on_gh_failure():
+async def test_check_traceability_review_comment_status_returns_none_on_gh_failure():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-        assert check_traceability_review_comment_status(1, "acme/repo", "alice", {}) is None
+        assert (await check_traceability_review_comment_status(1, "acme/repo", "alice", {})) is None
 
 
-def test_check_traceability_review_comment_status_returns_false_on_confirmed_absence():
+async def test_check_traceability_review_comment_status_returns_false_on_confirmed_absence():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps([]).encode())
-        assert check_traceability_review_comment_status(1, "acme/repo", "alice", {}) is False
+        assert (await check_traceability_review_comment_status(1, "acme/repo", "alice", {})) is False
 
 
-def test_has_regret_review_comment_true_when_marker_and_user_match():
+async def test_has_regret_review_comment_true_when_marker_and_user_match():
     # The regret pass always posts its marked comment at the PR (issue) level, never
     # only inline, so has_regret_review_comment only needs to check that endpoint.
     comments = [
@@ -529,19 +529,19 @@ def test_has_regret_review_comment_true_when_marker_and_user_match():
     ]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_regret_review_comment(1, "acme/repo", "alice", {}) is True
+        assert (await has_regret_review_comment(1, "acme/repo", "alice", {})) is True
 
 
-def test_has_regret_review_comment_false_when_same_user_but_no_marker():
+async def test_has_regret_review_comment_false_when_same_user_but_no_marker():
     # A regular self-review summary comment from the same account must not be mistaken
     # for a completed regret review.
     comments = [{"user": {"login": "alice"}, "body": "# Review Summary\nNo blocking issues found."}]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_regret_review_comment(1, "acme/repo", "alice", {}) is False
+        assert (await has_regret_review_comment(1, "acme/repo", "alice", {})) is False
 
 
-def test_has_regret_review_comment_false_when_other_user_posted_with_marker():
+async def test_has_regret_review_comment_false_when_other_user_posted_with_marker():
     comments = [
         {
             "user": {"login": "someone-else"},
@@ -550,22 +550,22 @@ def test_has_regret_review_comment_false_when_other_user_posted_with_marker():
     ]
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(comments).encode())
-        assert has_regret_review_comment(1, "acme/repo", "alice", {}) is False
+        assert (await has_regret_review_comment(1, "acme/repo", "alice", {})) is False
 
 
-def test_has_regret_review_comment_returns_false_on_gh_failure():
+async def test_has_regret_review_comment_returns_false_on_gh_failure():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-        assert has_regret_review_comment(1, "acme/repo", "alice", {}) is False
+        assert (await has_regret_review_comment(1, "acme/repo", "alice", {})) is False
 
 
-def test_check_regret_review_comment_status_returns_none_on_gh_failure():
+async def test_check_regret_review_comment_status_returns_none_on_gh_failure():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-        assert check_regret_review_comment_status(1, "acme/repo", "alice", {}) is None
+        assert (await check_regret_review_comment_status(1, "acme/repo", "alice", {})) is None
 
 
-def test_check_regret_review_comment_status_returns_false_on_confirmed_absence():
+async def test_check_regret_review_comment_status_returns_false_on_confirmed_absence():
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps([]).encode())
-        assert check_regret_review_comment_status(1, "acme/repo", "alice", {}) is False
+        assert (await check_regret_review_comment_status(1, "acme/repo", "alice", {})) is False

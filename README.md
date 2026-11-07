@@ -61,7 +61,8 @@ harness validate      # confirm config is correct
 ## Contributing
 
 Branch rule: I-1 targets `main`. I-2 to I-5 target `consolidation`. I-6 to I-8
-target `main` after I-5 merges. PRs that touch `src/dotharness/` update the
+target `main` after I-5 merges. This issue's PRs (I-6, #168) target
+`sisyphus/164-c86e8a65`. PRs that touch `src/dotharness/` update the
 [migration ledger](docs/migration-ledger.md). See
 [`docs/contributing.md`](docs/contributing.md).
 

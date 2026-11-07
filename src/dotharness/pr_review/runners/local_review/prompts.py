@@ -22,7 +22,7 @@ ADDRESS_HEADING = "**Finding to address**"
 MAX_DIFF_CHARS = 40_000
 
 
-def build_change_description(working_dir: Path, target: LocalReviewTarget) -> str:
+async def build_change_description(working_dir: Path, target: LocalReviewTarget) -> str:
     """`## Change description`: branch, base ref, merge base, then the commit log.
 
     The log keeps the newest MAX_DESCRIPTION_COMMITS commits (listed oldest first) and the
@@ -33,11 +33,11 @@ def build_change_description(working_dir: Path, target: LocalReviewTarget) -> st
         f"## Change description\nBranch: {target.branch}\nBase ref: {target.base_ref}\n"
         f"Merge base: {target.base_sha}\n\n"
     )
-    count = git(working_dir, "rev-list", "--count", f"{target.base_sha}..HEAD")
+    count = await git(working_dir, "rev-list", "--count", f"{target.base_sha}..HEAD")
     total = int(count.stdout.strip() or 0) if count.returncode == 0 else 0
     truncated = total > MAX_DESCRIPTION_COMMITS
     # --max-count keeps the newest N commits; --reverse then lists those oldest first.
-    proc = git(
+    proc = await git(
         working_dir,
         "log",
         "--reverse",

@@ -120,23 +120,23 @@ def _merge_calls(calls):
     return [c for c in calls if c[:2] == ["pr", "merge"]]
 
 
-def _run(cfg, **kw):
-    merge.run(cfg, **kw)
+async def _run(cfg, **kw):
+    await merge.run(cfg, **kw)
 
 
-def test_disabled_makes_no_calls(tmp_path, caplog):
+async def test_disabled_makes_no_calls(tmp_path, caplog):
     cfg = _cfg(tmp_path, enabled=False)
     with patch(P + "_gh") as gh, patch(P + "acquire_lock") as lock, caplog.at_level(logging.INFO):
-        _run(cfg)
+        await _run(cfg)
     gh.assert_not_called()
     lock.assert_not_called()
     assert "merge is disabled, nothing to do" in caplog.text
 
 
-def test_all_conditions_met_merges_once(tmp_path):
+async def test_all_conditions_met_merges_once(tmp_path):
     cfg = _cfg(tmp_path)
     with _mocks(tmp_path, cfg) as calls:
-        _run(cfg)
+        await _run(cfg)
     merges = _merge_calls(calls)
     assert merges == [["pr", "merge", "1", "--repo", "acme/frontend", "--squash", "--match-head-commit", SHA]]
 
@@ -164,85 +164,85 @@ def test_all_conditions_met_merges_once(tmp_path):
         ({"author": "someone-else"}, merge.SKIP_NOT_AUTHOR),
     ],
 )
-def test_skip_reasons_make_no_merge_call(tmp_path, caplog, kwargs, reason):
+async def test_skip_reasons_make_no_merge_call(tmp_path, caplog, kwargs, reason):
     cfg = _cfg(tmp_path)
     with _mocks(tmp_path, cfg, **kwargs) as calls, caplog.at_level(logging.INFO):
-        _run(cfg)
+        await _run(cfg)
     assert _merge_calls(calls) == []
     assert f"PR #1: skipped: {reason}" in caplog.text
 
 
-def test_unreadable_record_blocks(tmp_path, caplog):
+async def test_unreadable_record_blocks(tmp_path, caplog):
     cfg = _cfg(tmp_path)
     with _mocks(tmp_path, cfg, record=None) as calls, caplog.at_level(logging.INFO):
         _write_record(tmp_path, cfg, 1, raw="not json")
-        _run(cfg)
+        await _run(cfg)
     assert _merge_calls(calls) == []
     assert merge.SKIP_GATE_RECORD_MISSING in caplog.text
 
 
-def test_max_changed_lines_boundary_merges(tmp_path):
+async def test_max_changed_lines_boundary_merges(tmp_path):
     cfg = _cfg(tmp_path, max_lines=120)
     with _mocks(tmp_path, cfg, lines=(100, 20)) as calls:
-        _run(cfg)
+        await _run(cfg)
     assert len(_merge_calls(calls)) == 1
 
 
-def test_unviewed_files_ignored_when_not_required(tmp_path):
+async def test_unviewed_files_ignored_when_not_required(tmp_path):
     cfg = _cfg(tmp_path, viewed=False)
     with _mocks(tmp_path, cfg, viewed="some") as calls:
-        _run(cfg)
+        await _run(cfg)
     assert len(_merge_calls(calls)) == 1
 
 
-def test_dry_run_makes_no_merge_call(tmp_path, caplog):
+async def test_dry_run_makes_no_merge_call(tmp_path, caplog):
     cfg = _cfg(tmp_path)
     with _mocks(tmp_path, cfg) as calls, caplog.at_level(logging.INFO):
-        _run(cfg, dry_run=True)
+        await _run(cfg, dry_run=True)
     assert _merge_calls(calls) == []
     assert "would merge" in caplog.text
 
 
-def test_pr_flag_processes_only_that_pr(tmp_path):
+async def test_pr_flag_processes_only_that_pr(tmp_path):
     cfg = _cfg(tmp_path)
     with _mocks(tmp_path, cfg) as calls:
-        _run(cfg, pr=1)
+        await _run(cfg, pr=1)
     assert not any(c[:2] == ["pr", "list"] for c in calls)
     assert len(_merge_calls(calls)) == 1
 
 
-def test_merge_failure_raises_merge_error_after_loop(tmp_path):
+async def test_merge_failure_raises_merge_error_after_loop(tmp_path):
     cfg = _cfg(tmp_path)
     with _mocks(tmp_path, cfg, merge_rc=1), pytest.raises(MergeError, match="#1"):
-        _run(cfg)
+        await _run(cfg)
 
 
-def test_merge_failure_on_first_pr_does_not_abort_the_loop(tmp_path):
+async def test_merge_failure_on_first_pr_does_not_abort_the_loop(tmp_path):
     cfg = _cfg(tmp_path)
     prs = [{"number": n, "author": {"login": "me"}} for n in (1, 2)]
     with _mocks(tmp_path, cfg, prs=prs, merge_rc={1: 1}) as calls:
         with pytest.raises(MergeError, match="#1") as exc:
-            _run(cfg)
+            await _run(cfg)
         assert "#2" not in str(exc.value)
         assert [c[2] for c in _merge_calls(calls)] == ["1", "2"]
 
 
-def test_blank_current_user_is_not_author(tmp_path, caplog):
+async def test_blank_current_user_is_not_author(tmp_path, caplog):
     cfg = _cfg(tmp_path)
     with (
         _mocks(tmp_path, cfg, author="") as calls,
         patch(P + "get_current_user", return_value=""),
         caplog.at_level(logging.INFO),
     ):
-        _run(cfg)
+        await _run(cfg)
     assert _merge_calls(calls) == []
     assert merge.SKIP_NOT_AUTHOR in caplog.text
 
 
-def test_never_approves(tmp_path):
+async def test_never_approves(tmp_path):
     cfg = _cfg(tmp_path)
     with _mocks(tmp_path, cfg) as calls:
-        _run(cfg)
+        await _run(cfg)
     flat = [a for c in calls for a in c]
     assert "review" not in flat
     assert "--approve" not in flat
@@ -250,14 +250,14 @@ def test_never_approves(tmp_path):
         assert flag not in flat
 
 
-def test_malformed_pr_list_output_is_a_collected_failure_not_a_raw_error(tmp_path):
+async def test_malformed_pr_list_output_is_a_collected_failure_not_a_raw_error(tmp_path):
     cfg = _cfg(tmp_path)
     with _mocks(tmp_path, cfg) as calls:
         with (
             patch(P + "_gh", return_value=_proc(stdout=b"not json")),
             pytest.raises(MergeError, match="gh pr output was not JSON"),
         ):
-            _run(cfg)
+            await _run(cfg)
         assert _merge_calls(calls) == []
 
 
@@ -297,7 +297,7 @@ def test_golden_record_is_read_back(tmp_path, monkeypatch):
     assert merge.read_gate_record("acme-frontend", 1) == _GOLDEN["record"]["head_sha"]
 
 
-def test_check_ci_receives_base_branch_from_pr_state(tmp_path):
+async def test_check_ci_receives_base_branch_from_pr_state(tmp_path):
     with (
         patch(P + "_check_ci", return_value=SafetyResult(SafetyStatus.SKIP, "ci-blocked")) as check_ci,
         patch(
@@ -311,6 +311,6 @@ def test_check_ci_receives_base_branch_from_pr_state(tmp_path):
             },
         ),
     ):
-        reason, _ = merge._evaluate({"number": 4, "author": {"login": "me"}}, _cfg(tmp_path), {}, "me")
+        reason, _ = await merge._evaluate({"number": 4, "author": {"login": "me"}}, _cfg(tmp_path), {}, "me")
     assert reason == "ci-blocked"
     check_ci.assert_called_once_with("acme/frontend", 4, "stack-a", {})

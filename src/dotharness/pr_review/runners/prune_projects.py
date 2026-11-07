@@ -7,7 +7,7 @@ from dotharness.pr_review.runners.common import env_file_args, env_file_error, l
 logger = logging.getLogger(__name__)
 
 
-def run(config: HarnessConfig, env: dict) -> None:
+async def run(config: HarnessConfig, env: dict) -> None:
     """Delete stale vibe_heal temp SonarQube projects in every configured subdir.
 
     A subdir's SonarQube project key comes from its configured `env_file` (passed to
@@ -24,10 +24,10 @@ def run(config: HarnessConfig, env: dict) -> None:
         return
 
     for subdir in config.repo.subdirs:
-        _prune_subdir(subdir, config, env)
+        await _prune_subdir(subdir, config, env)
 
 
-def _prune_subdir(subdir: SubDir, config: HarnessConfig, env: dict) -> None:
+async def _prune_subdir(subdir: SubDir, config: HarnessConfig, env: dict) -> None:
     subdir_path = str(config.repo.working_dir / subdir.path)
     env_error = env_file_error(config, subdir)
     if env_error:
@@ -45,7 +45,7 @@ def _prune_subdir(subdir: SubDir, config: HarnessConfig, env: dict) -> None:
     cmd += env_file_args(config.repo, subdir)
     logger.info("Running vibe_heal prune-projects in %s", subdir_path)
     try:
-        run_cmd(cmd, cwd=subdir_path, env=env, timeout=config.vibe_heal.prune_projects_timeout)
+        await run_cmd(cmd, cwd=subdir_path, env=env, timeout=config.vibe_heal.prune_projects_timeout)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
         logger.warning("vibe_heal prune-projects failed in %s: %s", subdir_path, e)
         if isinstance(e, subprocess.CalledProcessError):

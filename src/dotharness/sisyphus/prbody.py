@@ -10,7 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 
 from dotharness.sisyphus.intake import parse_resolved_decisions, split_resolved_decision
@@ -397,7 +397,7 @@ def compose_body(
 # ------------------------------------------------------------------ assembly
 
 
-def build_body(
+async def build_body(
     item: str,
     *,
     brief_path: Path,
@@ -405,7 +405,7 @@ def build_body(
     phase_dir: Path,
     base_branch: str,
     workspace: Path,
-    run_git: Callable[[Sequence[str]], str | None],
+    run_git: Callable[[Sequence[str]], Awaitable[str | None]],
 ) -> str:
     """Locate the artifacts, check plan ownership, degrade per section and compose the body (FR-12, D-6).
 
@@ -428,7 +428,7 @@ def build_body(
         except (OSError, ValueError) as exc:
             phases = deviations = f"Note: leaf list unavailable ({type(exc).__name__})."
         else:
-            phases = list_phases(phase_dir, run_git(commit_log_args(base_branch)))
+            phases = list_phases(phase_dir, await run_git(commit_log_args(base_branch)))
             deviations = extract_deviations(workspace / "handoffs", stems)
     else:
         summary = PLAN_NOT_MATCHED_NOTE

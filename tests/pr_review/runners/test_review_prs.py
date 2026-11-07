@@ -41,7 +41,7 @@ def _make_config(tmp_path, authors="*", subdirs=None):
     )
 
 
-def test_skips_prs_with_unchanged_head_sha(tmp_xdg, tmp_path):
+async def test_skips_prs_with_unchanged_head_sha(tmp_xdg, tmp_path):
     from dotharness.pr_review.config import SubDir
 
     state.record_reviewed_sha("acme-frontend", 8, "sha8", 1000.0)
@@ -61,7 +61,7 @@ def test_skips_prs_with_unchanged_head_sha(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert vibe_calls == []
     # Both PRs were skipped before any checkout was needed.
@@ -94,7 +94,7 @@ def test_already_reviewed_false_when_sha_changed_and_interval_elapsed():
     assert review_prs._already_reviewed(reviewed_shas, pr, min_interval_seconds=86400, now=1000.0 + 25 * 3600) is False
 
 
-def test_run_locked_skips_pr_with_new_sha_within_min_reanalysis_interval(tmp_xdg, tmp_path):
+async def test_run_locked_skips_pr_with_new_sha_within_min_reanalysis_interval(tmp_xdg, tmp_path):
     from dotharness.pr_review.config import SubDir
 
     state.record_reviewed_sha("acme-frontend", 7, "old-sha", 1_000_000.0)
@@ -115,13 +115,13 @@ def test_run_locked_skips_pr_with_new_sha_within_min_reanalysis_interval(tmp_xdg
         ),  # 1h later, within 24h default
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert vibe_calls == []
     mock_detach.assert_not_called()
 
 
-def test_run_locked_reprocesses_pr_with_new_sha_after_min_reanalysis_interval_elapses(tmp_xdg, tmp_path):
+async def test_run_locked_reprocesses_pr_with_new_sha_after_min_reanalysis_interval_elapses(tmp_xdg, tmp_path):
     from dotharness.pr_review.config import SubDir
 
     state.record_reviewed_sha("acme-frontend", 7, "old-sha", 1_000_000.0)
@@ -144,13 +144,13 @@ def test_run_locked_reprocesses_pr_with_new_sha_after_min_reanalysis_interval_el
         ),  # 25h later, past 24h default
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert len(vibe_calls) >= 1
     assert state.get_reviewed_sha("acme-frontend", 7) == "new-sha"
 
 
-def test_run_locked_respects_configured_min_reanalysis_interval_hours(tmp_xdg, tmp_path):
+async def test_run_locked_respects_configured_min_reanalysis_interval_hours(tmp_xdg, tmp_path):
     from dotharness.pr_review.config import SubDir
 
     state.record_reviewed_sha("acme-frontend", 7, "old-sha", 1_000_000.0)
@@ -173,12 +173,12 @@ def test_run_locked_respects_configured_min_reanalysis_interval_hours(tmp_xdg, t
         patch("dotharness.pr_review.runners.review_prs.time.time", return_value=1_000_000.0 + 2 * 3600),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert len(vibe_calls) >= 1
 
 
-def test_reprocesses_pr_when_head_sha_changes(tmp_xdg, tmp_path):
+async def test_reprocesses_pr_when_head_sha_changes(tmp_xdg, tmp_path):
     from dotharness.pr_review.config import SubDir
 
     state.record_reviewed_sha("acme-frontend", 7, "old-sha", 1000.0)
@@ -198,13 +198,13 @@ def test_reprocesses_pr_when_head_sha_changes(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert len(vibe_calls) >= 1
     assert state.get_reviewed_sha("acme-frontend", 7) == "new-sha"
 
 
-def test_processes_new_prs(tmp_xdg, tmp_path):
+async def test_processes_new_prs(tmp_xdg, tmp_path):
     from dotharness.pr_review.config import SubDir
 
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
@@ -220,12 +220,12 @@ def test_processes_new_prs(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert len(vibe_calls) >= 1
 
 
-def test_failed_pr_fetch_does_not_prune_reviewed_shas(tmp_xdg, tmp_path):
+async def test_failed_pr_fetch_does_not_prune_reviewed_shas(tmp_xdg, tmp_path):
     from dotharness.pr_review.config import SubDir
 
     state.record_reviewed_sha("acme-frontend", 5, "sha5", 1000.0)
@@ -241,13 +241,13 @@ def test_failed_pr_fetch_does_not_prune_reviewed_shas(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     assert state.get_reviewed_sha("acme-frontend", 5) == "sha5"
     assert state.get_reviewed_sha("acme-frontend", 6) == "sha6"
     mock_detach.assert_not_called()
 
 
-def test_updates_state_after_success(tmp_xdg, tmp_path):
+async def test_updates_state_after_success(tmp_xdg, tmp_path):
     from dotharness.pr_review.config import SubDir
 
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
@@ -263,11 +263,11 @@ def test_updates_state_after_success(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     assert state.get_reviewed_sha("acme-frontend", 7) == "sha7"
 
 
-def test_coverage_flag_passed_when_true(tmp_xdg, tmp_path):
+async def test_coverage_flag_passed_when_true(tmp_xdg, tmp_path):
     from dotharness.pr_review.config import SubDir
 
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], coverage=True, timeout=30)])
@@ -283,12 +283,12 @@ def test_coverage_flag_passed_when_true(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c) and "--coverage" in str(c)]
     assert len(vibe_calls) >= 1
 
 
-def test_pr_url_graceful_on_pr_from_url_returns_empty(tmp_xdg, tmp_path):
+async def test_pr_url_graceful_on_pr_from_url_returns_empty(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     with (
         patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
@@ -300,12 +300,12 @@ def test_pr_url_graceful_on_pr_from_url_returns_empty(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_prs._run_locked(cfg, pr_url="https://github.com/acme/frontend/pull/3")
+        await review_prs._run_locked(cfg, pr_url="https://github.com/acme/frontend/pull/3")
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert vibe_calls == []
 
 
-def test_pr_url_graceful_on_pr_from_url_raises(tmp_xdg, tmp_path):
+async def test_pr_url_graceful_on_pr_from_url_raises(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     with (
         patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
@@ -315,12 +315,12 @@ def test_pr_url_graceful_on_pr_from_url_raises(tmp_xdg, tmp_path):
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
         with pytest.raises(RuntimeError):
-            review_prs._run_locked(cfg, pr_url="https://github.com/acme/frontend/pull/3")
+            await review_prs._run_locked(cfg, pr_url="https://github.com/acme/frontend/pull/3")
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert vibe_calls == []
 
 
-def test_pr_url_bypasses_reviewed_sha_filtering(tmp_xdg, tmp_path):
+async def test_pr_url_bypasses_reviewed_sha_filtering(tmp_xdg, tmp_path):
     # Even though this PR's current head SHA is already recorded as reviewed, --pr forces
     # it to run anyway — the whole point of the manual override.
     state.record_reviewed_sha("acme-frontend", 3, "sha3", 1000.0)
@@ -337,12 +337,12 @@ def test_pr_url_bypasses_reviewed_sha_filtering(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_prs._run_locked(cfg, pr_url="https://github.com/acme/frontend/pull/3")
+        await review_prs._run_locked(cfg, pr_url="https://github.com/acme/frontend/pull/3")
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert len(vibe_calls) >= 1
 
 
-def test_pr_url_does_not_update_reviewed_shas(tmp_xdg, tmp_path):
+async def test_pr_url_does_not_update_reviewed_shas(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     pr = {"number": 3, "headRefName": "feat", "baseRefName": "main", "headRefOid": "sha3"}
     with (
@@ -356,11 +356,11 @@ def test_pr_url_does_not_update_reviewed_shas(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_prs._run_locked(cfg, pr_url="https://github.com/acme/frontend/pull/3")
+        await review_prs._run_locked(cfg, pr_url="https://github.com/acme/frontend/pull/3")
     assert state.read_vibe_heal_state("acme-frontend")["reviewed_shas"] == {}
 
 
-def test_run_pre_commands_continues_after_non_critical_failure(tmp_path):
+async def test_run_pre_commands_continues_after_non_critical_failure(tmp_path):
     from dotharness.pr_review.config import HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
 
     cfg = HarnessConfig(
@@ -371,12 +371,12 @@ def test_run_pre_commands_continues_after_non_critical_failure(tmp_path):
     subdir = SubDir(path=".", pre_commands=[PreCommand(cmd="pnpm ci"), PreCommand(cmd="echo hi")])
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run:
         mock_run.side_effect = [subprocess.CalledProcessError(1, "pnpm ci"), MagicMock(returncode=0)]
-        result = review_prs._run_pre_commands(subdir, cfg, {})
+        result = await review_prs._run_pre_commands(subdir, cfg, {})
     assert result is True
     assert mock_run.call_count == 2
 
 
-def test_run_pre_commands_aborts_after_critical_failure(tmp_path):
+async def test_run_pre_commands_aborts_after_critical_failure(tmp_path):
     from dotharness.pr_review.config import HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
 
     cfg = HarnessConfig(
@@ -390,12 +390,12 @@ def test_run_pre_commands_aborts_after_critical_failure(tmp_path):
     )
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run:
         mock_run.side_effect = subprocess.CalledProcessError(1, "poetry install")
-        result = review_prs._run_pre_commands(subdir, cfg, {})
+        result = await review_prs._run_pre_commands(subdir, cfg, {})
     assert result is False
     assert mock_run.call_count == 1
 
 
-def test_run_pre_commands_continues_after_non_critical_timeout(tmp_path):
+async def test_run_pre_commands_continues_after_non_critical_timeout(tmp_path):
     from dotharness.pr_review.config import HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
 
     cfg = HarnessConfig(
@@ -406,12 +406,12 @@ def test_run_pre_commands_continues_after_non_critical_timeout(tmp_path):
     subdir = SubDir(path=".", pre_commands=[PreCommand(cmd="pnpm ci"), PreCommand(cmd="echo hi")])
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run:
         mock_run.side_effect = [subprocess.TimeoutExpired("pnpm ci", 30), MagicMock(returncode=0)]
-        result = review_prs._run_pre_commands(subdir, cfg, {})
+        result = await review_prs._run_pre_commands(subdir, cfg, {})
     assert result is True
     assert mock_run.call_count == 2
 
 
-def test_run_pre_commands_aborts_after_critical_timeout(tmp_path):
+async def test_run_pre_commands_aborts_after_critical_timeout(tmp_path):
     from dotharness.pr_review.config import HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
 
     cfg = HarnessConfig(
@@ -425,12 +425,12 @@ def test_run_pre_commands_aborts_after_critical_timeout(tmp_path):
     )
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run:
         mock_run.side_effect = subprocess.TimeoutExpired("poetry install", 30)
-        result = review_prs._run_pre_commands(subdir, cfg, {})
+        result = await review_prs._run_pre_commands(subdir, cfg, {})
     assert result is False
     assert mock_run.call_count == 1
 
 
-def test_run_locked_re_requests_review_once_per_pr_across_subdirs(tmp_xdg, tmp_path):
+async def test_run_locked_re_requests_review_once_per_pr_across_subdirs(tmp_xdg, tmp_path):
     cfg = _make_config(
         tmp_path,
         subdirs=[SubDir(path="a", pre_commands=[], coverage=False, timeout=30), SubDir(path="b")],
@@ -458,14 +458,14 @@ def test_run_locked_re_requests_review_once_per_pr_across_subdirs(tmp_xdg, tmp_p
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     assert mock_was_requested.call_count == 1
     assert mock_was_requested.call_args.args[:2] == (9, "acme/frontend")
     assert mock_add_reviewer.call_count == 1
     assert mock_add_reviewer.call_args.args[:3] == (9, "acme/frontend", "alice")
 
 
-def test_run_locked_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
+async def test_run_locked_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     prs = [{"number": 9, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha9"}]
     with (
@@ -480,11 +480,11 @@ def test_run_locked_does_not_re_request_review_if_not_previously_requested(tmp_x
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     mock_add_reviewer.assert_not_called()
 
 
-def test_process_subdir_skips_vibe_heal_after_critical_pre_command_failure(tmp_path):
+async def test_process_subdir_skips_vibe_heal_after_critical_pre_command_failure(tmp_path):
     from dotharness.pr_review.config import HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
 
     cfg = HarnessConfig(
@@ -495,25 +495,25 @@ def test_process_subdir_skips_vibe_heal_after_critical_pre_command_failure(tmp_p
     subdir = SubDir(path=".", pre_commands=[PreCommand(cmd="poetry install", critical=True)])
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run:
         mock_run.side_effect = subprocess.CalledProcessError(1, "poetry install")
-        result = review_prs._process_subdir(1, subdir, cfg, {})
+        result = await review_prs._process_subdir(1, subdir, cfg, {})
     assert result is False
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert vibe_calls == []
 
 
-def test_process_pr_skips_when_closed_since_discovery(tmp_path):
+async def test_process_pr_skips_when_closed_since_discovery(tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     pr = {"number": 42, "headRefName": "feat", "baseRefName": "main", "headRefOid": "sha42"}
     with (
         patch("dotharness.pr_review.runners.review_prs.is_pr_open", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout") as mock_fetch,
     ):
-        result = review_prs._process_pr(pr, cfg, {}, "alice", str(tmp_path))
+        result = await review_prs._process_pr(pr, cfg, {}, "alice", str(tmp_path))
     assert result is False
     mock_fetch.assert_not_called()
 
 
-def test_process_subdir_skips_post_when_pr_closed_during_review(tmp_path):
+async def test_process_subdir_skips_post_when_pr_closed_during_review(tmp_path):
     from dotharness.pr_review.config import HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
 
     cfg = HarnessConfig(
@@ -528,7 +528,7 @@ def test_process_subdir_skips_post_when_pr_closed_during_review(tmp_path):
         ) as mock_run,
         patch("dotharness.pr_review.runners.review_prs.is_pr_open", return_value=False),
     ):
-        result = review_prs._process_subdir(1, subdir, cfg, {})
+        result = await review_prs._process_subdir(1, subdir, cfg, {})
     assert result is False
     post_calls = [c for c in mock_run.call_args_list if "--post" in str(c)]
     assert post_calls == []
@@ -559,7 +559,7 @@ def test_subdir_has_changes_handles_trailing_slash_in_config():
     assert review_prs._subdir_has_changes("frontend/", ["frontend/src/app.tsx"]) is True
 
 
-def test_run_locked_skips_subdir_with_no_changes(tmp_xdg, tmp_path):
+async def test_run_locked_skips_subdir_with_no_changes(tmp_xdg, tmp_path):
     cfg = _make_config(
         tmp_path,
         subdirs=[SubDir(path="a", pre_commands=[], coverage=False, timeout=30), SubDir(path="b")],
@@ -587,25 +587,25 @@ def test_run_locked_skips_subdir_with_no_changes(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert len(vibe_calls) >= 1
     subdir_b_path = str(tmp_path / "b")
     assert all(c.kwargs.get("cwd") != subdir_b_path for c in vibe_calls)
 
 
-def test_run_base_analysis_skips_when_sha_unchanged(tmp_xdg, tmp_path):
+async def test_run_base_analysis_skips_when_sha_unchanged(tmp_xdg, tmp_path):
     state.write_vibe_heal_state("acme-frontend", last_main_sha="deadbeef")
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=b"deadbeef\n", stderr=b"")
-        result = review_prs._run_base_analysis(cfg, {})
+        result = await review_prs._run_base_analysis(cfg, {})
     assert result is True
     # Only fetch + rev-parse should run; no checkout, since the SHA already matches.
     assert not any("checkout" in str(c) for c in mock_run.call_args_list)
 
 
-def test_run_base_analysis_runs_subdirs_and_persists_sha_on_success(tmp_xdg, tmp_path):
+async def test_run_base_analysis_runs_subdirs_and_persists_sha_on_success(tmp_xdg, tmp_path):
     state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     with (
@@ -614,7 +614,7 @@ def test_run_base_analysis_runs_subdirs_and_persists_sha_on_success(tmp_xdg, tmp
         patch("dotharness.pr_review.runners.review_prs.git_restore") as mock_restore,
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"new-sha\n", stderr=b"")
-        result = review_prs._run_base_analysis(cfg, {})
+        result = await review_prs._run_base_analysis(cfg, {})
     assert result is True
     assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == "new-sha"
     vibe_calls = [c for c in mock_run.call_args_list if "--baseline" in str(c)]
@@ -622,7 +622,7 @@ def test_run_base_analysis_runs_subdirs_and_persists_sha_on_success(tmp_xdg, tmp
     mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
 
 
-def test_run_base_analysis_does_not_persist_sha_when_subdir_fails(tmp_xdg, tmp_path):
+async def test_run_base_analysis_does_not_persist_sha_when_subdir_fails(tmp_xdg, tmp_path):
     state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
 
@@ -636,13 +636,13 @@ def test_run_base_analysis_does_not_persist_sha_when_subdir_fails(tmp_xdg, tmp_p
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="original-sha"),
         patch("dotharness.pr_review.runners.review_prs.git_restore") as mock_restore,
     ):
-        result = review_prs._run_base_analysis(cfg, {})
+        result = await review_prs._run_base_analysis(cfg, {})
     assert result is False
     assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == "old-sha"
     mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
 
 
-def test_run_base_analysis_raises_on_git_fetch_failure(tmp_xdg, tmp_path, caplog):
+async def test_run_base_analysis_raises_on_git_fetch_failure(tmp_xdg, tmp_path, caplog):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     with patch.object(type(cfg), "repo_slug", "acme-frontend"):
         state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
@@ -658,13 +658,13 @@ def test_run_base_analysis_raises_on_git_fetch_failure(tmp_xdg, tmp_path, caplog
         caplog.at_level("WARNING"),
         pytest.raises(review_prs.BaseAnalysisError),
     ):
-        review_prs._run_base_analysis(cfg, {})
+        await review_prs._run_base_analysis(cfg, {})
     assert "Base analysis: git fetch failed: fetch error" in caplog.text
     assert mock_run.call_count == 1
     assert "fetch" in str(mock_run.call_args_list[0])
 
 
-def test_run_base_analysis_raises_on_rev_parse_failure(tmp_xdg, tmp_path, caplog):
+async def test_run_base_analysis_raises_on_rev_parse_failure(tmp_xdg, tmp_path, caplog):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     with patch.object(type(cfg), "repo_slug", "acme-frontend"):
         state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
@@ -682,12 +682,12 @@ def test_run_base_analysis_raises_on_rev_parse_failure(tmp_xdg, tmp_path, caplog
         caplog.at_level("WARNING"),
         pytest.raises(review_prs.BaseAnalysisError),
     ):
-        review_prs._run_base_analysis(cfg, {})
+        await review_prs._run_base_analysis(cfg, {})
     assert "Base analysis: git rev-parse failed: rev-parse error" in caplog.text
     assert mock_run.call_count == 2
 
 
-def test_run_base_analysis_raises_on_checkout_failure(tmp_xdg, tmp_path, caplog):
+async def test_run_base_analysis_raises_on_checkout_failure(tmp_xdg, tmp_path, caplog):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     with patch.object(type(cfg), "repo_slug", "acme-frontend"):
         state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
@@ -709,13 +709,13 @@ def test_run_base_analysis_raises_on_checkout_failure(tmp_xdg, tmp_path, caplog)
         caplog.at_level("WARNING"),
         pytest.raises(review_prs.BaseAnalysisError),
     ):
-        review_prs._run_base_analysis(cfg, {})
+        await review_prs._run_base_analysis(cfg, {})
     assert "Base analysis: git checkout failed: checkout error" in caplog.text
     mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
 
 
 @pytest.mark.parametrize("step", ["fetch", "rev-parse", "checkout"])
-def test_run_base_analysis_raises_on_git_timeout(tmp_xdg, tmp_path, caplog, step):
+async def test_run_base_analysis_raises_on_git_timeout(tmp_xdg, tmp_path, caplog, step):
     state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     seen = []
@@ -735,7 +735,7 @@ def test_run_base_analysis_raises_on_git_timeout(tmp_xdg, tmp_path, caplog, step
         caplog.at_level("WARNING"),
         pytest.raises(review_prs.BaseAnalysisError) as info,
     ):
-        review_prs._run_base_analysis(cfg, {})
+        await review_prs._run_base_analysis(cfg, {})
     assert info.value.__cause__ is raised[0]
     assert not isinstance(info.value, review_prs.FatalGitError)
     order = ["fetch", "rev-parse", "checkout"]
@@ -751,7 +751,7 @@ def test_run_base_analysis_raises_on_git_timeout(tmp_xdg, tmp_path, caplog, step
         mock_restore.assert_not_called()
 
 
-def test_run_locked_propagates_base_analysis_timeout_without_processing_prs(tmp_xdg, tmp_path):
+async def test_run_locked_propagates_base_analysis_timeout_without_processing_prs(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
 
     def fake_run_cmd(cmd, **kwargs):
@@ -765,12 +765,12 @@ def test_run_locked_propagates_base_analysis_timeout_without_processing_prs(tmp_
         patch("dotharness.pr_review.runners.review_prs.pr_from_url") as mock_from_url,
         pytest.raises(review_prs.BaseAnalysisError),
     ):
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     mock_list.assert_not_called()
     mock_from_url.assert_not_called()
 
 
-def test_run_locked_calls_prune_projects_before_base_analysis(tmp_xdg, tmp_path):
+async def test_run_locked_calls_prune_projects_before_base_analysis(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     calls = []
     with (
@@ -784,12 +784,12 @@ def test_run_locked_calls_prune_projects_before_base_analysis(tmp_xdg, tmp_path)
         ),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors") as mock_list,
     ):
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     assert calls == ["prune", "base_analysis"]
     mock_list.assert_not_called()
 
 
-def test_run_locked_does_not_prune_when_disabled(tmp_xdg, tmp_path):
+async def test_run_locked_does_not_prune_when_disabled(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     assert cfg.vibe_heal.prune_projects_enabled is False
     with (
@@ -798,33 +798,33 @@ def test_run_locked_does_not_prune_when_disabled(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=[]),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
     ):
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     prune_calls = [c for c in mock_run.call_args_list if "prune-projects" in str(c)]
     assert prune_calls == []
 
 
-def test_run_locked_skips_when_subdirs_empty(tmp_xdg, tmp_path):
+async def test_run_locked_skips_when_subdirs_empty(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path)
     with (
         patch("dotharness.pr_review.runners.review_prs.get_gh_token") as mock_token,
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors") as mock_list,
     ):
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     mock_token.assert_not_called()
     mock_list.assert_not_called()
 
 
-def test_run_locked_skips_pr_processing_when_base_analysis_fails(tmp_xdg, tmp_path):
+async def test_run_locked_skips_pr_processing_when_base_analysis_fails(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     with (
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors") as mock_list,
     ):
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     mock_list.assert_not_called()
 
 
-def test_run_locked_does_not_record_reviewed_sha_on_subdir_failure(tmp_xdg, tmp_path):
+async def test_run_locked_does_not_record_reviewed_sha_on_subdir_failure(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha7"}]
 
@@ -844,11 +844,11 @@ def test_run_locked_does_not_record_reviewed_sha_on_subdir_failure(tmp_xdg, tmp_
         patch("dotharness.pr_review.runners.review_prs.git_restore"),
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     assert state.get_reviewed_sha("acme-frontend", 7) is None
 
 
-def test_run_locked_does_not_record_reviewed_sha_on_generic_exception(tmp_xdg, tmp_path):
+async def test_run_locked_does_not_record_reviewed_sha_on_generic_exception(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha7"}]
 
@@ -867,11 +867,11 @@ def test_run_locked_does_not_record_reviewed_sha_on_generic_exception(tmp_xdg, t
         patch("dotharness.pr_review.runners.review_prs.git_restore"),
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     assert state.get_reviewed_sha("acme-frontend", 7) is None
 
 
-def test_run_locked_returns_early_when_vibe_heal_disabled(tmp_path):
+async def test_run_locked_returns_early_when_vibe_heal_disabled(tmp_path):
     from dotharness.pr_review.config import HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
 
     cfg = HarnessConfig(
@@ -880,11 +880,11 @@ def test_run_locked_returns_early_when_vibe_heal_disabled(tmp_path):
         vibe_heal=VibehealConfig(enabled=False),
     )
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run:
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     mock_run.assert_not_called()
 
 
-def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path):
+async def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path):
     from dotharness.pr_review.runners.common import FatalGitError
 
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
@@ -904,7 +904,7 @@ def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout") as mock_fetch,
     ):
         mock_fetch.side_effect = [None, FatalGitError("corrupted ref")]
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     # PR 3 completed successfully; FatalGitError on PR 4's fetch broke the loop before PR 4 could finish.
     assert mock_fetch.call_count == 2
     assert state.get_reviewed_sha("acme-frontend", 3) == "sha3"
@@ -912,7 +912,7 @@ def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path):
     assert mock_restore.call_count == 2
 
 
-def test_fatal_git_error_from_process_pr_stops_remaining_prs(tmp_xdg, tmp_path):
+async def test_fatal_git_error_from_process_pr_stops_remaining_prs(tmp_xdg, tmp_path):
     from dotharness.pr_review.runners.common import FatalGitError
 
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
@@ -934,12 +934,12 @@ def test_fatal_git_error_from_process_pr_stops_remaining_prs(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.review_prs.git_restore"),
     ):
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     # _process_pr was called exactly once — PR 6 was never attempted after PR 5's fatal error.
     assert mock_process.call_count == 1
 
 
-def test_generic_exception_does_not_block_credit_for_other_prs(tmp_xdg, tmp_path):
+async def test_generic_exception_does_not_block_credit_for_other_prs(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     prs = [
         {"number": 2, "headRefName": "pr2", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha2"},
@@ -957,7 +957,7 @@ def test_generic_exception_does_not_block_credit_for_other_prs(tmp_xdg, tmp_path
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout") as mock_fetch,
     ):
         mock_fetch.side_effect = [None, RuntimeError("unexpected failure")]
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     # Both PRs were processed; generic Exception on PR 4 did not break the loop.
     assert mock_fetch.call_count == 2
     assert mock_restore.call_count == 2
@@ -967,7 +967,7 @@ def test_generic_exception_does_not_block_credit_for_other_prs(tmp_xdg, tmp_path
     assert state.get_reviewed_sha("acme-frontend", 4) is None
 
 
-def test_run_locked_calls_git_restore_when_process_pr_raises(tmp_xdg, tmp_path):
+async def test_run_locked_calls_git_restore_when_process_pr_raises(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     prs = [{"number": 5, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha5"}]
 
@@ -983,7 +983,7 @@ def test_run_locked_calls_git_restore_when_process_pr_raises(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_prs.git_restore") as mock_restore,
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     mock_restore.assert_called_once()
     call_args = mock_restore.call_args
     assert call_args[0][0] == "original-sha"
@@ -1059,14 +1059,14 @@ def test_env_file_args(tmp_path):
     assert env_file_args(cfg.repo, SubDir(path=".", env_file=str(p))) == ["--env-file", str(p)]
 
 
-def test_base_subdir_argv_with_and_without_env_file(tmp_path):
+async def test_base_subdir_argv_with_and_without_env_file(tmp_path):
     cfg = _make_config(tmp_path)
     (tmp_path / ".env").write_text("X=1\n")
     p = str(tmp_path / ".env")
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=b"")
-        review_prs._run_base_subdir(SubDir(path="a", env_file=p), cfg, {})
-        review_prs._run_base_subdir(SubDir(path="b"), cfg, {})
+        await review_prs._run_base_subdir(SubDir(path="a", env_file=p), cfg, {})
+        await review_prs._run_base_subdir(SubDir(path="b"), cfg, {})
     with_env, without = _vibe_cmds(mock_run)
     base = ["/venv/bin/python3", "-m", "dotharness.vibe_heal", "review", "--baseline"]
     assert with_env == [*base, "--env-file", p]
@@ -1074,14 +1074,14 @@ def test_base_subdir_argv_with_and_without_env_file(tmp_path):
 
 
 @pytest.mark.parametrize("coverage", [True, False])
-def test_process_subdir_argv_with_and_without_env_file(tmp_path, coverage):
+async def test_process_subdir_argv_with_and_without_env_file(tmp_path, coverage):
     cfg = _make_config(tmp_path)
     (tmp_path / ".env").write_text("X=1\n")
     p = str(tmp_path / ".env")
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=b"")
-        review_prs._process_subdir(7, SubDir(path="a", coverage=coverage, env_file=p), cfg, {})
-        review_prs._process_subdir(7, SubDir(path="b", coverage=coverage), cfg, {})
+        await review_prs._process_subdir(7, SubDir(path="a", coverage=coverage, env_file=p), cfg, {})
+        await review_prs._process_subdir(7, SubDir(path="b", coverage=coverage), cfg, {})
     review_a, post_a, review_b, post_b = _vibe_cmds(mock_run)
     py = ["/venv/bin/python3", "-m", "dotharness.vibe_heal"]
     cov = ["--coverage"] if coverage else []
@@ -1103,12 +1103,12 @@ def _bad_env_file(tmp_path, kind):
 
 
 @pytest.mark.parametrize("kind", ["missing", "directory"])
-def test_base_subdir_fails_fast_on_bad_env_file(tmp_path, caplog, kind):
+async def test_base_subdir_fails_fast_on_bad_env_file(tmp_path, caplog, kind):
     cfg = _make_config(tmp_path)
     bad = _bad_env_file(tmp_path, kind)
     subdir = SubDir(path="a", env_file=bad, pre_commands=[PreCommand(cmd="echo hi")])
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run, caplog.at_level("DEBUG"):
-        assert review_prs._run_base_subdir(subdir, cfg, {}) is False
+        assert (await review_prs._run_base_subdir(subdir, cfg, {})) is False
     mock_run.assert_not_called()
     errors = [r for r in caplog.records if r.levelname == "ERROR"]
     assert len(errors) == 1
@@ -1116,12 +1116,12 @@ def test_base_subdir_fails_fast_on_bad_env_file(tmp_path, caplog, kind):
 
 
 @pytest.mark.parametrize("kind", ["missing", "directory"])
-def test_process_subdir_fails_fast_on_bad_env_file(tmp_path, caplog, kind):
+async def test_process_subdir_fails_fast_on_bad_env_file(tmp_path, caplog, kind):
     cfg = _make_config(tmp_path)
     bad = _bad_env_file(tmp_path, kind)
     subdir = SubDir(path="a", env_file=bad, pre_commands=[PreCommand(cmd="echo hi")])
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run, caplog.at_level("DEBUG"):
-        assert review_prs._process_subdir(7, subdir, cfg, {}) is False
+        assert (await review_prs._process_subdir(7, subdir, cfg, {})) is False
     mock_run.assert_not_called()
     errors = [r for r in caplog.records if r.levelname == "ERROR"]
     assert len(errors) == 1
@@ -1129,7 +1129,7 @@ def test_process_subdir_fails_fast_on_bad_env_file(tmp_path, caplog, kind):
 
 
 @pytest.mark.parametrize("kind", ["missing", "directory"])
-def test_run_base_analysis_does_not_persist_sha_on_bad_env_file(tmp_xdg, tmp_path, kind):
+async def test_run_base_analysis_does_not_persist_sha_on_bad_env_file(tmp_xdg, tmp_path, kind):
     state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
     bad = _bad_env_file(tmp_path, kind)
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30, env_file=bad)])
@@ -1139,13 +1139,13 @@ def test_run_base_analysis_does_not_persist_sha_on_bad_env_file(tmp_xdg, tmp_pat
         patch("dotharness.pr_review.runners.review_prs.git_restore"),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"new-sha\n", stderr=b"")
-        assert review_prs._run_base_analysis(cfg, {}) is False
+        assert (await review_prs._run_base_analysis(cfg, {})) is False
     assert not [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == "old-sha"
 
 
 @pytest.mark.parametrize("kind", ["missing", "directory"])
-def test_process_pr_does_not_record_reviewed_sha_on_bad_env_file(tmp_xdg, tmp_path, kind):
+async def test_process_pr_does_not_record_reviewed_sha_on_bad_env_file(tmp_xdg, tmp_path, kind):
     bad = _bad_env_file(tmp_path, kind)
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30, env_file=bad)])
     prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha7"}]
@@ -1161,14 +1161,14 @@ def test_process_pr_does_not_record_reviewed_sha_on_bad_env_file(tmp_xdg, tmp_pa
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout"),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]", stderr=b"")
-        review_prs._run_locked(cfg)
+        await review_prs._run_locked(cfg)
     assert not [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert state.get_reviewed_sha("acme-frontend", 7) is None
 
 
-def test_unset_env_file_logs_no_env_file_message(tmp_path, caplog):
+async def test_unset_env_file_logs_no_env_file_message(tmp_path, caplog):
     cfg = _make_config(tmp_path)
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run, caplog.at_level("DEBUG"):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"")
-        assert review_prs._run_base_subdir(SubDir(path="a"), cfg, {}) is True
+        assert (await review_prs._run_base_subdir(SubDir(path="a"), cfg, {})) is True
     assert not [r for r in caplog.records if "regular file" in r.getMessage()]

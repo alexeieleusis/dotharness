@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -15,13 +15,13 @@ OK = RunResult(returncode=0, stdout="", stderr="")
 
 @pytest.fixture
 def launch(monkeypatch):
-    mock = Mock(return_value=OK)
-    monkeypatch.setattr(prose_review, "launch_sync", mock)
+    mock = AsyncMock(return_value=OK)
+    monkeypatch.setattr(prose_review, "launch", mock)
     return mock
 
 
 def _setup(tmp_path, monkeypatch, rel="requirements.md"):
-    monkeypatch.setattr(prose_review, "git_toplevel", Mock(return_value=tmp_path))
+    monkeypatch.setattr(prose_review, "git_toplevel", AsyncMock(return_value=tmp_path))
     skill = tmp_path / "SKILL.md"
     skill.write_text("# skill\n")
     monkeypatch.setattr(prose_review, "_skill_path", lambda: skill)
@@ -31,11 +31,11 @@ def _setup(tmp_path, monkeypatch, rel="requirements.md"):
     return target, skill
 
 
-def test_noop_when_disabled(tmp_path, monkeypatch, launch):
-    toplevel_mock = Mock()
+async def test_noop_when_disabled(tmp_path, monkeypatch, launch):
+    toplevel_mock = AsyncMock()
     monkeypatch.setattr(prose_review, "git_toplevel", toplevel_mock)
 
-    prose_review.review_document(ProseReviewConfig(enabled=False), tmp_path / "requirements.md")
+    await prose_review.review_document(ProseReviewConfig(enabled=False), tmp_path / "requirements.md")
 
     toplevel_mock.assert_not_called()
     launch.assert_not_called()
@@ -49,22 +49,22 @@ def test_skill_path_resolves_via_importlib_resources():
     assert "dotharness" in path.parts
 
 
-def test_skips_and_warns_when_skill_file_missing(tmp_path, monkeypatch, caplog, launch):
+async def test_skips_and_warns_when_skill_file_missing(tmp_path, monkeypatch, caplog, launch):
     target, _ = _setup(tmp_path, monkeypatch)
     monkeypatch.setattr(prose_review, "_skill_path", lambda: tmp_path / "nope.md")
 
     with caplog.at_level(logging.WARNING):
-        prose_review.review_document(ProseReviewConfig(enabled=True), target)
+        await prose_review.review_document(ProseReviewConfig(enabled=True), target)
 
     launch.assert_not_called()
     assert "skill file not found" in caplog.text
     assert str(target) in caplog.text
 
 
-def test_claude_call_shape(tmp_path, monkeypatch, launch):
+async def test_claude_call_shape(tmp_path, monkeypatch, launch):
     target, skill = _setup(tmp_path, monkeypatch, "workspace/requirements.md")
 
-    prose_review.review_document(ProseReviewConfig(enabled=True, backend="claude"), target)
+    await prose_review.review_document(ProseReviewConfig(enabled=True, backend="claude"), target)
 
     launch.assert_called_once()
     args, kwargs = launch.call_args
@@ -79,10 +79,10 @@ def test_claude_call_shape(tmp_path, monkeypatch, launch):
     assert kwargs["backend_options"] == ClaudeOptions(skip_permissions=True, disable_slash_commands=True)
 
 
-def test_opencode_call_shape(tmp_path, monkeypatch, launch):
+async def test_opencode_call_shape(tmp_path, monkeypatch, launch):
     target, _ = _setup(tmp_path, monkeypatch)
 
-    prose_review.review_document(ProseReviewConfig(enabled=True, backend="opencode"), target, timeout=42)
+    await prose_review.review_document(ProseReviewConfig(enabled=True, backend="opencode"), target, timeout=42)
 
     args, kwargs = launch.call_args
     assert args[0] == "opencode"
@@ -92,46 +92,46 @@ def test_opencode_call_shape(tmp_path, monkeypatch, launch):
     assert kwargs["backend_options"].auto is False
 
 
-def test_toplevel_derived_from_target_path(tmp_path, monkeypatch, launch):
+async def test_toplevel_derived_from_target_path(tmp_path, monkeypatch, launch):
     target, _ = _setup(tmp_path, monkeypatch, "docs/plan.md")
-    toplevel_mock = Mock(return_value=tmp_path)
+    toplevel_mock = AsyncMock(return_value=tmp_path)
     monkeypatch.setattr(prose_review, "git_toplevel", toplevel_mock)
 
-    prose_review.review_document(ProseReviewConfig(enabled=True), target)
+    await prose_review.review_document(ProseReviewConfig(enabled=True), target)
 
     toplevel_mock.assert_called_once_with(target.resolve().parent)
 
 
-def test_swallows_git_error(tmp_path, monkeypatch, caplog, launch):
-    monkeypatch.setattr(prose_review, "git_toplevel", Mock(side_effect=GitError("not a git repo")))
+async def test_swallows_git_error(tmp_path, monkeypatch, caplog, launch):
+    monkeypatch.setattr(prose_review, "git_toplevel", AsyncMock(side_effect=GitError("not a git repo")))
 
     with caplog.at_level(logging.WARNING):
-        prose_review.review_document(ProseReviewConfig(enabled=True), tmp_path / "requirements.md")
+        await prose_review.review_document(ProseReviewConfig(enabled=True), tmp_path / "requirements.md")
 
     assert "prose review of" in caplog.text
     assert "not a git repo" in caplog.text
     launch.assert_not_called()
 
 
-def test_swallows_target_outside_toplevel(tmp_path, monkeypatch, caplog, launch):
+async def test_swallows_target_outside_toplevel(tmp_path, monkeypatch, caplog, launch):
     target, _ = _setup(tmp_path, monkeypatch)
     other = tmp_path / "unrelated"
     other.mkdir()
-    monkeypatch.setattr(prose_review, "git_toplevel", Mock(return_value=other))
+    monkeypatch.setattr(prose_review, "git_toplevel", AsyncMock(return_value=other))
 
     with caplog.at_level(logging.WARNING):
-        prose_review.review_document(ProseReviewConfig(enabled=True), target)
+        await prose_review.review_document(ProseReviewConfig(enabled=True), target)
 
     launch.assert_not_called()
     assert "prose review of" in caplog.text
 
 
-def test_swallows_launch_exception(tmp_path, monkeypatch, caplog, launch):
+async def test_swallows_launch_exception(tmp_path, monkeypatch, caplog, launch):
     target, _ = _setup(tmp_path, monkeypatch)
     launch.side_effect = RuntimeError("backend blew up")
 
     with caplog.at_level(logging.WARNING):
-        prose_review.review_document(ProseReviewConfig(enabled=True), target)
+        await prose_review.review_document(ProseReviewConfig(enabled=True), target)
 
     assert "prose review of" in caplog.text
     assert "backend blew up" in caplog.text
@@ -145,7 +145,7 @@ def test_swallows_launch_exception(tmp_path, monkeypatch, caplog, launch):
         (RunResult(returncode=3, stdout="", stderr=""), "exited with code 3"),
     ],
 )
-def test_warns_on_bad_result_without_leaking_secrets(tmp_path, monkeypatch, caplog, launch, result, expected):
+async def test_warns_on_bad_result_without_leaking_secrets(tmp_path, monkeypatch, caplog, launch, result, expected):
     target, skill = _setup(tmp_path, monkeypatch)
     secret = RunResult(
         returncode=result.returncode,
@@ -157,7 +157,7 @@ def test_warns_on_bad_result_without_leaking_secrets(tmp_path, monkeypatch, capl
     launch.return_value = secret
 
     with caplog.at_level(logging.WARNING):
-        prose_review.review_document(ProseReviewConfig(enabled=True), target)
+        await prose_review.review_document(ProseReviewConfig(enabled=True), target)
 
     assert expected in caplog.text
     prompt = launch.call_args.args[1]
@@ -168,10 +168,10 @@ def test_warns_on_bad_result_without_leaking_secrets(tmp_path, monkeypatch, capl
     assert Path(skill).name not in caplog.text
 
 
-def test_success_logs_nothing(tmp_path, monkeypatch, caplog, launch):
+async def test_success_logs_nothing(tmp_path, monkeypatch, caplog, launch):
     target, _ = _setup(tmp_path, monkeypatch)
 
     with caplog.at_level(logging.WARNING):
-        prose_review.review_document(ProseReviewConfig(enabled=True), target)
+        await prose_review.review_document(ProseReviewConfig(enabled=True), target)
 
     assert caplog.text == ""

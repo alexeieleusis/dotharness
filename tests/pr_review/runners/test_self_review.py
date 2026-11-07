@@ -1,6 +1,6 @@
 import json
 import subprocess
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -45,7 +45,7 @@ def _setup_knowledge(tmp_path, content="instructions"):
     (kdir / "review-regret.md").write_text(content)
 
 
-def test_skips_already_reviewed_pr(tmp_xdg, tmp_path):
+async def test_skips_already_reviewed_pr(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     state.write_self_review_state("acme-frontend", [5])
     cfg = _cfg(tmp_path)
@@ -70,12 +70,12 @@ def test_skips_already_reviewed_pr(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     assert 5 in state.get_design_reviewed_prs("acme-frontend")
 
 
-def test_backup_check_marks_reviewed_without_running(tmp_xdg, tmp_path):
+async def test_backup_check_marks_reviewed_without_running(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     state.write_self_review_state("acme-frontend", [])
     cfg = _cfg(tmp_path)
@@ -101,13 +101,13 @@ def test_backup_check_marks_reviewed_without_running(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     assert 3 in state.read_self_review_state("acme-frontend")["reviewed_prs"]
     assert 3 in state.get_design_reviewed_prs("acme-frontend")
 
 
-def test_updates_state_on_success(tmp_xdg, tmp_path):
+async def test_updates_state_on_success(tmp_xdg, tmp_path):
     state.write_self_review_state("acme-frontend", [])
     _setup_knowledge(tmp_path)
     (tmp_path / "src").mkdir(parents=True, exist_ok=True)
@@ -136,12 +136,13 @@ def test_updates_state_on_success(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     assert 7 in state.read_self_review_state("acme-frontend")["reviewed_prs"]
 
 
-def test_does_not_update_state_when_summary_comment_missing(tmp_xdg, tmp_path):
+async def test_does_not_update_state_when_summary_comment_missing(tmp_xdg, tmp_path):
     """Backend exits 0 for every call, but no summary comment is found on GitHub afterward —
     the PR must not be marked reviewed so the summary gets retried on the next run."""
     state.write_self_review_state("acme-frontend", [])
@@ -174,13 +175,14 @@ def test_does_not_update_state_when_summary_comment_missing(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     assert 15 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
     assert state.get_partial_reviewed_files("acme-frontend", 15) == ["src/foo.py"]
 
 
-def test_does_not_update_state_on_failure(tmp_xdg, tmp_path):
+async def test_does_not_update_state_on_failure(tmp_xdg, tmp_path):
     state.write_self_review_state("acme-frontend", [])
     _setup_knowledge(tmp_path)
     (tmp_path / "src").mkdir(parents=True, exist_ok=True)
@@ -207,12 +209,13 @@ def test_does_not_update_state_on_failure(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=1)
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     assert 9 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
 
 
-def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
+async def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
     state.write_self_review_state("acme-frontend", [])
     _setup_knowledge(tmp_path)
     (tmp_path / "src").mkdir(parents=True, exist_ok=True)
@@ -242,14 +245,15 @@ def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        self_review.run(cfg)
+        await self_review.run(cfg)
     # 2 files + 1 summary = 3 backend calls
     assert mock_be.return_value.run.call_count == 3
     assert 11 in state.read_self_review_state("acme-frontend")["reviewed_prs"]
 
 
-def test_does_not_update_state_when_file_call_fails(tmp_xdg, tmp_path):
+async def test_does_not_update_state_when_file_call_fails(tmp_xdg, tmp_path):
     state.write_self_review_state("acme-frontend", [])
     _setup_knowledge(tmp_path)
     (tmp_path / "src").mkdir(parents=True, exist_ok=True)
@@ -276,12 +280,13 @@ def test_does_not_update_state_when_file_call_fails(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=1)
-        self_review.run(cfg)
+        await self_review.run(cfg)
     assert 13 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
 
 
-def test_vibe_heal_context_included_in_prompts(tmp_xdg, tmp_path):
+async def test_vibe_heal_context_included_in_prompts(tmp_xdg, tmp_path):
     state.write_self_review_state("acme-frontend", [])
     _setup_knowledge(tmp_path)
     (tmp_path / "src").mkdir(parents=True, exist_ok=True)
@@ -309,15 +314,16 @@ def test_vibe_heal_context_included_in_prompts(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.get_vibe_heal_context", return_value="sonar findings"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     # backend.run(prompt, cwd=wdir) — prompt is first positional arg
     prompts = [c.args[0] for c in mock_be.return_value.run.call_args_list]
     assert all("## Static Analysis" in p for p in prompts)
     assert all("sonar findings" in p for p in prompts)
 
 
-def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
+async def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
     state.write_self_review_state("acme-frontend", [])
     _setup_knowledge(tmp_path)
     (tmp_path / "src").mkdir(parents=True, exist_ok=True)
@@ -345,13 +351,14 @@ def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.get_vibe_heal_context", return_value=""),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     prompts = [c.args[0] for c in mock_be.return_value.run.call_args_list]
     assert all("## Static Analysis" not in p for p in prompts)
 
 
-def test_git_restore_called_on_context_gathering_exception(tmp_xdg, tmp_path):
+async def test_git_restore_called_on_context_gathering_exception(tmp_xdg, tmp_path):
     """When a context-gathering call raises, git_restore still runs in finally."""
     state.write_self_review_state("acme-frontend", [])
     _setup_knowledge(tmp_path)
@@ -375,12 +382,12 @@ def test_git_restore_called_on_context_gathering_exception(tmp_xdg, tmp_path):
         ),
         patch("dotharness.pr_review.runners.self_review.Backend"),
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_restore.assert_called_once_with("sha", "b", str(tmp_path), mock_restore.call_args[0][3])
     assert 20 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
 
 
-def test_timeout_expired_does_not_mark_reviewed(tmp_xdg, tmp_path):
+async def test_timeout_expired_does_not_mark_reviewed(tmp_xdg, tmp_path):
     """When backend.run raises TimeoutExpired, the PR is not marked reviewed and no crash propagates."""
     state.write_self_review_state("acme-frontend", [])
     _setup_knowledge(tmp_path)
@@ -408,12 +415,13 @@ def test_timeout_expired_does_not_mark_reviewed(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.side_effect = subprocess.TimeoutExpired("cmd", 10)
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     assert 21 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
 
 
-def test_inconclusive_comment_check_skips_cycle_without_marking_reviewed(tmp_xdg, tmp_path):
+async def test_inconclusive_comment_check_skips_cycle_without_marking_reviewed(tmp_xdg, tmp_path):
     """When the GitHub API check itself fails (rate limit, transient 5xx), the up-front
     check can't confirm anything either way — the PR must be left alone this cycle rather
     than processed (risking a duplicate post) or marked reviewed (risking a false positive)."""
@@ -442,13 +450,13 @@ def test_inconclusive_comment_check_skips_cycle_without_marking_reviewed(tmp_xdg
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     assert 30 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
     assert 30 in state.get_design_reviewed_prs("acme-frontend")
 
 
-def test_prunes_stale_entries_for_closed_prs(tmp_xdg, tmp_path):
+async def test_prunes_stale_entries_for_closed_prs(tmp_xdg, tmp_path):
     """A PR that's no longer in the open-PR list gets its reviewed_prs/partial_reviews
     entries dropped, even though it's not reprocessed this cycle."""
     _setup_knowledge(tmp_path)
@@ -477,7 +485,7 @@ def test_prunes_stale_entries_for_closed_prs(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     result = state.read_self_review_state("acme-frontend")
     assert result["reviewed_prs"] == [5]
@@ -485,7 +493,7 @@ def test_prunes_stale_entries_for_closed_prs(tmp_xdg, tmp_path):
     assert 5 in state.get_design_reviewed_prs("acme-frontend")
 
 
-def test_failed_pr_fetch_skips_cycle_without_touching_state(tmp_xdg, tmp_path):
+async def test_failed_pr_fetch_skips_cycle_without_touching_state(tmp_xdg, tmp_path):
     """When _list_my_prs can't confirm the open-PR set (gh failure or malformed JSON), the
     cycle must skip entirely rather than pruning against a possibly-wrong empty set."""
     _setup_knowledge(tmp_path)
@@ -500,24 +508,24 @@ def test_failed_pr_fetch_skips_cycle_without_touching_state(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review._list_my_prs", return_value=None),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     assert state.read_self_review_state("acme-frontend")["reviewed_prs"] == [5]
 
 
-def test_list_my_prs_returns_none_on_gh_failure():
+async def test_list_my_prs_returns_none_on_gh_failure():
     with patch("dotharness.pr_review.runners.self_review.run_cmd", return_value=MagicMock(returncode=1, stdout=b"")):
-        assert self_review._list_my_prs("acme/frontend", {}) is None
+        assert (await self_review._list_my_prs("acme/frontend", {})) is None
 
 
-def test_list_my_prs_returns_none_on_malformed_json():
+async def test_list_my_prs_returns_none_on_malformed_json():
     with patch(
         "dotharness.pr_review.runners.self_review.run_cmd", return_value=MagicMock(returncode=0, stdout=b"not json")
     ):
-        assert self_review._list_my_prs("acme/frontend", {}) is None
+        assert (await self_review._list_my_prs("acme/frontend", {})) is None
 
 
-def test_list_my_prs_requests_author_field_in_both_queries():
+async def test_list_my_prs_requests_author_field_in_both_queries():
     """gh pr list --json must request the "author" field on both the --author and
     --assignee queries, because the regret pass's author gate
     (regret_review.find_introducing_prs -> _pr_gate_setup) reads
@@ -534,7 +542,7 @@ def test_list_my_prs_requests_author_field_in_both_queries():
         "dotharness.pr_review.runners.self_review.run_cmd",
         return_value=MagicMock(returncode=0, stdout=json.dumps([pr]).encode()),
     ) as mock_run:
-        prs = self_review._list_my_prs("acme/frontend", {})
+        prs = await self_review._list_my_prs("acme/frontend", {})
 
     assert prs == [pr]
     assert mock_run.call_count == 2
@@ -544,7 +552,7 @@ def test_list_my_prs_requests_author_field_in_both_queries():
         assert "author" in fields
 
 
-def test_list_my_prs_includes_assigned_prs_not_authored(tmp_xdg, tmp_path):
+async def test_list_my_prs_includes_assigned_prs_not_authored(tmp_xdg, tmp_path):
     """A PR opened by a bot on the user's behalf (not authored by them) but assigned to
     them must still show up — self_review is about PRs the user is responsible for, not
     strictly ones they authored."""
@@ -559,24 +567,24 @@ def test_list_my_prs_includes_assigned_prs_not_authored(tmp_xdg, tmp_path):
         raise AssertionError(f"unexpected command: {cmd}")  # noqa: TRY003
 
     with patch("dotharness.pr_review.runners.self_review.run_cmd", side_effect=side_effect):
-        prs = self_review._list_my_prs("acme/frontend", {})
+        prs = await self_review._list_my_prs("acme/frontend", {})
     assert prs is not None
     assert [p["number"] for p in prs] == [1, 2]
 
 
-def test_list_my_prs_deduplicates_pr_authored_and_assigned(tmp_xdg, tmp_path):
+async def test_list_my_prs_deduplicates_pr_authored_and_assigned(tmp_xdg, tmp_path):
     both = [{"number": 1, "url": "u1", "headRefName": "b1"}]
 
     with patch(
         "dotharness.pr_review.runners.self_review.run_cmd",
         return_value=MagicMock(returncode=0, stdout=json.dumps(both).encode()),
     ):
-        prs = self_review._list_my_prs("acme/frontend", {})
+        prs = await self_review._list_my_prs("acme/frontend", {})
     assert prs is not None
     assert [p["number"] for p in prs] == [1]
 
 
-def test_list_my_prs_returns_none_when_assignee_query_fails(tmp_xdg, tmp_path):
+async def test_list_my_prs_returns_none_when_assignee_query_fails(tmp_xdg, tmp_path):
     """The author query can succeed while the assignee query fails (or vice versa) — that
     partial result must not be treated as the authoritative open-PR set."""
     authored = [{"number": 1, "url": "u1", "headRefName": "b1"}]
@@ -587,10 +595,10 @@ def test_list_my_prs_returns_none_when_assignee_query_fails(tmp_xdg, tmp_path):
         return MagicMock(returncode=1, stdout=b"")
 
     with patch("dotharness.pr_review.runners.self_review.run_cmd", side_effect=side_effect):
-        assert self_review._list_my_prs("acme/frontend", {}) is None
+        assert (await self_review._list_my_prs("acme/frontend", {})) is None
 
 
-def test_design_review_runs_independently_of_already_reviewed_files(tmp_xdg, tmp_path):
+async def test_design_review_runs_independently_of_already_reviewed_files(tmp_xdg, tmp_path):
     """A PR whose files/summary already succeeded (reviewed_prs) still gets a design
     pass if design_reviewed_prs doesn't have it yet — fate is decoupled (dotharness#3)."""
     _setup_knowledge(tmp_path)
@@ -617,15 +625,16 @@ def test_design_review_runs_independently_of_already_reviewed_files(tmp_xdg, tmp
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     # Only the design pass runs (files/summary already done) — one backend call.
     assert mock_be.return_value.run.call_count == 1
     assert mock_be.return_value.run.call_args.kwargs["context"] == "PR #7 design review"
     assert 7 in state.get_design_reviewed_prs("acme-frontend")
 
 
-def test_design_review_failure_does_not_block_files_summary_state(tmp_xdg, tmp_path):
+async def test_design_review_failure_does_not_block_files_summary_state(tmp_xdg, tmp_path):
     """A design-pass failure must not prevent reviewed_prs from being updated, and must
     not itself be recorded as done — the two are tracked independently."""
     state.write_self_review_state("acme-frontend", [])
@@ -656,17 +665,18 @@ def test_design_review_failure_does_not_block_files_summary_state(tmp_xdg, tmp_p
     ):
         # File review + summary succeed (returncode 0); the design-review call — the
         # third and last backend invocation — fails.
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.side_effect = [
             MagicMock(returncode=0),
             MagicMock(returncode=0),
             MagicMock(returncode=1),
         ]
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     assert 8 in state.read_self_review_state("acme-frontend")["reviewed_prs"]
     assert 8 not in state.get_design_reviewed_prs("acme-frontend")
 
 
-def test_design_review_already_done_is_skipped_without_any_backend_call(tmp_xdg, tmp_path):
+async def test_design_review_already_done_is_skipped_without_any_backend_call(tmp_xdg, tmp_path):
     """Once design_reviewed_prs has the PR, and files/summary are also already done,
     nothing runs at all this cycle — not even a checkout."""
     _setup_knowledge(tmp_path)
@@ -685,12 +695,12 @@ def test_design_review_already_done_is_skipped_without_any_backend_call(tmp_xdg,
         patch("dotharness.pr_review.runners.self_review.git_fetch_and_checkout") as mock_checkout,
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     mock_checkout.assert_not_called()
 
 
-def test_design_review_marker_found_marks_done_without_invoking_backend(tmp_xdg, tmp_path):
+async def test_design_review_marker_found_marks_done_without_invoking_backend(tmp_xdg, tmp_path):
     """Defense-in-depth: if a design-review comment is already on GitHub (e.g. a prior
     state write didn't persist), the pass is recorded as done without re-invoking."""
     _setup_knowledge(tmp_path)
@@ -713,12 +723,12 @@ def test_design_review_marker_found_marks_done_without_invoking_backend(tmp_xdg,
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     assert 10 in state.get_design_reviewed_prs("acme-frontend")
 
 
-def test_design_review_not_marked_done_when_comment_confirmed_missing(tmp_xdg, tmp_path):
+async def test_design_review_not_marked_done_when_comment_confirmed_missing(tmp_xdg, tmp_path):
     """The backend exiting 0 is not proof it posted — if the post-run GitHub check
     confirms no design-review comment exists, the pass must not be recorded as done,
     so a future run retries instead of silently skipping it forever."""
@@ -746,12 +756,13 @@ def test_design_review_not_marked_done_when_comment_confirmed_missing(tmp_xdg, t
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     assert 11 not in state.get_design_reviewed_prs("acme-frontend")
 
 
-def test_design_review_not_marked_done_when_comment_check_inconclusive(tmp_xdg, tmp_path):
+async def test_design_review_not_marked_done_when_comment_check_inconclusive(tmp_xdg, tmp_path):
     """If the post-run GitHub check itself fails (e.g. transient API error), that's
     inconclusive, not a confirmed absence — the pass must still not be marked done."""
     _setup_knowledge(tmp_path)
@@ -778,12 +789,13 @@ def test_design_review_not_marked_done_when_comment_check_inconclusive(tmp_xdg, 
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     assert 12 not in state.get_design_reviewed_prs("acme-frontend")
 
 
-def test_does_not_update_state_when_summary_check_inconclusive(tmp_xdg, tmp_path):
+async def test_does_not_update_state_when_summary_check_inconclusive(tmp_xdg, tmp_path):
     """If the post-backend verification GET fails transiently, that's inconclusive, not a
     confirmed missing comment — the PR must still not be marked reviewed on this run."""
     state.write_self_review_state("acme-frontend", [])
@@ -816,12 +828,13 @@ def test_does_not_update_state_when_summary_check_inconclusive(tmp_xdg, tmp_path
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     assert 31 not in state.read_self_review_state("acme-frontend")["reviewed_prs"]
 
 
-def test_traceability_review_runs_independently_of_already_reviewed_files(tmp_xdg, tmp_path):
+async def test_traceability_review_runs_independently_of_already_reviewed_files(tmp_xdg, tmp_path):
     """A PR whose files/summary/design already succeeded still gets a traceability pass
     if traceability_reviewed_prs doesn't have it yet — fate is decoupled (dotharness#4)."""
     _setup_knowledge(tmp_path)
@@ -857,8 +870,9 @@ def test_traceability_review_runs_independently_of_already_reviewed_files(tmp_xd
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     # Only the traceability pass runs (files/summary/design already done) — one backend call.
     assert mock_be.return_value.run.call_count == 1
     assert mock_be.return_value.run.call_args.kwargs["context"] == "PR #7 traceability review"
@@ -868,7 +882,7 @@ def test_traceability_review_runs_independently_of_already_reviewed_files(tmp_xd
     assert 7 in state.get_traceability_reviewed_prs("acme-frontend")
 
 
-def test_traceability_review_no_linked_ticket_posts_comment_without_backend(tmp_xdg, tmp_path):
+async def test_traceability_review_no_linked_ticket_posts_comment_without_backend(tmp_xdg, tmp_path):
     """When resolve_linked_tickets finds nothing via either mechanism, the "no linked
     ticket" comment is posted directly and the pass is marked done — no backend call,
     since there's nothing for a model to judge (§7.1/§7.3)."""
@@ -894,14 +908,14 @@ def test_traceability_review_no_linked_ticket_posts_comment_without_backend(tmp_
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     mock_post.assert_called_once()
     assert mock_post.call_args.args[:2] == (7, "acme/frontend")
     assert 7 in state.get_traceability_reviewed_prs("acme-frontend")
 
 
-def test_traceability_review_inconclusive_ticket_lookup_skips_without_posting(tmp_xdg, tmp_path):
+async def test_traceability_review_inconclusive_ticket_lookup_skips_without_posting(tmp_xdg, tmp_path):
     """When resolve_linked_tickets returns None (a closing-keyword ref existed but failed
     to resolve due to an API failure, not a confirmed absence), the PR must be skipped —
     no backend call, no terminal "no linked ticket" comment, and left off
@@ -928,13 +942,13 @@ def test_traceability_review_inconclusive_ticket_lookup_skips_without_posting(tm
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     mock_post.assert_not_called()
     assert 7 not in state.get_traceability_reviewed_prs("acme-frontend")
 
 
-def test_traceability_review_no_linked_ticket_comment_post_failure_leaves_unmarked(tmp_xdg, tmp_path):
+async def test_traceability_review_no_linked_ticket_comment_post_failure_leaves_unmarked(tmp_xdg, tmp_path):
     """If posting the "no linked ticket" comment itself fails, the PR is left off
     traceability_reviewed_prs so the next run retries rather than silently losing the
     outcome."""
@@ -960,12 +974,12 @@ def test_traceability_review_no_linked_ticket_comment_post_failure_leaves_unmark
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     assert 7 not in state.get_traceability_reviewed_prs("acme-frontend")
 
 
-def test_traceability_review_failure_does_not_block_files_summary_state(tmp_xdg, tmp_path):
+async def test_traceability_review_failure_does_not_block_files_summary_state(tmp_xdg, tmp_path):
     """A traceability-pass failure must not prevent reviewed_prs from being updated, and
     must not itself be recorded as done — the two are tracked independently."""
     state.write_self_review_state("acme-frontend", [])
@@ -999,17 +1013,18 @@ def test_traceability_review_failure_does_not_block_files_summary_state(tmp_xdg,
     ):
         # File review + summary succeed (returncode 0); the traceability-review call —
         # the third and last backend invocation — fails.
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.side_effect = [
             MagicMock(returncode=0),
             MagicMock(returncode=0),
             MagicMock(returncode=1),
         ]
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     assert 8 in state.read_self_review_state("acme-frontend")["reviewed_prs"]
     assert 8 not in state.get_traceability_reviewed_prs("acme-frontend")
 
 
-def test_traceability_review_marker_found_marks_done_without_invoking_backend(tmp_xdg, tmp_path):
+async def test_traceability_review_marker_found_marks_done_without_invoking_backend(tmp_xdg, tmp_path):
     """Defense-in-depth: if a traceability-review comment is already on GitHub (e.g. a
     prior state write didn't persist), the pass is recorded as done without re-invoking."""
     _setup_knowledge(tmp_path)
@@ -1032,12 +1047,12 @@ def test_traceability_review_marker_found_marks_done_without_invoking_backend(tm
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     assert 10 in state.get_traceability_reviewed_prs("acme-frontend")
 
 
-def test_traceability_review_not_marked_done_when_comment_confirmed_missing(tmp_xdg, tmp_path):
+async def test_traceability_review_not_marked_done_when_comment_confirmed_missing(tmp_xdg, tmp_path):
     """The backend exiting 0 is not proof it posted — if the post-run GitHub check
     confirms no traceability-review comment exists, the pass must not be recorded as
     done, so a future run retries instead of silently skipping it forever."""
@@ -1068,12 +1083,13 @@ def test_traceability_review_not_marked_done_when_comment_confirmed_missing(tmp_
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     assert 11 not in state.get_traceability_reviewed_prs("acme-frontend")
 
 
-def test_traceability_review_not_marked_done_when_comment_check_inconclusive(tmp_xdg, tmp_path):
+async def test_traceability_review_not_marked_done_when_comment_check_inconclusive(tmp_xdg, tmp_path):
     """If the post-run GitHub check itself fails (e.g. transient API error), that's
     inconclusive, not a confirmed absence — the pass must still not be marked done."""
     _setup_knowledge(tmp_path)
@@ -1103,12 +1119,13 @@ def test_traceability_review_not_marked_done_when_comment_check_inconclusive(tmp
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     assert 12 not in state.get_traceability_reviewed_prs("acme-frontend")
 
 
-def test_traceability_review_already_done_is_skipped_without_any_backend_call(tmp_xdg, tmp_path):
+async def test_traceability_review_already_done_is_skipped_without_any_backend_call(tmp_xdg, tmp_path):
     """Once traceability_reviewed_prs has the PR, and files/summary/design are also
     already done, nothing runs at all this cycle — not even a checkout."""
     _setup_knowledge(tmp_path)
@@ -1127,7 +1144,7 @@ def test_traceability_review_already_done_is_skipped_without_any_backend_call(tm
         patch("dotharness.pr_review.runners.self_review.git_fetch_and_checkout") as mock_checkout,
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     mock_checkout.assert_not_called()
 
@@ -1155,7 +1172,7 @@ def _regret_candidate(hunk):
     )
 
 
-def test_regret_review_not_run_when_disabled(tmp_xdg, tmp_path):
+async def test_regret_review_not_run_when_disabled(tmp_xdg, tmp_path):
     """[regret_review].enabled is false by default — the pass is never entered at all,
     even for a PR that is in none of the state lists yet (the enabled gate is unique to
     this pass; design/traceability have none)."""
@@ -1176,12 +1193,12 @@ def test_regret_review_not_run_when_disabled(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.git_fetch_and_checkout") as mock_checkout,
         patch("dotharness.pr_review.runners.self_review._run_regret_review") as mock_regret,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_regret.assert_not_called()
     mock_checkout.assert_not_called()
 
 
-def test_regret_review_not_run_when_already_regret_reviewed(tmp_xdg, tmp_path):
+async def test_regret_review_not_run_when_already_regret_reviewed(tmp_xdg, tmp_path):
     """Once regret_reviewed_prs has the PR (pass enabled), and files/summary/design/
     traceability are also already done, nothing runs at all this cycle — not even a
     checkout."""
@@ -1203,12 +1220,12 @@ def test_regret_review_not_run_when_already_regret_reviewed(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.git_fetch_and_checkout") as mock_checkout,
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     mock_checkout.assert_not_called()
 
 
-def test_regret_review_marker_found_marks_done_without_invoking_backend(tmp_xdg, tmp_path):
+async def test_regret_review_marker_found_marks_done_without_invoking_backend(tmp_xdg, tmp_path):
     """Idempotency: if a regret comment is already on GitHub (e.g. a prior state write
     didn't persist), the pass is recorded as done without re-invoking — zero calls to
     the candidate pipeline and no backend call."""
@@ -1238,14 +1255,14 @@ def test_regret_review_marker_found_marks_done_without_invoking_backend(tmp_xdg,
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_find_prs.assert_not_called()
     mock_find_candidates.assert_not_called()
     mock_be.return_value.run.assert_not_called()
     assert 52 in state.get_regret_reviewed_prs("acme-frontend")
 
 
-def test_regret_review_posts_comment_and_marks_done_on_findings(tmp_xdg, tmp_path):
+async def test_regret_review_posts_comment_and_marks_done_on_findings(tmp_xdg, tmp_path):
     """The full pipeline: candidate search → backend verdict lines → findings parsed
     from the reply → regret comment posted by the harness (the backend posts nothing) →
     marker confirmed → marked done."""
@@ -1280,10 +1297,11 @@ def test_regret_review_posts_comment_and_marks_done_on_findings(tmp_xdg, tmp_pat
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
         patch("dotharness.pr_review.runners.self_review.post_regret_comment", return_value=True) as mock_post,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(
             returncode=0, stdout=b"CANDIDATE 1: YES - it predicted the empty-input failure\n"
         )
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     assert mock_be.return_value.run.call_count == 1
     assert mock_be.return_value.run.call_args.kwargs["context"] == "PR #53 regret review"
     assert 53 in state.get_regret_reviewed_prs("acme-frontend")
@@ -1297,7 +1315,7 @@ def test_regret_review_posts_comment_and_marks_done_on_findings(tmp_xdg, tmp_pat
     assert REGRET_REVIEW_MARKER in body
 
 
-def test_regret_review_no_candidates_no_backend_call_and_unmarked(tmp_xdg, tmp_path):
+async def test_regret_review_no_candidates_no_backend_call_and_unmarked(tmp_xdg, tmp_path):
     """Blame resolved an introducing PR but no comment matched the blamed hunk — there
     is structurally nothing to judge: no backend call, no comment posted, and the PR is
     NOT marked regret-reviewed, so a later PR update gets a fresh candidate search."""
@@ -1328,13 +1346,13 @@ def test_regret_review_no_candidates_no_backend_call_and_unmarked(tmp_xdg, tmp_p
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
         patch("dotharness.pr_review.runners.self_review.post_regret_comment") as mock_post,
     ):
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     mock_post.assert_not_called()
     assert 54 not in state.get_regret_reviewed_prs("acme-frontend")
 
 
-def test_regret_review_no_findings_marks_done_without_posting(tmp_xdg, tmp_path):
+async def test_regret_review_no_findings_marks_done_without_posting(tmp_xdg, tmp_path):
     """The backend judged every candidate NO — nothing is posted, but the run still
     counts as complete: there is nothing to post, and the PR is marked done like any
     other success, so the same candidates aren't re-judged on every future run."""
@@ -1368,16 +1386,17 @@ def test_regret_review_no_findings_marks_done_without_posting(tmp_xdg, tmp_path)
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
         patch("dotharness.pr_review.runners.self_review.post_regret_comment") as mock_post,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(
             returncode=0, stdout=b"CANDIDATE 1: NO - it was about a different edge case\n"
         )
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     assert mock_be.return_value.run.call_count == 1
     mock_post.assert_not_called()
     assert 55 in state.get_regret_reviewed_prs("acme-frontend")
 
 
-def test_regret_review_post_failure_leaves_unmarked(tmp_xdg, tmp_path):
+async def test_regret_review_post_failure_leaves_unmarked(tmp_xdg, tmp_path):
     """A backend verdict that parses into findings is not enough: if posting the regret
     comment fails, the PR must not be marked regret-reviewed, so the next run retries."""
     _setup_knowledge(tmp_path)
@@ -1411,15 +1430,16 @@ def test_regret_review_post_failure_leaves_unmarked(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
         patch("dotharness.pr_review.runners.self_review.post_regret_comment", return_value=False),
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(
             returncode=0, stdout=b"CANDIDATE 1: YES - it predicted the empty-input failure\n"
         )
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_check.assert_not_called()
     assert 56 not in state.get_regret_reviewed_prs("acme-frontend")
 
 
-def test_regret_review_incomplete_reply_leaves_unmarked(tmp_xdg, tmp_path):
+async def test_regret_review_incomplete_reply_leaves_unmarked(tmp_xdg, tmp_path):
     """A backend reply that is not a complete judgment — here, prose with no
     CANDIDATE verdict lines at all — is inconclusive, not a confirmed miss. Before the
     fix this parsed to [] and was treated as a confirmed "no regret", so the PR was
@@ -1456,17 +1476,18 @@ def test_regret_review_incomplete_reply_leaves_unmarked(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
         patch("dotharness.pr_review.runners.self_review.post_regret_comment") as mock_post,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(
             returncode=0,
             stdout=b"I looked over the diff and I don't see any regressions here.",
         )
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     assert mock_be.return_value.run.call_count == 1
     mock_post.assert_not_called()
     assert 57 not in state.get_regret_reviewed_prs("acme-frontend")
 
 
-def test_re_requests_review_when_previously_requested_on_assigned_pr(tmp_xdg, tmp_path):
+async def test_re_requests_review_when_previously_requested_on_assigned_pr(tmp_xdg, tmp_path):
     """A PR assigned to (but not authored by) the user can have them as a requested
     reviewer too — GitHub only forbids that for the PR's own author. Even on a fully
     successful run, _process_single_pr must re-add the user as a requested reviewer if
@@ -1500,12 +1521,13 @@ def test_re_requests_review_when_previously_requested_on_assigned_pr(tmp_xdg, tm
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=True),
         patch("dotharness.pr_review.runners.common.add_reviewer") as mock_add_reviewer,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_add_reviewer.assert_called_once_with(7, "acme/frontend", "alice", ANY)
 
 
-def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
+async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
     """The re-add must not fire for a PR where the user was never a requested reviewer
     to begin with (e.g. an authored PR, where GitHub disallows that in the first
     place) — the autouse fixture above already defaults was_review_requested to False."""
@@ -1536,6 +1558,7 @@ def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_pat
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
         patch("dotharness.pr_review.runners.common.add_reviewer") as mock_add_reviewer,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        self_review._run_locked(cfg)
+        await self_review._run_locked(cfg)
     mock_add_reviewer.assert_not_called()

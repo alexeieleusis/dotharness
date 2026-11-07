@@ -40,7 +40,7 @@ jobs:
         run: uv run ty check
 
       - name: Check for obsolete dependencies
-        run: uv run deptry . --extend-exclude "tools|vendor"
+        run: uv run deptry src
 
   tests-and-type-check:
     runs-on: ubuntu-latest

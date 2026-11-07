@@ -200,32 +200,32 @@ def _commit(path: Path, n: int, body: str = "") -> None:
     _git(path, "commit", "-q", "-m", f"commit {n}\n\n{body}" if body else f"commit {n}")
 
 
-def test_description_small(repo: tuple[Path, LocalReviewTarget]) -> None:
+async def test_description_small(repo: tuple[Path, LocalReviewTarget]) -> None:
     path, tgt = repo
     _commit(path, 1, "body one")
     _commit(path, 2)
-    desc = build_change_description(path, tgt)
+    desc = await build_change_description(path, tgt)
     assert desc.startswith(f"## Change description\nBranch: feat/x\nBase ref: main\nMerge base: {tgt.base_sha}\n")
     assert desc.index("commit 1") < desc.index("commit 2")
     assert "body one" in desc
     assert "(truncated)" not in desc
 
 
-def test_description_commit_cap(repo: tuple[Path, LocalReviewTarget]) -> None:
+async def test_description_commit_cap(repo: tuple[Path, LocalReviewTarget]) -> None:
     path, tgt = repo
     for i in range(1, 53):
         _commit(path, i)
-    desc = build_change_description(path, tgt)
+    desc = await build_change_description(path, tgt)
     assert desc.endswith("\n(truncated)")
     assert desc.count(" commit ") == 50
     assert len(desc) <= lr_prompts.MAX_DESCRIPTION_CHARS
 
 
-def test_description_char_cap(repo: tuple[Path, LocalReviewTarget]) -> None:
+async def test_description_char_cap(repo: tuple[Path, LocalReviewTarget]) -> None:
     path, tgt = repo
     for i in range(1, 6):
         _commit(path, i, "x" * 6000)
-    desc = build_change_description(path, tgt)
+    desc = await build_change_description(path, tgt)
     assert desc.endswith("\n(truncated)")
     assert len(desc) <= lr_prompts.MAX_DESCRIPTION_CHARS
 
@@ -290,7 +290,7 @@ class FakeBackend:
         self.review_dir_fn = review_dir_fn
         self.script = script
 
-    def run(self, prompt, cwd, opencode_dir=None, context=None):
+    async def run(self, prompt, cwd, opencode_dir=None, context=None):
         label = context or ""
         self.labels.append(label)
         if self.script:
@@ -310,7 +310,7 @@ class FakeBackend:
 
 
 @pytest.fixture
-def env(tmp_path: Path):
+async def env(tmp_path: Path):
     repo = (tmp_path / "repo").resolve()
     repo.mkdir()
     _git(repo, "init", "-b", "main")
@@ -330,7 +330,7 @@ def env(tmp_path: Path):
         harness=HarnessSection(knowledge_dir=kd),
         repo=RepoConfig(name="o/r", working_dir=repo, name_provided=False),
     )
-    target = lr.check_preconditions(repo, output_root=tmp_path / "out")
+    target = await lr.check_preconditions(repo, output_root=tmp_path / "out")
     root = tmp_path / "out"
     rdir = review_dir_for(root, cfg.repo_slug, target.branch, target.head_sha)
     return cfg, target, root, rdir, repo
@@ -342,10 +342,10 @@ def _m(d: Path) -> dict:
     return m
 
 
-def _run(env, backend=None, **kw):
+async def _run(env, backend=None, **kw):
     cfg, target, root, rdir, _ = env
     backend = backend or FakeBackend(lambda: rdir)
-    return backend, lr.run(cfg, target, output_root=root, backend=cast(Backend, backend), **kw)
+    return backend, await lr.run(cfg, target, output_root=root, backend=cast(Backend, backend), **kw)
 
 
 def test_review_dir_keeps_slash_and_rejects_bad_components(tmp_path: Path) -> None:
@@ -381,19 +381,19 @@ def test_manifest_roundtrip_and_invalid_is_absent(tmp_path: Path) -> None:
 def test_manifest_write_is_atomic_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     write_manifest(tmp_path, {"version": 1, "files": {"a": "done"}})
 
-    def boom(self, target):
+    def boom(src, dst):
         raise OSError("rename failed")  # noqa: TRY003
 
-    monkeypatch.setattr(Path, "replace", boom)
+    monkeypatch.setattr("os.replace", boom)
     with pytest.raises(OSError, match="rename failed"):
         write_manifest(tmp_path, {"version": 1, "files": {"a": "failed"}})
     monkeypatch.undo()
     assert read_manifest(tmp_path) == {"version": 1, "files": {"a": "done"}}
 
 
-def test_full_run_writes_layout_manifest_index_and_stamps(env) -> None:
+async def test_full_run_writes_layout_manifest_index_and_stamps(env) -> None:
     _cfg, target, root, rdir, _ = env
-    backend, res = _run(env)
+    backend, res = await _run(env)
     assert res.ok
     assert backend.labels == [
         "local-review file a.py",
@@ -420,83 +420,83 @@ def test_full_run_writes_layout_manifest_index_and_stamps(env) -> None:
     assert rdir == root / "o-r" / "feature" / "x" / target.head_sha
 
 
-def test_rerun_skips_done_and_reruns_only_failed(env) -> None:
+async def test_rerun_skips_done_and_reruns_only_failed(env) -> None:
     def script(label, cwd):
         if label == "local-review file b.py":
             return subprocess.CompletedProcess([], 1, "", "boom")
         return None
 
-    _, first = _run(env, FakeBackend(lambda: env[3], script))
+    _, first = await _run(env, FakeBackend(lambda: env[3], script))
     assert first.failed == ["file:b.py", "summary"]
     m = _m(env[3])
     assert m["files"] == {"a.py": "done", "b.py": "failed"}
     assert m["summary"] == "failed"
     assert m["design"] == "done"
 
-    backend, second = _run(env)
+    backend, second = await _run(env)
     assert second.ok
     assert backend.labels == ["local-review file b.py", "local-review summary"]
 
-    backend, third = _run(env)
+    backend, third = await _run(env)
     assert backend.labels == []
     assert len(third.skipped) == 4
 
 
-def test_timeout_marks_failed_and_continues(env) -> None:
+async def test_timeout_marks_failed_and_continues(env) -> None:
     def script(label, cwd):
         if label == "local-review file a.py":
             raise subprocess.TimeoutExpired("x", 1)
         return None
 
-    backend, res = _run(env, FakeBackend(lambda: env[3], script))
+    backend, res = await _run(env, FakeBackend(lambda: env[3], script))
     assert res.failed == ["file:a.py", "summary"]
     assert "local-review design" in backend.labels
 
 
-def test_repo_identity_error_stops_run_after_first_backend_call(env, capsys: pytest.CaptureFixture[str]) -> None:
+async def test_repo_identity_error_stops_run_after_first_backend_call(env, capsys: pytest.CaptureFixture[str]) -> None:
     cfg, _target, root, rdir, _ = env
 
     def script(label, cwd):
         raise RepoIdentityError("wrong repo")  # noqa: TRY003
 
     backend = FakeBackend(lambda: rdir, script)
-    code = lr.run_local_review(cfg, output_dir=root, backend=cast(Backend, backend))
+    code = await lr.run_local_review(cfg, output_dir=root, backend=cast(Backend, backend))
     assert code == 1
     assert backend.labels == ["local-review file a.py"]
     assert "wrong repo" in capsys.readouterr().err
 
 
-def test_missing_file_output_gets_no_findings_line_and_empty_summary_fails(env) -> None:
+async def test_missing_file_output_gets_no_findings_line_and_empty_summary_fails(env) -> None:
     def script(label, cwd):
         if label.startswith("local-review file ") or label.endswith("summary"):
             return subprocess.CompletedProcess([], 0, "", "")
         return None
 
-    _, res = _run(env, FakeBackend(lambda: env[3], script))
+    _, res = await _run(env, FakeBackend(lambda: env[3], script))
     assert (env[3] / "files" / "a.py.md").read_text() == "No P0/P1 findings.\n"
     assert _m(env[3])["files"] == {"a.py": "done", "b.py": "done"}
     assert res.failed == ["summary"]
 
 
-def test_force_reruns_everything_and_warns_about_address_statuses(env, caplog: pytest.LogCaptureFixture) -> None:
-    _run(env)
+async def test_force_reruns_everything_and_warns_about_address_statuses(env, caplog: pytest.LogCaptureFixture) -> None:
+    await _run(env)
     p = env[3] / "files" / "a.py.md"
     p.write_text(p.read_text().replace("status: open", "status: fixed"))
     with caplog.at_level(logging.WARNING):
-        backend, res = _run(env, force=True)
+        backend, res = await _run(env, force=True)
     assert len(backend.labels) == 4
     assert "1 fixed, 0 declined" in caplog.text
     assert res.ok
 
 
-def test_force_without_resolved_findings_does_not_warn(env, caplog: pytest.LogCaptureFixture) -> None:
-    _run(env)
+async def test_force_without_resolved_findings_does_not_warn(env, caplog: pytest.LogCaptureFixture) -> None:
+    await _run(env)
     with caplog.at_level(logging.WARNING):
-        _run(env, force=True)
+        await _run(env, force=True)
     assert "--force" not in caplog.text
 
 
-def test_guard_head_moved_stops_and_writes_manifest(env) -> None:
+async def test_guard_head_moved_stops_and_writes_manifest(env) -> None:
     repo = env[4]
 
     def script(label, cwd):
@@ -508,21 +508,21 @@ def test_guard_head_moved_stops_and_writes_manifest(env) -> None:
 
     backend = FakeBackend(lambda: env[3], script)
     with pytest.raises(RepoMutatedError, match="HEAD moved"):
-        _run(env, backend)
+        await _run(env, backend)
     assert backend.labels == ["local-review file a.py"]
     m = _m(env[3])
     assert m["files"] == {"a.py": "failed"}
     assert (env[3] / "index.md").is_file()
 
 
-def test_guard_tracked_change_stops_but_untracked_is_ignored(env) -> None:
+async def test_guard_tracked_change_stops_but_untracked_is_ignored(env) -> None:
     repo = env[4]
 
     def untracked(label, cwd):
         (repo / "scratch.txt").write_text("x")
         return None
 
-    _, res = _run(env, FakeBackend(lambda: env[3], untracked))
+    _, res = await _run(env, FakeBackend(lambda: env[3], untracked))
     assert res.ok
 
     def tracked(label, cwd):
@@ -531,21 +531,21 @@ def test_guard_tracked_change_stops_but_untracked_is_ignored(env) -> None:
 
     backend = FakeBackend(lambda: env[3], tracked)
     with pytest.raises(RepoMutatedError, match=r"a\.py"):
-        _run(env, backend, force=True)
+        await _run(env, backend, force=True)
     assert len(backend.labels) == 1
     assert (repo / "a.py").read_text() == "changed\n"  # nothing was restored
 
 
-def test_no_writes_inside_repo(env) -> None:
+async def test_no_writes_inside_repo(env) -> None:
     repo = env[4]
-    _run(env)
+    await _run(env)
     assert _git(repo, "status", "--porcelain") == ""
 
 
-def test_output_dir_inside_repo_refused(env) -> None:
+async def test_output_dir_inside_repo_refused(env) -> None:
     cfg, target, _, _, repo = env
     with pytest.raises(LocalReviewError):
-        lr.run(cfg, target, output_root=repo / "out", backend=cast(Backend, FakeBackend(lambda: repo)))
+        await lr.run(cfg, target, output_root=repo / "out", backend=cast(Backend, FakeBackend(lambda: repo)))
 
 
 # ---------------------------------------------------------------------------
@@ -592,7 +592,7 @@ def test_no_bare_subprocess_run_in_package() -> None:
         assert "subprocess.run(" not in path.read_text(encoding="utf-8"), path.name
 
 
-def test_backend_patch_on_address_module_reaches_review_run(env, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_backend_patch_on_address_module_reaches_review_run(env, monkeypatch: pytest.MonkeyPatch) -> None:
     from dotharness.pr_review.runners.local_review import address
 
     cfg, target, root, rdir, _ = env
@@ -604,6 +604,6 @@ def test_backend_patch_on_address_module_reaches_review_run(env, monkeypatch: py
             created.append(self)
 
     monkeypatch.setattr(address, "Backend", Stub)
-    result = lr.run(cfg, target, output_root=root)
+    result = await lr.run(cfg, target, output_root=root)
     assert created, "patching address.Backend did not reach the backend factory used by review.run"
     assert result.ok

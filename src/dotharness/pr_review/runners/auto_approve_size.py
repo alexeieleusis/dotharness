@@ -26,8 +26,8 @@ class SizeEvaluation:
     pr_is_small: bool = False
 
 
-def _git_diff_z(args: list[str], base_branch: str, wdir: str, env: dict) -> list[str]:
-    result = run_cmd(
+async def _git_diff_z(args: list[str], base_branch: str, wdir: str, env: dict) -> list[str]:
+    result = await run_cmd(
         ["git", "diff", *args, "-z", f"origin/{base_branch}...HEAD"],
         cwd=wdir,
         env=env,
@@ -36,12 +36,12 @@ def _git_diff_z(args: list[str], base_branch: str, wdir: str, env: dict) -> list
     return [t for t in result.stdout.decode("utf-8", errors="replace").split("\0") if t]
 
 
-def _excluded_files(base_branch: str, wdir: str, env: dict) -> set[str]:
+async def _excluded_files(base_branch: str, wdir: str, env: dict) -> set[str]:
     """Paths that are not counted files: deleted, renamed or copied."""
     excluded: set[str] = set()
 
     # --name-status -z: "<status>\0<path>\0" or "<R|C score>\0<old>\0<new>\0"
-    tokens = _git_diff_z(["--name-status", "-M"], base_branch, wdir, env)
+    tokens = await _git_diff_z(["--name-status", "-M"], base_branch, wdir, env)
     i = 0
     while i < len(tokens):
         status = tokens[i]
@@ -55,7 +55,7 @@ def _excluded_files(base_branch: str, wdir: str, env: dict) -> set[str]:
     return excluded
 
 
-def _numstat_counts(base_branch: str, wdir: str, env: dict) -> dict[str, int | None]:
+async def _numstat_counts(base_branch: str, wdir: str, env: dict) -> dict[str, int | None]:
     """Exact added+removed lines per path from ``git diff --numstat`` (None for binary files).
 
     Unlike counting ``+``/``-`` lines of a patch, this cannot mistake content such as a removed
@@ -64,7 +64,7 @@ def _numstat_counts(base_branch: str, wdir: str, env: dict) -> dict[str, int | N
     counts: dict[str, int | None] = {}
     # --numstat -z: "<add>\t<del>\t<path>\0", or for renames "<add>\t<del>\t\0<old>\0<new>\0".
     # Binary files print "-" for both counts.
-    tokens = _git_diff_z(["--numstat", "-M"], base_branch, wdir, env)
+    tokens = await _git_diff_z(["--numstat", "-M"], base_branch, wdir, env)
     i = 0
     while i < len(tokens):
         added, deleted, path = tokens[i].split("\t", 2)
@@ -79,7 +79,7 @@ def _numstat_counts(base_branch: str, wdir: str, env: dict) -> dict[str, int | N
     return counts
 
 
-def evaluate_size(base_branch: str, wdir: str, env: dict, config: AutoApproveConfig) -> SizeEvaluation:
+async def evaluate_size(base_branch: str, wdir: str, env: dict, config: AutoApproveConfig) -> SizeEvaluation:
     """Evaluate the checked-out branch against ``origin/<base_branch>``.
 
     A file is small when its added+removed count is strictly below ``viewed_max_lines``; the
@@ -87,8 +87,8 @@ def evaluate_size(base_branch: str, wdir: str, env: dict, config: AutoApproveCon
     below ``approve_max_lines``. Binary, deleted and renamed files are never marked small; binary
     files have no line count and contribute 0. Lockfiles and generated text files are counted.
     """
-    numstat = _numstat_counts(base_branch, wdir, env)
-    excluded = _excluded_files(base_branch, wdir, env)
+    numstat = await _numstat_counts(base_branch, wdir, env)
+    excluded = await _excluded_files(base_branch, wdir, env)
 
     file_counts = {p: n for p, n in numstat.items() if n is not None and p not in excluded}
 

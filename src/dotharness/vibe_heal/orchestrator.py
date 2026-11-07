@@ -288,7 +288,7 @@ class VibeHealOrchestrator:
 
         return rule, code_context, external_docs
 
-    def _handle_fix_result(
+    async def _handle_fix_result(
         self,
         fix_result: FixResult,
         issue: SonarQubeIssue,
@@ -314,7 +314,7 @@ class VibeHealOrchestrator:
             if not dry_run:
                 try:
                     # Pass None to auto-detect all modified files
-                    sha = self.git_manager.commit_fix(
+                    sha = await self.git_manager.commit_fix(
                         issue,
                         None,  # Auto-detect all modified files
                         self.ai_tool.tool_type,
@@ -398,7 +398,7 @@ class VibeHealOrchestrator:
                     external_docs=external_docs,
                 )
 
-                self._handle_fix_result(fix_result, issue, dry_run, summary, progress, task, rule)
+                await self._handle_fix_result(fix_result, issue, dry_run, summary, progress, task, rule)
 
                 # Remove the completed task to prevent duplicates in the display
                 progress.remove_task(task)

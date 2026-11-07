@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from dotharness.gh import build_subprocess_env, gh_argv
 from dotharness.pr_review import state
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
@@ -14,7 +15,6 @@ from dotharness.pr_review.runners.common import (
     PR_COMMENTS_SCRIPT_PATH,
     TIMEOUT_GH,
     TIMEOUT_GIT,
-    build_subprocess_env,
     fetch_all_pages,
     fetch_pr_comments,
     fetch_review_threads,
@@ -83,20 +83,20 @@ def _fence_user_content(text: str, nonce: str) -> list[str]:
     ]
 
 
-def run(config: HarnessConfig) -> None:
+async def run(config: HarnessConfig) -> None:
     with acquire_lock(config.lock_key):
-        _run_locked(config)
+        await _run_locked(config)
 
 
-def _run_locked(config: HarnessConfig) -> None:
+async def _run_locked(config: HarnessConfig) -> None:
     if not config.address_comments.enabled:
         logger.info("address_comments disabled, skipping")
         return
 
-    gh_token = get_gh_token(config.harness.gh_token_cmd)
+    gh_token = await get_gh_token(config.harness.gh_token_cmd)
     env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
 
-    prs = _list_prs_to_check(config.repo.name, env)
+    prs = await _list_prs_to_check(config.repo.name, env)
     script_path = PR_COMMENTS_SCRIPT_PATH
     knowledge_file = config.harness.knowledge_dir / "pr-review" / "address-comment.md"
     instructions_template = knowledge_file.read_text(encoding="utf-8")
@@ -113,8 +113,8 @@ def _run_locked(config: HarnessConfig) -> None:
     plugin_prefix = (
         str(config.repo.opencode_dir.relative_to(config.repo.working_dir)) if config.repo.opencode_dir else None
     )
-    original_sha = git_detach_and_record(wdir, env)
-    our_login = get_current_user(env)
+    original_sha = await git_detach_and_record(wdir, env)
+    our_login = await get_current_user(env)
 
     ctx = _ProcessPrContext(
         script_path=script_path,
@@ -132,7 +132,7 @@ def _run_locked(config: HarnessConfig) -> None:
     )
     # Prune against *all* open PRs (not the author/assignee-filtered list), and skip on fetch failure,
     # so a PR that temporarily drops out of `prs` doesn't lose its replied keys.
-    open_numbers = _list_all_open_pr_numbers(config.repo.name, env)
+    open_numbers = await _list_all_open_pr_numbers(config.repo.name, env)
     if open_numbers is not None:
         state.prune_address_comments_state(config.repo_slug, open_numbers)
 
@@ -143,16 +143,16 @@ def _run_locked(config: HarnessConfig) -> None:
             branch = pr["headRefName"]
             logger.debug("PR #%d (branch=%s): checking for pending feedback", number, branch)
             try:
-                has_feedback = _has_pending_feedback(number, config.repo.name, env)
+                has_feedback = await _has_pending_feedback(number, config.repo.name, env)
             except Exception:
                 logger.exception("PR #%d: pending-feedback check failed, skipping", number)
                 continue
             if not has_feedback:
                 logger.info("PR #%d: no pending feedback, skipping", number)
                 continue
-            _process_single_pr(number, branch, ctx)
+            await _process_single_pr(number, branch, ctx)
     finally:
-        git_restore(original_sha, "", wdir, env)
+        await git_restore(original_sha, "", wdir, env)
 
 
 @dataclass
@@ -173,28 +173,28 @@ class _ProcessPrContext:
     repo_slug: str | None = None
 
 
-def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -> None:
+async def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -> None:
     logger.info("PR #%d (branch=%s): has pending feedback, processing", number, branch)
     try:
         # Addressing a comment (a reply, or a pushed fix) can submit a review via the
         # GitHub API as a side effect, which would clear us from the requested-reviewers
         # list — restore it regardless of outcome, since we cannot observe from here
         # whether that happened.
-        with preserve_reviewer_request(number, ctx.repo, ctx.our_login or "", ctx.env):
-            _address_pending_comments(number, branch, ctx)
+        async with preserve_reviewer_request(number, ctx.repo, ctx.our_login or "", ctx.env):
+            await _address_pending_comments(number, branch, ctx)
     except Exception:
         logger.exception("PR #%d: error", number)
     finally:
-        git_restore(ctx.original_sha, branch, ctx.wdir, ctx.env)
+        await git_restore(ctx.original_sha, branch, ctx.wdir, ctx.env)
 
 
-def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) -> None:
-    git_fetch_and_checkout(branch, ctx.wdir, ctx.env)
-    comments = fetch_pr_comments(number, ctx.script_path, ctx.wdir, ctx.env)
+async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) -> None:
+    await git_fetch_and_checkout(branch, ctx.wdir, ctx.env)
+    comments = await fetch_pr_comments(number, ctx.script_path, ctx.wdir, ctx.env)
     if not comments:
         logger.info("PR #%d: no actionable comments found", number)
         return
-    comments = _filter_comments(
+    comments = await _filter_comments(
         comments,
         number,
         ctx.repo,
@@ -208,10 +208,10 @@ def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) 
         logger.info("PR #%d: no unresolved comments remain after filtering", number)
         return
     logger.info("PR #%d: found %d comment(s) to address", number, len(comments))
-    head_sha = get_head_sha(ctx.wdir, ctx.env)
+    head_sha = await get_head_sha(ctx.wdir, ctx.env)
     for comment in comments:
         thread_state = (
-            _comment_thread_state(comment, number, ctx.repo, ctx.env) if comment.get("type") == "inline" else True
+            await _comment_thread_state(comment, number, ctx.repo, ctx.env) if comment.get("type") == "inline" else True
         )
         if thread_state is None and comment.get("focused_review_original") is not None:
             logger.warning(
@@ -227,7 +227,7 @@ def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) 
                 comment.get("id", "?"),
             )
             continue
-        head_sha, rewritten = _address_single_comment(
+        head_sha, rewritten = await _address_single_comment(
             comment,
             number,
             ctx.instructions_template,
@@ -248,7 +248,7 @@ def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) 
                 comment.get("id", "?"),
             )
             break
-        if not _push_branch(number, branch, ctx.wdir, ctx.env):
+        if not await _push_branch(number, branch, ctx.wdir, ctx.env):
             logger.warning(
                 "PR #%d: skipping remaining comments this run after comment %s's push failed",
                 number,
@@ -401,7 +401,7 @@ def _filter_by_unresolved(comments: list[dict], pr_number: int, thread_state: Th
     return comments
 
 
-def _comment_thread_state(comment: dict, pr_number: int, repo: str, env: dict) -> bool | None:
+async def _comment_thread_state(comment: dict, pr_number: int, repo: str, env: dict) -> bool | None:
     """Tri-state thread check: True (unresolved), False (resolved), None (lookup failed).
 
     Makes exactly one `_get_unresolved_comment_ids` call; a non-int id returns True without
@@ -410,13 +410,13 @@ def _comment_thread_state(comment: dict, pr_number: int, repo: str, env: dict) -
     comment_id = comment.get("id")
     if not isinstance(comment_id, int):
         return True
-    thread_state = _get_unresolved_comment_ids(pr_number, repo, env)
+    thread_state = await _get_unresolved_comment_ids(pr_number, repo, env)
     if thread_state is None:
         return None
     return comment_id in thread_state.unresolved_ids
 
 
-def _comment_still_unresolved(comment: dict, pr_number: int, repo: str, env: dict) -> bool:
+async def _comment_still_unresolved(comment: dict, pr_number: int, repo: str, env: dict) -> bool:
     """Re-check one comment's thread resolution status right before addressing it.
 
     `_filter_by_unresolved` only queries resolution state once, up front, for the whole
@@ -426,7 +426,7 @@ def _comment_still_unresolved(comment: dict, pr_number: int, repo: str, env: dic
     own turn comes up later in the loop. Fails open (True) if the GraphQL check itself
     fails, matching `_filter_by_unresolved`'s policy of not blocking on a flaky API.
     """
-    return _comment_thread_state(comment, pr_number, repo, env) is not False
+    return await _comment_thread_state(comment, pr_number, repo, env) is not False
 
 
 def _filter_already_replied(
@@ -461,7 +461,7 @@ def _filter_by_plugin_prefix(comments: list[dict], pr_number: int, plugin_prefix
     return comments
 
 
-def _filter_comments(
+async def _filter_comments(
     comments: list[dict],
     pr_number: int,
     repo: str,
@@ -472,7 +472,7 @@ def _filter_comments(
     replied_keys: set[str] | None = None,
 ) -> list[dict]:
     comments = _filter_by_trusted_commenters(comments, pr_number, trusted_commenters)
-    thread_state = _get_unresolved_comment_ids(pr_number, repo, env)
+    thread_state = await _get_unresolved_comment_ids(pr_number, repo, env)
     comments = _filter_by_unresolved(comments, pr_number, thread_state)
     selected, comments = _select_focused_review_comments(
         comments,
@@ -487,7 +487,7 @@ def _filter_comments(
     return comments
 
 
-def _reply_observed(comment: dict, pr_number: int, repo: str, our_login: str, since_iso: str, env: dict) -> bool:
+async def _reply_observed(comment: dict, pr_number: int, repo: str, our_login: str, since_iso: str, env: dict) -> bool:
     """Best-effort check that *some* reply attributable to this comment was posted by
     our_login. Returns True on an inconclusive API failure — this only exists to surface
     silent skips, not to police a flaky GitHub API, so it must not cry wolf."""
@@ -495,7 +495,7 @@ def _reply_observed(comment: dict, pr_number: int, repo: str, our_login: str, si
     endpoint = (
         f"repos/{repo}/pulls/{pr_number}/comments" if ctype == "inline" else f"repos/{repo}/issues/{pr_number}/comments"
     )
-    items = fetch_all_pages(endpoint, env)
+    items = await fetch_all_pages(endpoint, env)
     if items is None:
         return True
     if ctype == "inline":
@@ -510,11 +510,13 @@ def _reply_observed(comment: dict, pr_number: int, repo: str, our_login: str, si
     return any(c.get("user", {}).get("login") == our_login and c.get("created_at", "") >= since_iso for c in items)
 
 
-def _check_reply_observed(comment: dict, pr_number: int, repo: str, our_login: str, since_iso: str, env: dict) -> bool:
+async def _check_reply_observed(
+    comment: dict, pr_number: int, repo: str, our_login: str, since_iso: str, env: dict
+) -> bool:
     """`_reply_observed` plus a warning on a confirmed silent skip; an erroring check counts as observed."""
     cid = comment.get("id", "?")
     try:
-        observed = _reply_observed(comment, pr_number, repo, our_login, since_iso, env)
+        observed = await _reply_observed(comment, pr_number, repo, our_login, since_iso, env)
     except Exception:
         logger.debug("PR #%d comment %s: reply-observed check itself failed", pr_number, cid, exc_info=True)
         return True  # inconclusive — don't warn on a flaky check, not a confirmed skip
@@ -528,7 +530,7 @@ def _check_reply_observed(comment: dict, pr_number: int, repo: str, our_login: s
     return observed
 
 
-def _address_single_comment(
+async def _address_single_comment(
     comment: dict,
     pr_number: int,
     instructions_template: str,
@@ -566,14 +568,16 @@ def _address_single_comment(
     since_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     clean_run = False
     try:
-        backend.run(comment_instructions, cwd=wdir, opencode_dir=opencode_dir, context=f"PR #{pr_number} comment {cid}")
+        await backend.run(
+            comment_instructions, cwd=wdir, opencode_dir=opencode_dir, context=f"PR #{pr_number} comment {cid}"
+        )
         logger.info("PR #%d: comment %s — backend finished", pr_number, cid)
         clean_run = True
     except Exception:
         logger.exception("PR #%d comment %s: error", pr_number, cid)
     finally:
-        post_sha = get_head_sha(wdir, env) or pre_sha
-        if pre_sha and post_sha != pre_sha and not _is_ancestor(pre_sha, post_sha, wdir, env):
+        post_sha = await get_head_sha(wdir, env) or pre_sha
+        if pre_sha and post_sha != pre_sha and not await _is_ancestor(pre_sha, post_sha, wdir, env):
             rewritten = True
             logger.error(
                 "PR #%d comment %s: HEAD %s..%s is not a fast-forward — branch history was "
@@ -586,7 +590,7 @@ def _address_single_comment(
     made_commit = post_sha != pre_sha
     observed = True  # no check possible/needed — don't treat as a confirmed silent skip
     if our_login and not made_commit:
-        observed = _check_reply_observed(comment, pr_number, repo, our_login, since_iso, env)
+        observed = await _check_reply_observed(comment, pr_number, repo, our_login, since_iso, env)
     # Recorded only when the run was clean AND a commit or reply was seen, so a crashed
     # attempt or a silent skip is retried next pass instead of being suppressed forever.
     if clean_run and (made_commit or observed) and repo_slug and ctype in _NON_THREADED_TYPES:
@@ -594,11 +598,11 @@ def _address_single_comment(
     return post_sha, rewritten
 
 
-def _push_branch(number: int, branch: str, wdir: str, env: dict) -> bool:
+async def _push_branch(number: int, branch: str, wdir: str, env: dict) -> bool:
     """Push `branch` to origin. Called after every comment (not once at the end of the
     PR) so each addressed comment is safely on GitHub before the next comment's backend
     session starts — bounding the damage if a later session rewrites local history."""
-    log_result = run_cmd(
+    log_result = await run_cmd(
         ["git", "log", "--oneline", f"origin/{branch}..HEAD"],
         cwd=wdir,
         env=env,
@@ -613,7 +617,7 @@ def _push_branch(number: int, branch: str, wdir: str, env: dict) -> bool:
             branch,
             commits or "(none)",
         )
-    push_result = run_cmd(
+    push_result = await run_cmd(
         ["git", "push", "origin", branch],
         cwd=wdir,
         env=env,
@@ -701,17 +705,19 @@ def _build_comment_instructions(template: str, comment: dict, pr_number: int, re
     return f"{template}\n\n---\n\n## Comment to address\n\n{detail}\n\nPR number: {pr_number}\nRepo: {repo}\n"
 
 
-def _list_prs_to_check(repo: str, env: dict) -> list[dict]:
+async def _list_prs_to_check(repo: str, env: dict) -> list[dict]:
     """PRs to process: ones authored by us, plus ones assigned to us (e.g. as a fix-it assignee
     on someone else's PR) — deduplicated by PR number."""
-    by_number = {pr["number"]: pr for pr in _list_prs(repo, env, "--author") + _list_prs(repo, env, "--assignee")}
+    by_number = {
+        pr["number"]: pr for pr in (await _list_prs(repo, env, "--author")) + (await _list_prs(repo, env, "--assignee"))
+    }
     return sorted(by_number.values(), key=lambda p: p["number"])
 
 
-def _list_all_open_pr_numbers(repo: str, env: dict) -> set[int] | None:
+async def _list_all_open_pr_numbers(repo: str, env: dict) -> set[int] | None:
     """Numbers of every open PR in the repo, or None if the fetch failed (caller must not prune)."""
-    result = run_cmd(
-        ["gh", "pr", "list", "--repo", repo, "--state", "open", "--json", "number", "--limit", "1000"],
+    result = await run_cmd(
+        gh_argv("pr", "list", "--repo", repo, "--state", "open", "--json", "number", "--limit", "1000"),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -725,10 +731,9 @@ def _list_all_open_pr_numbers(repo: str, env: dict) -> set[int] | None:
         return None
 
 
-def _list_prs(repo: str, env: dict, filter_flag: str) -> list[dict]:
-    result = run_cmd(
-        [
-            "gh",
+async def _list_prs(repo: str, env: dict, filter_flag: str) -> list[dict]:
+    result = await run_cmd(
+        gh_argv(
             "pr",
             "list",
             "--repo",
@@ -741,7 +746,7 @@ def _list_prs(repo: str, env: dict, filter_flag: str) -> list[dict]:
             "number,headRefName,isDraft",
             "--limit",
             "500",
-        ],
+        ),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -757,10 +762,10 @@ def _list_prs(repo: str, env: dict, filter_flag: str) -> list[dict]:
         return []
 
 
-def _get_unresolved_comment_ids(pr_number: int, repo: str, env: dict) -> ThreadState | None:
+async def _get_unresolved_comment_ids(pr_number: int, repo: str, env: dict) -> ThreadState | None:
     """Return the `ThreadState` of the PR's review threads.
     Returns None if the GraphQL query fails (caller should skip filtering)."""
-    threads = fetch_review_threads(pr_number, repo, env)
+    threads = await fetch_review_threads(pr_number, repo, env)
     if threads is None:
         return None
     ids: set[int] = set()
@@ -779,7 +784,26 @@ def _get_unresolved_comment_ids(pr_number: int, repo: str, env: dict) -> ThreadS
     return ThreadState(frozenset(ids), frozenset(minimized_ids))
 
 
-def _check_gql_unresolved_threads(pr_number: int, repo: str, env: dict) -> tuple[int, int, bool]:
+def _parse_threads_page(stdout: str, pr_number: int) -> tuple[int, int, str | None] | None:
+    """Parse one reviewThreads page into (count, unresolved, next_cursor); None if malformed."""
+    try:
+        data = json.loads(stdout) or {}
+        repository = (data.get("data") or {}).get("repository") or {}
+        threads_page = (repository.get("pullRequest") or {}).get("reviewThreads")
+        nodes = (threads_page or {}).get("nodes") or []
+        unresolved = sum(1 for t in nodes if not t.get("isResolved", False))
+        page_info = (threads_page or {}).get("pageInfo") or {}
+    except (ValueError, AttributeError, KeyError, TypeError):
+        logger.warning("PR #%d: malformed GraphQL review threads response", pr_number, exc_info=True)
+        return None
+    if threads_page is None:
+        logger.warning("PR #%d: missing reviewThreads in GraphQL response", pr_number)
+        return None
+    next_cursor = page_info.get("endCursor") if page_info.get("hasNextPage") else None
+    return len(nodes), unresolved, next_cursor
+
+
+async def _check_gql_unresolved_threads(pr_number: int, repo: str, env: dict) -> tuple[int, int, bool]:
     """Query review threads via GraphQL and return (total_threads, unresolved, success)."""
     owner, repo_name = repo.split("/")
     cursor: str | None = None
@@ -787,8 +811,7 @@ def _check_gql_unresolved_threads(pr_number: int, repo: str, env: dict) -> tuple
     total_unresolved = 0
 
     while True:
-        cmd = [
-            "gh",
+        cmd = gh_argv(
             "api",
             "graphql",
             "-f",
@@ -799,39 +822,29 @@ def _check_gql_unresolved_threads(pr_number: int, repo: str, env: dict) -> tuple
             f"repo={repo_name}",
             "-F",
             f"number={pr_number}",
-        ]
+        )
         if cursor:
             cmd += ["-f", f"cursor={cursor}"]
-        gql_result = run_cmd(cmd, cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
+        gql_result = await run_cmd(cmd, cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
         if gql_result.returncode != 0:
             logger.debug("PR #%d: GraphQL review threads query failed (rc=%d)", pr_number, gql_result.returncode)
             return total_threads, total_unresolved, False
-        try:
-            data = json.loads(gql_result.stdout) or {}
-            repository = (data.get("data") or {}).get("repository") or {}
-            threads_page = (repository.get("pullRequest") or {}).get("reviewThreads")
-            nodes = (threads_page or {}).get("nodes") or []
-            page_unresolved = sum(1 for t in nodes if not t.get("isResolved", False))
-            page_info = (threads_page or {}).get("pageInfo") or {}
-        except (ValueError, AttributeError, KeyError, TypeError):
-            logger.warning("PR #%d: malformed GraphQL review threads response", pr_number, exc_info=True)
+        page = _parse_threads_page(gql_result.stdout, pr_number)
+        if page is None:
             return total_threads, total_unresolved, False
-        if threads_page is None:
-            logger.warning("PR #%d: missing reviewThreads in GraphQL response", pr_number)
-            return total_threads, total_unresolved, False
-        total_threads += len(nodes)
+        page_total, page_unresolved, cursor = page
+        total_threads += page_total
         total_unresolved += page_unresolved
-        if not page_info.get("hasNextPage"):
+        if cursor is None:
             break
-        cursor = page_info.get("endCursor")
 
     return total_threads, total_unresolved, True
 
 
-def _check_human_issue_comments(pr_number: int, repo: str, env: dict) -> bool:
+async def _check_human_issue_comments(pr_number: int, repo: str, env: dict) -> bool:
     """Return True if the PR has any non-bot issue comments."""
-    comments_result = run_cmd(
-        ["gh", "api", f"repos/{repo}/issues/{pr_number}/comments", "--paginate"],
+    comments_result = await run_cmd(
+        gh_argv("api", f"repos/{repo}/issues/{pr_number}/comments", "--paginate"),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -851,12 +864,12 @@ def _check_human_issue_comments(pr_number: int, repo: str, env: dict) -> bool:
     return len(human_comments) > 0
 
 
-def _has_pending_feedback(pr_number: int, repo: str, env: dict) -> bool:
-    total_threads, total_unresolved, gql_ok = _check_gql_unresolved_threads(pr_number, repo, env)
+async def _has_pending_feedback(pr_number: int, repo: str, env: dict) -> bool:
+    total_threads, total_unresolved, gql_ok = await _check_gql_unresolved_threads(pr_number, repo, env)
 
     if gql_ok:
         logger.debug("PR #%d: %d review thread(s), %d unresolved", pr_number, total_threads, total_unresolved)
         if total_unresolved:
             return True
 
-    return _check_human_issue_comments(pr_number, repo, env)
+    return await _check_human_issue_comments(pr_number, repo, env)

@@ -17,12 +17,13 @@ digest that cannot be written (message on stderr).
 # ruff: noqa: TRY003
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import shlex
 import subprocess
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +31,7 @@ from typing import Annotated, Any
 
 import typer
 
+from dotharness.cli_common import fail
 from dotharness.sisyphus.agent import make_agent_runner
 from dotharness.sisyphus.archive import archive_item, check_archive_dir, resolve_archive_dir
 from dotharness.sisyphus.cleanup import PrInfo
@@ -125,25 +127,27 @@ class GhPullRequestClient:
     def __init__(self, gh: GhCli) -> None:
         self.gh = gh
 
-    def find_pr(self, branch: str) -> PullRequest | None:
+    async def find_pr(self, branch: str) -> PullRequest | None:
         try:
-            rows = self.gh.json("pr", "list", "--head", branch, "--state", "open", "--json", "number,url")
+            rows = await self.gh.json("pr", "list", "--head", branch, "--state", "open", "--json", "number,url")
         except PickError as exc:
             raise GitHubError(str(exc)) from exc
         for row in rows or []:
             return PullRequest(int(row["number"]), row.get("url", ""))
         return None
 
-    def pr_state(self, ref: str) -> PrInfo | None:
+    async def pr_state(self, ref: str) -> PrInfo | None:
         """``gh pr view <number or branch> --json number,state,headRefOid``; any state (used by branch cleanup)."""
         try:
-            row = self.gh.json("pr", "view", ref, "--json", "number,state,headRefOid")
+            row = await self.gh.json("pr", "view", ref, "--json", "number,state,headRefOid")
         except PickError as exc:
             raise GitHubError(str(exc)) from exc
         return _pr_info(row) if isinstance(row, dict) else None
 
-    def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
-        res = self.gh.run("pr", "create", "--draft", "--head", branch, "--base", base, "--title", title, "--body", body)
+    async def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
+        res = await self.gh.run(
+            "pr", "create", "--draft", "--head", branch, "--base", base, "--title", title, "--body", body
+        )
         match = _PR_URL.search(res.stdout)
         if res.returncode != 0 or not match:
             raise GitHubError(
@@ -166,13 +170,13 @@ class GhPrStateLookup:
     """PR state by number: ``gh pr view <n> --json state`` through :class:`GhCli`, bounded by a fixed timeout."""
 
     def __init__(self, repo_dir: Path, token: str | None, timeout: float = PR_STATE_TIMEOUT) -> None:
-        def run(argv: Sequence[str], cwd: Path | None, env: Any) -> Any:
-            return run_subprocess(argv, cwd, env, timeout=timeout)
+        async def run(argv: Sequence[str], cwd: Path | None, env: Any) -> Any:
+            return await run_subprocess(argv, cwd, env, timeout=timeout)
 
         self.gh = GhCli(repo_dir, token, run)
 
-    def __call__(self, number: int) -> str:
-        row = self.gh.json("pr", "view", str(number), "--json", "state")
+    async def __call__(self, number: int) -> str:
+        row = await self.gh.json("pr", "view", str(number), "--json", "state")
         state = row.get("state") if isinstance(row, dict) else None
         if not isinstance(state, str) or not state:
             raise PickError(f"gh pr view {number} returned no state")
@@ -183,8 +187,8 @@ class GhTimeboundLabelRemover(GhLabelRemover):
     """:class:`GhLabelRemover` whose ``gh`` call is bounded by :data:`PR_STATE_TIMEOUT` (a timeout is exit 124)."""
 
     def __init__(self, repo_dir: Path, token: str | None, timeout: float = PR_STATE_TIMEOUT) -> None:
-        def run(argv: Sequence[str], cwd: Path | None, env: Any) -> Any:
-            return run_subprocess(argv, cwd, env, timeout=timeout)
+        async def run(argv: Sequence[str], cwd: Path | None, env: Any) -> Any:
+            return await run_subprocess(argv, cwd, env, timeout=timeout)
 
         super().__init__(GhCli(repo_dir, token, run))
 
@@ -202,9 +206,9 @@ class Services:
     lock_dir: Path | None = None
     today: datetime | None = None
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
-    repo_info: Callable[[], str | None] | None = field(default=None)
+    repo_info: Callable[[], Awaitable[str | None]] | None = field(default=None)
     # `status --check-prs`: PR number -> state (OPEN, MERGED, CLOSED); raises PickError when it cannot be read.
-    pr_state: Callable[[int], str] | None = None
+    pr_state: Callable[[int], Awaitable[str]] | None = None
     # Removes the pick label from a settled GitHub issue; `None` means no removal is available.
     label_remover: LabelRemover | None = None
 
@@ -212,7 +216,7 @@ class Services:
 ServicesFactory = Callable[[SisyphusConfig], Services]
 
 
-def _no_backend(_prompt: str) -> None:
+async def _no_backend(_prompt: str) -> None:
     raise ConfigError("[agent] backend is not set")
 
 
@@ -234,10 +238,10 @@ def default_services(config: SisyphusConfig) -> Services:
         else _no_backend
     )
 
-    def repo_info() -> str | None:
+    async def repo_info() -> str | None:
         """The repository default branch from ``gh repo view``, or ``None`` if it cannot be read."""
         try:
-            data = gh.json("repo", "view", "--json", "defaultBranchRef")
+            data = await gh.json("repo", "view", "--json", "defaultBranchRef")
             return (data.get("defaultBranchRef") or {}).get("name")
         except (PickError, KeyError, TypeError, AttributeError):
             return None
@@ -256,30 +260,24 @@ def default_services(config: SisyphusConfig) -> Services:
 # --------------------------------------------------------------------- helpers
 
 
-def _fail(message: str) -> typer.Exit:
-    """Typer equivalent of ``click.ClickException``: ``Error: <message>`` on stderr; the caller raises the exit (code 1)."""
-    typer.echo(f"Error: {message}", err=True)
-    return typer.Exit(1)
-
-
 def _load(config_path: str | Path) -> SisyphusConfig:
     try:
         return load_config(config_path)
     except ConfigError as exc:
-        raise _fail(f"config error: {exc}") from exc
+        fail(f"config error: {exc}")
 
 
 def _require(config: SisyphusConfig, *keys: str) -> None:
     for key in keys:
         if not getattr(config.project, key):
-            raise _fail(f"config error: [project] {key} is required")
+            fail(f"config error: [project] {key} is required")
 
 
 def _services(factory: ServicesFactory | None, config: SisyphusConfig) -> Services:
     try:
         return (factory or default_services)(config)
     except (ConfigError, PickError) as exc:
-        raise _fail(f"config error: {exc}") from exc
+        fail(f"config error: {exc}")
 
 
 def _merge(parts: Sequence[DigestReport], extra: DigestReport) -> DigestReport:
@@ -311,11 +309,11 @@ def _resume_command(config_path: str | Path, item: str, base: str | None = None,
     return fill_resume_template(_resume_template(config_path, base), item, again=again)
 
 
-def _resolve_options(
+async def _resolve_options(
     config: SisyphusConfig, services: Services, base: str | None, config_path: str | Path = ""
 ) -> OrchestratorOptions:
     base = base or config.project.base_branch or DEFAULT_BASE_BRANCH
-    default_branch = services.repo_info() if services.repo_info else None
+    default_branch = await services.repo_info() if services.repo_info else None
     return OrchestratorOptions(
         base_branch=base,
         default_branch=default_branch,
@@ -387,7 +385,7 @@ def _resume_phase(config: SisyphusConfig, services: Services, state: _RunState, 
     return ready
 
 
-def _pick_phase(config: SisyphusConfig, services: Services, state: _RunState) -> list[Candidate]:
+async def _pick_phase(config: SisyphusConfig, services: Services, state: _RunState) -> list[Candidate]:
     """Auto-resume cleared items, then pick new ones. The caller holds the clone lock.
 
     Items waiting at a checkpoint never stop picking. Resumed and new items share ``max_tickets_per_run``.
@@ -396,7 +394,7 @@ def _pick_phase(config: SisyphusConfig, services: Services, state: _RunState) ->
     workspace = Path(config.project.workspace_dir).expanduser()
     limit = config.limits.max_tickets_per_run
     resumed = _resume_phase(config, services, state, limit)
-    new = pick_items(
+    new = await pick_items(
         config.source.work_item,
         services.tracker,
         services.lookup,
@@ -407,12 +405,12 @@ def _pick_phase(config: SisyphusConfig, services: Services, state: _RunState) ->
     return [*resumed, *new]
 
 
-def _run_one(
+async def _run_one(
     cand: Candidate, config: SisyphusConfig, services: Services, options: OrchestratorOptions, state: _RunState
 ) -> None:
     assert config.project.workspace_dir  # noqa: S101
     try:
-        result = run_item(
+        result = await run_item(
             cand.ref,
             config,
             options,
@@ -436,7 +434,7 @@ def _run_one(
     typer.echo(_summarise(result))
 
 
-def _run_phase(
+async def _run_phase(
     picked: Sequence[Candidate],
     config: SisyphusConfig,
     services: Services,
@@ -448,8 +446,8 @@ def _run_phase(
     if not picked:
         return
     if not config.agent.backend:
-        raise _fail("config error: [agent] backend is not set")
-    options = _resolve_options(config, services, base, config_path)
+        fail("config error: [agent] backend is not set")
+    options = await _resolve_options(config, services, base, config_path)
     tracker = LimitTracker(config.limits, services.clock)
     for cand in picked:
         if "max_run_minutes" in tracker.status().reached:
@@ -458,7 +456,7 @@ def _run_phase(
             )
             return
         tracker.record_ticket()
-        _run_one(cand, config, services, options, state)
+        await _run_one(cand, config, services, options, state)
 
 
 def _write_digest(config: SisyphusConfig, services: Services, state: _RunState) -> DigestWriteError | None:
@@ -476,13 +474,13 @@ def _write_digest(config: SisyphusConfig, services: Services, state: _RunState) 
     return None
 
 
-def _phase_and_digest(
-    config: SisyphusConfig, services: Services, state: _RunState, phase: Callable[[], None]
+async def _phase_and_digest(
+    config: SisyphusConfig, services: Services, state: _RunState, phase: Callable[[], Awaitable[None]]
 ) -> tuple[Exception | None, DigestWriteError | None]:
     """Run ``phase`` (an error is noted, not raised), then attempt the digest; returns both outcomes."""
     error: Exception | None = None
     try:
-        phase()
+        await phase()
     except Exception as exc:
         error = exc
         if not state.notes and not isinstance(exc, typer.Exit):  # a typer.Exit already printed its message
@@ -490,11 +488,11 @@ def _phase_and_digest(
     return error, _write_digest(config, services, state) if state.has_content else None
 
 
-def _run_locked(
+async def _run_locked(
     config: SisyphusConfig,
     services: Services,
     state: _RunState,
-    phase: Callable[[], None],
+    phase: Callable[[], Awaitable[None]],
     prepare: Callable[[], None] | None = None,
 ) -> None:
     """Shared skeleton of ``run`` and ``resume``: one lock, ``prepare`` (errors propagate), ``phase``, digest, exit code.
@@ -507,13 +505,13 @@ def _run_locked(
         with clone_lock(config.project.repo_dir, services.lock_dir):
             if prepare is not None:
                 prepare()
-            error, digest_error = _phase_and_digest(config, services, state, phase)
+            error, digest_error = await _phase_and_digest(config, services, state, phase)
     except LockHeld:
         return
     if isinstance(error, typer.Exit):
         raise error
     if error is not None:
-        raise _fail(str(error)) from error
+        fail(str(error))
     if digest_error is not None:
         raise typer.Exit(1)
 
@@ -528,12 +526,12 @@ def run_command(ctx: typer.Context, config_path: ConfigOption, base: BaseOption 
     services = _services(factory, config)
     state = _RunState()
 
-    def phase() -> None:
-        picked = _pick_phase(config, services, state)
-        _run_phase(picked, config, services, base, state, config_path)
+    async def phase() -> None:
+        picked = await _pick_phase(config, services, state)
+        await _run_phase(picked, config, services, base, state, config_path)
 
     # One non-blocking lock for the whole invocation: pick, every item, digest.
-    _run_locked(config, services, state, phase)
+    asyncio.run(_run_locked(config, services, state, phase))
 
 
 @app.command("intake")
@@ -545,15 +543,15 @@ def intake_command(ctx: typer.Context, work_item_ref: RefArgument, config_path: 
     assert config.project.repo_dir and config.project.workspace_dir  # noqa: S101
     services = _services(factory, config)
     if not config.agent.backend and factory is None:
-        raise _fail("config error: [agent] backend is not set")
+        fail("config error: [agent] backend is not set")
     try:
         with clone_lock(config.project.repo_dir, services.lock_dir):
             record = RunRecord.open(Path(config.project.workspace_dir).expanduser(), work_item_ref)
-            result = run_intake(work_item_ref, config, services.agent_runner, record=record)
+            result = asyncio.run(run_intake(work_item_ref, config, services.agent_runner, record=record))
     except LockHeld:
         return
     except Exception as exc:
-        raise _fail(str(exc)) from exc
+        fail(str(exc))
     rec_path = record_path(Path(config.project.workspace_dir).expanduser(), work_item_ref)
     if result.blocked:
         texts = tuple(f"{d.number}. {d.text}" for d in result.open_decisions)
@@ -582,15 +580,15 @@ def _check_resumable(rec: RunRecord, again: bool) -> None:
     stop = read_stop_record(rec.path)
     if is_abandoned(stop):
         if not again:
-            raise _fail(
+            fail(
                 f"{rec.item} is abandoned; run `sisyphus resume {shlex.quote(rec.item)} --config <config> --again` "
                 "to re-enable it"
             )
         clear_stop_record(rec.path)
     elif again:
-        raise _fail(f"{rec.item} is not abandoned; --again only re-enables an abandoned item")
+        fail(f"{rec.item} is not abandoned; --again only re-enables an abandoned item")
     elif not is_stopped(rec, stop):
-        raise _fail(f"{rec.item} is not stopped (stage {rec.stage}, {rec.stage_status}); nothing to resume")
+        fail(f"{rec.item} is not stopped (stage {rec.stage}, {rec.stage_status}); nothing to resume")
 
 
 def _prepare_resume(
@@ -600,7 +598,7 @@ def _prepare_resume(
     assert config.project.workspace_dir  # noqa: S101
     workspace = Path(config.project.workspace_dir).expanduser()
     if not record_path(workspace, work_item_ref).exists():
-        raise _fail(f"no run record for {work_item_ref}; nothing to resume")
+        fail(f"no run record for {work_item_ref}; nothing to resume")
     rec = RunRecord.open(workspace, work_item_ref)
     _check_resumable(rec, again)
     if reset_retries:
@@ -642,10 +640,10 @@ def resume_item_command(
     def prepare() -> None:
         _prepare_resume(config, services, work_item_ref, again=again, reset_retries=reset_retries)
 
-    def phase() -> None:
-        _run_phase([Candidate(work_item_ref)], config, services, base, state, config_path)
+    async def phase() -> None:
+        await _run_phase([Candidate(work_item_ref)], config, services, base, state, config_path)
 
-    _run_locked(config, services, state, phase, prepare)
+    asyncio.run(_run_locked(config, services, state, phase, prepare))
 
 
 @app.command("abandon")
@@ -667,7 +665,7 @@ def abandon_command(ctx: typer.Context, work_item_ref: RefArgument, config_path:
         with clone_lock(config.project.repo_dir, services.lock_dir):
             workspace = Path(config.project.workspace_dir).expanduser()
             if not record_path(workspace, work_item_ref).exists():
-                raise _fail(f"no run record for {work_item_ref}; nothing to abandon")
+                fail(f"no run record for {work_item_ref}; nothing to abandon")
             rec = RunRecord.open(workspace, work_item_ref)
             if is_abandoned(read_stop_record(rec.path)):
                 typer.echo(f"{work_item_ref}: already abandoned")
@@ -686,7 +684,7 @@ def abandon_command(ctx: typer.Context, work_item_ref: RefArgument, config_path:
             )
             if rec.checkpoint is not None:
                 rec.set_checkpoint(None)
-            _remove_pick_label(config, services, work_item_ref)
+            asyncio.run(_remove_pick_label(config, services, work_item_ref))
     except LockHeld:
         return
     typer.echo(
@@ -695,14 +693,14 @@ def abandon_command(ctx: typer.Context, work_item_ref: RefArgument, config_path:
     )
 
 
-def _remove_pick_label(config: SisyphusConfig, services: Services, ref: str) -> None:
+async def _remove_pick_label(config: SisyphusConfig, services: Services, ref: str) -> None:
     """Remove the pick label from a settled GitHub issue; any failure is one stderr line, never an exit code."""
     number = label_removal_number(config, ref)
     wi = config.source.work_item
     if number is None or wi is None or not wi.pick_label or services.label_remover is None:
         return
     try:
-        services.label_remover.remove_label(number, wi.pick_label)
+        await services.label_remover.remove_label(number, wi.pick_label)
     except Exception as exc:  # label removal is best effort; abandon must still succeed
         detail = " ".join(str(exc).split())  # collapse multi-line gh stderr so this stays one line
         typer.echo(f"{ref}: pick label '{wi.pick_label}' not removed: {type(exc).__name__}: {detail}", err=True)
@@ -742,7 +740,7 @@ def archive_command(ctx: typer.Context, config_path: ConfigOption) -> None:
         archive_dir = resolve_archive_dir(config.archive.dir, config.project.workspace_dir)
         check_archive_dir(archive_dir, config.project.workspace_dir)
     except ConfigError as exc:
-        raise _fail(f"config error: {exc}") from exc
+        fail(f"config error: {exc}")
     services = _services(factory, config)
     workspace = Path(config.project.workspace_dir).expanduser()
     archived = 0
@@ -801,7 +799,7 @@ def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_
     return lines
 
 
-def _pr_closed(rec: RunRecord, stop: Any, pr_state: Callable[[int], str]) -> bool:
+async def _pr_closed(rec: RunRecord, stop: Any, pr_state: Callable[[int], Awaitable[str]]) -> bool:
     """True if the record's PR is MERGED or CLOSED. Fails open: any lookup failure warns on stderr and returns False."""
     number = rec.retries.get(PR_NUMBER_KEY)
     if not number:
@@ -809,7 +807,7 @@ def _pr_closed(rec: RunRecord, stop: Any, pr_state: Callable[[int], str]) -> boo
     if rec.checkpoint is None and stop is None and rec.stage_status == STAGE_IN_PROGRESS:
         return False  # in progress with no stop record: may be running now, never hidden or looked up
     try:
-        return pr_state(number) in ("MERGED", "CLOSED")
+        return await pr_state(number) in ("MERGED", "CLOSED")
     except (PickError, OSError, ValueError) as exc:
         typer.echo(f"warning: cannot check PR #{number} for {rec.item}: {exc}", err=True)
         return False
@@ -849,22 +847,27 @@ def status_command(
     assert config.project.workspace_dir  # noqa: S101
     workspace = Path(config.project.workspace_dir).expanduser()
     if work_item_ref is not None and not record_path(workspace, work_item_ref).exists():
-        raise _fail(f"no run record for {work_item_ref}")
+        fail(f"no run record for {work_item_ref}")
     records = [r for r in iter_records(workspace) if work_item_ref in (None, r.item)]
     if not records:
         typer.echo("no items")
         return
-    hidden = 0
     pr_state = _services(factory, config).pr_state if check_prs and not show_all and work_item_ref is None else None
-    for rec in records:
-        stop = read_stop_record(rec.path)
-        if not show_all and work_item_ref is None and is_settled(rec, stop):
-            hidden += 1
-            continue
-        if pr_state is not None and _pr_closed(rec, stop, pr_state):
-            hidden += 1
-            continue
-        typer.echo("\n".join(_status_block(rec, _awaiting(rec, stop), config, config_path)))
+
+    async def render() -> int:
+        hidden = 0
+        for rec in records:
+            stop = read_stop_record(rec.path)
+            if not show_all and work_item_ref is None and is_settled(rec, stop):
+                hidden += 1
+                continue
+            if pr_state is not None and await _pr_closed(rec, stop, pr_state):
+                hidden += 1
+                continue
+            typer.echo("\n".join(_status_block(rec, _awaiting(rec, stop), config, config_path)))
+        return hidden
+
+    hidden = asyncio.run(render())
     if hidden == len(records):
         typer.echo(f"no items needing attention ({hidden} hidden; use --all)")
 

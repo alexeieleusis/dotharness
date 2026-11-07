@@ -4,15 +4,13 @@ Used by ``ai_backend.launch`` when ``OpencodeOptions.check_plugins`` / ``monitor
 """
 
 import asyncio
-import contextlib
 import logging
-import os
 import signal
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from dotharness.subprocess_runner import run
+from dotharness.subprocess_runner import killpg, run
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +38,6 @@ class MonitorState:
     pid: int | None = None
     monitor: "asyncio.Task[None] | None" = None
     diverged_to: str | None = None
-
-
-def _kill_group(pgid: int, sig: signal.Signals) -> None:
-    with contextlib.suppress(ProcessLookupError):
-        os.killpg(pgid, sig)
 
 
 async def _lsof_cwd(pid: int) -> str | None:
@@ -75,7 +68,7 @@ async def watch_cwd(state: MonitorState, expected_cwd: str, prefix: str) -> None
                 expected,
                 actual,
             )
-            _kill_group(state.pid, signal.SIGKILL)
+            killpg(state.pid, signal.SIGKILL)
             return
 
 

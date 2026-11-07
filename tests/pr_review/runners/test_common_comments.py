@@ -9,22 +9,22 @@ from dotharness.pr_review.runners.common import (
 )
 
 
-def test_fetch_pr_comments_returns_empty_on_script_failure(tmp_path):
+async def test_fetch_pr_comments_returns_empty_on_script_failure(tmp_path):
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-        result = fetch_pr_comments(1, tmp_path / "pr-comments.py", str(tmp_path), {})
+        result = await fetch_pr_comments(1, tmp_path / "pr-comments.py", str(tmp_path), {})
     assert result == []
 
 
-def test_fetch_pr_comments_returns_empty_when_cache_missing(tmp_path, monkeypatch):
+async def test_fetch_pr_comments_returns_empty_when_cache_missing(tmp_path, monkeypatch):
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
     with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
-        result = fetch_pr_comments(1, tmp_path / "pr-comments.py", str(tmp_path), {})
+        result = await fetch_pr_comments(1, tmp_path / "pr-comments.py", str(tmp_path), {})
     assert result == []
 
 
-def test_fetch_pr_comments_tags_types_and_filters_bots(tmp_path):
+async def test_fetch_pr_comments_tags_types_and_filters_bots(tmp_path):
     data = {
         "inline_comments": [{"id": 1, "body": "x"}],
         "review_comments": [{"id": "review-2", "body": "y"}],
@@ -40,7 +40,7 @@ def test_fetch_pr_comments_tags_types_and_filters_bots(tmp_path):
         return MagicMock(returncode=0, stdout=b"", stderr=b"")
 
     with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=fake_run):
-        result = fetch_pr_comments(9, tmp_path / "pr-comments.py", str(tmp_path), {})
+        result = await fetch_pr_comments(9, tmp_path / "pr-comments.py", str(tmp_path), {})
     types = {c["id"]: c["type"] for c in result}
     assert types[1] == "inline"
     assert types["review-2"] == "review"

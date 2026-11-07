@@ -174,6 +174,20 @@ def test_plan_init_rejects_unreadable_brief(tmp_path, monkeypatch, runner: CliRu
     assert "BRIEF_PATH is not readable:" in result.output
 
 
+def _awaitable(fn):
+    async def _call(*args, **kwargs):
+        return fn(*args, **kwargs)
+
+    return _call
+
+
+def _araiser(exc: Exception):
+    async def _raise(*args, **kwargs):
+        raise exc
+
+    return _raise
+
+
 def _raiser(exc: Exception):
     def _raise(*args, **kwargs):
         raise exc
@@ -245,7 +259,7 @@ def test_draft_overview_overwrite_prompt(tmp_path, monkeypatch, runner: CliRunne
 
 def test_draft_requirements_success(tmp_path, monkeypatch, runner: CliRunner) -> None:
     _workspace(tmp_path, monkeypatch)
-    monkeypatch.setattr(requirements_stage, "run_draft_requirements", lambda cfg: Path("req.md"))
+    monkeypatch.setattr(requirements_stage, "run_draft_requirements", _awaitable(lambda cfg: Path("req.md")))
 
     result = runner.invoke(cli, ["plan", "draft-requirements"])
 
@@ -257,7 +271,7 @@ def test_draft_requirements_error_exits_1(tmp_path, monkeypatch, runner: CliRunn
     _workspace(tmp_path, monkeypatch)
 
     monkeypatch.setattr(
-        requirements_stage, "run_draft_requirements", _raiser(requirements_stage.RequirementsError("req boom"))
+        requirements_stage, "run_draft_requirements", _araiser(requirements_stage.RequirementsError("req boom"))
     )
 
     result = runner.invoke(cli, ["plan", "draft-requirements"])
@@ -270,7 +284,9 @@ def test_draft_requirements_overwrite_prompt(tmp_path, monkeypatch, runner: CliR
     ws = _workspace(tmp_path, monkeypatch)
     (ws / requirements_stage.REQUIREMENTS_FILENAME).write_text("old")
     calls = []
-    monkeypatch.setattr(requirements_stage, "run_draft_requirements", lambda cfg: calls.append(1) or Path("req.md"))
+    monkeypatch.setattr(
+        requirements_stage, "run_draft_requirements", _awaitable(lambda cfg: calls.append(1) or Path("req.md"))
+    )
 
     declined = runner.invoke(cli, ["plan", "draft-requirements"], input="n\n")
     assert declined.exit_code == 1
@@ -392,7 +408,7 @@ def test_draft_phases_success_lists_outliers(tmp_path, monkeypatch, runner: CliR
     _workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(draft_phases, "target_phase_paths", lambda cfg: [tmp_path / "01-a.md"])
     monkeypatch.setattr(draft_phases, "stale_phase_paths", lambda cfg: [])
-    monkeypatch.setattr(draft_phases, "run_draft_phases", lambda cfg: _phases_result(["01-a.md too big"]))
+    monkeypatch.setattr(draft_phases, "run_draft_phases", _awaitable(lambda cfg: _phases_result(["01-a.md too big"])))
 
     result = runner.invoke(cli, ["plan", "draft-phases"])
 
@@ -410,7 +426,7 @@ def test_draft_phases_overwrite_prompt_lists_file_names(tmp_path, monkeypatch, r
     monkeypatch.setattr(draft_phases, "target_phase_paths", lambda cfg: [existing, tmp_path / "02-b.md"])
     monkeypatch.setattr(draft_phases, "stale_phase_paths", lambda cfg: [])
     calls = []
-    monkeypatch.setattr(draft_phases, "run_draft_phases", lambda cfg: calls.append(1) or _phases_result())
+    monkeypatch.setattr(draft_phases, "run_draft_phases", _awaitable(lambda cfg: calls.append(1) or _phases_result()))
 
     declined = runner.invoke(cli, ["plan", "draft-phases"], input="n\n")
     assert declined.exit_code == 1
@@ -428,7 +444,7 @@ def test_draft_phases_stale_prompt(tmp_path, monkeypatch, runner: CliRunner) -> 
     _workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(draft_phases, "target_phase_paths", lambda cfg: [])
     monkeypatch.setattr(draft_phases, "stale_phase_paths", lambda cfg: [tmp_path / "09-old.md"])
-    monkeypatch.setattr(draft_phases, "run_draft_phases", lambda cfg: _phases_result())
+    monkeypatch.setattr(draft_phases, "run_draft_phases", _awaitable(lambda cfg: _phases_result()))
 
     result = runner.invoke(cli, ["plan", "draft-phases"], input="n\n")
 
@@ -453,7 +469,7 @@ def test_draft_phases_error_from_run_exits_1(tmp_path, monkeypatch, runner: CliR
     monkeypatch.setattr(draft_phases, "target_phase_paths", lambda cfg: [])
     monkeypatch.setattr(draft_phases, "stale_phase_paths", lambda cfg: [])
 
-    monkeypatch.setattr(draft_phases, "run_draft_phases", _raiser(draft_phases.DraftPhasesError("run boom")))
+    monkeypatch.setattr(draft_phases, "run_draft_phases", _araiser(draft_phases.DraftPhasesError("run boom")))
 
     result = runner.invoke(cli, ["plan", "draft-phases"])
 
@@ -487,3 +503,14 @@ def test_review_failure_prints_violations_and_exits_1(tmp_path, monkeypatch, run
     assert "deps: FAIL" in result.output
     assert "  - bad edge" in result.output
     assert "naming: PASS" in result.output
+
+
+def test_plan_init_missing_brief_exact_stderr(tmp_path, monkeypatch, runner: CliRunner) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_config(tmp_path)
+
+    result = runner.invoke(cli, ["plan", "init", "missing-brief.md"])
+
+    assert result.exit_code == 1
+    assert result.stderr == "Error: BRIEF_PATH does not exist: missing-brief.md\n"
+    assert result.stdout == ""

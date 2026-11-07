@@ -35,7 +35,7 @@ def raw(pr):
     return proc(out=json.dumps({"data": {"repository": {"pullRequest": pr}}}).encode())
 
 
-def run(reads, mark=None, gate=True, dry_run=False, counts=COUNTS, repo="o/r"):
+async def run(reads, mark=None, gate=True, dry_run=False, counts=COUNTS, repo="o/r"):
     """reads: list of read responses in order; mark: mark response (or callable on path)."""
     reads = list(reads)
     calls = []
@@ -51,62 +51,64 @@ def run(reads, mark=None, gate=True, dry_run=False, counts=COUNTS, repo="o/r"):
         return item
 
     with patch("dotharness.pr_review.runners.ci_checks.run_cmd", side_effect=fake):
-        result = mark_files_viewed(repo, 5, counts, 75, gate, {}, dry_run)
+        result = await mark_files_viewed(repo, 5, counts, 75, gate, {}, dry_run)
     writes = [c for c in calls if any("markFileAsViewed" in a for a in c)]
     return result, calls, writes
 
 
-def test_gate_not_passed_makes_no_call():
-    result, calls, _ = run([], gate=False)
+async def test_gate_not_passed_makes_no_call():
+    result, calls, _ = await run([], gate=False)
     assert result.status is ViewedStatus.GATE_NOT_PASSED
     assert calls == []
 
 
-def test_marks_small_unviewed_files_only():
+async def test_marks_small_unviewed_files_only():
     reads = [page([node("a.py"), node("b.py"), node("big.py"), node("c.py"), node("other.py")])]
-    result, _, writes = run(reads)
+    result, _, writes = await run(reads)
     assert result.status is ViewedStatus.DONE
     assert result.marked == ["a.py", "b.py", "c.py"]  # big.py (80 >= 75) and uncounted other.py untouched
     assert len(writes) == 3
     assert "pullRequestId=PR_1" in writes[0]
 
 
-def test_threshold_is_strict():
-    result, _, writes = run([page([node("a.py")])], counts={"a.py": 75})
+async def test_threshold_is_strict():
+    result, _, writes = await run([page([node("a.py")])], counts={"a.py": 75})
     assert result.marked == [] and writes == []
 
 
-def test_already_viewed_skipped_and_rerun_no_write():
-    result, _, writes = run([page([node("a.py", "VIEWED"), node("b.py", "VIEWED")])], counts={"a.py": 1, "b.py": 2})
+async def test_already_viewed_skipped_and_rerun_no_write():
+    result, _, writes = await run(
+        [page([node("a.py", "VIEWED"), node("b.py", "VIEWED")])], counts={"a.py": 1, "b.py": 2}
+    )
     assert result.skipped == ["a.py", "b.py"]
     assert writes == []
 
 
-def test_dismissed_is_remarked():
-    result, _, writes = run([page([node("a.py", "DISMISSED")])], counts={"a.py": 1})
+async def test_dismissed_is_remarked():
+    result, _, writes = await run([page([node("a.py", "DISMISSED")])], counts={"a.py": 1})
     assert result.marked == ["a.py"] and len(writes) == 1
 
 
-def test_pagination_collects_all_pages():
+async def test_pagination_collects_all_pages():
     reads = [page([node("a.py")], True, "CUR1"), page([node("b.py")])]
-    result, calls, _ = run(reads, counts={"a.py": 1, "b.py": 1})
+    result, calls, _ = await run(reads, counts={"a.py": 1, "b.py": 1})
     assert result.marked == ["a.py", "b.py"]
     assert "cursor=CUR1" in calls[1]
     assert not any(a.startswith("cursor=") for a in calls[0])
 
 
-def test_read_failure_makes_no_write():
-    result, _, writes = run([proc(code=1)])
+async def test_read_failure_makes_no_write():
+    result, _, writes = await run([proc(code=1)])
     assert result.status is ViewedStatus.READ_FAILED and writes == []
 
 
-def test_read_failure_on_second_page_makes_no_write():
-    result, _, writes = run([page([node("a.py")], True, "C"), proc(code=1)], counts={"a.py": 1})
+async def test_read_failure_on_second_page_makes_no_write():
+    result, _, writes = await run([page([node("a.py")], True, "C"), proc(code=1)], counts={"a.py": 1})
     assert result.status is ViewedStatus.READ_FAILED and writes == []
 
 
-def test_malformed_read_makes_no_write():
-    result, _, writes = run([proc(out=b"not json")])
+async def test_malformed_read_makes_no_write():
+    result, _, writes = await run([proc(out=b"not json")])
     assert result.status is ViewedStatus.READ_FAILED and writes == []
 
 
@@ -124,82 +126,82 @@ MALFORMED_PAGES = {
 
 
 @pytest.mark.parametrize("response", MALFORMED_PAGES.values(), ids=MALFORMED_PAGES.keys())
-def test_malformed_page_is_read_failure_without_writes(response):
-    result, _, writes = run([response], counts={"a.py": 1})
+async def test_malformed_page_is_read_failure_without_writes(response):
+    result, _, writes = await run([response], counts={"a.py": 1})
     assert result.status is ViewedStatus.READ_FAILED and writes == []
     assert result.all_viewed is False
 
 
-def test_page_cap_reached_is_read_failure_not_truncated_done():
+async def test_page_cap_reached_is_read_failure_not_truncated_done():
     reads = [page([node("a.py")], True, f"C{i}") for i in range(_MAX_FILE_PAGES)]
-    result, calls, writes = run(reads, counts={"a.py": 1})
+    result, calls, writes = await run(reads, counts={"a.py": 1})
     assert result.status is ViewedStatus.READ_FAILED and writes == []
     assert result.all_viewed is False
     assert len(calls) == _MAX_FILE_PAGES
 
 
 @pytest.mark.parametrize("repo", ["norepo", "", "/name", "owner/"])
-def test_invalid_repo_is_read_failure_without_any_call(repo):
-    result, calls, writes = run([], repo=repo)
+async def test_invalid_repo_is_read_failure_without_any_call(repo):
+    result, calls, writes = await run([], repo=repo)
     assert result.status is ViewedStatus.READ_FAILED and writes == [] and calls == []
 
 
 @pytest.mark.parametrize("exc", [subprocess.TimeoutExpired("gh", 1), OSError("boom"), ValueError("bad")])
-def test_run_cmd_raising_is_caught_as_read_failure(exc):
-    result, _, writes = run([exc])
+async def test_run_cmd_raising_is_caught_as_read_failure(exc):
+    result, _, writes = await run([exc])
     assert result.status is ViewedStatus.READ_FAILED and writes == []
 
 
-def test_pr_with_zero_files_is_not_all_viewed():
-    result, _, writes = run([page([])], counts={})
+async def test_pr_with_zero_files_is_not_all_viewed():
+    result, _, writes = await run([page([])], counts={})
     assert result.status is ViewedStatus.DONE and writes == []
     assert result.all_viewed is False
 
 
-def test_failed_mark_does_not_stop_others():
+async def test_failed_mark_does_not_stop_others():
     def mark(path):
         return proc(code=1) if path == "a.py" else proc(out=b'{"data":{}}')
 
-    result, _, writes = run([page([node("a.py"), node("b.py")])], mark=mark, counts={"a.py": 1, "b.py": 1})
+    result, _, writes = await run([page([node("a.py"), node("b.py")])], mark=mark, counts={"a.py": 1, "b.py": 1})
     assert result.failed == ["a.py"] and result.marked == ["b.py"] and len(writes) == 2
 
 
-def test_graphql_errors_in_mutation_count_as_failure():
-    result, _, _ = run([page([node("a.py")])], mark=proc(out=b'{"errors":[{"message":"x"}]}'), counts={"a.py": 1})
+async def test_graphql_errors_in_mutation_count_as_failure():
+    result, _, _ = await run([page([node("a.py")])], mark=proc(out=b'{"errors":[{"message":"x"}]}'), counts={"a.py": 1})
     assert result.failed == ["a.py"]
 
 
 @pytest.mark.parametrize("out", [b"not json", b"[]", b'["errors"]'])
-def test_non_object_mutation_output_counts_as_failure(out):
-    result, _, _ = run([page([node("a.py")])], mark=proc(out=out), counts={"a.py": 1})
+async def test_non_object_mutation_output_counts_as_failure(out):
+    result, _, _ = await run([page([node("a.py")])], mark=proc(out=out), counts={"a.py": 1})
     assert result.failed == ["a.py"] and result.marked == []
     assert result.all_viewed is False
 
 
-def test_dry_run_reads_but_never_writes():
-    result, calls, writes = run([page([node("a.py"), node("b.py")])], dry_run=True, counts={"a.py": 1, "b.py": 1})
+async def test_dry_run_reads_but_never_writes():
+    result, calls, writes = await run([page([node("a.py"), node("b.py")])], dry_run=True, counts={"a.py": 1, "b.py": 1})
     assert result.marked == ["a.py", "b.py"]
     assert writes == [] and len(calls) == 1
 
 
-def test_all_viewed_when_every_file_viewed_or_marked():
+async def test_all_viewed_when_every_file_viewed_or_marked():
     reads = [page([node("a.py"), node("big.py", "VIEWED")])]
-    result, _, _ = run(reads, counts={"a.py": 10, "big.py": 80})
+    result, _, _ = await run(reads, counts={"a.py": 10, "big.py": 80})
     assert result.all_viewed is True
 
 
-def test_not_all_viewed_when_a_large_file_is_unviewed():
+async def test_not_all_viewed_when_a_large_file_is_unviewed():
     reads = [page([node("a.py"), node("big.py")])]
-    result, _, _ = run(reads, counts={"a.py": 10, "big.py": 80})
+    result, _, _ = await run(reads, counts={"a.py": 10, "big.py": 80})
     assert result.all_viewed is False
 
 
-def test_not_all_viewed_when_a_mark_fails():
+async def test_not_all_viewed_when_a_mark_fails():
     reads = [page([node("a.py")])]
-    result, _, _ = run(reads, mark=proc(code=1), counts={"a.py": 10})
+    result, _, _ = await run(reads, mark=proc(code=1), counts={"a.py": 10})
     assert result.all_viewed is False
 
 
-def test_all_viewed_in_dry_run_counts_would_be_marked():
-    result, _, writes = run([page([node("a.py")])], dry_run=True, counts={"a.py": 10})
+async def test_all_viewed_in_dry_run_counts_would_be_marked():
+    result, _, writes = await run([page([node("a.py")])], dry_run=True, counts={"a.py": 10})
     assert result.all_viewed is True and writes == []

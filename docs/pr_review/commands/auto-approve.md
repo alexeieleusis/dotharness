@@ -1,7 +1,7 @@
 # auto-approve
 
-`auto-approve` is the one command that is allowed to conclude a review. For
-pull requests where a review was requested from the current `gh` account, it
+`auto-approve` is the only command that can conclude a review. For
+pull requests where the current `gh` account has a review request, it
 marks small files as viewed and approves small PRs, but only after the PR
 author has answered the reviewer's comments. It is off until you set
 `[auto_approve].enabled = true`.
@@ -14,7 +14,7 @@ This one deliberately does not leave that to a human (see [`review-requested`](r
 pr_review run [--config PATH] [--verbose] auto-approve [--dry-run]
 ```
 
-The CLI name is `pr_review`; the config file names (`.harness*.toml`) keep the old prefix on purpose.
+The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the old prefix on purpose.
 
 
 - `--config PATH` — Path to the `.harness.toml` config file. Defaults to
@@ -34,15 +34,14 @@ nothing and exits 0. It does not even take the lock.
    [Shared behavior](index.md#shared-behavior)). A second concurrent run exits
    immediately.
 2. Lists the open, non-draft PRs where a review is requested from the current
-   `gh` account. No other PRs are touched.
+   `gh` account. It touches no other PRs.
 3. For each PR it checks out the branch, then measures how many lines changed
-   per file and in total. Renamed, copied, deleted and binary files are not
-   counted. Lockfiles are counted like any other text file.
+   per file and in total. It does not count renamed, copied, deleted and binary files. It counts lockfiles like any other text file.
 4. Checks the timing rule, then the safety conditions. All reads happen before
    any write.
 5. Marks each file with fewer than `viewed_max_lines` modified lines as
    viewed. It approves the PR if its total is fewer than `approve_max_lines`.
-   A PR of any size is also approved once all of its files are viewed
+   It also approves a PR of any size once all of its files are viewed
    (marked by you in the GitHub UI, or by this command). That waives only the size limit. The timing rule, the safety conditions, the already-approved check and the head-SHA binding still apply. So the PR author must have commented or pushed after the review first.
 
 Comparisons are strictly "less than". A threshold of `0` never matches, so it
@@ -51,15 +50,14 @@ turns that half of the feature off.
 ## The timing rule
 
 Nothing happens until the PR author has responded to the reviewer. The
-command looks at the account running it. Once that account has left comments, the PR author must comment or push a commit after the newest of them. Until then the
-PR is left alone and checked again on the next run. This is why the command
+command looks at the account running it. Once that account has left comments, the PR author must comment or push a commit after the newest of them. Until then, it leaves the PR alone and checks it again on the next run. This is why the command
 is separate from the review commands: it needs to run on a later pass than the
 one that posted the comments.
 
 ## The zero-findings rule
 
 If the account left no inline review comments (zero findings), there is
-nothing for the author to answer, so the PR does not wait for author activity.
+nothing for the author to answer. The PR does not wait for author activity.
 It still waits until the summary, design and traceability comments exist.
 
 ## Safety conditions
@@ -68,18 +66,10 @@ Before approving, on the PR's current head commit, the command requires:
 
 - the PR is open, not a draft, and has no merge conflicts;
 - auto-merge is not enabled on it;
-- CI is green. Required checks of the PR's base branch are used when it has
-  them, and nothing else is read. A stacked PR's base is another open PR's
-  branch, which has no required checks. For such a PR the command walks up the
-  stack: it finds the open PR whose head branch is the base (matched by branch
-  name only, no forks), then that PR's base, and so on until the base is the
-  default branch or no open PR has it as head. Only the checks required at that
-  stack root are judged on this PR, so a failing check that is not required
-  does not block it. A required name with no run on the PR does not pass. If
+- CI is green. It uses the required checks of the PR's base branch when it has them. It reads nothing else. A stacked PR's base is another open PR's
+  branch, which has no required checks. For such a PR, the command walks up the stack. It finds the open PR whose head branch is the base, matched by branch name only and with no forks. It then uses that PR's base, and so on, until the base is the default branch or no open PR has it as head. It judges only the checks required at that stack root, so a failing check that is not required does not block this PR. A required name with no run on the PR does not pass. If
   the root has no required checks, or there is no stack, all checks are used.
-  The walk stops at 10 levels; a deeper stack, two open PRs with the same head
-  branch, a failed or unreadable lookup, or pending required checks on the root
-  count as unreadable and nothing is approved. Only the latest run of each check counts: runs are matched by
+  The walk stops at 10 levels. A deeper stack, two open PRs with the same head branch, a failed or unreadable lookup, or pending required checks on the root count as unreadable, and nothing is approved. Only the latest run of each check counts: runs are matched by
   workflow and check name, and the one with the latest completion time (or
   start time when it has not completed) decides. A failed run followed by a
   passing rerun does not block. A pending, failing or not-yet-completed latest
@@ -108,10 +98,7 @@ file. Files already marked viewed are skipped, and a PR that the account has alr
 
 ## Errors
 
-A `gh` failure (a read of the PR list, the timing gate, the safety checks or
-the viewed states, or a failed approval or mark-viewed write) is logged as an
-error, with `gh`'s stderr for the approval, and does not fail the run. A failed
-read means no writes for that PR; every PR is checked again on the next run.
+The command logs a `gh` failure (a read of the PR list, the timing gate, the safety checks or the viewed states, or a failed approval or mark-viewed write) as an error, with `gh`'s stderr for the approval. It does not fail the run. A failed read means no writes for that PR. Every PR is checked again on the next run.
 
 If a git error or an unexpected exception occurs, the command logs it, keeps
 going with the other PRs (a git error stops the loop), and exits non-zero at

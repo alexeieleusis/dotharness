@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotharness.ai_backend import BACKEND_NAMES
+from dotharness.fileio import TOMLDecodeError, load_toml
 from dotharness.paths import default_knowledge_dir
 
 DEFAULT_AGENT_BACKEND = "claude"
@@ -15,7 +16,7 @@ class ConfigError(ValueError):
 
 
 def parse_backend(value: str, field_name: str) -> str:
-    if value not in ("claude", "opencode"):
+    if value not in BACKEND_NAMES:
         raise ConfigError(f"Invalid {field_name} '{value}': must be 'claude' or 'opencode'")  # noqa: TRY003
     return value
 
@@ -61,11 +62,10 @@ def load_config(path: Path) -> SpecPrismFlowConfig:
     if not path.exists():
         raise ConfigError(f"Config file not found: {path}")  # noqa: TRY003
 
-    with open(path, "rb") as f:
-        try:
-            data = tomllib.load(f)
-        except tomllib.TOMLDecodeError as e:
-            raise ConfigError(f"Invalid TOML in config file: {e}") from None  # noqa: TRY003
+    try:
+        data = load_toml(path)
+    except TOMLDecodeError as e:
+        raise ConfigError(f"Invalid TOML in config file: {e}") from None  # noqa: TRY003
 
     a = data.get("agent", {})
     agent = AgentConfig(backend=parse_backend(a.get("backend", DEFAULT_AGENT_BACKEND), "agent.backend"))

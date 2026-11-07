@@ -9,12 +9,13 @@ open decisions (checkpoint C1). Imports only Package A modules (never ``harness`
 # ruff: noqa: TRY003
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
 import subprocess
-from collections.abc import Generator, Iterable
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, Generator, Iterable
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -321,6 +322,8 @@ def repo_unchanged(repo_dir: Path | str, ignore: Iterable[Path | str] = ()) -> G
     before = snapshot_git_status(repo_dir, ignore)
     try:
         yield
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        raise  # never convert a cancellation into an ordinary exception
     except BaseException as exc:
         # A failing runner may still have modified the repository: report that instead of the bare error.
         after = snapshot_git_status(repo_dir, ignore)
@@ -328,6 +331,25 @@ def repo_unchanged(repo_dir: Path | str, ignore: Iterable[Path | str] = ()) -> G
             raise BoundaryViolation(_describe_difference(repo_dir, before, after)) from exc
         raise
     after = snapshot_git_status(repo_dir, ignore)
+    if after != before:
+        raise BoundaryViolation(_describe_difference(repo_dir, before, after))
+
+
+@asynccontextmanager
+async def repo_unchanged_async(repo_dir: Path | str, ignore: Iterable[Path | str] = ()) -> AsyncGenerator[None]:
+    """Like :func:`repo_unchanged`, but the git snapshots run in a thread so the event loop is not blocked."""
+    ignore = tuple(ignore)
+    before = await asyncio.to_thread(snapshot_git_status, repo_dir, ignore)
+    try:
+        yield
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        raise  # never convert a cancellation into an ordinary exception
+    except BaseException as exc:
+        after = await asyncio.to_thread(snapshot_git_status, repo_dir, ignore)
+        if after != before:
+            raise BoundaryViolation(_describe_difference(repo_dir, before, after)) from exc
+        raise
+    after = await asyncio.to_thread(snapshot_git_status, repo_dir, ignore)
     if after != before:
         raise BoundaryViolation(_describe_difference(repo_dir, before, after))
 
@@ -358,7 +380,7 @@ def _unchanged(brief: Path, item: str, digest: str) -> bool:
     return isinstance(data, dict) and data.get("item") == item and data.get("prompt_sha256") == digest
 
 
-def run_intake(
+async def run_intake(
     item: str,
     config: SisyphusConfig,
     runner: AgentRunner,
@@ -391,8 +413,8 @@ def run_intake(
         if not skipped:
             brief.parent.mkdir(parents=True, exist_ok=True)
             before = _brief_stamp(brief)
-            with repo_unchanged(repo, ignore=(brief, _sidecar(brief))):
-                runner(prompt)
+            async with repo_unchanged_async(repo, ignore=(brief, _sidecar(brief))):
+                await runner(prompt)
             after = _brief_stamp(brief)
             if after is None or after == before:
                 raise IntakeError(f"the agent did not write the brief at {brief}")

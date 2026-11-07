@@ -1,21 +1,21 @@
 # Config format recommendation
 
 This page recommends a file format for each section of the `spec_prism_flow`
-configuration after the plan-side-only migration, and records what happens to
-the sections that are no longer validated. It is a **recommendation only**.
+configuration after the plan-side-only migration. It also records what happens
+to the sections that are no longer validated. It is a **recommendation only**.
 Nothing here is applied: no code, parser, default or existing config file
 changes because of this page.
 
 The shapes below come from the config dataclasses in
 `src/dotharness/spec_prism_flow/config.py`. No real config files were
-inspected. Files are referred to by name pattern only: `.spec-prism-flow*.toml`,
+inspected. This page refers to files by name pattern only: `.spec-prism-flow*.toml`,
 `.harness*.toml`, `.sisyphus*.toml`. For the command-line side, see
 [Overview](overview.md).
 
 ## Summary
 
-**Recommendation: keep TOML.** The remaining keys are flat scalars and paths,
-TOML types them directly, and TOML is already in use and validated.
+**Recommendation: keep TOML.** The remaining keys are flat scalars and paths.
+TOML types them directly. TOML is already in use and validated.
 
 | Section | Keys | Recommended format | Change from today |
 |---|---|---|---|
@@ -25,7 +25,7 @@ TOML types them directly, and TOML is already in use and validated.
 | `[harness]` | `knowledge_dir` | TOML table | No |
 
 `[build]`, `[review]` and `[vibe_heal]` are no longer validated by
-`spec_prism_flow`; see [Sections no longer validated](#sections-no-longer-validated).
+`spec_prism_flow`. See [Sections no longer validated](#sections-no-longer-validated).
 
 ## Per-section recommendations
 
@@ -33,7 +33,7 @@ TOML types them directly, and TOML is already in use and validated.
 
 - **Keys:** `backend`.
 - **Type in use:** `backend: str`, default `"claude"`. Allowed values are
-  `claude` and `opencode`; any other value raises `ConfigError`.
+  `claude` and `opencode`. Any other value raises `ConfigError`.
 - **Recommended format:** keep as a TOML table.
 - **Reason:** a single string.
 - **Change from today:** none to the format. The key is kept but currently
@@ -55,7 +55,7 @@ TOML types them directly, and TOML is already in use and validated.
 ### `[prose_review]`
 
 - **Keys:** `enabled`, `backend`.
-- **Types in use:** `enabled: bool`, default `false`; `backend: str`, default
+- **Types in use:** `enabled: bool`, default `false`. `backend: str`, default
   `"claude"`, with the same allowed values as `[agent] backend`.
 - **Recommended format:** keep as a TOML table.
 - **Reason:** a flag and a string, both direct in TOML.
@@ -74,8 +74,8 @@ TOML types them directly, and TOML is already in use and validated.
 
 `spec_prism_flow` no longer validates `[build]`, `[review]` and `[vibe_heal]`.
 The config loader ignores unknown keys and tables, so an existing config file
-that still contains these sections loads without error. Their contents are not
-checked: a malformed `[build]` or `[review]` table no longer fails
+that still contains these sections loads without error. The loader does not check their
+contents: a malformed `[build]` or `[review]` table no longer fails
 `spec_prism_flow`, and the values have no effect on it.
 
 Sisyphus owns `[build]`. Keys under that section are documented by and
