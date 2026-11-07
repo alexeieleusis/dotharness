@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import subprocess
@@ -233,7 +234,7 @@ class _ReviewPasses:
             await self.file_pass(f)
 
     async def single_pass(
-        self, name: str, filename: str, build: Callable[[Path], Awaitable[str]], stamp: str | None, files_all_done: bool
+        self, name: str, filename: str, build: Callable[[Path], str | Awaitable[str]], stamp: str | None, files_all_done: bool
     ) -> None:
         if self.guard_errors:
             return
@@ -243,7 +244,10 @@ class _ReviewPasses:
         out = self.review_dir / filename
         out.unlink(missing_ok=True)
         self.result.ran.append(name)
-        ok = await self.call_backend(await build(out), f"local-review {name}")
+        prompt = build(out)
+        if inspect.isawaitable(prompt):
+            prompt = await prompt
+        ok = await self.call_backend(prompt, f"local-review {name}")
         ok = ok and _single_pass_output_ok(name, out, files_all_done)
         if ok and stamp:
             stamp_findings_file(out, stamp)
@@ -252,7 +256,7 @@ class _ReviewPasses:
     async def run_summary_and_design(self) -> None:
         files_all_done = all(self.manifest["files"].get(f) == STATUS_DONE for f in self.files)
 
-        async def build_summary(out: Path) -> str:
+        def build_summary(out: Path) -> str:
             return build_summary_prompt(
                 self.summary_instr, out, self.files, self.context, self.extra_knowledge, self.vibe
             )
