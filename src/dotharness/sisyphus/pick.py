@@ -414,6 +414,9 @@ class FileTracker:
     """
 
     async def list_candidates(self, source: WorkItemSource) -> Sequence[Candidate]:
+        return await asyncio.to_thread(self._list, source)
+
+    def _list(self, source: WorkItemSource) -> Sequence[Candidate]:
         if not source.dir:
             return []
         inbox = ticket_dir(source)
