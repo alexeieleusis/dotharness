@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import subprocess
@@ -351,6 +352,15 @@ async def test_runner_modifying_tracked_file_fails_stage(config: SisyphusConfig,
     rec = RunRecord.open(Path(config.project.workspace_dir or ""), "ENG-7")
     assert rec.stage_status == "in_progress"
     assert not intake._sidecar(resolve_brief_path(config, "ENG-7")).exists()
+
+
+async def test_cancelled_runner_stays_cancelled_after_dirtying_repo(config: SisyphusConfig, repo: Path) -> None:
+    async def runner(prompt: str) -> None:
+        (repo / "new.txt").write_text("x")
+        await asyncio.sleep(10)
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(run_intake("ENG-8", config, runner), 0.5)
 
 
 def test_boundary_detects_untracked_and_second_edit(repo: Path) -> None:
