@@ -18,7 +18,7 @@ import math
 import re
 import shlex
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import nullcontext, suppress
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -100,12 +100,12 @@ class GitHubError(Exception):
     """Raised by a :class:`PullRequestClient` for an unrecoverable failure (auth, network). Maps to C8."""
 
 
-SubprocessRunner = Callable[[Sequence[str], Path | None], CommandResult]
+SubprocessRunner = Callable[[Sequence[str], Path | None], Awaitable[CommandResult]]
 
 
-def default_subprocess_runner(argv: Sequence[str], cwd: Path | None) -> CommandResult:
+async def default_subprocess_runner(argv: Sequence[str], cwd: Path | None) -> CommandResult:
     """Real :class:`SubprocessRunner` for the CLI: :func:`run_command` without an env."""
-    return run_command(argv, cwd)
+    return await run_command(argv, cwd)
 
 
 @dataclass(frozen=True)
@@ -117,15 +117,15 @@ class PullRequest:
 class PullRequestClient(Protocol):
     """GitHub access for the open-PR stage. Raise :class:`GitHubError` on unrecoverable failures."""
 
-    def find_pr(self, branch: str) -> PullRequest | None:
+    async def find_pr(self, branch: str) -> PullRequest | None:
         """Return the open PR whose head is ``branch``, or ``None``."""
         ...
 
-    def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
+    async def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
         """Open one draft PR from ``branch`` into ``base``; a human marks it ready."""
         ...
 
-    def pr_state(self, ref: str) -> PrInfo | None:
+    async def pr_state(self, ref: str) -> PrInfo | None:
         """``gh pr view <number or branch>``: the PR's state and head SHA (any state), or ``None`` if none."""
         ...
 
@@ -435,8 +435,8 @@ class _Run:
 
     # -- git / process helpers
 
-    def git(self, *args: str, network: bool = False, ok: bool = True) -> CommandResult:
-        res = self.sh(["git", *args], self.repo)
+    async def git(self, *args: str, network: bool = False, ok: bool = True) -> CommandResult:
+        res = await self.sh(["git", *args], self.repo)
         if res.returncode != 0 and ok:
             msg = f"git {' '.join(args)} failed (exit {res.returncode}): {_tail(res.stderr)}"
             if network:
@@ -444,8 +444,8 @@ class _Run:
             raise OrchestratorError(msg)
         return res
 
-    def rev_parse_head(self) -> str:
-        return self.git("rev-parse", "HEAD").stdout.strip()
+    async def rev_parse_head(self) -> str:
+        return (await self.git("rev-parse", "HEAD")).stdout.strip()
 
     def created_branches(self) -> set[str]:
         return {self.branch} if self.rec.retries.get(BRANCH_CREATED_KEY) else set()
@@ -469,11 +469,11 @@ class _Run:
             return idx
         return idx + 1
 
-    def execute(self) -> Checkpoint | None:
+    async def execute(self) -> Checkpoint | None:
         start = self.start_index()
         if self.prior_cp is not None:
             self.rec.set_checkpoint(None)
-        handlers: dict[str, Callable[[], None]] = {
+        handlers: dict[str, Callable[[], Awaitable[None]]] = {
             INTAKE_STAGE: self.stage_intake,
             PLAN_STAGE: self.stage_plan,
             BUILD_STAGE: self.stage_build,
@@ -481,14 +481,14 @@ class _Run:
             OPEN_PR_STAGE: self.stage_open_pr,
         }
         try:
-            self.prepare_clone(start)
+            await self.prepare_clone(start)
             for stage in self.stages():
                 if STAGE_ORDER.index(stage) < start:
                     self.skipped.append(stage)
                     continue
                 self.check_time()
                 began = self.clock()
-                handlers[stage]()
+                await handlers[stage]()
                 self.done_stages.append(stage)
                 self.timings.append(StageTiming(self.item, stage, self.clock() - began))
         except _Stop as stop:
@@ -518,13 +518,13 @@ class _Run:
             and BRANCH_CREATED_KEY in self.rec.retries
         )
 
-    def cleanup_branch(self) -> None:
+    async def cleanup_branch(self) -> None:
         """Delete the local branch if (and only if) every safety check passes; otherwise keep it and say why."""
         if not self.finished_cleanly():
             return
         stored_pr = self.rec.retries.get(PR_NUMBER_KEY)
         try:
-            outcome = cleanup_branch(
+            outcome = await cleanup_branch(
                 lambda args: self.sh(["git", *args], self.repo),
                 item=self.item,
                 branch=self.branch,
@@ -549,7 +549,7 @@ class _Run:
         """
         return is_settled(self.rec, read_stop_record(self.rec.path), abandoned=self.was_abandoned)
 
-    def remove_pick_label(self) -> None:
+    async def remove_pick_label(self) -> None:
         """Remove the pick label once, when settled. A failure is only a digest note, never an error or a stop."""
         if self.label_remover is None or not self.settled():
             return
@@ -559,7 +559,7 @@ class _Run:
         wi = self.config.source.work_item
         label = (wi.pick_label if wi else None) or ""  # label_removal_number ensured both are set
         try:
-            self.label_remover.remove_label(number, label)
+            await self.label_remover.remove_label(number, label)
         except Exception as exc:  # never alters the exit code or the records (LabelRemovalError and anything else)
             self.note(f"Label kept: {self.item} label '{label}' removal failed: {type(exc).__name__}: {exc}")
 
@@ -589,9 +589,9 @@ class _Run:
 
     # -- single dedicated clone: clean between items, each item on its own branch
 
-    def ensure_clean(self) -> None:
+    async def ensure_clean(self) -> None:
         """Refuse (C8-style stop) when the clone has uncommitted changes. Never stashes or resets."""
-        dirty = self.git("status", "--porcelain", "--untracked-files=all").stdout.strip()
+        dirty = (await self.git("status", "--porcelain", "--untracked-files=all")).stdout.strip()
         if dirty:
             raise _Stop(
                 Checkpoint.C8,
@@ -600,27 +600,29 @@ class _Run:
                 f"First lines: {_tail(dirty, 200)}",
             )
 
-    def prepare_clone(self, start: int) -> None:
+    async def prepare_clone(self, start: int) -> None:
         """Before the first stage: a new item needs a clean clone; a later-stage resume goes back to its branch."""
         if self.rec.stage is None:
-            self.ensure_clean()
+            await self.ensure_clean()
             return
         if start > STAGE_ORDER.index(BUILD_STAGE) and any(STAGE_ORDER.index(st) >= start for st in self.stages()):
-            self.ensure_clean()
-            if self.git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip() != self.branch:
-                if self.git("rev-parse", "--verify", "--quiet", f"refs/heads/{self.branch}", ok=False).returncode == 0:
-                    self.git("checkout", self.branch)
+            await self.ensure_clean()
+            if (await self.git("rev-parse", "--abbrev-ref", "HEAD")).stdout.strip() != self.branch:
+                if (
+                    await self.git("rev-parse", "--verify", "--quiet", f"refs/heads/{self.branch}", ok=False)
+                ).returncode == 0:
+                    await self.git("checkout", self.branch)
                     return
                 # No local branch: expected after a clean finish (it is deleted once verified on origin).
                 # From the PR stage on the branch is already pushed, so work from the remote head, detached.
                 if start < STAGE_ORDER.index(OPEN_PR_STAGE):
                     raise OrchestratorError(f"cannot resume: branch {self.branch} does not exist in {self.repo}")
-                fetched = self.git("fetch", "origin", self.branch, ok=False)
+                fetched = await self.git("fetch", "origin", self.branch, ok=False)
                 if fetched.returncode != 0:
                     raise OrchestratorError(
                         f"cannot resume: branch {self.branch} is not in {self.repo} and not on origin: {_tail(fetched.stderr)}"
                     )
-                self.git("checkout", "--detach", "FETCH_HEAD")
+                await self.git("checkout", "--detach", "FETCH_HEAD")
 
     def check_time(self) -> None:
         if self.tracker.elapsed_minutes() >= self.config.limits.max_run_minutes:
@@ -628,14 +630,14 @@ class _Run:
 
     # -- intake
 
-    def stage_intake(self) -> None:
+    async def stage_intake(self) -> None:
         reparse = (
             self.prior_cp == Checkpoint.C1.value
             and self.rec.stage == INTAKE_STAGE
             and self.rec.stage_status == STAGE_COMPLETE
         )
         try:
-            result = run_intake(
+            result = await run_intake(
                 self.item,
                 self.config,
                 self.agent,
@@ -684,7 +686,7 @@ class _Run:
         self.plan_dir.mkdir(parents=True, exist_ok=True)
         self.spf.write_text(dump_spf_config(data), encoding="utf-8")
 
-    def run_agent_stage(self, stage: str) -> None:
+    async def run_agent_stage(self, stage: str) -> None:
         self.write_item_config()
         if stage == BUILD_STAGE:
             self.handoff_dir.mkdir(parents=True, exist_ok=True)
@@ -695,7 +697,7 @@ class _Run:
         answer = read_answer(self.rec.path)
         if answer:
             prompt += f"\n\nThe user answered your earlier stop. Their answer:\n\n{answer}\n"
-        self.agent(prompt)
+        await self.agent(prompt)
         if answer:
             consume_answer(self.rec.path)
         if stop_file.is_file():
@@ -716,12 +718,12 @@ class _Run:
             self.rec.increment_retry(BUILD_RETRY_KEY)
         raise _Stop(Checkpoint(cp), text)
 
-    def stage_plan(self) -> None:
+    async def stage_plan(self) -> None:
         # After a leaf-limit stop the leaves already exist: only re-check the limit, no new agent run.
         replanned = not (self.prior_cp == Checkpoint.C6.value and self.rec.retries.get(LEAF_LIMIT_KEY))
         with self.rec.stage_scope(PLAN_STAGE):
             if replanned:
-                self.run_agent_stage(PLAN_STAGE)
+                await self.run_agent_stage(PLAN_STAGE)
             leaves = self.count_leaves()
             limit = self.config.limits.max_leaves_per_run
             if leaves > limit:
@@ -741,41 +743,43 @@ class _Run:
             raise OrchestratorError(f"phase directory {phase_dir} does not exist after the plan stage")
         return len(leaf_stems(phase_dir))
 
-    def prepare_branch(self) -> None:
+    async def prepare_branch(self) -> None:
         base = self.opt.base_branch
-        self.ensure_clean()
-        self.git("fetch", "origin", base, network=True)
-        exists = self.git("rev-parse", "--verify", "--quiet", f"refs/heads/{self.branch}", ok=False).returncode == 0
+        await self.ensure_clean()
+        await self.git("fetch", "origin", base, network=True)
+        exists = (
+            await self.git("rev-parse", "--verify", "--quiet", f"refs/heads/{self.branch}", ok=False)
+        ).returncode == 0
         if exists:
             if not self.created_branches():
                 raise OrchestratorError(f"branch {self.branch} exists but Sisyphus did not create it; not touching it")
-            self.git("checkout", self.branch)
+            await self.git("checkout", self.branch)
             return
-        self.git("checkout", "-b", self.branch, f"origin/{base}")
+        await self.git("checkout", "-b", self.branch, f"origin/{base}")
         self.rec.increment_retry(BRANCH_CREATED_KEY)
 
-    def stage_build(self) -> None:
+    async def stage_build(self) -> None:
         with self.rec.stage_scope(BUILD_STAGE):
             bound = RetryBound(DEFAULT_MAX_RETRY_CYCLES, self.rec.retries.get(BUILD_RETRY_KEY, 0)).result()
             if bound.escalate:
                 raise _Stop(Checkpoint.C5, f"build already failed {bound.attempts} retry cycles; not launching again")
-            self.prepare_branch()
-            self.run_agent_stage(BUILD_STAGE)
-            current = self.git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+            await self.prepare_branch()
+            await self.run_agent_stage(BUILD_STAGE)
+            current = (await self.git("rev-parse", "--abbrev-ref", "HEAD")).stdout.strip()
             if current != self.branch:
                 raise OrchestratorError(f"build left the checkout on {current!r}, expected {self.branch!r}")
-            ahead = self.git("rev-list", "--count", f"origin/{self.opt.base_branch}..HEAD").stdout.strip()
+            ahead = (await self.git("rev-list", "--count", f"origin/{self.opt.base_branch}..HEAD")).stdout.strip()
             if not ahead.isdigit() or int(ahead) == 0:
                 raise OrchestratorError(f"build produced no commits on {self.branch}")
 
     # -- push
 
-    def needs_rebase(self) -> bool:
-        remote = self.git("ls-remote", "--heads", "origin", self.branch, network=True).stdout.strip()
+    async def needs_rebase(self) -> bool:
+        remote = (await self.git("ls-remote", "--heads", "origin", self.branch, network=True)).stdout.strip()
         if not remote:
             return False
-        self.git("fetch", "origin", self.branch, network=True)
-        return self.git("merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD", ok=False).returncode != 0
+        await self.git("fetch", "origin", self.branch, network=True)
+        return (await self.git("merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD", ok=False)).returncode != 0
 
     def check_push_guard(self, request: Any) -> None:
         """Refuse the push (stop or error) if it would touch a protected branch."""
@@ -788,45 +792,45 @@ class _Run:
                 raise _Stop(decision.checkpoint, decision.reason)
             raise OrchestratorError(f"push refused: {decision.reason}")
 
-    def stage_push(self) -> None:
+    async def stage_push(self) -> None:
         with self.rec.stage_scope(PUSH_STAGE):
             request = parse_push_argv(
-                ["push", "origin", self.branch], history_rewrite=False, needs_rebase=self.needs_rebase()
+                ["push", "origin", self.branch], history_rewrite=False, needs_rebase=await self.needs_rebase()
             )
             self.check_push_guard(request)
-            res = self.git("push", "origin", self.branch, ok=False)
+            res = await self.git("push", "origin", self.branch, ok=False)
             if res.returncode != 0:
                 raise _Stop(Checkpoint.C8, f"git push failed (exit {res.returncode}): {_tail(res.stderr)}")
 
     # -- PR + gate
 
-    def pr_number(self) -> int:
+    async def pr_number(self) -> int:
         if self.pr is None:
             try:
-                self.pr = self.gh.find_pr(self.branch)
+                self.pr = await self.gh.find_pr(self.branch)
             except GitHubError as exc:
                 raise _Stop(Checkpoint.C8, str(exc)) from exc
             if self.pr is None:
                 raise OrchestratorError(f"no open PR found for branch {self.branch}")
         return self.pr.number
 
-    def stage_open_pr(self) -> None:
+    async def stage_open_pr(self) -> None:
         with self.rec.stage_scope(OPEN_PR_STAGE):
             # Validate the gate config before any PR exists: a malformed entry must not leave a PR with no gate result.
             self.write_item_config()
             read_build_commands(self.spf)
             read_gate_entries(self.spf)
             try:
-                self.pr = self.gh.find_pr(self.branch)
+                self.pr = await self.gh.find_pr(self.branch)
                 if self.pr is None:
-                    body = self.build_pr_body()
-                    self.pr = self.gh.open_pr(self.branch, self.opt.base_branch, self.build_pr_title(), body)
+                    body = await self.build_pr_body()
+                    self.pr = await self.gh.open_pr(self.branch, self.opt.base_branch, self.build_pr_title(), body)
             except GitHubError as exc:
                 raise _Stop(Checkpoint.C8, str(exc)) from exc
             if self.rec.retries.get(PR_NUMBER_KEY) != self.pr.number:
                 self.rec.retries[PR_NUMBER_KEY] = self.pr.number
                 self.rec.save()
-            self.gate()
+            await self.gate()
 
     def build_pr_title(self) -> str:
         """Derive the PR title from the requirements or brief H1; never raises (FR-13).
@@ -840,29 +844,29 @@ class _Run:
         except Exception:  # title derivation must never stop the run: fall back to the plain title
             return prbody.fallback_title(self.item)
 
-    def build_pr_body(self) -> str:
+    async def build_pr_body(self) -> str:
         """Assemble the PR description from the workspace artifacts; never raises (FR-12, D-6).
 
         Any failure removes only the affected section; if assembly itself fails the plain header is used.
         """
         header = f"Work item: {self.item}"
         try:
-            return self._assemble_pr_body()
+            return await self._assemble_pr_body()
         except Exception:  # assembly must never stop the run: fall back to the header alone
             return header
 
-    def _assemble_pr_body(self) -> str:
+    async def _assemble_pr_body(self) -> str:
         plan_dir = prbody.locate_plan_dir(self.spf, self.repo) or self.plan_dir
         phase_dir = self.opt.phase_dir or prbody.locate_phase_dir(self.spf, self.repo) or plan_dir / "phases"
 
-        def run_git(args: Sequence[str]) -> str | None:
+        async def run_git(args: Sequence[str]) -> str | None:
             try:
-                res = self.git(*args, ok=False)
+                res = await self.git(*args, ok=False)
             except OSError:
                 return None
             return res.stdout if res.returncode == 0 else None
 
-        return prbody.build_body(
+        return await prbody.build_body(
             self.item,
             brief_path=resolve_brief_path(self.config, self.item),
             plan_dir=plan_dir,
@@ -876,10 +880,10 @@ class _Run:
         if text not in self.notes:
             self.notes.append(text)
 
-    def run_gate_plan(self, plan: Sequence[tuple[Path, str]]) -> bool:
+    async def run_gate_plan(self, plan: Sequence[tuple[Path, str]]) -> bool:
         """Run the commands in order; on the first failure record and note it, skip the rest and return True."""
         for directory, command in plan:
-            res = self.sh(shlex.split(command), directory)
+            res = await self.sh(shlex.split(command), directory)
             if res.returncode != 0:
                 tail = _tail(res.stderr or res.stdout)
                 self.gate_failure = GateFailure(command, directory, res.returncode, tail)
@@ -889,7 +893,7 @@ class _Run:
                 return True
         return False
 
-    def gate(self) -> None:
+    async def gate(self) -> None:
         """Run the gate commands in each touched package dir at HEAD; record the first failure.
 
         Per directory, the plain ``build.commands`` run first, then the ``[[build.gate]]`` entries that apply
@@ -899,14 +903,14 @@ class _Run:
         not run and return. A failing command is recorded in ``gate_failure`` and noted; the remaining commands
         are skipped and nothing is raised, so the run still completes.
         """
-        number = self.pr_number()
+        number = await self.pr_number()
         self.write_item_config()
         commands = read_build_commands(self.spf)
         entries = read_gate_entries(self.spf)
         if commands is None and entries is None:
             self.note(f"gate not run for PR #{number}: no build.commands in {self.spf}")
             return
-        changed = self.git("diff", "--name-only", f"origin/{self.opt.base_branch}...HEAD").stdout.split("\n")
+        changed = (await self.git("diff", "--name-only", f"origin/{self.opt.base_branch}...HEAD")).stdout.split("\n")
         dirs = package_dirs(self.repo, [c for c in changed if c.strip()])
         if not dirs:
             self.note(f"gate not run for PR #{number}: no changed files to gate")
@@ -920,7 +924,7 @@ class _Run:
                 f"gate not run for PR #{number}: no [[build.gate]] entry applies to the touched package directories"
             )
             return
-        if self.run_gate_plan(plan):
+        if await self.run_gate_plan(plan):
             return
         self.gated = True
         if self.rec.retries.get(GATE_FAILED_KEY):
@@ -928,7 +932,7 @@ class _Run:
             self.rec.save()
 
 
-def run_item(
+async def run_item(
     item: str,
     config: SisyphusConfig,
     options: OrchestratorOptions,
@@ -960,10 +964,10 @@ def run_item(
         error: BaseException | None = None
         checkpoint: Checkpoint | None = None
         try:
-            checkpoint = run.execute()
+            checkpoint = await run.execute()
             if checkpoint is None:
-                run.cleanup_branch()
-                run.remove_pick_label()
+                await run.cleanup_branch()
+                await run.remove_pick_label()
         except Exception as exc:
             error = exc
             run.record_error(exc)

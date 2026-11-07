@@ -56,7 +56,7 @@ class Repo:
         self.commit(self.other, "c.txt", "more")
         _run(self.other, "push", "-q", "origin", "main")
 
-    def git(self, args: Sequence[str]) -> CommandResult:
+    async def git(self, args: Sequence[str]) -> CommandResult:
         self.log.append(list(args))
         res = subprocess.run(["git", "-C", str(self.clone), *args], capture_output=True, text=True, check=False)  # noqa: S607
         return CommandResult(res.returncode, res.stdout, res.stderr)
@@ -82,16 +82,16 @@ class Repo:
     def head(self) -> str:
         return _run(self.clone, "rev-parse", BRANCH)
 
-    def cleanup(self, pr: object = None, pr_ref: str | None = None):
+    async def cleanup(self, pr: object = None, pr_ref: str | None = None):
         self.pr_calls: list[str] = []
 
-        def lookup(ref: str) -> PrInfo | None:
+        async def lookup(ref: str) -> PrInfo | None:
             self.pr_calls.append(ref)
             if isinstance(pr, Exception):
                 raise pr
             return pr if isinstance(pr, PrInfo) else None
 
-        return cleanup_branch(
+        return await cleanup_branch(
             self.git,
             item=ITEM,
             branch=BRANCH,
@@ -115,9 +115,9 @@ def repo(tmp_path: Path) -> Repo:
     return Repo(tmp_path)
 
 
-def test_pushed_branch_is_deleted_even_when_unmerged_and_clone_returns_to_base(repo: Repo) -> None:
+async def test_pushed_branch_is_deleted_even_when_unmerged_and_clone_returns_to_base(repo: Repo) -> None:
     repo.make_branch()
-    out = repo.cleanup()
+    out = await repo.cleanup()
     assert out.status == DELETED
     assert BRANCH not in repo.branches()
     assert repo.current() == "main"
@@ -127,17 +127,17 @@ def test_pushed_branch_is_deleted_even_when_unmerged_and_clone_returns_to_base(r
     repo.assert_no_capital_d()
 
 
-def test_base_is_fast_forwarded_from_origin(repo: Repo) -> None:
+async def test_base_is_fast_forwarded_from_origin(repo: Repo) -> None:
     repo.make_branch()
     repo.advance_origin_main()
-    assert repo.cleanup().status == DELETED
+    assert (await repo.cleanup()).status == DELETED
     assert (repo.clone / "c.txt").exists()
     assert _run(repo.clone, "rev-parse", "main") == _run(repo.origin, "rev-parse", "main")
 
 
-def test_not_pushed_is_kept(repo: Repo) -> None:
+async def test_not_pushed_is_kept(repo: Repo) -> None:
     repo.make_branch(push=False)
-    out = repo.cleanup()
+    out = await repo.cleanup()
     assert out.status == KEPT
     assert out.message.startswith(
         f"Branch kept: {ITEM} {BRANCH} no deletion proof held: (1) not pushed (no such branch"
@@ -149,28 +149,28 @@ def test_not_pushed_is_kept(repo: Repo) -> None:
     repo.assert_no_capital_d()
 
 
-def test_local_commits_not_on_origin_are_kept(repo: Repo) -> None:
+async def test_local_commits_not_on_origin_are_kept(repo: Repo) -> None:
     repo.make_branch()
     repo.commit(repo.clone, "late.txt", "unpushed")
-    out = repo.cleanup()
+    out = await repo.cleanup()
     assert out.status == KEPT
     assert "(1) has 1 commit(s) not on origin" in out.message
     assert BRANCH in repo.branches()
     assert repo.current() == BRANCH
 
 
-def test_upstream_tracking_is_not_trusted(repo: Repo) -> None:
+async def test_upstream_tracking_is_not_trusted(repo: Repo) -> None:
     repo.make_branch()
     _run(repo.clone, "branch", f"--set-upstream-to=origin/{BRANCH}", BRANCH)
     repo.commit(repo.clone, "late.txt", "unpushed")
-    assert repo.cleanup().status == KEPT
+    assert (await repo.cleanup()).status == KEPT
     assert BRANCH in repo.branches()
 
 
-def test_dirty_clone_is_kept_untouched(repo: Repo) -> None:
+async def test_dirty_clone_is_kept_untouched(repo: Repo) -> None:
     repo.make_branch()
     (repo.clone / "scratch.txt").write_text("mine")
-    out = repo.cleanup()
+    out = await repo.cleanup()
     assert out.status == KEPT
     assert "dirty" in out.message
     assert (repo.clone / "scratch.txt").read_text() == "mine"
@@ -178,26 +178,26 @@ def test_dirty_clone_is_kept_untouched(repo: Repo) -> None:
     assert not any(args[0] in ("stash", "reset", "clean", "checkout", "branch") for args in repo.log)
 
 
-def test_absent_branch_is_a_silent_no_op(repo: Repo) -> None:
-    out = repo.cleanup()
+async def test_absent_branch_is_a_silent_no_op(repo: Repo) -> None:
+    out = await repo.cleanup()
     assert out.status == ABSENT
     assert len(repo.log) == 1
 
 
-def test_idempotent_second_call(repo: Repo) -> None:
+async def test_idempotent_second_call(repo: Repo) -> None:
     repo.make_branch()
-    assert repo.cleanup().status == DELETED
-    assert repo.cleanup().status == ABSENT
+    assert (await repo.cleanup()).status == DELETED
+    assert (await repo.cleanup()).status == ABSENT
     assert repo.current() == "main"
 
 
-def test_failed_fast_forward_keeps_the_branch(repo: Repo) -> None:
+async def test_failed_fast_forward_keeps_the_branch(repo: Repo) -> None:
     repo.make_branch()
     _run(repo.clone, "checkout", "-q", "main")
     repo.commit(repo.clone, "local-only.txt", "diverged")
     repo.advance_origin_main()
     _run(repo.clone, "checkout", "-q", BRANCH)
-    out = repo.cleanup()
+    out = await repo.cleanup()
     assert out.status == KEPT
     assert "cannot be fast-forwarded" in out.message
     assert BRANCH in repo.branches()
@@ -206,27 +206,27 @@ def test_failed_fast_forward_keeps_the_branch(repo: Repo) -> None:
     repo.assert_no_capital_d()
 
 
-def test_detached_head_on_the_remote_branch_is_fine(repo: Repo) -> None:
+async def test_detached_head_on_the_remote_branch_is_fine(repo: Repo) -> None:
     repo.make_branch()
     _run(repo.clone, "checkout", "-q", "--detach", BRANCH)
-    assert repo.cleanup().status == DELETED
+    assert (await repo.cleanup()).status == DELETED
     assert repo.current() == "main"
 
 
-def test_detached_head_ahead_of_origin_is_kept(repo: Repo) -> None:
+async def test_detached_head_ahead_of_origin_is_kept(repo: Repo) -> None:
     repo.make_branch()
     _run(repo.clone, "checkout", "-q", "--detach", BRANCH)
     repo.commit(repo.clone, "orphan.txt", "would be lost")
-    out = repo.cleanup()
+    out = await repo.cleanup()
     assert out.status == KEPT
     assert "detached HEAD" in out.message
     assert BRANCH in repo.branches()
 
 
-def test_unreachable_origin_keeps_the_branch(repo: Repo) -> None:
+async def test_unreachable_origin_keeps_the_branch(repo: Repo) -> None:
     repo.make_branch()
     _run(repo.clone, "remote", "set-url", "origin", str(repo.origin) + "-missing")
-    out = repo.cleanup()
+    out = await repo.cleanup()
     assert out.status == KEPT
     assert BRANCH in repo.branches()
 
@@ -234,19 +234,19 @@ def test_unreachable_origin_keeps_the_branch(repo: Repo) -> None:
 # ---------------------------------------------------------------- the three proofs
 
 
-def test_done_message_names_proof_one(repo: Repo) -> None:
+async def test_done_message_names_proof_one(repo: Repo) -> None:
     repo.make_branch()
-    out = repo.cleanup()
+    out = await repo.cleanup()
     assert out.status == DELETED
     assert "(proof 1: head " in out.message
     assert f"is an ancestor of origin/{BRANCH}" in out.message
     assert repo.pr_calls == []  # cheapest first: gh is never asked
 
 
-def test_merge_commit_merge_with_remote_branch_gone_is_proof_two(repo: Repo) -> None:
+async def test_merge_commit_merge_with_remote_branch_gone_is_proof_two(repo: Repo) -> None:
     repo.make_branch()
     repo.merge_on_origin(squash=False)
-    out = repo.cleanup()
+    out = await repo.cleanup()
     assert out.status == DELETED
     assert "(proof 2: head " in out.message and "is an ancestor of origin/main" in out.message
     assert BRANCH not in repo.branches()  # no local branch left behind
@@ -257,7 +257,7 @@ def test_merge_commit_merge_with_remote_branch_gone_is_proof_two(repo: Repo) -> 
     repo.assert_no_capital_d()
 
 
-def test_rebase_style_merge_is_proof_two(repo: Repo) -> None:
+async def test_rebase_style_merge_is_proof_two(repo: Repo) -> None:
     repo.make_branch()
     # a rebase merge on GitHub replays commits; a fast-forward of main to the branch head is the same shape
     _run(repo.clone, "checkout", "-q", "main")
@@ -265,30 +265,30 @@ def test_rebase_style_merge_is_proof_two(repo: Repo) -> None:
     _run(repo.clone, "push", "-q", "origin", "main")
     _run(repo.clone, "push", "-q", "origin", "--delete", BRANCH)
     _run(repo.clone, "checkout", "-q", BRANCH)
-    out = repo.cleanup()
+    out = await repo.cleanup()
     assert out.status == DELETED
     assert "proof 2" in out.message
     assert BRANCH not in repo.branches()
 
 
-def test_unmerged_branch_with_nothing_pushed_names_all_three_proofs(repo: Repo) -> None:
+async def test_unmerged_branch_with_nothing_pushed_names_all_three_proofs(repo: Repo) -> None:
     repo.make_branch(push=False)
-    out = repo.cleanup(None)
+    out = await repo.cleanup(None)
     assert out.status == KEPT
     assert "(1) " in out.message and "(2) " in out.message and "(3) no PR found" in out.message
     assert repo.pr_calls == [BRANCH]
     assert BRANCH in repo.branches()
 
 
-def test_pr_number_from_the_run_record_is_what_gh_is_asked(repo: Repo) -> None:
+async def test_pr_number_from_the_run_record_is_what_gh_is_asked(repo: Repo) -> None:
     repo.make_branch(push=False)
-    repo.cleanup(None, pr_ref="17")
+    await repo.cleanup(None, pr_ref="17")
     assert repo.pr_calls == ["17"]
 
 
-def test_draft_pr_is_open_so_cleanup_keeps_the_branch(repo: Repo) -> None:
+async def test_draft_pr_is_open_so_cleanup_keeps_the_branch(repo: Repo) -> None:
     repo.make_branch(push=False)
-    out = repo.cleanup(PrInfo(5, "OPEN", "x"))  # a draft PR reports state OPEN
+    out = await repo.cleanup(PrInfo(5, "OPEN", "x"))  # a draft PR reports state OPEN
     assert out.status == KEPT
     assert "PR #5 is OPEN, not MERGED" in out.message
     assert BRANCH in repo.branches()
@@ -304,11 +304,11 @@ def test_draft_pr_is_open_so_cleanup_keeps_the_branch(repo: Repo) -> None:
         ("none-client", "no GitHub client available"),
     ],
 )
-def test_proof_three_failures_keep_the_branch_and_name_the_proofs(repo: Repo, info: object, needle: str) -> None:
+async def test_proof_three_failures_keep_the_branch_and_name_the_proofs(repo: Repo, info: object, needle: str) -> None:
     repo.make_branch(push=False)
     if isinstance(info, PrInfo) and info.head_sha == "x":
         info = PrInfo(info.number, info.state, repo.head())
-    out = repo.cleanup(info)
+    out = await repo.cleanup(info)
     assert out.status == KEPT
     assert out.message.startswith(f"Branch kept: {ITEM} {BRANCH} no deletion proof held: (1) ")
     assert needle in out.message
@@ -316,19 +316,19 @@ def test_proof_three_failures_keep_the_branch_and_name_the_proofs(repo: Repo, in
     repo.assert_no_capital_d()
 
 
-def test_proof_three_with_a_mismatching_head_keeps_the_branch(repo: Repo) -> None:
+async def test_proof_three_with_a_mismatching_head_keeps_the_branch(repo: Repo) -> None:
     repo.make_branch(push=False)
-    out = repo.cleanup(PrInfo(5, "MERGED", "0" * 40))
+    out = await repo.cleanup(PrInfo(5, "MERGED", "0" * 40))
     assert out.status == KEPT
     assert "PR #5 is MERGED but its head 000000000000 differs from the local head" in out.message
 
 
-def test_squash_merge_is_deleted_with_capital_d_only_after_the_merged_head_check(repo: Repo) -> None:
+async def test_squash_merge_is_deleted_with_capital_d_only_after_the_merged_head_check(repo: Repo) -> None:
     repo.make_branch()
     repo.merge_on_origin(squash=True)
     sha = repo.head()
     before = set(_run(repo.clone, "for-each-ref", "--format=%(refname)").splitlines())
-    out = repo.cleanup(PrInfo(9, "MERGED", sha), pr_ref="9")
+    out = await repo.cleanup(PrInfo(9, "MERGED", sha), pr_ref="9")
     assert out.status == DELETED
     assert BRANCH not in repo.branches()
     assert repo.current() == "main"  # the clone is on base, clean
@@ -360,12 +360,12 @@ def test_squash_merge_is_deleted_with_capital_d_only_after_the_merged_head_check
         None,
     ],
 )
-def test_squash_without_a_full_proof_keeps_the_branch_and_issues_no_capital_d(repo: Repo, pr: object) -> None:
+async def test_squash_without_a_full_proof_keeps_the_branch_and_issues_no_capital_d(repo: Repo, pr: object) -> None:
     repo.make_branch()
     repo.merge_on_origin(squash=True)
     if isinstance(pr, PrInfo) and pr.head_sha == "x":
         pr = PrInfo(pr.number, pr.state, repo.head())
-    out = repo.cleanup(pr, pr_ref="9")
+    out = await repo.cleanup(pr, pr_ref="9")
     assert out.status == KEPT
     assert out.message.startswith(f"Branch kept: {ITEM} {BRANCH} no deletion proof held: ")
     assert BRANCH in repo.branches()
@@ -373,17 +373,17 @@ def test_squash_without_a_full_proof_keeps_the_branch_and_issues_no_capital_d(re
     repo.assert_no_capital_d()
 
 
-def test_proofs_are_cheapest_first_and_gh_not_called_when_git_proves_it(repo: Repo) -> None:
+async def test_proofs_are_cheapest_first_and_gh_not_called_when_git_proves_it(repo: Repo) -> None:
     repo.make_branch()
     repo.merge_on_origin(squash=False)
-    repo.cleanup(PrInfo(1, "MERGED", repo.head()))
+    await repo.cleanup(PrInfo(1, "MERGED", repo.head()))
     assert repo.pr_calls == []
     order = [a[0] for a in repo.log]
     assert order.index("ls-remote") < order.index("merge-base")
 
 
-def test_dirty_clone_never_asks_gh(repo: Repo) -> None:
+async def test_dirty_clone_never_asks_gh(repo: Repo) -> None:
     repo.make_branch(push=False)
     (repo.clone / "scratch.txt").write_text("mine")
-    repo.cleanup(PrInfo(1, "MERGED", repo.head()))
+    await repo.cleanup(PrInfo(1, "MERGED", repo.head()))
     assert repo.pr_calls == []

@@ -358,7 +358,7 @@ def _unchanged(brief: Path, item: str, digest: str) -> bool:
     return isinstance(data, dict) and data.get("item") == item and data.get("prompt_sha256") == digest
 
 
-def run_intake(
+async def run_intake(
     item: str,
     config: SisyphusConfig,
     runner: AgentRunner,
@@ -392,7 +392,7 @@ def run_intake(
             brief.parent.mkdir(parents=True, exist_ok=True)
             before = _brief_stamp(brief)
             with repo_unchanged(repo, ignore=(brief, _sidecar(brief))):
-                runner(prompt)
+                await runner(prompt)
             after = _brief_stamp(brief)
             if after is None or after == before:
                 raise IntakeError(f"the agent did not write the brief at {brief}")

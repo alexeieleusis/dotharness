@@ -19,7 +19,7 @@ import json
 import re
 import sys
 import urllib.request
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -75,22 +75,22 @@ class LinkedPr:
 class TrackerClient(Protocol):
     """Read-only tracker access. Linear results come back in the tracker's own priority order."""
 
-    def list_candidates(self, source: WorkItemSource) -> Sequence[Candidate]: ...
+    async def list_candidates(self, source: WorkItemSource) -> Sequence[Candidate]: ...
 
 
 class PullRequestLookup(Protocol):
     """GitHub pull-request reads used by the default open-PR check."""
 
-    def linked_prs(self, issue_number: int) -> Sequence[LinkedPr]:
+    async def linked_prs(self, issue_number: int) -> Sequence[LinkedPr]:
         """Pull requests GitHub links to or lists as closing ``issue_number``, any state."""
         ...
 
-    def open_pr_bodies(self) -> Sequence[str]:
+    async def open_pr_bodies(self) -> Sequence[str]:
         """Bodies of every open pull request in the repository."""
         ...
 
 
-OpenPrCheck = Callable[[Candidate, PullRequestLookup], bool]
+OpenPrCheck = Callable[[Candidate, PullRequestLookup], Awaitable[bool]]
 
 
 def mentions_issue(body: str, number: int) -> bool:
@@ -98,7 +98,7 @@ def mentions_issue(body: str, number: int) -> bool:
     return re.search(rf"(?<![\w/#])#{number}(?!\w)", body or "") is not None
 
 
-def default_open_pr_check(candidate: Candidate, lookup: PullRequestLookup) -> bool:
+async def default_open_pr_check(candidate: Candidate, lookup: PullRequestLookup) -> bool:
     """Q-3 default, the stricter of two signals; either hit excludes the issue.
 
     (a) an OPEN pull request GitHub links to the issue; (b) an open pull request whose body mentions
@@ -106,9 +106,9 @@ def default_open_pr_check(candidate: Candidate, lookup: PullRequestLookup) -> bo
     """
     if candidate.number is None:
         return False
-    if any(pr.state.upper() == GITHUB_OPEN_STATE for pr in lookup.linked_prs(candidate.number)):
+    if any(pr.state.upper() == GITHUB_OPEN_STATE for pr in await lookup.linked_prs(candidate.number)):
         return True
-    return any(mentions_issue(body, candidate.number) for body in lookup.open_pr_bodies())
+    return any(mentions_issue(body, candidate.number) for body in await lookup.open_pr_bodies())
 
 
 def is_started(workspace_dir: str | Path, ref: str, archive_dir: str | Path | None = None) -> bool:
@@ -152,7 +152,7 @@ def _validate(source: WorkItemSource | None) -> WorkItemSource:
     return source  # NOSONAR python:S3516 - validator: every non-raising path returns `source` by design
 
 
-def pick_items(
+async def pick_items(
     source: WorkItemSource | None,
     tracker: TrackerClient,
     lookup: PullRequestLookup | None,
@@ -171,15 +171,15 @@ def pick_items(
     src = _validate(source)
     if limit <= 0:
         return []
-    candidates = [c for c in tracker.list_candidates(src) if _eligible(c, src)]
+    candidates = [c for c in await tracker.list_candidates(src) if _eligible(c, src)]
     if src.kind == "github":
         if lookup is None:
             raise PickError("a pull-request lookup is required for GitHub issues")
         candidates.sort(key=lambda c: (c.created_at, c.number if c.number is not None else 0))
-    return _take_unstarted(candidates, workspace_dir, limit, src.kind, lookup, open_pr_check, archive_dir)
+    return await _take_unstarted(candidates, workspace_dir, limit, src.kind, lookup, open_pr_check, archive_dir)
 
 
-def _take_unstarted(
+async def _take_unstarted(
     candidates: Sequence[Candidate],
     workspace_dir: str | Path,
     limit: int,
@@ -194,7 +194,7 @@ def _take_unstarted(
     for cand in candidates:
         if fold_item(cand.ref) in seen or is_started(workspace_dir, cand.ref, archive_dir):
             continue
-        if lookup is not None and kind == "github" and open_pr_check(cand, lookup):
+        if lookup is not None and kind == "github" and await open_pr_check(cand, lookup):
             continue
         seen.add(fold_item(cand.ref))
         picked.append(cand)
@@ -209,12 +209,12 @@ def _take_unstarted(
 ExecResult = CommandResult
 
 
-Exec = Callable[[Sequence[str], Path | None, Mapping[str, str] | None], ExecResult]
+Exec = Callable[[Sequence[str], Path | None, Mapping[str, str] | None], Awaitable[ExecResult]]
 
 
-def default_exec(argv: Sequence[str], cwd: Path | None, env: Mapping[str, str] | None) -> ExecResult:
+async def default_exec(argv: Sequence[str], cwd: Path | None, env: Mapping[str, str] | None) -> ExecResult:
     """Run ``argv`` with captured text output. ``env`` entries are added to the inherited environment."""
-    return run_command(argv, cwd, env)
+    return await run_command(argv, cwd, env)
 
 
 class GhCli:
@@ -225,12 +225,12 @@ class GhCli:
         self.env = {"GH_TOKEN": token} if token else None
         self._run = run
 
-    def run(self, *args: str) -> ExecResult:
+    async def run(self, *args: str) -> ExecResult:
         """Run ``gh <args>`` in the configured directory and environment; the caller inspects the result."""
-        return self._run(gh_argv(*args), self.cwd, self.env)
+        return await self._run(gh_argv(*args), self.cwd, self.env)
 
-    def json(self, *args: str) -> Any:
-        res = self.run(*args)
+    async def json(self, *args: str) -> Any:
+        res = await self.run(*args)
         if res.returncode != 0:
             raise PickError(f"gh {' '.join(args[:2])} failed (exit {res.returncode}): {res.stderr.strip()[-300:]}")
         try:
@@ -246,7 +246,7 @@ class LabelRemovalError(PickError):
 class LabelRemover(Protocol):
     """Removes one label from one GitHub issue. Raises :class:`LabelRemovalError` on failure."""
 
-    def remove_label(self, number: int, label: str) -> None: ...
+    async def remove_label(self, number: int, label: str) -> None: ...
 
 
 class GhLabelRemover:
@@ -260,8 +260,8 @@ class GhLabelRemover:
     def __init__(self, gh: GhCli) -> None:
         self.gh = gh
 
-    def remove_label(self, number: int, label: str) -> None:
-        res = self.gh.run("issue", "edit", str(number), "--remove-label", label)
+    async def remove_label(self, number: int, label: str) -> None:
+        res = await self.gh.run("issue", "edit", str(number), "--remove-label", label)
         if res.returncode != 0:
             raise LabelRemovalError(
                 f"gh issue edit {number} --remove-label failed (exit {res.returncode}): {res.stderr.strip()[-300:]}"
@@ -290,9 +290,9 @@ class GitHubIssueTracker:
         self.gh = gh
         self.limit = limit
 
-    def list_candidates(self, source: WorkItemSource) -> Sequence[Candidate]:
+    async def list_candidates(self, source: WorkItemSource) -> Sequence[Candidate]:
         assert source.assignee is not None  # noqa: S101
-        rows = self.gh.json(
+        rows = await self.gh.json(
             "issue", "list", "--state", "open", "--assignee", source.assignee, "--label", source.pick_label or "",
             "--limit", str(self.limit), "--json", "number,title,createdAt,assignees,labels",
         )  # fmt: skip
@@ -317,16 +317,16 @@ class GhPullRequestLookup:
         self.gh = gh
         self.limit = limit
 
-    def linked_prs(self, issue_number: int) -> Sequence[LinkedPr]:
-        view = self.gh.json("issue", "view", str(issue_number), "--json", "closedByPullRequestsReferences")
+    async def linked_prs(self, issue_number: int) -> Sequence[LinkedPr]:
+        view = await self.gh.json("issue", "view", str(issue_number), "--json", "closedByPullRequestsReferences")
         linked: list[LinkedPr] = []
         for ref in (view or {}).get("closedByPullRequestsReferences", []):
-            pr = self.gh.json("pr", "view", str(ref["number"]), "--json", "number,state")
+            pr = await self.gh.json("pr", "view", str(ref["number"]), "--json", "number,state")
             linked.append(LinkedPr(int(pr["number"]), str(pr["state"])))
         return linked
 
-    def open_pr_bodies(self) -> Sequence[str]:
-        rows = self.gh.json("pr", "list", "--state", "open", "--limit", str(self.limit), "--json", "body")
+    async def open_pr_bodies(self) -> Sequence[str]:
+        rows = await self.gh.json("pr", "list", "--state", "open", "--limit", str(self.limit), "--json", "body")
         return [row.get("body") or "" for row in rows or []]
 
 
@@ -362,7 +362,7 @@ class LinearTracker:
         self.token = token
         self._post = post
 
-    def list_candidates(self, source: WorkItemSource) -> Sequence[Candidate]:
+    async def list_candidates(self, source: WorkItemSource) -> Sequence[Candidate]:
         assert source.assignee is not None and source.pick_state is not None  # noqa: S101
         field = "email" if "@" in source.assignee else "displayName"
         variables = {"state": source.pick_state, "assignee": {field: {"eq": source.assignee}}}
@@ -411,7 +411,7 @@ class FileTracker:
     Invalid files are skipped with one line on stderr naming the file and the reason.
     """
 
-    def list_candidates(self, source: WorkItemSource) -> Sequence[Candidate]:
+    async def list_candidates(self, source: WorkItemSource) -> Sequence[Candidate]:
         if not source.dir:
             return []
         inbox = ticket_dir(source)

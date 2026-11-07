@@ -43,22 +43,30 @@ from dotharness.sisyphus.stoprecord import build_abandoned_record, build_stop_re
 TODAY = datetime(2026, 1, 2, tzinfo=UTC)
 
 
+async def _noop_agent(_prompt: str) -> None:
+    return None
+
+
+async def _main_branch() -> str:
+    return "main"
+
+
 class FakeTracker:
     def __init__(self, refs: Sequence[str] = ()) -> None:
         self.refs = list(refs)
         self.error: Exception | None = None
 
-    def list_candidates(self, source: WorkItemSource) -> Sequence[Candidate]:
+    async def list_candidates(self, source: WorkItemSource) -> Sequence[Candidate]:
         if self.error:
             raise self.error
         return [Candidate(r, r, None, "", ("me@x.io",), (), "Todo") for r in self.refs]
 
 
 class FakeLookup:
-    def linked_prs(self, issue_number: int) -> Sequence[LinkedPr]:
+    async def linked_prs(self, issue_number: int) -> Sequence[LinkedPr]:
         return []
 
-    def open_pr_bodies(self) -> Sequence[str]:
+    async def open_pr_bodies(self) -> Sequence[str]:
         return []
 
 
@@ -66,13 +74,13 @@ class FakePrs:
     def __init__(self, open_branches: dict[str, PullRequest] | None = None) -> None:
         self.open = open_branches or {}
 
-    def find_pr(self, branch: str) -> PullRequest | None:
+    async def find_pr(self, branch: str) -> PullRequest | None:
         return self.open.get(branch)
 
-    def pr_state(self, ref: str) -> PrInfo | None:
+    async def pr_state(self, ref: str) -> PrInfo | None:
         return None
 
-    def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
+    async def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
         raise AssertionError("not used")
 
 
@@ -94,7 +102,7 @@ class FakeLabelRemover:
     def __init__(self) -> None:
         self.calls: list[tuple[int, str]] = []
 
-    def remove_label(self, number: int, label: str) -> None:
+    async def remove_label(self, number: int, label: str) -> None:
         self.calls.append((number, label))
 
 
@@ -130,10 +138,10 @@ pick_state = "Todo"
         lookup=FakeLookup(),
         pr_client=prs or FakePrs(),
         label_remover=FakeLabelRemover(),
-        agent_runner=lambda _p: None,
+        agent_runner=_noop_agent,
         lock_dir=tmp_path / "locks",
         today=TODAY,
-        repo_info=lambda: "main",
+        repo_info=_main_branch,
     )
     return Env(tmp_path, cfg, services)
 
@@ -248,9 +256,9 @@ def test_status_of_finished_item_with_open_pr_is_none_without_pr_lookup(tmp_path
     looked_up: list[str] = []
 
     class SpyPrs(FakePrs):
-        def find_pr(self, branch: str) -> PullRequest | None:
+        async def find_pr(self, branch: str) -> PullRequest | None:
             looked_up.append(branch)
-            return super().find_pr(branch)
+            return await super().find_pr(branch)
 
     env = make_env(tmp_path, prs=SpyPrs({branch_name("OLD-1"): PullRequest(3, "http://pr/3")}))
     rec = RunRecord.open(tmp_path / "ws", "OLD-1")
@@ -364,7 +372,7 @@ PR_SHOWN = ["PR-FAIL-1", "PR-OPEN-1", "PR-RUN-1", "PR-UNKNOWN-1"]
 def _spy_pr_state(env: Any) -> list[int]:
     looked_up: list[int] = []
 
-    def pr_state(number: int) -> str:
+    async def pr_state(number: int) -> str:
         looked_up.append(number)
         if number not in PR_STATES:
             raise PickError(f"gh pr view failed (exit 1): no PR {number}")
@@ -607,7 +615,12 @@ def test_lock_held_means_no_pick_or_run(
 ) -> None:
     env = make_env(tmp_path, ["ENG-1"])
     touched: list[str] = []
-    monkeypatch.setattr(cli, "pick_items", lambda *a, **k: touched.append("p") or [])
+
+    async def fake_pick(*_a: Any, **_k: Any) -> list[Any]:
+        touched.append("p")
+        return []
+
+    monkeypatch.setattr(cli, "pick_items", fake_pick)
     with clone_lock(tmp_path / "repo", tmp_path / "locks"):
         result = env.invoke("run", "--config", str(env.config), "--base", "b")
     assert (result.exit_code, result.output) == (0, "")
@@ -680,7 +693,7 @@ def test_intake_runs_intake_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     env = make_env(tmp_path)
     seen: dict[str, Any] = {}
 
-    def fake_intake(item, config, runner, record=None, **_kw):
+    async def fake_intake(item, config, runner, record=None, **_kw):
         seen.update(item=item, record=record)
         return IntakeResult(tmp_path / "b.md", False, (OpenDecision(1, "Which tracker?"),))
 
@@ -722,15 +735,15 @@ def _result(returncode: int = 0, *, timed_out: bool = False, not_found: bool = F
     return RunResult(returncode, "", stderr, timed_out=timed_out, not_found=not_found)
 
 
-def test_agent_runner_launch_arguments(tmp_path: Path) -> None:
+async def test_agent_runner_launch_arguments(tmp_path: Path) -> None:
     calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
 
-    def fake_run(*args: Any, **kw: Any) -> RunResult:
+    async def fake_run(*args: Any, **kw: Any) -> RunResult:
         calls.append((args, kw))
         return _result()
 
-    make_agent_runner("claude", tmp_path, fake_run, timeout_minutes=3)("do it")
-    make_agent_runner("opencode", tmp_path, fake_run, timeout_minutes=3)("do it")
+    await make_agent_runner("claude", tmp_path, fake_run, timeout_minutes=3)("do it")
+    await make_agent_runner("opencode", tmp_path, fake_run, timeout_minutes=3)("do it")
     assert calls[0][0] == ("claude", "do it")
     assert calls[0][1]["backend_options"] == ClaudeOptions(skip_permissions=True)
     assert calls[1][0] == ("opencode", "do it")
@@ -739,16 +752,19 @@ def test_agent_runner_launch_arguments(tmp_path: Path) -> None:
     assert calls[0][1]["timeout"] == 180
 
 
-def test_agent_runner_failures(tmp_path: Path) -> None:
+async def test_agent_runner_failures(tmp_path: Path) -> None:
     def runner(result: RunResult) -> Any:
-        return make_agent_runner("claude", tmp_path, lambda *_a, **_k: result, timeout_minutes=1)
+        async def launch(*_a: Any, **_k: Any) -> RunResult:
+            return result
+
+        return make_agent_runner("claude", tmp_path, launch, timeout_minutes=1)
 
     with pytest.raises(AgentError, match="the claude backend exited with status 3"):
-        runner(_result(3))("x")
+        await runner(_result(3))("x")
     with pytest.raises(AgentError, match="cannot start the claude backend: no such file"):
-        runner(_result(127, not_found=True, stderr="no such file"))("x")
+        await runner(_result(127, not_found=True, stderr="no such file"))("x")
     with pytest.raises(AgentError, match="the claude backend timed out after 1 minutes"):
-        runner(_result(124, timed_out=True))("x")
+        await runner(_result(124, timed_out=True))("x")
     with pytest.raises(ConfigError):
         make_agent_runner(None, tmp_path, timeout_minutes=1)
 
@@ -793,7 +809,7 @@ def test_token_cmd_error_hides_argv() -> None:
         assert "s3cret" not in str(ei.value)
 
 
-def test_gh_pull_request_client() -> None:
+async def test_gh_pull_request_client() -> None:
     replies = [
         ExecResult(0, json.dumps([{"number": 4, "url": "u"}])),
         ExecResult(0, "[]"),
@@ -803,53 +819,53 @@ def test_gh_pull_request_client() -> None:
     ]
     calls: list[list[str]] = []
 
-    def ex(argv: Sequence[str], _cwd: Path | None, _env: Any) -> ExecResult:
+    async def ex(argv: Sequence[str], _cwd: Path | None, _env: Any) -> ExecResult:
         calls.append(list(argv))
         return replies.pop(0)
 
     client = cli.GhPullRequestClient(GhCli(None, None, ex))
-    assert client.find_pr("b") == PullRequest(4, "u")
-    assert client.find_pr("b") is None
-    assert client.open_pr("b", "base", "T", "B") == PullRequest(12, "https://github.com/o/r/pull/12")
+    assert await client.find_pr("b") == PullRequest(4, "u")
+    assert await client.find_pr("b") is None
+    assert await client.open_pr("b", "base", "T", "B") == PullRequest(12, "https://github.com/o/r/pull/12")
     assert calls[2][:3] == ["gh", "pr", "create"]
     assert "--draft" in calls[2]
     assert "base" in calls[2]
     with pytest.raises(GitHubError):
-        client.open_pr("b", "base", "T", "B")
+        await client.open_pr("b", "base", "T", "B")
     with pytest.raises(GitHubError):
-        client.find_pr("b")
+        await client.find_pr("b")
 
 
-def test_draft_pr_is_still_found_and_reported_open() -> None:
+async def test_draft_pr_is_still_found_and_reported_open() -> None:
     replies = [
         ExecResult(0, json.dumps([{"number": 9, "url": "u9", "isDraft": True}])),
         ExecResult(0, '{"number": 9, "state": "OPEN", "isDraft": true, "headRefOid": "abc"}'),
     ]
 
-    def ex(_argv: Sequence[str], _cwd: Path | None, _env: Any) -> ExecResult:
+    async def ex(_argv: Sequence[str], _cwd: Path | None, _env: Any) -> ExecResult:
         return replies.pop(0)
 
     client = cli.GhPullRequestClient(GhCli(None, None, ex))
-    assert client.find_pr("b") == PullRequest(9, "u9")
-    assert client.pr_state("9") == PrInfo(9, "OPEN", "abc")
+    assert await client.find_pr("b") == PullRequest(9, "u9")
+    assert await client.pr_state("9") == PrInfo(9, "OPEN", "abc")
 
 
-def test_gh_client_pr_state_reads_state_and_head_oid() -> None:
+async def test_gh_client_pr_state_reads_state_and_head_oid() -> None:
     replies = [
         ExecResult(0, '{"number": 7, "state": "MERGED", "headRefOid": "abc"}'),
         ExecResult(1, "", "no pull requests found"),
     ]
     calls: list[list[str]] = []
 
-    def ex(argv: Sequence[str], _cwd: Path | None, _env: Any) -> ExecResult:
+    async def ex(argv: Sequence[str], _cwd: Path | None, _env: Any) -> ExecResult:
         calls.append(list(argv))
         return replies.pop(0)
 
     client = cli.GhPullRequestClient(GhCli(None, None, ex))
-    assert client.pr_state("7") == PrInfo(7, "MERGED", "abc")
+    assert await client.pr_state("7") == PrInfo(7, "MERGED", "abc")
     assert calls[0] == ["gh", "pr", "view", "7", "--json", "number,state,headRefOid"]
     with pytest.raises(GitHubError):
-        client.pr_state("b")
+        await client.pr_state("b")
 
 
 def test_default_services_builds_clients(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -910,15 +926,15 @@ def test_default_path_without_linear_key_is_a_config_error(tmp_path: Path, monke
     assert "LINEAR_API_KEY" in result.stderr
 
 
-def test_agent_runner_timeout(tmp_path: Path) -> None:
+async def test_agent_runner_timeout(tmp_path: Path) -> None:
     seen: dict[str, Any] = {}
 
-    def hung(*_a: Any, **kw: Any) -> RunResult:
+    async def hung(*_a: Any, **kw: Any) -> RunResult:
         seen.update(kw)
         return _result(124, timed_out=True)
 
     with pytest.raises(AgentError, match="timed out after 2 minutes"):
-        make_agent_runner("claude", tmp_path, hung, timeout_minutes=2)("x")
+        await make_agent_runner("claude", tmp_path, hung, timeout_minutes=2)("x")
     assert seen["timeout"] == 120
 
 
@@ -1045,7 +1061,7 @@ def test_archive_makes_no_pr_lookup(tmp_path: Path) -> None:
     env = make_env(tmp_path)
     RunRecord.open(tmp_path / "ws", "FIN-1").mark_stage(OPEN_PR_STAGE, "complete")
 
-    def boom(_n: int) -> str:
+    async def boom(_n: int) -> str:
         raise AssertionError("gh called")
 
     env.services.pr_state = boom  # type: ignore[assignment]

@@ -24,7 +24,7 @@ def _isolated_home(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest
 def fake_run_item(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     state: dict[str, Any] = {"calls": [], "checkpoint": {}, "raise": {}, "hook": None}
 
-    def fake(item, config, options, **kwargs):
+    async def fake(item, config, options, **kwargs):
         state["calls"].append((item, options, kwargs))
         if state["hook"]:
             state["hook"](config, options)
