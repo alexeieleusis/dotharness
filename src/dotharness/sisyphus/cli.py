@@ -815,6 +815,12 @@ def _pr_closed(rec: RunRecord, stop: Any, pr_state: Callable[[int], str]) -> boo
         return False
 
 
+def _awaiting(rec: RunRecord, stop: Any) -> str:
+    if rec.checkpoint is not None:
+        return "you"
+    return "error" if stop is not None and not is_abandoned(stop) else "none"
+
+
 @app.command("status")
 def status_command(
     ctx: typer.Context,
@@ -858,15 +864,7 @@ def status_command(
         if pr_state is not None and _pr_closed(rec, stop, pr_state):
             hidden += 1
             continue
-        if rec.checkpoint is not None:
-            awaiting = "you"
-        elif is_abandoned(stop):
-            awaiting = "none"
-        elif stop is not None:
-            awaiting = "error"
-        else:
-            awaiting = "none"
-        typer.echo("\n".join(_status_block(rec, awaiting, config, config_path)))
+        typer.echo("\n".join(_status_block(rec, _awaiting(rec, stop), config, config_path)))
     if hidden == len(records):
         typer.echo(f"no items needing attention ({hidden} hidden; use --all)")
 
