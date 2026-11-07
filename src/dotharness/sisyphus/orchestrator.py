@@ -876,6 +876,19 @@ class _Run:
         if text not in self.notes:
             self.notes.append(text)
 
+    def run_gate_plan(self, plan: Sequence[tuple[Path, str]]) -> bool:
+        """Run the commands in order; on the first failure record and note it, skip the rest and return True."""
+        for directory, command in plan:
+            res = self.sh(shlex.split(command), directory)
+            if res.returncode != 0:
+                tail = _tail(res.stderr or res.stdout)
+                self.gate_failure = GateFailure(command, directory, res.returncode, tail)
+                self.rec.retries[GATE_FAILED_KEY] = 1
+                self.rec.save()
+                self.note(f"gate command '{command}' failed in {directory} (exit {res.returncode}): {tail}")
+                return True
+        return False
+
     def gate(self) -> None:
         """Run the gate commands in each touched package dir at HEAD; record the first failure.
 
@@ -907,15 +920,8 @@ class _Run:
                 f"gate not run for PR #{number}: no [[build.gate]] entry applies to the touched package directories"
             )
             return
-        for directory, command in plan:
-            res = self.sh(shlex.split(command), directory)
-            if res.returncode != 0:
-                tail = _tail(res.stderr or res.stdout)
-                self.gate_failure = GateFailure(command, directory, res.returncode, tail)
-                self.rec.retries[GATE_FAILED_KEY] = 1
-                self.rec.save()
-                self.note(f"gate command '{command}' failed in {directory} (exit {res.returncode}): {tail}")
-                return
+        if self.run_gate_plan(plan):
+            return
         self.gated = True
         if self.rec.retries.get(GATE_FAILED_KEY):
             self.rec.retries[GATE_FAILED_KEY] = 0
