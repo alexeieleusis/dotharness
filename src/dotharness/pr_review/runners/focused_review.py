@@ -173,14 +173,9 @@ async def _resolve_knowledge_file(vibe_types_repo: Path, commit: str, rel_path: 
     """
     repo = str(vibe_types_repo)
     key = working_dir_lock_key("vibe-types", vibe_types_repo)
-    # Poll non-blocking: a blocking flock would stall the event loop and deadlock same-loop holders.
-    while True:
-        try:
-            lock = acquire_lock(key)
-            lock.__enter__()
-            break
-        except SystemExit:
-            await asyncio.sleep(0.1)
+    # Block in a worker thread so the event loop stays free for same-loop holders to release.
+    lock = acquire_lock(key, blocking=True)
+    await asyncio.to_thread(lock.__enter__)
     try:
         attempts = [(None, commit), (commit, commit), ("main", "origin/main")]
         for fetch_ref, show_ref in attempts:
