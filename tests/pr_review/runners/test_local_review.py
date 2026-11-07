@@ -381,10 +381,10 @@ def test_manifest_roundtrip_and_invalid_is_absent(tmp_path: Path) -> None:
 def test_manifest_write_is_atomic_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     write_manifest(tmp_path, {"version": 1, "files": {"a": "done"}})
 
-    def boom(self, target):
+    def boom(src, dst):
         raise OSError("rename failed")  # noqa: TRY003
 
-    monkeypatch.setattr(Path, "replace", boom)
+    monkeypatch.setattr("os.replace", boom)
     with pytest.raises(OSError, match="rename failed"):
         write_manifest(tmp_path, {"version": 1, "files": {"a": "failed"}})
     monkeypatch.undo()

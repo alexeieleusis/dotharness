@@ -39,6 +39,7 @@ from dotharness.opencode_guards import (
     assert_no_opencode_plugins,
     watch_cwd,
 )
+from dotharness.paths import data_dir
 from dotharness.repo_guard import (
     RepoIdentityError,
     assert_harness_unchanged,
@@ -56,7 +57,7 @@ R = TypeVar("R")
 BackendName = Literal["claude", "opencode"]
 BACKEND_NAMES: tuple[BackendName, ...] = ("claude", "opencode")
 
-TMP_DIR = Path.home() / ".local/share/dotharness/tmp"
+TMP_DIR = data_dir() / "tmp"
 
 # How long to wait for a run's own process group to fully exit, and how often to poll.
 GROUP_EXIT_WAIT_SECONDS = 30.0

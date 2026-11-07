@@ -15,34 +15,16 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import tempfile
 from collections.abc import Generator, Iterable
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from dotharness.fileio import atomic_write_json
+from dotharness.paths import DATA_DIR_TILDE
 
-def atomic_write_json(path: Path, data: Any, *, indent: int | None = 2, suffix: str = ".json") -> None:
-    """Write ``data`` as JSON to ``path``: temp file in the same directory, fsync, then ``os.replace``.
-
-    Creates the parent directory; the temp file is removed if anything fails.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=suffix)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=indent)
-            fh.write("\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
-
-
-DEFAULT_STATE_DIR = "~/.local/share/dotharness/sisyphus"
+DEFAULT_STATE_DIR = f"{DATA_DIR_TILDE}/sisyphus"
 
 STAGE_IN_PROGRESS = "in_progress"
 STAGE_COMPLETE = "complete"

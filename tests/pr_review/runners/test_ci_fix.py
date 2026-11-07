@@ -475,13 +475,13 @@ def test_counter_untouched_in_dry_run_when_green(tmp_path):
 
 def test_reset_attempts_is_idempotent_and_writes_nothing_without_key(tmp_path):
     ci_fix._reset_attempts(SLUG, 1)
-    with patch("dotharness.pr_review.state._atomic_write") as write:
+    with patch("dotharness.pr_review.state.atomic_write_text") as write:
         ci_fix._reset_attempts(SLUG, 1)
     write.assert_not_called()
     ci_fix._record_attempt(SLUG, 1)
     ci_fix._reset_attempts(SLUG, 1)
     assert ci_fix.get_attempts(SLUG, 1) == 0
-    with patch("dotharness.pr_review.state._atomic_write") as write:
+    with patch("dotharness.pr_review.state.atomic_write_text") as write:
         ci_fix._reset_attempts(SLUG, 1)
     write.assert_not_called()
 

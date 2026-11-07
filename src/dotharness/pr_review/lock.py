@@ -1,9 +1,11 @@
-import fcntl
 import hashlib
 from contextlib import contextmanager
 from pathlib import Path
 
-XDG_RUNTIME = Path.home() / ".local/share/dotharness"
+from dotharness.fileio import LockContended, file_lock
+from dotharness.paths import data_dir
+
+XDG_RUNTIME = data_dir()
 
 
 def working_dir_lock_key(prefix: str, working_dir: Path) -> str:
@@ -44,19 +46,8 @@ def acquire_lock(lock_key: str, *, blocking: bool = False):
     lock_file = lock_dir / f"{lock_key}.lock"
     if not str(lock_file.resolve()).startswith(str(lock_dir.resolve())):
         raise ValueError(f"Invalid lock_key: {lock_key!r}")  # noqa: TRY003
-    fd = lock_file.open("w")
-    if blocking:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-    else:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as ex:
-            fd.close()
-            raise SystemExit(f"Another instance is already running for {lock_key}") from ex  # noqa: TRY003
     try:
-        try:
+        with file_lock(lock_file, blocking=blocking):
             yield
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        fd.close()
+    except LockContended as ex:
+        raise SystemExit(f"Another instance is already running for {lock_key}") from ex  # noqa: TRY003

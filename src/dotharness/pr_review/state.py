@@ -1,14 +1,17 @@
 import copy
-import fcntl
 import json
 import logging
-import os
 import re
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
+
+from dotharness.fileio import atomic_write_text, file_lock
+from dotharness.paths import data_dir
 
 logger = logging.getLogger(__name__)
 
-XDG_DATA = Path.home() / ".local/share/dotharness"
+XDG_DATA = data_dir()
 
 VIBE_HEAL_FILE = "vibe_heal.json"
 SELF_REVIEW_FILE = "self_review.json"
@@ -37,31 +40,16 @@ def _state_path(repo_slug: str, filename: str) -> Path:
     return p
 
 
-def _atomic_write(path: Path, data: dict) -> None:
-    tmp = path.with_suffix(f".tmp.{os.getpid()}")
-    tmp.write_text(json.dumps(data), encoding="utf-8")
-    tmp.rename(path)
-
-
-class _state_lock:
-    """Acquire an exclusive flock on a dedicated lock file next to the state file.
+@contextmanager
+def _state_lock(path: Path) -> Generator[None]:
+    """Hold an exclusive blocking flock on a dedicated lock file next to the state file.
 
     Locking a separate file (rather than the state file itself) avoids the side
     effect of `open(path, "a")` creating the state file on disk before its first
     real write, which would make callers see it as an existing-but-empty file.
     """
-
-    def __init__(self, path: Path) -> None:
-        self.path = path.with_suffix(path.suffix + ".lock")
-
-    def __enter__(self):
-        self._fd = open(self.path, "a")
-        fcntl.flock(self._fd, fcntl.LOCK_EX)
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        fcntl.flock(self._fd, fcntl.LOCK_UN)
-        self._fd.close()
+    with file_lock(path.with_suffix(path.suffix + ".lock"), blocking=True):
+        yield
 
 
 def _load_json_dict(p: Path, defaults: dict) -> dict:
@@ -105,7 +93,7 @@ def _update_state(repo_slug: str, filename: str, read_fn, mutate) -> dict:
     with _state_lock(p):
         current = read_fn(repo_slug)
         if mutate(current):
-            _atomic_write(p, current)
+            atomic_write_text(p, json.dumps(current))
         return current
 
 

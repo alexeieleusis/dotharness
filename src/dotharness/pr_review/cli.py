@@ -8,6 +8,7 @@ from typing import Annotated, NoReturn
 
 import typer
 
+from dotharness.paths import data_dir
 from dotharness.pr_review import state as state_mod
 from dotharness.pr_review.config import load_config
 from dotharness.pr_review.runners import (
@@ -74,7 +75,7 @@ enabled = false
 """
 
 HARNESS_CONFIG = ".harness.toml"
-XDG_LOGS = Path.home() / ".local/share/dotharness/logs"
+XDG_LOGS = data_dir() / "logs"
 RUNNER_FAILED_MSG = "Runner %s failed: %s"
 
 

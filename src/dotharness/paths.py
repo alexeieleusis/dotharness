@@ -3,6 +3,13 @@
 from importlib import resources
 from pathlib import Path
 
+DATA_DIR_TILDE = "~/.local/share/dotharness"  # the one literal (F-DUP-4); unexpanded for callers that expand lazily
+
+
+def data_dir() -> Path:
+    """`~/.local/share/dotharness`, expanded at call time."""
+    return Path.home() / DATA_DIR_TILDE.removeprefix("~/")  # Path.home(), not expanduser: tests patch it
+
 
 def default_knowledge_dir() -> Path:
     """`~/.harness/knowledge` when it exists, else the knowledge shipped inside the dotharness package (D-7)."""
