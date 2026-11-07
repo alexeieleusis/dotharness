@@ -819,6 +819,15 @@ def _awaiting(rec: RunRecord, stop: Any) -> str:
     return "error" if stop is not None and not is_abandoned(stop) else "none"
 
 
+async def _is_hidden(
+    rec: RunRecord, stop: Any, pr_state: Callable[[int], Awaitable[str]] | None, *, list_all: bool
+) -> bool:
+    """True if `status` hides ``rec``: settled, or (with ``pr_state``) its PR is merged or closed."""
+    if not list_all and is_settled(rec, stop):
+        return True
+    return pr_state is not None and await _pr_closed(rec, stop, pr_state)
+
+
 @app.command("status")
 def status_command(
     ctx: typer.Context,
@@ -858,10 +867,7 @@ def status_command(
         hidden = 0
         for rec in records:
             stop = read_stop_record(rec.path)
-            if not show_all and work_item_ref is None and is_settled(rec, stop):
-                hidden += 1
-                continue
-            if pr_state is not None and await _pr_closed(rec, stop, pr_state):
+            if await _is_hidden(rec, stop, pr_state, list_all=show_all or work_item_ref is not None):
                 hidden += 1
                 continue
             typer.echo("\n".join(_status_block(rec, _awaiting(rec, stop), config, config_path)))
