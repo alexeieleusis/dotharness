@@ -439,6 +439,8 @@ Gates run on this tree: `uv run ruff check` all passed; `uv run ruff format --ch
 
 Measured project-wide coverage (`pytest --cov --cov-config=pyproject.toml --cov-report=xml`, `branch = true`, source `dotharness`): lines 13,279 of 14,373 covered, branches 3,853 of 4,382, combined (coverage.py `TOTAL`) 91.35 %, line-rate 0.9239, branch-rate 0.8793. **Recommended `fail_under = 91`** in `[tool.coverage.report]` (integer below 91.35). The Phase 18 sibling re-measures in CI before applying; if the CI figure is below 91.0 it uses the integer below that figure, and never lowers it afterwards.
 
+Phase 18 re-measurement (after the async conversion, full `make test`, 3471 passed, 2 skipped): lines 13,317 of 14,392, branches 3,867 of 4,394, combined (`TOTAL`) 91.47 %. Applied `fail_under = 91` in `[tool.coverage.report]` (integer below 91.47). Enforcement checked with a temporary `fail_under = 92` (coverage failed as expected; not committed). CI deptry aligned to `deptry src` (the `.` scan also covered `tests/`; `src` scope is unchanged).
+
 | ID | Evidence | Verdict |
 | --- | --- | --- |
 | F-CI-1 | `pyproject.toml` `[tool.coverage.report]` has `skip_empty = true` and no `fail_under`; `Makefile` `test` and the `Run tests` step have no threshold. | apply now (Phase 18): `fail_under = 91`, wired through the existing `--cov` commands. |
