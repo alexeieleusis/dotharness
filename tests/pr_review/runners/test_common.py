@@ -321,3 +321,24 @@ async def test_git_restore_logs_error_when_recovery_ref_cannot_be_saved(tmp_path
     with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=side_effect), caplog.at_level("ERROR"):
         await git_restore("orig-sha", "my-branch", str(tmp_path), {})
     assert any("could NOT be preserved" in r.message for r in caplog.records)
+
+
+async def test_git_restore_completes_when_cancelled(tmp_path):
+    import asyncio
+
+    started = asyncio.Event()
+    calls = []
+
+    async def slow_run(cmd, **kwargs):
+        calls.append(cmd)
+        started.set()
+        await asyncio.sleep(0.05)
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    with patch("dotharness.pr_review.runners.common.run_cmd", slow_run):
+        task = asyncio.ensure_future(git_restore("orig-sha", "", str(tmp_path), {}))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert any("checkout" in c for c in calls)

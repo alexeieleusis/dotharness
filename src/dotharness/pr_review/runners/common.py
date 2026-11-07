@@ -179,6 +179,16 @@ async def get_head_sha(wdir: str, env: dict) -> str:
 
 
 async def git_restore(original_sha: str, branch: str, cwd: str, env: dict) -> None:
+    """Restore the checkout; cancellation-safe: a CancelledError lets the restore finish, then re-raises."""
+    task = asyncio.ensure_future(_git_restore_impl(original_sha, branch, cwd, env))
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.wait([task])
+        raise
+
+
+async def _git_restore_impl(original_sha: str, branch: str, cwd: str, env: dict) -> None:
     preserved = True
     if branch:
         try:
