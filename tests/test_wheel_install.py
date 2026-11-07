@@ -19,6 +19,14 @@ DATA_FILES = [
     "skills/asd-ste100/SKILL.md",
 ]
 
+PASSTHROUGH_ENV = (
+    "PATH", "HOME", "TMPDIR", "XDG_CACHE_HOME",
+    "UV_CACHE_DIR", "UV_INDEX_URL", "UV_DEFAULT_INDEX", "UV_EXTRA_INDEX_URL", "UV_OFFLINE", "UV_PYTHON_INSTALL_DIR",
+    "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
+    "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE",
+)  # fmt: skip
+_NETWORK_ERRORS = ("Failed to fetch", "error sending request", "dns error", "Could not connect", "offline mode")
+
 pytestmark = pytest.mark.skipif(shutil.which("uv") is None, reason="uv not on PATH")
 
 
@@ -26,13 +34,20 @@ def _run(args: list[str | Path], cwd: Path, env: dict[str, str]) -> subprocess.C
     return subprocess.run(args, cwd=cwd, env=env, capture_output=True, text=True, timeout=300, check=False)
 
 
+def _skip_if_offline(result: subprocess.CompletedProcess[str]) -> None:
+    # shortcut: matches uv's stderr wording, update if uv changes its network error text.
+    if result.returncode != 0 and any(m in result.stderr for m in _NETWORK_ERRORS):
+        pytest.skip(f"package index unreachable: {result.stderr.strip().splitlines()[-1]}")
+
+
 @pytest.fixture(scope="module")
 def venv(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict[str, str]]:
     root = tmp_path_factory.mktemp("wheel")
-    # Minimal allowlist: no credentials leak into the children (NG6).
-    env = {k: os.environ[k] for k in ("PATH", "HOME", "TMPDIR", "UV_CACHE_DIR", "UV_INDEX_URL") if k in os.environ}
+    # Allowlist: index, proxy, cert and cache settings only; no credentials from .env* leak into the children (NG6).
+    env = {k: os.environ[k] for k in PASSTHROUGH_ENV if k in os.environ}
     uv = str(shutil.which("uv"))
     built = _run([uv, "build", "--wheel", "--out-dir", root / "dist"], REPO_ROOT, env)
+    _skip_if_offline(built)
     assert built.returncode == 0, built.stderr
     wheels = list((root / "dist").glob("dotharness-*.whl"))
     assert len(wheels) == 1
@@ -40,6 +55,7 @@ def venv(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict[str, str]
     made = _run([uv, "venv", "--python", sys.executable, root / "venv"], root, env)
     assert made.returncode == 0, made.stderr
     installed = _run([uv, "pip", "install", "--python", py, wheels[0]], root, env)
+    _skip_if_offline(installed)
     assert installed.returncode == 0, installed.stderr
     return root / "venv", env
 
