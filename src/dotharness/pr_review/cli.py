@@ -351,26 +351,30 @@ def run_all(ctx: typer.Context) -> None:
     log = logging.getLogger(__name__)
 
     runners = [
-        ("review_prs", lambda: asyncio.run(review_prs.run(cfg))),
-        ("focused_review", lambda: asyncio.run(focused_review.run(cfg))),
-        ("self_review", lambda: asyncio.run(self_review.run(cfg))),
-        ("review_requested", lambda: asyncio.run(review_requested.run(cfg))),
-        ("address_comments", lambda: asyncio.run(address_comments.run(cfg))),
-        ("auto_approve", lambda: asyncio.run(auto_approve.run(cfg))),
-        ("ci_fix", lambda: asyncio.run(ci_fix.run(cfg))),
-        ("merge", lambda: asyncio.run(merge.run(cfg))),
+        ("review_prs", lambda: review_prs.run(cfg)),
+        ("focused_review", lambda: focused_review.run(cfg)),
+        ("self_review", lambda: self_review.run(cfg)),
+        ("review_requested", lambda: review_requested.run(cfg)),
+        ("address_comments", lambda: address_comments.run(cfg)),
+        ("auto_approve", lambda: auto_approve.run(cfg)),
+        ("ci_fix", lambda: ci_fix.run(cfg)),
+        ("merge", lambda: merge.run(cfg)),
     ]
 
-    failed = []
-    for name, fn in runners:
-        try:
-            fn()
-        except review_prs.BaseAnalysisError as exc:
-            log.error(RUNNER_FAILED_MSG, name, exc)  # noqa: TRY400
-            failed.append(name)
-        except Exception as exc:
-            log.error(RUNNER_FAILED_MSG, name, exc, exc_info=True)
-            failed.append(name)
+    async def _run_each() -> list[str]:
+        failed = []
+        for name, fn in runners:
+            try:
+                await fn()
+            except review_prs.BaseAnalysisError as exc:
+                log.error(RUNNER_FAILED_MSG, name, exc)  # noqa: TRY400
+                failed.append(name)
+            except Exception as exc:
+                log.error(RUNNER_FAILED_MSG, name, exc, exc_info=True)
+                failed.append(name)
+        return failed
+
+    failed = asyncio.run(_run_each())
 
     if failed:
         sys.exit(1)
