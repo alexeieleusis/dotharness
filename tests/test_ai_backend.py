@@ -381,13 +381,13 @@ async def test_harness_repo_guard(bin_dir: Path, tmp_path: Path, work: Path) -> 
     harness = make_repo(tmp_path / "harness", "https://github.com/acme/harness.git")
     make_exe(bin_dir, "claude", f"git -C {harness} -c user.email=t@t -c user.name=t commit -q --allow-empty -m rogue\n")
     with pytest.raises(RepoIdentityError, match="HEAD moved"):
-        await launch("claude", "p", cwd=work, timeout=10, guard_harness_repo=True, harness_repo_root=harness)
+        await launch("claude", "p", cwd=work, timeout=10, harness_repo_root=harness)
     # Not watched when cwd is the harness repo itself.
-    result = await launch("claude", "p", cwd=harness, timeout=10, guard_harness_repo=True, harness_repo_root=harness)
+    result = await launch("claude", "p", cwd=harness, timeout=10, harness_repo_root=harness)
     assert result.returncode == 0
     # Unchanged HEAD passes.
     make_exe(bin_dir, "claude", "exit 0\n")
-    result = await launch("claude", "p", cwd=work, timeout=10, guard_harness_repo=True, harness_repo_root=harness)
+    result = await launch("claude", "p", cwd=work, timeout=10, harness_repo_root=harness)
     assert result.returncode == 0
 
 

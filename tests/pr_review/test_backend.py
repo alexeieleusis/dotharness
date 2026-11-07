@@ -53,7 +53,6 @@ def test_opencode_flag_mapping_and_guards_passed(tmp_path):
     assert kw["path_prepend"] == ["/x/bin"]
     assert kw["context"] == "ctx"
     assert kw["expected_repo_name"] == "acme/web"
-    assert kw["guard_harness_repo"] is True
 
 
 def test_harness_root_is_discovered_in_a_checkout_and_passed_explicitly(tmp_path):
@@ -62,14 +61,12 @@ def test_harness_root_is_discovered_in_a_checkout_and_passed_explicitly(tmp_path
     assert (root / "src" / "dotharness" / "pr_review" / "backend.py").is_file()
     with patch(LAUNCH, return_value=RunResult(0, "", "")) as m:
         _make_backend("claude").run("x", str(tmp_path))
-    assert m.call_args.kwargs["guard_harness_repo"] is True
     assert m.call_args.kwargs["harness_repo_root"] == root
 
 
 def test_explicit_harness_root_overrides_discovery(tmp_path):
     with patch(LAUNCH, return_value=RunResult(0, "", "")) as m:
         _make_backend("claude", harness_repo_root=tmp_path).run("x", str(tmp_path))
-    assert m.call_args.kwargs["guard_harness_repo"] is True
     assert m.call_args.kwargs["harness_repo_root"] == tmp_path
 
 
@@ -88,7 +85,6 @@ def test_installed_package_skips_harness_guard_instead_of_pinning_wrong_repo(tmp
     finally:
         monkeypatch.undo()
         backend_mod.find_harness_checkout.cache_clear()
-    assert m.call_args.kwargs["guard_harness_repo"] is False
     assert m.call_args.kwargs["harness_repo_root"] is None
 
 

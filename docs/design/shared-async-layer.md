@@ -49,7 +49,7 @@ Argv per copy:
 pr-review `Backend` behaviours kept, each optional by parameter: retries (`max_retries`),
 cwd-divergence monitor (`monitor_cwd`, uses `lsof`), `opencode plugin list` check
 (`check_plugins`), repo-identity guard (`expected_repo_name`), harness-repo guard
-(`guard_harness_repo`), `PWD` pinned to `cwd`, and the wait for the process group to exit
+(`harness_repo_root`), `PWD` pinned to `cwd`, and the wait for the process group to exit
 (with a warning when members survive, and a by-name check for escaped daemonised children
 after a timeout-kill).
 
@@ -84,7 +84,6 @@ async def launch(
     max_retries: int = 0,
     retry_on_nonzero: bool = False,    # retry also after a non-zero exit; timeouts are always retried
     expected_repo_name: str | None = None,      # "owner/repo"
-    guard_harness_repo: bool = False,
     harness_repo_root: str | Path | None = None,
     backend_options: ClaudeOptions | OpencodeOptions | None = None,  # type must match `backend`; TypeError otherwise
 ) -> RunResult
@@ -128,7 +127,7 @@ Adapter contract:
 
 - Flags: claude `skip_permissions=True, disable_slash_commands=True`; opencode `standalone=True, auto=True,
   monitor_cwd=True, check_plugins=True` (+ `opencode_dir`). The adapter also passes `expected_repo_name` and
-  `guard_harness_repo=True`, because guards are opt-in in the shared layer. Argv is pinned in tests through
+  `harness_repo_root`, because guards are opt-in in the shared layer. Argv is pinned in tests through
   `build_claude_command` and `build_opencode_command`; it equals the old argv.
 - Retry default: the adapter keeps `max_retries=1` (old) and passes `max_retries` to `launch_sync` explicitly; the shared
   default is 0. It leaves `retry_on_nonzero` at `False`, so only timeouts are retried (old behaviour). A non-zero exit is
@@ -165,7 +164,7 @@ Hardening map (every retained item from the old `Backend`):
 | Harness-repo HEAD unchanged guard | shared layer | `repo_guard.assert_harness_unchanged` |
 | Retry loop mechanics | shared layer | `ai_backend._run_attempts` |
 | Choice of flags: `skip_permissions`, `disable_slash_commands`, `standalone`, `auto`, `monitor_cwd`, `check_plugins` | pr-review policy | `Backend.run` |
-| Enabling guards: `expected_repo_name`, `guard_harness_repo` | pr-review policy | `Backend.run` |
+| Enabling guards: `expected_repo_name`, `harness_repo_root` | pr-review policy | `Backend.run` |
 | Retry count (`max_retries`, adapter default 1) | pr-review policy | `Backend.__init__` |
 | Timeout value and `TimeoutExpired` / `CompletedProcess` result shape | pr-review policy | `Backend.run` |
 | Per-working-dir `fcntl.flock` lock files | pr-review policy | `pr_review/lock.py` (kept) |
@@ -225,7 +224,7 @@ the `__file__` audit (baseline `cb0efc1`).
 
 ### D-1: harness-repo guard and `harness_repo_root`
 
-Decision: pr-review passes `guard_harness_repo=True` and an explicit `harness_repo_root` whenever it can identify the
+Decision: pr-review passes an explicit `harness_repo_root` whenever it can identify the
 dotharness source checkout, and skips the harness-HEAD guard otherwise.
 
 - The shared `snapshot_harness_repo(cwd, root)` falls back to `git rev-parse --show-toplevel` from
@@ -238,7 +237,7 @@ dotharness source checkout, and skips the harness-HEAD guard otherwise.
 - Source of the root, in precedence order: `Backend(..., harness_repo_root=<Path>)` (explicit, new keyword-only argument,
   default None), then `find_harness_checkout()`. There is no config key and no environment variable (YAGNI; add a
   `[harness]` key later if an operator needs to point at a different checkout).
-- Root absent (installed package): the guard is skipped (`guard_harness_repo=False`, `harness_repo_root=None`), logged at
+- Root absent (installed package): the guard is skipped (`harness_repo_root=None`), logged at
   debug level. Fail-open is chosen because there is no checkout to watch and failing closed would make every installed
   package unusable. The primary defence, the repo-identity check (`expected_repo_name`, `assert_repo_identity`), is
   unaffected and stays enabled.
@@ -256,7 +255,7 @@ Ledger row `harness.repo_guard` (`tools/pr-review/harness/repo_guard.py`): statu
 | --- | --- |
 | `RepoIdentityError` | `dotharness.repo_guard.RepoIdentityError` (re-exported by `pr_review.backend`) |
 | `assert_repo_identity` | `dotharness.repo_guard.assert_repo_identity`, called by the shared launcher via `Backend` (phase 05) |
-| `discover_repo_root`, `assert_repo_unchanged` | `snapshot_harness_repo` / `assert_harness_unchanged`, called by the shared launcher (`guard_harness_repo`) |
+| `discover_repo_root`, `assert_repo_unchanged` | `snapshot_harness_repo` / `assert_harness_unchanged`, called by the shared launcher (`harness_repo_root`) |
 | SSH host alias resolution (`_resolve_ssh_host`, `_origin_matches_repo`) | same names in the shared module (async, with a fail-closed fallback) |
 | `head_sha` (used by `local_review/review.py` for its own mutation guard) | `review._read_head_sha`, a 5-line helper over the existing `git()` wrapper; it raises the shared `RepoIdentityError` |
 

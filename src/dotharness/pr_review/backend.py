@@ -89,7 +89,6 @@ class Backend:
             context=context,
             max_retries=self.max_retries,
             expected_repo_name=self.expected_repo_name,
-            guard_harness_repo=self.harness_repo_root is not None,
             harness_repo_root=self.harness_repo_root,
             backend_options=options,
         )

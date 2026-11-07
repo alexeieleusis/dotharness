@@ -385,7 +385,6 @@ async def launch(
     max_retries: int = 0,
     retry_on_nonzero: bool = False,
     expected_repo_name: str | None = None,
-    guard_harness_repo: bool = False,
     harness_repo_root: str | Path | None = None,
     backend_options: BackendOptions | None = None,
 ) -> RunResult:
@@ -400,7 +399,7 @@ async def launch(
     (default off: a failed run may already have had side effects such as posted replies or pushed commits, so
     re-running it is opt-in). Never after ``not_found``. Guards:
     ``expected_repo_name`` (``owner/repo``) checks the identity of ``cwd`` before and after each attempt;
-    ``guard_harness_repo`` checks this checkout's HEAD did not move (``harness_repo_root`` overrides discovery);
+    a non-None ``harness_repo_root`` checks that checkout's HEAD did not move;
     ``OpencodeOptions.monitor_cwd`` kills the run if its real cwd diverges; ``OpencodeOptions.check_plugins``
     raises ``OpencodePluginError`` when ``opencode plugin list`` reports plugins.
 
@@ -418,9 +417,8 @@ async def launch(
 
     # Snapshot once: re-snapshotting per attempt would adopt a HEAD an earlier attempt moved as the new baseline.
     harness = None
-    if guard_harness_repo:
-        root = Path(harness_repo_root) if harness_repo_root is not None else None
-        harness = await snapshot_harness_repo(Path(cwd_str), root)
+    if harness_repo_root is not None:
+        harness = await snapshot_harness_repo(Path(cwd_str), Path(harness_repo_root))
     result = await _run_attempts(
         name,
         prompt,
