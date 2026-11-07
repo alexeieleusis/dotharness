@@ -190,7 +190,7 @@ The CLI is `spec_prism_flow` (typer). Differences observed by running the click 
 
 ### Behavior differences from the shared-layer adapters
 
-`Backend` (adapter over `launch_sync`):
+`Backend` (adapter over `ai_backend.launch`):
 - prompt files use the prefix `dotharness_`.
 - retries still cover timeouts only (`retry_on_nonzero` stays off).
 - argv is no longer logged and the 2000-character failed-run log is dropped.
@@ -199,8 +199,7 @@ The CLI is `spec_prism_flow` (typer). Differences observed by running the click 
 The harness-repo guard runs only for a source checkout (`find_harness_checkout()`). An
 installed package skips it.
 
-`run_cmd` (sync wrapper over `subprocess_runner.run` through `asyncio.run`. Do not call it from async
-code):
+`run_cmd` (`async def` in `pr_review/runners/common.py`, over `subprocess_runner.run`):
 - the grace period is 5 s instead of 10 s.
 - stdin is `/dev/null` instead of inherited.
 - non-UTF-8 output is lossy (U+FFFD).
@@ -211,8 +210,8 @@ code):
 A missing executable or cwd still raises `FileNotFoundError`, as the baseline `Popen` did.
 
 The same differences apply to `git_toplevel`, `vibe_heal` `run_command` and `GitHubReviewClient._post_json`, which now run
-through `subprocess_runner.run` (Phase 07, D-15 in `docs/design/shared-async-layer.md`). `git_toplevel` is a sync bridge
-(`asyncio.run`) and raises `RuntimeError` inside a running event loop.
+through `subprocess_runner.run` (Phase 07, D-15 in `docs/design/shared-async-layer.md`). These are the accepted I-3
+differences, now applied to the async `run`. `git_toplevel` is `async def` too.
 
 ### Cron versus launchd argument order
 
