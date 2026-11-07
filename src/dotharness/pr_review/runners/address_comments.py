@@ -510,6 +510,24 @@ def _reply_observed(comment: dict, pr_number: int, repo: str, our_login: str, si
     return any(c.get("user", {}).get("login") == our_login and c.get("created_at", "") >= since_iso for c in items)
 
 
+def _check_reply_observed(comment: dict, pr_number: int, repo: str, our_login: str, since_iso: str, env: dict) -> bool:
+    """`_reply_observed` plus a warning on a confirmed silent skip; an erroring check counts as observed."""
+    cid = comment.get("id", "?")
+    try:
+        observed = _reply_observed(comment, pr_number, repo, our_login, since_iso, env)
+    except Exception:
+        logger.debug("PR #%d comment %s: reply-observed check itself failed", pr_number, cid, exc_info=True)
+        return True  # inconclusive — don't warn on a flaky check, not a confirmed skip
+    if not observed:
+        logger.warning(
+            "PR #%d comment %s: backend finished with no commit and no reply detected — "
+            "this may be a silent skip (verify manually rather than assuming it was intentional noise)",
+            pr_number,
+            cid,
+        )
+    return observed
+
+
 def _address_single_comment(
     comment: dict,
     pr_number: int,
@@ -568,18 +586,7 @@ def _address_single_comment(
     made_commit = post_sha != pre_sha
     observed = True  # no check possible/needed — don't treat as a confirmed silent skip
     if our_login and not made_commit:
-        try:
-            observed = _reply_observed(comment, pr_number, repo, our_login, since_iso, env)
-        except Exception:
-            logger.debug("PR #%d comment %s: reply-observed check itself failed", pr_number, cid, exc_info=True)
-            observed = True  # inconclusive — don't warn on a flaky check, not a confirmed skip
-        if not observed:
-            logger.warning(
-                "PR #%d comment %s: backend finished with no commit and no reply detected — "
-                "this may be a silent skip (verify manually rather than assuming it was intentional noise)",
-                pr_number,
-                cid,
-            )
+        observed = _check_reply_observed(comment, pr_number, repo, our_login, since_iso, env)
     # Recorded only when the run was clean AND a commit or reply was seen, so a crashed
     # attempt or a silent skip is retried next pass instead of being suppressed forever.
     if clean_run and (made_commit or observed) and repo_slug and ctype in _NON_THREADED_TYPES:
