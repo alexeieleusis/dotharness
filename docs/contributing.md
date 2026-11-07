@@ -66,8 +66,9 @@ them.
 ### Ruff version
 
 Ruff 0.15.7 and 0.17.3 were run over pr-review, spec-prism-flow and sisyphus at
-`cb0efc1` (no findings) and over vibe-heal `src/vibe_heal` at `9363868` (78
-findings: TRY003 33, TRY300 16, UP041 11, B008 10, UP017 6, UP042 1, UP035 1).
+`cb0efc1` (no findings). They were also run over vibe-heal `src/vibe_heal` at
+`9363868` (78 findings: TRY003 33, TRY300 16, UP041 11, B008 10, UP017 6,
+UP042 1, UP035 1).
 `ruff==0.17.3` is pinned, in the dev group and in `.pre-commit-config.yaml`. The
 ignore list stays `E501` and `E731` (plus `S101` in tests). TRY003, TRY300, B008 and
 the UP rules were not added to it. The vibe-heal findings are left for I-2, when vibe-heal
@@ -75,14 +76,19 @@ is migrated.
 
 ### Cookiecutter answers
 
-The project layout follows the cookiecutter-uv template with these answers: no
-Dockerfile, no devcontainer, no PyPI publishing and no mypy (`ty` is the type
-checker). The files were written by hand. Cookiecutter was not run.
+The project layout follows the cookiecutter-uv template with these answers:
+
+- no Dockerfile
+- no devcontainer
+- no PyPI publishing
+- no mypy (`ty` is the type checker)
+
+The files were written by hand. Cookiecutter was not run.
 
 ### Excludes for tools and vendor
 
-Ruff, `ty` and pre-commit exclude `tools` and `vendor`, so the old tools are not
-modified or checked by the new project. Later phases may remove these excludes as
+Ruff, `ty` and pre-commit exclude `tools` and `vendor`, so the new project does
+not modify or check the old tools. Later phases may remove these excludes as
 the tools migrate.
 
 ### Coverage policy

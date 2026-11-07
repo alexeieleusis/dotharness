@@ -23,8 +23,8 @@ implementation. It is invented from the issue text plus the conventions already
 established by `review-file.md`/`review-summary.md` and their two call sites.
 
 Issue #4 (requirement-traceability pass) is explicitly called out by #3 as needing
-*joint* design, because both are "PR-level, single-invocation passes" that must not
-multiply `self-review`'s existing per-file retry-on-failure cost. This document is
+*joint* design. Both are "PR-level, single-invocation passes" that must not multiply
+`self-review`'s existing per-file retry-on-failure cost. This document is
 scoped to #3 only. §7.4 records what was decided about anticipating #4 without building
 it now.
 
@@ -68,7 +68,7 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
   `review-summary.md` templates, so it can be authored, edited, and versioned the same
   way (§7.1).
 - **G3.** The new pass integrates into both `self-review` and `review-requested`
-  without changing either runner's existing idempotency guarantee: re-running the
+  without changing either runner's existing idempotency guarantee. Re-running the
   command against an already-fully-reviewed PR must not re-post duplicate design
   comments, exactly as file/summary comments aren't reposted today (§7.2, §7.3).
 - **G4 (resolved, §11.1).** The design pass's completion is tracked **independently**
@@ -148,8 +148,8 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
 |---|---|---|---|---|
 | `review-design.md` prompt template | What counts as a design finding, and how should it be posted? | Markdown instructions file in the knowledge dir (§7.1), git-tracked at `knowledge/pr-review/review-design.md` | PR metadata, full changed-file list, each file's diff (concatenated per-file review sections, PR-wide), PR description, optional extra-knowledge/vibe-heal context | Always exactly one PR-level `gh pr comment` (findings summary or "no blocking issues"), plus zero or more inline `gh api .../comments` for file-specific P0/P1 findings — all carrying `DESIGN_REVIEW_MARKER` |
 | `self_review.py` wiring | When does `self-review` run the design pass, and how does its outcome affect state? | New, independent step in `_process_single_pr` | Same `ctx` dict already built per PR | Success/failure tracked in a **new, independent** `self_review.json` field (`design_reviewed_prs`), decoupled from `reviewed_prs`/`partial_reviews` (§7.2) |
-| `review_requested.py` wiring | Same question, for the no-persisted-state runner | New, independent step in `_process_pr` | Same per-PR context already gathered | Gates `remove_reviewer` (design failure/timeout blocks removal); skipped as a noop (no re-invocation) if `DESIGN_REVIEW_MARKER` is already found on the PR (§7.3) |
-| Idempotency marker/detection helper | How does a re-run know the design pass already happened for this PR revision? | New constant (`DESIGN_REVIEW_MARKER`) + `is_design_review_comment`/`has_design_review_comment` in `harness/runners/common.py`, mirroring `is_review_summary_comment`/`has_review_summary_comment` | A GitHub comment body | Boolean "already done" signal, used by both runners; code comments at the reuse-relevant points flag it as a future generalization candidate for issue #4 (§7.4, §11.5) |
+| `review_requested.py` wiring | Same question, for the no-persisted-state runner | New, independent step in `_process_pr` | Same per-PR context already gathered | Gates `remove_reviewer` (design failure/timeout blocks removal). It is skipped as a noop (no re-invocation) if `DESIGN_REVIEW_MARKER` is already found on the PR (§7.3) |
+| Idempotency marker/detection helper | How does a re-run know the design pass already happened for this PR revision? | New constant (`DESIGN_REVIEW_MARKER`) + `is_design_review_comment`/`has_design_review_comment` in `harness/runners/common.py`, mirroring `is_review_summary_comment`/`has_review_summary_comment` | A GitHub comment body | Boolean "already done" signal, used by both runners. Code comments at the reuse-relevant points flag it as a future generalization candidate for issue #4 (§7.4, §11.5) |
 
 ## 7. Detailed functional requirements
 

@@ -31,7 +31,7 @@ everything downstream is.
    needs a deliberate process rather than ad-hoc effort. Ground it in an observed failure mode or
    gap, not an abstract aspiration.
 
-3. **Goals.** A numbered list (`G1`, `G2`, …) — each one a single, falsifiable outcome, not a
+3. **Goals.** A numbered list (`G1`, `G2`, …) — each one is a single, falsifiable outcome, not a
    direction. "Support X for any Y" beats "make things better." IDs let later documents (phase
    files, tickets) cite a goal instead of re-explaining it.
 
@@ -69,7 +69,7 @@ everything downstream is.
 10. **System/tool shape** (if applicable). Where this lives, how it's built, what it's made of —
     concrete enough that scaffolding can start immediately, not "some kind of CLI."
 
-11. **Open decisions log.** A numbered list of every question you could not resolve from the brief
+11. **Open-decisions log.** A numbered list of every question you could not resolve from the brief
     alone, each one phrased as a concrete, answerable question (not "TBD" or a vague concern) —
     with enough context that a human can answer it without re-reading the whole document. An
     unresolved, flagged question is a valid, honest terminal state for this section — track it here

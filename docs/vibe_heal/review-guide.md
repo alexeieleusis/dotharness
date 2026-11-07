@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `vibe_heal review` command analyzes SonarQube issues **scoped to the lines you actually changed** in your branch. It is a read-only companion to `cleanup`: instead of fixing issues it reports them, and can post the findings as inline GitHub PR review comments.
+The `vibe_heal review` command analyzes SonarQube issues **scoped to the lines you actually changed** in your branch. It is a read-only companion to `cleanup`: it reports issues instead of fixing them, and can post the findings as inline GitHub PR review comments.
 
 The workflow has two phases, plus a third standalone mode for CI baseline maintenance:
 
@@ -61,9 +61,9 @@ No AI tool configuration is required for the review command — it only reads, n
 
 ## sonar-project.properties Support
 
-If your project has a `sonar-project.properties` file, vibe_heal uses it automatically. Only auth or host-URL flags that are absent from both the file and the environment are appended to the `sonar-scanner` command. All other scanner settings (exclusions, language plugins, coverage paths, etc.) are preserved as-is.
+If your project has a `sonar-project.properties` file, vibe_heal uses it automatically. vibe_heal appends only those auth or host-URL flags to the `sonar-scanner` command that are absent from both the file and the environment. All other scanner settings (exclusions, language plugins, coverage paths, etc.) are preserved as-is.
 
-For the temporary SonarQube project created during `review`, vibe_heal patches `sonar.projectKey` and `sonar.projectName` in the file while the scanner runs, then restores the originals. A recovery comment is written first so you can restore manually if the process is interrupted. See the [Branch Cleanup Guide](branch-cleanup-guide.md#sonar-projectproperties-support) for full details.
+For the temporary SonarQube project created during `review`, vibe_heal patches `sonar.projectKey` and `sonar.projectName` in the file while the scanner runs, then restores the originals. vibe_heal writes a recovery comment first so you can restore manually if the process is interrupted. See the [Branch Cleanup Guide](branch-cleanup-guide.md#sonar-projectproperties-support) for full details.
 
 ## Basic Usage
 
@@ -115,7 +115,7 @@ vibe_heal review --post --report-file /tmp/my-review.json
 
 | Flag | Default | Description |
 |---|---|---|
-| `--base-branch` / `-b` | auto-detect via `gh`, else `origin/main` | Base branch to compare against. When omitted, auto-detects the current branch's open PR base via `gh pr view` and diffs against `origin/<that>`; falls back to `origin/main` if no open PR is found (or `gh` is unavailable). Passing an explicit value skips detection. |
+| `--base-branch` / `-b` | auto-detect via `gh`, else `origin/main` | Base branch to compare against. When omitted, auto-detects the current branch's open PR base via `gh pr view` and diffs against `origin/<that>`. Falls back to `origin/main` if no open PR is found or `gh` is unavailable. Passing an explicit value skips detection. |
 | `--pattern` / `-p` | (all files) | Glob pattern to filter files (repeatable) |
 | `--report-file` | auto | Override report output path |
 | `--env-file` | `.env.vibeheal` | Path to custom config file |
@@ -128,9 +128,9 @@ vibe_heal review --post --report-file /tmp/my-review.json
 
 ### Stacked PRs
 
-If your branch's PR targets another branch instead of `main` (a "stacked" PR), `review` diffs against that real base automatically — no flag needed. This avoids re-reporting issues that belong to the branch below yours in the stack, which would otherwise show up twice (once on each branch's review) and increase the odds of merge conflicts as both branches "fix" the same lines independently.
+If your branch's PR targets another branch instead of `main` (a "stacked" PR), `review` diffs against that real base automatically — no flag needed. This avoids re-reporting issues that belong to the branch below yours in the stack. Those issues would otherwise appear twice (once on each branch's review) and increase the odds of merge conflicts as both branches "fix" the same lines independently.
 
-This requires an open PR (so `gh pr view` can report its base) and a local `origin/<base>` remote-tracking ref — if the base branch hasn't been fetched locally, the diff will fail with a "branch not found" error rather than silently falling back to `origin/main`. Run `git fetch origin <base-branch>` first if you hit this.
+This requires an open PR (so `gh pr view` can report its base) and a local `origin/<base>` remote-tracking ref. If the base branch hasn't been fetched locally, the diff will fail with a "branch not found" error rather than silently falling back to `origin/main`. Run `git fetch origin <base-branch>` first if you hit this.
 
 Pass `--base-branch` explicitly to skip auto-detection entirely (e.g. in CI, or before a PR exists).
 
@@ -200,13 +200,13 @@ Per-File Breakdown:
   tests/test_api.py              0               N/A             0        —
 ```
 
-The Coverage column shows the percentage of **instrumented changed lines** (lines SonarQube has hit-count data for) that were covered by at least one test. Lines with no instrumentation data (e.g. comments, blank lines, or files not processed by the coverage tool) are excluded from the calculation. `—` means no coverage data was available for that file.
+The Coverage column shows the percentage of **instrumented changed lines** (lines SonarQube has hit-count data for) that were covered by at least one test. The calculation excludes lines with no instrumentation data (e.g. comments, blank lines, or files not processed by the coverage tool). `—` means no coverage data was available for that file.
 
 ### Report files
 
 Two files are written after each analysis:
 
-- **`review.json`** — machine-readable report; includes `root_cause` HTML per issue so `--post` can include rule docs without re-fetching. Also stores `coverage_pct`, `covered_lines`, and `instrumented_changed_lines` per file when `--coverage` was used.
+- **`review.json`** — machine-readable report. It includes `root_cause` HTML per issue so `--post` can include rule docs without re-fetching. It also stores `coverage_pct`, `covered_lines`, and `instrumented_changed_lines` per file when `--coverage` was used.
 - **`review.md`** — human-readable Markdown with issues per file and one collapsed `<details>` block per unique rule (deduped). When coverage data is present, each file section opens with a bold coverage line (e.g. `**Coverage on changed lines: 66.7% (4/6 instrumented lines covered)**`).
 
 Default report directory: `~/.vibe-heal/reviews/<project-key>/<branch>/`
@@ -223,7 +223,7 @@ Duplication findings appear as comments noting the other locations where the sam
 
 Resolved duplications (code that was duplicated on the base branch but is no longer duplicated in your branch — possibly meaning you fixed only one copy) appear with a warning to check the remaining copies.
 
-When the report contains coverage data (i.e. `review` was run with `--coverage`), the PR review body includes a **Coverage on changed lines** section listing each file's coverage percentage and instrumented line counts.
+When the report contains coverage data (i.e. you ran `review` with `--coverage`), the PR review body includes a **Coverage on changed lines** section listing each file's coverage percentage and instrumented line counts.
 
 ## Coverage Reporting
 
@@ -231,7 +231,7 @@ When `--coverage` is passed, vibe_heal fetches SonarQube's `lineHits` data for e
 
 ### What is counted
 
-- **Instrumented line** — a changed line for which SonarQube has hit-count data (i.e. the line was processed by the coverage tool during test execution). Comments, blank lines, and lines outside the coverage tool's scope are not instrumented.
+- **Instrumented line** — a changed line for which SonarQube has hit-count data (i.e. the coverage tool processed the line during test execution). Comments, blank lines, and lines outside the coverage tool's scope are not instrumented.
 - **Covered line** — an instrumented line with `lineHits > 0` (executed at least once during testing).
 - **`coverage_pct`** — `covered_lines / instrumented_changed_lines × 100`, rounded to one decimal place.
 
@@ -242,7 +242,7 @@ Coverage data must be present in SonarQube. This typically means:
 1. Running your test suite with a coverage tool (e.g. `pytest --cov`, `jest --coverage`, `jacoco`) and generating a coverage report.
 2. Passing the coverage report path to `sonar-scanner` (e.g. `sonar.python.coverage.reportPaths=coverage.xml`) before vibe_heal runs its analysis.
 
-If SonarQube has no coverage data for a file, `--coverage` shows `—` for that file when the Coverage column is present, and omits the file from the Coverage section in PR/Markdown output. With `--verbose`, a note is printed: `no coverage data available`.
+If SonarQube has no coverage data for a file, `--coverage` shows `—` for that file when the Coverage column is present, and omits the file from the Coverage section in PR/Markdown output. With `--verbose`, vibe_heal prints the note: `no coverage data available`.
 
 ### Example
 
@@ -264,15 +264,15 @@ The review command reports two types of duplication findings:
 
 ## Baseline Mode
 
-`vibe_heal review --baseline` refreshes the real SonarQube project's analysis directly — it exists for CI harnesses that need SonarQube's baseline for `main` to stay current between PR review cycles, so later PR reviews get accurate duplicate-code comparisons (see [Duplication Findings](#duplication-findings): the "resolved duplications" check queries the real project's most recent analysis, not a temp project).
+`vibe_heal review --baseline` refreshes the real SonarQube project's analysis directly. It exists for CI harnesses that need SonarQube's baseline for `main` to stay current between PR review cycles, so later PR reviews get accurate duplicate-code comparisons. The "resolved duplications" check queries the real project's most recent analysis, not a temp project (see [Duplication Findings](#duplication-findings)).
 
 ### Why it's a separate mode
 
-The normal `review` analyze phase (see [How It Works](#how-it-works)) always scans a **temporary, disposable SonarQube project** and deletes it afterward — it never re-analyzes the real project. If `review` is run on a checkout of `main` with no diff against the base branch, it short-circuits with "No modified files to review" and no scan runs at all, so the real project's SonarQube analysis goes stale.
+The normal `review` analyze phase (see [How It Works](#how-it-works)) always scans a **temporary, disposable SonarQube project** and deletes it afterward — it never re-analyzes the real project. If you run `review` on a checkout of `main` with no diff against the base branch, it short-circuits with "No modified files to review" and no scan runs at all, so the real project's SonarQube analysis goes stale.
 
-`--baseline` bypasses all of that: no diff is computed, no temporary project is created, and no report is written. It runs `sonar-scanner` directly against `config.sonarqube_project_key` — the same thing a normal CI build of `main` would do.
+`--baseline` bypasses all of that: it computes no diff, creates no temporary project, and writes no report. It runs `sonar-scanner` directly against `config.sonarqube_project_key` — the same thing a normal CI build of `main` would do.
 
-`--baseline` is **explicit-only**. It does not trigger automatically when a diff happens to be empty, because that would risk overwriting the real project's SonarQube baseline with a developer's local working-tree state during ordinary interactive use (e.g. running `vibe_heal review` on a feature branch with no committed diff yet, but uncommitted local edits).
+`--baseline` is **explicit-only**. It does not trigger automatically when a diff happens to be empty. That would risk overwriting the real project's SonarQube baseline with a developer's local working-tree state during ordinary interactive use (e.g. running `vibe_heal review` on a feature branch with no committed diff yet, but uncommitted local edits).
 
 ### Usage
 
@@ -283,7 +283,7 @@ git checkout main && git pull
 vibe_heal review --baseline
 ```
 
-`--baseline` ignores `--pr`, `--pattern`, `--coverage`, and `--base-branch` if they're passed alongside it — none of that diff/filtering machinery applies. Exit code is `0` on a successful scan, non-zero on failure (scanner not found, analysis error, etc.), so a CI harness can gate on it.
+`--baseline` ignores `--pr`, `--pattern`, `--coverage`, and `--base-branch` if they're passed alongside it — none of that diff/filtering machinery applies. The exit code is `0` on a successful scan, non-zero on failure (scanner not found, analysis error, etc.). A CI harness can gate on it.
 
 ### Output
 
@@ -429,8 +429,8 @@ jobs:
 1. **Requires sonar-scanner**: Must be installed and on PATH.
 2. **Requires SonarQube project permissions**: Create and delete projects.
 3. **Requires gh CLI for `--post`**: Must be installed and authenticated.
-4. **Open PR required for `--post`**: Auto-detection needs an open PR; use `--pr` to override.
-5. **SonarQube `isNew` flag**: The `isNew` field on SonarQube issues is unreliable for branches; vibe_heal uses its own diff-based line filter instead.
+4. **Open PR required for `--post`**: Auto-detection needs an open PR. Use `--pr` to override.
+5. **SonarQube `isNew` flag**: The `isNew` field on SonarQube issues is unreliable for branches. vibe_heal uses its own diff-based line filter instead.
 6. **Line filter trailing context**: Changed-line clusters expand by 3 lines of trailing context, which may occasionally include issues on lines just after your edits.
 
 ## Troubleshooting

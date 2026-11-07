@@ -4,8 +4,7 @@ Each command below is a subcommand of `pr_review run`. Each command loads a
 [`.harness.toml`](../configuration.md) config file (`./.harness.toml` by default, or
 the path passed to `--config`) before doing anything else.
 
-The CLI name `pr_review` and the config file names (`.harness*.toml`, `.sisyphus*.toml`, `.env*`) differ on purpose:
-the command was renamed when the tool moved into dotharness, while existing config files keep their names.
+The CLI name `pr_review` and the config file names (`.harness*.toml`, `.sisyphus*.toml`, `.env*`) differ on purpose. The command was renamed when the tool moved into dotharness. Existing config files keep their names.
 
 ```
 pr_review run [--config PATH] [--verbose] <command> [command options]
@@ -25,7 +24,7 @@ pr_review run [--config PATH] [--verbose] <command> [command options]
 
 There is also an optional `regret-review` pass. It is enabled via the [`[regret_review]`](../configuration.md#regret_review) config section. It re-checks old, ignored review comments on the PRs that `self-review` and `review-requested` already cover.
 
-There's also a convenience command that runs eight commands in sequence:
+A convenience command runs eight commands in sequence:
 
 ```
 pr_review run [--config PATH] [--verbose] all
@@ -37,17 +36,17 @@ continues to the next. If any command fails, `all` exits non-zero.
 
 ## Argument order for `--config`
 
-`--config` belongs to the `run` group, so it goes before the command name. Two forms are in play:
+`--config` belongs to the `run` group, so it goes before the command name. Two forms exist:
 
-- cron form: `<bin> run --config <cfg> <command>`. This is the working form, and `schedule install` writes it for both
+- cron form: `<bin> run --config <cfg> <command>`. This is the working form. `schedule install` writes it for both
   `cron` and `launchd` entries (`<bin>` is the `pr_review` executable).
 - launchd form: `<bin> run <command> --config <cfg>`. The old harness launchd plists used this order. It fails
   today (D-8): the command does not accept `--config` after the command name.
 
-Observed by the typer CLI test (`tests/pr_review/test_scheduler.py`,
-`test_run_config_then_runner_works_and_runner_then_config_is_usage_error`): `pr_review run review-prs --config <cfg>`
-exits with code 2 and prints `Error: No such option: --config`, while `pr_review run --config <cfg> review-prs`
-parses. Entries installed by the old `harness` binary (crontab lines or launchd plists using the old binary name or the
+The typer CLI test (`tests/pr_review/test_scheduler.py`,
+`test_run_config_then_runner_works_and_runner_then_config_is_usage_error`) confirms this behavior.
+`pr_review run review-prs --config <cfg>` exits with code 2 and prints `Error: No such option: --config`.
+`pr_review run --config <cfg> review-prs` parses. Entries installed by the old `harness` binary (crontab lines or launchd plists using the old binary name or the
 launchd order) must be reinstalled with `pr_review schedule install`.
 
 ## Shared behavior

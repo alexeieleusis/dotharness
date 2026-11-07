@@ -7,7 +7,7 @@ It is a batch command meant to run on a schedule, for example via `pr_review sch
 That way, every open PR gets vibe_heal/SonarQube-style feedback without anyone triggering it by hand.
 
 Unlike `review-requested` or `self-review`, this command does not invoke pr_review's own AI backend
-(opencode/claude) directly. Instead, it shells out to `vibe_heal`, which does its own analysis and posts its
+(opencode/claude) directly. Instead, it runs `vibe_heal`, which does its own analysis and posts its
 own comments.
 
 ## Usage
@@ -15,7 +15,7 @@ own comments.
 pr_review run [--config PATH] [--verbose] review-prs [--pr PR_URL]
 ```
 
-The CLI name is `pr_review`; the config file names (`.harness*.toml`) keep the old prefix on purpose.
+The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the old prefix on purpose.
 
 - `--config PATH` — path to the `.harness.toml` config file. Defaults to `./.harness.toml` (resolved relative
   to the current directory) if omitted.
@@ -24,8 +24,8 @@ The CLI name is `pr_review`; the config file names (`.harness*.toml`) keep the o
 - `--pr PR_URL` — optional. When given, runs the vibe_heal pipeline against only that one PR instead of
   discovering open PRs automatically. The PR number is parsed as the last path segment of the URL.
   - This mode does not read the per-PR reviewed-SHA record to decide eligibility, and does not update it
-    afterward. The same PR can be re-run any number of times (e.g. to pick up a config change or re-run after
-    a transient failure) without affecting which PRs future automatic runs pick up.
+    afterward. The same PR can be re-run any number of times (e.g. to apply a config change or re-run after
+    a transient failure) without affecting which PRs future automatic runs select.
   - It still performs the prune-stale-projects step (step 3a below, if `vibe_heal.prune_projects_enabled` is
     `true`) and the baseline analysis step (step 3b below). The baseline step reads and may write
     `last_main_sha` in the state file.
@@ -46,8 +46,8 @@ The CLI name is `pr_review`; the config file names (`.harness*.toml`) keep the o
    `repo.subdir`. Each subdir's SonarQube project key comes from its `env_file` when configured (passed to
    vibe-heal as `--env-file`), otherwise from vibe-heal's default `.env.vibeheal` / `.env` lookup in the subdir,
    so there is no single repo-wide project key to prune against. If a subdir's configured `env_file` is not an
-   existing regular file, a warning is logged, that subdir is skipped and pruning continues. `--yes` skips vibe_heal's own confirmation
-   prompt. Stale projects that match (temp projects left behind by an interrupted vibe_heal run, with zero
+   existing regular file, a warning is logged, that subdir is skipped, and pruning continues. `--yes` skips vibe_heal's own confirmation
+   prompt. Stale projects that match (temp projects created by an interrupted vibe_heal run, with zero
    finished analyses, older than the threshold) are deleted immediately. A failure or timeout in one subdir
    (bounded by `vibe_heal.prune_projects_timeout`) is logged and does not stop pruning in the remaining
    subdirs. It never blocks the baseline analysis or the PR review below. This step is best-effort cleanup,
@@ -80,7 +80,7 @@ The CLI name is `pr_review`; the config file names (`.harness*.toml`) keep the o
      successful review. What's left is sorted ascending by number.
    - Before any checkout, this step uses the full open, author-matching set of PR numbers to prune
      `reviewed_shas` of entries for PRs that are no longer open (closed/merged). This runs even if the list
-     of PRs left to process ends up empty.
+     of PRs left to process is empty.
 6. If there are no PRs left to process, the command exits.
 7. Detaches HEAD and records the current SHA, then processes each remaining PR in order:
    - Fetches and checks out the PR's head branch (see rebase/reset behavior in
@@ -93,7 +93,7 @@ The CLI name is `pr_review`; the config file names (`.harness*.toml`) keep the o
    - For each `repo.subdir`: skips it if it is not the root and none of the changed files fall under its
      path. Otherwise, if the subdir has a configured `env_file` that is not an existing regular file, fails
      that subdir before running pre-commands (see the `repo.subdir[].env_file` row below). Then runs its `pre_commands`, then `vibe_heal review --pr <N>` (with `--coverage` if the
-     subdir has `coverage = true`; `--env-file <path>` is added to each `vibe_heal` call when `env_file` is set), then `vibe_heal review --post --pr <N>`. The `--post` invocation is
+     subdir has `coverage = true`, and with `--env-file <path>` on each `vibe_heal` call when `env_file` is set), then `vibe_heal review --post --pr <N>`. The `--post` invocation is
      what actually posts the analysis findings as PR comments. A failing (non-critical) pre-command is
      logged and skipped. A failing `critical` pre-command, or a failing `vibe_heal` invocation, stops
      processing for that subdir only. It does not raise, so it does not affect the rest of the PR's
@@ -107,7 +107,7 @@ The CLI name is `pr_review`; the config file names (`.harness*.toml`) keep the o
      this PR finishes, and does not depend on how any other PR in this batch turns out. A PR that fails (or
      partially fails across subdirs) is retried against the same head SHA on the next run.
    - A `FatalGitError` aborts processing of all remaining PRs in this run. Any other exception is logged
-     and processing moves on to the next PR.
+     and processing continues to the next PR.
    - After each PR (success, failure, or exception), the working directory is restored to the SHA recorded
      in step 7.
 
@@ -126,9 +126,9 @@ Only the fields below affect this command. See [`../configuration.md`](../config
 | `repo.subdir[].pre_commands` | Commands run before `vibe_heal` in that subdir. A failing `critical` command aborts that subdir. |
 | `repo.subdir[].coverage` | Adds `--coverage` to the per-PR `vibe_heal review` invocation. |
 | `repo.subdir[].timeout` | Timeout (seconds) for each pre-command in that subdir. |
-| `repo.subdir[].env_file` | Optional vibe-heal env file for that subdir, passed as `--env-file`. Relative paths resolve against `repo.working_dir`; `~` is expanded; the file may be outside the repo. Default: unset (vibe-heal's default lookup of `.env.vibeheal` or `.env` in the subdir cwd). Precedence: with `--env-file`, vibe-heal's file beats process env vars, so `[harness.env]` `SONARQUBE_*` values no longer override it. Limitation: vibe_heal's project key then comes from this file, while `get_vibe_heal_context` (used by `self-review` and `review-requested`) reads the key from the subdir's `sonar-project.properties`; if they differ, the Static Analysis context in those commands is silently empty. A missing or non-regular `env_file` fails the subdir before pre-commands (prune logs a warning and continues); `pr_review validate` does not check it. |
+| `repo.subdir[].env_file` | Optional vibe-heal env file for that subdir, passed as `--env-file`. Relative paths resolve against `repo.working_dir`. `~` is expanded. The file may be outside the repo. Default: unset (vibe-heal's default lookup of `.env.vibeheal` or `.env` in the subdir cwd). Precedence: with `--env-file`, vibe-heal's file beats process env vars, so `[harness.env]` `SONARQUBE_*` values no longer override it. Limitation: vibe_heal's project key then comes from this file, while `get_vibe_heal_context` (used by `self-review` and `review-requested`) reads the key from the subdir's `sonar-project.properties`. If they differ, the Static Analysis context in those commands is silently empty. A missing or non-regular `env_file` fails the subdir before pre-commands (prune logs a warning and continues). `pr_review validate` does not check it. |
 | `vibe_heal.enabled` | Master switch — command is a no-op unless `true`. |
-| `vibe_heal.python` | Python interpreter used to invoke `vibe_heal` (`<python> -m dotharness.vibe_heal ...`). It must have dotharness installed; an interpreter from a separate, older vibe_heal virtualenv fails with `No module named dotharness.vibe_heal`. See [`../configuration.md`](../configuration.md). |
+| `vibe_heal.python` | Python interpreter used to invoke `vibe_heal` (`<python> -m dotharness.vibe_heal ...`). It must have dotharness installed. An interpreter from a separate, older vibe_heal virtualenv fails with `No module named dotharness.vibe_heal`. See [`../configuration.md`](../configuration.md). |
 | `vibe_heal.authors` | `"*"` (any author) or a list of GitHub logins. PRs from non-matching authors are filtered out of eligibility in the batch (non-`--pr`) case. |
 | `vibe_heal.vibe_heal_timeout` | Timeout for the `vibe_heal review --pr` and `vibe_heal review --baseline` invocations. |
 | `vibe_heal.vibe_heal_post_timeout` | Timeout for the `vibe_heal review --post --pr` invocation. |

@@ -53,9 +53,11 @@ cwd-divergence monitor (`monitor_cwd`, uses `lsof`), `opencode plugin list` chec
 (with a warning when members survive, and a by-name check for escaped daemonised children
 after a timeout-kill).
 
-Changes from pr-review worth knowing: retries cover timeouts only unless `retry_on_nonzero=True` is passed
-(same as pr-review; a failed run can already have posted replies or pushed commits, so re-running it is opt-in); the plugin check runs once per `launch` call (pr-review: once per `Backend`
-instance and cwd); the survivor check logs pids only, never command lines.
+Changes from pr-review worth knowing:
+
+- Retries cover timeouts only unless `retry_on_nonzero=True` is passed (same as pr-review). A failed run can already have posted replies or pushed commits, so re-running it is opt-in.
+- The plugin check runs once per `launch` call (pr-review: once per `Backend` instance and cwd).
+- The survivor check logs pids only, never command lines.
 
 ## Treatment of the other copies
 
@@ -91,9 +93,9 @@ async def launch(
 
 `ClaudeOptions` (`print_mode`, `print_flag`, `skip_permissions`, `permission_mode`, `disable_slash_commands`,
 `output_format`, `allowed_tools`) and `OpencodeOptions` (`standalone`, `auto`, `opencode_dir`, `model`,
-`monitor_cwd`, `check_plugins`) are frozen dataclasses; every flag is off by default.
+`monitor_cwd`, `check_plugins`) are frozen dataclasses. Every flag is off by default.
 
-`launch_sync` has the same signature and calls `launch` through `asyncio.run`; it must not
+`launch_sync` has the same signature and calls `launch` through `asyncio.run`. It must not
 be called from a running event loop. It is documented for the sync tools (I-3, I-4, I-5)
 and is not wired into any of them yet.
 
@@ -101,50 +103,50 @@ and is not wired into any of them yet.
   last attempt's. It never carries argv or env.
 - Plain non-zero exit, timeout (`timed_out`, 124) and missing executable (`not_found`, 127)
   are returned, not raised. Retries (`max_retries`) re-run after a timeout, and after a non-zero exit
-  only with `retry_on_nonzero=True` (default `False`); never after `not_found`; the last result is returned.
+  only with `retry_on_nonzero=True` (default `False`). They never run after `not_found`. The last result is returned.
 - Raised: `ValueError` (unknown backend, option of the other backend), `OpencodePluginError`,
   `BackendCwdDivergedError` (not retried), `RepoIdentityError`.
 - A caller must pass `backend`, `prompt`, `cwd` and `timeout`, and choose every permission
   and isolation flag itself. Reference mappings: pr-review claude =
-  `skip_permissions=True, disable_slash_commands=True`; pr-review opencode =
-  `standalone=True, auto=True, monitor_cwd=True, check_plugins=True`; vibe-heal claude =
+  `skip_permissions=True, disable_slash_commands=True`. pr-review opencode =
+  `standalone=True, auto=True, monitor_cwd=True, check_plugins=True`. vibe-heal claude =
   `print_flag="--print", output_format="json", permission_mode="acceptEdits",
   allowed_tools="Edit,Read"`.
-- Prompt file outside cwd: verified with a real `claude --print --permission-mode acceptEdits --allowedTools Edit,Read` run (cwd = a repo, prompt under `~/.local/share/dotharness/tmp`): the `Read` is not denied, because `--allowedTools Read` pre-approves it for any path. So no `add_dirs` parameter and no prompt file in cwd; I-3/I-4/I-5 copy the reference mappings as written. A caller that omits `Read` from `allowed_tools` and has no `skip_permissions` would be denied. Opt-in live test: `DOTHARNESS_LIVE_CLAUDE=1 pytest tests/test_ai_backend.py -k outside_cwd`.
+- Prompt file outside cwd: verified with a real `claude --print --permission-mode acceptEdits --allowedTools Edit,Read` run (cwd = a repo, prompt under `~/.local/share/dotharness/tmp`): the `Read` is not denied, because `--allowedTools Read` pre-approves it for any path. So no `add_dirs` parameter and no prompt file in cwd. I-3/I-4/I-5 copy the reference mappings as written. A caller that omits `Read` from `allowed_tools` and has no `skip_permissions` would be denied. Opt-in live test: `DOTHARNESS_LIVE_CLAUDE=1 pytest tests/test_ai_backend.py -k outside_cwd`.
 - Cancelling the task kills the process group and removes the prompt file.
 - Neither argv nor env is logged or placed in exception text. Callers must keep to this.
 - Not provided: lock files, `gh`, config loading. `build_subprocess_env` lives in `subprocess_runner.py` (F-DUP-7).
-- Decision D-6: the Claude timeout in vibe-heal is one value, 1200 s (`CLAUDE_TIMEOUT_SECONDS` in `ClaudeCodeTool`). It is passed to the launcher, which enforces it, and printed in the timeout message. The old 300 s constructor default and the literal 600 s wrapper are removed. `ClaudeCodeTool` and `OpenCodeTool` call `launch` only; their prompt files now live under `~/.local/share/dotharness/tmp` instead of the working tree.
+- Decision D-6: the Claude timeout in vibe-heal is one value, 1200 s (`CLAUDE_TIMEOUT_SECONDS` in `ClaudeCodeTool`). It is passed to the launcher, which enforces it, and printed in the timeout message. The old 300 s constructor default and the literal 600 s wrapper are removed. `ClaudeCodeTool` and `OpenCodeTool` call `launch` only. Their prompt files now live under `~/.local/share/dotharness/tmp` instead of the working tree.
 
 ## I-3 adapter contract and hardening map
 
 `dotharness.pr_review.backend.Backend` keeps its constructor
 `Backend(backend, timeout, path_prepend, env_vars, max_retries=1, *, expected_repo_name=None)` and
-`run(instructions, cwd, opencode_dir, context)`. Internally it calls `launch_sync` only; `_cmd_for`, `_build_command` and
+`run(instructions, cwd, opencode_dir, context)`. Internally it calls `launch_sync` only. `_cmd_for`, `_build_command` and
 the Popen/killpg code are deleted. It must not be called from async code.
 
 Adapter contract:
 
-- Flags: claude `skip_permissions=True, disable_slash_commands=True`; opencode `standalone=True, auto=True,
+- Flags: claude `skip_permissions=True, disable_slash_commands=True`. opencode `standalone=True, auto=True,
   monitor_cwd=True, check_plugins=True` (+ `opencode_dir`). The adapter also passes `expected_repo_name` and
   `harness_repo_root`, because guards are opt-in in the shared layer. Argv is pinned in tests through
-  `build_claude_command` and `build_opencode_command`; it equals the old argv.
-- Retry default: the adapter keeps `max_retries=1` (old) and passes `max_retries` to `launch_sync` explicitly; the shared
+  `build_claude_command` and `build_opencode_command`. It equals the old argv.
+- Retry default: the adapter keeps `max_retries=1` (old) and passes `max_retries` to `launch_sync` explicitly. The shared
   default is 0. It leaves `retry_on_nonzero` at `False`, so only timeouts are retried (old behaviour). A non-zero exit is
   run once: `address-comments` and `auto-approve` are not idempotent (replies, pushes) and must not run twice.
-- Bytes vs text: the shared `RunResult` is text; the adapter returns `subprocess.CompletedProcess` with stdout/stderr
-  encoded to UTF-8 bytes (`args` holds only the backend name; the shared layer never exposes argv).
+- Bytes vs text: the shared `RunResult` is text. The adapter returns `subprocess.CompletedProcess` with stdout/stderr
+  encoded to UTF-8 bytes (`args` holds only the backend name. The shared layer never exposes argv).
 - Timeout (`timed_out`, 124): raises `subprocess.TimeoutExpired` (old behaviour).
-- Non-zero exit: returned as `CompletedProcess` with that return code (old behaviour: `_execute` returned it; old callers
+- Non-zero exit: returned as `CompletedProcess` with that return code (old behaviour: `_execute` returned it. Old callers
   check `returncode`). `CalledProcessError` is never raised.
 - Missing executable (`not_found`, 127): returned as `CompletedProcess(returncode=127)`. The old code let `Popen` raise
-  `FileNotFoundError`; every old caller of `Backend.run` either checks `returncode` or catches `Exception`, so a returned 127
+  `FileNotFoundError`. Every old caller of `Backend.run` either checks `returncode` or catches `Exception`, so a returned 127
   is handled the same way as any failed run. This is a deliberate change.
 - Propagated unchanged: `ValueError`, `TypeError`, `OpencodePluginError`, `BackendCwdDivergedError`, `RepoIdentityError`
-  (`dotharness.repo_guard`; re-exported from `pr_review.backend`).
+  (`dotharness.repo_guard`, re-exported from `pr_review.backend`).
 - Accepted I-2 differences (see "Decisions per difference"): SIGTERM to the group then SIGKILL after
-  `KILL_GRACE_SECONDS = 5` (old: SIGKILL); plugin check once per launch call; survivor
-  check logs pids only; prompt files use the `dotharness_` prefix in a 0700 directory.
+  `KILL_GRACE_SECONDS = 5` (old: SIGKILL), plugin check once per launch call, survivor
+  check logs pids only, and prompt files use the `dotharness_` prefix in a 0700 directory.
 - Logging (D-9): the adapter logs no argv, env, or backend stdout/stderr. The old log of up to 2000 characters of failed-run
   output is dropped.
 
@@ -181,12 +183,12 @@ and no `start_new_session` (AC-2).
 
 Mapping of `RunResult` back to the old contract:
 
-- Bytes vs text (OD-3): every caller of `run_cmd` received bytes (`.stdout.decode(...)`, `text(...)`); callers are not
+- Bytes vs text (OD-3): every caller of `run_cmd` received bytes (`.stdout.decode(...)`, `text(...)`). Callers are not
   edited. The wrapper encodes the shared text result to UTF-8. Bytes that are not valid UTF-8 were already replaced
   with U+FFFD by the shared layer, so such output is lossy where the old code returned the raw bytes.
 - `timed_out`: raises `subprocess.TimeoutExpired(cmd, timeout, output=<bytes or None>, stderr=<bytes or None>)`.
   `stderr` now ends with the shared `timed out after {timeout}s` line.
-- Non-zero exit with `check`: raises `subprocess.CalledProcessError(returncode, cmd, stdout, stderr)`; without `check`
+- Non-zero exit with `check`: raises `subprocess.CalledProcessError(returncode, cmd, stdout, stderr)`. Without `check`,
   the `CompletedProcess` is returned. A child killed by a signal has a negative code, as before.
 - `not_found` (OD-2): the old `Popen` raised `FileNotFoundError` (an `OSError`) for a missing executable or a missing
   `cwd`, not a `CalledProcessError`. The wrapper raises `FileNotFoundError(<error text>)`. The shared layer folds every
@@ -194,10 +196,10 @@ Mapping of `RunResult` back to the old contract:
   `shell=True` a missing command is still a shell exit code 127, as before.
 - `shell=True`: mapped to `["/bin/sh", "-c", cmd]` (a list `cmd` becomes `["/bin/sh", "-c", *cmd]`, as `Popen` does on
   POSIX). A `str` `cmd` without `shell` is a single program name, as with `Popen`.
-- Accepted differences: the grace period is 5 s (`KILL_GRACE_SECONDS`), not 10 s (FR-3, not reintroduced); stdin is
-  `/dev/null` (old: inherited); a `SIGKILL` sweep of the process group also runs after a normal exit, so a background
+- Accepted differences: the grace period is 5 s (`KILL_GRACE_SECONDS`), not 10 s (FR-3, not reintroduced). stdin is
+  `/dev/null` (old: inherited). A `SIGKILL` sweep of the process group also runs after a normal exit, so a background
   process a command started on purpose no longer outlives the call.
-- Logging (D-9): the wrapper logs nothing; the shared runner never carries argv or env.
+- Logging (D-9): the wrapper logs nothing. The shared runner never carries argv or env.
 
 Hardening map (every item found in the old `run_cmd`):
 
@@ -235,7 +237,7 @@ dotharness source checkout, and skips the harness-HEAD guard otherwise.
   and `backend.py` lives at `<parent>/src/dotharness/pr_review/`. A `site-packages` install inside an unrelated repo has
   no such layout, so it returns None. An editable install resolves into the checkout and is found.
 - Source of the root, in precedence order: `Backend(..., harness_repo_root=<Path>)` (explicit, new keyword-only argument,
-  default None), then `find_harness_checkout()`. There is no config key and no environment variable (YAGNI; add a
+  default None), then `find_harness_checkout()`. There is no config key and no environment variable (YAGNI. Add a
   `[harness]` key later if an operator needs to point at a different checkout).
 - Root absent (installed package): the guard is skipped (`harness_repo_root=None`), logged at
   debug level. Fail-open is chosen because there is no checkout to watch and failing closed would make every installed
@@ -243,11 +245,11 @@ dotharness source checkout, and skips the harness-HEAD guard otherwise.
   unaffected and stays enabled.
 - Root present but git cannot read its HEAD: the shared layer raises `RepoIdentityError` (fail closed), as before.
 - The shared layer is unchanged (`src/dotharness/repo_guard.py` still discovers from its module directory when called
-  without a root; other callers may rely on that).
+  without a root. Other callers may rely on that).
 
 ### D-2: `harness.repo_guard` is replaced, not kept
 
-Decision: the pr-review sync module `repo_guard.py` is deleted; `dotharness.repo_guard` (shared, async) replaces it.
+Decision: the pr-review sync module `repo_guard.py` is deleted. `dotharness.repo_guard` (shared, async) replaces it.
 Ledger row `harness.repo_guard` (`tools/pr-review/harness/repo_guard.py`): status is replaced by
 `src/dotharness/repo_guard.py`.
 
@@ -265,7 +267,7 @@ of the old module moved to `tests/test_repo_guard.py` (async, against the shared
 
 ### D-3 and the `Path(__file__)` audit
 
-Every `__file__`-relative lookup in `tools/pr-review` at `cb0efc1` (`git grep __file__`; nothing else in the package uses
+Every `__file__`-relative lookup in `tools/pr-review` at `cb0efc1` (`git grep __file__`. Nothing else in the package uses
 `dirname`, `importlib.resources`, `inspect.getfile` or `.parents[`). D-3 answer: yes, there is one more production lookup
 beyond `_HARNESS_REPO_ROOT`, plus test-only lookups.
 
@@ -281,10 +283,10 @@ beyond `_HARNESS_REPO_ROOT`, plus test-only lookups.
 | `tests/runners/test_merge.py:264` | `Path(__file__).resolve().parents[3] / "contracts/gate_record_golden.json"` | gate-record fixture | Keep, `parents[2]` into `tests/contracts/` (phase 01) |
 
 Not a `Path(__file__)` lookup but listed for completeness: `src/dotharness/repo_guard.py:108` (shared layer, new tree) uses
-`Path(__file__).resolve().parent` as the discovery fallback in `snapshot_harness_repo`; pr-review avoids it (D-1).
+`Path(__file__).resolve().parent` as the discovery fallback in `snapshot_harness_repo`. pr-review avoids it (D-1).
 
 `PR_COMMENTS_SCRIPT_PATH` follow-up: resolved in phase 07 (commit 31843c4). `pr-comments.py` ships as package data at
-`src/dotharness/scripts/pr-comments.py` (hatch `packages = ["src/dotharness"]` includes it in the wheel; a wheel build lists
+`src/dotharness/scripts/pr-comments.py` (hatch `packages = ["src/dotharness"]` includes it in the wheel. A wheel build lists
 `dotharness/scripts/pr-comments.py`), and the `Path(__file__)` expression in `runners/common.py` resolves to it, so
 `address-comments`, `focused-review` and `regret-review` find it when installed.
 `tests/test_package_data.py::test_pr_comments_script_is_package_data_and_matches_runner_path` pins this.

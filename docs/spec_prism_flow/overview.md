@@ -20,9 +20,9 @@ Every `plan` command takes `--config PATH` (default `./.spec-prism-flow.toml`).
 
 ## Configuration notes
 
-- The `[agent] backend` key is accepted but unused by `plan`.
-- A malformed `build.commands`, or `review.enabled = true` without `harness_config`, no longer fails
-  in `spec_prism_flow`. The `[build]`, `[review]` and `[vibe_heal]` tables are tolerated and ignored.
+- `plan` accepts the `[agent] backend` key but does not use it.
+- `spec_prism_flow` no longer fails when `build.commands` is malformed or when `review.enabled = true`
+  without `harness_config`. It tolerates and ignores the `[build]`, `[review]` and `[vibe_heal]` tables.
 
 ## Pages
 

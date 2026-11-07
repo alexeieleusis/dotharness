@@ -1,7 +1,7 @@
 # merge
 
-`merge` squash-merges your own open pull requests once every merge condition
-holds. It is off until you set `[merge].enabled = true` (`enabled = false` by
+`merge` squash-merges your own open pull requests once all merge conditions
+hold. It is off until you set `[merge].enabled = true` (`enabled = false` by
 default). It never approves a PR (approving belongs to
 [`auto-approve`](auto-approve.md)).
 
@@ -23,7 +23,7 @@ A PR is merged only when all of these hold. They are checked in this order. The 
 
 1. The PR was authored by the acting user (a literal login comparison. A blank acting user never matches.)
 2. The PR is open, not a draft, has no conflict, and has no auto-merge request.
-3. Required checks pass (or all checks when none are required). For a stacked PR the required checks are those of the stack root, as in [auto-approve](auto-approve.md#safety-conditions); a required check with no run on the PR does not pass. Only the latest run of each check counts, as in [auto-approve](auto-approve.md#safety-conditions). A PR with no checks passes only when the repo has no active workflows.
+3. Required checks pass (or all checks when none are required). For a stacked PR the required checks are those of the stack root, as in [auto-approve](auto-approve.md#safety-conditions). A required check with no run on the PR does not pass. Only the latest run of each check counts, as in [auto-approve](auto-approve.md#safety-conditions). A PR with no checks passes only when the repo has no active workflows.
 4. The gate record exists and its head SHA equals the PR's current head SHA.
 5. Changed lines (additions plus deletions, from `gh pr view --json additions,deletions`) are at most `max_changed_lines`.
 6. When `require_all_files_viewed`: the file list is non-empty and every file is marked viewed. Viewed state is read fresh on every run and never cached. A push after the last viewed mark clears it on GitHub.
@@ -52,7 +52,7 @@ Each skip is logged as `PR #N: skipped: <reason>`. A summary of every PR's outco
 | `unviewed_files` | The file set is empty or a file is not viewed |
 | `viewed_read_failed` | The viewed states could not be read |
 
-A failed `gh pr merge` call, or an unexpected exception, is an error: the run continues with the other PRs and then raises `MergeError` listing the failed PRs.
+A failed `gh pr merge` call, or an unexpected exception, is an error. The run continues with the other PRs and then raises `MergeError` listing the failed PRs.
 
 ## Config
 

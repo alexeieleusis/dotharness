@@ -1,12 +1,12 @@
 # vibe_heal
 
 AI-powered SonarQube issue remediation that automatically fixes your code quality problems using
-Claude Code or opencode. `vibe_heal` is one of the tools in `dotharness`; it was migrated from the
+Claude Code or opencode. `vibe_heal` is one of the tools in `dotharness`. It was migrated from the
 standalone vibe-heal repository in I-2 (#164). See the [migration ledger](migration-ledger.md) for
 module status.
 
 !!! note "Removed in I-2"
-    The Aider and Gemini CLI backends were removed during the migration. The AI backends are now
+    The migration removed the Aider and Gemini CLI backends. The AI backends are now
     `claude-code` and `opencode`.
 
 ## Pages
@@ -108,9 +108,9 @@ If your repository already has a `sonar-project.properties` file, `vibe_heal` re
 automatically.
 
 - **Minimal command**: only appends auth and/or host-URL flags that are not already configured in the file or in environment variables (`SONAR_TOKEN`, `SONARQUBE_TOKEN`, `SONAR_LOGIN`, `SONAR_HOST_URL`, `SONARQUBE_HOST_URL`). All other scanner settings are preserved.
-- **Temp-project patching**: commands that create a temporary SonarQube project (`cleanup`, `dedupe-branch`, `review`) temporarily replace `sonar.projectKey` and `sonar.projectName` in the file for the duration of the analysis, then restore the original content. A recovery comment block is written first so you can restore it manually if the process is interrupted.
+- **Temp-project patching**: commands that create a temporary SonarQube project (`cleanup`, `dedupe-branch`, `review`) temporarily replace `sonar.projectKey` and `sonar.projectName` in the file during the analysis. The commands restore the original content after the analysis. `vibe_heal` writes a recovery comment block first so you can restore it manually if the process is interrupted.
 
-If the file does not exist, all scanner settings are passed as `-D` flags on the command line.
+If the file does not exist, `vibe_heal` passes all scanner settings as `-D` flags on the command line.
 
 ## Development
 

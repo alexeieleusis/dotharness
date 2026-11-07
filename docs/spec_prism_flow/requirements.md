@@ -5,7 +5,7 @@
 
 > **Migration note.** In `dotharness` only the plan side ships, as `spec_prism_flow plan ...`.
 > Feature B (`build`, §8) is not migrated. The phase files `docs/phases/01-05` and `graph.json`
-> that the original repo kept as its own planning corpus were dropped in the migration; they are
+> that the original repo kept as its own planning corpus were dropped in the migration. They are
 > not part of these docs.
 
 ## 0. Purpose / origin
@@ -331,7 +331,7 @@ state for a given run (recorded in the open-decisions log), and it is never sile
 
 ## 8. Feature B — `build` (phase execution) — not migrated
 
-> Not migrated into `dotharness`. This section is kept for the record only; there is no `build`
+> Not migrated into `dotharness`. This section is kept for the record only. There is no `build`
 > command in `spec_prism_flow`.
 
 This feature generalizes `scripts/orchestrate`. It keeps its proven core and drops what was
@@ -433,9 +433,8 @@ In parallel mode this pipeline runs once per concurrently-eligible leaf.
 
 ## 10. Tool shape
 
-> **Migration note.** In `dotharness` the CLI is `spec_prism_flow` (typer-based, `plan` group only;
-> there is no `build` group). The location, bootstrap and house-style bullets below describe the
-> original standalone repo and are historical; do not scaffold anything from them. The shipped CLI
+> **Migration note.** In `dotharness` the CLI is `spec_prism_flow` (typer-based, `plan` group only, no `build` group). The location, bootstrap and house-style bullets below describe the
+> original standalone repo and are historical. Do not scaffold anything from them. The shipped CLI
 > shape is specified in §7.1 of the I-4 requirements.
 
 - **Location:** `~/.harness/tools/spec-prism-flow/`, a new `uv`-managed Python CLI.
@@ -447,8 +446,8 @@ In parallel mode this pipeline runs once per concurrently-eligible leaf.
   output dir `~/.harness/tools`.
 - **CLI shape:** one CLI, two command groups mirroring the two features (§11 #8, resolved as one
   unified tool rather than a split) — `spec_prism_flow plan <subcommand>` (§7.2's stages) and
-  `build <subcommand>` (not migrated; mirroring `orchestrate run-phase`/`run-track`/`status`).
-  Historically the CLI was `click`-based; the `dotharness` port is typer-based and `plan`-only.
+  `build <subcommand>` (not migrated, mirroring `orchestrate run-phase`/`run-track`/`status`).
+  Historically the CLI was `click`-based. The `dotharness` port is typer-based and `plan`-only.
 - **Config:** a per-target-project TOML (analogous to `.harness.toml`) declaring:
   - the agent backend (Claude Code default, or opencode)
   - whether `harness`/`vibe-heal` integration is active, and how to reach it
@@ -505,7 +504,7 @@ than decided unilaterally by an agent building it:
 ## 12. Next step
 
 > **Migration note.** Historical. This section scaffolded the original standalone repo, which no
-> longer applies; in `dotharness` the tool is already migrated (`plan` only, `build` not migrated).
+> longer applies. In `dotharness` the tool is already migrated (`plan` only, `build` not migrated).
 > Do not scaffold `~/.harness/tools/spec-prism-flow/`.
 
 Once this draft is reviewed, with all of §11's open decisions now resolved:

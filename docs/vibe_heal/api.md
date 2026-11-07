@@ -51,7 +51,7 @@ preconditions (repo, base branch, AI tool, clean tree) -> git fetch -> HEAD on t
   -> [main-duplication phase, flag only] -> iteration loop -> delete temp project
 ```
 
-Each loop round analyzes the full repo into the temporary project, recomputes the diff, then fixes per file: in-scope duplications first, then in-scope issues. Issues are kept only if `IssueLineFilter` keeps them (changed lines plus a 3-line trailing window); duplications only when the target block intersects changed lines. The baseline scan overwrites the real project's analysis on the SonarQube server, even with `--dry-run`. There is no revert logic: earlier commits are kept when a later step fails.
+Each loop round analyzes the full repo into the temporary project, recomputes the diff, then fixes per file: in-scope duplications first, then in-scope issues. Issues are kept only if `IssueLineFilter` keeps them (changed lines plus a 3-line trailing window). Duplications are kept only when the target block intersects changed lines. The baseline scan overwrites the real project's analysis on the SonarQube server, even with `--dry-run`. There is no revert logic: earlier commits are kept when a later step fails.
 
 ### Commit Formats
 

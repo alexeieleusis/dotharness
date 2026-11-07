@@ -26,7 +26,7 @@ Claude Code or opencode.
 | `vibe_heal cleanup` | Fix all modified files in the current branch |
 | `vibe_heal dedupe-branch` | Remove duplications from all modified files in the current branch |
 | `vibe_heal cleanup-pr` | Fix issues and duplications on lines changed by the current branch (PR scope) |
-| `vibe_heal review` | Report issues on changed lines; optionally post to GitHub PR |
+| `vibe_heal review` | Report issues on changed lines. Optionally post them to a GitHub PR |
 | `vibe_heal review --baseline` | Refresh the real SonarQube project's analysis (for CI baseline maintenance) |
 | `vibe_heal config` | Show current configuration |
 | `vibe_heal version` | Show version information |

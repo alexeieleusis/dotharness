@@ -20,8 +20,8 @@
 (PR-level design/architecture, added by dotharness#3 — see `design-review-requirements.md`).
 None of them check whether a PR's diff actually matches what was *asked for*. Issue #4
 proposes a fourth pass whose only job is that comparison — catching scope creep (diff
-does more than the ticket asked) and gaps (ticket asks for X, diff doesn't cover it) —
-and issue #3 explicitly required the two issues be designed jointly so neither multiplies
+does more than the ticket asked) and gaps (ticket asks for X, diff doesn't cover it).
+Issue #3 explicitly required the two issues be designed jointly so neither multiplies
 `self-review`'s per-file retry-on-failure cost (currently ~2(N+1) invocations on a failed
 run, per PR #39's description).
 
@@ -50,7 +50,7 @@ so later sections don't need to re-justify them:
    diff** (the same per-file diff concatenation `review-design.md` already receives),
    not against the `review-summary.md` comment. The Review Summary is a deliberately
    terse, lossy 3-6 sentence summary explicitly told not to repeat individual findings
-   (`knowledge/pr-review/review-summary.md:8-13`) — comparing against it risked hiding
+   (`knowledge/pr-review/review-summary.md:8-13`). Comparing against it risked hiding
    exactly the scope creep/gaps this pass exists to catch. This also means the
    traceability pass has **no ordering dependency** on `review-summary.md` completing
    first. It is fully independent, like `review-design.md`.
@@ -125,7 +125,7 @@ expensive point to discover a mismatch.
   closing-keyword linking plus the comment-scan fallback. No tracker-specific API client
   is introduced. Still holds after the §4/G5 update: recognizing the `linear[bot]`
   linkback comment's already-mirrored content is not a Linear API integration — no
-  Linear-specific request is ever made, and a Linear ticket with no linkback comment on
+  Linear-specific request is ever made. A Linear ticket with no linkback comment on
   the PR (or a Linear workspace not wired to GitHub via that App) remains unresolvable,
   same as before.
 - **Not wiring into `review-prs`.** Same rationale as `design-review-requirements.md` §4:
@@ -136,11 +136,11 @@ expensive point to discover a mismatch.
   `review-design.md` was additive to `review-file.md`.
 - **Not building a generic "PR-level pass" *state-tracking* framework.** Per
   `design-review-requirements.md` §9, that generalization was explicitly deferred "to
-  whenever issue #4 is actually picked up" — this is that moment, but only for the
+  whenever issue #4 is actually picked up". This is that moment, but only for the
   narrow, already-flagged reuse point named there: the marker-comment-detection helper
   (§7.6). The independent-per-pass state-list pattern (`design_reviewed_prs`,
   `traceability_reviewed_prs` as two separate fields) and the runner-side `_ok`-gate
-  pattern stay duplicated exactly as `review-design.md` left them — extending those
+  pattern stay duplicated exactly as `review-design.md` left them. Extending those
   further is still out of scope here.
 - **Not re-triggering any pass on new commits pushed after it already completed.** This
   is a pre-existing property shared by all four passes (file/summary/design/traceability
@@ -179,7 +179,7 @@ expensive point to discover a mismatch.
 | Ticket-resolution helper | Which GitHub issue(s), if any, is this PR answering? | New `resolve_linked_tickets()` in `harness/runners/common.py` (§7.2) | The `pr` dict (extended to carry `closingIssuesReferences`/`createdAt`), repo, env | List of `{number, repo, title, body, source}` dicts, possibly empty |
 | Early-comment context helper | What extra clarifying context (if any) did people add right after opening the PR? | New `build_early_comment_context()` in `common.py` (§7.2) | PR number, repo, PR `createdAt`, env | Concatenated text block of early issue-timeline comments (possibly empty string) |
 | Generalized PR-level-pass marker helper | Reusable "did this bot already post its PR-level completion comment" check | `has_pr_level_pass_comment(marker, ...)` extracted in `common.py`, with `has_design_review_comment`/`has_traceability_review_comment` becoming thin wrappers (§7.6) | Marker string, PR number, repo, current_user, env | Boolean (or `None` for inconclusive), same tri-state contract as today |
-| `self_review.py` / `review_requested.py` wiring | When does each runner invoke the pass, and how does its outcome affect state / `remove_reviewer`? | New, independent step in each runner, mirroring the `review-design.md` wiring exactly | Same `ctx` dict already built per PR | Success/failure tracked in `self_review.json`'s new `traceability_reviewed_prs` field (self-review); gates `remove_reviewer` via an added `traceability_ok` term (review-requested) |
+| `self_review.py` / `review_requested.py` wiring | When does each runner invoke the pass, and how does its outcome affect state / `remove_reviewer`? | New, independent step in each runner, mirroring the `review-design.md` wiring exactly | Same `ctx` dict already built per PR | Success/failure tracked in `self_review.json`'s new `traceability_reviewed_prs` field (self-review). It gates `remove_reviewer` via an added `traceability_ok` term (review-requested) |
 
 ## 7. Detailed functional requirements
 
