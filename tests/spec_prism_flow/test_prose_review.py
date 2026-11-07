@@ -82,11 +82,11 @@ async def test_claude_call_shape(tmp_path, monkeypatch, launch):
 async def test_opencode_call_shape(tmp_path, monkeypatch, launch):
     target, _ = _setup(tmp_path, monkeypatch)
 
-    await prose_review.review_document(ProseReviewConfig(enabled=True, backend="opencode"), target, timeout=42)
+    await prose_review.review_document(ProseReviewConfig(enabled=True, backend="opencode"), target)
 
     args, kwargs = launch.call_args
     assert args[0] == "opencode"
-    assert kwargs["timeout"] == 42
+    assert kwargs["timeout"] == 900
     assert kwargs["max_retries"] == 0
     assert kwargs["backend_options"] == OpencodeOptions(standalone=True, opencode_dir=tmp_path)
     assert kwargs["backend_options"].auto is False

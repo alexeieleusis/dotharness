@@ -44,8 +44,6 @@ def _build_prompt(skill_path: Path, relative_target: Path) -> str:
 async def review_document(
     cfg: ProseReviewConfig,
     target_path: Path,
-    *,
-    timeout: int = DEFAULT_PROSE_REVIEW_TIMEOUT_SECONDS,
 ) -> None:
     """Review `target_path` in place using the asd-ste100 Strict-mode skill, via the `cfg.backend` CLI harness.
 
@@ -74,12 +72,12 @@ async def review_document(
             cfg.backend,
             prompt,
             cwd=target_toplevel,
-            timeout=timeout,
+            timeout=DEFAULT_PROSE_REVIEW_TIMEOUT_SECONDS,
             max_retries=0,
             backend_options=options,
         )
         if result.timed_out:
-            logger.warning("prose review of %s timed out after %ss", target_path, timeout)
+            logger.warning("prose review of %s timed out after %ss", target_path, DEFAULT_PROSE_REVIEW_TIMEOUT_SECONDS)
         if result.not_found:
             logger.warning("prose review of %s failed: %s backend executable not found", target_path, cfg.backend)
         if result.returncode != 0:
