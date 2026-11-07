@@ -1,7 +1,7 @@
 # review-requested
 
-This command reviews open pull requests where the current `gh` user has
-explicitly requested a review. These PRs appear under "Review requests"
+This command reviews open pull requests where a review has been explicitly
+requested from the current `gh` user. These PRs appear under "Review requests"
 for that account. For each PR, it posts review comments via the configured AI
 backend in four places. The four places are: per-file findings, a summary, a
 PR-level design/architecture review, and a PR-level
