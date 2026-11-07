@@ -289,7 +289,7 @@ class DeduplicationOrchestrator:
             f"[vibe_heal](https://github.com/alexeieleusis/dotharness)"
         )
 
-    def _handle_successful_fix_commit(
+    async def _handle_successful_fix_commit(
         self,
         group: DuplicationGroup,
         target_block: Any,
@@ -313,7 +313,7 @@ class DeduplicationOrchestrator:
 
             # Auto-detect all modified files since duplications may span multiple files
             # and AI might create new utility modules. Pass None to auto-detect.
-            sha = self.git_manager.create_commit(commit_msg, None, include_untracked=True)
+            sha = await self.git_manager.create_commit(commit_msg, None, include_untracked=True)
             if sha:
                 summary.commits.append(sha)
                 summary.fixed += 1
@@ -379,7 +379,7 @@ class DeduplicationOrchestrator:
         )
         logger.error(f"Failed to fix duplication: {fix_result.error_message}")
 
-    def _handle_fix_result(
+    async def _handle_fix_result(
         self,
         fix_result: FixResult,
         group: DuplicationGroup,
@@ -415,7 +415,7 @@ class DeduplicationOrchestrator:
         if dry_run:
             self._handle_successful_fix_dry_run(target_block, summary, progress, task)
         else:
-            self._handle_successful_fix_commit(group, target_block, response, summary, progress, task)
+            await self._handle_successful_fix_commit(group, target_block, response, summary, progress, task)
 
     async def _process_duplications(
         self,
@@ -468,7 +468,7 @@ class DeduplicationOrchestrator:
                 # Use AI tool to fix (pass prompt as "message" field)
                 fix_result = await self.ai_tool.fix_duplication(prompt, file_path)
 
-                self._handle_fix_result(
+                await self._handle_fix_result(
                     fix_result,
                     group,
                     target_ref,

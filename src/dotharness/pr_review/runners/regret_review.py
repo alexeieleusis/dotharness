@@ -5,6 +5,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 
+from dotharness.gh import gh_argv
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.runners.common import (
@@ -164,7 +165,7 @@ def _remaining_budget(budget_start: float, budget_seconds: int) -> int | None:
     return remaining if remaining > 0 else None
 
 
-def _run_within_budget(
+async def _run_within_budget(
     cmd: list[str],
     wdir: str,
     env: dict,
@@ -189,7 +190,7 @@ def _run_within_budget(
         )
         return None
     try:
-        return run_cmd(cmd, cwd=wdir, env=env, timeout=remaining, check=False)
+        return await run_cmd(cmd, cwd=wdir, env=env, timeout=remaining, check=False)
     except subprocess.TimeoutExpired:
         logger.debug(
             "PR #%d: regret-review budget (%ds) exhausted during %s — stopping the sequence",
@@ -267,7 +268,7 @@ def _line_within_hunk_ranges(line: int, ranges: list[tuple[int, int, int, int]])
     return False
 
 
-def _pr_gate_setup(pr: dict, config: HarnessConfig, wdir: str, env: dict) -> tuple[int, str, list[str]] | None:
+async def _pr_gate_setup(pr: dict, config: HarnessConfig, wdir: str, env: dict) -> tuple[int, str, list[str]] | None:
     """The G2 author gate plus the gate setup: (number, base_branch, changed files), or
     None when this PR is skipped entirely — no number, an author that does not match
     config.regret_review.authors (an empty login never matches: author_matches does a
@@ -282,14 +283,14 @@ def _pr_gate_setup(pr: dict, config: HarnessConfig, wdir: str, env: dict) -> tup
     if not login or not author_matches(login, config.regret_review.authors):
         logger.debug("PR #%d: author %r does not match regret_review.authors — skipping regret review", number, login)
         return None
-    base_branch = get_pr_base_branch(number, config.repo.name, env)
+    base_branch = await get_pr_base_branch(number, config.repo.name, env)
     if not base_branch:
         logger.debug("PR #%d: could not determine the base branch — skipping regret review", number)
         return None
-    return number, base_branch, get_changed_files(base_branch, wdir, env)
+    return number, base_branch, await get_changed_files(base_branch, wdir, env)
 
 
-def _diff_files_within_gate(
+async def _diff_files_within_gate(
     files: list[str],
     base_branch: str,
     wdir: str,
@@ -309,7 +310,7 @@ def _diff_files_within_gate(
     diffs: dict[str, str] = {}
     total_diff_lines = 0
     for file in files:
-        result = _run_within_budget(
+        result = await _run_within_budget(
             ["git", "diff", f"origin/{base_branch}...HEAD", "--unified=0", "--", file],
             wdir,
             env,
@@ -342,7 +343,7 @@ def _diff_files_within_gate(
     return diffs
 
 
-def _blame_removed_ranges(
+async def _blame_removed_ranges(
     diffs: dict[str, str],
     blame_ref: str,
     wdir: str,
@@ -364,7 +365,7 @@ def _blame_removed_ranges(
         for old_start, old_count, new_start, new_count in _removed_modified_ranges(diff):
             old_end = old_start + old_count - 1
             new_end = new_start + new_count - 1
-            result = _run_within_budget(
+            result = await _run_within_budget(
                 ["git", "blame", "-L", f"{old_start},{old_end}", blame_ref, "--", file],
                 wdir,
                 env,
@@ -390,7 +391,7 @@ def _blame_removed_ranges(
     return blamed
 
 
-def _resolve_commit_prs(
+async def _resolve_commit_prs(
     shas: list[str],
     repo: str,
     env: dict,
@@ -406,8 +407,8 @@ def _resolve_commit_prs(
     independently downstream. None means the budget was exhausted mid-sequence."""
     prs_by_sha: dict[str, list[int]] = {}
     for sha in shas:
-        result = _run_within_budget(
-            ["gh", "api", f"repos/{repo}/commits/{sha}/pulls"],
+        result = await _run_within_budget(
+            gh_argv("api", f"repos/{repo}/commits/{sha}/pulls"),
             "/",
             env,
             number,
@@ -434,7 +435,7 @@ def _resolve_commit_prs(
     return prs_by_sha
 
 
-def find_introducing_prs(
+async def find_introducing_prs(
     pr: dict, config: HarnessConfig, wdir: str, env: dict, budget_start: float | None = None
 ) -> list[IntroducingHunk]:
     """The blame → introducing-commit → introducing-PR resolver
@@ -475,7 +476,7 @@ def find_introducing_prs(
     two functions' calls are one bugfix-shaped sequence sharing a single
     regret_review_timeout cap, not two independent ones (regret-review-requirements.md
     §7.5/§8)."""
-    setup = _pr_gate_setup(pr, config, wdir, env)
+    setup = await _pr_gate_setup(pr, config, wdir, env)
     if setup is None:
         return []
     number, base_branch, files = setup
@@ -485,7 +486,7 @@ def find_introducing_prs(
     budget_start = _budget_clock(budget_start)
     budget_seconds = config.regret_review.regret_review_timeout
 
-    diffs = _diff_files_within_gate(
+    diffs = await _diff_files_within_gate(
         files,
         base_branch,
         wdir,
@@ -498,7 +499,7 @@ def find_introducing_prs(
     if diffs is None:
         return []
 
-    merge_base = _run_within_budget(
+    merge_base = await _run_within_budget(
         ["git", "merge-base", f"origin/{base_branch}", "HEAD"],
         wdir,
         env,
@@ -515,13 +516,13 @@ def find_introducing_prs(
         logger.debug("PR #%d: merge-base resolution failed — blaming origin/%s instead", number, base_branch)
         blame_ref = f"origin/{base_branch}"
 
-    blamed = _blame_removed_ranges(diffs, blame_ref, wdir, env, number, budget_start, budget_seconds)
+    blamed = await _blame_removed_ranges(diffs, blame_ref, wdir, env, number, budget_start, budget_seconds)
     if blamed is None:
         return []
 
     # G4: deduplicate the SHAs within the run — a commit blamed from several ranges or
     # files gets exactly one commit→PR lookup.
-    prs_by_sha = _resolve_commit_prs(
+    prs_by_sha = await _resolve_commit_prs(
         sorted({sha for *_, sha in blamed}), config.repo.name, env, number, budget_start, budget_seconds
     )
     if prs_by_sha is None:
@@ -548,7 +549,7 @@ def find_introducing_prs(
     return hunks
 
 
-def find_regret_candidates(
+async def find_regret_candidates(
     introducing_hunks: list[IntroducingHunk],
     config: HarnessConfig,
     wdir: str,
@@ -609,11 +610,11 @@ def find_regret_candidates(
     budget_start = _budget_clock(budget_start)
     budget_seconds = config.regret_review.regret_review_timeout
 
-    comments_by_pr = _fetch_comments_by_pr(introducing_hunks, wdir, env, budget_start, budget_seconds)
+    comments_by_pr = await _fetch_comments_by_pr(introducing_hunks, wdir, env, budget_start, budget_seconds)
     if comments_by_pr is None:
         return []
 
-    windows_by_commit_file = _introducing_hunk_windows(introducing_hunks, wdir, env, budget_start, budget_seconds)
+    windows_by_commit_file = await _introducing_hunk_windows(introducing_hunks, wdir, env, budget_start, budget_seconds)
     if windows_by_commit_file is None:
         return []
 
@@ -622,7 +623,7 @@ def find_regret_candidates(
     return candidates
 
 
-def _fetch_comments_by_pr(
+async def _fetch_comments_by_pr(
     introducing_hunks: list[IntroducingHunk],
     wdir: str,
     env: dict,
@@ -644,11 +645,11 @@ def _fetch_comments_by_pr(
                 budget_seconds,
             )
             return None
-        comments_by_pr[pr_number] = fetch_pr_comments(pr_number, PR_COMMENTS_SCRIPT_PATH, wdir, env)
+        comments_by_pr[pr_number] = await fetch_pr_comments(pr_number, PR_COMMENTS_SCRIPT_PATH, wdir, env)
     return comments_by_pr
 
 
-def _introducing_hunk_windows(
+async def _introducing_hunk_windows(
     introducing_hunks: list[IntroducingHunk],
     wdir: str,
     env: dict,
@@ -666,7 +667,7 @@ def _introducing_hunk_windows(
         prs_by_sha.setdefault(hunk.introducing_sha, set()).add(hunk.introducing_pr_number)
     windows: dict[tuple[str, str], list[tuple[int, int, int, int]]] = {}
     for sha, path in sorted({(h.introducing_sha, h.path) for h in introducing_hunks}):
-        result = _run_within_budget(
+        result = await _run_within_budget(
             ["git", "diff", f"{sha}^", sha, "--unified=0", "--", path],
             wdir,
             env,
@@ -923,14 +924,14 @@ def is_complete_judgment_response(response: str, candidates: list[RegretCandidat
 # with a single owner).
 
 
-def post_regret_comment(number: int, repo: str, body: str, env: dict) -> bool:
+async def post_regret_comment(number: int, repo: str, body: str, env: dict) -> bool:
     """Posts the regret-review PR-level comment — the harness posts it, not the backend:
     review-regret.md's output contract is verdict lines only, and the body is built by
     the caller from parse_regret_judgment's findings (regret-review-requirements.md
     §7.6). True if gh accepted it, mirroring common.post_no_linked_ticket_comment's
     shape."""
-    result = run_cmd(
-        ["gh", "pr", "comment", str(number), "--repo", repo, "--body", body],
+    result = await run_cmd(
+        gh_argv("pr", "comment", str(number), "--repo", repo, "--body", body),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -961,13 +962,13 @@ class RecordingBackend:
         self._wrapped = wrapped
         self._holder = holder
 
-    def run(
+    async def run(
         self,
         instructions: str,
         cwd: str,
         opencode_dir: str | None = None,
         context: str | None = None,
     ) -> subprocess.CompletedProcess:
-        result = self._wrapped.run(instructions, cwd=cwd, opencode_dir=opencode_dir, context=context)
+        result = await self._wrapped.run(instructions, cwd=cwd, opencode_dir=opencode_dir, context=context)
         self._holder["reply"] = result.stdout.decode("utf-8", errors="replace")
         return result

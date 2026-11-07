@@ -161,7 +161,7 @@ def test_blamed_shas_parses_default_blame_lines_and_strips_boundary_prefix():
     assert _blamed_shas(output) == ["abc123def456", "abc123def456"]
 
 
-def test_find_introducing_prs_happy_path_blames_merge_base_and_resolves_pr(tmp_path):
+async def test_find_introducing_prs_happy_path_blames_merge_base_and_resolves_pr(tmp_path):
     diff = (
         "diff --git a/src/foo.py b/src/foo.py\n"
         "index 1111..2222 100644\n"
@@ -195,7 +195,7 @@ def test_find_introducing_prs_happy_path_blames_merge_base_and_resolves_pr(tmp_p
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
     assert hunks == [
         IntroducingHunk(
             path="src/foo.py",
@@ -216,7 +216,7 @@ def test_find_introducing_prs_happy_path_blames_merge_base_and_resolves_pr(tmp_p
     assert _cmd_calls(mock_run, "gh") == [["gh", "api", "repos/acme/repo/commits/abc123def456/pulls"]]
 
 
-def test_find_introducing_prs_skips_oversized_pr_with_no_blame_or_api(tmp_path):
+async def test_find_introducing_prs_skips_oversized_pr_with_no_blame_or_api(tmp_path):
     diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -1,60 +1,0 @@\n" + "".join(f"-line {i}\n" for i in range(60))
 
     def side_effect(cmd, cwd, env, timeout, check=False):
@@ -230,11 +230,11 @@ def test_find_introducing_prs_skips_oversized_pr_with_no_blame_or_api(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        assert find_introducing_prs(_pr(), _config(), str(tmp_path), {}) == []
+        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
     assert mock_run.call_count == 1
 
 
-def test_find_introducing_prs_exits_oversized_gate_mid_file_list(tmp_path):
+async def test_find_introducing_prs_exits_oversized_gate_mid_file_list(tmp_path):
     small = "--- a/a.py\n+++ b/a.py\n@@ -1,1 +1,1 @@\n-x\n+y\n"
     big = "--- a/b.py\n+++ b/b.py\n@@ -1,50 +1,0 @@\n" + "".join(f"-line {i}\n" for i in range(50))
 
@@ -252,12 +252,12 @@ def test_find_introducing_prs_exits_oversized_gate_mid_file_list(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["a.py", "b.py", "c.py"]),
     ):
-        assert find_introducing_prs(_pr(), _config(), str(tmp_path), {}) == []
+        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
     # 1 + 50 > 50 on the second file: the gate exits then, and c.py is never diffed.
     assert mock_run.call_count == 2
 
 
-def test_find_introducing_prs_at_exact_max_diff_lines_is_not_gated(tmp_path):
+async def test_find_introducing_prs_at_exact_max_diff_lines_is_not_gated(tmp_path):
     # 25 removed + 25 added = exactly max_diff_lines: at-or-below is bugfix-shaped.
     diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -1,25 +1,25 @@\n" + "".join(
         f"-old {i}\n+new {i}\n" for i in range(25)
@@ -278,7 +278,7 @@ def test_find_introducing_prs_at_exact_max_diff_lines_is_not_gated(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        assert find_introducing_prs(_pr(), _config(), str(tmp_path), {}) == []
+        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
     # The gate must NOT have tripped: diff and merge-base both ran before the blame failure.
     # A regression from `>` to `>=` would short-circuit to [] before merge-base and fail here.
     assert _cmd_calls(mock_run, "git")[:2] == [
@@ -287,19 +287,19 @@ def test_find_introducing_prs_at_exact_max_diff_lines_is_not_gated(tmp_path):
     ]
 
 
-def test_find_introducing_prs_author_gate_skips_before_any_git_or_gh(tmp_path):
+async def test_find_introducing_prs_author_gate_skips_before_any_git_or_gh(tmp_path):
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch") as mock_base,
         patch("dotharness.pr_review.runners.regret_review.get_changed_files") as mock_files,
     ):
-        assert find_introducing_prs(_pr(login="bob"), _config(authors="alice"), str(tmp_path), {}) == []
+        assert (await find_introducing_prs(_pr(login="bob"), _config(authors="alice"), str(tmp_path), {})) == []
     mock_run.assert_not_called()
     mock_base.assert_not_called()
     mock_files.assert_not_called()
 
 
-def test_find_introducing_prs_author_allowlist_match_proceeds(tmp_path):
+async def test_find_introducing_prs_author_allowlist_match_proceeds(tmp_path):
     diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -5,1 +5,1 @@\n-old\n+new\n"
     blame = "abc123def456 (alice 2026-01-01 10:00:00 +0000   5) old\n"
 
@@ -320,24 +320,24 @@ def test_find_introducing_prs_author_allowlist_match_proceeds(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = find_introducing_prs(_pr(login="alice"), _config(authors=["alice", "bob"]), str(tmp_path), {})
+        hunks = await find_introducing_prs(_pr(login="alice"), _config(authors=["alice", "bob"]), str(tmp_path), {})
     assert [h.introducing_pr_number for h in hunks] == [7]
 
 
-def test_find_introducing_prs_missing_author_fails_closed_for_explicit_allowlist(tmp_path):
+async def test_find_introducing_prs_missing_author_fails_closed_for_explicit_allowlist(tmp_path):
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch") as mock_base,
         patch("dotharness.pr_review.runners.regret_review.get_changed_files") as mock_files,
     ):
         pr = {"number": 42}
-        assert find_introducing_prs(pr, _config(authors="alice"), str(tmp_path), {}) == []
+        assert (await find_introducing_prs(pr, _config(authors="alice"), str(tmp_path), {})) == []
     mock_run.assert_not_called()
     mock_base.assert_not_called()
     mock_files.assert_not_called()
 
 
-def test_find_introducing_prs_pure_addition_diff_blames_nothing(tmp_path):
+async def test_find_introducing_prs_pure_addition_diff_blames_nothing(tmp_path):
     diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -4,0 +5,3 @@\n+new a\n+new b\n+new c\n"
 
     def side_effect(cmd, cwd, env, timeout, check=False):
@@ -353,12 +353,12 @@ def test_find_introducing_prs_pure_addition_diff_blames_nothing(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        assert find_introducing_prs(_pr(), _config(), str(tmp_path), {}) == []
+        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
     # diff + merge-base only: no blame, no gh.
     assert [c.args[0][1] for c in mock_run.call_args_list] == ["diff", "merge-base"]
 
 
-def test_find_introducing_prs_same_commit_blamed_from_two_ranges_is_resolved_once(tmp_path):
+async def test_find_introducing_prs_same_commit_blamed_from_two_ranges_is_resolved_once(tmp_path):
     diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -5,1 +5,1 @@\n-old a\n+new a\n@@ -9,1 +9,1 @@\n-old b\n+new b\n"
 
     def side_effect(cmd, cwd, env, timeout, check=False):
@@ -379,14 +379,14 @@ def test_find_introducing_prs_same_commit_blamed_from_two_ranges_is_resolved_onc
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
     assert [(h.old_start, h.old_end) for h in hunks] == [(5, 5), (9, 9)]
     assert all(h.introducing_sha == "abc123def456" and h.introducing_pr_number == 7 for h in hunks)
     # G4: one unique SHA → exactly one commit→PR lookup, not one per range.
     assert len(_cmd_calls(mock_run, "gh")) == 1
 
 
-def test_find_introducing_prs_range_spanning_two_commits_yields_one_hunk_per_commit(tmp_path):
+async def test_find_introducing_prs_range_spanning_two_commits_yields_one_hunk_per_commit(tmp_path):
     diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -5,2 +5,2 @@\n-old a\n-old b\n+new a\n+new b\n"
     blame = "aaa111aaa111 (alice 2026-01-01 10:00:00 +0000   5) old a\nbbb222bbb222 (bob 2026-01-02 11:00:00 +0000   6) old b\n"
 
@@ -408,14 +408,14 @@ def test_find_introducing_prs_range_spanning_two_commits_yields_one_hunk_per_com
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
     assert sorted((h.introducing_sha, h.introducing_pr_number) for h in hunks) == [
         ("aaa111aaa111", 7),
         ("bbb222bbb222", 8),
     ]
 
 
-def test_find_introducing_prs_commit_in_multiple_prs_yields_one_hunk_per_pr(tmp_path):
+async def test_find_introducing_prs_commit_in_multiple_prs_yields_one_hunk_per_pr(tmp_path):
     diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -5,1 +5,1 @@\n-old\n+new\n"
     blame = "abc123def456 (alice 2026-01-01 10:00:00 +0000   5) old\n"
 
@@ -436,11 +436,11 @@ def test_find_introducing_prs_commit_in_multiple_prs_yields_one_hunk_per_pr(tmp_
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
     assert sorted(h.introducing_pr_number for h in hunks) == [7, 8]
 
 
-def test_find_introducing_prs_zero_pr_result_skips_lines_silently(tmp_path, caplog):
+async def test_find_introducing_prs_zero_pr_result_skips_lines_silently(tmp_path, caplog):
     diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -5,1 +5,1 @@\n-old\n+new\n"
     blame = "abc123def456 (alice 2026-01-01 10:00:00 +0000   5) old\n"
 
@@ -462,11 +462,11 @@ def test_find_introducing_prs_zero_pr_result_skips_lines_silently(tmp_path, capl
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
         caplog.at_level(logging.DEBUG, logger="dotharness.pr_review.runners.regret_review"),
     ):
-        assert find_introducing_prs(_pr(), _config(), str(tmp_path), {}) == []
+        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
-def test_find_introducing_prs_api_failure_skips_lines_silently(tmp_path, caplog):
+async def test_find_introducing_prs_api_failure_skips_lines_silently(tmp_path, caplog):
     diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -5,1 +5,1 @@\n-old\n+new\n"
     blame = "abc123def456 (alice 2026-01-01 10:00:00 +0000   5) old\n"
 
@@ -488,11 +488,11 @@ def test_find_introducing_prs_api_failure_skips_lines_silently(tmp_path, caplog)
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
         caplog.at_level(logging.DEBUG, logger="dotharness.pr_review.runners.regret_review"),
     ):
-        assert find_introducing_prs(_pr(), _config(), str(tmp_path), {}) == []
+        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
-def test_find_introducing_prs_malformed_pulls_json_skips_lines(tmp_path):
+async def test_find_introducing_prs_malformed_pulls_json_skips_lines(tmp_path):
     diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -5,1 +5,1 @@\n-old\n+new\n"
     blame = "abc123def456 (alice 2026-01-01 10:00:00 +0000   5) old\n"
 
@@ -513,10 +513,10 @@ def test_find_introducing_prs_malformed_pulls_json_skips_lines(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        assert find_introducing_prs(_pr(), _config(), str(tmp_path), {}) == []
+        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
 
 
-def test_find_introducing_prs_blame_failure_skips_only_that_range(tmp_path):
+async def test_find_introducing_prs_blame_failure_skips_only_that_range(tmp_path):
     diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -5,1 +5,1 @@\n-old a\n+new a\n@@ -9,1 +9,1 @@\n-old b\n+new b\n"
 
     def side_effect(cmd, cwd, env, timeout, check=False):
@@ -538,11 +538,11 @@ def test_find_introducing_prs_blame_failure_skips_only_that_range(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
     assert [(h.old_start, h.old_end, h.introducing_sha) for h in hunks] == [(9, 9, "bbb222bbb222")]
 
 
-def test_find_introducing_prs_merge_base_failure_blames_origin_base(tmp_path):
+async def test_find_introducing_prs_merge_base_failure_blames_origin_base(tmp_path):
     diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -5,1 +5,1 @@\n-old\n+new\n"
     blame = "abc123def456 (alice 2026-01-01 10:00:00 +0000   5) old\n"
 
@@ -563,44 +563,44 @@ def test_find_introducing_prs_merge_base_failure_blames_origin_base(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
     assert len(hunks) == 1
     blame_cmd = _cmd_calls(mock_run, "git")[2]
     assert blame_cmd == ["git", "blame", "-L", "5,5", "origin/main", "--", "src/foo.py"]
 
 
-def test_find_introducing_prs_no_changed_files_does_nothing(tmp_path):
+async def test_find_introducing_prs_no_changed_files_does_nothing(tmp_path):
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=[]),
     ):
-        assert find_introducing_prs(_pr(), _config(), str(tmp_path), {}) == []
+        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
     mock_run.assert_not_called()
 
 
-def test_find_introducing_prs_no_base_branch_does_nothing(tmp_path):
+async def test_find_introducing_prs_no_base_branch_does_nothing(tmp_path):
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value=""),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files") as mock_files,
     ):
-        assert find_introducing_prs(_pr(), _config(), str(tmp_path), {}) == []
+        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
     mock_run.assert_not_called()
     mock_files.assert_not_called()
 
 
-def test_find_introducing_prs_expired_budget_does_nothing(tmp_path):
+async def test_find_introducing_prs_expired_budget_does_nothing(tmp_path):
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        assert find_introducing_prs(_pr(), _config(timeout=0), str(tmp_path), {}) == []
+        assert (await find_introducing_prs(_pr(), _config(timeout=0), str(tmp_path), {})) == []
     mock_run.assert_not_called()
 
 
-def test_find_introducing_prs_timed_out_call_stops_sequence_fail_open(tmp_path):
+async def test_find_introducing_prs_timed_out_call_stops_sequence_fail_open(tmp_path):
     diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -5,1 +5,1 @@\n-old\n+new\n"
 
     def side_effect(cmd, cwd, env, timeout, check=False):
@@ -617,10 +617,10 @@ def test_find_introducing_prs_timed_out_call_stops_sequence_fail_open(tmp_path):
     ):
         # The diff succeeds, then the budget runs out during the next call: no partial
         # finding is produced.
-        assert find_introducing_prs(_pr(), _config(), str(tmp_path), {}) == []
+        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
 
 
-def test_find_introducing_prs_passes_remaining_budget_as_call_timeout(tmp_path):
+async def test_find_introducing_prs_passes_remaining_budget_as_call_timeout(tmp_path):
     diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -5,1 +5,1 @@\n-old\n+new\n"
     blame = "abc123def456 (alice 2026-01-01 10:00:00 +0000   5) old\n"
     seen_timeouts: list[int] = []
@@ -643,7 +643,7 @@ def test_find_introducing_prs_passes_remaining_budget_as_call_timeout(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        find_introducing_prs(_pr(), _config(timeout=300), str(tmp_path), {})
+        await find_introducing_prs(_pr(), _config(timeout=300), str(tmp_path), {})
     # Every call's timeout is the remaining budget (≤ 300, strictly decreasing in
     # elapsed time), never a fresh per-call constant.
     assert seen_timeouts and all(0 < t <= 300 for t in seen_timeouts)
@@ -709,7 +709,7 @@ def test_line_within_hunk_ranges_either_side_only():
     assert not _line_within_hunk_ranges(14, ranges)  # inside no range: the deletion's new side is empty
 
 
-def test_find_regret_candidates_happy_path_hunk_tolerant_not_exact_line(tmp_path):
+async def test_find_regret_candidates_happy_path_hunk_tolerant_not_exact_line(tmp_path):
     # The blamed change is line 5 only, but the introducing commit's hunk spans 5-7:
     # a comment at line 6 is in the same hunk and therefore a candidate.
     hunk = _hunk()
@@ -727,7 +727,7 @@ def test_find_regret_candidates_happy_path_hunk_tolerant_not_exact_line(tmp_path
             "dotharness.pr_review.runners.regret_review.fetch_pr_comments", return_value=[_inline_comment()]
         ) as mock_fetch,
     ):
-        candidates = find_regret_candidates([hunk], _config(), str(tmp_path), {})
+        candidates = await find_regret_candidates([hunk], _config(), str(tmp_path), {})
     assert mock_fetch.call_count == 1
     assert mock_fetch.call_args.args[0] == 7  # the introducing PR, not the current one
     assert _cmd_calls(mock_run, "git") == [
@@ -745,7 +745,7 @@ def test_find_regret_candidates_happy_path_hunk_tolerant_not_exact_line(tmp_path
     ]
 
 
-def test_find_regret_candidates_comment_outside_hunk_window_not_a_candidate(tmp_path):
+async def test_find_regret_candidates_comment_outside_hunk_window_not_a_candidate(tmp_path):
     diff = _introducing_commit_diff("@@ -5,3 +5,3 @@", "-old a\n+new a\n old b\n")
     comments = [
         _inline_comment(id=1, line=30),  # right file, far outside the 5-7 window
@@ -762,10 +762,10 @@ def test_find_regret_candidates_comment_outside_hunk_window_not_a_candidate(tmp_
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
         patch("dotharness.pr_review.runners.regret_review.fetch_pr_comments", return_value=comments),
     ):
-        assert find_regret_candidates([_hunk()], _config(), str(tmp_path), {}) == []
+        assert (await find_regret_candidates([_hunk()], _config(), str(tmp_path), {})) == []
 
 
-def test_find_regret_candidates_issue_and_review_types_never_candidates(tmp_path):
+async def test_find_regret_candidates_issue_and_review_types_never_candidates(tmp_path):
     diff = _introducing_commit_diff("@@ -5,3 +5,3 @@", "-old a\n+new a\n old b\n")
     comments = [
         _inline_comment(type="issue"),  # location-shaped, but the wrong type
@@ -789,10 +789,10 @@ def test_find_regret_candidates_issue_and_review_types_never_candidates(tmp_path
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
         patch("dotharness.pr_review.runners.regret_review.fetch_pr_comments", return_value=comments),
     ):
-        assert find_regret_candidates([_hunk()], _config(), str(tmp_path), {}) == []
+        assert (await find_regret_candidates([_hunk()], _config(), str(tmp_path), {})) == []
 
 
-def test_find_regret_candidates_dedupes_fetch_and_diff_and_yields_a_pair_per_range(tmp_path):
+async def test_find_regret_candidates_dedupes_fetch_and_diff_and_yields_a_pair_per_range(tmp_path):
     # Two blamed ranges in one file, both attributed to the same commit/PR, both inside
     # that commit's single 5-9 hunk: one fetch, one hunk-diff, one candidate per range.
     hunk_a = _hunk(old_start=5, old_end=5, new_start=5, new_end=5)
@@ -814,14 +814,14 @@ def test_find_regret_candidates_dedupes_fetch_and_diff_and_yields_a_pair_per_ran
             "dotharness.pr_review.runners.regret_review.fetch_pr_comments", return_value=[_inline_comment()]
         ) as mock_fetch,
     ):
-        candidates = find_regret_candidates([hunk_a, hunk_b], _config(), str(tmp_path), {})
+        candidates = await find_regret_candidates([hunk_a, hunk_b], _config(), str(tmp_path), {})
     assert mock_fetch.call_count == 1  # one fetch for the one unique introducing PR
     assert len(_cmd_calls(mock_run, "git")) == 1  # one hunk-diff for the one unique (commit, file)
     assert [c.hunk for c in candidates] == [hunk_a, hunk_b]
     assert all(c.comment_id == 456 for c in candidates)
 
 
-def test_find_regret_candidates_same_commit_in_two_prs_fetches_each_once(tmp_path):
+async def test_find_regret_candidates_same_commit_in_two_prs_fetches_each_once(tmp_path):
     hunk_a = _hunk(introducing_pr_number=7)
     hunk_b = _hunk(old_start=9, old_end=9, new_start=9, new_end=9, introducing_pr_number=8)
     diff = _introducing_commit_diff(
@@ -849,13 +849,13 @@ def test_find_regret_candidates_same_commit_in_two_prs_fetches_each_once(tmp_pat
             "dotharness.pr_review.runners.regret_review.fetch_pr_comments", side_effect=fetch_side_effect
         ) as mock_fetch,
     ):
-        candidates = find_regret_candidates([hunk_a, hunk_b], _config(), str(tmp_path), {})
+        candidates = await find_regret_candidates([hunk_a, hunk_b], _config(), str(tmp_path), {})
     assert [c.args[0] for c in mock_fetch.call_args_list] == [7, 8]
     assert len(_cmd_calls(mock_run, "git")) == 1  # the shared (commit, file) is diffed once
     assert [(c.hunk, c.comment_id) for c in candidates] == [(hunk_a, 456), (hunk_b, 789)]
 
 
-def test_find_regret_candidates_fetch_failure_drops_only_that_pr(tmp_path, caplog):
+async def test_find_regret_candidates_fetch_failure_drops_only_that_pr(tmp_path, caplog):
     hunk_a = _hunk(introducing_pr_number=7)
     hunk_b = _hunk(old_start=9, old_end=9, new_start=9, new_end=9, introducing_pr_number=8)
     diff = _introducing_commit_diff(
@@ -879,12 +879,12 @@ def test_find_regret_candidates_fetch_failure_drops_only_that_pr(tmp_path, caplo
         patch("dotharness.pr_review.runners.regret_review.fetch_pr_comments", side_effect=fetch_side_effect),
         caplog.at_level(logging.DEBUG, logger="dotharness.pr_review.runners.regret_review"),
     ):
-        candidates = find_regret_candidates([hunk_a, hunk_b], _config(), str(tmp_path), {})
+        candidates = await find_regret_candidates([hunk_a, hunk_b], _config(), str(tmp_path), {})
     assert [c.hunk for c in candidates] == [hunk_b]
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
-def test_find_regret_candidates_hunk_diff_failure_drops_only_that_commit(tmp_path, caplog):
+async def test_find_regret_candidates_hunk_diff_failure_drops_only_that_commit(tmp_path, caplog):
     hunk_a = _hunk(introducing_sha="aaa111aaa111", introducing_pr_number=7)
     hunk_b = _hunk(
         introducing_sha="bbb222bbb222",
@@ -912,12 +912,12 @@ def test_find_regret_candidates_hunk_diff_failure_drops_only_that_commit(tmp_pat
         ),
         caplog.at_level(logging.DEBUG, logger="dotharness.pr_review.runners.regret_review"),
     ):
-        candidates = find_regret_candidates([hunk_a, hunk_b], _config(), str(tmp_path), {})
+        candidates = await find_regret_candidates([hunk_a, hunk_b], _config(), str(tmp_path), {})
     assert [c.hunk for c in candidates] == [hunk_b]
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
-def test_find_regret_candidates_comment_on_old_side_of_introducing_hunk(tmp_path):
+async def test_find_regret_candidates_comment_on_old_side_of_introducing_hunk(tmp_path):
     # The introducing commit replaced lines 5-6 with lines 5-8; a comment anchored to
     # old line 5 (LEFT side, a line the change deleted) is still in the same hunk.
     hunk = _hunk(old_start=5, old_end=6, new_start=5, new_end=4)  # the current PR deletes them
@@ -936,11 +936,11 @@ def test_find_regret_candidates_comment_on_old_side_of_introducing_hunk(tmp_path
             return_value=[_inline_comment(line=5, side="LEFT")],
         ),
     ):
-        candidates = find_regret_candidates([hunk], _config(), str(tmp_path), {})
+        candidates = await find_regret_candidates([hunk], _config(), str(tmp_path), {})
     assert [c.hunk for c in candidates] == [hunk]
 
 
-def test_find_regret_candidates_pure_addition_introducing_commit_matches_new_side_only(tmp_path):
+async def test_find_regret_candidates_pure_addition_introducing_commit_matches_new_side_only(tmp_path):
     # The introducing commit added lines 5-7 (its old side is empty): a comment at
     # new line 7 matches; one at line 4 — outside the hunk on both sides — does not.
     hunk = _hunk(old_start=5, old_end=7, new_start=5, new_end=5)
@@ -957,11 +957,11 @@ def test_find_regret_candidates_pure_addition_introducing_commit_matches_new_sid
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
         patch("dotharness.pr_review.runners.regret_review.fetch_pr_comments", return_value=comments),
     ):
-        candidates = find_regret_candidates([hunk], _config(), str(tmp_path), {})
+        candidates = await find_regret_candidates([hunk], _config(), str(tmp_path), {})
     assert [c.comment_id for c in candidates] == [2]
 
 
-def test_find_regret_candidates_comment_with_no_line_never_a_candidate(tmp_path):
+async def test_find_regret_candidates_comment_with_no_line_never_a_candidate(tmp_path):
     # A stale inline comment whose line and original_line are both missing has no
     # locatable position: it can never match.
     diff = _introducing_commit_diff("@@ -5,3 +5,3 @@", "-old a\n+new a\n old b\n")
@@ -978,30 +978,30 @@ def test_find_regret_candidates_comment_with_no_line_never_a_candidate(tmp_path)
             "dotharness.pr_review.runners.regret_review.fetch_pr_comments", return_value=[_inline_comment(line=None)]
         ),
     ):
-        assert find_regret_candidates([_hunk()], _config(), str(tmp_path), {}) == []
+        assert (await find_regret_candidates([_hunk()], _config(), str(tmp_path), {})) == []
 
 
-def test_find_regret_candidates_empty_input_does_nothing(tmp_path):
+async def test_find_regret_candidates_empty_input_does_nothing(tmp_path):
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.regret_review.fetch_pr_comments") as mock_fetch,
     ):
-        assert find_regret_candidates([], _config(), str(tmp_path), {}) == []
+        assert (await find_regret_candidates([], _config(), str(tmp_path), {})) == []
     mock_run.assert_not_called()
     mock_fetch.assert_not_called()
 
 
-def test_find_regret_candidates_expired_budget_does_nothing(tmp_path):
+async def test_find_regret_candidates_expired_budget_does_nothing(tmp_path):
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.regret_review.fetch_pr_comments") as mock_fetch,
     ):
-        assert find_regret_candidates([_hunk()], _config(timeout=0), str(tmp_path), {}) == []
+        assert (await find_regret_candidates([_hunk()], _config(timeout=0), str(tmp_path), {})) == []
     mock_run.assert_not_called()
     mock_fetch.assert_not_called()
 
 
-def test_find_regret_candidates_timed_out_diff_stops_sequence_fail_open(tmp_path):
+async def test_find_regret_candidates_timed_out_diff_stops_sequence_fail_open(tmp_path):
     # The fetch succeeds, then the hunk-diff times out: the sequence stops and no
     # partial candidate set is produced.
 
@@ -1012,10 +1012,10 @@ def test_find_regret_candidates_timed_out_diff_stops_sequence_fail_open(tmp_path
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
         patch("dotharness.pr_review.runners.regret_review.fetch_pr_comments", return_value=[_inline_comment()]),
     ):
-        assert find_regret_candidates([_hunk()], _config(), str(tmp_path), {}) == []
+        assert (await find_regret_candidates([_hunk()], _config(), str(tmp_path), {})) == []
 
 
-def test_find_regret_candidates_passes_remaining_budget_as_call_timeout(tmp_path):
+async def test_find_regret_candidates_passes_remaining_budget_as_call_timeout(tmp_path):
     hunk = _hunk()
     diff = _introducing_commit_diff("@@ -5,3 +5,3 @@", "-old a\n+new a\n old b\n")
     seen_timeouts: list[int] = []
@@ -1031,7 +1031,7 @@ def test_find_regret_candidates_passes_remaining_budget_as_call_timeout(tmp_path
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
         patch("dotharness.pr_review.runners.regret_review.fetch_pr_comments", return_value=[_inline_comment()]),
     ):
-        find_regret_candidates([hunk, hunk], _config(timeout=300), str(tmp_path), {})
+        await find_regret_candidates([hunk, hunk], _config(timeout=300), str(tmp_path), {})
     # Every git call's timeout is the remaining budget (≤ 300, decreasing in elapsed
     # time), never a fresh per-call constant.
     assert seen_timeouts and all(0 < t <= 300 for t in seen_timeouts)
@@ -1360,7 +1360,7 @@ def test_is_complete_judgment_response_no_candidates_is_inconclusive():
     assert is_complete_judgment_response("CANDIDATE 1: YES — nobody to map to", []) is False
 
 
-def test_find_introducing_prs_non_utf8_diff_and_merge_base_do_not_raise(tmp_path):
+async def test_find_introducing_prs_non_utf8_diff_and_merge_base_do_not_raise(tmp_path):
     diff = b"@@ -1 +1 @@\n-caf\xe9\n+cafe\n"
     blame = b"abc123def456 (alice 2026-01-01 10:00:00 +0000   1) caf\xe9\n"
 
@@ -1378,5 +1378,5 @@ def test_find_introducing_prs_non_utf8_diff_and_merge_base_do_not_raise(tmp_path
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
     assert [(h.old_start, h.introducing_pr_number) for h in hunks] == [(1, 7)]

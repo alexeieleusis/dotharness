@@ -2,7 +2,7 @@
 
 One entry point, ``launch``, builds the command for the named backend, delivers the prompt through a temp file,
 runs the command with ``subprocess_runner.run`` (group SIGTERM, grace, SIGKILL; also on cancellation) and returns
-its ``RunResult``. ``launch_sync`` is the thin ``asyncio.run`` adapter for sync callers.
+its ``RunResult``.
 
 Carried over from pr-review's ``Backend`` (the global opencode lock is dropped): retries, the cwd-divergence
 monitor, the opencode plugin check, the repo-identity and harness-repo guards, ``PWD`` pinned to ``cwd`` and the
@@ -23,15 +23,14 @@ Neither argv nor env is ever logged, put in an exception message or kept in a re
 
 import asyncio
 import contextlib
-import functools
 import logging
 import os
 import tempfile
 import time
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, ParamSpec, TypeVar
+from typing import Literal
 
 from dotharness.opencode_guards import (
     BackendCwdDivergedError,
@@ -39,6 +38,7 @@ from dotharness.opencode_guards import (
     assert_no_opencode_plugins,
     watch_cwd,
 )
+from dotharness.paths import data_dir
 from dotharness.repo_guard import (
     RepoIdentityError,
     assert_harness_unchanged,
@@ -46,16 +46,15 @@ from dotharness.repo_guard import (
     snapshot_harness_repo,
 )
 from dotharness.subprocess_runner import RunResult, run
+from dotharness.subprocess_runner import group_alive as _group_alive  # tests patch this name
 
 logger = logging.getLogger(__name__)
 
-P = ParamSpec("P")
-R = TypeVar("R")
 
 BackendName = Literal["claude", "opencode"]
 BACKEND_NAMES: tuple[BackendName, ...] = ("claude", "opencode")
 
-TMP_DIR = Path.home() / ".local/share/dotharness/tmp"
+TMP_DIR = data_dir() / "tmp"
 
 # How long to wait for a run's own process group to fully exit, and how often to poll.
 GROUP_EXIT_WAIT_SECONDS = 30.0
@@ -187,16 +186,6 @@ def _write_prompt_file(prompt: str) -> Path:
         path.unlink(missing_ok=True)
         raise
     return path
-
-
-def _group_alive(pgid: int) -> bool:
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 async def _wait_for_group_exit(pgid: int, prefix: str) -> None:
@@ -436,18 +425,3 @@ async def launch(
     if result.timed_out and expected_repo_name is not None:
         await _log_identity_failure_after_timeout(cwd_str, expected_repo_name, prefix)
     return result
-
-
-def _as_sync(func: Callable[P, Coroutine[Any, Any, R]]) -> Callable[P, R]:
-    @functools.wraps(func)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-        return asyncio.run(func(*args, **kwargs))
-
-    return wrapper
-
-
-launch_sync = _as_sync(launch)
-launch_sync.__doc__ = (
-    "Sync adapter for ``launch`` (same parameters, same result): runs it with ``asyncio.run``.\n\n"
-    "For sync callers (I-3, I-4, I-5). Must not be called from a running event loop; await ``launch`` there."
-)

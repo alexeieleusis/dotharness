@@ -60,25 +60,25 @@ def test_build_requirements_prompt_omits_optional_sections_when_absent():
     assert "Architecture / convention constraints" not in prompt
 
 
-def test_run_draft_requirements_raises_when_manifest_missing(tmp_path):
+async def test_run_draft_requirements_raises_when_manifest_missing(tmp_path):
     cfg = _make_cfg(tmp_path)
     cfg.plan.workspace_dir.mkdir(parents=True)
 
     with pytest.raises(RequirementsError, match="Manifest not found"):
-        run_draft_requirements(cfg)
+        await run_draft_requirements(cfg)
 
 
-def test_run_draft_requirements_raises_when_overview_missing(tmp_path):
+async def test_run_draft_requirements_raises_when_overview_missing(tmp_path):
     brief = tmp_path / "brief.md"
     brief.write_text("brief content")
     cfg = _make_cfg(tmp_path)
     init_workspace(cfg.plan.workspace_dir, brief, None, None, [])
 
     with pytest.raises(RequirementsError, match="Overview not found"):
-        run_draft_requirements(cfg)
+        await run_draft_requirements(cfg)
 
 
-def test_run_draft_requirements_raises_when_template_missing(tmp_path):
+async def test_run_draft_requirements_raises_when_template_missing(tmp_path):
     brief = tmp_path / "brief.md"
     brief.write_text("brief content")
     cfg = _make_cfg(tmp_path)
@@ -86,10 +86,10 @@ def test_run_draft_requirements_raises_when_template_missing(tmp_path):
     (cfg.plan.workspace_dir / OVERVIEW_FILENAME).write_text("overview")
 
     with pytest.raises(RequirementsError, match="template not found"):
-        run_draft_requirements(cfg)
+        await run_draft_requirements(cfg)
 
 
-def test_run_draft_requirements_raises_when_conventions_path_invalid(tmp_path):
+async def test_run_draft_requirements_raises_when_conventions_path_invalid(tmp_path):
     brief = tmp_path / "brief.md"
     brief.write_text("brief content")
     conventions = tmp_path / "CONVENTIONS.md"
@@ -99,10 +99,10 @@ def test_run_draft_requirements_raises_when_conventions_path_invalid(tmp_path):
     _write_template(cfg)
 
     with pytest.raises(RequirementsError, match="Conventions file not found"):
-        run_draft_requirements(cfg)
+        await run_draft_requirements(cfg)
 
 
-def test_run_draft_requirements_writes_output_using_full_prompt(tmp_path, monkeypatch):
+async def test_run_draft_requirements_writes_output_using_full_prompt(tmp_path, monkeypatch):
     brief = tmp_path / "brief.md"
     brief.write_text("brief content")
     conventions = tmp_path / "CONVENTIONS.md"
@@ -123,7 +123,7 @@ def test_run_draft_requirements_writes_output_using_full_prompt(tmp_path, monkey
 
     monkeypatch.setattr(requirements_stage.handoff, "run_handoff", _fake_run_handoff)
 
-    requirements_path = run_draft_requirements(cfg)
+    requirements_path = await run_draft_requirements(cfg)
 
     assert requirements_path == cfg.plan.workspace_dir / REQUIREMENTS_FILENAME
     assert TEMPLATE_TEXT in captured["prompt_text"]
@@ -132,7 +132,7 @@ def test_run_draft_requirements_writes_output_using_full_prompt(tmp_path, monkey
     assert "convention rules" in captured["prompt_text"]
 
 
-def test_run_draft_requirements_translates_real_handoff_error_cleanly(tmp_path, monkeypatch):
+async def test_run_draft_requirements_translates_real_handoff_error_cleanly(tmp_path, monkeypatch):
     brief = tmp_path / "brief.md"
     brief.write_text("brief content")
     cfg = _make_cfg(tmp_path)
@@ -146,13 +146,13 @@ def test_run_draft_requirements_translates_real_handoff_error_cleanly(tmp_path, 
     monkeypatch.setattr(requirements_stage.handoff, "run_handoff", _raise_handoff_error)
 
     with pytest.raises(RequirementsError):
-        run_draft_requirements(cfg)
+        await run_draft_requirements(cfg)
 
 
 # --- prose review post-validation -----------------------------------------------------------------
 
 
-def test_run_draft_requirements_warns_when_prose_review_blanks_the_document(tmp_path, monkeypatch, caplog):
+async def test_run_draft_requirements_warns_when_prose_review_blanks_the_document(tmp_path, monkeypatch, caplog):
     brief = tmp_path / "brief.md"
     brief.write_text("brief content")
     cfg = _make_cfg(tmp_path)
@@ -164,7 +164,7 @@ def test_run_draft_requirements_warns_when_prose_review_blanks_the_document(tmp_
     def _fake_run_handoff(prompt_text, workspace_dir, stage_name, output_filename=None):
         (workspace_dir / REQUIREMENTS_FILENAME).write_text("requirements body")
 
-    def _blanking_review(review_cfg, target_path, **kwargs):
+    async def _blanking_review(review_cfg, target_path, **kwargs):
         # Simulate the review backend returning normally while blanking the document.
         target_path.write_text("")
 
@@ -172,14 +172,14 @@ def test_run_draft_requirements_warns_when_prose_review_blanks_the_document(tmp_
     monkeypatch.setattr(prose_review, "review_document", _blanking_review)
 
     with caplog.at_level(logging.WARNING):
-        requirements_path = run_draft_requirements(cfg)
+        requirements_path = await run_draft_requirements(cfg)
 
     # The stage is not blocked: it still returns the path even though the doc is now corrupted.
     assert requirements_path == cfg.plan.workspace_dir / REQUIREMENTS_FILENAME
     assert "left the requirements document empty or missing" in caplog.text
 
 
-def test_run_draft_requirements_logs_no_warning_when_review_preserves_document(tmp_path, monkeypatch, caplog):
+async def test_run_draft_requirements_logs_no_warning_when_review_preserves_document(tmp_path, monkeypatch, caplog):
     brief = tmp_path / "brief.md"
     brief.write_text("brief content")
     cfg = _make_cfg(tmp_path)
@@ -191,7 +191,7 @@ def test_run_draft_requirements_logs_no_warning_when_review_preserves_document(t
     def _fake_run_handoff(prompt_text, workspace_dir, stage_name, output_filename=None):
         (workspace_dir / REQUIREMENTS_FILENAME).write_text("requirements body")
 
-    def _preserving_review(review_cfg, target_path, **kwargs):
+    async def _preserving_review(review_cfg, target_path, **kwargs):
         # A healthy review polishes the prose while keeping the document intact.
         target_path.write_text(target_path.read_text().replace("requirements body", "requirements body, polished"))
 
@@ -199,7 +199,7 @@ def test_run_draft_requirements_logs_no_warning_when_review_preserves_document(t
     monkeypatch.setattr(prose_review, "review_document", _preserving_review)
 
     with caplog.at_level(logging.WARNING):
-        run_draft_requirements(cfg)
+        await run_draft_requirements(cfg)
 
     assert "left the requirements document empty or missing" not in caplog.text
 

@@ -38,6 +38,7 @@ import json
 import logging
 import subprocess
 
+from dotharness.gh import build_subprocess_env, gh_argv
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.auto_approve_github import (
@@ -55,7 +56,6 @@ from dotharness.pr_review.runners.common import (
     TIMEOUT_GH,
     TIMEOUT_GIT,
     FatalGitError,
-    build_subprocess_env,
     get_current_user,
     get_gh_token,
     get_head_sha,
@@ -71,19 +71,19 @@ class AutoApproveError(RuntimeError):
     """Raised by run() after the loop when one or more PRs failed."""
 
 
-def run(config: HarnessConfig, *, dry_run: bool = False) -> None:
+async def run(config: HarnessConfig, *, dry_run: bool = False) -> None:
     with acquire_lock(config.lock_key):
-        _run_locked(config, dry_run)
+        await _run_locked(config, dry_run)
 
 
-def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
+async def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
     if not config.auto_approve.enabled:
         logger.info("auto-approve is disabled, nothing to do")
         return
-    gh_token = get_gh_token(config.harness.gh_token_cmd)
+    gh_token = await get_gh_token(config.harness.gh_token_cmd)
     env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
-    current_user = get_current_user(env)
-    prs = _list_prs(config.repo.name, env)
+    current_user = await get_current_user(env)
+    prs = await _list_prs(config.repo.name, env)
     wdir = str(config.repo.working_dir)
     if not prs:
         logger.info(
@@ -98,7 +98,7 @@ def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
             continue
         pr_number = pr["number"]
         try:
-            _process_pr(pr, config, wdir, env, current_user, dry_run)
+            await _process_pr(pr, config, wdir, env, current_user, dry_run)
         except FatalGitError as e:
             logger.exception("PR #%d: fatal git error", pr_number)
             failures.append(f"#{pr_number}: {e}")
@@ -111,10 +111,9 @@ def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
         raise AutoApproveError("auto-approve failed for: " + "; ".join(failures))
 
 
-def _list_prs(repo: str, env: dict) -> list[dict]:
-    result = run_cmd(
-        [
-            "gh",
+async def _list_prs(repo: str, env: dict) -> list[dict]:
+    result = await run_cmd(
+        gh_argv(
             "pr",
             "list",
             "--repo",
@@ -127,7 +126,7 @@ def _list_prs(repo: str, env: dict) -> list[dict]:
             "number,headRefName,baseRefName,isDraft,isCrossRepository,state,author",
             "--limit",
             "500",
-        ],
+        ),
         cwd="/",
         env=env,
         timeout=TIMEOUT_GH,
@@ -155,29 +154,29 @@ def _is_candidate(pr: dict) -> bool:
     return True
 
 
-def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, current_user: str, dry_run: bool) -> None:
+async def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, current_user: str, dry_run: bool) -> None:
     """Process one PR. gh read/write failures are logged, not returned; git errors raise."""
     pr_number = pr["number"]
     logger.info("PR #%d: starting%s", pr_number, " (dry-run)" if dry_run else "")
-    original_sha = git_detach_and_record(wdir, env)
+    original_sha = await git_detach_and_record(wdir, env)
     try:
-        checked_out_sha = _checkout_pr_head(pr_number, wdir, env)
-        size = evaluate_size(pr["baseRefName"], wdir, env, config.auto_approve)
-        _decide_and_act(pr, size, checked_out_sha, config, env, current_user, dry_run)
+        checked_out_sha = await _checkout_pr_head(pr_number, wdir, env)
+        size = await evaluate_size(pr["baseRefName"], wdir, env, config.auto_approve)
+        await _decide_and_act(pr, size, checked_out_sha, config, env, current_user, dry_run)
     finally:
         # Detached checkout: no local branch was created, so there is none to delete.
-        git_restore(original_sha, "", wdir, env)
+        await git_restore(original_sha, "", wdir, env)
 
 
-def _checkout_pr_head(pr_number: int, wdir: str, env: dict) -> str:
+async def _checkout_pr_head(pr_number: int, wdir: str, env: dict) -> str:
     """Detach at the PR's real head (``refs/pull/<n>/head``) and return its SHA.
 
     Unlike ``origin/<headRefName>``, this is the commit GitHub reviews, also for fork PRs, so the
     size measured here is the size of the commit that gets approved.
     """
     try:
-        run_cmd(["git", "fetch", "origin", f"refs/pull/{pr_number}/head"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
-        run_cmd(
+        await run_cmd(["git", "fetch", "origin", f"refs/pull/{pr_number}/head"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
+        await run_cmd(
             ["git", "checkout", "--recurse-submodules", "--detach", "FETCH_HEAD"],
             cwd=wdir,
             env=env,
@@ -185,7 +184,7 @@ def _checkout_pr_head(pr_number: int, wdir: str, env: dict) -> str:
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         raise FatalGitError(f"git checkout of PR #{pr_number} head failed: {e}") from e  # noqa: TRY003
-    return get_head_sha(wdir, env)
+    return await get_head_sha(wdir, env)
 
 
 def _log_size(pr_number: int, size: SizeEvaluation, config: HarnessConfig) -> None:
@@ -201,7 +200,7 @@ def _log_size(pr_number: int, size: SizeEvaluation, config: HarnessConfig) -> No
     )
 
 
-def _decide_and_act(
+async def _decide_and_act(
     pr: dict,
     size: SizeEvaluation,
     checked_out_sha: str,
@@ -216,9 +215,9 @@ def _decide_and_act(
 
     # All reads first (NFR-1): any read failure means no write on this PR this run.
     author = (pr.get("author") or {}).get("login", "")
-    gate = check_timing_gate(repo, pr_number, author, current_user, env)
+    gate = await check_timing_gate(repo, pr_number, author, current_user, env)
     logger.info("PR #%d: timing gate %s (%s)", pr_number, gate.status.value, gate.reason)
-    safety = check_approval_safety(repo, pr_number, current_user, env)
+    safety = await check_approval_safety(repo, pr_number, current_user, env)
     logger.info("PR #%d: safety %s (%s) head=%s", pr_number, safety.status.value, safety.reason, safety.head_sha)
     if gate.status is GateStatus.READ_FAILED or safety.status is SafetyStatus.READ_FAILED:
         logger.error("PR #%d: a read failed, no writes this run; retrying next run", pr_number)
@@ -234,7 +233,7 @@ def _decide_and_act(
         return
 
     gate_passed = gate.status is GateStatus.PASSED
-    viewed = _mark_viewed(pr_number, size, config, gate_passed, env, dry_run)
+    viewed = await _mark_viewed(pr_number, size, config, gate_passed, env, dry_run)
     if viewed is None:
         logger.error("PR #%d: viewed-state read failed, no writes this run; retrying next run", pr_number)
         return
@@ -244,7 +243,7 @@ def _decide_and_act(
         return
     if all_viewed:
         logger.info("PR #%d: every file is viewed, size limit waived for approval", pr_number)
-    approval = approve_pr(
+    approval = await approve_pr(
         repo,
         pr_number,
         gate,
@@ -260,7 +259,7 @@ def _decide_and_act(
     logger.log(level, "PR #%d: approval %s (%s)", pr_number, approval.status.value, approval.reason)
 
 
-def _mark_viewed(
+async def _mark_viewed(
     pr_number: int, size: SizeEvaluation, config: HarnessConfig, gate_passed: bool, env: dict, dry_run: bool
 ) -> bool | None:
     """Mark small files viewed. Returns whether all files are viewed, or None when the read failed.
@@ -269,7 +268,7 @@ def _mark_viewed(
     hand is recognised.
     """
     max_lines = config.auto_approve.viewed_max_lines
-    viewed = mark_files_viewed(
+    viewed = await mark_files_viewed(
         config.repo.name, pr_number, size.file_counts, max_lines, gate_passed, env, dry_run=dry_run
     )
     logger.info(

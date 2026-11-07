@@ -58,17 +58,29 @@ class RunResult:
     not_found: bool = False
 
 
-def _killpg(pgid: int, sig: signal.Signals) -> None:
+def killpg(pgid: int, sig: signal.Signals) -> None:
+    """Signal a process group; an already-gone group is a no-op (F-DUP-1)."""
     with contextlib.suppress(ProcessLookupError):
         os.killpg(pgid, sig)
 
 
+def group_alive(pgid: int) -> bool:
+    """Liveness probe (signal 0); a group we may not signal still counts as alive (F-DUP-1)."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 async def _kill_group(proc: asyncio.subprocess.Process, pgid: int) -> None:
     """SIGTERM the group, wait the grace period, SIGKILL the group, reap the child."""
-    _killpg(pgid, signal.SIGTERM)
+    killpg(pgid, signal.SIGTERM)
     with contextlib.suppress(TimeoutError):
         await asyncio.wait_for(proc.wait(), KILL_GRACE_SECONDS)
-    _killpg(pgid, signal.SIGKILL)
+    killpg(pgid, signal.SIGKILL)
     await proc.wait()
 
 
@@ -150,7 +162,7 @@ async def run(
         # Wait on the child's exit, not on pipe EOF: a grandchild may keep the pipes open.
         done, _ = await asyncio.wait({waiter}, timeout=timeout)
         if waiter in done:
-            _killpg(pgid, signal.SIGKILL)  # sweep any grandchildren left behind; closes their pipe ends
+            killpg(pgid, signal.SIGKILL)  # sweep any grandchildren left behind; closes their pipe ends
             out, err = await _drain(comm, DRAIN_SECONDS)
             return RunResult(returncode=proc.returncode or 0, stdout=_text(out), stderr=_text(err))
 

@@ -9,15 +9,17 @@ them, never executes ``token_cmd`` and never reads the environment.
 # ruff: noqa: TRY003
 from __future__ import annotations
 
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from dotharness.ai_backend import BACKEND_NAMES
+from dotharness.fileio import TOMLDecodeError, load_toml
+
 DEFAULT_CONFIG_FILE = ".sisyphus.toml"
 
 TRACKER_KINDS = ("linear", "github", "file")
-AGENT_BACKENDS = ("claude", "opencode")
+AGENT_BACKENDS: tuple[str, ...] = BACKEND_NAMES
 DEFAULT_PICK_LABEL = "sisyphus"
 
 
@@ -282,12 +284,11 @@ def load_config(path: str | Path) -> SisyphusConfig:
     """
     p = Path(path)
     try:
-        with p.open("rb") as fh:
-            data = tomllib.load(fh)
+        data = load_toml(p)
     except FileNotFoundError:
         raise ConfigError(f"config file not found: {p}") from None
     except OSError as exc:
         raise ConfigError(f"cannot read config file {p}: {exc}") from exc
-    except tomllib.TOMLDecodeError as exc:
+    except TOMLDecodeError as exc:
         raise ConfigError(f"invalid TOML in {p}: {exc}") from exc
     return _parse(data)

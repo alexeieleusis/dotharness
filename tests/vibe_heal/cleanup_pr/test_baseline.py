@@ -1,7 +1,6 @@
 """Tests for the cleanup-pr baseline scan (FR-2 step 3, --include-main-duplications)."""
 
 import shutil
-import subprocess
 import tempfile
 from contextlib import AbstractContextManager
 from pathlib import Path
@@ -10,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from dotharness.subprocess_runner import RunResult
 from dotharness.vibe_heal.ai_tools.base import AITool
 from dotharness.vibe_heal.cleanup_pr.orchestrator import CleanupPrOrchestrator
 from dotharness.vibe_heal.config import VibeHealConfig
@@ -112,24 +112,24 @@ def _patch_subprocess(
     worktree_remove_rc: int = 0,
     worktree_remove_exc: Exception | None = None,
 ) -> AbstractContextManager[Any]:
-    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+    async def fake_run(cmd: list[str], **kwargs: object) -> RunResult:
         if "worktree" in cmd:
             env.worktree_cmds.append(cmd)
             if "add" in cmd:
                 env.events.append("worktree_add")
-                return _git_result(worktree_add_rc, stderr=b"fatal: bad ref" if worktree_add_rc else b"")
+                return _git_result(worktree_add_rc, stderr="fatal: bad ref" if worktree_add_rc else "")
             env.events.append("worktree_remove")
             if worktree_remove_exc is not None:
                 raise worktree_remove_exc
             return _git_result(worktree_remove_rc)
         if cmd == ["git", "remote"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout=b"origin\n", stderr=b"")
+            return _git_result(0, stdout="origin\n")
         if "fetch" in cmd or "merge-base" in cmd:
             return _git_result(0)
         msg = f"Unexpected command {cmd}"
         raise AssertionError(msg)
 
-    return patch("dotharness.vibe_heal.git.branch_analyzer.subprocess.run", side_effect=fake_run)
+    return patch("dotharness.vibe_heal.git.branch_analyzer.run", side_effect=fake_run)
 
 
 class TestBaselineScan:
@@ -312,11 +312,12 @@ class TestBaselineScan:
         assert result.success is False
         delete.assert_awaited_once()
 
-    def test_worktree_add_oserror_raises_git_operation_error(self) -> None:
+    async def test_worktree_add_oserror_raises_git_operation_error(self) -> None:
         analyzer = BranchAnalyzer(Path.cwd())
+        not_found = RunResult(returncode=127, stdout="", stderr="no git", not_found=True)
         with (
-            patch("dotharness.vibe_heal.git.branch_analyzer.subprocess.run", side_effect=OSError("no git")),
+            patch("dotharness.vibe_heal.git.branch_analyzer.run", AsyncMock(return_value=not_found)),
             pytest.raises(GitOperationError, match="no git"),
-            analyzer.temporary_worktree("origin/main"),
         ):
-            pass
+            async with analyzer.temporary_worktree("origin/main"):
+                pass

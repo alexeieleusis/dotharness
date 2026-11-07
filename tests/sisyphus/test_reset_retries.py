@@ -265,14 +265,14 @@ def test_digest_lists_every_reset(tmp_path: Path) -> None:
 # ----------------------------------------------- full flow with fake agent
 
 
-def test_c5_exhausted_item_gets_a_fresh_budget_after_reset(world: World) -> None:  # noqa: F811
+async def test_c5_exhausted_item_gets_a_fresh_budget_after_reset(world: World) -> None:  # noqa: F811
     world.build_stops = [{"checkpoint": "C5", "detail": "again"}] * 3
     for _ in range(3):
-        assert world.run().checkpoint is Checkpoint.C5
+        assert (await world.run()).checkpoint is Checkpoint.C5
         world.branch_exists = True
     builds = world.events.count("agent:build")
     # without a reset: stops at C5 again, no agent launched
-    assert world.run().checkpoint is Checkpoint.C5
+    assert (await world.run()).checkpoint is Checkpoint.C5
     assert world.events.count("agent:build") == builds
     rec = RunRecord.open(world.tmp / "ws", ITEM)
     assert rec.stage == "build"
@@ -280,7 +280,7 @@ def test_c5_exhausted_item_gets_a_fresh_budget_after_reset(world: World) -> None
     rec = RunRecord.open(world.tmp / "ws", ITEM)
     assert rec.retries["build:retry-cycles"] == 0 and rec.retries["branch-created"] == 1
     world.build_stops = [{"checkpoint": "C5", "detail": "one more"}]
-    assert world.run().checkpoint is Checkpoint.C5
+    assert (await world.run()).checkpoint is Checkpoint.C5
     assert world.events.count("agent:build") == builds + 1  # the agent ran again: fresh budget
     assert RunRecord.open(world.tmp / "ws", ITEM).retries["build:retry-cycles"] == 1
     assert "Retry reset: " in world.digest_text()

@@ -168,7 +168,7 @@ def test_prune_self_review_state_drops_partial_reviews_too(tmp_xdg):
 def test_prune_self_review_state_no_op_when_nothing_changes(tmp_xdg, monkeypatch):
     state.write_self_review_state("acme-frontend", [7])
     calls = []
-    monkeypatch.setattr(state, "_atomic_write", lambda *a: calls.append(a))
+    monkeypatch.setattr(state, "atomic_write_text", lambda *a: calls.append(a))
     state.prune_self_review_state("acme-frontend", {7})
     assert calls == []
     assert state.read_self_review_state("acme-frontend")["reviewed_prs"] == [7]
@@ -187,7 +187,7 @@ def test_add_design_reviewed_pr_is_independent_of_reviewed_prs(tmp_xdg):
 def test_add_design_reviewed_pr_is_idempotent(tmp_xdg, monkeypatch):
     state.add_design_reviewed_pr("acme-frontend", 9)
     calls = []
-    monkeypatch.setattr(state, "_atomic_write", lambda *a: calls.append(a))
+    monkeypatch.setattr(state, "atomic_write_text", lambda *a: calls.append(a))
     state.add_design_reviewed_pr("acme-frontend", 9)
     assert calls == []
     assert state.get_design_reviewed_prs("acme-frontend") == {9}
@@ -228,7 +228,7 @@ def test_add_traceability_reviewed_pr_is_independent_of_other_state(tmp_xdg):
 def test_add_traceability_reviewed_pr_is_idempotent(tmp_xdg, monkeypatch):
     state.add_traceability_reviewed_pr("acme-frontend", 9)
     calls = []
-    monkeypatch.setattr(state, "_atomic_write", lambda *a: calls.append(a))
+    monkeypatch.setattr(state, "atomic_write_text", lambda *a: calls.append(a))
     state.add_traceability_reviewed_pr("acme-frontend", 9)
     assert calls == []
     assert state.get_traceability_reviewed_prs("acme-frontend") == {9}
@@ -257,7 +257,7 @@ def test_add_regret_reviewed_pr_is_independent_of_other_state(tmp_xdg):
 def test_add_regret_reviewed_pr_is_idempotent(tmp_xdg, monkeypatch):
     state.add_regret_reviewed_pr("acme-frontend", 9)
     calls = []
-    monkeypatch.setattr(state, "_atomic_write", lambda *a: calls.append(a))
+    monkeypatch.setattr(state, "atomic_write_text", lambda *a: calls.append(a))
     state.add_regret_reviewed_pr("acme-frontend", 9)
     assert calls == []
     assert state.get_regret_reviewed_prs("acme-frontend") == {9}
@@ -363,7 +363,7 @@ class _StubBackend:
     def __init__(self, *args, **kwargs) -> None:
         pass
 
-    def run(self, prompt, cwd, opencode_dir=None, context=None):
+    async def run(self, prompt, cwd, opencode_dir=None, context=None):
         import re
 
         match = re.search(r"(/\S+\.md)", prompt)
@@ -411,7 +411,7 @@ def test_local_review_cli_failed_pass_exits_nonzero(tmp_xdg, tmp_path):
     cfg_path = _lr_config(tmp_path, repo)
 
     class _Failing(_StubBackend):
-        def run(self, prompt, cwd, opencode_dir=None, context=None):
+        async def run(self, prompt, cwd, opencode_dir=None, context=None):
             return subprocess.CompletedProcess([], 1, "", "boom")
 
     with patch("dotharness.pr_review.runners.local_review.address.Backend", _Failing):

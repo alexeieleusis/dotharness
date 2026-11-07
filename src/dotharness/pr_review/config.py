@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import re
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotharness.ai_backend import BACKEND_NAMES
+from dotharness.fileio import TOMLDecodeError, load_toml
 from dotharness.paths import default_knowledge_dir
 from dotharness.pr_review.lock import working_dir_lock_key
 
@@ -292,15 +293,14 @@ def _parse_merge(section: dict) -> MergeConfig:
 
 
 def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
-    with open(path, "rb") as f:
-        try:
-            data = tomllib.load(f)
-        except tomllib.TOMLDecodeError as e:
-            raise ConfigError(f"Invalid TOML in config file: {e}") from None  # noqa: TRY003
+    try:
+        data = load_toml(path)
+    except TOMLDecodeError as e:
+        raise ConfigError(f"Invalid TOML in config file: {e}") from None  # noqa: TRY003
 
     h = data.get("harness", {})
     backend = h.get("backend", "opencode")
-    if backend not in ("opencode", "claude"):
+    if backend not in BACKEND_NAMES:
         raise ConfigError(f"Invalid backend '{backend}': must be 'opencode' or 'claude'")  # noqa: TRY003
 
     path_prepend = list(h.get("path_prepend", {}).values())

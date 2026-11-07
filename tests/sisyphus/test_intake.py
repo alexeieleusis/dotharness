@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import subprocess
@@ -61,6 +62,10 @@ def config(tmp_path: Path, repo: Path) -> SisyphusConfig:
     )
 
 
+async def _noop(_prompt: str) -> None:
+    return None
+
+
 class FakeRunner:
     def __init__(self, brief_text: str = BRIEF_NONE, side_effect=None) -> None:
         self.brief_text = brief_text
@@ -68,7 +73,7 @@ class FakeRunner:
         self.prompts: list[str] = []
         self.config: SisyphusConfig | None = None
 
-    def __call__(self, prompt: str) -> None:
+    async def __call__(self, prompt: str) -> None:
         self.prompts.append(prompt)
         match = re.search(r"Save the brief file to (\S+)\.", prompt)
         assert match
@@ -95,9 +100,9 @@ def test_prompt_file_forbids_uv_and_virtualenvs_in_repo() -> None:
     assert "virtualenvs" in text
 
 
-def test_both_placeholders_substituted(config: SisyphusConfig) -> None:
+async def test_both_placeholders_substituted(config: SisyphusConfig) -> None:
     runner = FakeRunner()
-    result = run_intake("ENG-1", config, runner)
+    result = await run_intake("ENG-1", config, runner)
     (prompt,) = runner.prompts
     assert "<work-item reference>" not in prompt
     assert "<brief path>" not in prompt
@@ -118,10 +123,10 @@ def _file_config(config: SisyphusConfig, inbox: Path, kind: str = "file") -> Sis
     return SisyphusConfig(project=config.project, source=SourceConfig(work_item=work_item))
 
 
-def test_file_item_prompt_has_ticket_trailer(config: SisyphusConfig, tmp_path: Path) -> None:
+async def test_file_item_prompt_has_ticket_trailer(config: SisyphusConfig, tmp_path: Path) -> None:
     cfg = _file_config(config, tmp_path / "inbox")
     runner = FakeRunner()
-    run_intake("t-1", cfg, runner)
+    await run_intake("t-1", cfg, runner)
     (prompt,) = runner.prompts
     assert f"The ticket file for this work item is at {tmp_path / 'inbox' / 't-1.md'}" in prompt
     for phrase in (
@@ -143,10 +148,10 @@ def test_file_item_expands_tilde(config: SisyphusConfig, monkeypatch: pytest.Mon
 
 
 @pytest.mark.parametrize("kind", ["linear", "github"])
-def test_other_kinds_prompt_unchanged(config: SisyphusConfig, tmp_path: Path, kind: str) -> None:
+async def test_other_kinds_prompt_unchanged(config: SisyphusConfig, tmp_path: Path, kind: str) -> None:
     runner = FakeRunner()
     cfg = _file_config(config, tmp_path, kind)
-    run_intake("ENG-1", cfg, runner)
+    await run_intake("ENG-1", cfg, runner)
     (prompt,) = runner.prompts
     drafting = knowledge_file(intake.DRAFTING_PROMPT_FILE)
     template = knowledge_file(intake.PROMPT_FILE).read_text()
@@ -156,10 +161,10 @@ def test_other_kinds_prompt_unchanged(config: SisyphusConfig, tmp_path: Path, ki
 
 
 @pytest.mark.parametrize("ref", ["../x", "a/b", "..", "", "a b", "/etc/passwd"])
-def test_file_item_invalid_ref_fails(config: SisyphusConfig, tmp_path: Path, ref: str) -> None:
+async def test_file_item_invalid_ref_fails(config: SisyphusConfig, tmp_path: Path, ref: str) -> None:
     runner = FakeRunner()
     with pytest.raises(IntakeError, match="invalid ticket reference"):
-        run_intake(ref, _file_config(config, tmp_path), runner)
+        await run_intake(ref, _file_config(config, tmp_path), runner)
     assert runner.prompts == []
 
 
@@ -228,8 +233,8 @@ def test_parse_open_decisions_fails_closed(text: str) -> None:
     assert parse_open_decisions(text)
 
 
-def test_c1_result_when_open_decisions(config: SisyphusConfig) -> None:
-    result = run_intake("ENG-2", config, FakeRunner(BRIEF_OPEN))
+async def test_c1_result_when_open_decisions(config: SisyphusConfig) -> None:
+    result = await run_intake("ENG-2", config, FakeRunner(BRIEF_OPEN))
     assert result.blocked
     assert result.checkpoint is Checkpoint.C1
     rec = RunRecord.open(Path(config.project.workspace_dir or ""), "ENG-2")
@@ -237,37 +242,37 @@ def test_c1_result_when_open_decisions(config: SisyphusConfig) -> None:
     assert (rec.stage, rec.stage_status) == ("intake", "complete")
 
 
-def test_no_c1_when_no_open_decisions(config: SisyphusConfig) -> None:
-    result = run_intake("ENG-3", config, FakeRunner(BRIEF_NONE))
+async def test_no_c1_when_no_open_decisions(config: SisyphusConfig) -> None:
+    result = await run_intake("ENG-3", config, FakeRunner(BRIEF_NONE))
     assert not result.blocked
     assert result.checkpoint is None
     rec = RunRecord.open(Path(config.project.workspace_dir or ""), "ENG-3")
     assert rec.checkpoint is None
 
 
-def test_skip_when_unchanged_and_c1_reparsed(config: SisyphusConfig) -> None:
+async def test_skip_when_unchanged_and_c1_reparsed(config: SisyphusConfig) -> None:
     first = FakeRunner(BRIEF_OPEN)
-    run_intake("ENG-4", config, first)
+    await run_intake("ENG-4", config, first)
     second = FakeRunner()
-    again = run_intake("ENG-4", config, second)
+    again = await run_intake("ENG-4", config, second)
     assert again.skipped
     assert second.prompts == []
     assert again.blocked
     # a human resolves the log in the existing brief: the skip still sees it, clears C1
     again.brief_path.write_text(BRIEF_NONE)
-    third = run_intake("ENG-4", config, second)
+    third = await run_intake("ENG-4", config, second)
     assert third.skipped
     assert not third.blocked
     assert RunRecord.open(Path(config.project.workspace_dir or ""), "ENG-4").checkpoint is None
 
 
-def test_reparse_only_never_redrafts_existing_brief(config: SisyphusConfig) -> None:
-    first = run_intake("ENG-4b", config, FakeRunner(BRIEF_NONE))
+async def test_reparse_only_never_redrafts_existing_brief(config: SisyphusConfig) -> None:
+    first = await run_intake("ENG-4b", config, FakeRunner(BRIEF_NONE))
     # the sidecar no longer matches (as after editing the prompt), and a human edited the brief
     Path(str(first.brief_path) + intake.SIDECAR_SUFFIX).write_text("{}")
     first.brief_path.write_text(BRIEF_OPEN)
     runner = FakeRunner()
-    result = run_intake("ENG-4b", config, runner, reparse_only=True)
+    result = await run_intake("ENG-4b", config, runner, reparse_only=True)
     assert runner.prompts == []
     assert result.skipped
     assert result.blocked
@@ -275,21 +280,21 @@ def test_reparse_only_never_redrafts_existing_brief(config: SisyphusConfig) -> N
     assert first.brief_path.read_text() == BRIEF_OPEN
 
 
-def test_reparse_only_runs_when_brief_missing(config: SisyphusConfig) -> None:
+async def test_reparse_only_runs_when_brief_missing(config: SisyphusConfig) -> None:
     runner = FakeRunner()
-    result = run_intake("ENG-4c", config, runner, reparse_only=True)
+    result = await run_intake("ENG-4c", config, runner, reparse_only=True)
     assert len(runner.prompts) == 1
     assert not result.skipped
     with pytest.raises(IntakeError, match="did not write"):
-        run_intake("ENG-4d", config, lambda _prompt: None, reparse_only=True)
+        await run_intake("ENG-4d", config, _noop, reparse_only=True)
 
 
-def test_rerun_when_brief_missing(config: SisyphusConfig) -> None:
-    run_intake("ENG-5", config, FakeRunner())
+async def test_rerun_when_brief_missing(config: SisyphusConfig) -> None:
+    await run_intake("ENG-5", config, FakeRunner())
     brief = resolve_brief_path(config, "ENG-5")
     brief.unlink()
     runner = FakeRunner()
-    assert not run_intake("ENG-5", config, runner).skipped
+    assert not (await run_intake("ENG-5", config, runner)).skipped
     assert len(runner.prompts) == 1
 
 
@@ -303,50 +308,59 @@ def test_rerun_when_brief_missing(config: SisyphusConfig) -> None:
     ],
     ids=["item-differs", "digest-differs", "corrupt-json", "not-a-dict"],
 )
-def test_rerun_when_sidecar_does_not_vouch(config: SisyphusConfig, mutate) -> None:
-    first = run_intake("ENG-5", config, FakeRunner())
+async def test_rerun_when_sidecar_does_not_vouch(config: SisyphusConfig, mutate) -> None:
+    first = await run_intake("ENG-5", config, FakeRunner())
     sidecar = Path(str(first.brief_path) + intake.SIDECAR_SUFFIX)
     real = json.loads(sidecar.read_text())
     assert real["item"] == "ENG-5"
     changed = mutate(real)
     sidecar.write_text(changed if isinstance(changed, str) else json.dumps(changed))
     runner = FakeRunner()
-    assert not run_intake("ENG-5", config, runner).skipped
+    assert not (await run_intake("ENG-5", config, runner)).skipped
     assert len(runner.prompts) == 1
 
 
-def test_rerun_when_sidecar_missing(config: SisyphusConfig) -> None:
-    first = run_intake("ENG-5", config, FakeRunner())
+async def test_rerun_when_sidecar_missing(config: SisyphusConfig) -> None:
+    first = await run_intake("ENG-5", config, FakeRunner())
     Path(str(first.brief_path) + intake.SIDECAR_SUFFIX).unlink()
     runner = FakeRunner()
-    assert not run_intake("ENG-5", config, runner).skipped
+    assert not (await run_intake("ENG-5", config, runner)).skipped
     assert len(runner.prompts) == 1
 
 
-def test_missing_brief_after_runner_raises(config: SisyphusConfig) -> None:
+async def test_missing_brief_after_runner_raises(config: SisyphusConfig) -> None:
     with pytest.raises(IntakeError, match="did not write"):
-        run_intake("ENG-6", config, lambda _prompt: None)
+        await run_intake("ENG-6", config, _noop)
     rec = RunRecord.open(Path(config.project.workspace_dir or ""), "ENG-6")
     assert rec.stage_status == "in_progress"
 
 
-def test_stale_brief_not_accepted_when_runner_writes_nothing(config: SisyphusConfig) -> None:
-    first = run_intake("ENG-7", config, FakeRunner(BRIEF_OPEN))
+async def test_stale_brief_not_accepted_when_runner_writes_nothing(config: SisyphusConfig) -> None:
+    first = await run_intake("ENG-7", config, FakeRunner(BRIEF_OPEN))
     # the prompt digest no longer matches (as after editing the prompt): the sidecar is stale
     Path(str(first.brief_path) + intake.SIDECAR_SUFFIX).write_text("{}")
     with pytest.raises(IntakeError, match="did not write"):
-        run_intake("ENG-7", config, lambda _prompt: None)
+        await run_intake("ENG-7", config, _noop)
     # no fresh sidecar vouches for the stale brief
     assert Path(str(first.brief_path) + intake.SIDECAR_SUFFIX).read_text() == "{}"
 
 
-def test_runner_modifying_tracked_file_fails_stage(config: SisyphusConfig, repo: Path) -> None:
+async def test_runner_modifying_tracked_file_fails_stage(config: SisyphusConfig, repo: Path) -> None:
     runner = FakeRunner(side_effect=lambda: (repo / "tracked.txt").write_text("two\n"))
     with pytest.raises(BoundaryViolation):
-        run_intake("ENG-7", config, runner)
+        await run_intake("ENG-7", config, runner)
     rec = RunRecord.open(Path(config.project.workspace_dir or ""), "ENG-7")
     assert rec.stage_status == "in_progress"
     assert not intake._sidecar(resolve_brief_path(config, "ENG-7")).exists()
+
+
+async def test_cancelled_runner_stays_cancelled_after_dirtying_repo(config: SisyphusConfig, repo: Path) -> None:
+    async def runner(prompt: str) -> None:
+        (repo / "new.txt").write_text("x")
+        await asyncio.sleep(10)
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(run_intake("ENG-8", config, runner), 0.5)
 
 
 def test_boundary_detects_untracked_and_second_edit(repo: Path) -> None:
@@ -474,9 +488,9 @@ def test_git_failure_is_intake_error(tmp_path: Path) -> None:
         snapshot_git_status(tmp_path / "not-a-repo")
 
 
-def test_required_config(config: SisyphusConfig) -> None:
+async def test_required_config(config: SisyphusConfig) -> None:
     with pytest.raises(IntakeError, match="repo_dir"):
-        run_intake("X", SisyphusConfig(project=ProjectConfig()), FakeRunner())
+        await run_intake("X", SisyphusConfig(project=ProjectConfig()), FakeRunner())
 
 
 def test_no_harness_imports() -> None:

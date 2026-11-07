@@ -30,7 +30,7 @@ class Recorder:
     def __init__(self) -> None:
         self.calls: list[Any] = []
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
         self.calls.append(args)
         raise AssertionError("abandon must not run subprocesses")
 
@@ -40,9 +40,9 @@ class SpyPrs(FakePrs):
         super().__init__(open_branches)
         self.calls: list[str] = []
 
-    def find_pr(self, branch: str) -> PullRequest | None:
+    async def find_pr(self, branch: str) -> PullRequest | None:
         self.calls.append(branch)
-        return super().find_pr(branch)
+        return await super().find_pr(branch)
 
 
 def abandon_env(tmp_path: Path, refs: tuple[str, ...] = (), prs: FakePrs | None = None) -> tuple[Any, Recorder]:
@@ -228,8 +228,8 @@ def github_env(tmp_path: Path, extra_key: str = "", kind_block: str | None = Non
 
 
 class FailingRemover(FakeLabelRemover):
-    def remove_label(self, number: int, label: str) -> None:
-        super().remove_label(number, label)
+    async def remove_label(self, number: int, label: str) -> None:
+        await super().remove_label(number, label)
         raise RuntimeError("boom\nsecond line")
 
 

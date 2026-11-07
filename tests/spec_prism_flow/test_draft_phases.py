@@ -61,7 +61,7 @@ def _write_tree(cfg, tree: ChunkNode) -> None:
 # --- basic drafting -----------------------------------------------------------------------------
 
 
-def test_writes_one_phase_file_per_leaf_in_dfs_order_and_skips_internal_nodes(tmp_path):
+async def test_writes_one_phase_file_per_leaf_in_dfs_order_and_skips_internal_nodes(tmp_path):
     cfg = _make_cfg(tmp_path)
     leaf_1 = ChunkNode(chunk=_chunk("A-1", "first", ["a.py"], 1), leaf_doc=_goals_doc("Do the first thing."))
     leaf_2 = ChunkNode(chunk=_chunk("A-2", "second", ["b.py"], 1), leaf_doc=_goals_doc("Do the second thing."))
@@ -69,7 +69,7 @@ def test_writes_one_phase_file_per_leaf_in_dfs_order_and_skips_internal_nodes(tm
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[branch, leaf_2])
     _write_tree(cfg, root)
 
-    result = run_draft_phases(cfg)
+    result = await run_draft_phases(cfg)
 
     assert result.leaves_drafted == 2
     assert result.internal_nodes_skipped == 2  # root + branch
@@ -78,14 +78,14 @@ def test_writes_one_phase_file_per_leaf_in_dfs_order_and_skips_internal_nodes(tm
     assert len(result.written) == 2
 
 
-def test_requirements_verbatim_scope_and_depends_on_chain(tmp_path):
+async def test_requirements_verbatim_scope_and_depends_on_chain(tmp_path):
     cfg = _make_cfg(tmp_path)
     leaf_1 = ChunkNode(chunk=_chunk("A-1", "first", ["a.py", "b.py"], 1), leaf_doc=_goals_doc("First goal."))
     leaf_2 = ChunkNode(chunk=_chunk("A-2", "second", ["c.py"], 1), leaf_doc=_goals_doc("Second goal."))
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf_1, leaf_2])
     _write_tree(cfg, root)
 
-    run_draft_phases(cfg)
+    await run_draft_phases(cfg)
 
     phase_1 = parse_phase_file(cfg.plan.phase_dir / "01-first-leaf.md")
     phase_2 = parse_phase_file(cfg.plan.phase_dir / "02-second-leaf.md")
@@ -96,42 +96,42 @@ def test_requirements_verbatim_scope_and_depends_on_chain(tmp_path):
     assert phase_2.depends_on == "Phase 1 merged."
 
 
-def test_rerun_against_unchanged_tree_is_byte_identical(tmp_path):
+async def test_rerun_against_unchanged_tree_is_byte_identical(tmp_path):
     cfg = _make_cfg(tmp_path)
     leaf = ChunkNode(chunk=_chunk("A-1", "only", ["a.py"], 1), leaf_doc=_goals_doc("Only goal."))
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
     _write_tree(cfg, root)
 
-    run_draft_phases(cfg)
+    await run_draft_phases(cfg)
     first_bytes = (cfg.plan.phase_dir / "01-only-leaf.md").read_bytes()
 
-    run_draft_phases(cfg)
+    await run_draft_phases(cfg)
     second_bytes = (cfg.plan.phase_dir / "01-only-leaf.md").read_bytes()
 
     assert first_bytes == second_bytes
 
 
-def test_escalated_node_raises_draft_phases_error(tmp_path):
+async def test_escalated_node_raises_draft_phases_error(tmp_path):
     cfg = _make_cfg(tmp_path)
     escalated = ChunkNode(chunk=_chunk("A-1", "stuck", ["a.py"], 1), escalation_reason="depth cap reached")
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[escalated])
     _write_tree(cfg, root)
 
     with pytest.raises(DraftPhasesError, match="escalation_reason"):
-        run_draft_phases(cfg)
+        await run_draft_phases(cfg)
 
 
-def test_missing_tree_file_raises_draft_phases_error(tmp_path):
+async def test_missing_tree_file_raises_draft_phases_error(tmp_path):
     cfg = _make_cfg(tmp_path)
 
     with pytest.raises(DraftPhasesError, match="plan decompose"):
-        run_draft_phases(cfg)
+        await run_draft_phases(cfg)
 
 
 # --- target_phase_paths ---------------------------------------------------------------------------
 
 
-def test_target_phase_paths_matches_what_run_draft_phases_writes(tmp_path):
+async def test_target_phase_paths_matches_what_run_draft_phases_writes(tmp_path):
     cfg = _make_cfg(tmp_path)
     leaf_1 = ChunkNode(chunk=_chunk("A-1", "first", ["a.py"], 1), leaf_doc=_goals_doc("First goal."))
     leaf_2 = ChunkNode(chunk=_chunk("A-2", "second", ["b.py"], 1), leaf_doc=_goals_doc("Second goal."))
@@ -139,12 +139,12 @@ def test_target_phase_paths_matches_what_run_draft_phases_writes(tmp_path):
     _write_tree(cfg, root)
 
     paths_before_write = target_phase_paths(cfg)
-    result = run_draft_phases(cfg)
+    result = await run_draft_phases(cfg)
 
     assert paths_before_write == result.written
 
 
-def test_failure_during_rendering_leaves_existing_corpus_intact(tmp_path, monkeypatch):
+async def test_failure_during_rendering_leaves_existing_corpus_intact(tmp_path, monkeypatch):
     cfg = _make_cfg(tmp_path)
     leaf = ChunkNode(chunk=_chunk("A-1", "first", ["a.py"], 1), leaf_doc=_goals_doc("Goal."))
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
@@ -155,12 +155,12 @@ def test_failure_during_rendering_leaves_existing_corpus_intact(tmp_path, monkey
     monkeypatch.setattr("dotharness.spec_prism_flow.draft_phases.PHASE_FILE_NAME_PATTERN", re.compile(r"^never$"))
 
     with pytest.raises(DraftPhasesError):
-        run_draft_phases(cfg)
+        await run_draft_phases(cfg)
 
     assert old.read_text() == "hand-reviewed"
 
 
-def test_stale_phase_files_are_removed_after_successful_run(tmp_path):
+async def test_stale_phase_files_are_removed_after_successful_run(tmp_path):
     cfg = _make_cfg(tmp_path)
     leaf = ChunkNode(chunk=_chunk("A-1", "first", ["a.py"], 1), leaf_doc=_goals_doc("Goal."))
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
@@ -170,7 +170,7 @@ def test_stale_phase_files_are_removed_after_successful_run(tmp_path):
     old.write_text("stale")
 
     assert stale_phase_paths(cfg) == [old]
-    run_draft_phases(cfg)
+    await run_draft_phases(cfg)
 
     assert not old.exists()
 
@@ -186,27 +186,27 @@ def _in_band_words(prefix: str = "word") -> str:
     return " ".join([prefix] * 600)
 
 
-def test_sizing_outliers_are_flagged_but_do_not_block_write(tmp_path):
+async def test_sizing_outliers_are_flagged_but_do_not_block_write(tmp_path):
     cfg = _make_cfg(tmp_path)
     oversized_doc = _goals_doc("A goal.") + "\n" + _in_band_words()
     small_scope_leaf = ChunkNode(chunk=_chunk("A-1", "small", ["only.py"], 1), leaf_doc=oversized_doc)
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[small_scope_leaf])
     _write_tree(cfg, root)
 
-    result = run_draft_phases(cfg)
+    result = await run_draft_phases(cfg)
 
     assert (cfg.plan.phase_dir / "01-small-leaf.md").exists()
     assert any("01-small-leaf.md" in outlier for outlier in result.outliers)
 
 
-def test_in_band_leaf_produces_no_outliers(tmp_path):
+async def test_in_band_leaf_produces_no_outliers(tmp_path):
     cfg = _make_cfg(tmp_path)
     doc = _goals_doc("A goal.") + "\n" + _in_band_words()
     leaf = ChunkNode(chunk=_chunk("A-1", "fine", _in_band_scope("f"), 1), leaf_doc=doc)
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
     _write_tree(cfg, root)
 
-    result = run_draft_phases(cfg)
+    result = await run_draft_phases(cfg)
 
     assert result.outliers == []
 
@@ -214,14 +214,14 @@ def test_in_band_leaf_produces_no_outliers(tmp_path):
 # --- acceptance criteria / manual test checklist derivation -------------------------------------
 
 
-def test_acceptance_criteria_derived_from_goals_section(tmp_path):
+async def test_acceptance_criteria_derived_from_goals_section(tmp_path):
     cfg = _make_cfg(tmp_path)
     doc = _goals_doc("Support widgets.", "Reject invalid input.")
     leaf = ChunkNode(chunk=_chunk("A-1", "widgets", ["a.py"], 1), leaf_doc=doc)
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
     _write_tree(cfg, root)
 
-    run_draft_phases(cfg)
+    await run_draft_phases(cfg)
 
     phase = parse_phase_file(cfg.plan.phase_dir / "01-widgets-leaf.md")
     assert phase.acceptance_criteria == ["Support widgets.", "Reject invalid input."]
@@ -231,40 +231,40 @@ def test_acceptance_criteria_derived_from_goals_section(tmp_path):
     ]
 
 
-def test_acceptance_criteria_falls_back_to_bare_goal_markers_without_heading(tmp_path):
+async def test_acceptance_criteria_falls_back_to_bare_goal_markers_without_heading(tmp_path):
     cfg = _make_cfg(tmp_path)
     doc = "Some prose.\n\n- **G1.** Do the thing.\n- Not a goal, just a bullet.\n"
     leaf = ChunkNode(chunk=_chunk("A-1", "flat", ["a.py"], 1), leaf_doc=doc)
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
     _write_tree(cfg, root)
 
-    run_draft_phases(cfg)
+    await run_draft_phases(cfg)
 
     phase = parse_phase_file(cfg.plan.phase_dir / "01-flat-leaf.md")
     assert phase.acceptance_criteria == ["Do the thing."]
 
 
-def test_acceptance_criteria_does_not_treat_non_goals_heading_as_goals(tmp_path):
+async def test_acceptance_criteria_does_not_treat_non_goals_heading_as_goals(tmp_path):
     cfg = _make_cfg(tmp_path)
     doc = "### Non-Goals\n- Not this.\n"
     leaf = ChunkNode(chunk=_chunk("A-1", "leaf", ["a.py"], 1), leaf_doc=doc)
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
     _write_tree(cfg, root)
 
-    run_draft_phases(cfg)
+    await run_draft_phases(cfg)
 
     phase = parse_phase_file(cfg.plan.phase_dir / "01-leaf-leaf.md")
     assert len(phase.acceptance_criteria) == 1
     assert "No structured, testable requirements" in phase.acceptance_criteria[0]
 
 
-def test_acceptance_criteria_placeholder_when_nothing_recognizable(tmp_path):
+async def test_acceptance_criteria_placeholder_when_nothing_recognizable(tmp_path):
     cfg = _make_cfg(tmp_path)
     leaf = ChunkNode(chunk=_chunk("A-1", "plain", ["a.py"], 1), leaf_doc="Just an unstructured mini-doc.")
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
     _write_tree(cfg, root)
 
-    run_draft_phases(cfg)
+    await run_draft_phases(cfg)
 
     phase = parse_phase_file(cfg.plan.phase_dir / "01-plain-leaf.md")
     assert len(phase.acceptance_criteria) == 1
@@ -275,14 +275,14 @@ def test_acceptance_criteria_placeholder_when_nothing_recognizable(tmp_path):
 # --- prose review post-validation -----------------------------------------------------------------
 
 
-def test_malformed_post_review_file_is_reverted_to_pre_review_content(tmp_path, monkeypatch, caplog):
+async def test_malformed_post_review_file_is_reverted_to_pre_review_content(tmp_path, monkeypatch, caplog):
     cfg = _make_cfg(tmp_path)
     cfg.prose_review.enabled = True
     leaf = ChunkNode(chunk=_chunk("A-1", "only", ["a.py"], 1), leaf_doc=_goals_doc("Only goal."))
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
     _write_tree(cfg, root)
 
-    def corrupting_review(review_cfg, target_path, **kwargs):
+    async def corrupting_review(review_cfg, target_path, **kwargs):
         # Simulate the LLM rewriting the file so a header no longer matches the fixed
         # five-header set (it "improved" '## Scope' to '## Scopes').
         target_path.write_text(target_path.read_text().replace("## Scope", "## Scopes"))
@@ -290,7 +290,7 @@ def test_malformed_post_review_file_is_reverted_to_pre_review_content(tmp_path, 
     monkeypatch.setattr(prose_review, "review_document", corrupting_review)
 
     with caplog.at_level(logging.WARNING):
-        result = run_draft_phases(cfg)
+        result = await run_draft_phases(cfg)
 
     phase_path = cfg.plan.phase_dir / "01-only-leaf.md"
     # The corrupted file must have been reverted: it parses again and still carries the
@@ -301,21 +301,21 @@ def test_malformed_post_review_file_is_reverted_to_pre_review_content(tmp_path, 
     assert result.written == [phase_path]
 
 
-def test_valid_post_review_file_is_kept(tmp_path, monkeypatch):
+async def test_valid_post_review_file_is_kept(tmp_path, monkeypatch):
     cfg = _make_cfg(tmp_path)
     cfg.prose_review.enabled = True
     leaf = ChunkNode(chunk=_chunk("A-1", "only", ["a.py"], 1), leaf_doc=_goals_doc("Only goal."))
     root = ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf])
     _write_tree(cfg, root)
 
-    def preserving_review(review_cfg, target_path, **kwargs):
+    async def preserving_review(review_cfg, target_path, **kwargs):
         # Simulate a review that polishes a sentence while keeping the structure
         # intact (the result still round-trips through parse_phase_file).
         target_path.write_text(target_path.read_text().replace("Only goal.", "Only goal, done well."))
 
     monkeypatch.setattr(prose_review, "review_document", preserving_review)
 
-    run_draft_phases(cfg)
+    await run_draft_phases(cfg)
 
     text = (cfg.plan.phase_dir / "01-only-leaf.md").read_text()
     assert "Only goal, done well." in text  # reviewed content kept, not reverted
@@ -379,42 +379,42 @@ def test_cli_draft_phases_no_prompt_when_nothing_exists_yet(tmp_path, monkeypatc
 # --- issue #77 -------------------------------------------------------------------------------------
 
 
-def test_numbered_mini_doc_headings_produce_phase_file_that_parses(tmp_path):
+async def test_numbered_mini_doc_headings_produce_phase_file_that_parses(tmp_path):
     cfg = _make_cfg(tmp_path)
     doc = "# Leaf\n## 1. Purpose / origin\ntext\n## 2. Goals\n- **G1.** Do it.\n## 12. Next step\ngo\n"
     leaf = ChunkNode(chunk=_chunk("A-1", "only", ["a.py"], 1), leaf_doc=doc)
     _write_tree(cfg, ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf]))
 
-    result = run_draft_phases(cfg)
+    result = await run_draft_phases(cfg)
 
     parsed = parse_phase_file(result.written[0])
     assert "### 12. Next step" in parsed.requirements
 
 
-def test_no_prose_review_warning_when_disabled(tmp_path, caplog):
+async def test_no_prose_review_warning_when_disabled(tmp_path, caplog):
     cfg = _make_cfg(tmp_path)
     leaf = ChunkNode(chunk=_chunk("A-1", "only", ["a.py"], 1), leaf_doc=_goals_doc("Goal."))
     _write_tree(cfg, ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf]))
 
     with caplog.at_level(logging.WARNING):
-        run_draft_phases(cfg)
+        await run_draft_phases(cfg)
 
     assert "prose review" not in caplog.text
 
 
-def test_invalid_rendered_output_raises_and_writes_nothing(tmp_path, monkeypatch):
+async def test_invalid_rendered_output_raises_and_writes_nothing(tmp_path, monkeypatch):
     cfg = _make_cfg(tmp_path)
     leaf = ChunkNode(chunk=_chunk("A-1", "only", ["a.py"], 1), leaf_doc=_goals_doc("Goal."))
     _write_tree(cfg, ChunkNode(chunk=_chunk("A", "root", [], 0), children=[leaf]))
     monkeypatch.setattr("dotharness.spec_prism_flow.draft_phases.render_phase_file", lambda phase: "## Bogus\n")
 
     with pytest.raises(DraftPhasesError, match=r"01-only-leaf\.md"):
-        run_draft_phases(cfg)
+        await run_draft_phases(cfg)
 
     assert not (cfg.plan.phase_dir / "01-only-leaf.md").exists()
 
 
-def test_source_sections_cover_every_requirements_heading(tmp_path):
+async def test_source_sections_cover_every_requirements_heading(tmp_path):
     cfg = _make_cfg(tmp_path)
     cfg.plan.workspace_dir.mkdir(parents=True, exist_ok=True)
     requirements = (
@@ -434,7 +434,7 @@ def test_source_sections_cover_every_requirements_heading(tmp_path):
         ),
     )
 
-    result = run_draft_phases(cfg)
+    result = await run_draft_phases(cfg)
 
     phases = [parse_phase_file(p) for p in result.written]
     assert _check_section_coverage(requirements, phases) == []
@@ -458,7 +458,7 @@ def _load_sisyphus_plan():
     return module
 
 
-def test_produced_corpus_matches_sisyphus_contract(tmp_path, monkeypatch):
+async def test_produced_corpus_matches_sisyphus_contract(tmp_path, monkeypatch):
     cfg = _make_cfg(tmp_path)
     brief = tmp_path / "brief.md"
     brief.write_text("brief")
@@ -476,7 +476,7 @@ def test_produced_corpus_matches_sisyphus_contract(tmp_path, monkeypatch):
         ),
     )
     decompose.run_decompose(cfg)
-    run_draft_phases(cfg)
+    await run_draft_phases(cfg)
 
     phase_dir = cfg.plan.phase_dir
     leaf_names = sorted(p.name for p in phase_dir.glob("*-leaf.md"))

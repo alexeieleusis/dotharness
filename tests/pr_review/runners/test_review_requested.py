@@ -1,7 +1,7 @@
 import contextlib
 import json
 from types import SimpleNamespace
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from dotharness.pr_review.runners import review_requested
 from dotharness.pr_review.runners.common import REGRET_REVIEW_MARKER
@@ -89,6 +89,7 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
     ):
         os_mock.path.exists.return_value = True
         os_mock.path.join.side_effect = lambda *parts: "/".join(parts)
+        backend.return_value.run = AsyncMock()
         backend.return_value.run.return_value = MagicMock(returncode=0)
         yield SimpleNamespace(
             get_prs=get_prs,
@@ -104,7 +105,7 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
         )
 
 
-def test_skips_already_approved_pr(tmp_xdg, tmp_path):
+async def test_skips_already_approved_pr(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
@@ -121,11 +122,11 @@ def test_skips_already_approved_pr(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_requested.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.review_requested.Backend") as mock_be,
     ):
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     mock_be.return_value.run.assert_not_called()
 
 
-def test_skips_pr_with_existing_dotharness_review(tmp_xdg, tmp_path):
+async def test_skips_pr_with_existing_dotharness_review(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
@@ -142,34 +143,34 @@ def test_skips_pr_with_existing_dotharness_review(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_requested.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.review_requested.Backend") as mock_be,
     ):
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     mock_be.return_value.run.assert_not_called()
 
 
-def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
+async def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with _full_run_mocks(changed_files=["src/a.py", "src/b.py"]) as mocks:
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     # 2 files + 1 summary = 3 backend calls
     assert mocks.backend.return_value.run.call_count == 3
 
 
-def test_vibe_heal_context_included_in_prompts(tmp_xdg, tmp_path):
+async def test_vibe_heal_context_included_in_prompts(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
         _full_run_mocks() as mocks,
         patch("dotharness.pr_review.runners.review_requested.get_vibe_heal_context", return_value="sonar findings"),
     ):
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     # backend.run(prompt, cwd=wdir) — prompt is first positional arg
     prompts = [c.args[0] for c in mocks.backend.return_value.run.call_args_list]
     assert all("## Static Analysis" in p for p in prompts)
     assert all("sonar findings" in p for p in prompts)
 
 
-def test_get_prs_returns_head_ref_name_from_single_call(tmp_xdg, tmp_path):
+async def test_get_prs_returns_head_ref_name_from_single_call(tmp_xdg, tmp_path):
     # gh pr list --json can return headRefName directly, avoiding the N+1 pattern
     # of gh search prs + individual gh pr view calls.
     list_result = [{"number": 42, "url": "https://github.com/acme/frontend/pull/42", "headRefName": "feat/my-branch"}]
@@ -178,22 +179,22 @@ def test_get_prs_returns_head_ref_name_from_single_call(tmp_xdg, tmp_path):
         "dotharness.pr_review.runners.review_requested.run_cmd",
         side_effect=_strict_run_cmd({"gh pr list": MagicMock(returncode=0, stdout=json.dumps(list_result).encode())}),
     ) as mock_run:
-        prs = review_requested._get_prs("acme/frontend", {})
+        prs = await review_requested._get_prs("acme/frontend", {})
 
     assert prs == list_result
     mock_run.assert_called_once()
 
 
-def test_get_prs_returns_empty_on_search_failure(tmp_xdg, tmp_path):
+async def test_get_prs_returns_empty_on_search_failure(tmp_xdg, tmp_path):
     with patch(
         "dotharness.pr_review.runners.review_requested.run_cmd",
         side_effect=_strict_run_cmd({"gh pr list": MagicMock(returncode=1, stdout=b"")}),
     ):
-        prs = review_requested._get_prs("acme/frontend", {})
+        prs = await review_requested._get_prs("acme/frontend", {})
     assert prs == []
 
 
-def test_get_prs_searches_user_review_requested_not_reviewer(tmp_xdg, tmp_path):
+async def test_get_prs_searches_user_review_requested_not_reviewer(tmp_xdg, tmp_path):
     # "reviewer:@me" does not reliably match pending review requests on GitHub's
     # search API; only "user-review-requested:@me" does. Regression test for a bug
     # where this qualifier was swapped during a refactor, silently making the runner
@@ -202,36 +203,36 @@ def test_get_prs_searches_user_review_requested_not_reviewer(tmp_xdg, tmp_path):
     # want surfaced here.
     with patch("dotharness.pr_review.runners.review_requested.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        review_requested._get_prs("acme/frontend", {})
+        await review_requested._get_prs("acme/frontend", {})
 
     args = mock_run.call_args[0][0]
     assert "--search" in args
     assert args[args.index("--search") + 1] == "user-review-requested:@me"
 
 
-def test_has_user_approved_returns_false_on_non_list_response(tmp_xdg, tmp_path):
+async def test_has_user_approved_returns_false_on_non_list_response(tmp_xdg, tmp_path):
     # gh api can return a JSON error object (e.g. {"message": "Not Found"}) instead
     # of a list of reviews; iterating over that dict yields its keys as strings,
     # which used to crash with "string indices must be integers, not 'str'".
     with patch("dotharness.pr_review.runners.review_requested.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps({"message": "Not Found"}).encode())
-        approved = review_requested._has_user_approved(1, "acme/frontend", "me", {})
+        approved = await review_requested._has_user_approved(1, "acme/frontend", "me", {})
     assert approved is False
 
 
-def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
+async def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
         _full_run_mocks() as mocks,
         patch("dotharness.pr_review.runners.review_requested.get_vibe_heal_context", return_value=""),
     ):
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     prompts = [c.args[0] for c in mocks.backend.return_value.run.call_args_list]
     assert all("## Static Analysis" not in p for p in prompts)
 
 
-def test_design_review_invoked_when_no_marker_present(tmp_xdg, tmp_path):
+async def test_design_review_invoked_when_no_marker_present(tmp_xdg, tmp_path):
     """With no persisted state, has_design_review_comment is the only idempotency
     signal — when it's absent, the design pass must actually invoke the backend."""
     _setup_knowledge(tmp_path)
@@ -240,13 +241,13 @@ def test_design_review_invoked_when_no_marker_present(tmp_xdg, tmp_path):
         _full_run_mocks() as mocks,
         patch("dotharness.pr_review.runners.review_requested.has_design_review_comment", return_value=False),
     ):
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     # 1 file + 1 summary + 1 design = 3 backend calls
     assert mocks.backend.return_value.run.call_count == 3
     assert mocks.backend.return_value.run.call_args_list[-1].kwargs["context"] == "PR #1 design review"
 
 
-def test_design_review_noop_when_marker_already_present(tmp_xdg, tmp_path):
+async def test_design_review_noop_when_marker_already_present(tmp_xdg, tmp_path):
     """A design-review comment from a prior attempt makes this cycle's design step a
     noop — the backend must not be invoked a second time for it."""
     _setup_knowledge(tmp_path)
@@ -255,12 +256,12 @@ def test_design_review_noop_when_marker_already_present(tmp_xdg, tmp_path):
         _full_run_mocks() as mocks,
         patch("dotharness.pr_review.runners.review_requested.has_design_review_comment", return_value=True),
     ):
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     # 1 file + 1 summary = 2 backend calls; design is skipped entirely.
     assert mocks.backend.return_value.run.call_count == 2
 
 
-def test_continues_to_next_pr_on_backend_exception(tmp_xdg, tmp_path):
+async def test_continues_to_next_pr_on_backend_exception(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     prs = [
@@ -268,8 +269,9 @@ def test_continues_to_next_pr_on_backend_exception(tmp_xdg, tmp_path):
         {"number": 2, "url": "u2", "headRefName": "feat2"},
     ]
     with _full_run_mocks(prs=prs) as mocks:
+        mocks.backend.return_value.run = AsyncMock()
         mocks.backend.return_value.run.side_effect = [RuntimeError("backend crash"), MagicMock(returncode=0)]
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
 
     restore_calls = mocks.restore.call_args_list
     assert len(restore_calls) == 2
@@ -279,19 +281,20 @@ def test_continues_to_next_pr_on_backend_exception(tmp_xdg, tmp_path):
     assert mocks.detach.call_count == 2
 
 
-def test_restores_head_on_backend_failure(tmp_xdg, tmp_path):
+async def test_restores_head_on_backend_failure(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with _full_run_mocks() as mocks:
+        mocks.backend.return_value.run = AsyncMock()
         mocks.backend.return_value.run.side_effect = RuntimeError("backend crash")
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     mocks.restore.assert_called_once_with("sha", "feat", str(cfg.repo.working_dir), ANY)
 
 
 _TICKET = {"number": 3, "repo": "acme/frontend", "title": "Do the thing", "body": "body", "source": "closing_keyword"}
 
 
-def test_traceability_review_invoked_when_no_marker_present(tmp_xdg, tmp_path):
+async def test_traceability_review_invoked_when_no_marker_present(tmp_xdg, tmp_path):
     """With no persisted state, has_traceability_review_comment is the only idempotency
     signal — when it's absent and a ticket resolves, the pass must actually invoke the
     backend."""
@@ -306,7 +309,7 @@ def test_traceability_review_invoked_when_no_marker_present(tmp_xdg, tmp_path):
             "dotharness.pr_review.runners.review_requested.get_traceability_review_flagged_locations", return_value=[]
         ),
     ):
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     # 1 file + 1 summary + 1 traceability = 3 backend calls
     assert mocks.backend.return_value.run.call_count == 3
     assert mocks.backend.return_value.run.call_args_list[-1].kwargs["context"] == "PR #1 traceability review"
@@ -315,7 +318,7 @@ def test_traceability_review_invoked_when_no_marker_present(tmp_xdg, tmp_path):
     assert "Do the thing" in prompt
 
 
-def test_traceability_review_noop_when_marker_already_present(tmp_xdg, tmp_path):
+async def test_traceability_review_noop_when_marker_already_present(tmp_xdg, tmp_path):
     """A traceability-review comment from a prior attempt makes this cycle's step a
     noop — the backend must not be invoked a second time for it, and no ticket
     resolution is needed."""
@@ -325,12 +328,12 @@ def test_traceability_review_noop_when_marker_already_present(tmp_xdg, tmp_path)
         _full_run_mocks() as mocks,
         patch("dotharness.pr_review.runners.review_requested.has_traceability_review_comment", return_value=True),
     ):
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     # 1 file + 1 summary = 2 backend calls; traceability is skipped entirely.
     assert mocks.backend.return_value.run.call_count == 2
 
 
-def test_traceability_review_no_linked_ticket_posts_comment_without_backend(tmp_xdg, tmp_path):
+async def test_traceability_review_no_linked_ticket_posts_comment_without_backend(tmp_xdg, tmp_path):
     """When resolve_linked_tickets finds nothing, the "no linked ticket" comment is
     posted directly — no backend call for this pass, since there's nothing to judge."""
     _setup_knowledge(tmp_path)
@@ -343,7 +346,7 @@ def test_traceability_review_no_linked_ticket_posts_comment_without_backend(tmp_
             "dotharness.pr_review.runners.review_requested.post_no_linked_ticket_comment", return_value=True
         ) as mock_post,
     ):
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     # 1 file + 1 summary = 2 backend calls; traceability never invokes the backend.
     assert mocks.backend.return_value.run.call_count == 2
     mock_post.assert_called_once()
@@ -373,7 +376,7 @@ def _regret_candidate(hunk):
     )
 
 
-def test_regret_review_not_run_when_disabled(tmp_xdg, tmp_path):
+async def test_regret_review_not_run_when_disabled(tmp_xdg, tmp_path):
     """[regret_review].enabled is false by default — the pass is never entered at all,
     and no regret marker check is made (the enabled gate is unique to this pass;
     design/traceability have none)."""
@@ -384,14 +387,14 @@ def test_regret_review_not_run_when_disabled(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_requested.has_regret_review_comment") as mock_has_regret,
         patch("dotharness.pr_review.runners.review_requested._run_regret_review") as mock_regret,
     ):
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     mock_has_regret.assert_not_called()
     mock_regret.assert_not_called()
     # 1 file + 1 summary = 2 backend calls; regret is never entered.
     assert mocks.backend.return_value.run.call_count == 2
 
 
-def test_regret_review_noop_when_marker_already_present(tmp_xdg, tmp_path):
+async def test_regret_review_noop_when_marker_already_present(tmp_xdg, tmp_path):
     """A regret-review comment from a prior attempt makes this cycle's regret step a
     noop — no candidate-pipeline calls and no backend call for it. This runner has no
     persisted state, so the marker check is the pass's only idempotency signal."""
@@ -404,14 +407,14 @@ def test_regret_review_noop_when_marker_already_present(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_requested.find_introducing_prs") as mock_find_prs,
         patch("dotharness.pr_review.runners.review_requested.find_regret_candidates") as mock_find_candidates,
     ):
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     mock_find_prs.assert_not_called()
     mock_find_candidates.assert_not_called()
     # 1 file + 1 summary = 2 backend calls; regret is skipped entirely.
     assert mocks.backend.return_value.run.call_count == 2
 
 
-def test_regret_review_posts_comment_and_confirms_marker_on_findings(tmp_xdg, tmp_path):
+async def test_regret_review_posts_comment_and_confirms_marker_on_findings(tmp_xdg, tmp_path):
     """The full pipeline: candidate search → backend verdict lines → findings parsed
     from the recorded reply → regret comment posted by the harness (the backend posts
     nothing) → marker confirmed via the plain-bool has_regret_review_comment."""
@@ -431,12 +434,13 @@ def test_regret_review_posts_comment_and_confirms_marker_on_findings(tmp_xdg, tm
         patch("dotharness.pr_review.runners.review_requested.post_regret_comment", return_value=True) as mock_post,
     ):
         # file review, then summary, then a regret-review call with verdict lines
+        mocks.backend.return_value.run = AsyncMock()
         mocks.backend.return_value.run.side_effect = [
             MagicMock(returncode=0),
             MagicMock(returncode=0),
             MagicMock(returncode=0, stdout=b"CANDIDATE 1: YES - it predicted the empty-input failure\n"),
         ]
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     assert mocks.backend.return_value.run.call_count == 3
     assert mocks.backend.return_value.run.call_args_list[-1].kwargs["context"] == "PR #1 regret review"
     assert mock_post.call_count == 1
@@ -449,7 +453,7 @@ def test_regret_review_posts_comment_and_confirms_marker_on_findings(tmp_xdg, tm
     assert REGRET_REVIEW_MARKER in body
 
 
-def test_regret_review_no_candidates_no_backend_call(tmp_xdg, tmp_path):
+async def test_regret_review_no_candidates_no_backend_call(tmp_xdg, tmp_path):
     """Blame resolved an introducing PR but no comment matched the blamed hunk — there
     is structurally nothing to judge: no backend call for this pass, no comment posted.
     Nothing is persisted in this stateless runner, so a later run of this PR simply
@@ -464,13 +468,13 @@ def test_regret_review_no_candidates_no_backend_call(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_requested.find_regret_candidates", return_value=[]),
         patch("dotharness.pr_review.runners.review_requested.post_regret_comment") as mock_post,
     ):
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     # 1 file + 1 summary = 2 backend calls; regret never invokes the backend.
     assert mocks.backend.return_value.run.call_count == 2
     mock_post.assert_not_called()
 
 
-def test_regret_review_no_findings_counts_complete_without_posting(tmp_xdg, tmp_path):
+async def test_regret_review_no_findings_counts_complete_without_posting(tmp_xdg, tmp_path):
     """The backend judged every candidate NO — nothing is posted, but the run still
     counts as complete: there is nothing to post. Unlike self_review.py, nothing is
     persisted here, so a later run simply re-judges the candidates."""
@@ -487,17 +491,18 @@ def test_regret_review_no_findings_counts_complete_without_posting(tmp_xdg, tmp_
         ),
         patch("dotharness.pr_review.runners.review_requested.post_regret_comment") as mock_post,
     ):
+        mocks.backend.return_value.run = AsyncMock()
         mocks.backend.return_value.run.side_effect = [
             MagicMock(returncode=0),
             MagicMock(returncode=0),
             MagicMock(returncode=0, stdout=b"CANDIDATE 1: NO - it was about a different edge case\n"),
         ]
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     assert mocks.backend.return_value.run.call_count == 3
     mock_post.assert_not_called()
 
 
-def test_regret_review_writes_no_persisted_state(tmp_xdg, tmp_path):
+async def test_regret_review_writes_no_persisted_state(tmp_xdg, tmp_path):
     """This runner is deliberately stateless (like its design/traceability passes): a
     regret run that posts a comment must not create self-review's state file or add
     the PR to regret_reviewed_prs the way self_review.py's wiring does."""
@@ -514,16 +519,17 @@ def test_regret_review_writes_no_persisted_state(tmp_xdg, tmp_path):
         ),
         patch("dotharness.pr_review.runners.review_requested.post_regret_comment", return_value=True),
     ):
+        mocks.backend.return_value.run = AsyncMock()
         mocks.backend.return_value.run.side_effect = [
             MagicMock(returncode=0),
             MagicMock(returncode=0),
             MagicMock(returncode=0, stdout=b"CANDIDATE 1: YES - it predicted the empty-input failure\n"),
         ]
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     assert not (tmp_xdg / "state" / "acme-frontend" / "self_review.json").exists()
 
 
-def test_re_requests_review_when_incomplete_and_previously_requested(tmp_xdg, tmp_path):
+async def test_re_requests_review_when_incomplete_and_previously_requested(tmp_xdg, tmp_path):
     """Submitting a review via the GitHub API clears the submitter from the PR's
     requested-reviewers list. If the design pass fails but the user was a requested
     reviewer to begin with, the runner must re-add them so the PR stays in the
@@ -537,16 +543,17 @@ def test_re_requests_review_when_incomplete_and_previously_requested(tmp_xdg, tm
     ):
         mocks.get_requested.return_value = True
         # file review, then summary, then a failing design-review call
+        mocks.backend.return_value.run = AsyncMock()
         mocks.backend.return_value.run.side_effect = [
             MagicMock(returncode=0),
             MagicMock(returncode=0),
             MagicMock(returncode=1),
         ]
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     mocks.add_reviewer.assert_called_once_with(1, "acme/frontend", "bot", ANY)
 
 
-def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
+async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
     """The re-add only fires if the user was already a requested reviewer — it must
     not add a reviewer who was never on the PR to begin with."""
     _setup_knowledge(tmp_path)
@@ -556,16 +563,17 @@ def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_pat
         patch("dotharness.pr_review.runners.review_requested.has_design_review_comment", return_value=False),
     ):
         mocks.get_requested.return_value = False
+        mocks.backend.return_value.run = AsyncMock()
         mocks.backend.return_value.run.side_effect = [
             MagicMock(returncode=0),
             MagicMock(returncode=0),
             MagicMock(returncode=1),
         ]
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     mocks.add_reviewer.assert_not_called()
 
 
-def test_re_requests_review_even_when_fully_done(tmp_xdg, tmp_path):
+async def test_re_requests_review_even_when_fully_done(tmp_xdg, tmp_path):
     """This runner never concludes the review on the human's behalf — even when every
     pass succeeds, the user must still be re-added as a requested reviewer if they held
     that status going in. Regression test for the old behavior, where a fully successful
@@ -574,11 +582,11 @@ def test_re_requests_review_even_when_fully_done(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     with _full_run_mocks() as mocks:
         mocks.get_requested.return_value = True
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     mocks.add_reviewer.assert_called_once_with(1, "acme/frontend", "bot", ANY)
 
 
-def test_fatal_git_error_stops_loop_and_restores(tmp_xdg, tmp_path):
+async def test_fatal_git_error_stops_loop_and_restores(tmp_xdg, tmp_path):
     """FatalGitError must propagate out of _process_pr (not be swallowed by the generic
     handler) so _run_locked aborts the loop; git_restore still runs via finally."""
     from dotharness.pr_review.runners.common import FatalGitError
@@ -590,12 +598,12 @@ def test_fatal_git_error_stops_loop_and_restores(tmp_xdg, tmp_path):
     ]
     with _full_run_mocks(prs=prs) as mocks:
         mocks.fetch_checkout.side_effect = FatalGitError("boom")
-        review_requested._run_locked(cfg, pr_url=None)
+        await review_requested._run_locked(cfg, pr_url=None)
     assert mocks.fetch_checkout.call_count == 1
     mocks.restore.assert_called_once()
 
 
-def test_process_pr_skips_summary_when_file_reviews_fail(tmp_path):
+async def test_process_pr_skips_summary_when_file_reviews_fail(tmp_path):
     """A failed file review must not be followed by the summary: the summary comment marks
     the PR "done" in _should_skip_pr, which would permanently suppress the retry."""
     mod = "dotharness.pr_review.runners.review_requested"
@@ -611,7 +619,7 @@ def test_process_pr_skips_summary_when_file_reviews_fail(tmp_path):
         patch(f"{mod}._run_design_review"),
         patch(f"{mod}._run_traceability_review"),
     ):
-        review_requested._process_pr(
+        await review_requested._process_pr(
             pr, _cfg(tmp_path), tmp_path, None, MagicMock(), str(tmp_path), {}, "me", True, True, True, True
         )
     summary.assert_not_called()

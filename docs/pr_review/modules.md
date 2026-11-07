@@ -4,7 +4,7 @@
 
 ## Command modules
 
-The `local-review` command lives in the package `dotharness.pr_review.runners.local_review`. See [`local-review`](commands/local-review.md) for how to use it. The package re-exports its public names, so `from dotharness.pr_review.runners.local_review import run` and the like keep working; each name is defined in one submodule:
+The `local-review` command lives in the package `dotharness.pr_review.runners.local_review`. See [`local-review`](commands/local-review.md) for how to use it. The package re-exports its public names, so `from dotharness.pr_review.runners.local_review import run` and the like keep working. Each name is defined in one submodule:
 
 - `types`: `LocalReviewError`, `NothingToReviewError`, `RepoMutatedError` and `LocalReviewTarget`.
 - `git`: `check_preconditions` and the single git helper, built on `common.run_cmd`.

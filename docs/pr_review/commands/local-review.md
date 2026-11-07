@@ -9,7 +9,7 @@ The command has two phases. The review phase writes findings. The optional addre
 pr_review run [--config PATH] [--verbose] local-review [--base REF] [--output-dir DIR] [--force] [--address [--skip-review [--review-dir DIR]]]
 ```
 
-The CLI name is `pr_review`; the config file names (`.harness*.toml`) keep the old prefix on purpose.
+The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the old prefix on purpose.
 
 
 - `--config PATH` — path to the `.harness.toml` config file. Defaults to `./.harness.toml`. This option belongs to the `run` group, so it must come before `local-review` on the command line.
@@ -36,8 +36,8 @@ The CLI name is `pr_review`; the config file names (`.harness*.toml`) keep the o
     - The base ref resolves (see [Base ref and diff](#base-ref-and-diff)).
 4. If the branch has no commits beyond the base, it prints `Nothing to review: <branch> has no commits beyond <base ref>` and exits 0.
 5. Loads the prompt templates `local-review-file.md`, `local-review-summary.md` and `local-review-design.md` from `harness.knowledge_dir/pr-review/`. It also loads the optional `harness.review_knowledge_file`, which is added to every prompt as an "Additional Review Guide" section.
-6. For each changed file that is not yet `done`, builds a prompt from the file diff (or the whole file, if the file is new or the diff touches 75% or more of it). The prompt also holds a description of the change (the branch commits) and any matching vibe-heal static-analysis context. It runs the backend once. The backend writes its findings to `files/<changed file path>.md`.
-7. Runs one summary pass, then one design pass, unless each is already `done`. The design pass gets the diffs of all changed files in one prompt. The summary pass runs even if some file passes failed, but it is then recorded as `failed`, so it runs again next time together with the failed files.
+6. For each changed file that is not yet `done`, builds a prompt from the file diff. If the file is new or the diff touches 75% or more of it, uses the whole file instead. The prompt also holds a description of the change (the branch commits) and any matching vibe-heal static-analysis context. It runs the backend once. The backend writes its findings to `files/<changed file path>.md`.
+7. Runs one summary pass, then one design pass, unless each is already `done`. The design pass gets the diffs of all changed files in one prompt. The summary pass runs even if some file passes failed. It is then recorded as `failed`, so it runs again next time together with the failed files.
 8. After each pass, it rewrites `manifest.json`. After the last pass, it writes `index.md`.
 9. Checks, after every backend call, that the backend did not change the repository (see [Security](#security)).
 10. With `--address`, runs the address phase after the review phase (or instead of it, with `--skip-review`). See [Address phase and finding curation](#address-phase-and-finding-curation).
@@ -174,7 +174,7 @@ The backend runs with unrestricted shell access in `repo.working_dir`. For `clau
 
 - **Mutation guard.** After every backend call, the tool checks that `HEAD` did not move and that no tracked file changed. Untracked files are ignored. If the check fails, that pass is marked `failed`, no further passes run, and the command exits non-zero. The message names what changed. The guard detects changes. It does not undo them. Inspect the repository and restore it yourself.
 - **The address phase edits your branch.** With `--address`, the backend can create commits on your checked-out branch. The tool never pushes, but the commits are real and stay in your history until you remove them. Review them (`git log`, `git show`) before you push.
-- **Address checks detect, they do not undo.** After every backend call in the address phase, the tool checks that the old `HEAD` is still an ancestor of the new `HEAD` (so history was not rewritten), that the branch did not change, and that no tracked file has uncommitted changes. If a check fails, the finding is marked `failed`, the phase stops, and the command exits non-zero. The tool resets and repairs nothing. Inspect the repository and restore it yourself.
+- **Address checks detect, they do not undo.** After every backend call in the address phase, the tool checks that the old `HEAD` is still an ancestor of the new `HEAD` (so history was not rewritten). It also checks that the branch did not change and that no tracked file has uncommitted changes. If a check fails, the finding is marked `failed`, the phase stops, and the command exits non-zero. The tool resets and repairs nothing. Inspect the repository and restore it yourself.
 - **No `GITHUB_TOKEN`.** The tool does not export `GITHUB_TOKEN` to the backend. This is a smaller exposure than `self-review`. The backend can still reach the network if the host allows it.
 - **Output outside the repo.** The command refuses an output directory inside `repo.working_dir` (including the directory itself). This keeps review files out of your working tree and out of the guard check.
 
@@ -216,7 +216,7 @@ pr_review run local-review --address --skip-review --review-dir ~/.local/share/d
 ### Which review is addressed
 
 - With `--address` alone, the review phase runs first (or is skipped for `done` passes, as usual). The address phase then uses the review directory for the current head commit.
-- With `--address --skip-review`, the review phase does not run. The tool picks the review directory of the same branch whose head commit is `HEAD` or an ancestor of `HEAD` and has the newest committer date. If two have the same date, the one with the newer `manifest.json` modification time wins. If there is none, the command exits with an error that tells you to run `local-review` first.
+- With `--address --skip-review`, the review phase does not run. The tool picks the review directory of the same branch whose head commit is `HEAD` or an ancestor of `HEAD`. It chooses the one with the newest committer date. If two have the same date, the one with the newer `manifest.json` modification time wins. If there is none, the command exits with an error that tells you to run `local-review` first.
 - With `--review-dir DIR`, the tool uses that directory. It must contain a `manifest.json` for the same branch, and its head commit must be `HEAD` or an ancestor of `HEAD`. Otherwise the command exits with an error.
 
 Only passes marked `done` in the manifest are read. If some review passes failed, the address phase still runs on the passes that are `done`, and the command exits non-zero at the end.
@@ -239,7 +239,12 @@ Findings are addressed in this order: the per-file findings, by file path and th
 ### What happens for each finding
 
 1. The tool checks that you are still on the branch that was reviewed and that no tracked file has uncommitted changes. Untracked files are ignored. If not, the finding is marked `failed` and the phase stops.
-2. It records the current `HEAD` and runs the backend once. The prompt contains the instructions from `local-address-finding.md`, the finding, its file and line, the diff of that file against the merge base, any vibe-heal context, and the path where the backend must write its resolution.
+2. It records the current `HEAD` and runs the backend once. The prompt contains:
+    - the instructions from `local-address-finding.md`
+    - the finding, its file, and its line
+    - the diff of that file against the merge base
+    - any matching vibe-heal context
+    - the path where the backend must write its resolution
 3. The backend writes a resolution file, `<review dir>/resolutions/<finding id>.md`. Its first line must be `decision: fixed` or `decision: declined`. The tool deletes any old resolution file for the finding before the call.
 4. The tool compares the decision with git:
 

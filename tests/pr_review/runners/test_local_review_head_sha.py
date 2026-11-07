@@ -12,7 +12,7 @@ def _git(path, *args):
     subprocess.run(["git", "-C", str(path), *args], check=True)  # noqa: S607
 
 
-def test_head_sha_returns_current_commit(tmp_path):
+async def test_head_sha_returns_current_commit(tmp_path):
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@example.com")
     _git(tmp_path, "config", "user.name", "T")
@@ -25,10 +25,10 @@ def test_head_sha_returns_current_commit(tmp_path):
         text=True,
         check=True,
     ).stdout.strip()
-    assert _read_head_sha(tmp_path) == expected
+    assert (await _read_head_sha(tmp_path)) == expected
 
 
-def test_head_sha_raises_when_no_commits_exist(tmp_path):
+async def test_head_sha_raises_when_no_commits_exist(tmp_path):
     _git(tmp_path, "init", "-q")
     with pytest.raises(RepoIdentityError, match="could not read HEAD"):
-        _read_head_sha(tmp_path)
+        await _read_head_sha(tmp_path)

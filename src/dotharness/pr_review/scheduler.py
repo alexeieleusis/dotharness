@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax import saxutils
 
+from dotharness.paths import data_dir
+
 
 def parse_duration(s: str) -> int:
     if s.endswith("h") and s[:-1].isdigit():
@@ -54,7 +56,7 @@ class ScheduleEntry:
         return f"com.harness.{self.command}-{self.repo_slug}"
 
     def to_cron_line(self) -> str:
-        log_dir = Path.home() / ".local/share/dotharness/logs" / self.command
+        log_dir = data_dir() / "logs" / self.command
         cron_expr = build_cron_expression(self.interval_seconds)
         # Escape % to \% for cron (bare % is interpreted as newline in crontab)
         cron_escape = lambda s: s.replace("%", "\\%")
@@ -64,7 +66,7 @@ class ScheduleEntry:
         return f"{cron_expr} {cmd}\n{marker}"
 
     def to_launchd_plist(self) -> str:
-        log_dir = Path.home() / ".local/share/dotharness/logs" / self.command
+        log_dir = data_dir() / "logs" / self.command
         log_file = str(log_dir / "launchd.log")
         esc = saxutils.escape
         return f"""<?xml version="1.0" encoding="UTF-8"?>

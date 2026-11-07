@@ -16,7 +16,7 @@ Files are referred to by name pattern only: `.harness*.toml`, `.env*`,
 
 | Section | Dataclass | Recommended format | Change from today |
 |---|---|---|---|
-| `[harness]` | `HarnessSection` | TOML table; secrets move out of `env` | No format change; `env` usage tightened |
+| `[harness]` | `HarnessSection` | TOML table. Secrets move out of `env` | No format change. `env` usage tightened |
 | `[repo]` | `RepoConfig` | TOML table of paths | No |
 | `[[repo.subdir]]` | `SubDir` | TOML array of tables | No |
 | `[vibe_heal]` | `VibehealConfig` | TOML table | No |
@@ -42,7 +42,7 @@ The one recommendation that changes practice is about secrets, in
 - **Recommended format:** keep as a TOML table.
 - **Reason:** the section is scalars, one short list and one flat string map.
   TOML types these directly (strings, integers, arrays, inline or sub-tables).
-  The only concern is `env`, which invites secrets; see below.
+  The only concern is `env`, which invites secrets. See below.
 - **Change from today:** no format change. Stop putting secrets in `env`.
 
 ### `[repo]`
@@ -63,9 +63,9 @@ The one recommendation that changes practice is about secrets, in
   `[[repo.subdir.pre_commands]]` or an inline array for the nested list.
 - **Reason:** this is a repeated record that contains a nested list of records.
   Flat key/value formats (dotenv, INI) cannot express repetition or nesting
-  without ad hoc key-naming schemes. TOML and YAML both can; TOML is already
+  without ad hoc key-naming schemes. TOML and YAML both can. TOML is already
   in use and already validated.
-- **Change from today:** none. `env_file` is a path, not contents; see below.
+- **Change from today:** none. `env_file` is a path, not contents. See below.
 
 ### `[vibe_heal]`
 
@@ -166,7 +166,7 @@ read in a screen share and safe to copy between machines.
       (shell profile, launchd or cron environment), so it never lands in the
       config file.
 - **Change from today:** a documentation and review rule only. The parser still
-  accepts any string; enforcement (for example a validate-time warning on
+  accepts any string. Enforcement (for example a validate-time warning on
   token-shaped keys) would be separate work.
 
 ### `[[repo.subdir]]` `env_file`

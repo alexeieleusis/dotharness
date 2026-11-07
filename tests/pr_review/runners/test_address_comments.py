@@ -1,7 +1,7 @@
 import json
 import subprocess
 from pathlib import Path
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -45,14 +45,14 @@ def _setup_knowledge(tmp_path, filename, content="instructions"):
     (d / filename).write_text(content)
 
 
-def test_disabled_skips_everything(tmp_path):
+async def test_disabled_skips_everything(tmp_path):
     cfg = _cfg(tmp_path, enabled=False)
     with patch("dotharness.pr_review.runners.address_comments.get_gh_token") as mock_token:
-        address_comments._run_locked(cfg)
+        await address_comments._run_locked(cfg)
     mock_token.assert_not_called()
 
 
-def test_skips_pr_with_no_pending_feedback(tmp_xdg, tmp_path):
+async def test_skips_pr_with_no_pending_feedback(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path, "address-comment.md")
     cfg = _cfg(tmp_path)
     with (
@@ -65,7 +65,7 @@ def test_skips_pr_with_no_pending_feedback(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.address_comments.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
     ):
-        address_comments._run_locked(cfg)
+        await address_comments._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
 
 
@@ -82,7 +82,7 @@ _FAKE_COMMENT = {
 }
 
 
-def test_runs_backend_when_unresolved_threads(tmp_xdg, tmp_path):
+async def test_runs_backend_when_unresolved_threads(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
@@ -101,13 +101,14 @@ def test_runs_backend_when_unresolved_threads(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.common.run_cmd", mock_run),
         patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
         mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
-        address_comments._run_locked(cfg)
+        await address_comments._run_locked(cfg)
     mock_be.return_value.run.assert_called_once()
 
 
-def test_processes_draft_pr_with_pending_feedback(tmp_xdg, tmp_path):
+async def test_processes_draft_pr_with_pending_feedback(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
@@ -122,6 +123,7 @@ def test_processes_draft_pr_with_pending_feedback(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.common.run_cmd", mock_run),
         patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
         # `_list_prs_to_check` runs for real; the only draft PR comes back from the `gh pr list` call
         # for --author and nothing for --assignee, so a re-added isDraft filter would drop it.
@@ -134,11 +136,11 @@ def test_processes_draft_pr_with_pending_feedback(tmp_xdg, tmp_path):
             return MagicMock(returncode=0, stdout=b"", stderr=b"")
 
         mock_run.side_effect = fake_run_cmd
-        address_comments._run_locked(cfg)
+        await address_comments._run_locked(cfg)
     mock_be.return_value.run.assert_called_once()
 
 
-def test_pushes_branch_after_backend(tmp_xdg, tmp_path):
+async def test_pushes_branch_after_backend(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
@@ -157,14 +159,15 @@ def test_pushes_branch_after_backend(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.common.run_cmd", mock_run),
         patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
         mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
-        address_comments._run_locked(cfg)
+        await address_comments._run_locked(cfg)
     push_calls = [c for c in mock_run.call_args_list if "push" in str(c)]
     assert any("my-branch" in str(c) for c in push_calls)
 
 
-def test_pushes_after_each_comment_not_once_at_end(tmp_xdg, tmp_path):
+async def test_pushes_after_each_comment_not_once_at_end(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
@@ -186,15 +189,16 @@ def test_pushes_after_each_comment_not_once_at_end(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.common.run_cmd", mock_run),
         patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
         mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
-        address_comments._run_locked(cfg)
+        await address_comments._run_locked(cfg)
     push_calls = [c for c in mock_run.call_args_list if c.args and "push" in c.args[0]]
     assert len(push_calls) == 2  # one push per comment, not a single push after the loop
     assert mock_be.return_value.run.call_count == 2  # both comments' backends ran
 
 
-def test_skips_comment_whose_thread_resolves_mid_run(tmp_xdg, tmp_path):
+async def test_skips_comment_whose_thread_resolves_mid_run(tmp_xdg, tmp_path):
     """A thread resolved (by a human, or as a side effect of an earlier comment's fix in
     this same run) after the upfront unresolved-filter pass but before its own turn comes
     up in the loop must not be addressed."""
@@ -231,9 +235,10 @@ def test_skips_comment_whose_thread_resolves_mid_run(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.common.run_cmd", mock_run),
         patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
         mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
-        address_comments._run_locked(cfg)
+        await address_comments._run_locked(cfg)
     # comment 43 passed the upfront filter but its thread resolved before its turn —
     # its backend must never run, and only one push (for comment 42) happens
     assert mock_be.return_value.run.call_count == 1
@@ -241,21 +246,21 @@ def test_skips_comment_whose_thread_resolves_mid_run(tmp_xdg, tmp_path):
     assert len(push_calls) == 1
 
 
-def test_comment_still_unresolved_fails_open_when_check_returns_none():
+async def test_comment_still_unresolved_fails_open_when_check_returns_none():
     with patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=None):
-        result = address_comments._comment_still_unresolved(_FAKE_COMMENT, 2, "acme/frontend", {})
+        result = await address_comments._comment_still_unresolved(_FAKE_COMMENT, 2, "acme/frontend", {})
     assert result is True
 
 
-def test_comment_still_unresolved_true_for_non_int_id():
+async def test_comment_still_unresolved_true_for_non_int_id():
     comment = {**_FAKE_COMMENT, "id": "not-an-int"}
     with patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids") as mock_ids:
-        result = address_comments._comment_still_unresolved(comment, 2, "acme/frontend", {})
+        result = await address_comments._comment_still_unresolved(comment, 2, "acme/frontend", {})
     mock_ids.assert_not_called()
     assert result is True
 
 
-def test_stops_processing_comments_after_push_failure(tmp_xdg, tmp_path):
+async def test_stops_processing_comments_after_push_failure(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
@@ -283,15 +288,16 @@ def test_stops_processing_comments_after_push_failure(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.common.run_cmd", side_effect=run_cmd_side_effect),
         patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        address_comments._run_locked(cfg)
+        await address_comments._run_locked(cfg)
     # the first comment's backend ran and its push was attempted (and failed); the second
     # comment's backend must never run, since its predecessor's push already failed
     assert mock_be.return_value.run.call_count == 1
     mock_restore.assert_called()
 
 
-def test_stops_processing_comments_after_history_rewrite(tmp_xdg, tmp_path):
+async def test_stops_processing_comments_after_history_rewrite(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
@@ -309,7 +315,7 @@ def test_stops_processing_comments_after_history_rewrite(tmp_xdg, tmp_path):
             return MagicMock(returncode=1, stdout=b"", stderr=b"")  # not an ancestor: history was rewritten
         return MagicMock(returncode=0, stdout=b"", stderr=b"")
 
-    mock_run = MagicMock(side_effect=run_cmd_side_effect)
+    mock_run = AsyncMock(side_effect=run_cmd_side_effect)
     with (
         patch("dotharness.pr_review.runners.address_comments.get_gh_token", return_value="tok"),
         patch(
@@ -327,8 +333,9 @@ def test_stops_processing_comments_after_history_rewrite(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.common.run_cmd", mock_run),
         patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        address_comments._run_locked(cfg)
+        await address_comments._run_locked(cfg)
     # the first comment's backend ran; the fast-forward check must have caught the
     # rewrite and skipped both the push and the second comment entirely
     assert mock_be.return_value.run.call_count == 1
@@ -337,7 +344,7 @@ def test_stops_processing_comments_after_history_rewrite(tmp_xdg, tmp_path):
     mock_restore.assert_called()
 
 
-def test_list_prs_to_check_merges_author_and_assignee_deduped():
+async def test_list_prs_to_check_merges_author_and_assignee_deduped():
     author_payload = [{"number": 1, "headRefName": "a", "isDraft": False}]
     assignee_payload = [
         {"number": 1, "headRefName": "a", "isDraft": False},
@@ -349,12 +356,12 @@ def test_list_prs_to_check_merges_author_and_assignee_deduped():
     ]
 
     with patch("dotharness.pr_review.runners.address_comments.run_cmd", side_effect=responses):
-        prs = address_comments._list_prs_to_check("acme/frontend", {})
+        prs = await address_comments._list_prs_to_check("acme/frontend", {})
 
     assert [p["number"] for p in prs] == [1, 2]
 
 
-def test_restores_head_even_on_backend_failure(tmp_xdg, tmp_path):
+async def test_restores_head_even_on_backend_failure(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
@@ -369,16 +376,17 @@ def test_restores_head_even_on_backend_failure(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.address_comments.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.address_comments.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.address_comments.git_restore") as mock_restore,
-        patch("dotharness.pr_review.runners.address_comments.run_cmd"),
-        patch("dotharness.pr_review.runners.common.run_cmd"),
+        patch("dotharness.pr_review.runners.address_comments.run_cmd", return_value=MagicMock()),
+        patch("dotharness.pr_review.runners.common.run_cmd", return_value=MagicMock()),
         patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.side_effect = Exception("backend exploded")
-        address_comments._run_locked(cfg)
+        await address_comments._run_locked(cfg)
     mock_restore.assert_called()
 
 
-def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
+async def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
     """Addressing a comment (a reply, or a pushed fix) can submit a review via the GitHub
     API as a side effect, which clears the submitter from the PR's requested-reviewers
     list — hiding it from review_requested's "user-review-requested:@me" search. If the
@@ -405,14 +413,15 @@ def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.common.run_cmd", mock_run),
         patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
         mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
-        address_comments._run_locked(cfg)
+        await address_comments._run_locked(cfg)
     mock_was_requested.assert_called_once_with(2, "acme/frontend", "bot", ANY)
     mock_add_reviewer.assert_called_once_with(2, "acme/frontend", "bot", ANY)
 
 
-def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
+async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
@@ -434,13 +443,14 @@ def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_pat
         patch("dotharness.pr_review.runners.common.run_cmd", mock_run),
         patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
         mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
-        address_comments._run_locked(cfg)
+        await address_comments._run_locked(cfg)
     mock_add_reviewer.assert_not_called()
 
 
-def test_re_requests_review_even_when_backend_raises(tmp_xdg, tmp_path):
+async def test_re_requests_review_even_when_backend_raises(tmp_xdg, tmp_path):
     """The re-add must not depend on the wrapped work succeeding — GitHub's side effect
     (clearing the requested reviewer) happens regardless of whether the backend call
     that triggered it went on to raise."""
@@ -461,12 +471,13 @@ def test_re_requests_review_even_when_backend_raises(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.address_comments.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.address_comments.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.address_comments.git_restore") as mock_restore,
-        patch("dotharness.pr_review.runners.address_comments.run_cmd"),
-        patch("dotharness.pr_review.runners.common.run_cmd"),
+        patch("dotharness.pr_review.runners.address_comments.run_cmd", return_value=MagicMock()),
+        patch("dotharness.pr_review.runners.common.run_cmd", return_value=MagicMock()),
         patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.side_effect = Exception("backend exploded")
-        address_comments._run_locked(cfg)
+        await address_comments._run_locked(cfg)
     mock_add_reviewer.assert_called_once_with(2, "acme/frontend", "bot", ANY)
     mock_restore.assert_called()
 
@@ -479,7 +490,7 @@ def test_re_requests_review_even_when_backend_raises(tmp_xdg, tmp_path):
         (b"sha-after\n", 0, False),  # HEAD moved but is-ancestor says yes: clean fast-forward
     ],
 )
-def test_address_single_comment_history_rewrite_detection(
+async def test_address_single_comment_history_rewrite_detection(
     post_sha_stdout, is_ancestor_returncode, expect_error, caplog
 ):
     responses = iter([
@@ -487,14 +498,15 @@ def test_address_single_comment_history_rewrite_detection(
         MagicMock(returncode=is_ancestor_returncode, stdout=b"", stderr=b""),  # merge-base --is-ancestor
     ])
     mock_backend = MagicMock()
+    mock_backend.run = AsyncMock()
     mock_backend.run.return_value = MagicMock(returncode=0)
-    run_cmd_mock = MagicMock(side_effect=lambda *a, **k: next(responses))
+    run_cmd_mock = AsyncMock(side_effect=lambda *a, **k: next(responses))
     with (
         patch("dotharness.pr_review.runners.address_comments.run_cmd", run_cmd_mock),
         patch("dotharness.pr_review.runners.common.run_cmd", run_cmd_mock),
         caplog.at_level("ERROR"),
     ):
-        post_sha, rewritten = _address_single_comment(
+        post_sha, rewritten = await _address_single_comment(
             _FAKE_COMMENT, 1, "instructions", mock_backend, "/repo", "acme/frontend", {}, "sha-before"
         )
     assert any("not a fast-forward" in r.message for r in caplog.records) == expect_error
@@ -666,56 +678,57 @@ def test_addressed_marked_thread_with_other_login_completion_reply_falls_to_rest
     assert rest == [thread]
 
 
-def test_filter_comments_admits_marked_comment_transformed_without_reaction_lookup():
+async def test_filter_comments_admits_marked_comment_transformed_without_reaction_lookup():
     # The comment reaching the backend must be the marker reply itself (re-pointed via
     # `_as_focused_review_comment`), not the terse parent it responded to.
     with (
         patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=_state(1)),
         patch("dotharness.pr_review.runners.common.run_cmd") as mock_run,
     ):
-        result = address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
+        result = await address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
     assert result == [_FOCUSED_REVIEW_COMMENT]
     mock_run.assert_not_called()
 
 
-def test_filter_comments_does_not_affect_plain_comments():
+async def test_filter_comments_does_not_affect_plain_comments():
     with patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=None):
-        result = address_comments._filter_comments([_PLAIN_COMMENT], 1, "acme/frontend", "alexei", {})
+        result = await address_comments._filter_comments([_PLAIN_COMMENT], 1, "acme/frontend", "alexei", {})
     assert result == [_PLAIN_COMMENT]
 
 
-def test_filter_comments_does_not_reprocess_already_addressed_thread():
+async def test_filter_comments_does_not_reprocess_already_addressed_thread():
     # A thread whose marker reply has already been superseded by our own completion reply
     # must be dropped by the ordinary our_login-last-reply skip, not resent to the backend.
     with patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=None):
-        result = address_comments._filter_comments([_ADDRESSED_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
+        result = await address_comments._filter_comments([_ADDRESSED_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
     assert result == []
 
 
-def test_filter_comments_plugin_prefix_drops_inline_comments_outside_subdir():
+async def test_filter_comments_plugin_prefix_drops_inline_comments_outside_subdir():
     in_subdir = {**_PLAIN_COMMENT, "path": "plugins/foo/b.py"}
     outside_subdir = {**_MARKED_COMMENT, "path": "a.py", "author": "sonar", "replies": []}
     with patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=None):
-        result = address_comments._filter_comments(
+        result = await address_comments._filter_comments(
             [in_subdir, outside_subdir], 1, "acme/frontend", None, {}, plugin_prefix="plugins/foo"
         )
     assert result == [in_subdir]
 
 
-def test_filter_comments_plugin_prefix_keeps_non_inline_comments():
+async def test_filter_comments_plugin_prefix_keeps_non_inline_comments():
     issue_comment = {"type": "issue", "id": 3, "author": "bob", "body": "please fix", "url": "http://z"}
     with patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=None):
-        result = address_comments._filter_comments(
+        result = await address_comments._filter_comments(
             [issue_comment], 1, "acme/frontend", None, {}, plugin_prefix="plugins/foo"
         )
     assert result == [issue_comment]
 
 
-def test_address_single_comment_passes_opencode_dir_to_backend():
+async def test_address_single_comment_passes_opencode_dir_to_backend():
     mock_backend = MagicMock()
+    mock_backend.run = AsyncMock()
     mock_backend.run.return_value = MagicMock(returncode=0)
     with patch("dotharness.pr_review.runners.address_comments.get_head_sha", return_value="sha-before"):
-        _address_single_comment(
+        await _address_single_comment(
             _FAKE_COMMENT,
             1,
             "instructions",
@@ -746,7 +759,7 @@ def _graphql_page(nodes, cursor=None, has_next=False):
     }
 
 
-def test_get_unresolved_comment_ids_paginates_across_multiple_pages():
+async def test_get_unresolved_comment_ids_paginates_across_multiple_pages():
     page1 = _graphql_page(
         [{"isResolved": False, "comments": {"nodes": [{"databaseId": 1}]}}], cursor="CURSOR1", has_next=True
     )
@@ -756,11 +769,11 @@ def test_get_unresolved_comment_ids_paginates_across_multiple_pages():
         MagicMock(returncode=0, stdout=json.dumps(page2).encode()),
     ])
     with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=lambda *a, **k: next(responses)):
-        ids = address_comments._get_unresolved_comment_ids(1, "acme/frontend", {})
+        ids = await address_comments._get_unresolved_comment_ids(1, "acme/frontend", {})
     assert ids == _state(1, 2)
 
 
-def test_has_pending_feedback_finds_unresolved_thread_on_second_page():
+async def test_has_pending_feedback_finds_unresolved_thread_on_second_page():
     page1 = _graphql_page([{"isResolved": True}], cursor="CURSOR1", has_next=True)
     page2 = _graphql_page([{"isResolved": False}])
     responses = iter([
@@ -768,29 +781,33 @@ def test_has_pending_feedback_finds_unresolved_thread_on_second_page():
         MagicMock(returncode=0, stdout=json.dumps(page2).encode()),
     ])
     with patch("dotharness.pr_review.runners.address_comments.run_cmd", side_effect=lambda *a, **k: next(responses)):
-        result = address_comments._has_pending_feedback(1, "acme/frontend", {})
+        result = await address_comments._has_pending_feedback(1, "acme/frontend", {})
     assert result is True
 
 
-def test_reply_observed_inline_matches_by_in_reply_to_id():
+async def test_reply_observed_inline_matches_by_in_reply_to_id():
     replies = [{"in_reply_to_id": 42, "user": {"login": "harness-bot"}}]
     with patch(
         "dotharness.pr_review.runners.common.run_cmd",
         return_value=MagicMock(returncode=0, stdout=json.dumps(replies).encode()),
     ):
-        assert address_comments._reply_observed(_FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {})
+        assert await address_comments._reply_observed(
+            _FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {}
+        )
 
 
-def test_reply_observed_inline_false_when_reply_from_someone_else():
+async def test_reply_observed_inline_false_when_reply_from_someone_else():
     replies = [{"in_reply_to_id": 42, "user": {"login": "alice"}}]
     with patch(
         "dotharness.pr_review.runners.common.run_cmd",
         return_value=MagicMock(returncode=0, stdout=json.dumps(replies).encode()),
     ):
-        assert not address_comments._reply_observed(_FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {})
+        assert not await address_comments._reply_observed(
+            _FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {}
+        )
 
 
-def test_reply_observed_issue_falls_back_to_timestamp():
+async def test_reply_observed_issue_falls_back_to_timestamp():
     issue_comment = {**_FAKE_COMMENT, "type": "issue", "url": "http://x/issue/1"}
     # A reply posted by us that does NOT quote the parent URL: issue comments have no
     # reply linkage, so it must be detected via the timestamp fallback (the old
@@ -800,61 +817,64 @@ def test_reply_observed_issue_falls_back_to_timestamp():
         "dotharness.pr_review.runners.common.run_cmd",
         return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
     ):
-        assert address_comments._reply_observed(
+        assert await address_comments._reply_observed(
             issue_comment, 1, "acme/frontend", "harness-bot", "2026-01-01T00:00:00Z", {}
         )
 
 
-def test_reply_observed_issue_false_when_reply_not_from_us():
+async def test_reply_observed_issue_false_when_reply_not_from_us():
     issue_comment = {**_FAKE_COMMENT, "type": "issue", "url": "http://x/issue/1"}
     comments = [{"user": {"login": "alice"}, "created_at": "2026-01-02T00:00:00Z", "body": "> http://x/issue/1"}]
     with patch(
         "dotharness.pr_review.runners.common.run_cmd",
         return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
     ):
-        assert not address_comments._reply_observed(
+        assert not await address_comments._reply_observed(
             issue_comment, 1, "acme/frontend", "harness-bot", "2026-01-01T00:00:00Z", {}
         )
 
 
-def test_reply_observed_review_falls_back_to_timestamp():
+async def test_reply_observed_review_falls_back_to_timestamp():
     review_comment = {**_FAKE_COMMENT, "type": "review"}
     comments = [{"user": {"login": "harness-bot"}, "created_at": "2026-01-02T00:00:00Z", "body": "reply"}]
     with patch(
         "dotharness.pr_review.runners.common.run_cmd",
         return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
     ):
-        assert address_comments._reply_observed(
+        assert await address_comments._reply_observed(
             review_comment, 1, "acme/frontend", "harness-bot", "2026-01-01T00:00:00Z", {}
         )
 
 
-def test_reply_observed_review_matches_reply_in_same_second_as_since_iso():
+async def test_reply_observed_review_matches_reply_in_same_second_as_since_iso():
     review_comment = {**_FAKE_COMMENT, "type": "review"}
     comments = [{"user": {"login": "harness-bot"}, "created_at": "2026-01-01T00:00:00Z", "body": "reply"}]
     with patch(
         "dotharness.pr_review.runners.common.run_cmd",
         return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
     ):
-        assert address_comments._reply_observed(
+        assert await address_comments._reply_observed(
             review_comment, 1, "acme/frontend", "harness-bot", "2026-01-01T00:00:00Z", {}
         )
 
 
-def test_reply_observed_returns_true_when_api_fails_inconclusive():
+async def test_reply_observed_returns_true_when_api_fails_inconclusive():
     with patch("dotharness.pr_review.runners.common.run_cmd", return_value=MagicMock(returncode=1, stdout=b"")):
-        assert address_comments._reply_observed(_FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {})
+        assert await address_comments._reply_observed(
+            _FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {}
+        )
 
 
-def test_address_single_comment_warns_when_no_commit_and_no_reply_observed(caplog):
+async def test_address_single_comment_warns_when_no_commit_and_no_reply_observed(caplog):
     mock_backend = MagicMock()
+    mock_backend.run = AsyncMock()
     mock_backend.run.return_value = MagicMock(returncode=0)
     with (
         patch("dotharness.pr_review.runners.address_comments.get_head_sha", return_value="sha-before"),
         patch("dotharness.pr_review.runners.address_comments._reply_observed", return_value=False),
         caplog.at_level("WARNING"),
     ):
-        _address_single_comment(
+        await _address_single_comment(
             _FAKE_COMMENT,
             1,
             "instructions",
@@ -868,8 +888,9 @@ def test_address_single_comment_warns_when_no_commit_and_no_reply_observed(caplo
     assert any("silent skip" in r.message for r in caplog.records)
 
 
-def test_address_single_comment_no_warning_when_commit_made(caplog):
+async def test_address_single_comment_no_warning_when_commit_made(caplog):
     mock_backend = MagicMock()
+    mock_backend.run = AsyncMock()
     mock_backend.run.return_value = MagicMock(returncode=0)
     with (
         patch("dotharness.pr_review.runners.address_comments.get_head_sha", return_value="sha-after"),
@@ -877,7 +898,7 @@ def test_address_single_comment_no_warning_when_commit_made(caplog):
         patch("dotharness.pr_review.runners.address_comments._reply_observed") as mock_reply_observed,
         caplog.at_level("WARNING"),
     ):
-        _address_single_comment(
+        await _address_single_comment(
             _FAKE_COMMENT,
             1,
             "instructions",
@@ -892,15 +913,16 @@ def test_address_single_comment_no_warning_when_commit_made(caplog):
     assert not any("silent skip" in r.message for r in caplog.records)
 
 
-def test_address_single_comment_no_warning_when_reply_observed_check_raises(caplog):
+async def test_address_single_comment_no_warning_when_reply_observed_check_raises(caplog):
     mock_backend = MagicMock()
+    mock_backend.run = AsyncMock()
     mock_backend.run.return_value = MagicMock(returncode=0)
     with (
         patch("dotharness.pr_review.runners.address_comments.get_head_sha", return_value="sha-before"),
         patch("dotharness.pr_review.runners.address_comments._reply_observed", side_effect=RuntimeError("boom")),
         caplog.at_level("WARNING"),
     ):
-        _address_single_comment(
+        await _address_single_comment(
             _FAKE_COMMENT,
             1,
             "instructions",
@@ -914,15 +936,16 @@ def test_address_single_comment_no_warning_when_reply_observed_check_raises(capl
     assert not any("silent skip" in r.message for r in caplog.records)
 
 
-def test_address_single_comment_skips_reply_check_when_our_login_not_provided(caplog):
+async def test_address_single_comment_skips_reply_check_when_our_login_not_provided(caplog):
     mock_backend = MagicMock()
+    mock_backend.run = AsyncMock()
     mock_backend.run.return_value = MagicMock(returncode=0)
     with (
         patch("dotharness.pr_review.runners.address_comments.get_head_sha", return_value="sha-before"),
         patch("dotharness.pr_review.runners.address_comments._reply_observed") as mock_reply_observed,
         caplog.at_level("WARNING"),
     ):
-        _address_single_comment(
+        await _address_single_comment(
             _FAKE_COMMENT, 1, "instructions", mock_backend, "/repo", "acme/frontend", {}, "sha-before"
         )
     mock_reply_observed.assert_not_called()
@@ -957,27 +980,29 @@ def test_filter_already_replied_keeps_issue_comment_not_recorded():
     assert result == [_ISSUE_COMMENT]
 
 
-def test_address_single_comment_records_issue_comment_after_clean_run(monkeypatch):
+async def test_address_single_comment_records_issue_comment_after_clean_run(monkeypatch):
     recorded = []
     monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
-    monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha")
+    monkeypatch.setattr(address_comments, "get_head_sha", AsyncMock(return_value="sha"))
     backend = MagicMock(spec=Backend)
+    backend.run = AsyncMock()
     backend.run.return_value = None
-    address_comments._address_single_comment(
+    await address_comments._address_single_comment(
         _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, None, "acme-frontend"
     )
     assert recorded == [("acme-frontend", 7, "issue:6161750034")]
 
 
-def test_address_single_comment_does_not_record_when_backend_raises(monkeypatch):
+async def test_address_single_comment_does_not_record_when_backend_raises(monkeypatch):
     recorded = []
     monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
-    monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha")
+    monkeypatch.setattr(address_comments, "get_head_sha", AsyncMock(return_value="sha"))
 
     boom = MagicMock(spec=Backend)
+    boom.run = AsyncMock()
     boom.run.side_effect = RuntimeError("boom")
 
-    address_comments._address_single_comment(
+    await address_comments._address_single_comment(
         _ISSUE_COMMENT, 7, "tmpl", boom, "/w", "acme/frontend", {}, "sha", None, None, "acme-frontend"
     )
     assert recorded == []
@@ -993,7 +1018,7 @@ _BACKEND_FAILURES = [
 
 
 @pytest.mark.parametrize("failure", _BACKEND_FAILURES)
-def test_backend_failure_is_swallowed_and_loop_continues_and_pushes(failure, tmp_xdg, tmp_path):
+async def test_backend_failure_is_swallowed_and_loop_continues_and_pushes(failure, tmp_xdg, tmp_path):
     """Pins today's behaviour: `_address_single_comment` catches *every* backend exception
     (including the shared-layer guards, which the Backend adapter propagates unchanged),
     so a failed run that left a commit behind is still pushed, the next comment is still
@@ -1028,25 +1053,27 @@ def test_backend_failure_is_swallowed_and_loop_continues_and_pushes(failure, tmp
         patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.side_effect = failure
-        address_comments._run_locked(cfg)
+        await address_comments._run_locked(cfg)
     assert mock_be.return_value.run.call_count == 2  # next comment still processed
     assert mock_push.call_count == 2  # partial commit from the failed run is pushed
     mock_restore.assert_called()
 
 
 @pytest.mark.parametrize("failure", _BACKEND_FAILURES)
-def test_address_single_comment_does_not_record_for_any_backend_failure(failure, monkeypatch):
+async def test_address_single_comment_does_not_record_for_any_backend_failure(failure, monkeypatch):
     recorded = []
     monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
     # HEAD moved, so a commit exists; only `clean_run` may keep the comment from being recorded
-    monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha-after")
-    monkeypatch.setattr(address_comments, "_is_ancestor", lambda *a, **k: True)
+    monkeypatch.setattr(address_comments, "get_head_sha", AsyncMock(return_value="sha-after"))
+    monkeypatch.setattr(address_comments, "_is_ancestor", AsyncMock(return_value=True))
 
     backend = MagicMock(spec=Backend)
+    backend.run = AsyncMock()
     backend.run.side_effect = failure
 
-    post_sha, rewritten = address_comments._address_single_comment(
+    post_sha, rewritten = await address_comments._address_single_comment(
         _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, None, "acme-frontend"
     )
     assert recorded == []
@@ -1054,41 +1081,43 @@ def test_address_single_comment_does_not_record_for_any_backend_failure(failure,
     assert rewritten is False
 
 
-def test_address_single_comment_does_not_record_when_no_commit_and_no_reply_observed(monkeypatch):
+async def test_address_single_comment_does_not_record_when_no_commit_and_no_reply_observed(monkeypatch):
     recorded = []
     monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
-    monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha")
-    monkeypatch.setattr(address_comments, "_reply_observed", lambda *a, **k: False)
+    monkeypatch.setattr(address_comments, "get_head_sha", AsyncMock(return_value="sha"))
+    monkeypatch.setattr(address_comments, "_reply_observed", AsyncMock(return_value=False))
     backend = MagicMock(spec=Backend)
+    backend.run = AsyncMock()
     backend.run.return_value = None
-    address_comments._address_single_comment(
+    await address_comments._address_single_comment(
         _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, "bot", "acme-frontend"
     )
     assert recorded == []
 
 
-def test_address_single_comment_records_when_reply_observed_without_commit(monkeypatch):
+async def test_address_single_comment_records_when_reply_observed_without_commit(monkeypatch):
     recorded = []
     monkeypatch.setattr(address_comments.state, "record_replied_comment", lambda *a: recorded.append(a))
-    monkeypatch.setattr(address_comments, "get_head_sha", lambda *a, **k: "sha")
-    monkeypatch.setattr(address_comments, "_reply_observed", lambda *a, **k: True)
+    monkeypatch.setattr(address_comments, "get_head_sha", AsyncMock(return_value="sha"))
+    monkeypatch.setattr(address_comments, "_reply_observed", AsyncMock(return_value=True))
     backend = MagicMock(spec=Backend)
+    backend.run = AsyncMock()
     backend.run.return_value = None
-    address_comments._address_single_comment(
+    await address_comments._address_single_comment(
         _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, "bot", "acme-frontend"
     )
     assert recorded == [("acme-frontend", 7, "issue:6161750034")]
 
 
-def test_list_all_open_pr_numbers_returns_none_on_failure():
+async def test_list_all_open_pr_numbers_returns_none_on_failure():
     from types import SimpleNamespace
 
     from dotharness.pr_review.runners import address_comments as ac
 
     with patch.object(ac, "run_cmd", return_value=SimpleNamespace(returncode=1, stdout="")):
-        assert ac._list_all_open_pr_numbers("o/r", {}) is None
+        assert (await ac._list_all_open_pr_numbers("o/r", {})) is None
     with patch.object(ac, "run_cmd", return_value=SimpleNamespace(returncode=0, stdout='[{"number": 7}]')):
-        assert ac._list_all_open_pr_numbers("o/r", {}) == {7}
+        assert (await ac._list_all_open_pr_numbers("o/r", {})) == {7}
 
 
 def _thread(root_id, *, resolved=False, minimized=False):
@@ -1098,11 +1127,11 @@ def _thread(root_id, *, resolved=False, minimized=False):
     }
 
 
-def test_filter_comments_drops_marked_comment_in_resolved_thread():
+async def test_filter_comments_drops_marked_comment_in_resolved_thread():
     with patch(
         "dotharness.pr_review.runners.address_comments.fetch_review_threads", return_value=[_thread(1, resolved=True)]
     ):
-        result = address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
+        result = await address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
     assert result == []
 
 
@@ -1147,26 +1176,30 @@ def test_select_focused_review_comments_drops_marked_comment_not_in_unresolved_i
     assert rest == []
 
 
-def test_filter_comments_drops_minimized_marked_thread_and_does_not_forward_to_rest():
+async def test_filter_comments_drops_minimized_marked_thread_and_does_not_forward_to_rest():
     threads = [_thread(1, minimized=True), _thread(2)]
     with patch("dotharness.pr_review.runners.address_comments.fetch_review_threads", return_value=threads):
-        result = address_comments._filter_comments([_MARKED_COMMENT, _PLAIN_COMMENT], 1, "acme/frontend", "alexei", {})
+        result = await address_comments._filter_comments(
+            [_MARKED_COMMENT, _PLAIN_COMMENT], 1, "acme/frontend", "alexei", {}
+        )
     assert result == [_PLAIN_COMMENT]
 
 
-def test_filter_comments_selects_unresolved_unminimized_marked_thread():
+async def test_filter_comments_selects_unresolved_unminimized_marked_thread():
     with patch("dotharness.pr_review.runners.address_comments.fetch_review_threads", return_value=[_thread(1)]):
-        result = address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
+        result = await address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
     assert result == [_FOCUSED_REVIEW_COMMENT]
 
 
 @pytest.mark.parametrize("patch_target", ["fetch_review_threads", "_get_unresolved_comment_ids"])
-def test_filter_comments_lookup_failure_fails_closed_for_marked_threads(patch_target, caplog):
+async def test_filter_comments_lookup_failure_fails_closed_for_marked_threads(patch_target, caplog):
     with (
         patch(f"dotharness.pr_review.runners.address_comments.{patch_target}", return_value=None),
         caplog.at_level("WARNING"),
     ):
-        result = address_comments._filter_comments([_MARKED_COMMENT, _PLAIN_COMMENT], 7, "acme/frontend", "alexei", {})
+        result = await address_comments._filter_comments(
+            [_MARKED_COMMENT, _PLAIN_COMMENT], 7, "acme/frontend", "alexei", {}
+        )
     assert result == [_PLAIN_COMMENT]
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert len(warnings) == 1
@@ -1174,22 +1207,22 @@ def test_filter_comments_lookup_failure_fails_closed_for_marked_threads(patch_ta
     assert "1 marked" in warnings[0].getMessage()
 
 
-def test_filter_comments_lookup_failure_without_marked_threads_logs_no_warning(caplog):
+async def test_filter_comments_lookup_failure_without_marked_threads_logs_no_warning(caplog):
     with (
         patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=None),
         caplog.at_level("WARNING"),
     ):
-        result = address_comments._filter_comments([_PLAIN_COMMENT], 1, "acme/frontend", "alexei", {})
+        result = await address_comments._filter_comments([_PLAIN_COMMENT], 1, "acme/frontend", "alexei", {})
     assert result == [_PLAIN_COMMENT]
     assert not [r for r in caplog.records if r.levelname == "WARNING"]
 
 
-def test_comment_still_unresolved_returns_true_on_lookup_failure_for_unmarked_comment():
+async def test_comment_still_unresolved_returns_true_on_lookup_failure_for_unmarked_comment():
     with patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=None):
-        assert address_comments._comment_still_unresolved(_PLAIN_COMMENT, 1, "acme/frontend", {}) is True
+        assert (await address_comments._comment_still_unresolved(_PLAIN_COMMENT, 1, "acme/frontend", {})) is True
 
 
-def _run_pending(comments, lookup_return):
+async def _run_pending(comments, lookup_return):
     ctx = address_comments._ProcessPrContext(
         script_path=Path("s"),
         instructions_template="t",
@@ -1214,14 +1247,14 @@ def _run_pending(comments, lookup_return):
         ) as single,
         patch("dotharness.pr_review.runners.address_comments._push_branch", return_value=True),
     ):
-        address_comments._address_pending_comments(5, "br", ctx)
+        await address_comments._address_pending_comments(5, "br", ctx)
     return lookup, single
 
 
-def test_prerun_recheck_skips_repointed_comment_on_lookup_failure(caplog):
+async def test_prerun_recheck_skips_repointed_comment_on_lookup_failure(caplog):
     marked = {**_PLAIN_COMMENT, "focused_review_original": {"author": "sonar", "body": "x"}}
     with caplog.at_level("WARNING"):
-        lookup, single = _run_pending([marked], None)
+        lookup, single = await _run_pending([marked], None)
     single.assert_not_called()
     assert lookup.call_count == 1
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
@@ -1230,14 +1263,14 @@ def test_prerun_recheck_skips_repointed_comment_on_lookup_failure(caplog):
     assert "2" in warnings[0].getMessage()
 
 
-def test_prerun_recheck_addresses_repointed_comment_when_unresolved():
+async def test_prerun_recheck_addresses_repointed_comment_when_unresolved():
     marked = {**_PLAIN_COMMENT, "focused_review_original": {"author": "sonar", "body": "x"}}
-    _, single = _run_pending([marked], _state(2))
+    _, single = await _run_pending([marked], _state(2))
     single.assert_called_once()
 
 
-def test_prerun_recheck_addresses_unmarked_comment_on_lookup_failure():
-    _, single = _run_pending([_PLAIN_COMMENT], None)
+async def test_prerun_recheck_addresses_unmarked_comment_on_lookup_failure():
+    _, single = await _run_pending([_PLAIN_COMMENT], None)
     single.assert_called_once()
 
 
@@ -1268,19 +1301,19 @@ def test_build_comment_instructions_fences_replies_and_original():
     "stdout",
     [b'{"data": {"repository": null}}', b"null", b"not json", b'{"data": {"repository": {"pullRequest": null}}}'],
 )
-def test_check_gql_unresolved_threads_malformed_payload_fails_soft(stdout):
+async def test_check_gql_unresolved_threads_malformed_payload_fails_soft(stdout):
     result = MagicMock(returncode=0, stdout=stdout)
     with patch("dotharness.pr_review.runners.address_comments.run_cmd", return_value=result):
-        assert address_comments._check_gql_unresolved_threads(1, "o/r", {}) == (0, 0, False)
+        assert (await address_comments._check_gql_unresolved_threads(1, "o/r", {})) == (0, 0, False)
 
 
-def test_check_human_issue_comments_malformed_payload_returns_false():
+async def test_check_human_issue_comments_malformed_payload_returns_false():
     result = MagicMock(returncode=0, stdout=b"{truncated")
     with patch("dotharness.pr_review.runners.address_comments.run_cmd", return_value=result):
-        assert address_comments._check_human_issue_comments(1, "o/r", {}) is False
+        assert (await address_comments._check_human_issue_comments(1, "o/r", {})) is False
 
 
-def test_list_prs_malformed_payload_returns_empty():
+async def test_list_prs_malformed_payload_returns_empty():
     result = MagicMock(returncode=0, stdout=b"{truncated")
     with patch("dotharness.pr_review.runners.address_comments.run_cmd", return_value=result):
-        assert address_comments._list_prs("o/r", {}, "--author") == []
+        assert (await address_comments._list_prs("o/r", {}, "--author")) == []

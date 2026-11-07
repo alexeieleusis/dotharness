@@ -1,13 +1,16 @@
+import asyncio
 import enum
 import logging
 import shutil
 import sys
 from datetime import date
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated
 
 import typer
 
+from dotharness.cli_common import fail
+from dotharness.paths import data_dir
 from dotharness.pr_review import state as state_mod
 from dotharness.pr_review.config import load_config
 from dotharness.pr_review.runners import (
@@ -74,7 +77,7 @@ enabled = false
 """
 
 HARNESS_CONFIG = ".harness.toml"
-XDG_LOGS = Path.home() / ".local/share/dotharness/logs"
+XDG_LOGS = data_dir() / "logs"
 RUNNER_FAILED_MSG = "Runner %s failed: %s"
 
 
@@ -107,18 +110,12 @@ class Scheduler(enum.StrEnum):
     launchd = "launchd"
 
 
-def _fail(message: str) -> NoReturn:
-    """Typer equivalent of ``click.ClickException``: ``Error: <message>`` on stderr, exit code 1."""
-    typer.echo(f"Error: {message}", err=True)
-    raise typer.Exit(1)
-
-
 @app.command("init")
 def cmd_init(directory: Annotated[str, typer.Argument(metavar="DIRECTORY")] = ".") -> None:
     """Write a .harness.toml template to DIRECTORY (default: current directory)."""
     p = Path(directory) / HARNESS_CONFIG
     if p.exists():
-        _fail(f"{HARNESS_CONFIG} already exists in {Path(directory).resolve()}")
+        fail(f"{HARNESS_CONFIG} already exists in {Path(directory).resolve()}")
     p.write_text(TEMPLATE)
     typer.echo(f"Created {p.resolve()}")
 
@@ -192,7 +189,7 @@ def run_review_prs(
     _setup_logging("review-prs", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
     try:
-        review_prs.run(cfg, pr_url=pr_url)
+        asyncio.run(review_prs.run(cfg, pr_url=pr_url))
     except review_prs.BaseAnalysisError as exc:
         logging.getLogger(__name__).error(RUNNER_FAILED_MSG, "review_prs", exc)  # noqa: TRY400
         sys.exit(1)
@@ -202,7 +199,7 @@ def run_review_prs(
 def run_focused_review(ctx: typer.Context) -> None:
     _setup_logging("focused-review", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
-    focused_review.run(cfg)
+    asyncio.run(focused_review.run(cfg))
 
 
 @run_app.command("review-requested")
@@ -220,14 +217,14 @@ def run_review_requested(
     """Post a dotharness-review on PRs where you're a requested reviewer (or a single PR with --pr)."""
     _setup_logging("review-requested", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
-    review_requested.run(cfg, pr_url=pr_url)
+    asyncio.run(review_requested.run(cfg, pr_url=pr_url))
 
 
 @run_app.command("self-review")
 def run_self_review(ctx: typer.Context) -> None:
     _setup_logging("self-review", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
-    self_review.run(cfg)
+    asyncio.run(self_review.run(cfg))
 
 
 @run_app.command("local-review")
@@ -263,14 +260,16 @@ def run_local_review(
         raise typer.BadParameter(usage_error)
     _setup_logging("local-review", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"], require_repo_name=False)
-    code = local_review.run_local_review(
-        cfg,
-        base=base,
-        output_dir=output_dir_arg,
-        force=force,
-        address=address,
-        skip_review=skip_review,
-        review_dir=review_dir_arg,
+    code = asyncio.run(
+        local_review.run_local_review(
+            cfg,
+            base=base,
+            output_dir=output_dir_arg,
+            force=force,
+            address=address,
+            skip_review=skip_review,
+            review_dir=review_dir_arg,
+        )
     )
     sys.exit(code)
 
@@ -279,7 +278,7 @@ def run_local_review(
 def run_address_comments(ctx: typer.Context) -> None:
     _setup_logging("address-comments", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
-    address_comments.run(cfg)
+    asyncio.run(address_comments.run(cfg))
 
 
 @run_app.command("auto-approve")
@@ -296,7 +295,7 @@ def run_auto_approve(
     """Mark small files viewed and approve small PRs once the author has followed up on review comments."""
     _setup_logging("auto-approve", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
-    auto_approve.run(cfg, dry_run=dry_run)
+    asyncio.run(auto_approve.run(cfg, dry_run=dry_run))
 
 
 PrOption = Annotated[
@@ -321,7 +320,7 @@ def run_ci_fix(
     """Fix failing required CI checks on your own PRs and push the fix to the PR branch. Off unless [ci_fix].enabled."""
     _setup_logging("ci-fix", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
-    ci_fix.run(cfg, dry_run=dry_run, pr=pr)
+    asyncio.run(ci_fix.run(cfg, dry_run=dry_run, pr=pr))
 
 
 @run_app.command("merge")
@@ -338,7 +337,7 @@ def run_merge(
     """Squash-merge your own PRs once every merge condition holds. Never approves. Off unless [merge].enabled."""
     _setup_logging("merge", ctx.obj.get("verbose", False))
     cfg = load_config(ctx.obj["config_path"])
-    merge.run(cfg, dry_run=dry_run, pr=pr)
+    asyncio.run(merge.run(cfg, dry_run=dry_run, pr=pr))
 
 
 @run_app.command("all")
@@ -362,16 +361,20 @@ def run_all(ctx: typer.Context) -> None:
         ("merge", lambda: merge.run(cfg)),
     ]
 
-    failed = []
-    for name, fn in runners:
-        try:
-            fn()
-        except review_prs.BaseAnalysisError as exc:
-            log.error(RUNNER_FAILED_MSG, name, exc)  # noqa: TRY400
-            failed.append(name)
-        except Exception as exc:
-            log.error(RUNNER_FAILED_MSG, name, exc, exc_info=True)
-            failed.append(name)
+    async def _run_each() -> list[str]:
+        failed = []
+        for name, fn in runners:
+            try:
+                await fn()
+            except review_prs.BaseAnalysisError as exc:
+                log.error(RUNNER_FAILED_MSG, name, exc)  # noqa: TRY400
+                failed.append(name)
+            except Exception as exc:
+                log.error(RUNNER_FAILED_MSG, name, exc, exc_info=True)
+                failed.append(name)
+        return failed
+
+    failed = asyncio.run(_run_each())
 
     if failed:
         sys.exit(1)
@@ -382,7 +385,7 @@ def _reset_local_review(config_path: Path, yes: bool) -> None:
     try:
         review_root = local_review.review_root_for_reset(cfg)
     except ValueError as exc:
-        _fail(str(exc))
+        fail(str(exc))
     if not review_root.exists():
         typer.echo(f"Nothing to reset: {review_root} does not exist")
         return

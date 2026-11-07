@@ -164,7 +164,7 @@ class World:
         return replace(base, **kw)
 
     # ---- fakes
-    def agent(self, prompt: str) -> None:
+    async def agent(self, prompt: str) -> None:
         self.agent_prompts.append(prompt)
         match = re.search(r"Save the brief file to (\S+)\.", prompt)
         if match:
@@ -195,7 +195,7 @@ class World:
             if stop:
                 stop_path.write_text(json.dumps(stop))
 
-    def shell(self, argv: Sequence[str], cwd: Path | None) -> CommandResult:
+    async def shell(self, argv: Sequence[str], cwd: Path | None) -> CommandResult:
         a = list(argv)
         self.shell_calls.append((tuple(a), cwd))
         if a[0] == "git":
@@ -254,18 +254,18 @@ class World:
             return CommandResult(self.ff_rc)
         raise AssertionError(f"unexpected git {a}")
 
-    def find_pr(self, branch: str) -> PullRequest | None:
+    async def find_pr(self, branch: str) -> PullRequest | None:
         self.find_calls += 1
         self.events.append("find_pr")
         return self.existing_pr
 
-    def pr_state(self, ref: str) -> PrInfo | None:
+    async def pr_state(self, ref: str) -> PrInfo | None:
         self.pr_state_refs.append(ref)
         if self.pr_state_error:
             raise self.pr_state_error
         return self.pr_info
 
-    def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
+    async def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
         self.events.append("open_pr")
         if self.client_error:
             raise self.client_error
@@ -274,14 +274,14 @@ class World:
         return self.existing_pr
 
     # ---- label remover (the LabelRemover protocol)
-    def remove_label(self, number: int, label: str) -> None:
+    async def remove_label(self, number: int, label: str) -> None:
         self.label_calls.append((number, label))
         if self.label_error:
             raise self.label_error
 
     # ---- run
-    def run(self, lock_held: bool = False, **kw: object) -> orchestrator.RunResult:
-        return run_item(
+    async def run(self, lock_held: bool = False, **kw: object) -> orchestrator.RunResult:
+        return await run_item(
             self.item,
             self.config(),
             self.options(**kw),
@@ -335,9 +335,9 @@ def _assert_stop(world: World, result: orchestrator.RunResult, cp: Checkpoint) -
 # ------------------------------------------------------------------ AC1, happy path
 
 
-def test_stage_order_and_record_writes(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stage_order_and_record_writes(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     log = world.mark_log(monkeypatch)
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert result.stages_run == ("intake", "plan", "build", "push", "open-pr")
     expected = []
@@ -356,8 +356,8 @@ def test_stage_order_and_record_writes(world: World, monkeypatch: pytest.MonkeyP
     ]
 
 
-def test_happy_path_pr_gate_and_digest(world: World) -> None:
-    result = world.run()
+async def test_happy_path_pr_gate_and_digest(world: World) -> None:
+    result = await world.run()
     assert world.opened == [(branch_name(ITEM), "base-branch", "Brief", world.opened[0][3])]  # no owned plan: brief H1
     assert result.pr == PullRequest(42, "https://example.test/pr/42")
     digest = world.digest_text()
@@ -375,8 +375,8 @@ def test_base_branch_is_a_parameter_not_a_literal() -> None:
     assert '"main"' not in src
 
 
-def test_prompts_carry_resolved_paths(world: World) -> None:
-    world.run()
+async def test_prompts_carry_resolved_paths(world: World) -> None:
+    await world.run()
     plan, build = world.agent_prompts[1], world.agent_prompts[2]
     cheat = str(knowledge_file("spec-prism-flow/lifecycle-cheat-sheet.md"))
     assert cheat.endswith("knowledge/spec-prism-flow/lifecycle-cheat-sheet.md")
@@ -397,8 +397,8 @@ def test_build_prompt_carries_the_test_only_deviation_rule() -> None:
     assert re.search(r"Context for later phases: .*list the tests you added or changed", text)
 
 
-def test_build_prompt_handoff_dir_is_the_items_plan_dir_not_the_workspace_root(world: World) -> None:
-    world.run()
+async def test_build_prompt_handoff_dir_is_the_items_plan_dir_not_the_workspace_root(world: World) -> None:
+    await world.run()
     build = world.agent_prompts[2]
     workspace_root = world.tmp / "ws"
     plan_dir = workspace_root / plan_dir_name(ITEM)
@@ -407,14 +407,14 @@ def test_build_prompt_handoff_dir_is_the_items_plan_dir_not_the_workspace_root(w
     assert not re.search(re.escape(str(workspace_root / "handoffs")) + r"(?![\w.-])", build)
 
 
-def test_two_items_get_distinct_handoff_dirs(world: World) -> None:
+async def test_two_items_get_distinct_handoff_dirs(world: World) -> None:
     other = "ENG-2"
     assert plan_dir_name(other) != plan_dir_name(ITEM)
-    world.run()
+    await world.run()
     first_prompt = world.agent_prompts[2]
     world.agent_prompts.clear()
     # second item against the same workspace root, through the real run_item with the same fakes
-    run_item(
+    await run_item(
         other,
         world.config(),
         world.options(),
@@ -437,8 +437,8 @@ def test_two_items_get_distinct_handoff_dirs(world: World) -> None:
     assert str(first) not in build_prompts[0]
 
 
-def test_build_stage_creates_handoff_dir_without_asking_the_agent_to_(world: World) -> None:
-    world.run()
+async def test_build_stage_creates_handoff_dir_without_asking_the_agent_to_(world: World) -> None:
+    await world.run()
     plan_dir = world.tmp / "ws" / plan_dir_name(ITEM)
     assert (plan_dir / "handoffs").is_dir()
     build = world.agent_prompts[2]
@@ -451,50 +451,50 @@ def test_build_stage_creates_handoff_dir_without_asking_the_agent_to_(world: Wor
 # ---------------------------------------------------------------- AC2: checkpoints
 
 
-def test_c1_brief_open_decisions(world: World) -> None:
+async def test_c1_brief_open_decisions(world: World) -> None:
     world.brief_text = BRIEF_OPEN
-    result = world.run()
+    result = await world.run()
     _assert_stop(world, result, Checkpoint.C1)
     assert result.stages_run == ()  # intake did not finish its stage in this run
     assert world.events == ["agent:intake"]  # no plan agent, no git
 
 
-def test_c2_open_questions_after_overview(world: World) -> None:
+async def test_c2_open_questions_after_overview(world: World) -> None:
     world.plan_stop = {"checkpoint": "C2", "leaf": "", "detail": "Which API version?"}
-    result = world.run()
+    result = await world.run()
     _assert_stop(world, result, Checkpoint.C2)
     assert "agent:build" not in world.events
     assert "Which API version?" in world.digest_text()
     assert not any(c[0][:2] == ("git", "fetch") for c in world.shell_calls)
 
 
-def test_c3_leaf_open_question(world: World) -> None:
+async def test_c3_leaf_open_question(world: World) -> None:
     world.build_stops = [{"checkpoint": "C3", "leaf": "13-foo", "detail": "Use A or B?"}]
-    result = world.run()
+    result = await world.run()
     _assert_stop(world, result, Checkpoint.C3)
     assert "Use A or B?" in result.detail
     assert not any(c[0][:2] == ("git", "push") for c in world.shell_calls)
     assert world.find_calls == 0
 
 
-def test_c4_deviation_changes_later_leaf(world: World) -> None:
+async def test_c4_deviation_changes_later_leaf(world: World) -> None:
     world.build_stops = [{"checkpoint": "C4", "leaf": "13-foo", "detail": "cannot tell"}]
-    result = world.run()
+    result = await world.run()
     _assert_stop(world, result, Checkpoint.C4)
     assert not any(c[0][:2] == ("git", "push") for c in world.shell_calls)
 
 
-def test_c5_leaf_scope_violation_from_agent(world: World) -> None:
+async def test_c5_leaf_scope_violation_from_agent(world: World) -> None:
     world.build_stops = [{"checkpoint": "C5", "leaf": "13-foo", "detail": "touched config.py"}]
-    result = world.run()
+    result = await world.run()
     _assert_stop(world, result, Checkpoint.C5)
     assert RunRecord.open(world.tmp / "ws", ITEM).retries["build:retry-cycles"] == 1
     assert world.find_calls == 0
 
 
-def test_gate_command_failure_completes_and_reports_in_digest(world: World) -> None:
+async def test_gate_command_failure_completes_and_reports_in_digest(world: World) -> None:
     world.gate_rc = 2
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert result.checkpoint is None
     assert result.pr is not None
@@ -508,9 +508,9 @@ def test_gate_command_failure_completes_and_reports_in_digest(world: World) -> N
     assert world.events.count("gate:make check@pkg") == 1  # stopped at the first failure
 
 
-def test_c5_intake_boundary_violation(world: World) -> None:
+async def test_c5_intake_boundary_violation(world: World) -> None:
     world.touch_repo_in_intake = True
-    result = world.run()
+    result = await world.run()
     _assert_stop(world, result, Checkpoint.C5)
     assert world.events == ["agent:intake"]
     assert "tracked.txt" in result.detail
@@ -522,19 +522,19 @@ def test_c5_intake_boundary_violation(world: World) -> None:
     assert "--reset-retries" not in action
 
 
-def test_c5_intake_resume_after_manual_revert_reruns_intake(world: World) -> None:
+async def test_c5_intake_resume_after_manual_revert_reruns_intake(world: World) -> None:
     world.touch_repo_in_intake = True
-    _assert_stop(world, world.run(), Checkpoint.C5)
+    _assert_stop(world, await world.run(), Checkpoint.C5)
     _git(world.repo, "checkout", "--", "tracked.txt")  # the user reverts the offending path by hand
     world.touch_repo_in_intake = False
-    result = world.run()
+    result = await world.run()
     assert result.checkpoint is not Checkpoint.C5
     assert world.events.count("agent:intake") == 2
 
 
-def test_c6_five_leaves(world: World) -> None:
+async def test_c6_five_leaves(world: World) -> None:
     world.leaves = 5
-    result = world.run()
+    result = await world.run()
     _assert_stop(world, result, Checkpoint.C6)
     assert "5 leaves" in result.detail
     assert "agent:build" not in world.events
@@ -542,33 +542,33 @@ def test_c6_five_leaves(world: World) -> None:
     assert "max_leaves_per_run" in world.digest_text().split("## Limits hit")[1]
 
 
-def test_four_leaves_is_allowed(world: World) -> None:
+async def test_four_leaves_is_allowed(world: World) -> None:
     world.leaves = 4
-    assert world.run().completed
+    assert (await world.run()).completed
 
 
-def test_c6_leaf_limit_rerun_does_not_replan(world: World) -> None:
+async def test_c6_leaf_limit_rerun_does_not_replan(world: World) -> None:
     world.leaves = 5
-    world.run()
+    await world.run()
     plans_before = world.events.count("agent:plan")
-    result = world.run()
+    result = await world.run()
     assert result.checkpoint is Checkpoint.C6
     assert world.events.count("agent:plan") == plans_before
     world.limits = LimitsConfig(max_leaves_per_run=5)  # the human raised the limit
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert world.events.count("agent:plan") == plans_before
 
 
-def test_c6_run_time_limit(world: World) -> None:
+async def test_c6_run_time_limit(world: World) -> None:
     original = world.agent
 
-    def slow(prompt: str) -> None:
-        original(prompt)
+    async def slow(prompt: str) -> None:
+        await original(prompt)
         world.clock.now += 3 * 3600
 
     world.agent_prompts = []
-    result = run_item(
+    result = await run_item(
         ITEM,
         world.config(),
         world.options(),
@@ -582,33 +582,33 @@ def test_c6_run_time_limit(world: World) -> None:
     assert "agent:plan" not in world.events
 
 
-def test_c7_branch_needs_rebase(world: World) -> None:
+async def test_c7_branch_needs_rebase(world: World) -> None:
     world.remote_exists = True
     world.ancestor_rc = 1
-    result = world.run()
+    result = await world.run()
     _assert_stop(world, result, Checkpoint.C7)
     assert not any(c[0][:2] == ("git", "push") for c in world.shell_calls)
     assert world.find_calls == 0
 
 
-def test_c8_pr_client_failure(world: World) -> None:
+async def test_c8_pr_client_failure(world: World) -> None:
     world.client_error = GitHubError("auth failed")
-    result = world.run()
+    result = await world.run()
     _assert_stop(world, result, Checkpoint.C8)
     assert "auth failed" in result.detail
     assert not any(e.startswith("gate") for e in world.events)
 
 
-def test_c8_push_failure(world: World) -> None:
+async def test_c8_push_failure(world: World) -> None:
     world.push_rc = 1
-    result = world.run()
+    result = await world.run()
     _assert_stop(world, result, Checkpoint.C8)
     assert world.find_calls == 0
 
 
-def test_c8_network_fetch_failure(world: World) -> None:
+async def test_c8_network_fetch_failure(world: World) -> None:
     world.fetch_rc = 1
-    result = world.run()
+    result = await world.run()
     _assert_stop(world, result, Checkpoint.C8)
     assert "agent:build" not in world.events
 
@@ -616,11 +616,11 @@ def test_c8_network_fetch_failure(world: World) -> None:
 # ------------------------------------------------------------ resume and retries
 
 
-def test_resume_after_c3_relaunches_build_without_replanning(world: World) -> None:
+async def test_resume_after_c3_relaunches_build_without_replanning(world: World) -> None:
     world.build_stops = [{"checkpoint": "C3", "leaf": "13-foo", "detail": "Use A or B?"}]
-    world.run()
+    await world.run()
     world.branch_exists = True
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert result.stages_run == ("build", "push", "open-pr")
     assert result.stages_skipped == ("intake", "plan")
@@ -629,47 +629,47 @@ def test_resume_after_c3_relaunches_build_without_replanning(world: World) -> No
     assert RunRecord.open(world.tmp / "ws", ITEM).checkpoint is None
 
 
-def test_build_not_relaunched_after_retry_cycles_exhausted(world: World) -> None:
+async def test_build_not_relaunched_after_retry_cycles_exhausted(world: World) -> None:
     world.build_stops = [{"checkpoint": "C5", "detail": "again"}] * 3
     for _ in range(3):
-        assert world.run().checkpoint is Checkpoint.C5
+        assert (await world.run()).checkpoint is Checkpoint.C5
         world.branch_exists = True
     builds = world.events.count("agent:build")
-    result = world.run()
+    result = await world.run()
     assert result.checkpoint is Checkpoint.C5
     assert world.events.count("agent:build") == builds == 3
 
 
-def test_bad_stop_reports_raise(world: World) -> None:
+async def test_bad_stop_reports_raise(world: World) -> None:
     world.plan_stop = {"checkpoint": "C3", "detail": "wrong stage"}
     with pytest.raises(OrchestratorError, match="not valid for stage plan"):
-        world.run()
+        await world.run()
     rec = RunRecord.open(world.tmp / "ws", ITEM)
     assert (rec.stage, rec.stage_status) == ("plan", "in_progress")
     assert "# Sisyphus digest" in world.digest_text()  # digest still written when a stage raises
 
 
-def test_build_without_commits_raises(world: World) -> None:
+async def test_build_without_commits_raises(world: World) -> None:
     world.ahead = "0"
     with pytest.raises(OrchestratorError, match="no commits"):
-        world.run()
+        await world.run()
 
 
-def test_preexisting_branch_not_created_by_sisyphus_is_refused(world: World) -> None:
+async def test_preexisting_branch_not_created_by_sisyphus_is_refused(world: World) -> None:
     world.branch_exists = True
     with pytest.raises(OrchestratorError, match="did not create it"):
-        world.run()
+        await world.run()
     assert "agent:build" not in world.events
 
 
 # ------------------------------------------------------------------- AC3: idempotence
 
 
-def test_rerun_with_unchanged_inputs_repeats_nothing(world: World) -> None:
-    world.run()
+async def test_rerun_with_unchanged_inputs_repeats_nothing(world: World) -> None:
+    await world.run()
     before = world.counts()
     events = list(world.events)
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert result.stages_run == ()
     assert result.stages_skipped == ("intake", "plan", "build", "push", "open-pr")
@@ -683,11 +683,11 @@ def test_rerun_with_unchanged_inputs_repeats_nothing(world: World) -> None:
     assert len(world.opened) == 1
 
 
-def test_rerun_after_gate_failure_skips_every_stage(world: World) -> None:
+async def test_rerun_after_gate_failure_skips_every_stage(world: World) -> None:
     world.gate_rc = 1
-    world.run()
+    await world.run()
     world.gate_rc = 0
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert len(world.opened) == 1  # no second PR
     assert world.events.count("agent:build") == 1
@@ -698,10 +698,10 @@ def test_rerun_after_gate_failure_skips_every_stage(world: World) -> None:
     assert "gate not run" not in world.digest_text()
 
 
-def test_rerun_after_c1_unchanged_brief_makes_no_agent_call(world: World) -> None:
+async def test_rerun_after_c1_unchanged_brief_makes_no_agent_call(world: World) -> None:
     world.brief_text = BRIEF_OPEN
-    world.run()
-    result = world.run()
+    await world.run()
+    result = await world.run()
     assert result.checkpoint is Checkpoint.C1
     assert world.events == ["agent:intake"]  # the sidecar skip means no second intake call
 
@@ -709,27 +709,27 @@ def test_rerun_after_c1_unchanged_brief_makes_no_agent_call(world: World) -> Non
 # --------------------------------------------------------------- AC5: push guard
 
 
-def test_push_to_protected_branch_is_refused(world: World) -> None:
+async def test_push_to_protected_branch_is_refused(world: World) -> None:
     protected = branch_name(ITEM)
     with pytest.raises(OrchestratorError, match="push refused: push to the default branch"):
-        world.run(default_branch=protected)
+        await world.run(default_branch=protected)
     assert not any(c[0][:2] == ("git", "push") for c in world.shell_calls)
     assert world.find_calls == 0
 
 
-def test_push_refused_when_branch_not_recorded_as_created(world: World) -> None:
-    world.run()
+async def test_push_refused_when_branch_not_recorded_as_created(world: World) -> None:
+    await world.run()
     rec = RunRecord.open(world.tmp / "ws", ITEM)
     rec.retries.pop("branch-created")
     rec.mark_stage("build", "complete")
     world.shell_calls.clear()
     with pytest.raises(OrchestratorError, match="not created by Sisyphus"):
-        world.run()
+        await world.run()
     assert not any(c[0][:2] == ("git", "push") for c in world.shell_calls)
 
 
-def test_push_argv_is_plain_non_force(world: World) -> None:
-    world.run()
+async def test_push_argv_is_plain_non_force(world: World) -> None:
+    await world.run()
     pushes = [c[0] for c in world.shell_calls if c[0][:2] == ("git", "push")]
     assert pushes == [("git", "push", "origin", branch_name(ITEM))]
 
@@ -737,15 +737,15 @@ def test_push_argv_is_plain_non_force(world: World) -> None:
 # ------------------------------------------------------------- AC6: Sisyphus stops at open-pr
 
 
-def test_nothing_ever_approves(world: World) -> None:
-    world.run()
+async def test_nothing_ever_approves(world: World) -> None:
+    await world.run()
     for argv, _ in world.shell_calls:
         assert "approve" not in " ".join(argv)
 
 
-def test_run_is_complete_once_the_pr_is_open_and_frees_the_clone(world: World) -> None:
+async def test_run_is_complete_once_the_pr_is_open_and_frees_the_clone(world: World) -> None:
     _cleanup_ready(world)  # proof (1): the pushed head is an ancestor of origin/<branch>
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert result.stages_run[-1] == "open-pr"
     for stage in ("ci-fix", "merge"):
@@ -761,9 +761,9 @@ def test_run_is_complete_once_the_pr_is_open_and_frees_the_clone(world: World) -
 # ---------------------------------------------------------- gate commands (FR-3.3.10)
 
 
-def test_no_build_commands_skips_gate_and_reports_in_digest(world: World) -> None:
+async def test_no_build_commands_skips_gate_and_reports_in_digest(world: World) -> None:
     (world.repo / ".spec-prism-flow.toml").write_text('[plan]\nphase_dir = "x"\n')
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert result.checkpoint is None
     assert "gate not run for PR #42: no build.commands" in world.digest_text().split("## Deviations")[1]
@@ -771,7 +771,7 @@ def test_no_build_commands_skips_gate_and_reports_in_digest(world: World) -> Non
     assert not any(e.startswith("gate") for e in world.events)
 
 
-def test_item_config_points_at_this_items_plan_dir_not_the_repos(world: World) -> None:
+async def test_item_config_points_at_this_items_plan_dir_not_the_repos(world: World) -> None:
     stale = world.tmp / "ws" / "plan-82"
     (world.repo / ".spec-prism-flow.toml").write_text(
         f'[plan]\nworkspace_dir = "{stale}"\nphase_dir = "{stale}/phases"\n\n'
@@ -781,7 +781,7 @@ def test_item_config_points_at_this_items_plan_dir_not_the_repos(world: World) -
     plan_dir = world.tmp / "ws" / plan_dir_name(ITEM)
     world.phases = plan_dir / "phases"
     world.phases.mkdir(parents=True)
-    result = world.run(phase_dir=None)
+    result = await world.run(phase_dir=None)
     assert result.completed
     data = tomllib.loads((plan_dir / ".spec-prism-flow.toml").read_text())
     assert data["plan"] == {"workspace_dir": str(plan_dir), "phase_dir": str(plan_dir / "phases")}
@@ -824,27 +824,27 @@ def test_dump_spf_config_round_trips_nested_tables_quoted_keys_and_datetimes() -
     assert tomllib.loads(dump_spf_config(data)) == data
 
 
-def test_missing_spf_config_skips_gate(world: World) -> None:
+async def test_missing_spf_config_skips_gate(world: World) -> None:
     (world.repo / ".spec-prism-flow.toml").unlink()
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert "gate not run for PR #42: no build.commands" in world.digest_text()
 
 
-def test_no_changed_files_skips_gate_without_checkpoint(world: World) -> None:
+async def test_no_changed_files_skips_gate_without_checkpoint(world: World) -> None:
     world.changed = ""
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert result.checkpoint is None
     assert not any(e.startswith("gate") for e in world.events)
     assert "gate not run for PR #42: no changed files to gate" in world.digest_text()
 
 
-def test_gate_runs_in_each_touched_package_dir(world: World) -> None:
+async def test_gate_runs_in_each_touched_package_dir(world: World) -> None:
     (world.repo / "other").mkdir()
     (world.repo / "other" / "Makefile").write_text("x:\n")
     world.changed = "tools/pkg/a.py\nother/b.py\n"
-    world.run()
+    await world.run()
     gates = [c for c in world.shell_calls if c[0][0] == "make"]
     assert {(c[0], c[1].name) for c in gates if c[1]} == {
         (("make", "check"), "pkg"),
@@ -865,49 +865,49 @@ def _gates(world: World) -> list[str]:
     return [e for e in world.events if e.startswith("gate")]
 
 
-def test_gate_entry_runs_only_in_matching_dir(world: World) -> None:
+async def test_gate_entry_runs_only_in_matching_dir(world: World) -> None:
     _gate_world(world, '[[build.gate]]\nrun = "make scoped"\npackages = ["tools/pkg"]\n')
-    assert world.run().completed
+    assert (await world.run()).completed
     assert _gates(world) == ["gate:make scoped@pkg"]
     assert "gate passed" in world.digest_text()
 
 
-def test_gate_entry_not_matching_any_dir_notes_and_skips(world: World) -> None:
+async def test_gate_entry_not_matching_any_dir_notes_and_skips(world: World) -> None:
     _gate_world(world, '[[build.gate]]\nrun = "make scoped"\npackages = ["elsewhere"]\n')
-    assert world.run().completed
+    assert (await world.run()).completed
     assert not _gates(world)
     assert "no [[build.gate]] entry applies" in world.digest_text()
     assert "gate not run" in world.digest_text().split("## Done")[1].split("## Deviations")[0]
 
 
-def test_gate_entry_without_packages_runs_everywhere(world: World) -> None:
+async def test_gate_entry_without_packages_runs_everywhere(world: World) -> None:
     _gate_world(world, '[[build.gate]]\nrun = "make all"\n')
-    world.run()
+    await world.run()
     assert _gates(world) == ["gate:make all@other", "gate:make all@pkg"]
 
 
-def test_gate_entry_dot_means_repo_root(world: World) -> None:
+async def test_gate_entry_dot_means_repo_root(world: World) -> None:
     _gate_world(world, '[[build.gate]]\nrun = "make root"\npackages = ["."]\n', "top.md\ntools/pkg/a.py\n")
-    world.run()
+    await world.run()
     assert _gates(world) == [f"gate:make root@{world.repo.name}"]
 
 
-def test_gate_entry_matches_normalized_and_not_by_prefix(world: World) -> None:
+async def test_gate_entry_matches_normalized_and_not_by_prefix(world: World) -> None:
     _gate_world(
         world,
         '[[build.gate]]\nrun = "make a"\npackages = ["./tools/pkg/"]\n\n[[build.gate]]\nrun = "make b"\npackages = ["tools"]\n',
     )
-    world.run()
+    await world.run()
     assert _gates(world) == ["gate:make a@pkg"]
 
 
-def test_gate_plain_commands_run_before_entries_per_dir(world: World) -> None:
+async def test_gate_plain_commands_run_before_entries_per_dir(world: World) -> None:
     _gate_world(
         world,
         '[build]\ncommands = ["make plain"]\n\n[[build.gate]]\nrun = "make one"\n\n'
         '[[build.gate]]\nrun = "make two"\npackages = ["tools/pkg"]\n',
     )
-    world.run()
+    await world.run()
     assert _gates(world) == [
         "gate:make plain@other",
         "gate:make one@other",
@@ -917,32 +917,32 @@ def test_gate_plain_commands_run_before_entries_per_dir(world: World) -> None:
     ]
 
 
-def test_gate_entries_unmatched_with_plain_commands_run_plain_silently(world: World) -> None:
+async def test_gate_entries_unmatched_with_plain_commands_run_plain_silently(world: World) -> None:
     _gate_world(world, '[build]\ncommands = ["make plain"]\n\n[[build.gate]]\nrun = "make x"\npackages = ["nope"]\n')
-    assert world.run().completed
+    assert (await world.run()).completed
     assert _gates(world) == ["gate:make plain@other", "gate:make plain@pkg"]
     assert "no [[build.gate]] entry applies" not in world.digest_text()
 
 
-def test_gate_entry_failure_is_recorded_without_a_checkpoint(world: World) -> None:
+async def test_gate_entry_failure_is_recorded_without_a_checkpoint(world: World) -> None:
     _gate_world(world, '[[build.gate]]\nrun = "make scoped"\n')
     world.gate_rc = 2
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert "gate failed: make scoped in" in world.digest_text()
 
 
-def test_gate_entry_unknown_key_raises(world: World) -> None:
+async def test_gate_entry_unknown_key_raises(world: World) -> None:
     _gate_world(world, '[[build.gate]]\nrun = "make x"\ncwd = "a"\n')
     with pytest.raises(OrchestratorError, match=r"build\.gate\[0\] has unknown keys: cwd"):
-        world.run()
+        await world.run()
     assert not world.opened  # validated before the PR is opened
 
 
-def test_invalid_gate_entry_fails_even_without_changed_files(world: World) -> None:
+async def test_invalid_gate_entry_fails_even_without_changed_files(world: World) -> None:
     _gate_world(world, '[[build.gate]]\nrun = ""\n', changed="")
     with pytest.raises(OrchestratorError, match="run must be a non-empty string"):
-        world.run()
+        await world.run()
 
 
 def test_read_gate_entries(tmp_path: Path) -> None:
@@ -984,14 +984,14 @@ def test_read_gate_entries_rejects_non_table_array(tmp_path: Path) -> None:
         read_gate_entries(p)
 
 
-def test_gate_entries_round_trip_through_item_config(world: World) -> None:
+async def test_gate_entries_round_trip_through_item_config(world: World) -> None:
     src = '[build]\ncommands = ["make plain"]\n\n[[build.gate]]\nrun = "make x"\npackages = ["tools/pkg"]\n\n[[build.gate]]\nrun = "make y"\n'
     _gate_world(world, src)
     assert tomllib.loads(dump_spf_config(tomllib.loads(src)))["build"]["gate"] == [
         {"run": "make x", "packages": ["tools/pkg"]},
         {"run": "make y"},
     ]
-    world.run()
+    await world.run()
     plan_dir = world.tmp / "ws" / plan_dir_name(ITEM)
     assert tomllib.loads((plan_dir / ".spec-prism-flow.toml").read_text())["build"] == tomllib.loads(src)["build"]
 
@@ -1021,40 +1021,40 @@ def test_read_build_commands(tmp_path: Path) -> None:
 # ---------------------------------------------------- lock, digest and misc surfaces
 
 
-def test_lock_held_propagates_before_any_state(world: World) -> None:
+async def test_lock_held_propagates_before_any_state(world: World) -> None:
     with clone_lock(world.repo, world.tmp / "locks"), pytest.raises(LockHeld):
-        world.run()
+        await world.run()
     assert world.events == []
     assert not (world.tmp / "ws").exists()
     assert not (world.tmp / "digest-2026-01-02.md").exists()
 
 
-def test_lock_held_by_caller_skips_locking(world: World) -> None:
+async def test_lock_held_by_caller_skips_locking(world: World) -> None:
     with clone_lock(world.repo, world.tmp / "locks"):
-        result = world.run(lock_held=True)
+        result = await world.run(lock_held=True)
     assert result.stages_run
     with clone_lock(world.repo, world.tmp / "locks"):
         pass
 
 
-def test_default_still_locks_and_releases_on_error(world: World) -> None:
+async def test_default_still_locks_and_releases_on_error(world: World) -> None:
     with clone_lock(world.repo, world.tmp / "locks"), pytest.raises(LockHeld):
-        world.run(lock_held=False)
+        await world.run(lock_held=False)
     assert world.events == []
 
 
-def test_lock_released_after_run(world: World) -> None:
-    world.run()
+async def test_lock_released_after_run(world: World) -> None:
+    await world.run()
     with clone_lock(world.repo, world.tmp / "locks"):
         pass
 
 
-def test_digest_write_error_surfaces(world: World) -> None:
+async def test_digest_write_error_surfaces(world: World) -> None:
     blocker = world.tmp / "file"
     blocker.write_text("x")
     config = replace(world.config(), digest=DigestConfig(path_template=str(blocker / "d.md")))
     with pytest.raises(DigestWriteError):
-        run_item(
+        await run_item(
             ITEM,
             config,
             world.options(),
@@ -1066,13 +1066,13 @@ def test_digest_write_error_surfaces(world: World) -> None:
         )
 
 
-def test_digest_error_is_chained_to_stage_error(world: World) -> None:
+async def test_digest_error_is_chained_to_stage_error(world: World) -> None:
     blocker = world.tmp / "file"
     blocker.write_text("x")
     world.ahead = "0"
     config = replace(world.config(), digest=DigestConfig(path_template=str(blocker / "d.md")))
     with pytest.raises(DigestWriteError) as info:
-        run_item(
+        await run_item(
             ITEM,
             config,
             world.options(),
@@ -1085,8 +1085,8 @@ def test_digest_error_is_chained_to_stage_error(world: World) -> None:
     assert isinstance(info.value.__cause__, OrchestratorError)
 
 
-def test_digest_can_be_deferred_to_the_caller(world: World) -> None:
-    result = run_item(
+async def test_digest_can_be_deferred_to_the_caller(world: World) -> None:
+    result = await run_item(
         ITEM,
         world.config(),
         world.options(),
@@ -1100,10 +1100,10 @@ def test_digest_can_be_deferred_to_the_caller(world: World) -> None:
     assert result.report.done
 
 
-def test_required_config_is_validated(world: World) -> None:
+async def test_required_config_is_validated(world: World) -> None:
     config = replace(world.config(), project=ProjectConfig())
     with pytest.raises(OrchestratorError, match="repo_dir"):
-        run_item(
+        await run_item(
             ITEM,
             config,
             world.options(),
@@ -1112,7 +1112,7 @@ def test_required_config_is_validated(world: World) -> None:
             pr_client=world,
         )
     with pytest.raises(OrchestratorError, match="base_branch"):
-        world.run(base_branch="")
+        await world.run(base_branch="")
 
 
 def test_branch_name_is_deterministic_and_safe() -> None:
@@ -1128,15 +1128,15 @@ def test_stop_report_path_sits_next_to_record(world: World) -> None:
     assert stop_report_path(rec).parent == rec.path.parent
 
 
-def test_default_subprocess_runner_captures_output(tmp_path: Path) -> None:
-    res = default_subprocess_runner([sys.executable, "-c", "import sys; print('out'); sys.exit(3)"], tmp_path)
+async def test_default_subprocess_runner_captures_output(tmp_path: Path) -> None:
+    res = await default_subprocess_runner([sys.executable, "-c", "import sys; print('out'); sys.exit(3)"], tmp_path)
     assert (res.returncode, res.stdout.strip()) == (3, "out")
-    assert default_subprocess_runner(["definitely-not-a-real-binary-xyz"], tmp_path).returncode == 127
+    assert (await default_subprocess_runner(["definitely-not-a-real-binary-xyz"], tmp_path)).returncode == 127
 
 
-def test_pr_client_protocol_is_satisfied_by_the_fake(world: World) -> None:
+async def test_pr_client_protocol_is_satisfied_by_the_fake(world: World) -> None:
     client: orchestrator.PullRequestClient = world
-    assert client.find_pr("b") is None
+    assert await client.find_pr("b") is None
 
 
 # -------------------------------------------------- AC7 / checklist: static guarantees
@@ -1149,8 +1149,8 @@ def test_orchestrator_does_not_import_harness_or_spec_prism_flow() -> None:
     assert "spec_prism_flow" not in text
 
 
-def test_tests_never_invoke_real_tools(world: World) -> None:
-    world.run()
+async def test_tests_never_invoke_real_tools(world: World) -> None:
+    await world.run()
     for argv, _ in world.shell_calls:
         assert argv[0] in {"git", "harness", "make"}  # all through the fake, none executed for real
     assert world.events  # the fake saw every call
@@ -1298,9 +1298,9 @@ def _stop_c8(world: World) -> None:
         (_stop_c8, "C8", "retry"),
     ],
 )
-def test_stop_record_written_for_each_checkpoint(world: World, setup, cp: str, clears_by: str) -> None:
+async def test_stop_record_written_for_each_checkpoint(world: World, setup, cp: str, clears_by: str) -> None:
     setup(world)
-    world.run()
+    await world.run()
     stop = _stop(world)
     assert stop is not None
     assert (stop.kind, stop.checkpoint, stop.item, stop.clears_by) == ("checkpoint", cp, ITEM, clears_by)
@@ -1313,19 +1313,19 @@ def test_stop_record_written_for_each_checkpoint(world: World, setup, cp: str, c
     assert f"Resume: `{stop.resume_command}`" in line
 
 
-def test_c1_stop_record_lists_each_open_decision(world: World) -> None:
+async def test_c1_stop_record_lists_each_open_decision(world: World) -> None:
     world.brief_text = "# B\n\n## Open decisions log\n\n1. Which tracker?\n2. Which base?\n"
-    world.run()
+    await world.run()
     stop = _stop(world)
     assert stop is not None
     assert stop.questions == ("1. Which tracker?", "2. Which base?")
     assert str(_brief(world)) in stop.action
 
 
-def test_stop_record_written_for_an_unexpected_error(world: World) -> None:
+async def test_stop_record_written_for_an_unexpected_error(world: World) -> None:
     world.ahead = "0"
     with pytest.raises(OrchestratorError):
-        world.run()
+        await world.run()
     stop = _stop(world)
     assert stop is not None
     assert (stop.kind, stop.checkpoint, stop.stage, stop.stage_status) == ("error", None, "build", "in_progress")
@@ -1336,18 +1336,18 @@ def test_stop_record_written_for_an_unexpected_error(world: World) -> None:
     assert "Resume:" in line
 
 
-def test_stop_record_removed_when_the_run_completes(world: World) -> None:
+async def test_stop_record_removed_when_the_run_completes(world: World) -> None:
     world.brief_text = BRIEF_OPEN
-    world.run()
+    await world.run()
     assert _stop(world) is not None
     _brief(world).write_text(BRIEF_NONE)
-    assert world.run().completed
+    assert (await world.run()).completed
     assert _stop(world) is None
 
 
-def test_options_resume_command_is_stored(world: World) -> None:
+async def test_options_resume_command_is_stored(world: World) -> None:
     world.brief_text = BRIEF_OPEN
-    world.run(resume_command="sisyphus resume {item} --config /c.toml --base b")
+    await world.run(resume_command="sisyphus resume {item} --config /c.toml --base b")
     stop = _stop(world)
     assert stop is not None
     assert stop.resume_command == "sisyphus resume ENG-1 --config /c.toml --base b"
@@ -1359,11 +1359,11 @@ def _brief(world: World) -> Path:
     return resolve_brief_path(world.config(), ITEM)
 
 
-def test_c1_resume_with_edited_brief_proceeds_to_plan(world: World) -> None:
+async def test_c1_resume_with_edited_brief_proceeds_to_plan(world: World) -> None:
     world.brief_text = BRIEF_OPEN
-    world.run()
+    await world.run()
     _brief(world).write_text(BRIEF_NONE)
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert world.events.count("agent:intake") == 1  # not redrafted
     assert world.events.count("agent:plan") == 1
@@ -1371,24 +1371,24 @@ def test_c1_resume_with_edited_brief_proceeds_to_plan(world: World) -> None:
     assert _stop(world) is None
 
 
-def test_c1_resume_never_redrafts_a_human_edited_brief_even_if_the_prompt_changed(world: World) -> None:
+async def test_c1_resume_never_redrafts_a_human_edited_brief_even_if_the_prompt_changed(world: World) -> None:
     world.brief_text = BRIEF_OPEN
-    world.run()
+    await world.run()
     _brief(world).write_text(BRIEF_OPEN + "\n2. Resolved: ok\n")
     _brief(world).with_name("brief.md.intake.json").write_text(
         "{}"
     )  # prompt hash mismatch: a plain re-run would call the intake agent again
-    result = world.run()
+    result = await world.run()
     assert result.checkpoint is Checkpoint.C1
     assert world.events == ["agent:intake"]
 
 
-def test_c1_resume_without_edit_stops_again_with_same_question_and_repeats_nothing(world: World) -> None:
+async def test_c1_resume_without_edit_stops_again_with_same_question_and_repeats_nothing(world: World) -> None:
     world.brief_text = BRIEF_OPEN
-    world.run()
+    await world.run()
     first = _stop(world)
     counts = world.counts()
-    result = world.run()
+    result = await world.run()
     second = _stop(world)
     assert result.checkpoint is Checkpoint.C1
     assert first is not None
@@ -1399,11 +1399,11 @@ def test_c1_resume_without_edit_stops_again_with_same_question_and_repeats_nothi
     assert not any(c[0][:2] == ("git", "fetch") for c in world.shell_calls)
 
 
-def test_resume_skips_a_stage_completed_before_a_between_stage_limit_stop(world: World) -> None:
+async def test_resume_skips_a_stage_completed_before_a_between_stage_limit_stop(world: World) -> None:
     original = world.agent
 
-    def slow(prompt: str) -> None:
-        original(prompt)
+    async def slow(prompt: str) -> None:
+        await original(prompt)
         world.clock.now += 3 * 3600
 
     kw = {
@@ -1413,33 +1413,33 @@ def test_resume_skips_a_stage_completed_before_a_between_stage_limit_stop(world:
         "clock": world.clock,
         "today": TODAY,
     }
-    first = run_item(ITEM, world.config(), world.options(), **kw)  # ty: ignore[invalid-argument-type]
+    first = await run_item(ITEM, world.config(), world.options(), **kw)  # ty: ignore[invalid-argument-type]
     assert first.checkpoint is Checkpoint.C6
-    result = world.run()  # fresh clock budget (Clock keeps now, so reset)
+    result = await world.run()  # fresh clock budget (Clock keeps now, so reset)
     assert result.stages_skipped == ("intake",)
     assert world.events.count("agent:intake") == 1
 
 
-def test_resume_keeps_retry_budgets_and_branch(world: World) -> None:
+async def test_resume_keeps_retry_budgets_and_branch(world: World) -> None:
     world.build_stops = [{"checkpoint": "C5", "detail": "x"}]
-    world.run()
+    await world.run()
     world.branch_exists = True
-    world.run()
+    await world.run()
     rec = RunRecord.open(world.tmp / "ws", ITEM)
     assert rec.retries["build:retry-cycles"] == 1
     assert rec.retries["branch-created"] == 1
     assert not any(c[0][:3] == ("git", "checkout", "-b") for c in world.shell_calls[-6:])
 
 
-def test_answer_file_is_given_to_the_agent_once_then_consumed(world: World) -> None:
+async def test_answer_file_is_given_to_the_agent_once_then_consumed(world: World) -> None:
     from dotharness.sisyphus.resume import answer_path
 
     world.build_stops = [{"checkpoint": "C3", "leaf": "13-foo", "detail": "A or B?"}]
-    world.run()
+    await world.run()
     rec_path = RunRecord.open(world.tmp / "ws", ITEM).path
     answer_path(rec_path).write_text("Use B.\n")
     world.branch_exists = True
-    assert world.run().completed
+    assert (await world.run()).completed
     build_prompts = [p for p in world.agent_prompts if "Stage to run now: `build`" in p]
     assert "Use B." in build_prompts[-1]
     assert "Use B." not in build_prompts[0]
@@ -1450,9 +1450,9 @@ def test_answer_file_is_given_to_the_agent_once_then_consumed(world: World) -> N
 # ------------------------------------------------------ single dedicated clone
 
 
-def test_dirty_clone_refuses_a_new_item_without_touching_it(world: World) -> None:
+async def test_dirty_clone_refuses_a_new_item_without_touching_it(world: World) -> None:
     world.dirty = " M tracked.txt\n"
-    result = world.run()
+    result = await world.run()
     _assert_stop(world, result, Checkpoint.C8)
     assert "uncommitted" in result.detail
     assert world.events == []  # no agent run
@@ -1462,15 +1462,15 @@ def test_dirty_clone_refuses_a_new_item_without_touching_it(world: World) -> Non
     assert "uncommitted" in world.digest_text()
 
 
-def test_dirty_clone_refuses_before_the_build_checkout(world: World) -> None:
+async def test_dirty_clone_refuses_before_the_build_checkout(world: World) -> None:
     original = world.shell
 
-    def dirty_after_plan(argv: Sequence[str], cwd: Path | None) -> CommandResult:
+    async def dirty_after_plan(argv: Sequence[str], cwd: Path | None) -> CommandResult:
         if list(argv)[:2] == ["git", "status"] and "agent:plan" in world.events:
             return CommandResult(0, "?? leftover.txt\n")
-        return original(argv, cwd)
+        return await original(argv, cwd)
 
-    result = run_item(
+    result = await run_item(
         ITEM,
         world.config(),
         world.options(),
@@ -1485,27 +1485,27 @@ def test_dirty_clone_refuses_before_the_build_checkout(world: World) -> None:
     assert world.checkouts == []
 
 
-def test_resume_checks_out_the_items_own_branch(world: World) -> None:
+async def test_resume_checks_out_the_items_own_branch(world: World) -> None:
     world.push_rc = 1
-    assert world.run().checkpoint is Checkpoint.C8  # stopped at push, branch committed
+    assert (await world.run()).checkpoint is Checkpoint.C8  # stopped at push, branch committed
     world.push_rc = 0
     world.branch_exists = True
     world.current_branch = "sisyphus/other-item-12345678"  # another item ran meanwhile
     world.ancestor_rc_after_pr = 1  # nothing proves the branch deletable, so cleanup leaves the checkout alone
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert world.checkouts[-1] == branch_name(ITEM)
     assert result.stages_skipped == ("intake", "plan", "build")
     assert world.events.count("agent:build") == 1  # committed work not redone
 
 
-def test_resume_without_the_branch_is_an_error(world: World) -> None:
+async def test_resume_without_the_branch_is_an_error(world: World) -> None:
     world.push_rc = 1
-    world.run()
+    await world.run()
     world.branch_exists = False
     world.current_branch = "elsewhere"
     with pytest.raises(OrchestratorError, match="does not exist"):
-        world.run()
+        await world.run()
 
 
 # ------------------------------------------------- local branch cleanup after a clean finish
@@ -1516,9 +1516,9 @@ def _cleanup_ready(world: World) -> None:
     world.remote_exists = True
 
 
-def test_clean_finish_deletes_the_branch_with_d_after_switching_to_base(world: World) -> None:
+async def test_clean_finish_deletes_the_branch_with_d_after_switching_to_base(world: World) -> None:
     _cleanup_ready(world)
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert world.branch_cmds == [
         ["branch", f"--set-upstream-to=origin/{branch_name(ITEM)}", branch_name(ITEM)],
@@ -1531,18 +1531,18 @@ def test_clean_finish_deletes_the_branch_with_d_after_switching_to_base(world: W
     assert f"local branch {branch_name(ITEM)} deleted" in world.digest_text()
 
 
-def test_capital_d_is_used_only_on_the_proof_3_path_and_never_with_force(world: World) -> None:
+async def test_capital_d_is_used_only_on_the_proof_3_path_and_never_with_force(world: World) -> None:
     _cleanup_ready(world)  # proof 1 holds: plain -d, gh not asked
-    world.run()
+    await world.run()
     assert not any("-D" in argv or "--force" in argv for argv, _ in world.shell_calls)
     assert world.pr_state_refs == []
 
 
-def test_branch_already_gone_is_silent_and_idempotent(world: World) -> None:
+async def test_branch_already_gone_is_silent_and_idempotent(world: World) -> None:
     _cleanup_ready(world)
-    world.run()
+    await world.run()
     before = len(world.shell_calls)
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert [c[0] for c in world.shell_calls[before:]] == [
         ("git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_name(ITEM)}")
@@ -1551,11 +1551,11 @@ def test_branch_already_gone_is_silent_and_idempotent(world: World) -> None:
     assert "deleted" not in world.digest_text()
 
 
-def test_not_pushed_keeps_the_branch_and_notes_it(world: World) -> None:
+async def test_not_pushed_keeps_the_branch_and_notes_it(world: World) -> None:
     world.branch_present_after_pr = True
     world.remote_exists = False
     world.ancestor_rc_after_pr = 1  # not on origin/<base> either
-    world.run()
+    await world.run()
     assert world.branch_cmds == []
     text = world.digest_text()
     assert f"Branch kept: {ITEM} {branch_name(ITEM)} no deletion proof held: (1) not pushed" in text
@@ -1563,71 +1563,71 @@ def test_not_pushed_keeps_the_branch_and_notes_it(world: World) -> None:
     assert "(3) no PR found for 42" in text  # the run record stores the PR number
 
 
-def test_done_line_names_the_proof(world: World) -> None:
+async def test_done_line_names_the_proof(world: World) -> None:
     _cleanup_ready(world)
-    world.run()
+    await world.run()
     assert f"deleted (proof 1: head {SHA1[:12]} is an ancestor of origin/{branch_name(ITEM)})" in world.digest_text()
     assert world.pr_state_refs == []  # gh is not asked when git proves it
 
 
-def test_remote_branch_gone_after_merge_is_proven_against_base(world: World) -> None:
+async def test_remote_branch_gone_after_merge_is_proven_against_base(world: World) -> None:
     world.branch_present_after_pr = True
     world.remote_exists = False
     world.ancestor_rc_after_pr = 1
-    world.run()
+    await world.run()
     world.ancestor_rc_after_pr = 0  # merged into origin/base-branch, remote branch deleted
     world.pr_state_refs.clear()
     world.branch_present_after_pr = True
-    world.run()
+    await world.run()
     assert ["branch", "-d", branch_name(ITEM)] in world.branch_cmds
     assert not any(c[1].startswith("--set-upstream") for c in world.branch_cmds)
     assert "proof 2: head" in world.digest_text()
     assert world.pr_state_refs == []
 
 
-def test_squash_merge_proof_uses_the_stored_pr_number_and_gh_error_keeps(world: World) -> None:
+async def test_squash_merge_proof_uses_the_stored_pr_number_and_gh_error_keeps(world: World) -> None:
     world.branch_present_after_pr = True
     world.remote_exists = False
     world.ancestor_rc_after_pr = 1
     world.pr_state_error = GitHubError("gh pr view failed (exit 1): boom")
-    world.run()
+    await world.run()
     assert world.pr_state_refs == ["42"]
     assert world.branch_cmds == []
     assert "(3) gh lookup of 42 failed: gh pr view failed (exit 1): boom" in world.digest_text()
 
 
-def test_commits_not_on_origin_keep_the_branch(world: World) -> None:
+async def test_commits_not_on_origin_keep_the_branch(world: World) -> None:
     _cleanup_ready(world)
     world.ancestor_rc_after_pr = 1
     world.ahead = "2"
-    world.run()
+    await world.run()
     assert world.branch_cmds == []
     assert "has 2 commit(s) not on origin" in world.digest_text()
 
 
-def test_dirty_clone_keeps_the_branch_and_touches_nothing(world: World) -> None:
+async def test_dirty_clone_keeps_the_branch_and_touches_nothing(world: World) -> None:
     _cleanup_ready(world)
-    world.run()  # deleted; now a second item state: a dirty clone on a re-created branch
+    await world.run()  # deleted; now a second item state: a dirty clone on a re-created branch
     world.branch_present_after_pr = True
     world.dirty = " M tracked.txt\n"
     before = len(world.shell_calls)
-    world.run()
+    await world.run()
     new = [c[0] for c in world.shell_calls[before:]]
     assert not any(c[:2] in (("git", "checkout"), ("git", "branch"), ("git", "merge")) for c in new)
     assert not any(c[1] in ("stash", "reset", "clean") for c in new)
     assert "the clone is dirty" in world.digest_text()
 
 
-def test_failed_base_fast_forward_keeps_the_branch(world: World) -> None:
+async def test_failed_base_fast_forward_keeps_the_branch(world: World) -> None:
     _cleanup_ready(world)
     world.ff_rc = 1
-    world.run()
+    await world.run()
     assert world.branch_cmds == []
     assert "cannot be fast-forwarded" in world.digest_text()
 
 
 @pytest.mark.parametrize("fault", ["gate", "c1", "error"])
-def test_stopped_or_failed_item_keeps_its_branch(world: World, fault: str) -> None:
+async def test_stopped_or_failed_item_keeps_its_branch(world: World, fault: str) -> None:
     _cleanup_ready(world)
     if fault == "gate":
         world.gate_rc = 1  # finishes (no stop), but the branch is kept
@@ -1637,32 +1637,32 @@ def test_stopped_or_failed_item_keeps_its_branch(world: World, fault: str) -> No
         world.ahead = "0"  # build produced no commits: OrchestratorError
     if fault == "error":
         with pytest.raises(OrchestratorError):
-            world.run()
+            await world.run()
     else:
-        assert world.run().completed is (fault == "gate")
+        assert (await world.run()).completed is (fault == "gate")
     assert world.branch_cmds == []
     assert not any(c[0][:2] == ("git", "checkout") and c[0][2] == "base-branch" for c in world.shell_calls)
 
 
-def test_abandoned_item_keeps_its_branch(world: World) -> None:
-    world.run()
+async def test_abandoned_item_keeps_its_branch(world: World) -> None:
+    await world.run()
     rec = RunRecord.open(world.tmp / "ws", ITEM)
     write_stop_record(
         rec.path,
         build_abandoned_record(ITEM, stage="open-pr", stage_status="complete", prior_label="C7", reenable_command="x"),
     )
     _cleanup_ready(world)
-    world.run()
+    await world.run()
     assert world.branch_cmds == []
 
 
-def test_resume_before_the_pr_stage_still_needs_the_local_branch(world: World) -> None:
-    world.run()
+async def test_resume_before_the_pr_stage_still_needs_the_local_branch(world: World) -> None:
+    await world.run()
     rec = RunRecord.open(world.tmp / "ws", ITEM)
     rec.mark_stage("push", "in_progress")
     world.current_branch = "base-branch"
     with pytest.raises(OrchestratorError, match="does not exist"):
-        world.run()
+        await world.run()
 
 
 REQUIREMENTS = (
@@ -1674,13 +1674,13 @@ def _header(item: str = ITEM) -> str:
     return f"Work item: {item}"
 
 
-def test_open_pr_body_is_assembled(world: World) -> None:
+async def test_open_pr_body_is_assembled(world: World) -> None:
     world.requirements = REQUIREMENTS.replace("{ws}", str(world.tmp / "ws"))
     world.git_log = "abc1234\t00-leaf0-leaf done\n"
     handoffs = world.tmp / "ws" / "handoffs"
     handoffs.mkdir(parents=True)
     (handoffs / "00-leaf0-leaf.md").write_text("### Handoff\n- Deviations from the plan: Used a ZIP.\n")
-    result = world.run()
+    result = await world.run()
     assert result.completed
     body = world.opened[0][3]
     assert body.startswith(_header())
@@ -1696,9 +1696,9 @@ def test_open_pr_body_is_assembled(world: World) -> None:
     assert world.log_calls == [["log", "--reverse", "--format=%h%x09%s", "origin/base-branch..HEAD"]]
 
 
-def test_open_pr_body_missing_artifacts_still_opens(world: World) -> None:
+async def test_open_pr_body_missing_artifacts_still_opens(world: World) -> None:
     world.git_log_rc = 1
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert result.pr == PullRequest(42, "https://example.test/pr/42")
     body = world.opened[0][3]
@@ -1706,63 +1706,63 @@ def test_open_pr_body_missing_artifacts_still_opens(world: World) -> None:
     assert "requirements.md" in body  # one-line note instead of the file
 
 
-def test_open_pr_body_oversize_is_capped(world: World) -> None:
+async def test_open_pr_body_oversize_is_capped(world: World) -> None:
     world.requirements = "# Requirements\n\n### 1. Overview\n\n" + "word " * 20000
-    world.run()
+    await world.run()
     body = world.opened[0][3]
     assert len(body) <= 60000
     assert body.startswith(_header())
 
 
-def test_assembly_failure_does_not_stop_the_run(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_assembly_failure_does_not_stop_the_run(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*_a: object, **_k: object) -> str:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(orchestrator.prbody, "compose_body", boom)
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert world.opened[0][3] == _header()
 
 
-def test_existing_pr_does_not_assemble_a_body(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_existing_pr_does_not_assemble_a_body(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     world.existing_pr = PullRequest(42, "https://example.test/pr/42")
     calls: list[str] = []
     monkeypatch.setattr(orchestrator.prbody, "compose_body", lambda *a, **k: calls.append("x") or "")
-    world.run()
+    await world.run()
     assert world.opened == []
     assert calls == []
     assert world.log_calls == []
 
 
-def test_open_pr_title_is_the_requirements_h1(world: World) -> None:
+async def test_open_pr_title_is_the_requirements_h1(world: World) -> None:
     world.requirements = "# Descriptive requirements title\n\n### 1. Overview\n\nText.\n"
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert world.opened[0][2] == "Descriptive requirements title"
 
 
-def test_open_pr_title_missing_artifacts_is_the_fallback(world: World) -> None:
+async def test_open_pr_title_missing_artifacts_is_the_fallback(world: World) -> None:
     world.brief_text = "## Open decisions log\n\nNone\n"  # no H1 anywhere
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert world.opened[0][2] == "Sisyphus: ENG-1"
 
 
-def test_title_failure_does_not_stop_the_run(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_title_failure_does_not_stop_the_run(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*_a: object, **_k: object) -> str:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(orchestrator.prbody, "derive_title", boom)
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert world.opened[0][2] == "Sisyphus: ENG-1"
 
 
-def test_existing_pr_does_not_open_or_retitle(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_existing_pr_does_not_open_or_retitle(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     world.existing_pr = PullRequest(42, "https://example.test/pr/42")
     calls: list[str] = []
     monkeypatch.setattr(orchestrator.prbody, "derive_title", lambda *a, **k: calls.append("x") or "t")
-    world.run()
+    await world.run()
     assert world.opened == []
     assert calls == []
 
@@ -1775,56 +1775,56 @@ def _github(world: World, remove: bool = True) -> None:
     world.source = WorkItemSource(kind="github", pick_label="bot-pick", remove_label_when_settled=remove)
 
 
-def test_label_removed_once_on_clean_finish_with_configured_label(world: World) -> None:
+async def test_label_removed_once_on_clean_finish_with_configured_label(world: World) -> None:
     _github(world)
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert world.label_calls == [(7, "bot-pick")]
 
 
-def test_no_tracker_call_for_linear(world: World) -> None:
+async def test_no_tracker_call_for_linear(world: World) -> None:
     # A #N ref with pick_label and removal on, so only the kind check can prevent a removal call.
     # (The ``file`` kind rejects a ``#N`` ref at intake; its kind gate is covered in test_pick.)
     world.item = "#7"
     world.source = WorkItemSource(kind="linear", pick_label="bot-pick", remove_label_when_settled=True)
-    assert world.run().completed
+    assert (await world.run()).completed
     assert world.label_calls == []
 
 
-def test_no_call_when_removal_is_off(world: World) -> None:
+async def test_no_call_when_removal_is_off(world: World) -> None:
     _github(world, remove=False)
-    assert world.run().completed
+    assert (await world.run()).completed
     assert world.label_calls == []
 
 
-def test_label_removed_once_when_gate_failed(world: World) -> None:
+async def test_label_removed_once_when_gate_failed(world: World) -> None:
     _github(world)
     world.gate_rc = 2
-    assert world.run().completed
+    assert (await world.run()).completed
     assert world.label_calls == [(7, "bot-pick")]
     rec = RunRecord.open(world.tmp / "ws", "#7")
     assert rec.retries["gate-failed"] == 1
 
 
-def test_removal_failure_with_gate_failed_is_a_digest_note_only(world: World) -> None:
+async def test_removal_failure_with_gate_failed_is_a_digest_note_only(world: World) -> None:
     _github(world)
     world.gate_rc = 2
     world.label_error = pick.LabelRemovalError("permission denied")
-    assert world.run().completed
+    assert (await world.run()).completed
     assert "Label kept: #7 label 'bot-pick' removal failed" in world.digest_text()
 
 
-def test_no_call_when_a_checkpoint_is_set(world: World) -> None:
+async def test_no_call_when_a_checkpoint_is_set(world: World) -> None:
     _github(world)
     world.build_stops = [{"checkpoint": "C3", "leaf": "13-foo", "detail": "Use A or B?"}]
-    assert world.run().checkpoint is Checkpoint.C3
+    assert (await world.run()).checkpoint is Checkpoint.C3
     assert world.label_calls == []
 
 
-def test_removal_failure_is_a_digest_note_only(world: World) -> None:
+async def test_removal_failure_is_a_digest_note_only(world: World) -> None:
     _github(world)
     world.label_error = pick.LabelRemovalError("permission denied")
-    result = world.run()
+    result = await world.run()
     assert result.completed
     assert result.checkpoint is None
     rec = RunRecord.open(world.tmp / "ws", "#7")
@@ -1833,16 +1833,16 @@ def test_removal_failure_is_a_digest_note_only(world: World) -> None:
     assert "Label kept: #7 label 'bot-pick' removal failed: LabelRemovalError: permission denied" in world.digest_text()
 
 
-def test_unexpected_removal_error_is_also_swallowed(world: World) -> None:
+async def test_unexpected_removal_error_is_also_swallowed(world: World) -> None:
     _github(world)
     world.label_error = OSError("network down")
-    assert world.run().completed
+    assert (await world.run()).completed
     assert "removal failed: OSError: network down" in world.digest_text()
 
 
-def test_repeated_invocation_is_harmless(world: World) -> None:
+async def test_repeated_invocation_is_harmless(world: World) -> None:
     _github(world)
-    world.run()
-    again = world.run()
+    await world.run()
+    again = await world.run()
     assert again.completed
     assert world.label_calls == [(7, "bot-pick")] * 2  # one per invocation; removal is idempotent on the tracker

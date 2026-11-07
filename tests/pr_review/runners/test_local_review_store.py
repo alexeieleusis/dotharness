@@ -59,7 +59,7 @@ def _stamped(tmp_path: Path) -> tuple[Path, str]:
     return path, fid
 
 
-def test_isolation_store_imports_without_backend_lock_or_orchestrators() -> None:
+async def test_isolation_store_imports_without_backend_lock_or_orchestrators() -> None:
     pkg_dir = str(Path(store.__file__).parent)
     code = (
         f"import importlib, sys, types\n"
@@ -69,7 +69,7 @@ def test_isolation_store_imports_without_backend_lock_or_orchestrators() -> None
         "print(bad)\n"
         "sys.exit(1 if bad else 0)"
     )
-    proc = run_cmd([sys.executable, "-c", code], cwd=os.getcwd(), env=dict(os.environ), timeout=60, check=False)
+    proc = await run_cmd([sys.executable, "-c", code], cwd=os.getcwd(), env=dict(os.environ), timeout=60, check=False)
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 

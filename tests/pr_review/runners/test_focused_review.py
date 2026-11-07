@@ -1,7 +1,7 @@
 import json
 from importlib.resources import files
 from pathlib import Path
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -117,29 +117,29 @@ def test_recreated_comment_matched_next_to_old_resolved_comment():
     assert [c["id"] for c, _commit, _path in result] == [2]
 
 
-def test_resolve_knowledge_file_commit_hit_first_try():
+async def test_resolve_knowledge_file_commit_hit_first_try():
     with patch("dotharness.pr_review.runners.focused_review.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=b"content")
-        result = _resolve_knowledge_file(Path("/vt"), "abc123", "catalog/T02.md", {})
+        result = await _resolve_knowledge_file(Path("/vt"), "abc123", "catalog/T02.md", {})
     assert result == "content"
     assert mock_run.call_count == 1
 
 
-def test_resolve_knowledge_file_fetch_then_retry_hit():
+async def test_resolve_knowledge_file_fetch_then_retry_hit():
     responses = [
         MagicMock(returncode=1, stdout=b""),
         MagicMock(returncode=0, stdout=b""),
         MagicMock(returncode=0, stdout=b"content"),
     ]
     with patch("dotharness.pr_review.runners.focused_review.run_cmd", side_effect=responses) as mock_run:
-        result = _resolve_knowledge_file(Path("/vt"), "abc123", "catalog/T02.md", {})
+        result = await _resolve_knowledge_file(Path("/vt"), "abc123", "catalog/T02.md", {})
     assert result == "content"
     assert mock_run.call_count == 3
     calls = mock_run.call_args_list
     assert calls[1].args[0] == ["git", "fetch", "origin", "abc123"]
 
 
-def test_resolve_knowledge_file_falls_back_to_main():
+async def test_resolve_knowledge_file_falls_back_to_main():
     responses = [
         MagicMock(returncode=1, stdout=b""),
         MagicMock(returncode=0, stdout=b""),
@@ -148,7 +148,7 @@ def test_resolve_knowledge_file_falls_back_to_main():
         MagicMock(returncode=0, stdout=b"main content"),
     ]
     with patch("dotharness.pr_review.runners.focused_review.run_cmd", side_effect=responses) as mock_run:
-        result = _resolve_knowledge_file(Path("/vt"), "abc123", "catalog/T02.md", {})
+        result = await _resolve_knowledge_file(Path("/vt"), "abc123", "catalog/T02.md", {})
     assert result == "main content"
     assert mock_run.call_count == 5
     calls = mock_run.call_args_list
@@ -159,10 +159,10 @@ def test_resolve_knowledge_file_falls_back_to_main():
     assert calls[4].args[0] == ["git", "show", "origin/main:catalog/T02.md"]
 
 
-def test_resolve_knowledge_file_returns_none_when_all_fail():
+async def test_resolve_knowledge_file_returns_none_when_all_fail():
     with patch("dotharness.pr_review.runners.focused_review.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=1, stdout=b"")
-        result = _resolve_knowledge_file(Path("/vt"), "abc123", "catalog/T02.md", {})
+        result = await _resolve_knowledge_file(Path("/vt"), "abc123", "catalog/T02.md", {})
     assert result is None
 
 
@@ -272,14 +272,14 @@ _MATCHING_COMMENT = {
 }
 
 
-def test_disabled_skips_everything(tmp_path):
+async def test_disabled_skips_everything(tmp_path):
     cfg = _cfg(tmp_path, enabled=False)
     with patch("dotharness.pr_review.runners.focused_review.get_gh_token") as mock_token:
-        focused_review._run_locked(cfg)
+        await focused_review._run_locked(cfg)
     mock_token.assert_not_called()
 
 
-def test_matching_comment_invokes_backend(tmp_xdg, tmp_path):
+async def test_matching_comment_invokes_backend(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
@@ -295,13 +295,13 @@ def test_matching_comment_invokes_backend(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
-        focused_review._run_locked(cfg)
-    mock_be.return_value.run.assert_called_once()
+        await focused_review._run_locked(cfg)
+    mock_be.return_value.run.assert_awaited_once()
 
 
-def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
+async def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
     """Replying to a comment can submit a review via the GitHub API as a side effect,
     which clears the submitter from the PR's requested-reviewers list — hiding it from
     review_requested's "user-review-requested:@me" search. If the user was already a
@@ -323,15 +323,15 @@ def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
-        focused_review._run_locked(cfg)
-    mock_be.return_value.run.assert_called_once()
+        await focused_review._run_locked(cfg)
+    mock_be.return_value.run.assert_awaited_once()
     mock_was_requested.assert_called_once_with(1, "acme/frontend", "bot", ANY)
     mock_add_reviewer.assert_called_once_with(1, "acme/frontend", "bot", mock_add_reviewer.call_args.args[3])
 
 
-def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
+async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
@@ -348,13 +348,13 @@ def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_pat
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend"),
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True),
     ):
-        focused_review._run_locked(cfg)
+        await focused_review._run_locked(cfg)
     mock_add_reviewer.assert_not_called()
 
 
-def test_already_marked_comment_skips_backend(tmp_xdg, tmp_path):
+async def test_already_marked_comment_skips_backend(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     marked = {
@@ -372,14 +372,14 @@ def test_already_marked_comment_skips_backend(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout") as mock_checkout,
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
-        focused_review._run_locked(cfg)
+        await focused_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     mock_checkout.assert_not_called()
 
 
-def test_non_matching_comment_skips_backend(tmp_xdg, tmp_path):
+async def test_non_matching_comment_skips_backend(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     plain = {**_MATCHING_COMMENT, "body": "just SonarQube noise, no knowledge url"}
@@ -394,13 +394,13 @@ def test_non_matching_comment_skips_backend(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
-        focused_review._run_locked(cfg)
+        await focused_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
 
 
-def test_non_matching_pr_skips_restore(tmp_xdg, tmp_path):
+async def test_non_matching_pr_skips_restore(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     plain = {**_MATCHING_COMMENT, "body": "just SonarQube noise, no knowledge url"}
@@ -415,14 +415,14 @@ def test_non_matching_pr_skips_restore(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore") as mock_restore,
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
-        focused_review._run_locked(cfg)
+        await focused_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     mock_restore.assert_not_called()
 
 
-def test_unresolvable_knowledge_file_skips_comment_but_continues(tmp_xdg, tmp_path):
+async def test_unresolvable_knowledge_file_skips_comment_but_continues(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
@@ -438,14 +438,14 @@ def test_unresolvable_knowledge_file_skips_comment_but_continues(tmp_xdg, tmp_pa
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore") as mock_restore,
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value=None),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
-        focused_review._run_locked(cfg)
+        await focused_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     mock_restore.assert_called_once()
 
 
-def test_restores_working_dir_even_on_backend_failure(tmp_xdg, tmp_path):
+async def test_restores_working_dir_even_on_backend_failure(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
@@ -461,14 +461,15 @@ def test_restores_working_dir_even_on_backend_failure(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore") as mock_restore,
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
+        mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.side_effect = Exception("backend exploded")
-        focused_review._run_locked(cfg)
+        await focused_review._run_locked(cfg)
     mock_restore.assert_called_once()
 
 
-def test_fatal_git_error_continues_to_remaining_prs(tmp_xdg, tmp_path):
+async def test_fatal_git_error_continues_to_remaining_prs(tmp_xdg, tmp_path):
     # A fatal git error on one PR must not abort the remaining PRs, since
     # the finally block restores the repo state before moving on.
     _setup_knowledge(tmp_path)
@@ -489,15 +490,15 @@ def test_fatal_git_error_continues_to_remaining_prs(tmp_xdg, tmp_path):
         ) as mock_checkout,
         patch("dotharness.pr_review.runners.focused_review.git_restore") as mock_restore,
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
-        focused_review._run_locked(cfg)
+        await focused_review._run_locked(cfg)
     assert mock_checkout.call_count == 2
     assert mock_restore.call_count == 2
     mock_be.return_value.run.assert_not_called()
 
 
-def test_non_fatal_error_continues_to_next_pr(tmp_xdg, tmp_path):
+async def test_non_fatal_error_continues_to_next_pr(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
@@ -516,10 +517,10 @@ def test_non_fatal_error_continues_to_next_pr(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
-        focused_review._run_locked(cfg)
-    mock_be.return_value.run.assert_called_once()
+        await focused_review._run_locked(cfg)
+    mock_be.return_value.run.assert_awaited_once()
 
 
 @pytest.fixture(autouse=True)
@@ -594,13 +595,13 @@ def test_merge_non_inline_untouched():
     assert comments == [{"type": "review", "id": 10}, {"type": "issue", "id": 10}]
 
 
-def test_fetch_review_threads_follows_pagination():
+async def test_fetch_review_threads_follows_pagination():
     pages = [
         _page([_thread("T1", False, [("C1", 1, False)])], has_next=True, cursor="CUR1"),
         _page([_thread("T2", True, [("C2", 2, False)])]),
     ]
     with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=pages) as mock_run:
-        nodes = common.fetch_review_threads(7, "acme/frontend", {})
+        nodes = await common.fetch_review_threads(7, "acme/frontend", {})
     assert nodes is not None
     assert [n["id"] for n in nodes] == ["T1", "T2"]
     first, second = (c.args[0] for c in mock_run.call_args_list)
@@ -620,18 +621,18 @@ def test_fetch_review_threads_follows_pagination():
         MagicMock(returncode=0, stdout=b'{"data": {"repository": {"pullRequest": null}}}'),
     ],
 )
-def test_fetch_review_threads_failure_returns_none(result):
+async def test_fetch_review_threads_failure_returns_none(result):
     with patch("dotharness.pr_review.runners.common.run_cmd", return_value=result):
-        assert common.fetch_review_threads(7, "acme/frontend", {}) is None
+        assert (await common.fetch_review_threads(7, "acme/frontend", {})) is None
 
 
-def test_fetch_review_threads_failure_on_later_page_returns_none():
+async def test_fetch_review_threads_failure_on_later_page_returns_none():
     pages = [_page([], has_next=True, cursor="C"), MagicMock(returncode=1, stdout=b"")]
     with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=pages):
-        assert common.fetch_review_threads(7, "acme/frontend", {}) is None
+        assert (await common.fetch_review_threads(7, "acme/frontend", {})) is None
 
 
-def _run_with_threads(tmp_path, comments, threads):
+async def _run_with_threads(tmp_path, comments, threads):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
@@ -648,21 +649,21 @@ def _run_with_threads(tmp_path, comments, threads):
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout") as mock_checkout,
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
-        focused_review._run_locked(cfg)
+        await focused_review._run_locked(cfg)
     return mock_threads, mock_checkout, mock_be
 
 
-def test_thread_fetch_failure_skips_pr(tmp_xdg, tmp_path, caplog):
-    mock_threads, mock_checkout, mock_be = _run_with_threads(tmp_path, [dict(_MATCHING_COMMENT)], None)
+async def test_thread_fetch_failure_skips_pr(tmp_xdg, tmp_path, caplog):
+    mock_threads, mock_checkout, mock_be = await _run_with_threads(tmp_path, [dict(_MATCHING_COMMENT)], None)
     mock_threads.assert_called_once()
     mock_checkout.assert_not_called()
     mock_be.return_value.run.assert_not_called()
     assert "PR #1" in caplog.text
 
 
-def test_thread_fetch_failure_does_not_stop_other_prs(tmp_xdg, tmp_path):
+async def test_thread_fetch_failure_does_not_stop_other_prs(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
@@ -679,58 +680,58 @@ def test_thread_fetch_failure_does_not_stop_other_prs(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.focused_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.focused_review.git_restore"),
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
-        patch("dotharness.pr_review.runners.focused_review.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
-        focused_review._run_locked(cfg)
-    mock_be.return_value.run.assert_called_once()
+        await focused_review._run_locked(cfg)
+    mock_be.return_value.run.assert_awaited_once()
 
 
-def test_no_target_comment_makes_no_thread_fetch(tmp_xdg, tmp_path):
+async def test_no_target_comment_makes_no_thread_fetch(tmp_xdg, tmp_path):
     plain = {**_MATCHING_COMMENT, "body": "no knowledge url"}
-    mock_threads, _checkout, _be = _run_with_threads(tmp_path, [plain], [])
+    mock_threads, _checkout, _be = await _run_with_threads(tmp_path, [plain], [])
     mock_threads.assert_not_called()
 
 
-def test_run_merges_thread_state_into_target_comment(tmp_xdg, tmp_path):
+async def test_run_merges_thread_state_into_target_comment(tmp_xdg, tmp_path):
     comment = dict(_MATCHING_COMMENT)
     threads = [_thread("T1", False, [("C1", 1, False)])]
-    _t, _c, mock_be = _run_with_threads(tmp_path, [comment], threads)
+    _t, _c, mock_be = await _run_with_threads(tmp_path, [comment], threads)
     assert comment["thread_id"] == "T1"
     assert comment["node_id"] == "C1"
-    mock_be.return_value.run.assert_called_once()
+    mock_be.return_value.run.assert_awaited_once()
 
 
-def test_target_without_matching_thread_is_still_processed(tmp_xdg, tmp_path):
+async def test_target_without_matching_thread_is_still_processed(tmp_xdg, tmp_path):
     comment = dict(_MATCHING_COMMENT)
-    _t, _c, mock_be = _run_with_threads(tmp_path, [comment], [])
+    _t, _c, mock_be = await _run_with_threads(tmp_path, [comment], [])
     assert "thread_id" not in comment
-    mock_be.return_value.run.assert_called_once()
+    mock_be.return_value.run.assert_awaited_once()
 
 
-def test_resolved_thread_target_skips_backend_end_to_end(tmp_xdg, tmp_path):
+async def test_resolved_thread_target_skips_backend_end_to_end(tmp_xdg, tmp_path):
     # Real flow: thread state comes from the (patched) GraphQL fetch and is merged in
     # _run_locked, so the skip must act on the merged keys, not pre-set ones.
     comment = dict(_MATCHING_COMMENT)
     threads = [_thread("T1", True, [("C1", 1, False)])]
-    mock_threads, mock_checkout, mock_be = _run_with_threads(tmp_path, [comment], threads)
+    mock_threads, mock_checkout, mock_be = await _run_with_threads(tmp_path, [comment], threads)
     mock_threads.assert_called_once()
     mock_be.return_value.run.assert_not_called()
     mock_checkout.assert_not_called()
 
 
-def test_minimised_target_skips_backend_end_to_end(tmp_xdg, tmp_path):
+async def test_minimised_target_skips_backend_end_to_end(tmp_xdg, tmp_path):
     comment = dict(_MATCHING_COMMENT)
     threads = [_thread("T1", False, [("C1", 1, True)])]
-    _t, mock_checkout, mock_be = _run_with_threads(tmp_path, [comment], threads)
+    _t, mock_checkout, mock_be = await _run_with_threads(tmp_path, [comment], threads)
     mock_be.return_value.run.assert_not_called()
     mock_checkout.assert_not_called()
 
 
-def test_runner_passes_node_ids_to_backend_prompt(tmp_xdg, tmp_path):
+async def test_runner_passes_node_ids_to_backend_prompt(tmp_xdg, tmp_path):
     comment = dict(_MATCHING_COMMENT)
     threads = [_thread("PRRT_T1", False, [("PRRC_C1", 1, False)])]
-    _t, _c, mock_be = _run_with_threads(tmp_path, [comment], threads)
-    mock_be.return_value.run.assert_called_once()
+    _t, _c, mock_be = await _run_with_threads(tmp_path, [comment], threads)
+    mock_be.return_value.run.assert_awaited_once()
     prompt = mock_be.return_value.run.call_args.args[0]
     assert "Thread node ID: PRRT_T1" in prompt
     assert "Comment node ID: PRRC_C1" in prompt

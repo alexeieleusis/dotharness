@@ -1,5 +1,6 @@
 """Tests for AI tool utilities (run_command stays for the gh helper; prompts go through the shared launcher)."""
 
+import asyncio
 import sys
 
 import pytest
@@ -25,3 +26,16 @@ class TestRunCommand:
         assert result.success is False
         assert result.exit_code == 3
         assert result.stderr == "bad"
+
+    @pytest.mark.asyncio
+    async def test_missing_executable_raises_file_not_found(self) -> None:
+        """A launch failure still surfaces as an OSError subclass, as before the routing."""
+        with pytest.raises(FileNotFoundError):
+            await run_command(["dotharness-no-such-binary"])
+
+    @pytest.mark.asyncio
+    async def test_caller_deadline_cancels_and_kills(self) -> None:
+        """An outer asyncio.timeout() still bounds the call (no own deadline)."""
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.2):
+                await run_command([sys.executable, "-c", "import time; time.sleep(30)"])
