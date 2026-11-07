@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from typing import Annotated
 
@@ -108,7 +109,7 @@ def plan_draft_requirements(config: ConfigOption = None, yes: YesOption = False)
         typer.confirm(f"Overwrite existing {target_path}?", abort=True)
 
     try:
-        requirements_path = requirements_stage.run_draft_requirements(cfg)
+        requirements_path = asyncio.run(requirements_stage.run_draft_requirements(cfg))
     except requirements_stage.RequirementsError as e:
         fail(str(e))
 
@@ -180,7 +181,7 @@ def plan_draft_phases(config: ConfigOption = None, yes: YesOption = False) -> No
         typer.confirm(f"Delete stale phase file(s) no longer produced by the tree ({stale_names})?", abort=True)
 
     try:
-        result = draft_phases.run_draft_phases(cfg)
+        result = asyncio.run(draft_phases.run_draft_phases(cfg))
     except draft_phases.DraftPhasesError as e:
         fail(str(e))
 

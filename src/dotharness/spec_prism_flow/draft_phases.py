@@ -183,7 +183,7 @@ def stale_phase_paths(cfg: SpecPrismFlowConfig) -> list[Path]:
     return _stale_phase_paths(cfg.plan.phase_dir, keep)
 
 
-def run_draft_phases(cfg: SpecPrismFlowConfig) -> DraftPhasesResult:
+async def run_draft_phases(cfg: SpecPrismFlowConfig) -> DraftPhasesResult:
     tree, result = _load_linearized(cfg)
 
     internal_nodes_skipped = _count_total_nodes(tree) - len(result.leaves)
@@ -242,7 +242,7 @@ def run_draft_phases(cfg: SpecPrismFlowConfig) -> DraftPhasesResult:
     for label, rendered in rendered_files:
         out_path = cfg.plan.phase_dir / label
         out_path.write_text(rendered)
-        prose_review.review_document(cfg.prose_review, out_path)
+        await prose_review.review_document(cfg.prose_review, out_path)
         try:
             parse_phase_file(out_path)
         except PhaseFileError as exc:

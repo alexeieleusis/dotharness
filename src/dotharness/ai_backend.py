@@ -2,7 +2,7 @@
 
 One entry point, ``launch``, builds the command for the named backend, delivers the prompt through a temp file,
 runs the command with ``subprocess_runner.run`` (group SIGTERM, grace, SIGKILL; also on cancellation) and returns
-its ``RunResult``. ``launch_sync`` is the thin ``asyncio.run`` adapter for sync callers.
+its ``RunResult``.
 
 Carried over from pr-review's ``Backend`` (the global opencode lock is dropped): retries, the cwd-divergence
 monitor, the opencode plugin check, the repo-identity and harness-repo guards, ``PWD`` pinned to ``cwd`` and the
@@ -23,15 +23,14 @@ Neither argv nor env is ever logged, put in an exception message or kept in a re
 
 import asyncio
 import contextlib
-import functools
 import logging
 import os
 import tempfile
 import time
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, ParamSpec, TypeVar
+from typing import Literal
 
 from dotharness.opencode_guards import (
     BackendCwdDivergedError,
@@ -51,8 +50,6 @@ from dotharness.subprocess_runner import group_alive as _group_alive  # tests pa
 
 logger = logging.getLogger(__name__)
 
-P = ParamSpec("P")
-R = TypeVar("R")
 
 BackendName = Literal["claude", "opencode"]
 BACKEND_NAMES: tuple[BackendName, ...] = ("claude", "opencode")
@@ -428,18 +425,3 @@ async def launch(
     if result.timed_out and expected_repo_name is not None:
         await _log_identity_failure_after_timeout(cwd_str, expected_repo_name, prefix)
     return result
-
-
-def _as_sync(func: Callable[P, Coroutine[Any, Any, R]]) -> Callable[P, R]:
-    @functools.wraps(func)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-        return asyncio.run(func(*args, **kwargs))
-
-    return wrapper
-
-
-launch_sync = _as_sync(launch)
-launch_sync.__doc__ = (
-    "Sync adapter for ``launch`` (same parameters, same result): runs it with ``asyncio.run``.\n\n"
-    "For sync callers (I-3, I-4, I-5). Must not be called from a running event loop; await ``launch`` there."
-)

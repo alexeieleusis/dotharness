@@ -1,6 +1,6 @@
 """Prose review of a plan document via the shared backend layer.
 
-Must not be called from async code: ``launch_sync`` uses ``asyncio.run``. Neither argv, env nor prompt text is logged.
+Awaits ``ai_backend.launch``; the CLI boundary owns the event loop. Neither argv, env nor prompt text is logged.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ import logging
 from importlib import resources
 from pathlib import Path
 
-from dotharness.ai_backend import ClaudeOptions, OpencodeOptions, launch_sync
+from dotharness.ai_backend import ClaudeOptions, OpencodeOptions, launch
 from dotharness.git_utils import git_toplevel
 from dotharness.spec_prism_flow.config import ProseReviewConfig
 
@@ -41,7 +41,7 @@ def _build_prompt(skill_path: Path, relative_target: Path) -> str:
     )
 
 
-def review_document(
+async def review_document(
     cfg: ProseReviewConfig,
     target_path: Path,
     *,
@@ -56,7 +56,7 @@ def review_document(
 
     try:
         resolved_target = target_path.resolve()
-        target_toplevel = git_toplevel(resolved_target.parent)
+        target_toplevel = await git_toplevel(resolved_target.parent)
         relative_target = resolved_target.relative_to(target_toplevel.resolve())
 
         skill_path = _skill_path()
@@ -70,7 +70,7 @@ def review_document(
             options: ClaudeOptions | OpencodeOptions = OpencodeOptions(standalone=True, opencode_dir=target_toplevel)
         else:
             options = ClaudeOptions(skip_permissions=True, disable_slash_commands=True)
-        result = launch_sync(
+        result = await launch(
             cfg.backend,
             prompt,
             cwd=target_toplevel,

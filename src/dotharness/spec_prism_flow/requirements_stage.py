@@ -49,7 +49,7 @@ def build_requirements_prompt(
     return "".join(sections)
 
 
-def run_draft_requirements(cfg: SpecPrismFlowConfig) -> Path:
+async def run_draft_requirements(cfg: SpecPrismFlowConfig) -> Path:
     try:
         manifest = load_manifest(cfg.plan.workspace_dir)
     except ManifestError as e:
@@ -89,7 +89,7 @@ def run_draft_requirements(cfg: SpecPrismFlowConfig) -> Path:
         raise RequirementsError(str(e)) from e
 
     requirements_path = cfg.plan.workspace_dir / REQUIREMENTS_FILENAME
-    prose_review.review_document(cfg.prose_review, requirements_path)
+    await prose_review.review_document(cfg.prose_review, requirements_path)
 
     # review_document is best-effort and never raises (a failure is logged and swallowed so a
     # prose review can't block the pipeline) — but a backend that *succeeds* can still blank or

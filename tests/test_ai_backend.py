@@ -17,7 +17,6 @@ from dotharness.ai_backend import (
     build_claude_command,
     build_opencode_command,
     launch,
-    launch_sync,
     select_backend,
 )
 from dotharness.opencode_guards import BackendCwdDivergedError, OpencodePluginError
@@ -473,17 +472,6 @@ async def test_no_argv_or_env_in_logs_results_or_errors(
     texts.append(caplog.text)
     for text in texts:
         assert SENTINEL not in text
-
-
-# --- sync adapter ------------------------------------------------------------------------------------------------
-
-
-def test_launch_sync(bin_dir: Path, work: Path) -> None:
-    make_exe(bin_dir, "claude", "echo sync-ok\n")
-    result = launch_sync("claude", "p", cwd=work, timeout=10)
-    assert result.stdout.strip() == "sync-ok"
-    assert result.returncode == 0
-    assert prompt_files() == []
 
 
 def test_prompt_file_is_private_and_randomly_named():
