@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import cast
 
+from dotharness.gh import build_subprocess_env, gh_argv
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
@@ -51,7 +52,6 @@ from dotharness.pr_review.runners.regret_review import (
     parse_regret_judgment,
     post_regret_comment,
 )
-from dotharness.subprocess_runner import build_subprocess_env, gh_argv
 
 logger = logging.getLogger(__name__)
 

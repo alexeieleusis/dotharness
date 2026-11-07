@@ -23,8 +23,8 @@ import subprocess
 from datetime import UTC, datetime
 from typing import NamedTuple
 
+from dotharness.gh import gh_argv
 from dotharness.pr_review.runners.common import TIMEOUT_GH, run_cmd
-from dotharness.subprocess_runner import gh_argv
 
 logger = logging.getLogger(__name__)
 

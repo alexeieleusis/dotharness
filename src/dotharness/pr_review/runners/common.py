@@ -10,9 +10,10 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from dotharness.gh import gh_argv
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig, RepoConfig, SubDir
-from dotharness.subprocess_runner import gh_argv, run
+from dotharness.subprocess_runner import run
 
 logger = logging.getLogger(__name__)
 

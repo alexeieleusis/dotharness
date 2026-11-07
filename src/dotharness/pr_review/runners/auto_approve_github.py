@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
+from dotharness.gh import gh_argv
 from dotharness.pr_review.runners.auto_approve_size import SizeEvaluation
 from dotharness.pr_review.runners.ci_checks import (
     PASSING_BUCKETS,
@@ -62,7 +63,6 @@ from dotharness.pr_review.runners.common import (
     is_traceability_review_comment,
     run_cmd,
 )
-from dotharness.subprocess_runner import gh_argv
 
 logger = logging.getLogger(__name__)
 

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from dotharness.gh import build_subprocess_env
 from dotharness.pr_review.runners.common import (
     FatalGitError,
     add_reviewer,
@@ -15,7 +16,6 @@ from dotharness.pr_review.runners.common import (
     git_restore,
     run_cmd,
 )
-from dotharness.subprocess_runner import build_subprocess_env
 
 
 async def _run(cmd, tmp_path, **kw):

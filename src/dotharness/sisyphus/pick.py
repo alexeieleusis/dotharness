@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from dotharness.gh import gh_argv
 from dotharness.sisyphus.config import SisyphusConfig, WorkItemSource
 from dotharness.sisyphus.runrecord import fold_item, record_path
 from dotharness.sisyphus.subproc import CommandResult, run_command
@@ -36,7 +37,6 @@ from dotharness.sisyphus.ticketfile import (
     ticket_dir,
     valid_file_ref,
 )
-from dotharness.subprocess_runner import gh_argv
 
 LINEAR_API_URL = "https://api.linear.app/graphql"
 GITHUB_OPEN_STATE = "OPEN"

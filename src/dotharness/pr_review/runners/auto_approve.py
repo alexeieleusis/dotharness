@@ -38,6 +38,7 @@ import json
 import logging
 import subprocess
 
+from dotharness.gh import build_subprocess_env, gh_argv
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.auto_approve_github import (
@@ -62,7 +63,6 @@ from dotharness.pr_review.runners.common import (
     git_restore,
     run_cmd,
 )
-from dotharness.subprocess_runner import build_subprocess_env, gh_argv
 
 logger = logging.getLogger(__name__)
 

@@ -5,6 +5,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 
+from dotharness.gh import gh_argv
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.runners.common import (
@@ -19,7 +20,6 @@ from dotharness.pr_review.runners.common import (
     get_pr_base_branch,
     run_cmd,
 )
-from dotharness.subprocess_runner import gh_argv
 
 logger = logging.getLogger(__name__)
 

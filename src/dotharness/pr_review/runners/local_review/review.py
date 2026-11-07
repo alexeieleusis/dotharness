@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotharness.gh import build_subprocess_env
 from dotharness.opencode_guards import BackendCwdDivergedError, OpencodePluginError
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
@@ -70,7 +71,6 @@ from dotharness.pr_review.runners.local_review.types import (
     RepoMutatedError,
 )
 from dotharness.repo_guard import RepoIdentityError
-from dotharness.subprocess_runner import build_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +234,12 @@ class _ReviewPasses:
             await self.file_pass(f)
 
     async def single_pass(
-        self, name: str, filename: str, build: Callable[[Path], str | Awaitable[str]], stamp: str | None, files_all_done: bool
+        self,
+        name: str,
+        filename: str,
+        build: Callable[[Path], str | Awaitable[str]],
+        stamp: str | None,
+        files_all_done: bool,
     ) -> None:
         if self.guard_errors:
             return

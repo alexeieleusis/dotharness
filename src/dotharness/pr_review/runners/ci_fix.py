@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path, PurePosixPath
 
+from dotharness.gh import build_subprocess_env
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
@@ -55,7 +56,6 @@ from dotharness.pr_review.runners.common import (
     run_cmd,
 )
 from dotharness.pr_review.state import _state_path, _update_state
-from dotharness.subprocess_runner import build_subprocess_env
 
 logger = logging.getLogger(__name__)
 

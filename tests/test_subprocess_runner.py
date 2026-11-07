@@ -192,7 +192,7 @@ def test_group_alive_outcomes(monkeypatch, exc, alive):
 
 
 def test_gh_argv_is_gh_plus_args() -> None:
-    from dotharness.subprocess_runner import gh_argv
+    from dotharness.gh import gh_argv
 
     assert gh_argv("pr", "view") == ["gh", "pr", "view"]
     assert gh_argv() == ["gh"]

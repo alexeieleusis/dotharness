@@ -3,6 +3,7 @@ import shlex
 import subprocess
 import time
 
+from dotharness.gh import build_subprocess_env
 from dotharness.pr_review import state
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
@@ -25,7 +26,6 @@ from dotharness.pr_review.runners.common import (
     preserve_reviewer_request,
     run_cmd,
 )
-from dotharness.subprocess_runner import build_subprocess_env
 
 logger = logging.getLogger(__name__)
 

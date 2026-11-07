@@ -26,6 +26,7 @@ import json
 import logging
 from pathlib import Path
 
+from dotharness.gh import build_subprocess_env
 from dotharness.pr_review import state
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
@@ -41,7 +42,6 @@ from dotharness.pr_review.runners.auto_approve_github import (
 from dotharness.pr_review.runners.ci_checks import gh as _gh
 from dotharness.pr_review.runners.ci_checks import text as _text
 from dotharness.pr_review.runners.common import get_current_user, get_gh_token
-from dotharness.subprocess_runner import build_subprocess_env
 
 logger = logging.getLogger(__name__)
 

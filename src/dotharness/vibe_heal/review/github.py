@@ -9,7 +9,8 @@ from contextlib import asynccontextmanager
 from typing import Any, cast
 from urllib.parse import urlparse
 
-from dotharness.subprocess_runner import gh_argv, run
+from dotharness.gh import gh_argv
+from dotharness.subprocess_runner import run
 from dotharness.vibe_heal.ai_tools.utils import CommandResult, run_command
 from dotharness.vibe_heal.output import warn
 from dotharness.vibe_heal.review.models import FileReview, ReviewIssue, ReviewResult

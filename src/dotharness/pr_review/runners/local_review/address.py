@@ -8,6 +8,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotharness.gh import build_subprocess_env
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.runners.common import get_file_diff, get_vibe_heal_context, is_ancestor
@@ -33,7 +34,6 @@ from dotharness.pr_review.runners.local_review.store import (
     write_finding_status,
 )
 from dotharness.pr_review.runners.local_review.types import LocalReviewError, LocalReviewTarget
-from dotharness.subprocess_runner import build_subprocess_env
 
 logger = logging.getLogger(__name__)
 
