@@ -1,8 +1,8 @@
 # Lifecycle cheat sheet: idea → phase corpus
 
 `plan` turns a rough idea into an agent-sized phase corpus. The build side
-(`build run`, `build status`) is not migrated into `dotharness`. sisyphus builds the
-corpus, or a coding agent that follows `build-execution-prompt.md` builds it. Everything below
+(`build run`, `build status`) is not migrated into `dotharness`; the corpus is built by
+sisyphus, or by a coding agent that follows `build-execution-prompt.md`. Everything below
 assumes a `.spec-prism-flow.toml` already exists for the target project. `plan.workspace_dir`
 and `plan.phase_dir` are required. See [requirements.md §10](requirements.md#10-tool-shape).
 
@@ -21,7 +21,7 @@ Ask a coding agent to do these steps:
 
 You answer the remaining open questions. The agent adds each answer to the brief as a
 numbered decision. If the agent cannot find the code or a referenced document, it asks you
-once, in one message. If you do not answer, it carries on with what it has. Run `plan init`
+once, in one message, and carries on with what it has if you do not answer. Run `plan init`
 when you confirm that no open question blocks the requirements document.
 
 ## Drive this yourself
@@ -38,21 +38,21 @@ You run everything else in `plan` yourself: `draft-requirements`, `decompose`,
 at those three checkpoints.
 
 Delegate each step to its own sub-agent. Do not run the whole pipeline in one context.
-Spawn a sub-agent to draft `requirements.md`. Run `draft-phases` and review its
-output. It writes the phase files itself from the leaf docs, so there is nothing to
-draft. Spawn a sub-agent to run `plan review` and fix what it flags. Each
-sub-agent reasons over one file only. It does not carry the whole plan's context
+Spawn a sub-agent to draft `requirements.md`. `draft-phases` just needs to be run and
+its output reviewed — it writes the phase files itself from the leaf docs, so there is
+nothing to draft. Spawn a sub-agent to run `plan review` and fix what it flags. Each
+sub-agent reasons over one file only. It does not carry the whole plan's context forward
 from stage to stage.
 
 Use `plan-generation-prompt.md` (packaged at `src/dotharness/knowledge/spec-prism-flow/`)
 to run this without pre-filled parameters. Point a coding-agent session at that file
-directly. It resolves the project, its config, and its brief on its own. It asks the
+directly — it resolves the project, its config, and its brief on its own, and asks the
 human only when it genuinely cannot.
 
 The build side is not part of `spec_prism_flow`. To implement the phase corpus, use
-`build-execution-prompt.md` (packaged at `src/dotharness/knowledge/spec-prism-flow/`).
-It implements the corpus directly from the leaf files and `graph.json`, one phase at a
-time, with a fresh sub-agent per phase.
+`build-execution-prompt.md` (packaged at `src/dotharness/knowledge/spec-prism-flow/`): it
+implements the corpus directly from the leaf files and `graph.json`, one phase at a time,
+with a fresh sub-agent per phase.
 
 ### Delegating plan and build to sub-agents
 
@@ -67,9 +67,8 @@ sub-agent its prompt file and the project's config or `BRIEF.md`.
 - **Context between phases.** Each phase sub-agent ends its report with a handoff summary.
   The summary states what the sub-agent did, its deviations from the plan, context for later
   phases, and open questions. The build sub-agent saves each one to
-  `handoffs/NN-<leaf name>.md` (one per item) in the workspace directory
-  (`plan.workspace_dir`). It gives the paths of all earlier summaries to the next
-  phase sub-agent. The template is in `build-execution-prompt.md`,
+  `handoffs/NN-<leaf name>.md` in the workspace directory (`plan.workspace_dir`), which is per item, and gives the paths of all earlier
+  summaries to the next phase sub-agent. The template is in `build-execution-prompt.md`,
   under "Handoff summary". Tell the build sub-agent to require it.
 - **Open questions.** A phase can raise an open question. A phase can also raise a deviation
   that changes a later phase. In both cases, the build sub-agent stops and returns to you. It
@@ -96,7 +95,7 @@ each tree node `decompose` visits — blocks on the same protocol
 1. It writes `{stage}_prompt.md` into `workspace_dir` and prints its path. It also copies
    the path, best-effort, to the clipboard (`pbcopy`) and, inside tmux, to the paste
    buffer. It skips this silently if neither is available.
-2. It prints the exact expected output path. Then it blocks on
+2. It prints the exact expected output path, then blocks on
    `Agent finished writing output? [y/N]`.
 3. You must read that prompt, do the drafting, and write the file at the exact expected
    path before you answer "y".
@@ -110,10 +109,9 @@ subprocess's stdin.
 
 `decompose` runs this protocol once per tree node, not once for the whole command. Each
 oversized node can cost two handoffs: the natural split/leaf attempt, plus a
-`{node}_forced` retry. The retry happens when a Leaf verdict comes back oversized and
-depth has not hit `--depth-cap` yet. Oversized means over 15 files or over 1500 words.
-Undersized leaves are accepted, so a small project can end as a single phase.
-`--depth-cap` defaults to 4 (`DEFAULT_DEPTH_CAP` in `decompose.py`). For any
+`{node}_forced` retry when a Leaf verdict comes back oversized (over 15 files or over 1500 words.
+Undersized leaves are accepted, so a small project can end as a single phase) and depth has not hit
+`--depth-cap` yet (default 4 — `DEFAULT_DEPTH_CAP` in `decompose.py`). For any
 requirements doc that is not tiny, expect a couple dozen prompt/output round trips before
 the tree is done, not one. Budget for that. Consider passing `--depth-cap` on purpose
 instead of accepting the default: it bounds how deep the recursion goes, and so how many
@@ -173,7 +171,7 @@ spec_prism_flow plan review
 ```
 
 `decompose` recursively splits `requirements.md` into a tree of chunks. It is an
-`unfoldr` corecursion. Each branch stops independently once it is small enough to be
+`unfoldr` corecursion: each branch stops independently once it is small enough to be
 one agent-sized leaf, or when a depth cap forces human review instead. `draft-phases`
 then turns each **leaf only** into a five-section phase file (`Scope`, `Requirements`,
 `Acceptance criteria`, `Manual test checklist`, `Depends on`). It flags any leaf

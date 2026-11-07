@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = REPO_ROOT / "src" / "dotharness"
 
 # SHA-256 of each tracked file under the old root knowledge/ at commit cb0efc1 (pre-move), except files edited since:
-# the I-5 prompt rewording (spec_prism_flow naming), the lifecycle cheat sheet added for sisyphus, and the asd-ste100 plain-English edits to the spec-prism-flow files.
+# the I-5 prompt rewording (spec_prism_flow naming) and the lifecycle cheat sheet added for sisyphus.
 KNOWLEDGE_SHA256 = {
     "patterns/react/COMPONENT_ORGANIZATION_CONVENTION.md": "2c6a3ffcb255055323370074f66511b0c828426cf2ff819a63fd820c9256497e",
     "patterns/react/QUICK_REF_PATTERNS.md": "a862de1be5bf6a93d75a9b08f8f077ad9d00a197185d361877ca1dc5f3376fb4",
@@ -35,10 +35,10 @@ KNOWLEDGE_SHA256 = {
     "sisyphus/linear-feed-prompt.md": "e76652507f9fdb9aaafc933dadb1c9c76eef4597791203dcade167e70fb3eddc",
     "sisyphus/orchestration-prompt.md": "88a4f099b9d494ab527421aa797772bd032a2b28ac1768e4f64b1ed98c894cb4",
     "sisyphus/sizing-rules.md": "953ed3e744d39f8fbe7196303fd3dcad4eae70f98d49adbccb5530532260cc36",
-    "spec-prism-flow/build-execution-prompt.md": "08fdad3d99b698a5accc36f8ce285c83b683944af1c6e3512a6db605d6e24077",
-    "spec-prism-flow/lifecycle-cheat-sheet.md": "7a0fff54a1dfd07acf30dc81cdb292bc3218ed7ac740d5a0505b840726c9676b",
-    "spec-prism-flow/plan-generation-prompt.md": "860031de83d152f43846341648785a2053f7fc10c2b648b5bdb00563619a8769",
-    "spec-prism-flow/requirements-doc-drafting-prompt.md": "bc5ce35c738521f3fa4de2cd3b9db88bb094b6ec501d581063496c1cc55f2c86",
+    "spec-prism-flow/build-execution-prompt.md": "417f7e6998d8b7e8ee60ea4b78dfe76ace82de15b7587ecb005f13bd95b9ef60",
+    "spec-prism-flow/lifecycle-cheat-sheet.md": "3ed0b34ac35997cce8f34e5d013b608ba46b24f2f749ef0e5dc9e740d1bccbf5",
+    "spec-prism-flow/plan-generation-prompt.md": "4651068890fe6b2bd948e3ab6e3b7eed442aec6a1d8f33dfd0b6e74489982041",
+    "spec-prism-flow/requirements-doc-drafting-prompt.md": "72524c62db898e102e06b33645bee7a129d2ab7ce5a018e5a1b49fa86f31a95c",
 }
 
 
