@@ -1,3 +1,0 @@
-::: sisyphus.config
-
-::: sisyphus.prbody

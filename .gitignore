@@ -17,3 +17,8 @@ cache
 
 # MkDocs build output
 site/
+
+# Local credentials / scanner config (never commit)
+.env
+.env.vibeheal
+sonar-project.properties

@@ -71,7 +71,7 @@ call to pick an item.
 | `claude` | `claude -p <prompt> --dangerously-skip-permissions` |
 | `opencode` | `opencode run <prompt>` |
 
-The agent's working directory is the dedicated clone (see [safety rails](safety-rails.md)), but that is not a
+The agent's working directory is the dedicated clone (see the safety rails), but that is not a
 sandbox. `claude --dangerously-skip-permissions` can read and write anywhere the invoking user can, and Sisyphus
 does not scrub the environment: the agent inherits the full environment of the `sisyphus` process, including
 `LINEAR_API_KEY` or `GH_TOKEN` if they are exported there. (A token produced by `token_cmd` is added only to the

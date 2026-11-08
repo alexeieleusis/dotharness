@@ -11,9 +11,9 @@ inputs:
     required: true
     default: "0.10.12"
   working-directory:
-    description: "Directory containing the tool's pyproject.toml/uv.lock to sync"
+    description: "Directory containing the pyproject.toml/uv.lock to sync"
     required: true
-    default: "tools/pr-review"
+    default: "."
 
 runs:
   using: "composite"

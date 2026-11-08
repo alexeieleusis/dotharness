@@ -49,7 +49,11 @@ nav = [
         { "Requirements" = "spec_prism_flow/requirements.md" },
         { "Config format recommendation" = "spec_prism_flow/config-format-recommendation.md" },
     ] },
-    { "sisyphus" = "sisyphus.md" },
+    { "sisyphus" = [
+        "sisyphus.md",
+        { "Configuration" = "sisyphus/configuration.md" },
+        { "Usage" = "sisyphus/usage.md" },
+    ] },
     { "Contributing" = "contributing.md" },
     { "Migration ledger" = "migration-ledger.md" },
 ]

@@ -449,7 +449,7 @@ async def test_source_sections_cover_every_requirements_heading(tmp_path):
 
 
 def _load_sisyphus_plan():
-    path = Path(__file__).resolve().parents[2] / "tools" / "sisyphus" / "sisyphus" / "plan.py"
+    path = Path(__file__).resolve().parents[2] / "src" / "dotharness" / "sisyphus" / "plan.py"
     spec = importlib.util.spec_from_file_location("sisyphus_plan_contract", path)
     assert spec is not None
     assert spec.loader is not None

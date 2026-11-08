@@ -67,7 +67,7 @@ Unknown keys are rejected. See [configuration](../configuration.md).
 
 ## Gate record
 
-Package A (`tools/sisyphus`, `gaterecord.py`) writes the evidence that `build.commands` passed on the head SHA. The format is settled. The reader here and the writer there must stay in sync:
+Package A (the sisyphus gate-record writer) writes the evidence that `build.commands` passed on the head SHA. The format is settled. The reader here and the writer there must stay in sync:
 
 - File: `~/.local/share/dotharness/state/<repo-slug>/build_gate_<PR number>.json`
 - Content: `{"head_sha": "<sha>"}` (other keys are ignored)

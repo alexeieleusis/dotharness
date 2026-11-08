@@ -61,23 +61,11 @@ def test_knowledge_has_no_extra_files() -> None:
     assert found == set(KNOWLEDGE_SHA256)
 
 
-def test_root_knowledge_is_symlink_to_package() -> None:
-    link = REPO_ROOT / "knowledge"
-    assert link.is_symlink()
-    assert link.resolve() == (PACKAGE_DIR / "knowledge").resolve()
-
-
 def test_root_skills_symlink_resolves_to_skill() -> None:
     link = REPO_ROOT / "skills" / "asd-ste100"
     assert link.is_symlink()
     assert (link / "SKILL.md").resolve() == (PACKAGE_DIR / "skills" / "asd-ste100" / "SKILL.md").resolve()
     assert (link / "SKILL.md").is_file()
-
-
-def test_orchestration_prompt_resolves_through_symlink() -> None:
-    prompt = REPO_ROOT / "knowledge" / "sisyphus" / "orchestration-prompt.md"
-    assert prompt.is_file()
-    assert prompt.read_bytes() == (PACKAGE_DIR / "knowledge" / "sisyphus" / "orchestration-prompt.md").read_bytes()
 
 
 def test_importlib_resources_resolves_knowledge_and_skills() -> None:

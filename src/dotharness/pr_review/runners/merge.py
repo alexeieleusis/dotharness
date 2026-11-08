@@ -16,9 +16,9 @@ Public entry point (takes the shared working-directory lock itself, like the sib
   failed merge call) is collected and raised as :class:`MergeError` after the loop.
 
 Gate record: the evidence that ``build.commands`` passed on the head SHA is written by Package A
-(``tools/sisyphus/sisyphus/gaterecord.py``). The format is settled: a JSON file
+(the sisyphus gate-record writer). The format is settled: a JSON file
 ``{"head_sha": "<sha>"}`` (other keys are ignored) at ``<XDG_DATA>/state/<repo_slug>/build_gate_<pr>.json``
-(see :func:`gate_record_path`). The reader here and the writer in gaterecord.py must stay in sync. A
+(see :func:`gate_record_path`). The reader here and the gate-record writer must stay in sync. A
 missing, unreadable or SHA-mismatched record blocks the merge.
 """
 

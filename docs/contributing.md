@@ -1,38 +1,14 @@
 # Contributing
 
-## Branch rule
+## GitHub Pages
 
-The integration branch is `consolidation`. It is created from `main` after I-1
-merges.
-
-- I-1 targets `main`.
-- I-2 to I-5 target `consolidation`.
-- I-6 to I-8 target `main` after I-5 merges. This issue's PRs (I-6, #168) target
-  `sisyphus/164-c86e8a65`.
-- `consolidation` lands on `main` as one squash commit. The `main` ruleset (squash
-  only, linear history) is not changed.
-
-### Post-merge steps (after I-1 merges)
-
-1. Create `consolidation` from `main` and push it.
-2. Open each of the I-2 to I-5 PRs against `consolidation`. The CI workflow has no
-   `branches` filter, so it runs for these PRs.
-3. After I-5 merges into `consolidation`, squash `consolidation` onto `main`.
-4. Check the GitHub Pages setting (see below).
-
-### GitHub Pages
-
-Pages is `legacy` with source `main:/docs`. A root `docs/` directory on `main`
-may change what Pages serves. The old `docs.yml` keeps deploying the three tool
-sites until I-5 merges. The new workflow only builds the docs (`zensical build -s`).
-Correcting the Pages setting needs a repo-admin action and is done after I-5 if
-needed. No redirects are added: old URLs return 404 until I-5 merges.
+Pages is built and deployed by `.github/workflows/docs.yml` through Actions. Old
+multi-site URLs are not redirected.
 
 ## Migration ledger rule
 
-Every PR for I-2 to I-8 that touches `src/dotharness/` updates
-[`docs/migration-ledger.md`](migration-ledger.md) in the same PR. The PR template
-has a checkbox for it.
+[`docs/migration-ledger.md`](migration-ledger.md) records the migration history.
+The ledger is frozen at I-6.
 
 ## Development
 
@@ -85,17 +61,13 @@ The project layout follows the cookiecutter-uv template with these answers:
 
 The files were written by hand. Cookiecutter was not run.
 
-### Excludes for tools and vendor
+### Excludes for vendor
 
-Ruff, `ty` and pre-commit exclude `tools` and `vendor`, so the new project does
-not modify or check the old tools. Later phases may remove these excludes as
-the tools migrate.
+Ruff, `ty` and pre-commit exclude `vendor`.
 
 ### Coverage policy
 
 The project-wide branch coverage floor is 91%. It is `fail_under` in
 `[tool.coverage.report]` of `pyproject.toml`, enforced by `make test` and in CI.
-The measured value when it was set was 91.47%. The `dotharness` Codecov status is
-informational.
-
-The existing `sisyphus` status and flag stay untouched until I-8.
+The measured value when it was set was 91.47%. The target is 91% with a Codecov threshold of 0.5%. `fail_under = 91` in
+`[tool.coverage.report]` is never lowered.

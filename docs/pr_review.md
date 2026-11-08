@@ -1,7 +1,7 @@
 # pr_review
 
 Generic PR automation with configurable AI backends. `pr_review` is one of the tools in `dotharness`. It was migrated
-from the standalone `tools/pr-review` tool (package `harness`) in I-3 (#165). See the
+from what was formerly the standalone `harness` tool in I-3 (#165). See the
 [migration ledger](migration-ledger.md) for module status.
 
 The CLI name (`pr_review`) and the config file names (`.harness*.toml`) differ on purpose: the config files keep the old

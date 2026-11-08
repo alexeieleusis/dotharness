@@ -1,15 +1,19 @@
-# .harness
+# dotharness
 
-Personal AI tooling, scripts, prompts, and knowledge files for automating recurring
-engineering workflows with configurable AI backends (Claude Code or opencode).
+Personal AI tooling for automating recurring engineering workflows with
+configurable AI backends (Claude Code or opencode). It is one uv project,
+`dotharness`, with four console scripts: `vibe_heal`, `pr_review`,
+`spec_prism_flow` and `sisyphus`.
 
 ## Tools
 
-- [`tools/pr-review/`](tools/pr-review/README.md) — Configurable PR automation
-  (`harness` CLI). It posts static-analysis feedback on open PRs, runs AI code
-  review, and can address reviewer comments automatically, all driven by a per-repo
-  `.harness.toml` config. See its [docs](tools/pr-review/docs/index.md) for the
-  full command and configuration reference.
+- [`vibe_heal`](docs/vibe_heal.md)
+- [`pr_review`](docs/pr_review.md) — Configurable PR automation: static-analysis
+  feedback, AI code review, and automatic handling of reviewer comments. The CLI
+  name `pr_review` differs from the `.harness*.toml` config file names on
+  purpose.
+- [`spec_prism_flow`](docs/spec_prism_flow.md)
+- [`sisyphus`](docs/sisyphus.md)
 
 ## Prerequisites
 
@@ -28,41 +32,25 @@ uv run pytest         # confirm it works
 uv tool install --editable ~/.harness
 ```
 
-The root project `dotharness` registers four console scripts: `vibe_heal`,
-`pr_review`, `spec_prism_flow` and `sisyphus`. They are stubs until the tools are
-migrated (see [`docs/migration-ledger.md`](docs/migration-ledger.md)).
-
-### Legacy install (until I-8)
-
-The old tools stay installable until I-8. To use the current `harness` CLI:
-
-```bash
-uv tool install --editable ~/.harness/tools/pr-review/
-harness init          # in each repo you want to automate
-harness validate      # confirm config is correct
-```
+All four tools are migrated into `dotharness` (see
+[`docs/migration-ledger.md`](docs/migration-ledger.md)).
 
 ## Layout
 
-- `src/dotharness/` — The `dotharness` Python package
+- `src/dotharness/` — The `dotharness` Python package, including
+  `src/dotharness/knowledge/`: the packaged Markdown knowledge files consumed by AI
+  runners, model- and tool-agnostic
 - `tests/` — Tests for the package
 - `docs/` — Documentation site (built with `uv run zensical build -s`), including
   the migration ledger and contributor notes
-- `tools/` — The old, uv-managed tool packages, kept until I-8
 - `vendor/` — Vendored dependencies and files (submodules, `containers/`)
-- `knowledge` — Symlink to `src/dotharness/knowledge/`: Markdown knowledge files
-  consumed by AI runners, model- and tool-agnostic (no assumptions about which LLM
-  or coding-agent CLI reads them)
 - `skills/` — Symlinks to the skills in `src/dotharness/skills/`: Claude Code Agent
   Skills (`skills/<name>/SKILL.md`). They use the Skill frontmatter schema
-  (`name`/`description`/`version`) and are specific to that format, unlike the
-  tool-agnostic files in `knowledge/`
+  (`name`/`description`/`version`) and are specific to that format
 
 ## Contributing
 
-Branch rule: I-1 targets `main`. I-2 to I-5 target `consolidation`. I-6 to I-8
-target `main` after I-5 merges. This issue's PRs (I-6, #168) target
-`sisyphus/164-c86e8a65`. PRs that touch `src/dotharness/` update the
+PRs that touch `src/dotharness/` update the
 [migration ledger](docs/migration-ledger.md). See
 [`docs/contributing.md`](docs/contributing.md).
 
