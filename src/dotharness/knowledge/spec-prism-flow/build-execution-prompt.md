@@ -63,7 +63,7 @@ sessions running together can hit rate limits or compete for resources.
 For each phase, in order:
 
 1. Read that phase's leaf file in full.
-2. Spawn a fresh sub-agent scoped to just that phase. Give it the leaf file's `Scope`,
+2. Spawn a fresh sub-agent, **in the foreground** (never `run_in_background`; do not end your turn until it reports) scoped to just that phase. Give it the leaf file's `Scope`,
    `Requirements`, and `Acceptance criteria`, word for word. Also give it the paths of the
    handoff summary files of the phases already done (see "Handoff summary" below). Tell it to check its
    own work against the `Manual test checklist` before it reports that it is done. It must

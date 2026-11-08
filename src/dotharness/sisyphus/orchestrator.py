@@ -771,6 +771,27 @@ class _Run:
             ahead = (await self.git("rev-list", "--count", f"origin/{self.opt.base_branch}..HEAD")).stdout.strip()
             if not ahead.isdigit() or int(ahead) == 0:
                 raise OrchestratorError(f"build produced no commits on {self.branch}")
+            await self.check_build_complete()
+
+    async def check_build_complete(self) -> None:
+        """Stop at C5 unless every leaf has a handoff and the clone is clean.
+
+        An agent that ends its turn while a background sub-agent still runs exits 0 with leaves unbuilt
+        and the sub-agent's edits uncommitted; the exit code alone cannot tell.
+        """
+        problems: list[str] = []
+        phase_dir = self.opt.phase_dir or plan_path(read_spf_config(self.spf), self.repo, "phase_dir")
+        stems = leaf_stems(phase_dir) if phase_dir is not None and phase_dir.is_dir() else []
+        found = prbody.select_handoffs(self.handoff_dir, stems) if self.handoff_dir.is_dir() else {}
+        missing = [stem for stem in stems if not found.get(stem)]
+        if missing:
+            problems.append(f"no handoff for leaves: {', '.join(missing)}")
+        dirty = (await self.git("status", "--porcelain", "--untracked-files=all")).stdout.strip()
+        if dirty:
+            problems.append(f"uncommitted changes: {_tail(dirty, 200)}")
+        if problems:
+            self.rec.increment_retry(BUILD_RETRY_KEY)
+            raise _Stop(Checkpoint.C5, "the build agent ended before the build was complete; " + "; ".join(problems))
 
     # -- push
 

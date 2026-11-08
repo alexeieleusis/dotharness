@@ -99,6 +99,8 @@ class World:
         # agent behaviour
         self.brief_text = BRIEF_NONE
         self.leaves = 2
+        self.write_handoffs = True
+        self.dirty_after_build = False
         self.plan_stop: dict | None = None
         self.build_stops: list[dict | None] = []
         self.agent_prompts: list[str] = []
@@ -191,9 +193,19 @@ class World:
             if self.plan_stop:
                 stop_path.write_text(json.dumps(self.plan_stop))
         else:
-            stop = self.build_stops.pop(0) if self.build_stops else None
-            if stop:
-                stop_path.write_text(json.dumps(stop))
+            self._build(stop_path)
+
+    def _build(self, stop_path: Path) -> None:
+        stop = self.build_stops.pop(0) if self.build_stops else None
+        if stop:
+            stop_path.write_text(json.dumps(stop))
+        if self.dirty_after_build:
+            self.dirty = " M src/x.tsx\n"
+        if not stop and self.write_handoffs:
+            handoffs = self.tmp / "ws" / orchestrator.plan_dir_name(self.item) / "handoffs"
+            handoffs.mkdir(parents=True, exist_ok=True)
+            for i in range(self.leaves):
+                (handoffs / f"{i:02d}-leaf{i}-leaf.md").write_text("done")
 
     async def shell(self, argv: Sequence[str], cwd: Path | None) -> CommandResult:
         a = list(argv)
@@ -1846,3 +1858,20 @@ async def test_repeated_invocation_is_harmless(world: World) -> None:
     again = await world.run()
     assert again.completed
     assert world.label_calls == [(7, "bot-pick")] * 2  # one per invocation; removal is idempotent on the tracker
+
+
+async def test_build_without_every_handoff_stops_at_c5(world: World) -> None:
+    world.write_handoffs = False  # the agent exited 0 with leaves unbuilt (background sub-agent killed)
+    result = await world.run()
+    assert not result.completed
+    assert "no handoff for leaves" in world.digest_text()
+    assert "agent:push" not in world.events
+    assert RunRecord.open(world.tmp / "ws", ITEM).retries["build:retry-cycles"] == 1
+
+
+async def test_build_with_uncommitted_changes_stops_at_c5(world: World) -> None:
+    world.dirty_after_build = True  # a killed sub-agent leaves its edits behind
+    result = await world.run()
+    assert not result.completed
+    assert "uncommitted changes" in world.digest_text()
+    assert "agent:push" not in world.events
