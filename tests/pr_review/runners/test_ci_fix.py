@@ -109,7 +109,10 @@ def _mocks(
             return_value=failing or [_Check("Run checks", "https://x/actions/runs/9/job/8")],
         ),
         patch(P + "_read_failed_log", return_value="quality\tRun checks\t2024Z error"),
-        patch(P + "find_step_command", return_value=_Step("Run checks", "make check", "tools/pr-review")),
+        patch(
+            P + "find_step_command",
+            return_value=_Step("Run checks", "make check", "src/dotharness/pr_review/runners/pr-review"),
+        ),
         patch(P + "git_detach_and_record", return_value="orig"),
         patch(P + "git_fetch_and_checkout") as checkout,
         patch(P + "git_restore") as restore,
@@ -497,7 +500,7 @@ def _state_home(tmp_path):
 WORKFLOW = """name: Main
 defaults:
   run:
-    working-directory: tools/pr-review
+    working-directory: src/dotharness/pr_review/runners/pr-review
 
 jobs:
   quality:
@@ -531,7 +534,9 @@ def test_find_step_command_reads_workflow(tmp_path):
     wf = tmp_path / ".github" / "workflows"
     wf.mkdir(parents=True)
     (wf / "main.yml").write_text(WORKFLOW, encoding="utf-8")
-    assert ci_fix.find_step_command(str(tmp_path), "Run checks") == _Step("Run checks", "make check", "tools/pr-review")
+    assert ci_fix.find_step_command(str(tmp_path), "Run checks") == _Step(
+        "Run checks", "make check", "src/dotharness/pr_review/runners/pr-review"
+    )
     assert ci_fix.find_step_command(str(tmp_path), "Run tests") == _Step(
         "Run tests", "uv run pytest\nuv run ty check", "other"
     )
@@ -544,7 +549,10 @@ def test_find_step_command_reads_workflow(tmp_path):
 def test_find_step_command_picks_the_workflow_the_check_belongs_to(tmp_path):
     wf = tmp_path / ".github" / "workflows"
     wf.mkdir(parents=True)
-    for file, name, wd in (("a.yml", "Alpha", "tools/a"), ("b.yml", "Beta", "tools/b")):
+    for file, name, wd in (
+        ("a.yml", "Alpha", "src/dotharness/pr_review/runners/a"),
+        ("b.yml", "Beta", "src/dotharness/pr_review/runners/b"),
+    ):
         (wf / file).write_text(
             f"name: {name}\njobs:\n  t:\n    steps:\n      - name: Run tests\n"
             f"        working-directory: {wd}\n        run: pytest\n",
@@ -553,12 +561,16 @@ def test_find_step_command_picks_the_workflow_the_check_belongs_to(tmp_path):
     (wf / "c.yml").write_text(
         "jobs:\n  t:\n    steps:\n      - name: Run tests\n        run: make c\n", encoding="utf-8"
     )
-    assert ci_fix.find_step_command(str(tmp_path), "Run tests", "Beta") == _Step("Run tests", "pytest", "tools/b")
+    assert ci_fix.find_step_command(str(tmp_path), "Run tests", "Beta") == _Step(
+        "Run tests", "pytest", "src/dotharness/pr_review/runners/b"
+    )
     assert ci_fix.find_step_command(str(tmp_path), "Run tests", ".github/workflows/c.yml") == _Step(
         "Run tests", "make c", ""
     )
     assert ci_fix.find_step_command(str(tmp_path), "Run tests", "Nope") is None
-    assert ci_fix.find_step_command(str(tmp_path), "Run tests") == _Step("Run tests", "pytest", "tools/a")
+    assert ci_fix.find_step_command(str(tmp_path), "Run tests") == _Step(
+        "Run tests", "pytest", "src/dotharness/pr_review/runners/a"
+    )
 
 
 async def test_read_failing_checks_carries_the_workflow():

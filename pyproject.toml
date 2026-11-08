@@ -67,7 +67,7 @@ python = "./.venv"
 python-version = "3.11"
 
 [tool.ty.src]
-exclude = ["tools", "vendor"]
+exclude = ["vendor"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -79,7 +79,7 @@ asyncio_default_fixture_loop_scope = "function"
 target-version = "py311"
 line-length = 120
 fix = true
-extend-exclude = ["tools", "vendor"]
+extend-exclude = ["vendor"]
 force-exclude = true
 
 [tool.ruff.lint]

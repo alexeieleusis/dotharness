@@ -1,5 +1,5 @@
 {
-  "_comment": "Golden fixture for the build->merge gate-record contract. Checked by tools/sisyphus/tests/test_gaterecord.py (writer) and tools/pr-review/tests/runners/test_merge.py (reader). Change it only together with both implementations.",
+  "_comment": "Golden fixture for the build->merge gate-record contract. Checked by the sisyphus gate-record writer tests and tests/pr_review/runners/test_merge.py (reader). Change it only together with both implementations.",
   "path_cases": [
     {
       "repo_name": "acme/frontend",
