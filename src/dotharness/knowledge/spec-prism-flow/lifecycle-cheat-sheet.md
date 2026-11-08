@@ -4,7 +4,7 @@
 (`build run`, `build status`) is not migrated into `dotharness`; the corpus is built by
 sisyphus, or by a coding agent that follows `build-execution-prompt.md`. Everything below
 assumes a `.spec-prism-flow.toml` already exists for the target project. `plan.workspace_dir`
-and `plan.phase_dir` are required. See [requirements.md §10](requirements.md#10-tool-shape).
+and `plan.phase_dir` are required. See [requirements.md §10](../../../../docs/spec_prism_flow/requirements.md#10-tool-shape).
 
 ## Step 0: Get a brief (before `plan init`)
 
