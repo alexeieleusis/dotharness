@@ -2,14 +2,8 @@
 #
 # D-8: one project-wide branch-coverage floor, `fail_under = 91`, enforced by
 # `[tool.coverage.report]` in pyproject.toml (used by `make test` and the CI
-# pytest step via --cov-config). It is never lowered. The `dotharness` flag
-# below stays informational.
-#
-# Current per-tool figures, non-authoritative inputs only (from local
-# coverage.xml files, pre-merge; they do not set or change the floor):
-#   pr-review 0.9396, spec-prism-flow 0.9667, sisyphus 0.9675, vibe-heal 0.7949
-#
-# The existing `sisyphus` status and flag stay untouched until I-8.
+# pytest step via --cov-config). It is never lowered. The `dotharness` status
+# below is enforcing at 91% with a 0.5% threshold.
 
 coverage:
   range: 70..100
@@ -17,19 +11,12 @@ coverage:
   precision: 1
   status:
     project:
-      sisyphus:
-        target: 90%
-        threshold: 0.5%
-        flags:
-          - sisyphus
       dotharness:
-        informational: true
+        target: 91%
+        threshold: 0.5%
         flags:
           - dotharness
 flags:
-  sisyphus:
-    paths:
-      - tools/sisyphus/
   dotharness:
     paths:
       - src/dotharness/
