@@ -38,7 +38,7 @@ from dotharness.pr_review.runners.local_review import findings as lr_findings
 from dotharness.pr_review.runners.local_review import prompts as lr_prompts
 from dotharness.repo_guard import RepoIdentityError
 
-KNOWLEDGE = Path(__file__).resolve().parents[3] / "knowledge" / "pr-review"
+KNOWLEDGE = Path(__file__).resolve().parents[3] / "src" / "dotharness" / "knowledge" / "pr-review"
 
 BLOCK_A = """## Finding: Off by one
 - severity: P0
