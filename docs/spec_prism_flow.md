@@ -1,7 +1,7 @@
 # spec_prism_flow
 
 Specification-driven planning: turns a rough idea into agent-sized phase files. `spec_prism_flow` is one of the
-tools in `dotharness`. It was migrated from the standalone `tools/spec-prism-flow` tool in I-4 (#166). Only the
+tools in `dotharness`. It was migrated from what was formerly the standalone `spec-prism-flow` tool in I-4 (#166). Only the
 plan side (`spec_prism_flow plan ...`) is migrated. The build side is not migrated. See the
 [migration ledger](migration-ledger.md) for module status.
 
