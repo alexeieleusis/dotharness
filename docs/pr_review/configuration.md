@@ -1,0 +1,326 @@
+# Configuration: .harness.toml
+
+Every `pr_review run <command>` subcommand loads a `.harness.toml` file from the
+current directory by default. Override the path with `--config PATH` on the
+`pr_review run` group, or pass a directory as the first argument to `pr_review init` / `pr_review validate`. See the [overview page](overview.md#quick-start) for
+the quick-start commands to scaffold and check one.
+
+The CLI name `pr_review` and the config file names (`.harness*.toml`, `.sisyphus*.toml`, `.env*`) differ on purpose.
+The command was renamed when the tool moved into dotharness. Existing config files keep their names so they
+continue to load unchanged. This page describes config files by name only.
+
+This file holds per-repo settings and can contain sensitive values (a
+`gh_token_cmd`, arbitrary `env` entries, filesystem paths). It is **not
+meant to be committed**. The template written by `pr_review init` starts with
+the comment `# dotharness configuration — DO NOT COMMIT this file` and
+recommends adding `.harness.toml` to your global gitignore rather than the
+repo's.
+
+- `pr_review init [DIRECTORY]` writes a template `.harness.toml` into `DIRECTORY`
+  (default: current directory). It refuses to overwrite an existing file.
+- `pr_review validate [DIRECTORY] [--config PATH]` loads `DIRECTORY/.harness.toml`
+  (or the file at `--config PATH` if given), parses it, and runs a handful of
+  environment checks (see [Validation](#validation) below). It exits `0` if
+  all checks pass. Otherwise it exits `1` and prints each problem to stderr.
+
+## Full schema
+
+### `[harness]`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `backend` | string | `"opencode"` | Which coding-agent CLI to shell out to. Must be `"opencode"` or `"claude"`. Any other value raises a `ConfigError` at load time. `"opencode"` invokes `opencode run --standalone <instructions>`. `"claude"` invokes `claude --dangerously-skip-permissions --disable-slash-commands -p <instructions>`. Both run with `cwd` set to `repo.working_dir`. |
+| `gh_token_cmd` | string | `"gh auth token"` | Shell command whose stdout is the GitHub token. The token is exported to subprocesses as `GITHUB_TOKEN`. |
+| `backend_timeout_seconds` | integer | `900` | Wall-clock timeout (seconds) for a single backend invocation before it is killed. |
+| `knowledge_dir` | path | `"~/.harness/knowledge"` | Directory holding the review prompt templates and other knowledge files the runners read. `~` is expanded. When the key is not set and `~/.harness/knowledge` does not exist, the knowledge shipped inside the package is used (see [Path defaults when installed](#path-defaults-when-installed)). |
+| `[harness.path_prepend]` | table (string → string) | `{}` (empty) | Keys map to directories. All of the *values* are joined with `:` and prepended to `PATH` for every subprocess harness spawns (backend CLI, `git`, `gh`, pre-commands, etc.). Keys are labels for readability (e.g. `java`, `node`). Only the values matter, and they are joined in the order they appear in the TOML table. |
+| `[harness.env]` | table (string → string) | `{}` (empty) | Arbitrary `KEY = "value"` pairs merged into the environment of every subprocess harness spawns, overriding any inherited environment variable of the same name. |
+| `review_knowledge_file` | path or unset | `None` | Optional path to a markdown file with extra review guidance. `~` is expanded. When unset, no extra file is loaded. |
+
+### `[repo]`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | string | **required** (optional for `local-review`) | Repo identifier, typically `"org/repo"`. Loading fails with `ConfigError: repo.name is required` if missing or empty, except for `pr_review run local-review`, which does not need a GitHub repo and loads the config with `repo.name` optional (the loaded `repo.name` is then `""` and `repo.name_provided` is `false`). Also used to derive `repo_slug` (`name` with `/` replaced by `-`) for state files and schedule labels. When `name` is absent (`local-review` only), `repo_slug` is the `working_dir` basename (characters outside `[a-zA-Z0-9._-]` replaced by `-`), then `-`, then the first 8 hex characters of the SHA-256 of the resolved `working_dir` path. |
+| `working_dir` | path | **required** | Local filesystem checkout of the repo. Loading fails with `ConfigError: repo.working_dir is required` if missing or empty. `~` is expanded. |
+| `opencode_dir` | path or unset | `None` | Optional directory passed to the `opencode` backend as `--dir` instead of the repo root. If set, it **must be inside `working_dir`**. The loader calls `opencode_dir.relative_to(working_dir)` and raises `ConfigError: repo.opencode_dir '<path>' must be inside repo.working_dir '<path>'` if `opencode_dir` is not a subpath. `~` is expanded before the check. |
+
+### `[[repo.subdir]]`
+
+An array of tables describing sub-projects inside a monorepo. Each subdir can
+be tied to its own `sonar-project.properties` file. That lets
+`get_vibe_heal_context` look up a matching vibe_heal/SonarQube review
+(`~/.vibe-heal/reviews/<sonar.projectKey>/<branch>/review.md`) and fold it into
+the review context for that part of the repo. Subdirs can also carry their own
+pre-commands (e.g. `npm ci`, `mvn compile`), a coverage flag, and a timeout.
+That is useful when different sub-projects need different setup before a
+review or pre-commit step.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `path` | string | **required** | Path of the sub-project, relative to `repo.working_dir` (e.g. `"."` for the repo root, or `"services/api"`). Loading fails with `ConfigError: repo.subdir[].path is required` if missing. |
+| `pre_commands` | list | `[]` | Commands to run before operating on this subdir. Each entry is either a plain string (shorthand for `{ cmd = "...", critical = false }`) or a table `{ cmd = "...", critical = true/false }`. See below for the two forms. |
+| `coverage` | boolean | `false` | Whether this subdir participates in coverage collection. |
+| `timeout` | integer | `300` | Timeout (seconds) for running this subdir's pre-commands. |
+| `env_file` | string | unset | Optional vibe-heal env file for this subdir, passed to vibe-heal as `--env-file`. Relative paths resolve against `repo.working_dir`. `~` is expanded. The file may be outside the repo. Default: unset (vibe-heal's default lookup of `.env.vibeheal` or `.env` in the subdir cwd). With `--env-file`, vibe-heal's file beats process env vars, so `[harness.env]` `SONARQUBE_*` values no longer override a configured `env_file`. See "`env_file` notes" below for a project-key limitation. |
+
+`pre_commands` entries may take either of two forms:
+
+- **Plain string** — `"npm ci"` becomes `PreCommand(cmd="npm ci", critical=False)`.
+- **Table** — `{ cmd = "npm ci", critical = true }` becomes `PreCommand(cmd="npm ci", critical=True)`. `critical` defaults to `false` if omitted from the table form too. A `critical` pre-command that fails is treated as fatal for that subdir. A non-critical pre-command that fails is not treated as fatal.
+
+**`env_file` notes**
+
+- **Precedence.** With `--env-file`, vibe-heal's file beats process env vars. Without it, env vars beat `.env.vibeheal`. So `[harness.env]` `SONARQUBE_*` values no longer override a configured `env_file`.
+- **Project-key limitation.** With an `env_file`, vibe_heal's project key comes from that file. `get_vibe_heal_context` in `common.py` reads `~/.vibe-heal/reviews/<project_key>/<branch>/review.md`. It takes the key from each subdir's `sonar-project.properties` and is used by `self-review` and `review-requested`. If the two differ, the Static Analysis context in those commands is silently empty. This is a known limitation. The harness does not reconcile the keys.
+- **Validation.** A configured `env_file` that is not an existing regular file fails fast, before pre-commands: baseline and per-PR processing fail that subdir. Prune logs a warning and continues. `pr_review validate` does not check `env_file`. Its list (`repo.working_dir`, `harness.knowledge_dir`) is unchanged.
+
+### `[vibe_heal]`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Turns on vibe_heal/SonarQube-style review integration. When enabled, `review-prs` invokes vibe_heal to produce per-PR reviews. Other runners can fold matching review output (looked up via each subdir's `sonar-project.properties` → `sonar.projectKey`) into the review context. |
+| `python` | string | `""` (unset) | Path to the Python interpreter used to invoke vibe_heal as `python -m dotharness.vibe_heal`. It must point at an interpreter that has dotharness installed. An interpreter from a separate, older vibe_heal virtualenv will not work. Only checked/required in practice when `enabled = true`. See [Path defaults when installed](#path-defaults-when-installed). |
+| `authors` | string or list of strings | `"*"` | Which PR authors vibe_heal should apply to in `review-prs`'s batch mode. `"*"` means all authors. Otherwise it is a list of GitHub usernames. Ignored when `review-prs` is run with `--pr`. |
+| `vibe_heal_timeout` | integer | `600` | Timeout (seconds) for the per-PR `vibe_heal review` run. |
+| `vibe_heal_post_timeout` | integer | `120` | Timeout (seconds) for posting/finalizing vibe_heal output (e.g. writing results, comments) after the run itself completes. |
+| `min_reanalysis_interval_hours` | number | `24.0` | Minimum time that must pass since a PR's last successful review before `review-prs`'s batch mode will re-analyze it. This applies even if the head SHA has changed (e.g. from rapid pushes). Ignored when `review-prs` is run with `--pr`. |
+| `prune_projects_enabled` | boolean | `false` | Turns on a `vibe_heal prune-projects --yes` step, run in every `repo.subdir` at the start of every `review-prs` invocation, before baseline analysis. Deletes stale temp SonarQube projects (left behind by failed/interrupted vibe_heal runs) **without the CLI's confirmation prompt**. Off by default since it's a destructive, no-confirmation delete. Has no effect unless `vibe_heal.enabled` is also `true` and `repo.subdirs` is non-empty. `review-prs` checks both (with an early return) before this step runs. |
+| `prune_older_than_minutes` | integer | `60` | Passed as `vibe_heal prune-projects --older-than`. Only temp projects with zero finished analyses that are older than this are eligible for deletion. Ignored if `prune_projects_enabled` is `false`. |
+| `prune_projects_timeout` | integer | `120` | Timeout (seconds) for each subdir's `vibe_heal prune-projects` invocation. A timeout or failure is logged and does not block baseline analysis or PR review. |
+
+### `[focused_review]`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Turns on the `focused-review` command, including its resolve and minimise behaviour for false-positive comments (see below). It is independent of `vibe_heal.enabled`. |
+| `vibe_types_repo` | path | `"~/.harness/vendor/vibe-types"` | Local git checkout of `jpablo/vibe-types`, used to resolve knowledge-file content (via `git show <commit>:<path>`) for SonarQube comments that cite it. `~` is expanded. There is no packaged fallback. Clone the repository to this path or set the key. |
+
+Enabling `focused_review.enabled` now also enables the resolve and minimise
+behaviour. When the backend judges a target comment a false positive, the harness first posts a reply that states the finding is a false positive and ends with the `[focused-review-bot]` marker. It then resolves the review thread (`resolveReviewThread`). It then minimises the root comment (`minimizeComment`, classifier `RESOLVED`). No new config field exists for this behaviour,
+so there is no separate opt-in or opt-out. The refactor-description reply path
+is unchanged.
+
+Risks of `focused_review.enabled`:
+
+- R1: enabling `focused_review.enabled` also enables resolve and minimise. There is no separate opt-in or opt-out, and no config field for it.
+- R2: the root comment is hidden even when humans have replied in the thread, so a human conversation may be hidden.
+- R3: the comment body, the diff and the knowledge file are untrusted input. A crafted one could persuade the backend to judge a finding a false positive and hide a comment. This is accepted because the scope is limited to target comments (SonarQube inline comments citing a vibe-types knowledge file) and the action is reversible: unresolve the thread and unminimise the comment in the GitHub UI. Nothing is deleted.
+- R4: if a hidden comment is recreated, the harness hides it again each time.
+- V1: if the harness token lacks the permission to resolve or minimise, the feature has no effect. The two mutations were run directly with the `alexei-oscilar` token on a real PR comment and both succeeded, so the permission is available. The backend's end-to-end behaviour (judging a finding and issuing the mutations itself) has not yet been observed. The result is recorded in the PR description of the change that introduced this behaviour.
+
+### `[address_comments]`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `true` | Turns the `address-comments` command on. Set to `false` to disable this push-capable runner. |
+| `trusted_commenters` | `"*"` or list of strings | `"*"` | Restricts which comment authors `address-comments` will act on at all. `"*"` (default) considers everyone. |
+
+An inline comment thread carrying a `focused-review`-bot reply (marked
+`[focused-review-bot]`) is addressed without any reaction or other human
+approval. It is addressed as long as that reply is the last one in the thread
+and the thread is neither resolved nor minimised. If the thread-state lookup
+fails, marked threads are skipped (fail closed). No config flag changes this,
+and there is no human approval gate, so to limit whose comments are acted on,
+restrict `trusted_commenters` (the default `"*"` is permissive). The thread is
+addressed using that reply's own content as the actual "comment to address"
+(not the terse original finding it responded to). See
+[`address-comments`](commands/address-comments.md#notes) for details.
+
+### `[auto_approve]`
+
+Used by `pr_review run auto-approve` (and `pr_review run all`). Off by default.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Turns the `auto-approve` command on. While `false`, the command does nothing and exits 0. |
+| `viewed_max_lines` | integer | `75` | A file with fewer than this many modified lines (added + removed) is marked as viewed. |
+| `approve_max_lines` | integer | `500` | A PR whose total modified lines are fewer than this is approved. |
+
+The comparison is strictly less than, so a value of `0` never matches and disables that feature. Invalid values (a non-boolean `enabled`, or a negative or non-integer threshold) raise `ConfigError` naming the field. Like `max_diff_lines` in `[regret_review]`, `75` and `500` are round, conservative starting points pending real usage data. See [`auto-approve`](commands/auto-approve.md) for the full rules.
+
+### `[ci_fix]`
+
+Settings for the `ci-fix` runner. Off by default. Whether `ci-fix` joins `pr_review run all` is not decided here.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Turns the `ci-fix` runner on. While `false`, the runner does nothing. |
+| `max_fix_attempts` | integer | `3` | Maximum number of agent fix runs per PR. Must be a positive integer. |
+
+Unknown keys and invalid values (a non-boolean `enabled`, or a zero, negative, boolean or non-integer `max_fix_attempts`) raise `ConfigError` naming the key.
+
+### `[merge]`
+
+Settings for the `merge` runner. Off by default: with `enabled = false` the runner does nothing and a run ends at an open PR.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Turns the `merge` runner on. |
+| `require_all_files_viewed` | boolean | `true` | Only merge a PR whose files have all been marked as viewed. |
+| `max_changed_lines` | integer | `500` | Maximum total modified lines for a PR to be merged. Equal to the `[auto_approve]` `approve_max_lines` default, so merge is not more permissive than approve by default. Must be a positive integer. |
+
+Unknown keys and invalid values (a non-boolean `enabled` or `require_all_files_viewed`, or a zero, negative, boolean or non-integer `max_changed_lines`) raise `ConfigError` naming the key.
+
+No secrets belong in these sections. Credentials come from `gh_token_cmd`.
+
+### `[local_review]`
+
+Optional. Used only by `pr_review run local-review`. All other commands ignore it. Both fields are optional, and an absent section behaves as if both were unset.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `base` | string | unset | Default base ref for the review. |
+| `output_dir` | path | unset | Default output root. The built-in default is `~/.local/share/dotharness/reviews`. The `--output-dir` flag overrides this. The value is stored as written (`~` is not expanded at load time). |
+
+```toml
+[local_review]
+# base = "main"
+# output_dir = "~/reviews"
+```
+
+### `[regret_review]`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Turns the `regret-review` pass on. Off by default — unlike the other commands, this is the one pass you must explicitly opt into. |
+| `max_diff_lines` | integer | `50` | The bugfix-shaped threshold: a PR is skipped entirely when its diff (added + removed lines across all files) exceeds this size. `50` is a round, conservative starting point for "small fix" — pending real usage data. |
+| `authors` | string or list of strings | `"*"` | Which PR authors the pass applies to. `"*"` means all authors. Otherwise it is a list of GitHub usernames. Applies to the **current** PR's author. The introducing PR's author is never filtered. The point is tracing *whoever's* old comment was ignored. |
+| `regret_review_timeout` | integer | `300` | Per-PR wall-clock budget (seconds) for the pass's own git/`gh` calls (blame, commit→PR lookups, comment fetches), checked and decremented before each call. Does not bound the backend invocation itself, which uses `harness.backend_timeout_seconds` independently. |
+
+## Path defaults when installed
+
+Three settings depend on where files live once dotharness is installed as a package.
+
+### D-2: `[vibe_heal] python` needs dotharness installed
+
+`pr_review` starts vibe_heal as `<python> -m dotharness.vibe_heal`. The interpreter in `[vibe_heal] python` must
+therefore have dotharness installed. `pr_review validate` only checks that the path exists, not that dotharness is
+importable, so a wrong interpreter is found when `review-prs` runs, not at validation time.
+
+### D-10: `vibe_types_repo` has no packaged fallback
+
+`[focused_review] vibe_types_repo` defaults to `~/.harness/vendor/vibe-types`. It is an external vendor checkout and
+cannot ship with the package, so there is no fallback: if the path is missing, clone it there or point the setting
+elsewhere.
+
+### D-7: `knowledge_dir` has a packaged fallback
+
+`[harness] knowledge_dir` defaults to `~/.harness/knowledge` (prompt templates at `<knowledge_dir>/pr-review/*.md`).
+When the key is not set and that directory does not exist, the knowledge shipped inside the package
+(`src/dotharness/knowledge/`, found with `importlib.resources`) is used. A `knowledge_dir` set explicitly is used as
+written and never falls back. `pr_review validate` reports it when the path does not exist. This is the only setting
+with a packaged fallback. Note that the template written by `pr_review init` sets `knowledge_dir` explicitly, which opts
+out of the fallback.
+
+### Other installed-package notes
+
+- Comments cache: `~/.harness/cache/pr-<n>-comments.json` holds the comments fetched for PR `<n>`. The location is
+  unchanged from the original tool.
+- Harness-repo guard: backend runs watch the dotharness source checkout's HEAD to catch a runaway backend that commits
+  into it. When the package is installed outside a checkout (for example in `site-packages`) there is nothing to watch
+  and this guard is skipped. The repo-identity check for the configured repository (`[repo] name`) always runs. See
+  `docs/design/shared-async-layer.md`, "I-3 packaging-sensitive paths and repo guard".
+
+## Full example
+
+```toml
+# dotharness configuration — DO NOT COMMIT this file
+# Add .harness.toml to your global gitignore
+
+[harness]
+backend = "opencode"               # "opencode" or "claude"
+gh_token_cmd = "gh auth token"
+backend_timeout_seconds = 900
+knowledge_dir = "~/.harness/knowledge"
+
+# [harness.path_prepend]
+# java = "/Users/you/.sdkman/candidates/java/current/bin"
+# node = "/Users/you/.nvm/versions/node/v22.20.0/bin"
+
+# [harness.env]
+# JAVA_HOME = "/Users/you/.sdkman/candidates/java/current"
+
+# review_knowledge_file = "/path/to/review-guide.md"
+
+[repo]
+name = "org/repo"
+working_dir = "/path/to/repo"
+# opencode_dir must live inside working_dir if set
+# opencode_dir = "/path/to/repo/apps/backend"
+
+[vibe_heal]
+enabled = false
+# python = "/path/to/dotharness/.venv/bin/python3"  # must have dotharness installed
+# authors = "*"
+# vibe_heal_timeout = 600
+# vibe_heal_post_timeout = 120
+# min_reanalysis_interval_hours = 24.0
+# prune_projects_enabled = false
+# prune_older_than_minutes = 60
+# prune_projects_timeout = 120
+
+[focused_review]
+enabled = false
+# vibe_types_repo = "~/.harness/vendor/vibe-types"
+
+[address_comments]
+# enabled = true
+# trusted_commenters = "*"
+
+[auto_approve]
+# enabled = false
+# viewed_max_lines = 75
+# approve_max_lines = 500
+
+[ci_fix]
+# enabled = false
+# max_fix_attempts = 3
+
+[merge]
+# enabled = false
+# require_all_files_viewed = true
+# max_changed_lines = 500
+
+[regret_review]
+enabled = false
+# max_diff_lines = 50
+# authors = "*"
+# regret_review_timeout = 300
+
+# [[repo.subdir]]
+# path = "."
+# pre_commands = []
+# coverage = false
+# timeout = 300
+
+# A fuller monorepo example for [[repo.subdir]] with both pre_commands forms:
+# [[repo.subdir]]
+# path = "services/api"
+# pre_commands = [
+#   "npm ci",
+#   { cmd = "npm run build", critical = true },
+# ]
+# coverage = true
+# timeout = 600
+# env_file = "~/secrets/api.env.vibeheal"  # optional; may live outside the repo
+```
+
+## Validation
+
+`pr_review validate` loads the config, then checks the following, accumulating
+every error before exiting:
+
+- `repo.working_dir` exists on disk.
+- `harness.knowledge_dir` exists on disk.
+- The backend binary is on `PATH` — `opencode` if `harness.backend =
+  "opencode"`, otherwise `claude`.
+- `gh` is on `PATH`.
+- If `vibe_heal.enabled` is `true` and `vibe_heal.python` is set, that path
+  exists on disk.
+
+Any parse-time problem (invalid `backend`, missing `repo.name`/`repo.working_dir`,
+an `opencode_dir` outside `working_dir`) is reported immediately, and
+`pr_review validate` exits `1` before these checks even run. If all checks pass,
+it prints `Config valid: <repo.name> backend=<backend>` and exits `0`. If any
+check fails, it prints each failure to stderr and exits `1`.

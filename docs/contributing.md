@@ -7,7 +7,8 @@ merges.
 
 - I-1 targets `main`.
 - I-2 to I-5 target `consolidation`.
-- I-6 to I-8 target `main` after I-5 merges.
+- I-6 to I-8 target `main` after I-5 merges. This issue's PRs (I-6, #168) target
+  `sisyphus/164-c86e8a65`.
 - `consolidation` lands on `main` as one squash commit. The `main` ruleset (squash
   only, linear history) is not changed.
 
@@ -44,6 +45,19 @@ uv run zensical build -s
 
 Unset `VIRTUAL_ENV` if `uv run` complains about a mismatched environment.
 
+## Shared async layer
+
+`dotharness.subprocess_runner` and `dotharness.ai_backend` are the shared way to run
+subprocesses and launch `claude` or `opencode`. The comparison of the old copies, the
+decisions and the contract for I-3 to I-5 are in
+[`design/shared-async-layer.md`](design/shared-async-layer.md).
+
+## Finding and decision IDs
+
+I-6 findings are `F-<area>-<n>` and carry a verdict (`apply now`, `defer`, `no action (justified)`). Triage table, I-7
+hand-off list and fixture decision IDs are in `docs/design/shared-async-layer.md` (sections k to m). Decisions from D-13 on
+record any fixture edit or any later-added item; no apply-now PR merges before the user approves the triage table (D-1).
+
 ## Tooling provenance
 
 These choices were made in I-1 and are recorded here because no other file records
@@ -52,8 +66,9 @@ them.
 ### Ruff version
 
 Ruff 0.15.7 and 0.17.3 were run over pr-review, spec-prism-flow and sisyphus at
-`cb0efc1` (no findings) and over vibe-heal `src/vibe_heal` at `9363868` (78
-findings: TRY003 33, TRY300 16, UP041 11, B008 10, UP017 6, UP042 1, UP035 1).
+`cb0efc1` (no findings). They were also run over vibe-heal `src/vibe_heal` at
+`9363868` (78 findings: TRY003 33, TRY300 16, UP041 11, B008 10, UP017 6,
+UP042 1, UP035 1).
 `ruff==0.17.3` is pinned, in the dev group and in `.pre-commit-config.yaml`. The
 ignore list stays `E501` and `E731` (plus `S101` in tests). TRY003, TRY300, B008 and
 the UP rules were not added to it. The vibe-heal findings are left for I-2, when vibe-heal
@@ -61,31 +76,26 @@ is migrated.
 
 ### Cookiecutter answers
 
-The project layout follows the cookiecutter-uv template with these answers: no
-Dockerfile, no devcontainer, no PyPI publishing and no mypy (`ty` is the type
-checker). The files were written by hand. Cookiecutter was not run.
+The project layout follows the cookiecutter-uv template with these answers:
+
+- no Dockerfile
+- no devcontainer
+- no PyPI publishing
+- no mypy (`ty` is the type checker)
+
+The files were written by hand. Cookiecutter was not run.
 
 ### Excludes for tools and vendor
 
-Ruff, `ty` and pre-commit exclude `tools` and `vendor`, so the old tools are not
-modified or checked by the new project. Later phases may remove these excludes as
+Ruff, `ty` and pre-commit exclude `tools` and `vendor`, so the new project does
+not modify or check the old tools. Later phases may remove these excludes as
 the tools migrate.
 
 ### Coverage policy
 
-I-1 enforces no project-wide numeric coverage floor (D-6, staged floor). The
-`dotharness` Codecov status is informational. The tools are migrated first, and the
-floor is set in I-6, once all four tools have migrated, at the level then reached.
-A 90% floor would fail as soon as vibe-heal migrates in I-2.
-
-Input figures, from local `coverage.xml` files. They are non-authoritative and are
-recomputed in CI before any floor is set:
-
-| Tool | Coverage |
-| --- | --- |
-| pr-review | 0.9396 |
-| spec-prism-flow | 0.9667 |
-| sisyphus | 0.9675 |
-| vibe-heal | 0.7949 |
+The project-wide branch coverage floor is 91%. It is `fail_under` in
+`[tool.coverage.report]` of `pyproject.toml`, enforced by `make test` and in CI.
+The measured value when it was set was 91.47%. The `dotharness` Codecov status is
+informational.
 
 The existing `sisyphus` status and flag stay untouched until I-8.

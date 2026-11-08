@@ -1,15 +1,14 @@
-# Prompt: Drive spec-prism-flow's Build Stage (Manual, Per-Phase)
+# Prompt: Drive the spec_prism_flow Build Stage (Manual, Per-Phase)
 
 > Point a coding-agent session at this file. No parameters need pre-filling: the agent
 > resolves the phase corpus and target repo itself (see below). It asks the user only
 > when it cannot resolve something on its own. It then implements an already-generated
-> phase corpus one phase at a time, instead of using `spec-prism-flow build run`.
+> phase corpus one phase at a time. `spec_prism_flow` has no `build` command group, so this
+> prompt is the build stage.
 >
-> This pairs with `tools/spec-prism-flow/docs/lifecycle-cheat-sheet.md`. That guide's
-> "Drive this yourself" section explains why: `build run`'s own orchestration is the
-> least mature part of the tool. This prompt is a deliberately thin, honest manual
-> stand-in for it. The steps are: implement, check against acceptance criteria, commit,
-> move on.
+> This pairs with `lifecycle-cheat-sheet.md` (next to this file). This prompt is a
+> deliberately thin, honest manual build: implement, check against acceptance criteria,
+> commit, move on.
 
 ## Resolve the parameters yourself — don't ask to have them pre-filled
 
@@ -32,7 +31,8 @@ own:
   - If `plan init` ran with `--code`, that path is the target repo.
   - If the `"code"` field is null or missing, **ask the user** for the git checkout to
     build in. Never guess this value.
-  - Never use the spec-prism-flow tool repo as the target repo. Never use the project's
+  - Never fall back to the dotharness checkout (the `spec_prism_flow` tool) as the target repo
+    implicitly. Use it only when `init_manifest.json` explicitly names it in `code`. Never use the project's
     own planning directory either — that directory holds planning files only, and git
     does not track it.
 
@@ -63,7 +63,7 @@ sessions running together can hit rate limits or compete for resources.
 For each phase, in order:
 
 1. Read that phase's leaf file in full.
-2. Spawn a fresh sub-agent scoped to just that phase. Give it the leaf file's `Scope`,
+2. Spawn a fresh sub-agent, **in the foreground** (never `run_in_background`; do not end your turn until it reports) scoped to just that phase. Give it the leaf file's `Scope`,
    `Requirements`, and `Acceptance criteria`, word for word. Also give it the paths of the
    handoff summary files of the phases already done (see "Handoff summary" below). Tell it to check its
    own work against the `Manual test checklist` before it reports that it is done. It must
@@ -72,9 +72,7 @@ For each phase, in order:
    implements, and to create or change those test files even when they are not in `Scope`.
    Adding these tests is not a reason to stop or to raise an open question. It must not
    list "should I write tests?" as an open question. This exception applies only to this
-   prompt-driven build. The mechanical scope guard of `build run` has no such exception: it
-   stops on any changed path outside `Scope`, test files included. For `build run`, the
-   phase's test paths must be listed in `Scope`. Tell it to end its report with its own
+   prompt-driven build; a mechanical scope guard would have no such exception. Tell it to end its report with its own
    handoff summary.
 3. Once the sub-agent reports that the implementation is done, **commit the result** in
    the target repo. Use a message that names the phase, for example
@@ -85,8 +83,7 @@ For each phase, in order:
 4. Confirm the commit exists (`git log -1`) before moving to the next phase. If a phase's
    sub-agent gets stuck, or produces work that does not meet its acceptance criteria,
    stop. Escalate the problem instead of moving on to the next phase. There is no retry
-   budget and no PR-lifecycle process here. This build method is a deliberately thin,
-   honest stand-in for `build run`, which is not yet reliable.
+   budget and no PR-lifecycle process here. This build method is deliberately thin.
 
 ## Handoff summary
 

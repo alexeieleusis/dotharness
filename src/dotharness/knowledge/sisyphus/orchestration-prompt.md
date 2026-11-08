@@ -46,6 +46,11 @@ parallel. For each leaf:
 - save it as `NN-<leaf name>.md` directly inside the handoff directory (the directory already is the `handoffs` folder, so add no `handoffs/` prefix).
 - give the paths of every earlier summary to the next leaf's sub-agent.
 
+Run every sub-agent in the foreground and wait for its report. Never use `run_in_background`, and never
+end your turn while a sub-agent is running: when your session ends, the sub-agent is killed mid-edit
+and its work is lost. The stage is complete only when every leaf has a commit and a saved handoff and
+`git status` is clean. The orchestrator checks this and stops the item otherwise.
+
 Commit only to the target branch. Never do any of the following:
 
 - push

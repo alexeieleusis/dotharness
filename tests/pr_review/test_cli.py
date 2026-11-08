@@ -1,0 +1,414 @@
+import contextlib
+import logging
+import tomllib
+from unittest.mock import patch
+
+import pytest
+from typer.testing import CliRunner
+
+from dotharness.pr_review.cli import TEMPLATE, cli
+from dotharness.pr_review.runners.review_prs import BaseAnalysisError
+
+
+def test_run_review_prs_dispatches(minimal_toml, tmp_xdg):
+    runner = CliRunner()
+    with patch("dotharness.pr_review.runners.review_prs.run") as mock_run:
+        result = runner.invoke(cli, ["run", "--config", str(minimal_toml), "review-prs"])
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+
+
+def test_run_review_prs_with_pr_url(minimal_toml, tmp_xdg):
+    runner = CliRunner()
+    with patch("dotharness.pr_review.runners.review_prs.run") as mock_run:
+        runner.invoke(
+            cli,
+            [
+                "run",
+                "--config",
+                str(minimal_toml),
+                "review-prs",
+                "--pr",
+                "https://github.com/acme/frontend/pull/1",
+            ],
+        )
+    _, kwargs = mock_run.call_args
+    assert kwargs.get("pr_url") == "https://github.com/acme/frontend/pull/1"
+
+
+def test_run_review_requested_dispatches(minimal_toml, tmp_xdg):
+    runner = CliRunner()
+    with patch("dotharness.pr_review.runners.review_requested.run") as mock_run:
+        _ = runner.invoke(cli, ["run", "--config", str(minimal_toml), "review-requested"])
+    mock_run.assert_called_once()
+
+
+def test_run_review_requested_with_pr_url(minimal_toml, tmp_xdg):
+    runner = CliRunner()
+    with patch("dotharness.pr_review.runners.review_requested.run") as mock_run:
+        runner.invoke(
+            cli,
+            [
+                "run",
+                "--config",
+                str(minimal_toml),
+                "review-requested",
+                "--pr",
+                "https://github.com/acme/frontend/pull/1",
+            ],
+        )
+    _, kwargs = mock_run.call_args
+    assert kwargs.get("pr_url") == "https://github.com/acme/frontend/pull/1"
+
+
+def test_run_focused_review_dispatches(minimal_toml, tmp_xdg):
+    runner = CliRunner()
+    with patch("dotharness.pr_review.runners.focused_review.run") as mock_run:
+        result = runner.invoke(cli, ["run", "--config", str(minimal_toml), "focused-review"])
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+
+
+def test_init_creates_template(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["init"])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / ".harness.toml").exists()
+
+
+def test_init_aborts_if_exists(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".harness.toml").write_text("existing")
+    runner = CliRunner()
+    result = runner.invoke(cli, ["init"])
+    assert result.exit_code != 0
+    assert "already exists" in result.output
+
+
+def test_validate_exits_0_on_valid(minimal_toml):
+    runner = CliRunner()
+    with patch("shutil.which", return_value="/usr/bin/stub"):
+        result = runner.invoke(cli, ["validate", "--config", str(minimal_toml)])
+    assert result.exit_code == 0
+
+
+def test_validate_exits_1_on_invalid(tmp_path):
+    bad = tmp_path / ".harness.toml"
+    bad.write_text("[harness]\n[repo]\nworking_dir = '/tmp'\n")  # missing name
+    runner = CliRunner()
+    result = runner.invoke(cli, ["validate", "--config", str(bad)])
+    assert result.exit_code == 1
+
+
+def test_run_all_calls_runners_in_order(minimal_toml, tmp_xdg):
+    _enable_auto_approve(minimal_toml)
+    runner = CliRunner()
+    call_order = []
+
+    def make_side_effect(name):
+        def _fn(*args, **kwargs):
+            call_order.append(name)
+
+        return _fn
+
+    with (
+        patch("dotharness.pr_review.runners.review_prs.run", side_effect=make_side_effect("review_prs")),
+        patch("dotharness.pr_review.runners.focused_review.run", side_effect=make_side_effect("focused_review")),
+        patch("dotharness.pr_review.runners.self_review.run", side_effect=make_side_effect("self_review")),
+        patch("dotharness.pr_review.runners.review_requested.run", side_effect=make_side_effect("review_requested")),
+        patch("dotharness.pr_review.runners.address_comments.run", side_effect=make_side_effect("address_comments")),
+        patch("dotharness.pr_review.runners.auto_approve.run", side_effect=make_side_effect("auto_approve")),
+    ):
+        result = runner.invoke(cli, ["run", "--config", str(minimal_toml), "all"])
+
+    assert result.exit_code == 0, result.output
+    assert call_order == [
+        "review_prs",
+        "focused_review",
+        "self_review",
+        "review_requested",
+        "address_comments",
+        "auto_approve",
+    ]
+
+
+def test_run_all_continues_after_failure_and_exits_nonzero(minimal_toml, tmp_xdg):
+    _enable_auto_approve(minimal_toml)
+    runner = CliRunner()
+    call_order = []
+
+    def make_side_effect(name, fail=False):
+        def _fn(*args, **kwargs):
+            call_order.append(name)
+            if fail:
+                raise RuntimeError(f"{name} exploded")  # noqa: TRY003
+
+        return _fn
+
+    with (
+        patch("dotharness.pr_review.runners.review_prs.run", side_effect=make_side_effect("review_prs", fail=True)),
+        patch("dotharness.pr_review.runners.focused_review.run", side_effect=make_side_effect("focused_review")),
+        patch("dotharness.pr_review.runners.self_review.run", side_effect=make_side_effect("self_review")),
+        patch("dotharness.pr_review.runners.review_requested.run", side_effect=make_side_effect("review_requested")),
+        patch("dotharness.pr_review.runners.address_comments.run", side_effect=make_side_effect("address_comments")),
+        patch("dotharness.pr_review.runners.auto_approve.run", side_effect=make_side_effect("auto_approve")),
+    ):
+        result = runner.invoke(cli, ["run", "--config", str(minimal_toml), "all"])
+
+    assert result.exit_code != 0
+    assert call_order == [
+        "review_prs",
+        "focused_review",
+        "self_review",
+        "review_requested",
+        "address_comments",
+        "auto_approve",
+    ]
+
+
+def test_state_reset_yes_deletes_state(minimal_toml, tmp_xdg):
+    from dotharness.pr_review import state
+
+    state.record_reviewed_sha("acme-frontend", 5, "sha5", 1000.0)
+    runner = CliRunner()
+    _ = runner.invoke(cli, ["state", "reset", "review-prs", "--config", str(minimal_toml), "--yes"])
+    assert state.read_vibe_heal_state("acme-frontend")["reviewed_shas"] == {}
+
+
+def _enable_auto_approve(minimal_toml, enabled=True):
+    minimal_toml.write_text(minimal_toml.read_text() + f"\n[auto_approve]\nenabled = {str(enabled).lower()}\n")
+
+
+def test_auto_approve_registered_under_run():
+    result = CliRunner().invoke(cli, ["run", "--help"])
+    assert result.exit_code == 0
+    assert "auto-approve" in result.output
+
+
+def test_run_auto_approve_forwards_dry_run(minimal_toml, tmp_xdg):
+    _enable_auto_approve(minimal_toml)
+    with patch("dotharness.pr_review.runners.auto_approve.run") as mock_run:
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "auto-approve", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs == {"dry_run": True}
+
+
+def test_run_auto_approve_default_not_dry_run(minimal_toml, tmp_xdg):
+    _enable_auto_approve(minimal_toml)
+    with patch("dotharness.pr_review.runners.auto_approve.run") as mock_run:
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "auto-approve"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs == {"dry_run": False}
+
+
+def test_run_auto_approve_runner_error_exits_nonzero(minimal_toml, tmp_xdg):
+    _enable_auto_approve(minimal_toml)
+    with patch("dotharness.pr_review.runners.auto_approve.run", side_effect=RuntimeError("boom")):
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "auto-approve"])
+    assert result.exit_code != 0
+
+
+def test_run_auto_approve_disabled_is_noop(minimal_toml, tmp_xdg):
+    with (
+        patch("dotharness.pr_review.runners.auto_approve.acquire_lock"),
+        patch("dotharness.pr_review.runners.auto_approve.get_gh_token") as mock_token,
+    ):
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "auto-approve"])
+    assert result.exit_code == 0, result.output
+    mock_token.assert_not_called()
+
+
+async def test_auto_approve_run_takes_lock(minimal_toml, tmp_xdg):
+    from dotharness.pr_review.config import load_config
+    from dotharness.pr_review.runners import auto_approve
+
+    with patch("dotharness.pr_review.runners.auto_approve.acquire_lock") as mock_lock:
+        await auto_approve.run(load_config(minimal_toml))
+    mock_lock.assert_called_once()
+
+
+def test_init_template_has_commented_auto_approve_block():
+    assert "# [auto_approve]" in TEMPLATE
+    block = TEMPLATE.split("# [auto_approve]")[1].split("# [[repo.subdir]]")[0]
+    assert "# enabled = false" in block
+    assert "# viewed_max_lines = 75" in block
+    assert "# approve_max_lines = 500" in block
+    assert "auto_approve" not in tomllib.loads(TEMPLATE)
+
+
+@pytest.mark.parametrize(("command", "module"), [("ci-fix", "ci_fix"), ("merge", "merge")])
+def test_new_runner_registered_under_run(command, module):
+    result = CliRunner().invoke(cli, ["run", "--help"])
+    assert result.exit_code == 0
+    assert command in result.output
+
+
+@pytest.mark.parametrize(("command", "module"), [("ci-fix", "ci_fix"), ("merge", "merge")])
+def test_new_runner_help_shows_flags(command, module):
+    result = CliRunner().invoke(cli, ["run", command, "--help"])
+    assert result.exit_code == 0
+    assert "--dry-run" in result.output
+    assert "--pr" in result.output
+
+
+@pytest.mark.parametrize(("command", "module"), [("ci-fix", "ci_fix"), ("merge", "merge")])
+def test_new_runner_forwards_dry_run_and_pr(minimal_toml, tmp_xdg, command, module):
+    with patch(f"dotharness.pr_review.runners.{module}.run") as mock_run:
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), command, "--dry-run", "--pr", "42"])
+    assert result.exit_code == 0, result.output
+    mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs == {"dry_run": True, "pr": 42}
+
+
+@pytest.mark.parametrize(("command", "module"), [("ci-fix", "ci_fix"), ("merge", "merge")])
+def test_new_runner_defaults_and_error_exit(minimal_toml, tmp_xdg, command, module):
+    with patch(f"dotharness.pr_review.runners.{module}.run") as mock_run:
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), command])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs == {"dry_run": False, "pr": None}
+    with patch(f"dotharness.pr_review.runners.{module}.run", side_effect=RuntimeError("boom")):
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), command])
+    assert result.exit_code != 0
+
+
+@pytest.mark.parametrize("bad", ["abc", "https://github.com/o/r/pull/1"])
+def test_new_runner_pr_must_be_integer(minimal_toml, tmp_xdg, bad):
+    result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "ci-fix", "--pr", bad])
+    assert result.exit_code != 0
+
+
+def test_run_all_with_ci_fix_and_merge_unset_makes_no_calls(minimal_toml, tmp_xdg):
+    runner = CliRunner()
+    call_order = []
+
+    def make_side_effect(name):
+        def _fn(*args, **kwargs):
+            call_order.append(name)
+
+        return _fn
+
+    with (
+        patch("dotharness.pr_review.runners.review_prs.run", side_effect=make_side_effect("review_prs")),
+        patch("dotharness.pr_review.runners.focused_review.run", side_effect=make_side_effect("focused_review")),
+        patch("dotharness.pr_review.runners.self_review.run", side_effect=make_side_effect("self_review")),
+        patch("dotharness.pr_review.runners.review_requested.run", side_effect=make_side_effect("review_requested")),
+        patch("dotharness.pr_review.runners.address_comments.run", side_effect=make_side_effect("address_comments")),
+        patch("dotharness.pr_review.runners.auto_approve.run", side_effect=make_side_effect("auto_approve")),
+        patch("dotharness.pr_review.runners.ci_fix.acquire_lock") as ci_lock,
+        patch("dotharness.pr_review.runners.merge.acquire_lock") as merge_lock,
+        patch("subprocess.run") as mock_sub,
+    ):
+        result = runner.invoke(cli, ["run", "--config", str(minimal_toml), "all"])
+
+    assert result.exit_code == 0, result.output
+    assert call_order == [
+        "review_prs",
+        "focused_review",
+        "self_review",
+        "review_requested",
+        "address_comments",
+        "auto_approve",
+    ]
+    ci_lock.assert_not_called()
+    merge_lock.assert_not_called()
+    mock_sub.assert_not_called()
+
+
+def test_run_all_calls_ci_fix_then_merge_last(minimal_toml, tmp_xdg):
+    call_order = []
+
+    def make_side_effect(name):
+        def _fn(*args, **kwargs):
+            call_order.append(name)
+
+        return _fn
+
+    names = ["review_prs", "focused_review", "self_review", "review_requested", "address_comments", "auto_approve"]
+    names += ["ci_fix", "merge"]
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        for n in names:
+            stack.enter_context(patch(f"dotharness.pr_review.runners.{n}.run", side_effect=make_side_effect(n)))
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "all"])
+    assert result.exit_code == 0, result.output
+    assert call_order == names
+
+
+_ALL_RUNNERS = ("focused_review", "self_review", "review_requested", "address_comments", "auto_approve")
+
+
+def _invoke_all_with_review_prs_error(minimal_toml, exc):
+    _enable_auto_approve(minimal_toml)
+    call_order = []
+
+    def make_side_effect(name):
+        def _fn(*args, **kwargs):
+            call_order.append(name)
+
+        return _fn
+
+    def _boom(*args, **kwargs):
+        call_order.append("review_prs")
+        raise exc
+
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch("dotharness.pr_review.runners.review_prs.run", side_effect=_boom))
+        for name in _ALL_RUNNERS:
+            stack.enter_context(patch(f"dotharness.pr_review.runners.{name}.run", side_effect=make_side_effect(name)))
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "all"])
+    return result, call_order
+
+
+def _failure_records(caplog):
+    return [r for r in caplog.records if r.getMessage().startswith("Runner review_prs failed")]
+
+
+def test_run_all_base_analysis_error_exits_1_without_traceback(minimal_toml, tmp_xdg, caplog):
+    caplog.set_level(logging.ERROR)
+    result, call_order = _invoke_all_with_review_prs_error(minimal_toml, BaseAnalysisError("fetch", "failed"))
+
+    assert result.exit_code == 1
+    assert call_order[0] == "review_prs"
+    assert "focused_review" in call_order
+    records = _failure_records(caplog)
+    assert len(records) == 1
+    assert not records[0].exc_info
+    assert "git fetch failed" in records[0].getMessage()
+    assert "Traceback" not in result.output
+
+
+def test_run_all_generic_exception_still_logs_exc_info(minimal_toml, tmp_xdg, caplog):
+    caplog.set_level(logging.ERROR)
+    result, call_order = _invoke_all_with_review_prs_error(minimal_toml, RuntimeError("boom"))
+
+    assert result.exit_code == 1
+    assert "focused_review" in call_order
+    records = _failure_records(caplog)
+    assert len(records) == 1
+    assert records[0].exc_info
+
+
+@pytest.mark.parametrize("extra", [[], ["--pr", "https://github.com/acme/frontend/pull/1"]])
+def test_run_review_prs_base_analysis_error_exits_1(minimal_toml, tmp_xdg, caplog, extra):
+    caplog.set_level(logging.ERROR)
+    with patch("dotharness.pr_review.runners.review_prs.run", side_effect=BaseAnalysisError("checkout", "failed")):
+        result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "review-prs", *extra])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    records = _failure_records(caplog)
+    assert len(records) == 1
+    assert not records[0].exc_info
+    assert "git checkout failed" in records[0].getMessage()
+
+
+def test_init_aborts_if_exists_exact_stderr(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".harness.toml").write_text("existing")
+    result = CliRunner().invoke(cli, ["init"])
+    assert result.exit_code == 1
+    assert result.stderr == f"Error: .harness.toml already exists in {tmp_path.resolve()}\n"
+    assert result.stdout == ""
