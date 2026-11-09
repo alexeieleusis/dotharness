@@ -1750,3 +1750,228 @@ All proposed defaults are accepted per human instruction.
 - FS-OD-2 Undeclared capabilities are substituted by objects that raise `UnsupportedCapabilityError`, not `None`
   (default accepted per human instruction).
 - FS-OD-3 The built-in reference name is `reference` (default accepted per human instruction).
+
+## Conformance suite and in-memory fake
+
+How an implementation author checks a code host, and how a consumer test runs without one (A-3-2; ticket task 9, goal G5). The
+suite and the fake ship in one module of the wheel. This section cites interfaces (Interfaces), models (Models), errors (Error
+model), declarations (Declarations) and the factory (Factory and selection) by section name and does not restate them. Names
+below that are not in those sections (`CodeHostConformance`, `InMemoryCodeHost` and their members) are owned here. Phase 0 adds
+no code and no test; Phase 1 (#193) implements the module and the packaging test.
+
+Non-goals: no live-host run in CI (it needs network and credentials; an author may run the suite against the reference
+implementation by choice, but it is not run by default); no second host implementation and no login flow; no raw host dicts or
+`api(...)` pass-through in the suite or fake interfaces; no migration of existing tests or seams in Phase 0; no property-based,
+fuzz or performance tests; no record and replay of real host traffic; no pytest plugin entry point in `pyproject.toml`. Examples
+use the placeholder host `examplehost` and the token value `<token>`.
+
+### Module, packaging and run mechanism
+
+- **Module.** `src/dotharness/code_host/testing.py`, importable as `dotharness.code_host.testing`. One file holds the suite and
+  the fake. If it later outgrows one file it becomes the package `code_host/testing/` with the same import path (D-C2).
+- **Imports.** Standard library and `dotharness.code_host` modules only. `pytest` is not imported by the module. Verified in
+  `pyproject.toml` (read only): `pytest`, `pytest-asyncio` and `pytest-mock` are in the `dev` dependency group, not in the
+  runtime dependencies, so a pytest import would break `import dotharness.code_host.testing` in an installed wheel (D-C3).
+- **Run mechanism: base class.** `class CodeHostConformance` holds the test methods as `async def test_...` coroutines. The
+  author subclasses it in their own test file and overrides one hook. Whatever runner collects the subclass runs the tests; no
+  plugin, fixture registration or conftest wiring belongs to this module. (The fixture alternative ties the shipped module to
+  pytest at import time and is rejected.)
+- **The one hook.** `async def make_target(self) -> ConformanceTarget` returns a fresh, empty host for each test:
+
+```python
+from dataclasses import dataclass
+from typing import Protocol
+
+
+class HostSeeder(Protocol):
+    """Test-side handle that puts state into, and injects failures into, one host.
+
+    `InMemoryCodeHost` is its own seeder (see "In-memory fake"). A real implementation supplies a seeder that drives a sandbox.
+    Methods are the seeding and injection methods named in "In-memory fake" (add_repository ... fail_always)."""
+
+
+@dataclass(frozen=True)
+class ConformanceTarget:
+    host: "CodeHost"  # what create_code_host returns (Factory)
+    seeder: HostSeeder
+```
+
+- **Usage** (three lines; `examplehost` and `<token>` are placeholders):
+
+```python
+class TestExampleHost(CodeHostConformance):
+    async def make_target(self) -> ConformanceTarget:
+        host = ExampleHost(token="<token>"); return ConformanceTarget(host=host.code_host(), seeder=host.seeder())
+```
+
+- **Opting out of a capability.** An implementation that lacks a capability leaves it out of `declaration.capabilities`
+  (Declarations, "Capabilities"). The suite reads the declaration, skips nothing silently, and for each undeclared capability
+  runs the B-ERR-4 test instead of that capability's group. A group is never skipped because a test fails.
+- **Suite validated by the fake.** `InMemoryCodeHost` must pass the whole suite; this is a requirement, and a Phase 1 test
+  (`TestInMemoryCodeHost(CodeHostConformance)`) enforces it. It is how the fake stays honest.
+- **Packaging check (NF-9).** A test in the style of `tests/test_wheel_install.py` (build the wheel, install it into a clean
+  venv outside the repo, then exercise it) or `tests/test_package_data.py` confirms the module ships. The assertion: in the clean
+  venv, `import dotharness.code_host.testing` succeeds, and `dotharness/code_host/testing.py` is in the wheel's file list.
+  Phase 0 adds no such test; it is a Phase 1 task, together with the module.
+- **NF-8.** Phase 0 edits no knowledge file; `KNOWLEDGE_SHA256` in `tests/test_package_data.py` (27 entries) is untouched.
+
+### Behaviors asserted
+
+Types and error names come from the sections cited above. Each behavior has a stable id. Where the first draft of this section
+differed from the Interfaces section, Interfaces wins: ChangeRequests has no generic "update" or "close" (it has
+`create_draft`, `squash_merge`, `request_reviewer`, `approve`, `mark_viewed`); WorkItems has `remove_label` but no add-label;
+"not-found" is an empty result or `None` where the signature says so, not an error (Error model D-E2); `find_by_branch` returns
+an empty sequence and `NoChangeRequestError` is raised by the consumer that needs exactly one change request (Interfaces rule 5).
+
+**Cross-capability (B-ERR).** Operation names are `Interface.method`, as in the Declarations reference-values table.
+
+| ID | Statement |
+| --- | --- |
+| B-ERR-1 | `ChangeRequests.find_by_branch` for a branch with no change request returns an empty sequence: not `None`, not an error. The seeder can make a host call raise `NoChangeRequestError` (injection), and the test asserts it is a `CodeHostError` and distinct from the other four types. |
+| B-ERR-2 | A write whose outcome is unknown raises `CodeHostTimeoutError` with `write=True`; a read timeout raises it with `write=False`. The test asserts the two `write` values differ, for at least `ChangeRequests.create_draft`, `Discussion.post_comment` and `ChangeRequests.get`. |
+| B-ERR-3 | An operation without valid credentials raises `AuthenticationError`, a different type from the B-ERR-1 and B-ERR-2 errors. |
+| B-ERR-4 | For each capability absent from `declaration.capabilities`, every method of that interface (taken from `CodeHost`, Factory) raises `UnsupportedCapabilityError` whose `capability` equals the interface name. Not `AttributeError`, not a stub result. |
+| B-ERR-5 | No error raised by the host carries a token value: with a credential `<token>` and a token command string, `str(exc)`, `repr(exc)` and `str(exc.__cause__)` of every error type from B-ERR-1..4 contain neither (Error model, "Message and secret rules"). |
+| B-ERR-6 | Each of the six error types is a subclass of `CodeHostError` (Error model R5). |
+
+B-ERR-2 asserts the error type and the `write` flag only. It does not assert that the write is retry-safe, because the Error
+model says consumers must not retry after `write=True` and defines no idempotency promise (D-C6).
+
+**Per capability.**
+
+| ID | Statement |
+| --- | --- |
+| B-SES-1 | `available()` returns a `bool` and does not raise, with and without credentials. |
+| B-SES-2 | `current_user()` returns the login the seeder configured; without credentials it raises `AuthenticationError`. |
+| B-SES-3 | `credential()` returns a `Credential`; its `repr` does not contain the token (Models: `token` is `repr=False`). |
+| B-SES-4 | `agent_environment_names()` returns the names as data; `agent_environment(base)` contains every base entry and each credential variable, and a credential variable wins over a base entry of the same name. |
+| B-REP-1 | `resolve(identity)` for a seeded identity returns a `RepositoryRef`; for an unknown identity it raises `ConfigurationError`. |
+| B-REP-2 | A `RepositoryRef` is opaque: passing the ref from `resolve()` to another method works without the test parsing it, and two `resolve()` calls for one identity return equal refs. |
+| B-REP-3 | `current()` returns a ref for the repository the target was created for (`ConfigurationError` when the target has none); `default_branch(ref)` returns the seeded name; `display_name(ref)` returns a non-empty `str`. |
+| B-CR-1 | `get(repo, n)` returns the seeded `ChangeRequest`; for a missing number it raises `CodeHostError`. |
+| B-CR-2 | `find_by_branch` returns the change requests whose `head_reference` equals the branch, honoring `state` (default open). |
+| B-CR-3 | `list` returns seeded change requests in insertion order, filtered by `state`, `author`, `assignee` and `requested_reviewer` when given. |
+| B-CR-4 | `find_by_commit`, `commits` (oldest first) and `reviews` return what was seeded; a change request with none returns an empty sequence. |
+| B-CR-5 | `create_draft` returns a `ChangeRequest` with `is_draft` true and visible to a following `get` and `find_by_branch`; creating a second one for the same head and base raises `CodeHostError`. |
+| B-CR-6 | `squash_merge(expected_head=...)` with the current head revision makes the state merged; with a different revision it raises `CodeHostError` and changes nothing. |
+| B-CR-7 | `request_reviewer` adds the login to `requested_reviewers`; `approve(head_revision=...)` appears in `reviews()` with an approved state. |
+| B-CR-8 | `mark_viewed` is reflected in `viewed_files` for that path; marking twice leaves it viewed. |
+| B-DIS-1 | `post_comment` returns the new `Comment` and it appears in `comments()`; order is posting order. |
+| B-DIS-2 | `review_threads` returns seeded threads with `is_resolved` and `anchor`. A thread whose anchor no longer maps to the diff is returned with `anchor=None`, not dropped. |
+| B-DIS-3 | `reply(thread_id, body)` appends a `Comment` to that thread; an unknown `thread_id` raises `CodeHostError`. |
+| B-DIS-4 | `post_review` with anchors the host's `AnchorRules` accept returns `fell_back=False` and the inline comments appear in `review_threads`; with an anchor the rules reject (a side not in `sides`, or a line outside the diff when `requires_line_in_diff`) it returns `fell_back=True` and the body is a top-level comment. |
+| B-DIS-5 | A `CodeHostTimeoutError` with `write=True` from `post_review` propagates and the body is not posted a second time (no fallback; Declarations, "Anchor and anchor rules"). |
+| B-CHK-1 | `list_checks` returns seeded checks; `required_only=True` returns only the required ones. A change request with no checks returns an empty sequence, which is not an error. |
+| B-CHK-2 | `list_workflows` returns seeded workflows, empty when none. |
+| B-CHK-3 | `failed_log(check)` returns the seeded log text; `get_job(job_id)` returns the `Job` with its `failed_step`; an unknown id raises `CodeHostError`. |
+| B-WI-1 | `get` returns the seeded `WorkItem`; a missing number raises `CodeHostError`. |
+| B-WI-2 | `list_open` returns open work items in insertion (tracker) order, filtered by `assignee` and `label`; closed ones are excluded; the result respects the declared list bound. |
+| B-WI-3 | `remove_label` removes the label; removing an absent label is a no-op (default, D-C7). |
+| B-WI-4 | `closing_change_requests` returns the change requests the seeder linked; `linked_work_items` is the reverse relation; with no link both are empty. |
+| B-WI-5 | `open_change_request_bodies` returns open change requests with their descriptions, separate from B-WI-4 (Interfaces: the two lookups are not merged). |
+
+**Factory and version (B-FAC).** Run once per module by `CodeHostConformance` against `create_code_host` with the implementation
+registered, using only standard-library patching of entry-point discovery.
+
+| ID | Statement |
+| --- | --- |
+| B-FAC-1 | The implementation's `HostRegistration.interface_version` equals `CODE_HOST_INTERFACE_VERSION`; a registration with another integer makes `create_code_host` raise `ConfigurationError` naming both numbers. |
+| B-FAC-2 | Options the `options_model` rejects raise `ConfigurationError` whose message lists field names only (no option value). |
+| B-FAC-3 | Two entry points sharing the selected name, an unloadable entry point and an invalid dotted path each raise `ConfigurationError` in the form `code host setting <setting> = "<value>": <reason>`. |
+| B-FAC-4 | `create_code_host` makes no host call: the seeder records zero calls after it returns. |
+
+### In-memory fake
+
+One class, `InMemoryCodeHost`, in `code_host/testing.py`. It implements all six capability Protocols and serves as its own
+`HostSeeder`. Constructor (all keyword-only):
+`InMemoryCodeHost(*, capabilities: frozenset[Capability] = frozenset(Capability), user: str = "fake-user", token: str = "<token>", declaration: HostDeclaration | None = None)`.
+`capabilities` selects the declared subset (this is how B-ERR-4 is exercised); an undeclared interface raises
+`UnsupportedCapabilityError(capability=<name>)` from each method, as the factory substitutes (Factory, "Factory"). The fake
+registers itself as `FAKE_REGISTRATION` (a `HostRegistration` with `interface_version=CODE_HOST_INTERFACE_VERSION`), selectable by
+the dotted path `dotharness.code_host.testing:FAKE_REGISTRATION`. `code_host()` returns the `CodeHost` bundle for the instance.
+
+**Determinism.** No network, no clock, no subprocess, no environment variable read. Timestamps come from a counter the fake owns
+(`datetime` values increase by one second per created object from a fixed epoch). Ordering is insertion order unless the
+Interfaces section defines otherwise (`commits` oldest first; WorkItems in insertion order, which stands for tracker order).
+
+**Seeding.** Builder methods; they do not go through the capability interfaces and take no host dicts. Arguments use the Models
+types; each returns the created model so a test can use it as an expected value.
+
+| Method | Arguments | Returns |
+| --- | --- | --- |
+| `add_repository` | `identity: str, *, default_branch: str = "main", is_current: bool = False` | `RepositoryRef` |
+| `add_change_request` | `repo, *, head_reference: str, base_reference: str = "main", title: str = "", body: str = "", state: ChangeRequestState = OPEN, is_draft: bool = False, author: str = "fake-user", head_revision: str \| None = None, number: int \| None = None, requested_reviewers: Sequence[str] = ()` | `ChangeRequest` |
+| `add_commit` | `repo, number, *, revision: str, message: str \| None = None, authors: Sequence[str] = ()` | `CommitInfo` |
+| `add_review` | `repo, number, *, author: str, state: ReviewState, revision: str \| None = None, body: str = ""` | `Review` |
+| `add_comment` | `repo, number, *, author: str, body: str` | `Comment` |
+| `add_thread` | `repo, number, *, anchor: Anchor \| None, comments: Sequence[Comment], is_resolved: bool = False` | `ReviewThread` |
+| `add_check` | `repo, number, *, name: str, status: CheckStatus, required: bool = False, job_id: str \| None = None` | `Check` |
+| `add_workflow` | `repo, *, name: str` | `Workflow` |
+| `add_job` | `repo, *, job_id: str, failed_step: str \| None = None, log: str = ""` | `Job` |
+| `add_work_item` | `repo, *, title: str, body: str = "", labels: Sequence[str] = (), assignees: Sequence[str] = (), state: WorkItemState = OPEN, number: int \| None = None` | `WorkItem` |
+| `link_closing` | `repo, *, work_item: int, change_request: int` | `None` |
+| `set_user` | `login: str` | `None` |
+
+`number=None` assigns the next number for that repository. `add_repository(..., is_current=True)` makes it the answer of
+`Repository.current()`; none marked makes `current()` raise `ConfigurationError`.
+
+**Error injection.** Two methods cover every kind. `operation` is `Interface.method`, or `"*"` for all operations.
+
+| Method | Meaning |
+| --- | --- |
+| `fail_next(operation, error, *, apply: bool = False)` | The next call to `operation` raises `error` (a `CodeHostError` instance), then behavior returns to normal. |
+| `fail_always(operation, error, *, apply: bool = False)` | Every call to `operation` raises `error` until `clear_failures()`. |
+| `clear_failures()` | Removes all injected failures. |
+
+`apply=True` is allowed only for write operations: the fake applies the write to its state and then raises, so a consumer test can
+cover "timed out but took effect"; `apply=False` raises without applying, covering "timed out and did not take effect".
+Both outcomes are needed for B-ERR-2. Each kind is injected by passing an instance:
+
+| Kind | Injection |
+| --- | --- |
+| No change request (B-ERR-1) | `fail_next("ChangeRequests.find_by_branch", NoChangeRequestError("..."))` for consumer handlers; the empty-result case needs no injection |
+| Timeout, write may have taken effect (B-ERR-2) | `fail_next("ChangeRequests.squash_merge", CodeHostTimeoutError("...", write=True), apply=True)` or `apply=False` |
+| Timeout, read | `fail_next("ChangeRequests.get", CodeHostTimeoutError("...", write=False))` |
+| Not authenticated (B-ERR-3) | `fail_always("*", AuthenticationError("..."))` |
+| Unsupported capability (B-ERR-4) | construct with `capabilities=frozenset(Capability) - {Capability.CHECKS}` |
+
+**Inspection.** `calls: list[Call]` records every capability call in order (`Call` is a frozen dataclass of `operation: str`,
+`args: tuple`, `kwargs: Mapping[str, object]`, `outcome: str` with value `"ok"` or the error class name); injected failures are
+recorded too. State attributes are read-only mappings keyed by `RepositoryRef`: `change_requests`, `comments`, `threads`,
+`reviews`, `checks`, `work_items`. `writes` is the subset of `calls` that mutated state (including `apply=True` injected ones),
+so a test asserts `host.writes == []` for a read-only consumer.
+
+### Seam map
+
+Each existing seam is replaced by the fake in consumer tests; replacing them is later work (Phase split). Evidence from
+f293b99. "Members" are interface methods (Interfaces) served by the fake.
+
+| Existing seam | Where | Today | Replaced by (capability: members) |
+| --- | --- | --- | --- |
+| `LabelRemover` | `src/dotharness/sisyphus/pick.py` (`Protocol`) | label removal | WorkItems: `remove_label`; inspect via `calls` / `work_items` |
+| `TrackerClient` | `src/dotharness/sisyphus/pick.py` (`Protocol`, `list_candidates(source)`) | candidate listing in tracker order | WorkItems: `list_open`; seed with `add_work_item` |
+| `PullRequestLookup` | `src/dotharness/sisyphus/pick.py` (`Protocol`, `linked_prs`, `open_pr_bodies`) | linked and open PR reads | WorkItems: `closing_change_requests` (`linked_prs`), `open_change_request_bodies` (`open_pr_bodies`); seed with `link_closing`, `add_change_request` |
+| `GhCli` | `src/dotharness/sisyphus/pick.py` (class) | wraps the `gh` subprocess | The whole fake (all capabilities); the concrete reference wrapper itself is not replaced in Phase 0 |
+| `PullRequestClient` | `src/dotharness/sisyphus/orchestrator.py` (`Protocol`) | orchestrator PR operations | ChangeRequests: `get`, `find_by_branch`, `create_draft`; to be confirmed against the Protocol's method list in Phase 1, since the page maps by inventory rows (INV-SY-06..09) |
+| injected `_gh` param | pr-review `list_own_open_prs(..., _gh)` | tests pass a fake callable | ChangeRequests: `list(author=...)` with Session `current_user`; seed with `add_change_request(author=...)`, `set_user` |
+| `gh` callable | `src/dotharness/pr_review/runners/ci_checks.py` (`async def gh(args, env)`) | runs `gh`, returns `CompletedProcess` | Checks: `list_checks`, `list_workflows`, `failed_log`, `get_job`; seed with `add_check`, `add_workflow`, `add_job` |
+
+Gap rule: a seam the fake cannot replace without a new interface method is reported here, not worked around. No gap is found at
+this stage; the two "to be confirmed" notes are checked in Phase 1 when the Protocols are read against the code.
+
+`src/dotharness/vibe_heal/review/github.py` (`_run_gh`) is a further `gh` call site found by search. It is not in the ticket's D-13
+list: found, not in D-13. It is not mapped as a seam; its operations are covered by inventory rows (INV-VH-07 for the transport
+error adapter, Interfaces Session table) and the fake serves them through the Session, ChangeRequests and Discussion members.
+
+### Open decisions (Conformance and fake)
+
+All defaults are accepted per human instruction.
+
+- D-C1 Sibling sections are cited by name; the first draft's `§<sibling:N>` placeholders are gone and the Interfaces section wins
+  where the capability table differed (default accepted).
+- D-C2 Single file `code_host/testing.py` (default accepted).
+- D-C3 Base class, not a pytest fixture; `pytest` is a dev-group dependency only (verified, `pyproject.toml`) (default accepted).
+- D-C4 `_run_gh` is listed as found, not in D-13, and not mapped as a seam (default accepted).
+- D-C5 No target size for this section (default accepted; it is comparable to the Interfaces and Error model sections).
+- D-C6 B-ERR-2 asserts the error type and `write` flag, not retry-safety (default accepted).
+- D-C7 Removing an absent label is a no-op (default accepted; the Interfaces section names no error for it).
