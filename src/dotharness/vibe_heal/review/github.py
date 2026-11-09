@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Any, cast
 from urllib.parse import urlparse
 
+from dotharness.code_host.errors import CodeHostError, CodeHostTimeoutError, NoChangeRequestError
 from dotharness.gh import gh_argv
 from dotharness.subprocess_runner import run
 from dotharness.vibe_heal.ai_tools.utils import CommandResult, run_command
@@ -19,20 +20,9 @@ from dotharness.vibe_heal.review.reporter import format_coverage_table
 logger = logging.getLogger(__name__)
 
 
-class GitHubReviewError(Exception):
-    """Error during GitHub review operations."""
-
-
-class NoOpenPrError(GitHubReviewError):
-    """Raised when there is no open PR for the current branch."""
-
-
-class GitHubTimeoutError(GitHubReviewError):
-    """Raised when a gh API call times out.
-
-    The request may already have been processed by GitHub, so callers must not
-    blindly retry (e.g. via a fallback post) as that could duplicate the review.
-    """
+GitHubReviewError = CodeHostError
+NoOpenPrError = NoChangeRequestError
+GitHubTimeoutError = CodeHostTimeoutError
 
 
 _MAX_INLINE_COMMENTS = 50
