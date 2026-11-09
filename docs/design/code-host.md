@@ -344,3 +344,138 @@ runners versus `cli.py`/`config.py`, with `ci_checks.py`, `merge.py` and `ci_fix
 
 (The `PS-` prefix avoids clashing with other decision ids used in the Inventory handoff. `sisyphus/config.py` as a user, the
 former OD-7, is settled: it is INV-SY-12, Phase 1.)
+
+## Rename plan
+
+Rename plan for `GitHub*`, `Gh*`, `gh_*`, `GH*`, `GITHUB_*` identifiers and configuration keys. It is the alias section that
+the Phase split section refers to. Facts below were read from the code at commit `93fa633` (the audit grep counts are
+unchanged since `f293b99`). The new names are proposals; they are placeholders until the phase that introduces them. Phase
+numbers are those of the Phase split section: Phase 1 (#193) creates `src/dotharness/code_host/` and migrates `sisyphus`;
+Phase 2 (#194) migrates `vibe_heal`; Phase 3 (#195) migrates `pr_review`; Phase 4 (#196) removes `gh.py`, migrates both
+`pr-comments.py` copies' gh calls and removes every alias. No code, `pyproject.toml`, `src/`, `tests/`, `zensical.toml` or
+`src/dotharness/knowledge/` file changes in Phase 0. Examples and new names never name a third-party host; the "Old name"
+column quotes existing names.
+
+### Naming rules
+
+- **R1.** New class and function names say "change request", never "PR" (`NoOpenPrError` becomes
+  `NoOpenChangeRequestError`). A name for the reference implementation's tool appears only inside the reference implementation
+  module and never as a shipped class name (`ReferenceCli` is rejected).
+- **R2.** A rename introduced in phase N keeps the old name importable until Phase 4. An alias is a plain re-export
+  (`OldName = NewName`) in the old module: no behavior change, no `DeprecationWarning` (a warning would change stderr and test
+  output; decision RN-OD-2).
+- **R3.** Removal condition for every alias, at Phase 4: `grep -rnE '\b<OldName>\b' src tests` finds no match outside the
+  alias definition lines, and `uv run pytest` passes. Rows cite this rule by number and do not restate it.
+- **R4.** The "Intro" column is the phase that introduces the new name (the phase of the first user of the old name, or Phase 1
+  for names that live in the new package). A consumer stops using the old name in the phase of its own inventory group.
+- **R5 (test patching).** Tests patch by module path (for example `patch(p + "get_gh_token")`,
+  `patch(p + "build_subprocess_env")` in `tests/pr_review/runners/test_auto_approve.py`). An alias in the old module does not
+  intercept a patch aimed at the new name, so a phase that migrates a caller moves that caller's patch targets in the same
+  change.
+
+### Identifiers
+
+"Alias" = keep the old name importable until Phase 4 (R2, R3). Ids `REN-nn` are never renumbered.
+
+| Id | Old name | Where | New name | Intro | Alias / removal | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| REN-01 | module `dotharness.gh` | `src/dotharness/gh.py` | `dotharness.code_host.reference` (exact module path set by Phase 1) | 1 | Old module stays a re-export shim until Phase 4 (R3); INV-LO-01 | Package location is `src/dotharness/code_host/`. |
+| REN-02 | `GH = "gh"` | `gh.py` | `REFERENCE_CLI = "gh"` in the reference module | 1 | Alias `GH` (R3) | The string `"gh"` is the executable name and does not change. The `GH` in `tests/sisyphus/test_pick.py` is a different object (REN-25). |
+| REN-03 | `gh_argv(*args)` | `gh.py`; callers in `vibe_heal/review/github.py`, `sisyphus/pick.py`, `pr_review/runners/*` and tests (49 grep hits) | `reference_argv(*args)` (reference module only) | 1 (defined); consumers stop in 1 (sisyphus), 2 (vibe-heal), 3 (pr-review) | Alias `gh_argv` (R3) | Returns `[REFERENCE_CLI, *args]`; semantics unchanged. Consumers call capability interfaces and stop building argv. |
+| REN-04 | `build_subprocess_env(path_prepend, env_vars, gh_token=None)` | `gh.py` | Function name KEEPS. Parameter `gh_token` becomes `host_token`. | 3 | During transition the function accepts both `gh_token=` and `host_token=`; if both are given, `host_token` wins. Removal of the `gh_token=` keyword: R3 on `gh_token=` | Sets `env["GITHUB_TOKEN"]` when the token is truthy (variable name: Child-agent environment). All `pr_review` runners pass it positionally; `local_review/review.py`, `local_review/address.py` and `local_review/git.py` pass no token. Only the parameter name changes. |
+| REN-05 | local variable `gh_token` | `pr_review/runners/*.py` (`focused_review`, `ci_fix`, `self_review`, `auto_approve`, `review_requested`, `address_comments`, `review_prs`, `merge`) | `host_token` | 3 | none (local name, not importable) | Internal rename. |
+| REN-06 | `get_gh_token(gh_token_cmd)` | `pr_review/runners/common.py` | `get_host_token(token_cmd)` | 3 | Alias `get_gh_token` (R3); R5 applies | Runs the command with `shell=True`. The default string `gh auth token` is not moved or changed (REN-31). Imported by 8 runner modules and patched in tests. |
+| REN-07 | `PR_COMMENTS_SCRIPT_PATH` | `pr_review/runners/common.py`; used by `focused_review`, `address_comments`, `regret_review` | KEEP | n/a | n/a | It names a script path, not a host. The script `src/dotharness/scripts/pr-comments.py` is stdlib only, runs as a child process and must not import `dotharness` (F-DUP-8 in `docs/design/shared-async-layer.md`). "PR" stays per the glossary. How the script reaches the interface is a Phase 4 design question (see `scripts/pr-comments.py` in Phase split); this row does not decide it (RN-OD-4). |
+| REN-08 | `gh_json`, `gh_json_paginated` | `scripts/pr-comments.py` (both copies) | KEEP | n/a | n/a | Script-local helpers, never imported by `dotharness` code (the file name is not a valid module name). The file must stay dependency-free. Their gh calls are INV-LO-02..06. |
+| REN-09 | `ci_checks.gh` (`async def gh(args, env)`), imported as `_gh` by `merge.py` and `ci_fix.py` | `pr_review/runners/ci_checks.py` | `run_host_cli(args, env)` in `ci_checks.py`; consumers move to the Checks capability | 3 | Alias `gh`; the `_gh` import alias is local to each importer and disappears when that importer is migrated (R3 covers `ci_checks.gh`) | 14 `_gh` grep hits. `merge.py`, `ci_fix.py` and `ci_checks.py` move together (R-SPLIT-5). |
+| REN-10 | `GitHubReviewClient` | `vibe_heal/review/github.py`; used in `vibe_heal/review/orchestrator.py`, `vibe_heal/cli.py` and tests (55 hits) | `ChangeRequestReviewClient` (reference module); consumers depend on the ChangeRequests and Discussion interfaces | 2 | Alias `GitHubReviewClient` (R3) | `vibe_heal/review/github.py` becomes a shim under the same alias rule. |
+| REN-11 | `GitHubReviewError` | `vibe_heal/review/github.py` | `ChangeRequestReviewError` (in `code_host`) | 2 | Alias `GitHubReviewError` (R3). Subclass relation preserved: the aliases of REN-12 and REN-13 stay subclasses, so `except GitHubReviewError` still catches them | Existing catches must keep working without edit. |
+| REN-12 | `NoOpenPrError(GitHubReviewError)` | same | `NoOpenChangeRequestError` | 2 | Alias `NoOpenPrError` (R3) | R1. Also re-exported from `vibe_heal/review/__init__.py` and imported by `vibe_heal/cli.py`; both keep working through the alias. |
+| REN-13 | `GitHubTimeoutError(GitHubReviewError)` | same | `HostTimeoutError` | 2 | Alias `GitHubTimeoutError` (R3) | |
+| REN-14 | `GitHubError` | `sisyphus/orchestrator.py`, imported by `sisyphus/cli.py` | `HostError` (in `code_host`) | 1 | Alias `GitHubError` (R3) | Raised at the sisyphus orchestration boundary; messages unchanged. |
+| REN-15 | `GhCli` | `sisyphus/pick.py` (27 hits; constructed as `GhCli(cwd, token, executor)`) | `HostCli` (generic command runner, reference module only) | 1 | Alias `GhCli` (R3); constructor signature unchanged | Sets `GH_TOKEN` in the child env (Child-agent environment). |
+| REN-16 | `GhLabelRemover` | `sisyphus/pick.py` | `WorkItemLabelRemover` (WorkItems capability) | 1 | Alias (R3) | `LabelRemovalError(PickError)` is REN-26. |
+| REN-17 | `GhTimeboundLabelRemover(GhLabelRemover)` | `sisyphus/cli.py` | `TimeboundWorkItemLabelRemover` | 1 | Alias (R3) | Subclass of REN-16; its alias must point at the renamed subclass of the renamed base. |
+| REN-18 | `GhPullRequestLookup` | `sisyphus/pick.py` | `ChangeRequestLookup` | 1 | Alias (R3) | R1. |
+| REN-19 | `GhPullRequestClient` | `sisyphus/cli.py` | `ChangeRequestClient` | 1 | Alias (R3) | |
+| REN-20 | `GhPrStateLookup` | `sisyphus/cli.py` | `ChangeRequestStateLookup` | 1 | Alias (R3) | |
+| REN-21 | `GitHubIssueTracker` | `sisyphus/pick.py`, `sisyphus/cli.py` | `WorkItemTracker` (WorkItems implementation for the reference host) | 1 | Alias (R3) | The config value `kind = "github"` is not renamed (REN-33). |
+| REN-22 | `GITHUB_OPEN_STATE = "OPEN"` | `sisyphus/pick.py` | `CHANGE_REQUEST_OPEN_STATE` (value `"OPEN"` unchanged) | 1 | Alias (R3). If the neutral model exposes an enum, the constant is deleted at Phase 4 under the same rule | The value is the reference host's state string, compared case-insensitively. |
+| REN-23 | `GITHUB_FOOTER_LINE` | `vibe_heal/cli.py` | KEEP | n/a | n/a | It is this project's own repository link, not a host dependency. Its text is user-visible output. |
+| REN-24 | `GITHUB_SOURCE` | `tests/sisyphus/test_abandon.py` (TOML snippet with `kind = "github"`) | KEEP in Phase 0; the Phase 1 test edit may rename it | 1 (optional) | none (test constant, not importable by `src`) | Listed for completeness of the grep. |
+| REN-25 | `GH` (test fixture `WorkItemSource(kind="github", ...)`) | `tests/sisyphus/test_pick.py` | KEEP in Phase 0; the Phase 1 test edit may rename it | 1 (optional) | none | Not the `GH` of `gh.py` (REN-02); the 13 `GH` grep hits are 1 definition in `gh.py`, 1 in `gh.py`'s `gh_argv` and 11 in this test file. |
+| REN-26 | `PickError`, `LabelRemovalError(PickError)` | `sisyphus/pick.py` | KEEP | n/a | n/a | They describe the operation, not a host. They do not match the grep patterns; checked on purpose. |
+| REN-27 | `MergeError`, `AutoApproveError`, `CiFixError` | `pr_review/runners/merge.py`, `auto_approve.py`, `ci_fix.py` | KEEP | n/a | n/a | Named for the command. Whether Phase 3 wraps `HostError` into them is a Phase 3 design point (RN-OD-5). |
+| REN-28 | `_IssueFetchError` | `pr_review/runners/common.py` | KEEP | n/a | n/a | Private (underscore), no host pattern, not importable by external code. |
+| REN-29 | `gh_ops` | only the ledger row `spec_prism_flow.build.gh_ops` in `tests/data/ledger_modules.tsv` (path `tools/spec-prism-flow/spec_prism_flow/build/gh_ops.py`, not under `src/dotharness`) | KEEP | n/a | n/a | The ledger is frozen. |
+| REN-30 | `GitHub` alone (about 151 hits) and the footer text | prose in docstrings, comments, user-facing text | KEEP | n/a | n/a | Not an identifier; no import or config contract depends on it. |
+
+### Configuration keys and values
+
+Keys are renamed only additively. "Gh" in the config key column is quoted from existing files.
+
+| Id | Old key | File / section | New key | Precedence and behavior | Alias / removal |
+| --- | --- | --- | --- | --- | --- |
+| REN-31 | `gh_token_cmd` | `[harness]` of the `pr_review` config; field `gh_token_cmd: str = "gh auth token"` in `pr_review/config.py`; the template written by `pr_review/cli.py`; docs `docs/pr_review/configuration.md`, `commands/address-comments.md`, `commands/self-review.md`, `commands/local-review.md` | `host_token_cmd` (additive) | If only `gh_token_cmd` is set, behavior is exactly today's. If only `host_token_cmd` is set, its value is used with the same semantics. If both are set, `host_token_cmd` wins, the old key is ignored and no error is raised (RN-OD-6). Neither key set: the effective value is `gh auth token`, same as today. The command string runs with `shell=True` exactly as in `get_gh_token`. | Introduced in Phase 3. The old key is accepted until Phase 4. Removal: R3 on `gh_token_cmd`, docs mention only the new key. Users' config files that still use the old key break at Phase 4, so the Phase 4 release notes MUST say so. |
+| REN-32 | `token_cmd` | `[source.host]` of the sisyphus config (`token_cmd: str \| None = None` in `sisyphus/config.py`; `run_token_cmd` in `sisyphus/cli.py`) | KEEP, no new key | Unchanged: default `None`, split with `shlex.split`, no shell, no default command. The key is already neutral. | n/a |
+| REN-33 | `kind = "github"` | `[source.work_item]` of the sisyphus config; `TRACKER_KINDS` in `sisyphus/config.py` | KEEP the value `"github"`. A neutral spelling would be additive and is chosen when the WorkItems capability is designed. | Existing configs must load unchanged. User-visible error messages (for example "mixed tracker") are unchanged. | n/a (RN-OD-7) |
+| REN-34 | `[harness] env` passthrough (`config.harness.env`) | `pr_review/config.py` | KEEP | Used as `{**config.harness.env, "GITHUB_TOKEN": token}` in `focused_review.py`, `address_comments.py`, `review_requested.py`, `self_review.py` and `ci_fix.py`: the explicit variable overrides a same-named `env` entry. This order is preserved. | n/a |
+
+Loader constraint (binds REN-32, REN-33 and any future sisyphus key): `src/dotharness/sisyphus/config.py` is stdlib only,
+never executes `token_cmd` and never reads the environment. A neutral sisyphus key is a plain parsed value; resolving it
+(running a command, reading a variable) belongs to `sisyphus/cli.py` and Session, not the loader.
+
+### Child-agent environment
+
+Owned by Session. This section states the rule and the table only.
+
+| Id | Variable | Set by | Decision |
+| --- | --- | --- | --- |
+| REN-35 | `GITHUB_TOKEN` | `gh.py` `build_subprocess_env` (when the token is truthy); hand-built dicts in `focused_review.py`, `address_comments.py`, `review_requested.py`, `self_review.py`, `ci_fix.py` (the last three read it back from `env`) | KEEP the name for the reference implementation. |
+| REN-36 | `GH_TOKEN` | `sisyphus/pick.py` `GhCli` | KEEP the name for the reference implementation. |
+
+Rule (RN-OD-1): with the default config the child process receives exactly the same variable names and values as today. A
+neutral variable name is allowed only if behavior does not change. Proposed design: Session exposes the variable names as
+data (a mapping returned for the reference implementation containing `GITHUB_TOKEN` and `GH_TOKEN` as applicable per call
+site), and hand-built env dicts migrate to that data in Phase 3. Knowledge files under `src/dotharness/knowledge/` that
+mention `gh` or `GITHUB_TOKEN` are pinned by `KNOWLEDGE_SHA256` in `tests/test_package_data.py`; a phase that changes
+anything agents see updates the hashes deliberately in the same change.
+
+### Rename audit grep
+
+Run from the repository root (result at `93fa633`, identical to the count at `f293b99`):
+
+```
+grep -rhoE "\b(GitHub[A-Za-z_]*|Gh[A-Z][A-Za-z_]*|gh_[a-z_]+|GH_[A-Z_]+|GH\b|GITHUB_[A-Z_]+|_gh\b|token_cmd)" src tests | sort | uniq -c | sort -rn
+```
+
+Counts (prose included): `GitHub` 151, `GitHubReviewClient` 55, `gh_argv` 49, `GhCli` 27, `gh_token_cmd` 26, `gh_token` 25,
+`GITHUB_TOKEN` 23, `GitHubReviewError` 20, `GitHubError` 20, `token_cmd` 16, `_gh` 14, `GH` 13, `GitHubTimeoutError` 8,
+`GhPullRequestLookup` 8, `GhLabelRemover` 8, `GhPullRequestClient` 6, `GitHubIssueTracker` 5, `gh_json` 5, `GITHUB_SOURCE` 4,
+`GITHUB_FOOTER_LINE` 4, `GH_TOKEN` 4, `gh_json_paginated` 4, `GhTimeboundLabelRemover` 3, `GITHUB_OPEN_STATE` 2,
+`GhPrStateLookup` 2, `gh_ops` 2.
+
+Coverage check for reviewers: every name above maps to a row. `GitHub` REN-30; `GitHubReviewClient` REN-10; `gh_argv`
+REN-03; `GhCli` REN-15; `gh_token_cmd` REN-31 (also REN-06 parameter); `gh_token` REN-04, REN-05; `GITHUB_TOKEN` REN-35;
+`GitHubReviewError` REN-11; `GitHubError` REN-14; `token_cmd` REN-32 (and REN-31, REN-06); `_gh` REN-09; `GH` REN-02, REN-25;
+`GitHubTimeoutError` REN-13; `GhPullRequestLookup` REN-18; `GhLabelRemover` REN-16; `GhPullRequestClient` REN-19;
+`GitHubIssueTracker` REN-21; `gh_json`, `gh_json_paginated` REN-08; `GITHUB_SOURCE` REN-24; `GITHUB_FOOTER_LINE` REN-23;
+`GH_TOKEN` REN-36; `GhTimeboundLabelRemover` REN-17; `GITHUB_OPEN_STATE` REN-22; `GhPrStateLookup` REN-20; `gh_ops` REN-29.
+Companion queries for names the pattern cannot see: `grep -rnE "^class \w*Error" src` (REN-11..14, 26..28) and
+`grep -rnE "PR_COMMENTS_SCRIPT_PATH|def get_gh_token|def gh\b|_IssueFetchError" src` (REN-06, 07, 09, 28).
+`NoOpenPrError` (REN-12) is not matched by the pattern; it is found by the first companion query.
+
+### Open decisions (Rename plan)
+
+- RN-OD-1: Session exposes variable names as data and keeps `GITHUB_TOKEN` and `GH_TOKEN` (proposed default), or a neutral
+  variable name is wanted. Open unless the interface section closes it.
+- RN-OD-2: aliases emit no `DeprecationWarning` (proposed default; a warning changes stderr and test output).
+- RN-OD-4: `PR_COMMENTS_SCRIPT_PATH` may later be re-pointed to a host-declared script (default: keep).
+- RN-OD-5: whether `MergeError`, `AutoApproveError`, `CiFixError` wrap `HostError` in Phase 3 (default: yes, by wrapping at
+  raise sites only; deferred to Phase 3).
+- RN-OD-6: warn when both `gh_token_cmd` and `host_token_cmd` are set (default: no warning, `host_token_cmd` wins).
+- RN-OD-7: neutral spelling for `kind = "github"` (default: none in Phases 1 to 3).
+- Phase numbers: reconciled with the Phase split section (the leaf's draft numbering is replaced).
+- A neutral `[harness]` key (`host_token_cmd`) is included as additive-only; no further decision pending.
+
+(The `RN-` prefix avoids clashing with the Inventory and Phase split decision ids.)
