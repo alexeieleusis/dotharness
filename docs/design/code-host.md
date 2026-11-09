@@ -1502,7 +1502,7 @@ means the default applies).
 | timeout, installed check (INV-VH-01) | 10 | `Session.available` | `validate_installed` in `vibe_heal/review/github.py` |
 | timeout, CR field read of the current branch (INV-VH-02) | 30 | `ChangeRequests.find_by_branch` | `_view_pr_field` in the same file |
 | timeout, review post (INV-VH-03) | 60 | `Discussion.post_review` | `_POST_TIMEOUT_SECONDS` in the same file |
-| `list_bounds.default` | 100 | | `per_page=100` in `common.py` and `review_requested.py` |
+| `list_bounds.default` | 100 | | `per_page=100` in `ci_checks.py` (single call); exhaustive reads are `None`, see below |
 | list bound, CR listings | 1000 | `ChangeRequests.list` | `--limit 1000` in `address_comments.py` (covers the `--limit 500` listings, INV-PR-11, INV-PR-27, INV-PR-41) |
 | list bound, work-item candidate listing (INV-SY-03) | 100 | `WorkItems.list_open` | `GitHubIssueTracker.__init__(limit=100)` in `sisyphus/pick.py` |
 | list bound, open CR bodies (INV-SY-05) | 200 | `WorkItems.open_change_request_bodies` | `GhPullRequestLookup.__init__(limit=200)` in `sisyphus/pick.py` |
