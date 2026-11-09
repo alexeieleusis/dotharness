@@ -1457,7 +1457,7 @@ class OperationTimeouts:
 @dataclass(frozen=True)
 class ListBounds:
     default: int
-    per_operation: dict[str, int]
+    per_operation: dict[str, int | None]  # None: unbounded, the host returns every item
 
 
 @dataclass(frozen=True)
@@ -1477,7 +1477,8 @@ class HostLimits:
     It moves the overflow beyond the inline limit into the review body, and truncates the body with a notice.
   - `max_change_request_body_chars`: the consumer that builds a change request description (`sisyphus/prbody.py`).
   - `timeouts`: the host implementation, which applies them to its own calls. A consumer never passes a timeout.
-  - `list_bounds`: the host implementation of every list-returning operation, which returns at most that many items.
+  - `list_bounds`: the host implementation of every list-returning operation, which returns at most that many items. A bound of `None` means the host returns every item. A host never
+    truncates silently: if it cannot return the whole result under the bound that applies, it raises `CodeHostError` instead.
 - A list size bound is a declared limit, never a paging parameter. No operation takes a page, cursor or `--limit` argument and
   no caller passes one. Each declared bound replaces `--limit 1000` (`address_comments.py`), `--limit 500` (the four
   `@me` listings), `per_page=100` (`common.py`, `review_requested.py`, `ci_checks.py`) and the `limit=100` / `limit=200`
@@ -1505,7 +1506,7 @@ means the default applies).
 | list bound, CR listings | 1000 | `ChangeRequests.list` | `--limit 1000` in `address_comments.py` (covers the `--limit 500` listings, INV-PR-11, INV-PR-27, INV-PR-41) |
 | list bound, work-item candidate listing (INV-SY-03) | 100 | `WorkItems.list_open` | `GitHubIssueTracker.__init__(limit=100)` in `sisyphus/pick.py` |
 | list bound, open CR bodies (INV-SY-05) | 200 | `WorkItems.open_change_request_bodies` | `GhPullRequestLookup.__init__(limit=200)` in `sisyphus/pick.py` |
-| list bound, comments, reviews and threads | 100 | `Discussion.comments`, `Discussion.review_threads`, `ChangeRequests.reviews` | `per_page=100` in `common.py`, `review_requested.py` |
+| list bound, exhaustive reads (INV-PR-07, INV-PR-17, INV-PR-29, INV-PR-39, INV-PR-40, INV-PR-42) | `None` | `Discussion.comments`, `Discussion.review_threads`, `ChangeRequests.reviews`, `ChangeRequests.commits`, `ChangeRequests.viewed_files` | `fetch_all_pages`, `--paginate` and cursor loops page to exhaustion today (safety gates read them in full) |
 | list bound, workflows | 100 | `Checks.list_workflows` | `per_page=100` in `ci_checks.py` |
 
 The page contains no other values. Examples of other hosts use the placeholder `examplehost`, and a token, where one
@@ -1566,8 +1567,11 @@ All proposed defaults are accepted per human instruction.
   current-state reads. The 10.0 s belongs to `ChangeRequests.get` and the 30 s to `ChangeRequests.find_by_branch`, following
   the Interfaces note that "current branch" is a `find_by_branch` call. Default: as stated.
 - D-8 (added) The `--limit 500` listings are declared under the 1000 bound of `ChangeRequests.list` (one key per method).
-  The `per_page=100` sites are page sizes today; declared as bounds they cap results at 100 where the code fetches every page
-  (INV-PR-07). Default: follow the leaf (declare 100); the implementer of the host raises the bound if a consumer needs more.
+  The `per_page=100` sites that fetch every page today (INV-PR-07 and the `--paginate` and cursor loops) are page sizes, not
+  bounds; declaring 100 would silently truncate what the safety gates read in full (`_has_user_approved`,
+  `_check_approval_safety`, `_check_human_issue_comments`). Default (revised after review): those methods declare `None`
+  (unbounded), and a host that cannot return everything raises `CodeHostError` rather than truncate. Only reads that have a
+  bound today (`--limit`, `limit=`, single-call `per_page=100` such as workflows) keep a numeric bound.
 
 ## Factory and selection
 
@@ -1851,13 +1855,13 @@ model says consumers must not retry after `write=True` and defines no idempotenc
 | B-CR-1 | `get(repo, n)` returns the seeded `ChangeRequest`; for a missing number it raises `CodeHostError`. |
 | B-CR-2 | `find_by_branch` returns the change requests whose `head_reference` equals the branch, honoring `state` (default open). |
 | B-CR-3 | `list` returns seeded change requests in insertion order, filtered by `state`, `author`, `assignee` and `requested_reviewer` when given. |
-| B-CR-4 | `find_by_commit`, `commits` (oldest first) and `reviews` return what was seeded; a change request with none returns an empty sequence. |
+| B-CR-4 | `find_by_commit`, `commits` (oldest first) and `reviews` return what was seeded; a change request with none returns an empty sequence. A fake seeded with more items than the default list bound returns all of `reviews` and `commits` (their declared bound is `None`). |
 | B-CR-5 | `create_draft` returns a `ChangeRequest` with `is_draft` true and visible to a following `get` and `find_by_branch`; creating a second one for the same head and base raises `CodeHostError`. |
 | B-CR-6 | `squash_merge(expected_head=...)` with the current head revision makes the state merged; with a different revision it raises `CodeHostError` and changes nothing. |
 | B-CR-7 | `request_reviewer` adds the login to `requested_reviewers`; `approve(head_revision=...)` appears in `reviews()` with an approved state. |
 | B-CR-8 | `mark_viewed` is reflected in `viewed_files` for that path; marking twice leaves it viewed. |
 | B-DIS-1 | `post_comment` returns the new `Comment` and it appears in `comments()`; order is posting order. |
-| B-DIS-2 | `review_threads` returns seeded threads with `is_resolved` and `anchor`. A thread whose anchor no longer maps to the diff is returned with `anchor=None`, not dropped. |
+| B-DIS-2 | `review_threads` returns seeded threads with `is_resolved` and `anchor`. A thread whose anchor no longer maps to the diff is returned with `anchor=None`, not dropped. `comments` and `review_threads` return every seeded item even above the default list bound (declared `None`). |
 | B-DIS-3 | `reply(thread_id, body)` appends a `Comment` to that thread; an unknown `thread_id` raises `CodeHostError`. |
 | B-DIS-4 | `post_review` with anchors the host's `AnchorRules` accept returns `fell_back=False` and the inline comments appear in `review_threads`; with an anchor the rules reject (a side not in `sides`, or a line outside the diff when `requires_line_in_diff`) it returns `fell_back=True` and the body is a top-level comment. |
 | B-DIS-5 | A `CodeHostTimeoutError` with `write=True` from `post_review` propagates and the body is not posted a second time (no fallback; Declarations, "Anchor and anchor rules"). |
