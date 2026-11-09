@@ -262,10 +262,10 @@ commit: 12 + 7 + 47 + 6 = 72 rows).
 | Phase | Issue | Rows | Users (file and symbol) |
 | --- | --- | --- | --- |
 | 1 | #193 | `INV-SY-01` .. `INV-SY-12` | `sisyphus/pick.py` (`GhCli`, `GhLabelRemover`, `GhPullRequestLookup`, candidate lister); `sisyphus/cli.py` (`GhPullRequestClient`, `GhPrStateLookup`, `run_token_cmd` and its env); `sisyphus/config.py` `HostSource.token_cmd` (INV-SY-12, same package as `run_token_cmd`) |
-| 2 | to be filed | `INV-VH-01` .. `INV-VH-07` | `vibe_heal/review/github.py` (`GitHubReviewClient`) |
-| 3 | to be filed | `INV-PR-01` .. `INV-PR-47` | `pr_review/runners/*` (`common.py`, `ci_checks.py`, `ci_fix.py`, `auto_approve.py`, `auto_approve_github.py`, `merge.py`, `regret_review.py`, `address_comments.py`, `review_requested.py`, `self_review.py`, `focused_review.py`, `review_prs.py`), `pr_review/cli.py`, `pr_review/config.py` |
-| 4 | to be filed | `INV-LO-01` .. `INV-LO-05` | `gh.py` (`GH`, `gh_argv`, `build_subprocess_env`); `src/dotharness/scripts/pr-comments.py`; removal of the rename aliases; final grep check |
-| none | to be filed (OD-4) | `INV-LO-06` | `docs/pr_review/scripts/pr-comments.py`: inventoried only, not migrated or deleted. Its Inventory cell reads "none: not migrated"; this is the single allowed exception to "one removing phase per row". |
+| 2 | #194 | `INV-VH-01` .. `INV-VH-07` | `vibe_heal/review/github.py` (`GitHubReviewClient`) |
+| 3 | #195 | `INV-PR-01` .. `INV-PR-47` | `pr_review/runners/*` (`common.py`, `ci_checks.py`, `ci_fix.py`, `auto_approve.py`, `auto_approve_github.py`, `merge.py`, `regret_review.py`, `address_comments.py`, `review_requested.py`, `self_review.py`, `focused_review.py`, `review_prs.py`), `pr_review/cli.py`, `pr_review/config.py` |
+| 4 | #196 | `INV-LO-01` .. `INV-LO-05` | `gh.py` (`GH`, `gh_argv`, `build_subprocess_env`); `src/dotharness/scripts/pr-comments.py`; removal of the rename aliases; final grep check |
+| none | to be filed in #196 (OD-4) | `INV-LO-06` | `docs/pr_review/scripts/pr-comments.py`: inventoried only, not migrated or deleted. Its Inventory cell reads "none: not migrated"; this is the single allowed exception to "one removing phase per row". |
 
 INV-LO-06 sits in the `leftovers` table of the Inventory for grouping only; its removing phase is "none", so it is excluded
 from the four lists. Confirmed decisions: Linear is out of the inventory; INV-PR-46 and INV-PR-47 are Phase 3;
@@ -296,7 +296,7 @@ three greps of the Audit method must return only non-call hits), so a direct use
 ### Package introduction (R-SPLIT-2)
 
 Phase 1 (#193) creates `src/dotharness/code_host/` (interface, reference implementation, factory, fake) and migrates sisyphus.
-This is a proposed default, open decision PS-OD-3: the ticket names #193 as Phase 1 only. It stays open until a human confirms.
+This is decision PS-OD-3, confirmed by a human: Phase 1 of #193 creates the `code_host` package.
 
 ### Alias removal (R-SPLIT-3)
 
@@ -309,18 +309,22 @@ Constraint: the script is stdlib only and must not import `dotharness` (F-DUP-8,
 as a child process through `PR_COMMENTS_SCRIPT_PATH`, used by `focused_review.py`, `address_comments.py` and
 `regret_review.py`.
 
-Chosen path (default, PS-OD-6 open): Phase 4. The script drops all `gh` knowledge and runs the installed dotharness console
-entry point as a child process, so it reaches the interface through the neutral CLI surface without importing `dotharness`.
-The entry point does not exist yet (`pyproject.toml` has only the `vibe_heal`, `pr_review`, `spec_prism_flow`, `sisyphus`
-scripts); its name and commands are defined by the interface section of this page, and until then are undecided. The script
-keeps its `run(argv)` seam so `patch.object(mod, "run", ...)` still works. `parse_paginated` stays while the entry point still
-emits concatenated pages; if it stops, it is deleted together with its tests in Phase 4.
+Fact (PS-OD-6, answered): the script never runs the installed dotharness console entry point, so there is no command name to
+define. Every child process it starts goes through its local `run()` helper (a wrapper over `subprocess.run`) and invokes only
+`gh` (`gh pr view`, `gh api ... -X POST`, `gh pr edit --add-reviewer`) or `git` (`git rev-parse`). It does not use
+`sys.executable` or `-m dotharness`, and calls none of the `[project.scripts]` console scripts (`vibe_heal`, `pr_review`,
+`spec_prism_flow`, `sisyphus`). (Checked by grep and by reading the `run(` call sites; the rest of the file was not read line by line.)
 
-Rejected alternative: the script receives already-fetched data. It works only if the three runners fetch first, which moves the
-fetch into Phase 3 and changes the script's CLI; the child-process path keeps Phase 3 free of that change.
+Consequence: its gh calls are INV-LO-02..05, owned by Phase 4. The earlier assumption that Phase 4 makes the script call a
+dotharness entry point is withdrawn. How the script reaches the code-host interface (for example a new neutral entry point, or
+receiving already-fetched data from the runners) is a Phase 4 design question for #196. Phase 0 does not define a command name.
+Until then the script keeps its `run(argv)` seam so `patch.object(mod, "run", ...)` still works, and `parse_paginated` stays.
+
+Rejected alternative, kept for Phase 4: the script receives already-fetched data. It works only if the three runners fetch
+first, which moves the fetch into Phase 3 and changes the script's CLI.
 
 Tests: `tests/test_pr_comments_script.py` passes unchanged through Phase 3. In Phase 4 only the argv asserted in the post-reply
-test changes, and that edit is part of Phase 4. If the default is rejected, log a new open decision.
+test changes, and that edit is part of Phase 4.
 
 ### pr-review is one phase (R-SPLIT-5, PS-OD-5)
 
@@ -331,12 +335,12 @@ runners versus `cli.py`/`config.py`, with `ci_checks.py`, `merge.py` and `ci_fix
 
 ### Open decisions (Phase split)
 
-- PS-OD-3: Does Phase 1 (#193) create `src/dotharness/code_host/`? Default yes.
-- OD-4: Which issue deletes `docs/pr_review/scripts/pr-comments.py`? To be filed; not blocking.
-- PS-OD-5: pr-review one phase? Default yes (decided above; reopen only if Phase 3 review is too large).
-- PS-OD-6: Console entry point name and path for `src/dotharness/scripts/pr-comments.py` (entry point via subprocess versus
-  already-fetched data). Default entry point; name undecided.
-- OD-8: Issue numbers for Phases 2 to 4: to be filed unless supplied.
+- PS-OD-3: decided. Phase 1 (#193) creates `src/dotharness/code_host/`.
+- OD-4: Which issue deletes `docs/pr_review/scripts/pr-comments.py`? To be filed as part of #196; not blocking.
+- PS-OD-5: pr-review is one phase (default stands; no split was requested; reopen only if Phase 3 review is too large).
+- PS-OD-6: decided. The script runs no dotharness entry point; no command name. How it reaches the interface is decided in
+  Phase 4 (#196).
+- OD-8: Issue numbers for Phases 2 to 4 are #194, #195, #196. Remaining "to be filed" items are handled as part of #196.
 
 (The `PS-` prefix avoids clashing with other decision ids used in the Inventory handoff. `sisyphus/config.py` as a user, the
 former OD-7, is settled: it is INV-SY-12, Phase 1.)
