@@ -639,7 +639,7 @@ class _Run:
 
     async def _probe_and_fetch(self, name: str) -> bool:
         """True after fetching ``origin/<name>``; False when origin lacks it; C8 on any other failure."""
-        args = ("ls-remote", "--exit-code", "--heads", "origin", name)
+        args = ("ls-remote", "--exit-code", "origin", f"refs/heads/{name}")
         probe = await self.git(*args, ok=False)
         if probe.returncode == 2:
             return False

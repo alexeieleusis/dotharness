@@ -267,7 +267,7 @@ class World:
         if sub == "ls-remote" and "--exit-code" in a:
             if self.ls_remote_rc is not None:
                 return CommandResult(self.ls_remote_rc, "", "could not read from remote")
-            return CommandResult(0, f"{SHA1}\trefs/heads/{a[-1]}\n") if a[-1] in self.origin_heads else CommandResult(2)
+            return CommandResult(0, f"{SHA1}\t{a[-1]}\n") if a[-1].removeprefix("refs/heads/") in self.origin_heads and a[-1].startswith("refs/heads/") else CommandResult(2)
         if sub == "ls-remote":
             return CommandResult(0, f"{SHA1}\trefs/heads/{a[-1]}\n" if self.remote_exists else "")
         if sub == "merge-base":
@@ -656,9 +656,8 @@ async def test_intake_detaches_at_origin_base_before_the_agent(world: World) -> 
     assert calls.index(("status", "--porcelain", "--untracked-files=all")) < calls.index((
         "ls-remote",
         "--exit-code",
-        "--heads",
         "origin",
-        "base-branch",
+        "refs/heads/base-branch",
     ))
     assert ("fetch", "origin", "base-branch") in calls
     assert "git ls-remote" not in world.digest_text()
@@ -675,7 +674,7 @@ async def test_intake_falls_back_to_local_base(world: World) -> None:
     world.local_heads["base-branch"] = SHA2
     assert (await world.run()).completed
     assert world.detached == ["base-branch"]
-    assert ("ls-remote", "--exit-code", "--heads", "origin", "main") not in _git_calls(world)
+    assert ("ls-remote", "--exit-code", "origin", "refs/heads/main") not in _git_calls(world)
 
 
 async def test_intake_falls_back_to_origin_main(world: World) -> None:
@@ -683,6 +682,14 @@ async def test_intake_falls_back_to_origin_main(world: World) -> None:
     assert (await world.run()).completed
     assert world.detached == ["origin/main"]
     assert ("fetch", "origin", "main") in _git_calls(world)
+
+
+async def test_intake_probe_uses_full_ref_not_tail_pattern(world: World) -> None:
+    world.origin_heads.clear()
+    world.origin_heads["release/main"] = SHA1
+    result = await world.run()
+    _assert_stop(world, result, Checkpoint.C8)
+    assert ("fetch", "origin", "main") not in _git_calls(world)
 
 
 async def test_intake_no_candidate_stops_c8_naming_all_three(world: World) -> None:
@@ -699,7 +706,7 @@ async def test_intake_probe_network_error_stops_c8_without_fallback(world: World
     world.local_heads["base-branch"] = SHA1
     result = await world.run()
     _assert_stop(world, result, Checkpoint.C8)
-    assert "git ls-remote --exit-code --heads origin base-branch failed (exit 128): could not read" in result.detail
+    assert "git ls-remote --exit-code origin refs/heads/base-branch failed (exit 128): could not read" in result.detail
     assert world.detached == []
     assert "agent:intake" not in world.events
 
