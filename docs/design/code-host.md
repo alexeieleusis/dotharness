@@ -29,7 +29,7 @@ One id namespace. Every entry is decided; the entry gives the rationale.
 | DEC-14 | `WorkflowRun` is omitted. | No consumer in the audit. |
 | DEC-15 | Default branch is `Repository.default_branch(repo)`. | There is no `Repository` model. |
 | DEC-16 | The REST and GraphQL fields read by inventory rows are all listed in the mapping table. | Coverage check requires every field a row reads. |
-| DEC-17 | `ChangeRequest.commits` and `ChangeRequest.linked_work_items` are kept; no host fills them from `get` (they come from `commits()` and `linked_work_items()`). | A host with a cheap combined read may fill them. |
+| DEC-17 | `ChangeRequest` has no `commits` or `linked_work_items` field; consumers call `ChangeRequests.commits()` and `WorkItems.linked_work_items()`. | A host read that returns them with the change request for free, if a consumer needs it. |
 | DEC-18 | Model names are `CommitInfo`, `ReviewThread`, `Check`; error names are `CodeHostError`, `AuthenticationError`, `CodeHostTimeoutError`, `UnsupportedCapabilityError`, `ConfigurationError`, `NoChangeRequestError`. | The Interfaces section is the naming authority. |
 | DEC-19 | `PickError` covers gh failures; the Linear path keeps a consumer-local error. | The Linear path is not a code host. |
 | DEC-20 | No type or discriminator for rate limiting (such as `retry_after`) until a consumer needs it. | No current consumer. |
@@ -1022,8 +1022,6 @@ class ChangeRequest:
     requested_reviewers: tuple[User, ...] = ()
     additions: int | None = None
     deletions: int | None = None
-    commits: tuple[CommitInfo, ...] = ()
-    linked_work_items: tuple[WorkItemRef, ...] = ()
 
 @dataclass(frozen=True)
 class Check:
@@ -1054,10 +1052,9 @@ Notes on the fields:
 - `ChangeRequest`, only on request. Every operation of ChangeRequests (Interfaces) fills identity, title, body, url, state,
   draft flag, author, head and base reference, head revision, cross-repository flag and creation time. `mergeable`,
   `auto_merge_enabled`, `review_decision`, `requested_reviewers`, `additions` and `deletions` are filled by `get` only and are
-  `None`, `False` or empty from `list`, `find_by_branch` and `find_by_commit`. `commits` is always empty on a
-  `ChangeRequest`; the consumer calls `ChangeRequests.commits()`. `linked_work_items` is always empty; the consumer calls
-  `WorkItems.linked_work_items()`. These two fields therefore exist only so that a host with a cheap combined read may fill
-  them; no host does (DEC-17).
+  `None`, `False` or empty from `list`, `find_by_branch` and `find_by_commit`. `ChangeRequest` has no
+  commits or linked work items field; the consumer calls `ChangeRequests.commits()` and `WorkItems.linked_work_items()`
+  (DEC-17).
 - `ChangeRequest.mergeable` and `ReviewDecision` are `None` when the host has no such concept or did not compute it.
 - `User.is_bot` exists because two consumers distinguish bot authors today (`auto_approve_github.py`, `scripts/pr-comments.py`).
 - `CommitInfo.authors` is a tuple (a tuple, since one commit can have several authors) because the commit-clock gate counts commits
@@ -1101,12 +1098,12 @@ Change request (`--json` on `pr view`, `pr list`, `search prs`):
 | `reviews` | `scripts/pr-comments.py` | `Review` | (list returned by `ChangeRequests.reviews()`) | not a `ChangeRequest` field; element fields are in the REST rows below |
 | `additions` | `runners/merge.py` `_read_changed_lines` | `ChangeRequest` | `additions` | only from `get` |
 | `deletions` | `runners/merge.py` `_read_changed_lines` | `ChangeRequest` | `deletions` | only from `get` |
-| `commits` | `runners/auto_approve_github.py` `_fetch_pr_commits` | `CommitInfo` | (list returned by `ChangeRequests.commits()`) | element fields below; `ChangeRequest.commits` stays empty |
+| `commits` | `runners/auto_approve_github.py` `_fetch_pr_commits` | `CommitInfo` | (list returned by `ChangeRequests.commits()`) | element fields below |
 | `commits[].authors` | same | `CommitInfo` | `authors` | each `{login}` to `User` |
 | `commits[].committedDate` | same | `CommitInfo` | `committed_at` | ISO text to aware `datetime`; unparsable is `None` |
 | `commits[].oid` | same (implied by the list shape) | `CommitInfo` | `revision` | |
 | `createdAt` | `runners/self_review.py`, `runners/review_requested.py`, `runners/common.py` | `ChangeRequest` | `created_at` | ISO text to aware `datetime` |
-| `closingIssuesReferences` | `runners/self_review.py`, `runners/review_requested.py`, `runners/common.py` | `ChangeRequest` | `linked_work_items` | each reference to `WorkItemRef`; filled only if a host does it cheaply, else `WorkItems.linked_work_items()` |
+| `closingIssuesReferences` | `runners/self_review.py`, `runners/review_requested.py`, `runners/common.py` | `ChangeRequest` | (none) | not a `ChangeRequest` field; each reference becomes a `WorkItemRef` returned by `WorkItems.linked_work_items()` |
 
 Work item (`issue view`, `issue list`):
 
