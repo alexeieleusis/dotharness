@@ -479,3 +479,340 @@ Companion queries for names the pattern cannot see: `grep -rnE "^class \w*Error"
 - A neutral `[harness]` key (`host_token_cmd`) is included as additive-only; no further decision pending.
 
 (The `RN-` prefix avoids clashing with the Inventory and Phase split decision ids.)
+
+## Interfaces
+
+Capability interfaces of the code host (A-2.1). Each is a `typing.Protocol` in the planned package
+`src/dotharness/code_host/`. This section owns method names, parameters and which interface owns which inventory row. It does
+not define model types (Models section), error types (Error model section) or limits, anchor rules and capability
+declarations (Declarations section); it only names them. Those sections and the factory section are written by other
+slices; until they land, the names below are the contract the other sections must accept or rename here. The Inventory
+section is the one place that assigns each operation to an owner; the "Rows" column below lists the ids so the coverage can be
+checked, and does not restate the assignment.
+
+### Rules for every interface
+
+1. Every method is `async def`.
+2. Every method returns a host-neutral model (Models section), a `Sequence` of models, `str`, `bool` or `None`. No method
+   returns a `dict` from a host tool and there is no `api(...)`-style pass-through that takes a path or a query.
+3. Pagination is an implementation detail. No parameter, return type or error in this section mentions a page, a cursor or a
+   paginate flag. A method that lists returns the complete result up to the host's declared limit. Where a caller needs a bound
+   today (`--limit 1000`, `per_page=100`, `limit=200`), the bound is a declared limit owned by the Declarations section.
+4. Repository-scoped methods take `repo: RepositoryRef` as the first argument after `self`. A `RepositoryRef` is host-defined
+   and opaque: consumers never parse, split or compare its parts and never read a remote URL to build one.
+5. Failures raise subclasses of `HostError` (Error model section). A name used below is `HostError` or one of
+   `HostAuthError`, `HostNotFoundError`, `HostTimeoutError`, `HostConflictError`, `HostUnsupportedError`; the Error model
+   section decides the final names and when each applies.
+6. Naming: new names use "change request"; existing code keeps "PR" until the phase that migrates it (Rename plan).
+
+### Repository resolution: explicit and cwd-based (D-12)
+
+Two consumers resolve the repository differently today: `pr-review` passes an explicit identity to every call; `vibe-heal`
+and `sisyphus` run in a clone and pass nothing. One method signature serves both because identity is a value, not an
+ambient setting:
+
+- `Repository.resolve(identity)` (explicit mode) turns the host-defined identity string the user supplied (for example the
+  `--repo` value) into a `RepositoryRef`. The consumer passes the string through unchanged; only the host interprets it.
+- `Repository.current()` (cwd mode) returns the `RepositoryRef` of the clone the host was created for. No identity string
+  appears in the call, and the consumer never reads a remote URL.
+- Every other method takes the resulting `RepositoryRef`. A cwd-based consumer calls `current()` once and passes the result;
+  an explicit consumer calls `resolve()` once per repository. The implementation of a cwd-mode ref may omit any repository
+  argument from its host calls (this is what sisyphus does today).
+
+The factory's return value exposes both modes: it returns the capability objects together with a `RepositoryRef` source that
+supports `current()` and `resolve()` (factory section). A host that cannot do one mode raises `HostUnsupportedError` from that
+method and declares so (Declarations section).
+
+### Session
+
+Credential, environment, availability and current user. Not repository-scoped.
+
+```python
+from collections.abc import Mapping, Sequence
+from typing import Protocol
+
+
+class Session(Protocol):
+    async def available(self) -> bool:
+        """True when the host tool or service can be used. Never raises."""
+        ...
+
+    async def credential(self) -> Credential:
+        """Resolve the token (configured command or default). Raises HostAuthError, HostTimeoutError."""
+        ...
+
+    async def current_user(self) -> str:
+        """Login of the acting user. Raises HostAuthError, HostTimeoutError."""
+        ...
+
+    async def agent_environment_names(self) -> Sequence[str]:
+        """Names of the variables a child agent process sees for this host, as data."""
+        ...
+
+    async def agent_environment(self, base: Mapping[str, str] | None = None) -> Mapping[str, str]:
+        """base plus the credential variables, base entries first so credential variables win. Raises HostAuthError."""
+        ...
+```
+
+| Method | Replaces | Rows |
+| --- | --- | --- |
+| `available` | `gh --version`, `shutil.which("gh")` | INV-VH-01, INV-PR-46 |
+| `credential` | `get_gh_token`, `run_token_cmd` | INV-PR-01, INV-SY-11, INV-SY-12 (config input) |
+| `current_user` | `api user --jq .login`; today fails open and returns `""`, here it raises and the consumer decides | INV-PR-03 |
+| `agent_environment_names`, `agent_environment` | `build_subprocess_env`, hand-built env dicts, `GhCli` env | INV-LO-01, INV-PR-44, INV-PR-45, INV-SY-01, INV-PR-47 (config default) |
+| (transport errors) | `_run_gh` error adapter | INV-VH-07 |
+
+Environment (D-3, OD-1): for the reference implementation `agent_environment_names()` returns `("GITHUB_TOKEN", "GH_TOKEN")` and
+`agent_environment()` sets the variables per call site exactly as today (Rename plan REN-35, REN-36). The names are data
+returned by Session, never constants in consumers. Examples in docs write the value as `<token>`. OD-1 default accepted per
+human instruction: keep `GITHUB_TOKEN` and `GH_TOKEN` for the reference implementation, no neutral variable name.
+
+### Repository
+
+```python
+class Repository(Protocol):
+    async def current(self) -> RepositoryRef:
+        """cwd mode: the repository of the clone. Raises HostNotFoundError."""
+        ...
+
+    async def resolve(self, identity: str) -> RepositoryRef:
+        """explicit mode: host-defined identity string to a ref. Raises HostNotFoundError."""
+        ...
+
+    async def default_branch(self, repo: RepositoryRef) -> str:
+        """Name of the default branch. Raises HostNotFoundError."""
+        ...
+
+    async def display_name(self, repo: RepositoryRef) -> str:
+        """Human-readable identity for logs and messages only. Consumers must not parse it."""
+        ...
+```
+
+| Method | Replaces | Rows |
+| --- | --- | --- |
+| `current` | `_get_owner_repo` with `git remote get-url origin` fallback and `_parse_remote_url` | INV-VH-05, INV-VH-06 |
+| `resolve` | explicit `--repo` string plus `repo.split("/")` | INV-VH-05 |
+| `default_branch` | `repo view --json defaultBranchRef` | INV-SY-10, INV-PR-23 |
+
+### ChangeRequests
+
+Read and write on change requests, including approval, merge and per-file viewed state (viewed state is owned here by the
+Inventory, Owner justifications 2). `ChangeRequest` carries state, draft flag, head and base reference, head revision,
+description, additions and deletions, requested reviewers, merge state and author (Models section).
+
+```python
+class ChangeRequests(Protocol):
+    async def get(self, repo: RepositoryRef, number: int) -> ChangeRequest:
+        """Raises HostNotFoundError."""
+        ...
+
+    async def find_by_branch(
+        self, repo: RepositoryRef, branch: str, *, state: ChangeRequestState = ChangeRequestState.OPEN
+    ) -> Sequence[ChangeRequest]:
+        """Change requests whose head is `branch`. Empty when none."""
+        ...
+
+    async def list(
+        self,
+        repo: RepositoryRef,
+        *,
+        state: ChangeRequestState = ChangeRequestState.OPEN,
+        author: str | None = None,
+        assignee: str | None = None,
+        requested_reviewer: str | None = None,
+    ) -> Sequence[ChangeRequest]:
+        """Filters are logins; the consumer resolves "me" with Session.current_user()."""
+        ...
+
+    async def find_by_commit(self, repo: RepositoryRef, revision: str) -> Sequence[ChangeRequest]:
+        """Change requests that contain the commit."""
+        ...
+
+    async def commits(self, repo: RepositoryRef, number: int) -> Sequence[CommitInfo]:
+        """Commits with their dates, oldest first."""
+        ...
+
+    async def reviews(self, repo: RepositoryRef, number: int) -> Sequence[Review]:
+        """All reviews (author, verdict, commit reviewed)."""
+        ...
+
+    async def create_draft(
+        self, repo: RepositoryRef, *, head: str, base: str, title: str, body: str
+    ) -> ChangeRequest:
+        """Raises HostConflictError, HostError."""
+        ...
+
+    async def squash_merge(self, repo: RepositoryRef, number: int, *, expected_head: str) -> None:
+        """Squash-merge only if the head revision equals `expected_head`. Raises HostConflictError on mismatch."""
+        ...
+
+    async def request_reviewer(self, repo: RepositoryRef, number: int, login: str) -> None: ...
+
+    async def approve(self, repo: RepositoryRef, number: int, *, head_revision: str) -> None:
+        """Approve the change request at `head_revision`."""
+        ...
+
+    async def viewed_files(self, repo: RepositoryRef, number: int) -> Mapping[str, bool]:
+        """Path to viewed flag for the acting user."""
+        ...
+
+    async def mark_viewed(self, repo: RepositoryRef, number: int, path: str) -> None: ...
+```
+
+| Method | Replaces | Rows |
+| --- | --- | --- |
+| `get` | `pr view` with chosen fields: state, base, head revision, description, line counts, requested reviewers, merge state | INV-SY-07, INV-SY-09, INV-VH-02, INV-PR-02, INV-PR-04, INV-PR-05, INV-PR-14, INV-PR-15, INV-PR-16, INV-PR-32 (merge state), INV-PR-33, INV-LO-02 |
+| `find_by_branch` | `pr list --head` | INV-SY-06, INV-PR-21 |
+| `list` | `pr list` with author, assignee, reviewer, state; review-requested search | INV-PR-11, INV-PR-12, INV-PR-13, INV-PR-27, INV-PR-37, INV-PR-38, INV-PR-41, INV-PR-43 |
+| `find_by_commit` | `commits/SHA/pulls` | INV-PR-35 |
+| `commits` | `pr view --json commits` | INV-PR-28 |
+| `reviews` | reviews listing, has-user-approved | INV-PR-07 (transport), INV-PR-32 (approval half), INV-PR-42 |
+| `create_draft` | `pr create --draft` | INV-SY-08 |
+| `squash_merge` | `pr merge --squash --match-head-commit` | INV-PR-34 |
+| `request_reviewer` | `pr edit --add-reviewer` | INV-PR-06, INV-LO-05 |
+| `approve` | POST review `event=APPROVE` with commit id | INV-PR-31 |
+| `viewed_files`, `mark_viewed` | viewed-state query, `markFileAsViewed` | INV-PR-29, INV-PR-30 |
+
+Notes:
+
+- The leaf lists "by head" next to "by branch". Both mean the head branch name; no inventory row looks a change request up by
+  head revision, so there is one method, `find_by_branch`. "Current branch" (INV-VH-02) is `find_by_branch` with the branch
+  the consumer read from git; there is no ambient-branch method.
+- "Is the user's approval current" (INV-PR-32, INV-PR-42) is computed by the consumer from `reviews()` and the
+  `ChangeRequest` head revision.
+- The viewed-state owner (R-INV-3) was decided in the Inventory as ChangeRequests; Discussion does not repeat it.
+
+### Discussion
+
+```python
+class Discussion(Protocol):
+    async def comments(self, repo: RepositoryRef, number: int) -> Sequence[Comment]:
+        """Change-request-level comments."""
+        ...
+
+    async def review_threads(self, repo: RepositoryRef, number: int) -> Sequence[ReviewThread]:
+        """Inline review comments grouped in threads, each with its resolved state."""
+        ...
+
+    async def post_comment(self, repo: RepositoryRef, number: int, body: str) -> Comment: ...
+
+    async def post_review(
+        self,
+        repo: RepositoryRef,
+        number: int,
+        *,
+        body: str,
+        inline_comments: Sequence[InlineComment],
+        head_revision: str | None = None,
+    ) -> ReviewPostResult:
+        """Post a review. If the host rejects the review or its anchors, post `body` as a top-level comment.
+
+        `ReviewPostResult.fell_back` tells the caller which happened. Raises HostError only if both fail.
+        Size limits and anchor rules are declared (Declarations section), not parameters.
+        """
+        ...
+
+    async def reply(self, repo: RepositoryRef, number: int, thread_id: str, body: str) -> Comment:
+        """Reply in a review thread; `thread_id` is the opaque id from ReviewThread."""
+        ...
+```
+
+| Method | Replaces | Rows |
+| --- | --- | --- |
+| `comments` | human issue comments, CR comment fetch | INV-PR-40, INV-PR-18 (the child-process fetch), INV-LO-03 |
+| `review_threads` | GraphQL review-thread state and unresolved count | INV-PR-17, INV-PR-39, INV-PR-18, INV-LO-03 |
+| `post_comment` | `pr comment` | INV-PR-10, INV-PR-36 |
+| `post_review` | POST review with inline comments, and the fallback comment | INV-VH-03, INV-VH-04 |
+| `reply` | POST reply in a thread | INV-LO-04 |
+
+INV-LO-06 (documentation copy, not migrated) is not covered by any method. How `scripts/pr-comments.py` reaches this
+interface is a Phase 4 design question (Phase split).
+
+### Checks
+
+```python
+class Checks(Protocol):
+    async def list_checks(
+        self, repo: RepositoryRef, number: int, *, required_only: bool = False
+    ) -> Sequence[Check]:
+        """Checks of a change request, optionally only those the host requires."""
+        ...
+
+    async def list_workflows(self, repo: RepositoryRef) -> Sequence[Workflow]:
+        """Empty when the repository has none."""
+        ...
+
+    async def failed_log(self, repo: RepositoryRef, check: Check) -> str:
+        """Log of the failing part of `check`. Raises HostNotFoundError."""
+        ...
+
+    async def get_job(self, repo: RepositoryRef, job_id: str) -> Job:
+        """A job with its failing step name; `job_id` is the opaque id from Check."""
+        ...
+```
+
+| Method | Replaces | Rows |
+| --- | --- | --- |
+| `list_checks` | `pr checks --json`, `--required`, required names of the stack root | INV-PR-20, INV-PR-22 |
+| `list_workflows` | workflows listing | INV-PR-24 |
+| `failed_log` | `run view --log-failed` | INV-PR-25 |
+| `get_job` | job read for the failed step | INV-PR-26 |
+| (transport) | `ci_checks.gh` timeout mapping | INV-PR-19 |
+
+### WorkItems
+
+Not every host supports work items. The capability is declared (Declarations section); a host without it raises
+`HostUnsupportedError` from every method here.
+
+```python
+class WorkItems(Protocol):
+    async def get(self, repo: RepositoryRef, number: int) -> WorkItem:
+        """Title and body. Raises HostNotFoundError."""
+        ...
+
+    async def list_open(
+        self, repo: RepositoryRef, *, assignee: str | None = None, label: str | None = None
+    ) -> Sequence[WorkItem]: ...
+
+    async def remove_label(self, repo: RepositoryRef, number: int, label: str) -> None: ...
+
+    async def closing_change_requests(
+        self, repo: RepositoryRef, number: int
+    ) -> Sequence[ChangeRequest]:
+        """Change requests the host records as closing the work item (reference lookup plus per-reference view)."""
+        ...
+
+    async def open_change_request_bodies(self, repo: RepositoryRef) -> Sequence[ChangeRequest]:
+        """Open change requests with their descriptions, for a consumer-side scan for mentions. Bounded by a declared limit."""
+        ...
+
+    async def linked_work_items(self, repo: RepositoryRef, number: int) -> Sequence[WorkItem]:
+        """Work items the host records as closed by the change request."""
+        ...
+```
+
+| Method | Replaces | Rows |
+| --- | --- | --- |
+| `get` | `issue view` | INV-PR-08 |
+| `list_open` | `issue list --state open --assignee --label --limit 100` | INV-SY-03 |
+| `remove_label` | `issue edit --remove-label` | INV-SY-02 |
+| `closing_change_requests` | reference lookup, R-INV-2 (a) and (b) | INV-SY-04 |
+| `open_change_request_bodies` | repo-wide body scan, R-INV-2 (c); stays a separate operation | INV-SY-05 |
+| `linked_work_items` | closing-issue references of a change request | INV-PR-09 |
+
+Per R-INV-2 the two lookups are not merged: the first returns what the host records, the second returns text for the
+consumer to match, which is not a host relation. The `limit=200` of the second is a declared limit (Declarations section).
+
+### Row coverage
+
+Every inventory row other than INV-LO-06 appears in exactly one Rows cell above or is named as transport or config. Check:
+extract the `INV-` ids from the Rows cells of this section and compare with the Inventory id set minus INV-LO-06; the
+difference must be empty. Rows listed under two interfaces (INV-PR-18, INV-LO-03, INV-PR-07, INV-PR-32) are shared reads whose
+owner in the Inventory is the first interface named there.
+
+### Open decisions (Interfaces)
+
+- OD-1: neutral agent-visible variable name. Default accepted per human instruction: keep `GITHUB_TOKEN` and `GH_TOKEN` for
+  the reference implementation and expose the names as data from Session (same as RN-OD-1).
+- Error names in rule 5 and model names are proposals until the Error model and Models sections exist; they are reconciled
+  there, not here.
