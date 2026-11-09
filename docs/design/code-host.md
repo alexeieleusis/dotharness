@@ -710,7 +710,10 @@ class Discussion(Protocol):
     ) -> ReviewPostResult:
         """Post a review. If the host rejects the review or its anchors, post `body` as a top-level comment.
 
-        `ReviewPostResult.fell_back` tells the caller which happened. Raises CodeHostError only if both fail.
+        The host owns this single fallback; the consumer does not catch and re-post, it reads `ReviewPostResult.fell_back`.
+        The host never falls back after `CodeHostTimeoutError` (the review may already exist), `AuthenticationError` or
+        `UnsupportedCapabilityError`; those propagate as raised. It falls back at most once: if the top-level post also
+        fails, that error propagates (`CodeHostError`) and nothing else is posted.
         Size limits and anchor rules are declared (Declarations section), not parameters.
         """
         ...
@@ -1269,8 +1272,8 @@ Every row is [code @f293b99].
 
 Notes:
 
-1. `GitHubReviewError` is the base of `NoOpenPrError` and `GitHubTimeoutError`. In the new hierarchy the fallback site catches
-   `CodeHostTimeoutError` first and then `CodeHostError`, so the ordering is preserved (row F1 below).
+1. `GitHubReviewError` is the base of `NoOpenPrError` and `GitHubTimeoutError`. In the new hierarchy the host's fallback inside
+   `post_review` checks `CodeHostTimeoutError` first and then `CodeHostError`, so the ordering is preserved (row F1 below).
 2. `PickError` mixes tracker failures and local setup problems. A Linear-tracker `PickError` is not a code-host failure: the
    Linear path (`LINEAR_API_URL` in `sisyphus/pick.py`) keeps a consumer-local error, and only code-host-sourced raises map to
    `CodeHostError` [inferred from `pick.py`; D-E1].
@@ -1357,7 +1360,7 @@ where the old behavior was fail-open or fail-closed, so the interface stays rais
 | N-1 | `is_pr_open` | returns False after a failed lookup (fail-closed) | Consumer wrapper catches `CodeHostError` and returns False. The interface method raises. |
 | N-2 | `get_current_user` | returns `""` after logging (fail-open) | Consumer wrapper catches `CodeHostError`, logs, returns `""`. Stays fail-open; an `AuthenticationError` is logged the same way (that log line is where a revoked token is visible today). |
 | N-3 | `sisyphus/orchestrator.py` label removal wrapped in `except Exception` ("never alters the exit code or the records") | swallow and continue | Unchanged; swallows `CodeHostError` like any other exception. |
-| F1 | `vibe_heal/review/github.py` inline-review post with fallback | fall back to a plain post on `GitHubReviewError`, except `GitHubTimeoutError` | Fall back on `CodeHostError`, except `CodeHostTimeoutError` with `write=True` (no fallback, the first request may have succeeded). `AuthenticationError` and `UnsupportedCapabilityError` also skip the fallback, because a plain post would fail the same way [inferred; D-E3]. |
+| F1 | `vibe_heal/review/github.py` inline-review post with fallback | fall back to a plain post on `GitHubReviewError`, except `GitHubTimeoutError` | The host falls back once, inside `Discussion.post_review`, on a rejected review or anchors. It skips the fallback on `CodeHostTimeoutError` (the first request may have succeeded), `AuthenticationError` and `UnsupportedCapabilityError`, because a plain post would fail the same way [inferred; D-E3]. The consumer does not catch and re-post; it reads `fell_back`. |
 
 Other inventory call sites not listed here inherit the convention of their old code.
 
@@ -1370,7 +1373,7 @@ unchanged. Initial policies [inferred, proposed defaults; D-E4]:
 
 | Consumer | Call site | Capability | Policy |
 |---|---|---|---|
-| `vibe_heal` review | inline review comments with an Anchor | Discussion | degrade (post a plain review; this is the consumer fallback from the anchor decision) |
+| `vibe_heal` review | inline review comments with an Anchor | Discussion | degrade (the host posts a plain top-level comment and sets `fell_back`; the consumer does not re-post) |
 | `vibe_heal` review | change-request lookup for the branch | ChangeRequests | stop |
 | `pr_review` runners | merge, auto-approve, ci-fix | ChangeRequests / Checks | stop |
 | `pr_review` runners | current-user lookup | Session | warn (keeps the blank-user fail-open result) |
@@ -1397,7 +1400,7 @@ All proposed defaults are accepted per human instruction.
 
 - D-E1 `PickError` covers gh and Linear failures: the Linear path keeps a consumer-local error (default accepted).
 - D-E2 No type or discriminator for rate limiting (such as `retry_after`) until a consumer needs it (default accepted).
-- D-E3 At F1, `AuthenticationError` and `UnsupportedCapabilityError` skip the fallback post (default accepted).
+- D-E3 At F1, the host skips the fallback post on `AuthenticationError` and `UnsupportedCapabilityError` (default accepted).
 - D-E4 The unsupported-capability policy table above stands, since no current code path raises it (default accepted).
 - D-E5 The three distinctions are subclasses, not a single `kind` discriminator (default accepted).
 - D-E6 The aggregate errors `MergeError`, `AutoApproveError`, `CiFixError` keep their names, consumer-local (default accepted).
@@ -1536,9 +1539,10 @@ class AnchorRules:
 ```
 
 - Reader: the review-posting consumer (the vibe-heal review path) consults the rules before posting, to decide which findings
-  go inline and which go into the review body. It always keeps the fallback below for rejections the rules did not predict.
-- Fallback (decided, not reopened): when the host rejects an inline comment, the consumer posts a top-level comment carrying
-  the same text and its location. The host declares rules; the consumer owns the fallback. `Discussion.post_review` reports
+  go inline and which go into the review body. The host's fallback below still covers rejections the rules did not predict.
+- Fallback (decided, not reopened): when the host rejects an inline comment, the host posts a top-level comment carrying
+  the same text and its location, once (single owner: the host, inside `post_review`). The host declares rules and performs the
+  fallback; the consumer does not catch and re-post. `Discussion.post_review` reports
   which happened through `ReviewPostResult.fell_back`. `fallback` is informational and fixed to `"top_level_comment"`. A
   timeout is not a rejection and never triggers the fallback (the review may already exist; INV-VH-03).
 - Reference implementation values (derived from `vibe_heal/review/github.py` `_collect_file_comments`, the
