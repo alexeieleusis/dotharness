@@ -1400,3 +1400,171 @@ All proposed defaults are accepted per human instruction.
 - D-E4 The unsupported-capability policy table above stands, since no current code path raises it (default accepted).
 - D-E5 The three distinctions are subclasses, not a single `kind` discriminator (default accepted).
 - D-E6 The aggregate errors `MergeError`, `AutoApproveError`, `CiFixError` keep their names, consumer-local (default accepted).
+
+## Declarations
+
+What a host says about itself (A-2.4): which capability interfaces it implements, its size and time limits, and which inline
+anchors it accepts. Each is a frozen value object that the host exposes and a consumer reads. This section owns these three
+shapes and the `Anchor` value type. The Protocols that expose them are defined in the Interfaces section; the error raised
+when a consumer uses an interface the host did not declare, and each consumer's policy for it, is defined in the Error model
+section (`UnsupportedCapabilityError`, "Unsupported-capability policy"). The reference implementation (the existing `gh`
+behavior) declares the constants that the code hard-codes today (see "Reference implementation values"). Fields and values are
+data; nothing here changes a constant.
+
+Non-goals: no paging or cursor parameter; no timeout supplied by a consumer per call; no per-repository limit override; no
+runtime negotiation protocol.
+
+### Capabilities
+
+```python
+from dataclasses import dataclass
+from enum import StrEnum
+
+
+class Capability(StrEnum):
+    SESSION = "Session"
+    REPOSITORY = "Repository"
+    CHANGE_REQUESTS = "ChangeRequests"
+    DISCUSSION = "Discussion"
+    CHECKS = "Checks"
+    WORK_ITEMS = "WorkItems"
+
+
+@dataclass(frozen=True)
+class HostDeclaration:
+    capabilities: frozenset[Capability]
+    limits: "HostLimits"
+    anchors: "AnchorRules"
+```
+
+- The values of `Capability` are the interface names of the Interfaces section, verbatim (`Session`, `Repository`,
+  `ChangeRequests`, `Discussion`, `Checks`, `WorkItems`). If the set of interfaces changes, this enum and the Interfaces
+  section change together.
+- Reader: a consumer reads `capabilities` before first use of an interface; the conformance suite reads it to run only the
+  declared interfaces' tests. The reference implementation declares all six.
+- The declaration is the single source of truth for support: a consumer never probes by calling and catching a failure. What
+  it does on an undeclared interface is owned by the Error model section.
+
+### Limits
+
+```python
+@dataclass(frozen=True)
+class OperationTimeouts:
+    default_seconds: float
+    per_operation: dict[str, float]
+
+
+@dataclass(frozen=True)
+class ListBounds:
+    default: int
+    per_operation: dict[str, int]
+
+
+@dataclass(frozen=True)
+class HostLimits:
+    max_inline_comments_per_review: int
+    max_review_body_chars: int
+    max_change_request_body_chars: int
+    timeouts: OperationTimeouts
+    list_bounds: ListBounds
+```
+
+- The keys of both `per_operation` maps are written `Interface.method`, using the Protocol and method names of the Interfaces
+  section (for example `Discussion.post_review`). The Interfaces section's Rows tables map each method to its inventory rows,
+  so a key traces to the Inventory. An operation absent from a map uses `default_seconds` or `default`.
+- Readers:
+  - `max_inline_comments_per_review` and `max_review_body_chars`: the review-posting consumer (the vibe-heal review path).
+    It moves the overflow beyond the inline limit into the review body, and truncates the body with a notice.
+  - `max_change_request_body_chars`: the consumer that builds a change request description (`sisyphus/prbody.py`).
+  - `timeouts`: the host implementation, which applies them to its own calls. A consumer never passes a timeout.
+  - `list_bounds`: the host implementation of every list-returning operation, which returns at most that many items.
+- A list size bound is a declared limit, never a paging parameter. No operation takes a page, cursor or `--limit` argument and
+  no caller passes one. Each declared bound replaces `--limit 1000` (`address_comments.py`), `--limit 500` (the four
+  `@me` listings), `per_page=100` (`common.py`, `review_requested.py`, `ci_checks.py`) and the `limit=100` / `limit=200`
+  constructor defaults of `sisyphus/pick.py`. What the host does to honor a bound (several pages, one call) is its own
+  concern.
+- The caller-supplied `limit` of the sisyphus pick functions (`pick.py` lines 162 and 186, and `cli.py`) means "how many
+  candidates to pick". It is a consumer parameter, distinct from the host bound, and stays with the consumer.
+
+### Reference implementation values
+
+The reference implementation declares exactly these values. The "Operation key" column is the `per_operation` entry (blank
+means the default applies).
+
+| Field | Value | Operation key | Source |
+| --- | --- | --- | --- |
+| `max_inline_comments_per_review` | 50 | | `_MAX_INLINE_COMMENTS` in `vibe_heal/review/github.py` |
+| `max_review_body_chars` | 60 000 | | `_MAX_REVIEW_BODY_CHARS` in the same file (the host's real limit is about 65 536; headroom kept) |
+| `max_change_request_body_chars` | 60 000 | | `MAX_BODY_CHARS` in `sisyphus/prbody.py` |
+| `timeouts.default_seconds` | 30 | | `TIMEOUT_GH` in `pr_review/runners/common.py` |
+| timeout, CR state lookup (INV-SY-09) | 10.0 | `ChangeRequests.get` | `PR_STATE_TIMEOUT` in `sisyphus/cli.py` |
+| timeout, installed check (INV-VH-01) | 10 | `Session.available` | `validate_installed` in `vibe_heal/review/github.py` |
+| timeout, CR field read of the current branch (INV-VH-02) | 30 | `ChangeRequests.find_by_branch` | `_view_pr_field` in the same file |
+| timeout, review post (INV-VH-03) | 60 | `Discussion.post_review` | `_POST_TIMEOUT_SECONDS` in the same file |
+| `list_bounds.default` | 100 | | `per_page=100` in `common.py` and `review_requested.py` |
+| list bound, CR listings | 1000 | `ChangeRequests.list` | `--limit 1000` in `address_comments.py` (covers the `--limit 500` listings, INV-PR-11, INV-PR-27, INV-PR-41) |
+| list bound, work-item candidate listing (INV-SY-03) | 100 | `WorkItems.list_open` | `GitHubIssueTracker.__init__(limit=100)` in `sisyphus/pick.py` |
+| list bound, open CR bodies (INV-SY-05) | 200 | `WorkItems.open_change_request_bodies` | `GhPullRequestLookup.__init__(limit=200)` in `sisyphus/pick.py` |
+| list bound, comments, reviews and threads | 100 | `Discussion.comments`, `Discussion.review_threads`, `ChangeRequests.reviews` | `per_page=100` in `common.py`, `review_requested.py` |
+| list bound, workflows | 100 | `Checks.list_workflows` | `per_page=100` in `ci_checks.py` |
+
+The page contains no other values. Examples of other hosts use the placeholder `examplehost`, and a token, where one
+appears, is written `<token>`.
+
+### Anchor and anchor rules
+
+An `Anchor` is the file and line position a consumer attaches an inline comment to. `AnchorRules` is the host's declaration of
+which anchors it accepts.
+
+```python
+@dataclass(frozen=True)
+class Anchor:
+    path: str
+    line: int
+    side: str  # one of the host's declared `sides`
+
+
+@dataclass(frozen=True)
+class AnchorRules:
+    inline_supported: bool
+    sides: frozenset[str]
+    requires_line_in_diff: bool
+    supports_ranges: bool
+    fallback: str = "top_level_comment"
+```
+
+- Reader: the review-posting consumer (the vibe-heal review path) consults the rules before posting, to decide which findings
+  go inline and which go into the review body. It always keeps the fallback below for rejections the rules did not predict.
+- Fallback (decided, not reopened): when the host rejects an inline comment, the consumer posts a top-level comment carrying
+  the same text and its location. The host declares rules; the consumer owns the fallback. `Discussion.post_review` reports
+  which happened through `ReviewPostResult.fell_back`. `fallback` is informational and fixed to `"top_level_comment"`. A
+  timeout is not a rejection and never triggers the fallback (the review may already exist; INV-VH-03).
+- Reference implementation values (derived from `vibe_heal/review/github.py` `_collect_file_comments`, the
+  `on_changed_line` filter in `line_filter.py`, and `tests/vibe_heal/review/test_github.py`):
+
+| Field | Value | Evidence |
+| --- | --- | --- |
+| `inline_supported` | `True` | the review payload carries inline `comments` |
+| `sides` | `frozenset({"RIGHT"})` | every inline comment is built with `"side": "RIGHT"`; no `LEFT` anywhere |
+| `requires_line_in_diff` | `True` | findings with `on_changed_line=False` are listed in the body ("outside diff"), and the fallback test uses "line outside diff" as the rejection |
+| `supports_ranges` | `False` | payloads carry `line` only, never `start_line` |
+| `fallback` | `"top_level_comment"` | `post_review` fallback payload (INV-VH-04) |
+
+### Open decisions (Declarations)
+
+All proposed defaults are accepted per human instruction.
+
+- D-1 Review body limit and CR body limit stay two fields with equal reference values (default accepted).
+- D-2 The `limit=200` default is `GhPullRequestLookup.__init__` in `sisyphus/pick.py` (`open_pr_bodies`, INV-SY-05); the
+  `limit=100` default is `GitHubIssueTracker.__init__` (INV-SY-03). The caller's pick count stays a consumer parameter
+  (found in code; default accepted).
+- D-3 `Capability` values are the interface names verbatim (default accepted).
+- D-4 Anchor values derived from the review posting path and its tests, as in the table above. No value is a guess.
+- D-5 `per_operation` keys are `Interface.method` (Interfaces names, which trace to inventory rows) (default accepted).
+- D-6 The 10 s `validate_installed` and 10.0 s `PR_STATE_TIMEOUT` stay separate entries (default accepted).
+- D-7 (added) Two sites share one method but have different timeouts: INV-SY-09 (10.0 s) and INV-VH-02 (30 s) are both
+  current-state reads. The 10.0 s belongs to `ChangeRequests.get` and the 30 s to `ChangeRequests.find_by_branch`, following
+  the Interfaces note that "current branch" is a `find_by_branch` call. Default: as stated.
+- D-8 (added) The `--limit 500` listings are declared under the 1000 bound of `ChangeRequests.list` (one key per method).
+  The `per_page=100` sites are page sizes today; declared as bounds they cap results at 100 where the code fetches every page
+  (INV-PR-07). Default: follow the leaf (declare 100); the implementer of the host raises the bound if a consumer needs more.
