@@ -532,3 +532,8 @@ async def test_required_config(config: SisyphusConfig) -> None:
 
 def test_no_harness_imports() -> None:
     assert not forbidden_imports(Path(intake.__file__).read_text())
+
+
+def test_parse_open_decisions_nested_heading_stays_in_section() -> None:
+    text = "## Open decisions log\n### Open questions\n1. A?\n### Notes\n2. B?\n## Next\n"
+    assert [d.number for d in parse_open_decisions(text)] == [1, 2]

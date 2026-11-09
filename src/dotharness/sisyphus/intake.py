@@ -154,7 +154,7 @@ def _section_lines(text: str) -> tuple[bool, list[str]]:
         if section is not None and heading and len(heading.group(1)) <= level:
             section = None
         m = _HEADING.match(line)
-        if m:
+        if m and section is None:  # a nested "Open ..." line stays in the enclosing section
             level = len(m.group(1)) if m.group(1) else 7
             section = []
             sections.append(section)
