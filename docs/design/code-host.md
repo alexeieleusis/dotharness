@@ -609,6 +609,10 @@ class ChangeRequests(Protocol):
         """Raises CodeHostError when the change request does not exist."""
         ...
 
+    async def state(self, repo: RepositoryRef, number: int) -> ChangeRequestState:
+        """Lifecycle state only (one narrow read). Raises CodeHostError when the change request does not exist."""
+        ...
+
     async def find_by_branch(
         self, repo: RepositoryRef, branch: str, *, state: ChangeRequestState = ChangeRequestState.OPEN
     ) -> Sequence[ChangeRequest]:
@@ -664,7 +668,8 @@ class ChangeRequests(Protocol):
 
 | Method | Replaces | Rows |
 | --- | --- | --- |
-| `get` | `pr view` with chosen fields: state, base, head revision, description, line counts, requested reviewers, merge state | INV-SY-07, INV-SY-09, INV-VH-02, INV-PR-02, INV-PR-04, INV-PR-05, INV-PR-14, INV-PR-15, INV-PR-16, INV-PR-32 (merge state), INV-PR-33, INV-LO-02 |
+| `get` | `pr view` with chosen fields: state, base, head revision, description, line counts, requested reviewers, merge state | INV-SY-07, INV-VH-02, INV-PR-02, INV-PR-04, INV-PR-05, INV-PR-14, INV-PR-15, INV-PR-16, INV-PR-32 (merge state), INV-PR-33, INV-LO-02 |
+| `state` | `pr view N --json state` (state only, no heavier fields) | INV-SY-09 |
 | `find_by_branch` | `pr list --head` | INV-SY-06, INV-PR-21 |
 | `list` | `pr list` with author, assignee, reviewer, state; review-requested search | INV-PR-11, INV-PR-12, INV-PR-13, INV-PR-27, INV-PR-37, INV-PR-38, INV-PR-41, INV-PR-43 |
 | `find_by_commit` | `commits/SHA/pulls` | INV-PR-35 |
@@ -1502,7 +1507,7 @@ means the default applies).
 | `max_review_body_chars` | 60 000 | | `_MAX_REVIEW_BODY_CHARS` in the same file (the host's real limit is about 65 536; headroom kept) |
 | `max_change_request_body_chars` | 60 000 | | `MAX_BODY_CHARS` in `sisyphus/prbody.py` |
 | `timeouts.default_seconds` | 30 | | `TIMEOUT_GH` in `pr_review/runners/common.py` |
-| timeout, CR state lookup (INV-SY-09) | 10.0 | `ChangeRequests.get` | `PR_STATE_TIMEOUT` in `sisyphus/cli.py` |
+| timeout, CR state lookup (INV-SY-09) | 10.0 | `ChangeRequests.state` | `PR_STATE_TIMEOUT` in `sisyphus/cli.py` |
 | timeout, installed check (INV-VH-01) | 10 | `Session.available` | `validate_installed` in `vibe_heal/review/github.py` |
 | timeout, CR field read of the current branch (INV-VH-02) | 30 | `ChangeRequests.find_by_branch` | `_view_pr_field` in the same file |
 | timeout, review post (INV-VH-03) | 60 | `Discussion.post_review` | `_POST_TIMEOUT_SECONDS` in the same file |
@@ -1568,9 +1573,11 @@ All proposed defaults are accepted per human instruction.
 - D-4 Anchor values derived from the review posting path and its tests, as in the table above. No value is a guess.
 - D-5 `per_operation` keys are `Interface.method` (Interfaces names, which trace to inventory rows) (default accepted).
 - D-6 The 10 s `validate_installed` and 10.0 s `PR_STATE_TIMEOUT` stay separate entries (default accepted).
-- D-7 (added) Two sites share one method but have different timeouts: INV-SY-09 (10.0 s) and INV-VH-02 (30 s) are both
-  current-state reads. The 10.0 s belongs to `ChangeRequests.get` and the 30 s to `ChangeRequests.find_by_branch`, following
-  the Interfaces note that "current branch" is a `find_by_branch` call. Default: as stated.
+- D-7 (added, revised after review) INV-SY-09 (10.0 s, a single `pr view N --json state`) and INV-VH-02 (30 s) have
+  different timeouts. The 10.0 s belongs to the narrow `ChangeRequests.state` method, so `ChangeRequests.get` keeps the 30 s
+  default that INV-PR-02/04/05/14/15/16/32/33 run under today (`get` fetches the heavier field set; a 10 s key on it would
+  make slow reads fail in pr-review, against the "invisible with the default configuration" requirement). The 30 s of INV-VH-02
+  belongs to `ChangeRequests.find_by_branch`, following the Interfaces note that "current branch" is a `find_by_branch` call.
 - D-8 (added) The `--limit 500` listings are declared under the 1000 bound of `ChangeRequests.list` (one key per method).
   The `per_page=100` sites that fetch every page today (INV-PR-07 and the `--paginate` and cursor loops) are page sizes, not
   bounds; declaring 100 would silently truncate what the safety gates read in full (`_has_user_approved`,
