@@ -164,7 +164,7 @@ script is stdlib only and must not import dotharness (F-DUP-8 in `docs/design/sh
 is inventoried only, not migrated; deleting it needs an issue that is not in the repo: to be filed.
 
 Phase column rule: Phase 1 = every `INV-SY-*` row; Phase 2 = every `INV-VH-*` row; Phase 3 = every `INV-PR-*` row;
-Phase 4 = every `INV-LO-*` row. INV-PR-46 and INV-PR-47 are Phase 3 here; if the Phase split assigns them to Phase 4,
+Phase 4 = every `INV-LO-*` row except INV-LO-06, whose removing phase reads "none: not migrated" (see Phase split). INV-PR-46 and INV-PR-47 are Phase 3 here; if the Phase split assigns them to Phase 4,
 edit the table, not the rule.
 
 ### Owner justifications
@@ -247,3 +247,96 @@ The audit re-ran and re-read the cited sites. Differences from the ticket's star
 - INV-PR-44 also covers `ci_fix.py`, `self_review.py`, `review_requested.py` and `address_comments.py`, and the three
   `local_review/` callers pass no token.
 - Rows INV-PR-22, 27, 29, 31, 32, 42, INV-SY-03 and 06 were confirmed against the code at the audited commit.
+
+## Phase split
+
+Partition of the Inventory into four ordered phases. Row ids are those of the Inventory section; no row is restated here. The
+rename aliases that Phase 4 removes are listed in the alias section of this page, not here. Issue numbers for Phases 2 to 4 are
+not in the repo: "to be filed".
+
+### Phase lists
+
+Each inventory row is in exactly one list. Lists are given by row id (ranges are inclusive and contiguous at the audited
+commit: 12 + 7 + 47 + 6 = 72 rows).
+
+| Phase | Issue | Rows | Users (file and symbol) |
+| --- | --- | --- | --- |
+| 1 | #193 | `INV-SY-01` .. `INV-SY-12` | `sisyphus/pick.py` (`GhCli`, `GhLabelRemover`, `GhPullRequestLookup`, candidate lister); `sisyphus/cli.py` (`GhPullRequestClient`, `GhPrStateLookup`, `run_token_cmd` and its env); `sisyphus/config.py` `HostSource.token_cmd` (INV-SY-12, same package as `run_token_cmd`) |
+| 2 | to be filed | `INV-VH-01` .. `INV-VH-07` | `vibe_heal/review/github.py` (`GitHubReviewClient`) |
+| 3 | to be filed | `INV-PR-01` .. `INV-PR-47` | `pr_review/runners/*` (`common.py`, `ci_checks.py`, `ci_fix.py`, `auto_approve.py`, `auto_approve_github.py`, `merge.py`, `regret_review.py`, `address_comments.py`, `review_requested.py`, `self_review.py`, `focused_review.py`, `review_prs.py`), `pr_review/cli.py`, `pr_review/config.py` |
+| 4 | to be filed | `INV-LO-01` .. `INV-LO-05` | `gh.py` (`GH`, `gh_argv`, `build_subprocess_env`); `src/dotharness/scripts/pr-comments.py`; removal of the rename aliases; final grep check |
+| none | to be filed (OD-4) | `INV-LO-06` | `docs/pr_review/scripts/pr-comments.py`: inventoried only, not migrated or deleted. Its Inventory cell reads "none: not migrated"; this is the single allowed exception to "one removing phase per row". |
+
+INV-LO-06 sits in the `leftovers` table of the Inventory for grouping only; its removing phase is "none", so it is excluded
+from the four lists. Confirmed decisions: Linear is out of the inventory; INV-PR-46 and INV-PR-47 are Phase 3;
+INV-LO-06 is grouped with Phase 4 although it is never migrated. Git code (`repo_guard.py` origin check, `git fetch origin
+refs/pull/{n}/head` in `auto_approve.py`) is in no list.
+
+Not users, named so nobody adds them: `sisyphus/orchestrator.py` `PullRequestClient` (existing seam, a Consumer contract that
+Phase 1 may re-point at the interface); `sisyphus/cleanup.py` (consumes `PrInfo`); `vibe_heal/review/orchestrator.py` and
+`vibe_heal/cli.py` (consume `GitHubReviewClient`, updated in Phase 2 with the client).
+
+### Shared users
+
+- `gh.py` (INV-LO-01): Phase 4. Every group above calls it; it can be deleted only after the last caller has moved, so earlier
+  phases keep calling it and it is the last thing to go.
+- `pr_review/runners/ci_checks.py` `gh` (INV-PR-07 transport): Phase 3, together with both of its other callers, `merge.py`
+  (squash merge write path) and `ci_fix.py` (as `_gh`). All three sit in `pr_review/runners/`; moving the helper alone would
+  leave two callers on a deleted function.
+- INV-PR-18 (runner side of the pr-comments child process, `common.py` `fetch_pr_comments`) is Phase 3; the script's own gh
+  calls (INV-LO-02..05) are Phase 4. The script keeps working unchanged in between because the runners spawn it by path.
+
+### Check method (reviewer-run, no code added)
+
+(a) Extract the id column of the Inventory tables and the ids of the four lists. (b) The sorted concatenation of the four lists
+has no duplicate. (c) The set equals the Inventory id set minus `INV-LO-06`, which is listed separately above. (d) For each id,
+the table it sits in (its removing phase) equals the list it appears in. Phase 4 ends with the final grep check (the first
+three greps of the Audit method must return only non-call hits), so a direct user missed by (c) still fails there.
+
+### Package introduction (R-SPLIT-2)
+
+Phase 1 (#193) creates `src/dotharness/code_host/` (interface, reference implementation, factory, fake) and migrates sisyphus.
+This is a proposed default, open decision PS-OD-3: the ticket names #193 as Phase 1 only. It stays open until a human confirms.
+
+### Alias removal (R-SPLIT-3)
+
+Phase 4 removes the rename aliases. Any phase that renames what agents see must update the `KNOWLEDGE_SHA256` pins in
+`tests/test_package_data.py` deliberately; Phase 0 edits none.
+
+### `scripts/pr-comments.py` (R-SPLIT-4)
+
+Constraint: the script is stdlib only and must not import `dotharness` (F-DUP-8, `docs/design/shared-async-layer.md`). It runs
+as a child process through `PR_COMMENTS_SCRIPT_PATH`, used by `focused_review.py`, `address_comments.py` and
+`regret_review.py`.
+
+Chosen path (default, PS-OD-6 open): Phase 4. The script drops all `gh` knowledge and runs the installed dotharness console
+entry point as a child process, so it reaches the interface through the neutral CLI surface without importing `dotharness`.
+The entry point does not exist yet (`pyproject.toml` has only the `vibe_heal`, `pr_review`, `spec_prism_flow`, `sisyphus`
+scripts); its name and commands are defined by the interface section of this page, and until then are undecided. The script
+keeps its `run(argv)` seam so `patch.object(mod, "run", ...)` still works. `parse_paginated` stays while the entry point still
+emits concatenated pages; if it stops, it is deleted together with its tests in Phase 4.
+
+Rejected alternative: the script receives already-fetched data. It works only if the three runners fetch first, which moves the
+fetch into Phase 3 and changes the script's CLI; the child-process path keeps Phase 3 free of that change.
+
+Tests: `tests/test_pr_comments_script.py` passes unchanged through Phase 3. In Phase 4 only the argv asserted in the post-reply
+test changes, and that edit is part of Phase 4. If the default is rejected, log a new open decision.
+
+### pr-review is one phase (R-SPLIT-5, PS-OD-5)
+
+pr-review is not split: all of group `pr-review` is Phase 3. In particular `merge.py`, the only squash-merge write path, is not
+its own phase. Reason: `ci_checks.gh` is shared by `merge.py` and `ci_fix.py`, so a split would need a temporary adapter that
+Phase 0 does not design. Risk: Phase 3 is the largest phase (about fourteen modules). Fallback if reviewers find it too large:
+runners versus `cli.py`/`config.py`, with `ci_checks.py`, `merge.py` and `ci_fix.py` together in the first part.
+
+### Open decisions (Phase split)
+
+- PS-OD-3: Does Phase 1 (#193) create `src/dotharness/code_host/`? Default yes.
+- OD-4: Which issue deletes `docs/pr_review/scripts/pr-comments.py`? To be filed; not blocking.
+- PS-OD-5: pr-review one phase? Default yes (decided above; reopen only if Phase 3 review is too large).
+- PS-OD-6: Console entry point name and path for `src/dotharness/scripts/pr-comments.py` (entry point via subprocess versus
+  already-fetched data). Default entry point; name undecided.
+- OD-8: Issue numbers for Phases 2 to 4: to be filed unless supplied.
+
+(The `PS-` prefix avoids clashing with other decision ids used in the Inventory handoff. `sisyphus/config.py` as a user, the
+former OD-7, is settled: it is INV-SY-12, Phase 1.)
