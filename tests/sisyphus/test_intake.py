@@ -233,6 +233,24 @@ def test_parse_open_decisions_fails_closed(text: str) -> None:
     assert parse_open_decisions(text)
 
 
+BRIEF_TWO_HEADINGS = (
+    "# Brief\n\n## Open decisions\n\nSee the log below.\n\n## Open decisions log\n\n"
+    "1. Which base?\n2. Resolved: use main.\n"
+)
+
+
+def test_two_headings_first_section_with_entries_wins() -> None:
+    assert [d.number for d in parse_open_decisions(BRIEF_TWO_HEADINGS)] == [1]
+    assert [d.number for d in parse_resolved_decisions(BRIEF_TWO_HEADINGS)] == [2]
+    bold_first = "**Open questions**\n\nprose\n\n## Open decisions log\n\n1. Q?\n"
+    assert [d.number for d in parse_open_decisions(bold_first)] == [1]
+
+
+def test_two_headings_without_entries_keep_first_section() -> None:
+    assert parse_open_decisions("## Open decisions\n\nprose\n\n## Open decisions log\n\nmore prose\n")[0].number == 0
+    assert parse_open_decisions("## Open decisions\n\nNone\n\n## Open decisions log\n\nNone\n") == ()
+
+
 async def test_c1_result_when_open_decisions(config: SisyphusConfig) -> None:
     result = await run_intake("ENG-2", config, FakeRunner(BRIEF_OPEN))
     assert result.blocked

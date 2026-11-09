@@ -142,25 +142,27 @@ def _unparsed(reason: str) -> tuple[OpenDecision, ...]:
 
 
 def _section_lines(text: str) -> tuple[bool, list[str]]:
-    """Return ``(found, lines)``: the lines under the open-decisions heading, up to the next heading of equal or higher rank."""
-    lines = iter(text.splitlines())
+    """Return ``(found, lines)``: the first open-decisions section with an entry, else the first section.
+
+    A section runs from its heading to the next heading of equal or higher rank.
+    """
+    sections: list[list[str]] = []
+    section: list[str] | None = None
     level = 0
-    found = False
-    for line in lines:
+    for line in text.splitlines():
+        heading = _ANY_HEADING.match(line)
+        if section is not None and heading and len(heading.group(1)) <= level:
+            section = None
         m = _HEADING.match(line)
         if m:
-            found = True
             level = len(m.group(1)) if m.group(1) else 7
-            break
-    section: list[str] = []
-    if not found:
-        return False, section
-    for line in lines:
-        heading = _ANY_HEADING.match(line)
-        if heading and len(heading.group(1)) <= level:
-            break
-        section.append(line)
-    return True, section
+            section = []
+            sections.append(section)
+        elif section is not None:
+            section.append(line)
+    if not sections:
+        return False, []
+    return True, next((s for s in sections if any(_ENTRY.match(x) for x in s)), sections[0])
 
 
 def _scan_log(text: str) -> tuple[bool, list[list[str]], list[str]]:
