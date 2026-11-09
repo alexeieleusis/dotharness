@@ -769,8 +769,9 @@ Not every host supports work items. The capability is declared (Declarations sec
 
 ```python
 class WorkItems(Protocol):
-    async def get(self, repo: RepositoryRef, number: int) -> WorkItem:
-        """Title and body. Raises CodeHostError when the work item does not exist."""
+    async def get(self, repo: RepositoryRef, number: int) -> WorkItem | None:
+        """Title and body. None when the work item is confirmed absent (deleted, transferred); raises CodeHostError
+        (`transient=True`) only for an inconclusive failure."""
         ...
 
     async def list_open(
@@ -1868,7 +1869,7 @@ model says consumers must not retry after `write=True` and defines no idempotenc
 | B-CHK-1 | `list_checks` returns seeded checks; `required_only=True` returns only the required ones. A change request with no checks returns an empty sequence, which is not an error. |
 | B-CHK-2 | `list_workflows` returns seeded workflows, empty when none. |
 | B-CHK-3 | `failed_log(check)` returns the seeded log text; `get_job(job_id)` returns the `Job` with its `failed_step`; an unknown id raises `CodeHostError`. |
-| B-WI-1 | `get` returns the seeded `WorkItem`; a missing number raises `CodeHostError`. |
+| B-WI-1 | `get` returns the seeded `WorkItem`; a missing number returns `None` (confirmed absence, Error model note 5), not an error. |
 | B-WI-2 | `list_open` returns open work items in insertion (tracker) order, filtered by `assignee` and `label`; closed ones are excluded; the result respects the declared list bound. |
 | B-WI-3 | `remove_label` removes the label; removing an absent label is a no-op (default, D-C7). |
 | B-WI-4 | `closing_change_requests` returns the change requests the seeder linked; `linked_work_items` is the reverse relation; with no link both are empty. |
