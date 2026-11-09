@@ -201,8 +201,12 @@ def _deviation_text(handoff: str) -> str | None:
     return None
 
 
+_NONE = re.compile(r"none(?:$|[.;!:,]|\s*\()", re.IGNORECASE)
+
+
 def _is_none(text: str) -> bool:
-    return text.strip().rstrip(".!;:,").strip().lower() == "none"
+    """True when the bullet starts with the word ``None`` (then end of text or ``.;!:,(``), whatever follows."""
+    return _NONE.match(text.strip()) is not None
 
 
 def _handoff_deviation(stem: str, path: Path) -> tuple[str | None, str | None]:
@@ -224,6 +228,8 @@ def extract_deviations(handoff_dir: Path, stems: Sequence[str]) -> str:
         by_stem = select_handoffs(handoff_dir, stems)
     except OSError:
         return f"Note: Deviations unavailable: handoffs directory {handoff_dir.name} is absent or unreadable."
+    if stems and not any(by_stem[s] for s in stems):
+        return f"Note: no handoffs found for any of the {len(stems)} leaves; deviations could not be checked."
     entries: list[str] = []
     notes: list[str] = []
     for stem in stems:
@@ -429,7 +435,7 @@ async def build_body(
             phases = deviations = f"Note: leaf list unavailable ({type(exc).__name__})."
         else:
             phases = list_phases(phase_dir, await run_git(commit_log_args(base_branch)))
-            deviations = extract_deviations(workspace / "handoffs", stems)
+            deviations = extract_deviations(plan_dir / "handoffs", stems)
     else:
         summary = PLAN_NOT_MATCHED_NOTE
     return compose_body(

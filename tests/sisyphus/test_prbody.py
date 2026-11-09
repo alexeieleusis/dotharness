@@ -169,6 +169,26 @@ def test_deviation_with_none_and_a_missing_handoff_is_not_none_reported(tmp_path
     assert out == "Note: no handoff found for 02-beta-leaf."
 
 
+def test_deviations_none_with_explanation(tmp_path: Path) -> None:
+    (tmp_path / "01-alpha-leaf.md").write_text(_handoff("None. Defaults D-1 applied."))
+    (tmp_path / "02-beta-leaf.md").write_text(_handoff("None (used defaults)"))
+    assert extract_deviations(tmp_path, STEMS) == "None reported."
+    (tmp_path / "02-beta-leaf.md").write_text(_handoff("None, see notes"))
+    assert extract_deviations(tmp_path, STEMS) == "None reported."
+
+
+def test_deviations_none_lookalikes_are_deviations(tmp_path: Path) -> None:
+    (tmp_path / "01-alpha-leaf.md").write_text(_handoff("None of the checks ran"))
+    (tmp_path / "02-beta-leaf.md").write_text(_handoff("Nonexistent files were touched"))
+    out = extract_deviations(tmp_path, STEMS).splitlines()
+    assert out == ["- 01-alpha-leaf: None of the checks ran", "- 02-beta-leaf: Nonexistent files were touched"]
+
+
+def test_deviations_all_missing_is_one_line(tmp_path: Path) -> None:
+    out = extract_deviations(tmp_path, STEMS)
+    assert out == "Note: no handoffs found for any of the 2 leaves; deviations could not be checked."
+
+
 BRIEF = "# B\n\n## Open decisions log\n\n- D-1: Who owns it? Status: resolved - the item.\n- D-2: Resolved: use GitHub.\n- D-3: open?\n"
 
 
@@ -308,6 +328,34 @@ async def test_build_body_full_and_degraded(tmp_path: Path) -> None:
     assert "Phases unavailable: git log failed" in await _build(tmp_path, plan, None)
     (plan / "init_manifest.json").unlink()
     assert PLAN_NOT_MATCHED_NOTE in await _build(tmp_path, plan)
+
+
+async def test_build_body_reads_handoffs_from_plan_dir(tmp_path: Path) -> None:
+    (tmp_path / "phases").mkdir()
+    (tmp_path / "b.md").write_text("x")
+    plan = tmp_path / "plan"
+    (plan / "handoffs").mkdir(parents=True)
+    (plan / "requirements.md").write_text("## 1. Goal\n\nShip it.\n")
+    (plan / "init_manifest.json").write_text(json.dumps({"brief": str(tmp_path / "b.md")}))
+    (plan / "handoffs" / "01-alpha-leaf.md").write_text("- Deviations from the plan: Used A instead of B.\n")
+    assert "Used A instead of B." in await _build(tmp_path, plan)
+
+
+async def test_build_body_deviation_notes(tmp_path: Path) -> None:
+    (tmp_path / "phases").mkdir()
+    (tmp_path / "b.md").write_text("x")
+    plan = tmp_path / "plan"
+    plan.mkdir()
+    (plan / "requirements.md").write_text("## 1. Goal\n\nShip it.\n")
+    (plan / "init_manifest.json").write_text(json.dumps({"brief": str(tmp_path / "b.md")}))
+    (plan / "handoffs").mkdir()
+    body = await _build(tmp_path, plan)
+    assert "Note: no handoffs found for any of the 2 leaves; deviations could not be checked." in body
+    assert "no handoff found for" not in body
+    (plan / "handoffs" / "01-alpha-leaf.md").write_text(_handoff("None."))
+    body = await _build(tmp_path, plan)
+    assert "Note: no handoff found for 02-beta-leaf." in body
+    assert "for any of" not in body
 
 
 # ---------------------------------------------------------------- title
