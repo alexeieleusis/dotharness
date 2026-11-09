@@ -435,7 +435,7 @@ async def build_body(
             phases = deviations = f"Note: leaf list unavailable ({type(exc).__name__})."
         else:
             phases = list_phases(phase_dir, await run_git(commit_log_args(base_branch)))
-            deviations = extract_deviations(workspace / "handoffs", stems)
+            deviations = extract_deviations(plan_dir / "handoffs", stems)
     else:
         summary = PLAN_NOT_MATCHED_NOTE
     return compose_body(

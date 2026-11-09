@@ -330,6 +330,17 @@ async def test_build_body_full_and_degraded(tmp_path: Path) -> None:
     assert PLAN_NOT_MATCHED_NOTE in await _build(tmp_path, plan)
 
 
+async def test_build_body_reads_handoffs_from_plan_dir(tmp_path: Path) -> None:
+    (tmp_path / "phases").mkdir()
+    (tmp_path / "b.md").write_text("x")
+    plan = tmp_path / "plan"
+    (plan / "handoffs").mkdir(parents=True)
+    (plan / "requirements.md").write_text("## 1. Goal\n\nShip it.\n")
+    (plan / "init_manifest.json").write_text(json.dumps({"brief": str(tmp_path / "b.md")}))
+    (plan / "handoffs" / "01-alpha-leaf.md").write_text("- Deviations from the plan: Used A instead of B.\n")
+    assert "Used A instead of B." in await _build(tmp_path, plan)
+
+
 async def test_build_body_deviation_notes(tmp_path: Path) -> None:
     (tmp_path / "phases").mkdir()
     (tmp_path / "b.md").write_text("x")
@@ -337,11 +348,11 @@ async def test_build_body_deviation_notes(tmp_path: Path) -> None:
     plan.mkdir()
     (plan / "requirements.md").write_text("## 1. Goal\n\nShip it.\n")
     (plan / "init_manifest.json").write_text(json.dumps({"brief": str(tmp_path / "b.md")}))
-    (tmp_path / "handoffs").mkdir()
+    (plan / "handoffs").mkdir()
     body = await _build(tmp_path, plan)
     assert "Note: no handoffs found for any of the 2 leaves; deviations could not be checked." in body
     assert "no handoff found for" not in body
-    (tmp_path / "handoffs" / "01-alpha-leaf.md").write_text(_handoff("None."))
+    (plan / "handoffs" / "01-alpha-leaf.md").write_text(_handoff("None."))
     body = await _build(tmp_path, plan)
     assert "Note: no handoff found for 02-beta-leaf." in body
     assert "for any of" not in body

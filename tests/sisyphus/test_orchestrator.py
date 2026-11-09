@@ -100,6 +100,7 @@ class World:
         self.brief_text = BRIEF_NONE
         self.leaves = 2
         self.write_handoffs = True
+        self.handoff_text = "done"
         self.dirty_after_build = False
         self.plan_stop: dict | None = None
         self.build_stops: list[dict | None] = []
@@ -205,7 +206,7 @@ class World:
             handoffs = self.tmp / "ws" / orchestrator.plan_dir_name(self.item) / "handoffs"
             handoffs.mkdir(parents=True, exist_ok=True)
             for i in range(self.leaves):
-                (handoffs / f"{i:02d}-leaf{i}-leaf.md").write_text("done")
+                (handoffs / f"{i:02d}-leaf{i}-leaf.md").write_text(self.handoff_text)
 
     async def shell(self, argv: Sequence[str], cwd: Path | None) -> CommandResult:
         a = list(argv)
@@ -1689,9 +1690,7 @@ def _header(item: str = ITEM) -> str:
 async def test_open_pr_body_is_assembled(world: World) -> None:
     world.requirements = REQUIREMENTS.replace("{ws}", str(world.tmp / "ws"))
     world.git_log = "abc1234\t00-leaf0-leaf done\n"
-    handoffs = world.tmp / "ws" / "handoffs"
-    handoffs.mkdir(parents=True)
-    (handoffs / "00-leaf0-leaf.md").write_text("### Handoff\n- Deviations from the plan: Used a ZIP.\n")
+    world.handoff_text = "### Handoff\n- Deviations from the plan: Used a ZIP.\n"
     result = await world.run()
     assert result.completed
     body = world.opened[0][3]
