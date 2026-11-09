@@ -359,7 +359,7 @@ column quotes existing names.
 ### Naming rules
 
 - **R1.** New class and function names say "change request", never "PR" (`NoOpenPrError` becomes
-  `NoOpenChangeRequestError`). A name for the reference implementation's tool appears only inside the reference implementation
+  `NoChangeRequestError`). A name for the reference implementation's tool appears only inside the reference implementation
   module and never as a shipped class name (`ReferenceCli` is rejected).
 - **R2.** A rename introduced in phase N keeps the old name importable until Phase 4. An alias is a plain re-export
   (`OldName = NewName`) in the old module: no behavior change, no `DeprecationWarning` (a warning would change stderr and test
@@ -389,10 +389,10 @@ column quotes existing names.
 | REN-08 | `gh_json`, `gh_json_paginated` | `scripts/pr-comments.py` (both copies) | KEEP | n/a | n/a | Script-local helpers, never imported by `dotharness` code (the file name is not a valid module name). The file must stay dependency-free. Their gh calls are INV-LO-02..06. |
 | REN-09 | `ci_checks.gh` (`async def gh(args, env)`), imported as `_gh` by `merge.py` and `ci_fix.py` | `pr_review/runners/ci_checks.py` | `run_host_cli(args, env)` in `ci_checks.py`; consumers move to the Checks capability | 3 | Alias `gh`; the `_gh` import alias is local to each importer and disappears when that importer is migrated (R3 covers `ci_checks.gh`) | 14 `_gh` grep hits. `merge.py`, `ci_fix.py` and `ci_checks.py` move together (R-SPLIT-5). |
 | REN-10 | `GitHubReviewClient` | `vibe_heal/review/github.py`; used in `vibe_heal/review/orchestrator.py`, `vibe_heal/cli.py` and tests (55 hits) | `ChangeRequestReviewClient` (reference module); consumers depend on the ChangeRequests and Discussion interfaces | 2 | Alias `GitHubReviewClient` (R3) | `vibe_heal/review/github.py` becomes a shim under the same alias rule. |
-| REN-11 | `GitHubReviewError` | `vibe_heal/review/github.py` | `ChangeRequestReviewError` (in `code_host`) | 2 | Alias `GitHubReviewError` (R3). Subclass relation preserved: the aliases of REN-12 and REN-13 stay subclasses, so `except GitHubReviewError` still catches them | Existing catches must keep working without edit. |
-| REN-12 | `NoOpenPrError(GitHubReviewError)` | same | `NoOpenChangeRequestError` | 2 | Alias `NoOpenPrError` (R3) | R1. Also re-exported from `vibe_heal/review/__init__.py` and imported by `vibe_heal/cli.py`; both keep working through the alias. |
-| REN-13 | `GitHubTimeoutError(GitHubReviewError)` | same | `HostTimeoutError` | 2 | Alias `GitHubTimeoutError` (R3) | |
-| REN-14 | `GitHubError` | `sisyphus/orchestrator.py`, imported by `sisyphus/cli.py` | `HostError` (in `code_host`) | 1 | Alias `GitHubError` (R3) | Raised at the sisyphus orchestration boundary; messages unchanged. |
+| REN-11 | `GitHubReviewError` | `vibe_heal/review/github.py` | `CodeHostError` (in `code_host`; Error model, 6.1 note 1) | 2 | Alias `GitHubReviewError` (R3). Subclass relation preserved: the aliases of REN-12 and REN-13 stay subclasses, so `except GitHubReviewError` still catches them | Existing catches must keep working without edit. |
+| REN-12 | `NoOpenPrError(GitHubReviewError)` | same | `NoChangeRequestError` | 2 | Alias `NoOpenPrError` (R3) | R1. Also re-exported from `vibe_heal/review/__init__.py` and imported by `vibe_heal/cli.py`; both keep working through the alias. |
+| REN-13 | `GitHubTimeoutError(GitHubReviewError)` | same | `CodeHostTimeoutError` | 2 | Alias `GitHubTimeoutError` (R3) | |
+| REN-14 | `GitHubError` | `sisyphus/orchestrator.py`, imported by `sisyphus/cli.py` | `CodeHostError` (in `code_host`) | 1 | Alias `GitHubError` (R3) | Raised at the sisyphus orchestration boundary; messages unchanged. |
 | REN-15 | `GhCli` | `sisyphus/pick.py` (27 hits; constructed as `GhCli(cwd, token, executor)`) | `HostCli` (generic command runner, reference module only) | 1 | Alias `GhCli` (R3); constructor signature unchanged | Sets `GH_TOKEN` in the child env (Child-agent environment). |
 | REN-16 | `GhLabelRemover` | `sisyphus/pick.py` | `WorkItemLabelRemover` (WorkItems capability) | 1 | Alias (R3) | `LabelRemovalError(PickError)` is REN-26. |
 | REN-17 | `GhTimeboundLabelRemover(GhLabelRemover)` | `sisyphus/cli.py` | `TimeboundWorkItemLabelRemover` | 1 | Alias (R3) | Subclass of REN-16; its alias must point at the renamed subclass of the renamed base. |
@@ -405,7 +405,7 @@ column quotes existing names.
 | REN-24 | `GITHUB_SOURCE` | `tests/sisyphus/test_abandon.py` (TOML snippet with `kind = "github"`) | KEEP in Phase 0; the Phase 1 test edit may rename it | 1 (optional) | none (test constant, not importable by `src`) | Listed for completeness of the grep. |
 | REN-25 | `GH` (test fixture `WorkItemSource(kind="github", ...)`) | `tests/sisyphus/test_pick.py` | KEEP in Phase 0; the Phase 1 test edit may rename it | 1 (optional) | none | Not the `GH` of `gh.py` (REN-02); the 13 `GH` grep hits are 1 definition in `gh.py`, 1 in `gh.py`'s `gh_argv` and 11 in this test file. |
 | REN-26 | `PickError`, `LabelRemovalError(PickError)` | `sisyphus/pick.py` | KEEP | n/a | n/a | They describe the operation, not a host. They do not match the grep patterns; checked on purpose. |
-| REN-27 | `MergeError`, `AutoApproveError`, `CiFixError` | `pr_review/runners/merge.py`, `auto_approve.py`, `ci_fix.py` | KEEP | n/a | n/a | Named for the command. Whether Phase 3 wraps `HostError` into them is a Phase 3 design point (RN-OD-5). |
+| REN-27 | `MergeError`, `AutoApproveError`, `CiFixError` | `pr_review/runners/merge.py`, `auto_approve.py`, `ci_fix.py` | KEEP | n/a | n/a | Named for the command. Whether Phase 3 wraps `CodeHostError` into them is a Phase 3 design point (RN-OD-5). |
 | REN-28 | `_IssueFetchError` | `pr_review/runners/common.py` | KEEP | n/a | n/a | Private (underscore), no host pattern, not importable by external code. |
 | REN-29 | `gh_ops` | only the ledger row `spec_prism_flow.build.gh_ops` in `tests/data/ledger_modules.tsv` (path `tools/spec-prism-flow/spec_prism_flow/build/gh_ops.py`, not under `src/dotharness`) | KEEP | n/a | n/a | The ledger is frozen. |
 | REN-30 | `GitHub` alone (about 151 hits) and the footer text | prose in docstrings, comments, user-facing text | KEEP | n/a | n/a | Not an identifier; no import or config contract depends on it. |
@@ -471,7 +471,7 @@ Companion queries for names the pattern cannot see: `grep -rnE "^class \w*Error"
   variable name is wanted. Open unless the interface section closes it.
 - RN-OD-2: aliases emit no `DeprecationWarning` (proposed default; a warning changes stderr and test output).
 - RN-OD-4: `PR_COMMENTS_SCRIPT_PATH` may later be re-pointed to a host-declared script (default: keep).
-- RN-OD-5: whether `MergeError`, `AutoApproveError`, `CiFixError` wrap `HostError` in Phase 3 (default: yes, by wrapping at
+- RN-OD-5: whether `MergeError`, `AutoApproveError`, `CiFixError` wrap `CodeHostError` in Phase 3 (default: yes, by wrapping at
   raise sites only; deferred to Phase 3).
 - RN-OD-6: warn when both `gh_token_cmd` and `host_token_cmd` are set (default: no warning, `host_token_cmd` wins).
 - RN-OD-7: neutral spelling for `kind = "github"` (default: none in Phases 1 to 3).
@@ -500,9 +500,12 @@ checked, and does not restate the assignment.
    today (`--limit 1000`, `per_page=100`, `limit=200`), the bound is a declared limit owned by the Declarations section.
 4. Repository-scoped methods take `repo: RepositoryRef` as the first argument after `self`. A `RepositoryRef` is host-defined
    and opaque: consumers never parse, split or compare its parts and never read a remote URL to build one.
-5. Failures raise subclasses of `HostError` (Error model section). A name used below is `HostError` or one of
-   `HostAuthError`, `HostNotFoundError`, `HostTimeoutError`, `HostConflictError`, `HostUnsupportedError`; the Error model
-   section decides the final names and when each applies.
+5. Failures raise subclasses of `CodeHostError` (Error model section). A name used below is `CodeHostError` or one of
+   `AuthenticationError`, `CodeHostTimeoutError`, `UnsupportedCapabilityError`, `ConfigurationError`,
+   `NoChangeRequestError`. This section is the one place that says which method raises which type; the Error model section
+   defines the types only. A confirmed absence is returned as `None` or an empty sequence where the signature says so (no
+   not-found type exists, Error model D-E2). A consumer that needs exactly one change request for a branch (INV-VH-02)
+   raises `NoChangeRequestError` when `find_by_branch` returns an empty sequence.
 6. Naming: new names use "change request"; existing code keeps "PR" until the phase that migrates it (Rename plan).
 
 ### Repository resolution: explicit and cwd-based (D-12)
@@ -520,7 +523,7 @@ ambient setting:
   argument from its host calls (this is what sisyphus does today).
 
 The factory's return value exposes both modes: it returns the capability objects together with a `RepositoryRef` source that
-supports `current()` and `resolve()` (factory section). A host that cannot do one mode raises `HostUnsupportedError` from that
+supports `current()` and `resolve()` (factory section). A host that cannot do one mode raises `UnsupportedCapabilityError` from that
 method and declares so (Declarations section).
 
 ### Session
@@ -538,11 +541,11 @@ class Session(Protocol):
         ...
 
     async def credential(self) -> Credential:
-        """Resolve the token (configured command or default). Raises HostAuthError, HostTimeoutError."""
+        """Resolve the token (configured command or default). Raises AuthenticationError, CodeHostTimeoutError."""
         ...
 
     async def current_user(self) -> str:
-        """Login of the acting user. Raises HostAuthError, HostTimeoutError."""
+        """Login of the acting user. Raises AuthenticationError, CodeHostTimeoutError."""
         ...
 
     async def agent_environment_names(self) -> Sequence[str]:
@@ -550,7 +553,7 @@ class Session(Protocol):
         ...
 
     async def agent_environment(self, base: Mapping[str, str] | None = None) -> Mapping[str, str]:
-        """base plus the credential variables, base entries first so credential variables win. Raises HostAuthError."""
+        """base plus the credential variables, base entries first so credential variables win. Raises AuthenticationError."""
         ...
 ```
 
@@ -572,15 +575,15 @@ human instruction: keep `GITHUB_TOKEN` and `GH_TOKEN` for the reference implemen
 ```python
 class Repository(Protocol):
     async def current(self) -> RepositoryRef:
-        """cwd mode: the repository of the clone. Raises HostNotFoundError."""
+        """cwd mode: the repository of the clone. Raises ConfigurationError when the clone has no usable repository identity."""
         ...
 
     async def resolve(self, identity: str) -> RepositoryRef:
-        """explicit mode: host-defined identity string to a ref. Raises HostNotFoundError."""
+        """explicit mode: host-defined identity string to a ref. Raises ConfigurationError when the identity cannot be resolved."""
         ...
 
     async def default_branch(self, repo: RepositoryRef) -> str:
-        """Name of the default branch. Raises HostNotFoundError."""
+        """Name of the default branch. Raises CodeHostError."""
         ...
 
     async def display_name(self, repo: RepositoryRef) -> str:
@@ -603,7 +606,7 @@ description, additions and deletions, requested reviewers, merge state and autho
 ```python
 class ChangeRequests(Protocol):
     async def get(self, repo: RepositoryRef, number: int) -> ChangeRequest:
-        """Raises HostNotFoundError."""
+        """Raises CodeHostError when the change request does not exist."""
         ...
 
     async def find_by_branch(
@@ -639,11 +642,11 @@ class ChangeRequests(Protocol):
     async def create_draft(
         self, repo: RepositoryRef, *, head: str, base: str, title: str, body: str
     ) -> ChangeRequest:
-        """Raises HostConflictError, HostError."""
+        """Raises CodeHostError (including a conflicting existing change request)."""
         ...
 
     async def squash_merge(self, repo: RepositoryRef, number: int, *, expected_head: str) -> None:
-        """Squash-merge only if the head revision equals `expected_head`. Raises HostConflictError on mismatch."""
+        """Squash-merge only if the head revision equals `expected_head`. Raises CodeHostError on mismatch."""
         ...
 
     async def request_reviewer(self, repo: RepositoryRef, number: int, login: str) -> None: ...
@@ -707,7 +710,7 @@ class Discussion(Protocol):
     ) -> ReviewPostResult:
         """Post a review. If the host rejects the review or its anchors, post `body` as a top-level comment.
 
-        `ReviewPostResult.fell_back` tells the caller which happened. Raises HostError only if both fail.
+        `ReviewPostResult.fell_back` tells the caller which happened. Raises CodeHostError only if both fail.
         Size limits and anchor rules are declared (Declarations section), not parameters.
         """
         ...
@@ -743,7 +746,7 @@ class Checks(Protocol):
         ...
 
     async def failed_log(self, repo: RepositoryRef, check: Check) -> str:
-        """Log of the failing part of `check`. Raises HostNotFoundError."""
+        """Log of the failing part of `check`. Raises CodeHostError."""
         ...
 
     async def get_job(self, repo: RepositoryRef, job_id: str) -> Job:
@@ -762,12 +765,12 @@ class Checks(Protocol):
 ### WorkItems
 
 Not every host supports work items. The capability is declared (Declarations section); a host without it raises
-`HostUnsupportedError` from every method here.
+`UnsupportedCapabilityError` from every method here.
 
 ```python
 class WorkItems(Protocol):
     async def get(self, repo: RepositoryRef, number: int) -> WorkItem:
-        """Title and body. Raises HostNotFoundError."""
+        """Title and body. Raises CodeHostError when the work item does not exist."""
         ...
 
     async def list_open(
@@ -814,8 +817,9 @@ owner in the Inventory is the first interface named there.
 
 - OD-1: neutral agent-visible variable name. Default accepted per human instruction: keep `GITHUB_TOKEN` and `GH_TOKEN` for
   the reference implementation and expose the names as data from Session (same as RN-OD-1).
-- Error names in rule 5 and model names are proposals until the Error model and Models sections exist; they are reconciled
-  there, not here.
+- Error names in rule 5 were provisional (`HostError` family) and are reconciled with the Error model section (final names
+  `CodeHostError`, `AuthenticationError`, `CodeHostTimeoutError`, `UnsupportedCapabilityError`, `ConfigurationError`,
+  `NoChangeRequestError`). Model names are reconciled in the Models section.
 
 ## Models
 
@@ -1202,3 +1206,197 @@ each call. GraphQL query bodies are read from `GRAPHQL_QUERY`, `GRAPHQL_QUERY_RE
   state that no host fills them from `get`. Alternative: remove the fields there. Default accepted per human instruction.
 - Names differing from the leaf's draft (`Commit` to `CommitInfo`, `Thread` to `ReviewThread`, `CheckRun` to `Check`) follow
   the Interfaces section, not a change to it. No change is needed in Interfaces for them.
+
+## Error model
+
+The single exception hierarchy that every code-host implementation raises, and the mapping of the existing failure types and
+conventions onto it (A-2.3, goal G3 of issue #192). Fact labels: [code @f293b99] read from the repository at commit
+`f293b99`; [ticket] from issue #192; [inferred] not verified. Terms (Code host, Change request, Capability interface,
+Consumer, Session, Anchor, Conformance suite) are defined in the Inventory terms and the Interfaces section and are not
+redefined here. This section adds two: an **old type** is an exception class in the inventory table below, as it exists at
+`f293b99`; a **discriminator** is a documented attribute on an error that lets a caller tell cases apart without a subclass.
+Which method raises which type is stated once, in the Interfaces section (rule 5 and the method docstrings); this section
+defines types and mappings only. There is no code in `src/dotharness/code_host/` in this phase; the fenced code is
+illustrative.
+
+### Problem
+
+Three failure conventions coexist in the gh-touching code [code @f293b99]:
+
+1. Raise. `get_gh_token` (`pr_review/runners/common.py`) raises `RuntimeError`; `_fetch_issue` raises `_IssueFetchError`.
+2. Return `None`, `[]`, `False` or `""` after logging. `is_pr_open` returns False on a failed lookup (fail-closed);
+   `get_current_user` returns `""` (fail-open).
+3. Fall back. `vibe_heal/review/github.py` catches `GitHubReviewError` from the inline review post and falls back to a plain
+   post, except on `GitHubTimeoutError` (`except GitHubTimeoutError:` precedes `except GitHubReviewError as inline_err:`).
+
+"Not authenticated" is not an exception type anywhere [ticket]. A bad token surfaces as `RuntimeError`, `GitHubError`,
+`AutoApproveError` or a blank login. Ten unrelated types express overlapping failures, so a second host could not honor any of
+them uniformly.
+
+### Goals
+
+- G3.1 Exactly one hierarchy, rooted at `CodeHostError`.
+- G3.2 Every old type below maps to exactly one new type; the table has no unmapped row.
+- G3.3 Three distinctions are expressible by type: no change request for the branch (`NoChangeRequestError`); timed out and the
+  request may have taken effect (`CodeHostTimeoutError`); not authenticated (`AuthenticationError`).
+- G3.4 The timeout error carries a boolean `write`.
+- G3.5 One unsupported-capability type exists, and every consumer call site names its policy for it (policy table below).
+- G3.6 Per call site, the convention that is preserved is stated (call-site table below).
+- G3.7 No message built by the design contains a token or the token command (message and secret rules below).
+
+Non-goals: no code or edits outside this page; no behavior change (fail-open sites stay fail-open in their consumer); no raw
+`api(...)` pass-through and no raw `--json` dicts in error payloads; no login flow ("not authenticated" is a type to raise, not
+a flow to start); no retry or backoff policy beyond "do not retry a write timeout"; no rate-limit-specific type; no Linear
+tracker error translation; no ledger entries and no nav entry.
+
+### Old-type inventory and mapping
+
+Every row is [code @f293b99].
+
+| Old type | Defined in | Base | Meaning at f293b99 | New type |
+|---|---|---|---|---|
+| `GitHubReviewError` | `vibe_heal/review/github.py` | `Exception` | generic review-op failure; caught to trigger fallback post | `CodeHostError` (or the specific subclass raised; note 1) |
+| `NoOpenPrError` | `vibe_heal/review/github.py` | `GitHubReviewError` | no open PR for the current branch; caught in `vibe_heal/cli.py` at two sites | `NoChangeRequestError` |
+| `GitHubTimeoutError` | `vibe_heal/review/github.py` | `GitHubReviewError` | gh call timed out; request may have been processed; callers must not blindly retry | `CodeHostTimeoutError` (field `write: bool`) |
+| `PickError` | `sisyphus/pick.py` | `Exception` | unusable pick setup or failed tracker call, including invalid JSON from gh | `CodeHostError` for host failures; `ConfigurationError` for unusable setup (note 2) |
+| `LabelRemovalError` | `sisyphus/pick.py` | `PickError` | `gh issue edit --remove-label` failed (non-zero exit, timeout as 124) | `CodeHostError`, or `CodeHostTimeoutError(write=True)` when the timeout case is distinguishable |
+| `GitHubError` | `sisyphus/orchestrator.py` | `Exception` | "unrecoverable failure (auth, network)" from a `PullRequestClient`; maps to orchestrator condition C8 | `AuthenticationError` for auth; `CodeHostError` otherwise (note 3) |
+| `MergeError` | `pr_review/runners/merge.py` | `RuntimeError` | failed `gh pr merge` call, and the aggregate "merge failed for: ..." raised after the loop | per call: `CodeHostError`; aggregate stays consumer-local (note 4) |
+| `AutoApproveError` | `pr_review/runners/auto_approve.py` | `RuntimeError` | PR list unreadable (e.g. bad token), and the aggregate raised after the loop | per call: `AuthenticationError` or `CodeHostError`; aggregate stays consumer-local (note 4) |
+| `CiFixError` | `pr_review/runners/ci_fix.py` | `RuntimeError` | aggregate "ci-fix failed for: ..."; also a `git push` failure | host part: `CodeHostError`; aggregate and `git push` stay consumer-local (note 4) |
+| `_IssueFetchError` | `pr_review/runners/common.py` | `Exception` | inconclusive issue lookup (rate limit, 5xx, network, malformed); distinct from confirmed absence | `CodeHostError` with discriminator `transient: bool = True`; confirmed absence is not an error (note 5) |
+
+Notes:
+
+1. `GitHubReviewError` is the base of `NoOpenPrError` and `GitHubTimeoutError`. In the new hierarchy the fallback site catches
+   `CodeHostTimeoutError` first and then `CodeHostError`, so the ordering is preserved (row F1 below).
+2. `PickError` mixes tracker failures and local setup problems. A Linear-tracker `PickError` is not a code-host failure: the
+   Linear path (`LINEAR_API_URL` in `sisyphus/pick.py`) keeps a consumer-local error, and only code-host-sourced raises map to
+   `CodeHostError` [inferred from `pick.py`; D-E1].
+3. `GitHubError` is raised by a `PullRequestClient` and caught at two sites in `sisyphus/orchestrator.py`, both mapping to C8.
+   After the change the orchestrator catches `CodeHostError` there. Authentication and network failures both stay C8, so exit
+   behavior is unchanged.
+4. `MergeError`, `AutoApproveError` and `CiFixError` serve two purposes: one host call failed, and an aggregate "failed for:
+   ..." summary raised after a loop so the CLI exits non-zero. The per-call failure maps to the hierarchy; the aggregate is a
+   consumer concern, keeps its name and base, and only its cause chain changes (`raise ... from <CodeHostError>`; D-E6).
+5. `_fetch_issue` returns `None` for a confirmed absence (`_ISSUE_NOT_FOUND_RE`) and raises for anything inconclusive. That
+   split is kept: absence is returned as `None` (Interfaces), inconclusive failure raises `CodeHostError`. No `NotFoundError`
+   type is introduced (D-E2).
+
+### Hierarchy
+
+```python
+from __future__ import annotations
+
+
+class CodeHostError(Exception):
+    """Root of every error a code-host implementation raises."""
+
+
+class NoChangeRequestError(CodeHostError):
+    """No open change request exists for the requested branch."""
+
+
+class AuthenticationError(CodeHostError):
+    """The session is not authenticated, or its credential was rejected.
+
+    The message never contains the token or the token command (message and secret rules).
+    """
+
+
+class CodeHostTimeoutError(CodeHostError):
+    """The call timed out; the host may have processed it. Do not retry blindly."""
+
+    def __init__(self, message: str, *, write: bool) -> None:
+        super().__init__(message)
+        self.write = write
+
+
+class UnsupportedCapabilityError(CodeHostError):
+    """The host does not implement a capability interface or operation."""
+
+    def __init__(self, message: str, *, capability: str) -> None:
+        super().__init__(message)
+        self.capability = capability
+
+
+class ConfigurationError(CodeHostError):
+    """The code-host setup is unusable (missing repository identity, bad option)."""
+```
+
+The `transient: bool = True` discriminator of the `_IssueFetchError` row is an attribute of a plain `CodeHostError` raised by
+the issue lookup; it is documented here and not a separate class.
+
+- R1. All six classes are importable from `dotharness.code_host`. Whether they live in a module `errors.py` is left to the
+  implementation phase (#193).
+- R2. Implementations raise only `CodeHostError` subclasses for host failures. They never let a raw subprocess, HTTP or parsing
+  exception escape, `subprocess.TimeoutExpired` included, because it stringifies the command.
+- R3. The three distinctions: (1) no change request for this branch is `NoChangeRequestError`; (2) timed out and the request
+  may have taken effect is `CodeHostTimeoutError`, with `write=True` for a write and `write=False` for a read. Consumers must
+  not retry or fall back after a `write=True` timeout; a `write=False` timeout may be retried; (3) not authenticated is
+  `AuthenticationError`.
+- R4. `UnsupportedCapabilityError.capability` holds the name of a capability interface (Session, Repository, ChangeRequests,
+  Discussion, Checks, WorkItems; see Interfaces).
+- R5. A subclass test in the conformance suite checks that each of the six types is a subclass of `CodeHostError`.
+
+### Failure conventions per call site
+
+Rule: default behavior does not change. A site that raised keeps raising, a site that returned a sentinel keeps returning it in
+its consumer, and a fallback keeps falling back. The implementation raises; the consumer wrapper converts to the old sentinel
+where the old behavior was fail-open or fail-closed, so the interface stays raise-only.
+
+| ID | Call site [code @f293b99] | Convention today | Preserved as |
+|---|---|---|---|
+| R-1 | `get_gh_token` (`pr_review/runners/common.py`) | raise `RuntimeError` on failed command or blank stdout | Raise. Not a code-host call: it resolves the credential before a Session exists. A blank or failed token command is reported as `AuthenticationError` by the Session, under the message and secret rules. |
+| R-2 | `_fetch_issue` | raise `_IssueFetchError`; `None` on confirmed absence | Raise `CodeHostError`; `None` kept for absence (note 5). |
+| R-3 | `vibe_heal/cli.py`, two `except NoOpenPrError` sites | raise, caught and reported | Raise `NoChangeRequestError`; same handler. |
+| R-4 | `sisyphus/orchestrator.py`, two `except GitHubError` sites | raise, mapped to C8 | Raise `CodeHostError`; same C8 mapping. |
+| R-5 | `sisyphus/cli.py`, two `except PickError` sites | raise, caught and reported | Raise; handler catches `CodeHostError` plus the consumer-local pick error (note 2). |
+| R-6 | `merge.py`, `auto_approve.py`, `ci_fix.py` loops | collect failures per PR, raise aggregate after loop | Same collection; each collected item is a `CodeHostError` message; aggregate stays consumer-local (note 4). |
+| N-1 | `is_pr_open` | returns False after a failed lookup (fail-closed) | Consumer wrapper catches `CodeHostError` and returns False. The interface method raises. |
+| N-2 | `get_current_user` | returns `""` after logging (fail-open) | Consumer wrapper catches `CodeHostError`, logs, returns `""`. Stays fail-open; an `AuthenticationError` is logged the same way (that log line is where a revoked token is visible today). |
+| N-3 | `sisyphus/orchestrator.py` label removal wrapped in `except Exception` ("never alters the exit code or the records") | swallow and continue | Unchanged; swallows `CodeHostError` like any other exception. |
+| F1 | `vibe_heal/review/github.py` inline-review post with fallback | fall back to a plain post on `GitHubReviewError`, except `GitHubTimeoutError` | Fall back on `CodeHostError`, except `CodeHostTimeoutError` with `write=True` (no fallback, the first request may have succeeded). `AuthenticationError` and `UnsupportedCapabilityError` also skip the fallback, because a plain post would fail the same way [inferred; D-E3]. |
+
+Other inventory call sites not listed here inherit the convention of their old code.
+
+### Unsupported-capability policy
+
+Each consumer declares a policy per call site: **degrade** (skip the feature silently and continue with reduced behavior),
+**warn** (log a warning naming `capability`, then continue) or **stop** (re-raise and let the consumer's top-level handler
+exit non-zero). The reference implementation supports every capability, so no policy fires on it and default behavior is
+unchanged. Initial policies [inferred, proposed defaults; D-E4]:
+
+| Consumer | Call site | Capability | Policy |
+|---|---|---|---|
+| `vibe_heal` review | inline review comments with an Anchor | Discussion | degrade (post a plain review; this is the consumer fallback from the anchor decision) |
+| `vibe_heal` review | change-request lookup for the branch | ChangeRequests | stop |
+| `pr_review` runners | merge, auto-approve, ci-fix | ChangeRequests / Checks | stop |
+| `pr_review` runners | current-user lookup | Session | warn (keeps the blank-user fail-open result) |
+| `sisyphus` | issue picking and label removal | WorkItems | stop for picking, warn for label removal |
+
+### Message and secret rules
+
+- No exception message, `__cause__` text, log line or `repr` raised by an implementation or by the conformance suite contains
+  the token value or the token command string (D-10).
+- Evidence [code @f293b99]: `get_gh_token` builds its messages from the literal string `gh_token_cmd`, not from its value. It
+  re-raises `subprocess.TimeoutExpired` as `RuntimeError(...) from None` because `TimeoutExpired` stringifies the command "and
+  it may embed a credential". The same rule applies to every implementation: catch the transport exception and raise a
+  hierarchy member with `from None`, or with a cause whose text has been checked.
+- Host CLI stderr may be included in a message only after the implementation has confirmed it does not echo the credential
+  [inferred]. The rule adopted: include the exit code and a short host-defined reason, and omit the raw command line.
+- Examples on this page use `<token>` for any token value.
+- Testable check for the Conformance section: a fake whose credential is the sentinel `<token>` raises each error type, and the
+  test asserts that neither the sentinel nor the token command string appears in `str(exc)`, `repr(exc)` or
+  `str(exc.__cause__)`.
+
+### Open decisions (Error model)
+
+All proposed defaults are accepted per human instruction.
+
+- D-E1 `PickError` covers gh and Linear failures: the Linear path keeps a consumer-local error (default accepted).
+- D-E2 No type or discriminator for rate limiting (such as `retry_after`) until a consumer needs it (default accepted).
+- D-E3 At F1, `AuthenticationError` and `UnsupportedCapabilityError` skip the fallback post (default accepted).
+- D-E4 The unsupported-capability policy table above stands, since no current code path raises it (default accepted).
+- D-E5 The three distinctions are subclasses, not a single `kind` discriminator (default accepted).
+- D-E6 The aggregate errors `MergeError`, `AutoApproveError`, `CiFixError` keep their names, consumer-local (default accepted).
