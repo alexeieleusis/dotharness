@@ -267,7 +267,11 @@ class World:
         if sub == "ls-remote" and "--exit-code" in a:
             if self.ls_remote_rc is not None:
                 return CommandResult(self.ls_remote_rc, "", "could not read from remote")
-            return CommandResult(0, f"{SHA1}\t{a[-1]}\n") if a[-1].removeprefix("refs/heads/") in self.origin_heads and a[-1].startswith("refs/heads/") else CommandResult(2)
+            return (
+                CommandResult(0, f"{SHA1}\t{a[-1]}\n")
+                if a[-1].removeprefix("refs/heads/") in self.origin_heads and a[-1].startswith("refs/heads/")
+                else CommandResult(2)
+            )
         if sub == "ls-remote":
             return CommandResult(0, f"{SHA1}\trefs/heads/{a[-1]}\n" if self.remote_exists else "")
         if sub == "merge-base":
