@@ -518,8 +518,10 @@ checked, and does not restate the assignment.
 2. Every method returns a host-neutral model (Models section), a `Sequence` of models, `str`, `bool` or `None`. No method
    returns a `dict` from a host tool and there is no `api(...)`-style pass-through that takes a path or a query.
 3. Pagination is an implementation detail. No parameter, return type or error in this section mentions a page, a cursor or a
-   paginate flag. A method that lists returns the complete result up to the host's declared limit. Where a caller needs a bound
-   today (`--limit 1000`, `per_page=100`, `limit=200`), the bound is a declared limit owned by the Declarations section.
+   paginate flag. A method that lists returns the complete result up to the host's declared limit, or all of it where the
+   declared limit is `None`. Where a caller has a bound today (`--limit 1000`, `limit=200`, the single-call `per_page=100` of
+   `ci_checks.py`), the bound is a declared limit owned by the Declarations section. Paged loops that read to exhaustion
+   (`per_page=100` in `common.py`, `review_requested.py`) are `None`: `per_page` there is a page size, not a bound.
 4. Repository-scoped methods take `repo: RepositoryRef` as the first argument after `self`. A `RepositoryRef` is host-defined
    and opaque: consumers never parse, split or compare its parts and never read a remote URL to build one.
 5. Failures raise subclasses of `CodeHostError` (Error model section). A name used below is `CodeHostError` or one of
@@ -1444,7 +1446,8 @@ class HostLimits:
     truncates silently: if it cannot return the whole result under the bound that applies, it raises `CodeHostError` instead.
 - A list size bound is a declared limit, never a paging parameter. No operation takes a page, cursor or `--limit` argument and
   no caller passes one. Each declared bound replaces `--limit 1000` (`address_comments.py`), `--limit 500` (the four
-  `@me` listings), `per_page=100` (`common.py`, `review_requested.py`, `ci_checks.py`) and the `limit=100` / `limit=200`
+  `@me` listings), the single-call `per_page=100` (`ci_checks.py`; the paged loops in `common.py` and `review_requested.py`
+  declare `None`) and the `limit=100` / `limit=200`
   constructor defaults of `sisyphus/pick.py`. What the host does to honor a bound (several pages, one call) is its own
   concern.
 - The caller-supplied `limit` of the sisyphus pick functions (`pick.py` lines 162 and 186, and `cli.py`) means "how many
