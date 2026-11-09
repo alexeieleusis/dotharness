@@ -37,4 +37,4 @@ max_retry_cycles = 3
 state_dir = "~/.local/share/dotharness/spec-prism-flow/state"
 
 [harness]
-knowledge_dir = "~/.harness/knowledge"
+# knowledge_dir defaults to the knowledge packaged with dotharness

@@ -33,7 +33,6 @@ TEMPLATE = """\
 backend = "opencode"               # "opencode" or "claude"
 gh_token_cmd = "gh auth token"
 backend_timeout_seconds = 900
-knowledge_dir = "~/.harness/knowledge"
 
 # [harness.path_prepend]
 # java = "/Users/you/.sdkman/candidates/java/current/bin"

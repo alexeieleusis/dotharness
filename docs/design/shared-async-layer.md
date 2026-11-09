@@ -297,8 +297,7 @@ Not a `Path(__file__)` lookup but listed for completeness: `src/dotharness/repo_
   does not exist, `config.default_knowledge_dir()` resolves to the packaged `src/dotharness/knowledge/` via
   `importlib.resources.files("dotharness") / "knowledge"` (a plain path: wheels are installed unpacked). An explicit
   `knowledge_dir` is never replaced, so `validate` still reports a configured path that does not exist. The fallback
-  applies to `knowledge_dir` only. Note: the `init` template in `cli.py` writes `knowledge_dir = "~/.harness/knowledge"`
-  explicitly, which opts out of the fallback.
+  applies to `knowledge_dir` only. The `init` template in `cli.py` omits `knowledge_dir` so new configs use the fallback.
 - `vibe_types_repo` (`[focused_review]`) defaults to `~/.harness/vendor/vibe-types` with no packaged fallback: it is an
   external vendor checkout.
 - `~/.harness/cache/pr-<n>-comments.json` (`fetch_pr_comments`) is unchanged.
