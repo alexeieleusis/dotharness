@@ -31,7 +31,7 @@ KNOWLEDGE_SHA256 = {
     "pr-review/review-regret.md": "594442dcfe762b50eddad7b2e56f0e2e2dc970bd04874766c5db680cdea4f88e",
     "pr-review/review-summary.md": "5a9a2e432d570d4d31c5cedbf8011fac3d1fc66a29a988399f690b16e2d7bf1b",
     "pr-review/review-traceability.md": "0f3fee691506e277494f2e82fc62eb8a3dae6fa378520d4834b100ae963a20e7",
-    "sisyphus/intake-prompt.md": "7fb1d907a18bd20f76ccadeea07cd74a588dff330c85225ec331a7229a974046",
+    "sisyphus/intake-prompt.md": "77f69497f895ac2137743f5533daa1444e30e70cea20d77d58089d7650159d87",
     "sisyphus/linear-feed-prompt.md": "e76652507f9fdb9aaafc933dadb1c9c76eef4597791203dcade167e70fb3eddc",
     "sisyphus/orchestration-prompt.md": "00a740a2e90866a446cb602ecdb3d0d2190082c6eca50c3794b250382b808364",
     "sisyphus/sizing-rules.md": "953ed3e744d39f8fbe7196303fd3dcad4eae70f98d49adbccb5530532260cc36",

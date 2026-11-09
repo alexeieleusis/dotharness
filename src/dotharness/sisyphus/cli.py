@@ -312,11 +312,14 @@ def _resume_command(config_path: str | Path, item: str, base: str | None = None,
 async def _resolve_options(
     config: SisyphusConfig, services: Services, base: str | None, config_path: str | Path = ""
 ) -> OrchestratorOptions:
-    base = base or config.project.base_branch or DEFAULT_BASE_BRANCH
+    given = base or config.project.base_branch
+    base = given or DEFAULT_BASE_BRANCH
     default_branch = await services.repo_info() if services.repo_info else None
     return OrchestratorOptions(
         base_branch=base,
         default_branch=default_branch,
+        # The PR base stays `base`; only the intake clone prefers the repository default branch over "main".
+        intake_base=given or default_branch or DEFAULT_BASE_BRANCH,
         lock_dir=services.lock_dir,
         resume_command=_resume_template(config_path, base) if config_path else None,
     )

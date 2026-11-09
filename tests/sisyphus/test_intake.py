@@ -233,6 +233,26 @@ def test_parse_open_decisions_fails_closed(text: str) -> None:
     assert parse_open_decisions(text)
 
 
+BRIEF_TWO_HEADINGS = (
+    "# Brief\n\n## Open decisions\n\nSee the log below.\n\n## Open decisions log\n\n"
+    "1. Which base?\n2. Resolved: use main.\n"
+)
+
+
+def test_two_headings_first_section_with_entries_wins() -> None:
+    assert [d.number for d in parse_open_decisions(BRIEF_TWO_HEADINGS)] == [1]
+    assert [d.number for d in parse_resolved_decisions(BRIEF_TWO_HEADINGS)] == [2]
+    log_first = "## Open decisions log\n\n1. Q?\n\n## Open decisions\n\nprose\n"
+    assert [d.number for d in parse_open_decisions(log_first)] == [1]
+    bold_first = "**Open questions**\n\nprose\n\n## Open decisions log\n\n1. Q?\n"
+    assert [d.number for d in parse_open_decisions(bold_first)] == [1]
+
+
+def test_two_headings_without_entries_keep_first_section() -> None:
+    assert parse_open_decisions("## Open decisions\n\nprose\n\n## Open decisions log\n\nmore prose\n")[0].number == 0
+    assert parse_open_decisions("## Open decisions\n\nNone\n\n## Open decisions log\n\nNone\n") == ()
+
+
 async def test_c1_result_when_open_decisions(config: SisyphusConfig) -> None:
     result = await run_intake("ENG-2", config, FakeRunner(BRIEF_OPEN))
     assert result.blocked
@@ -264,6 +284,23 @@ async def test_skip_when_unchanged_and_c1_reparsed(config: SisyphusConfig) -> No
     assert third.skipped
     assert not third.blocked
     assert RunRecord.open(Path(config.project.workspace_dir or ""), "ENG-4").checkpoint is None
+
+
+async def test_prepare_runs_once_before_the_runner_and_not_on_skip_or_reparse(config: SisyphusConfig) -> None:
+    order: list[str] = []
+
+    async def prepare() -> None:
+        order.append("prepare")
+
+    async def runner(prompt: str) -> None:
+        order.append("runner")
+        await FakeRunner()(prompt)
+
+    await run_intake("ENG-P", config, runner, prepare=prepare)
+    assert order == ["prepare", "runner"]
+    await run_intake("ENG-P", config, runner, prepare=prepare)  # sidecar match: skipped
+    await run_intake("ENG-P", config, runner, reparse_only=True, prepare=prepare)
+    assert order == ["prepare", "runner"]
 
 
 async def test_reparse_only_never_redrafts_existing_brief(config: SisyphusConfig) -> None:
@@ -495,3 +532,8 @@ async def test_required_config(config: SisyphusConfig) -> None:
 
 def test_no_harness_imports() -> None:
     assert not forbidden_imports(Path(intake.__file__).read_text())
+
+
+def test_parse_open_decisions_nested_heading_stays_in_section() -> None:
+    text = "## Open decisions log\n### Open questions\n1. A?\n### Notes\n2. B?\n## Next\n"
+    assert [d.number for d in parse_open_decisions(text)] == [1, 2]

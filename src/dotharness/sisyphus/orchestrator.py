@@ -142,10 +142,14 @@ class OrchestratorOptions:
     ``plan.phase_dir`` set for the item. ``phase_dir`` overrides the item's ``plan.phase_dir``.
     ``resume_command`` is the exact command stored in the stop record (the CLI supplies it with the config
     path and base); the library default has a placeholder for the config path.
+    ``intake_base`` is the base the intake clone starts from; it differs from ``base_branch`` only when no
+    ``--base`` or ``[project].base_branch`` was given and the repository default branch is used instead of
+    ``main`` (the PR base is unchanged). ``None`` means ``base_branch``.
     """
 
     base_branch: str
     default_branch: str | None = None
+    intake_base: str | None = None
     spf_config_path: Path | None = None
     phase_dir: Path | None = None
     lock_dir: Path | None = None
@@ -168,6 +172,9 @@ class RunResult:
     @property
     def completed(self) -> bool:
         return self.checkpoint is None
+
+
+FALLBACK_BASE = "main"  # last intake candidate when neither the base nor a local branch of that name exists
 
 
 class _Stop(Exception):
@@ -630,6 +637,44 @@ class _Run:
 
     # -- intake
 
+    async def _probe_and_fetch(self, name: str) -> bool:
+        """True after fetching ``origin/<name>``; False when origin lacks it; C8 on any other failure."""
+        args = ("ls-remote", "--exit-code", "origin", f"refs/heads/{name}")
+        probe = await self.git(*args, ok=False)
+        if probe.returncode == 2:
+            return False
+        if probe.returncode != 0:
+            raise _Stop(Checkpoint.C8, f"git {' '.join(args)} failed (exit {probe.returncode}): {_tail(probe.stderr)}")
+        await self.git("fetch", "origin", name, network=True)
+        return True
+
+    async def _has_local(self, name: str) -> bool:
+        return (await self.git("rev-parse", "--verify", "--quiet", f"refs/heads/{name}", ok=False)).returncode == 0
+
+    async def prepare_intake_base(self) -> None:
+        """Detach the clone at the resolved base (origin, then local, then origin/main) before intake runs."""
+        base = self.opt.intake_base or self.opt.base_branch
+        if await self._probe_and_fetch(base):
+            if await self._has_local(base):
+                local = (await self.git("rev-parse", base)).stdout.strip()
+                remote = (await self.git("rev-parse", f"origin/{base}")).stdout.strip()
+                if local != remote:
+                    self.note(
+                        f"intake base: local {base} ({local[:7]}) differs from origin/{base} ({remote[:7]}); "
+                        f"using origin/{base}"
+                    )
+            ref = f"origin/{base}"
+        elif await self._has_local(base):
+            ref = base
+        elif base != FALLBACK_BASE and await self._probe_and_fetch(FALLBACK_BASE):
+            ref = f"origin/{FALLBACK_BASE}"
+        else:
+            raise _Stop(
+                Checkpoint.C8,
+                f"intake base not found: none of origin/{base}, local {base}, origin/{FALLBACK_BASE} exists in {self.repo}",
+            )
+        await self.git("checkout", "--detach", ref, network=True)
+
     async def stage_intake(self) -> None:
         reparse = (
             self.prior_cp == Checkpoint.C1.value
@@ -643,6 +688,7 @@ class _Run:
                 self.agent,
                 self.rec,
                 reparse_only=reparse,
+                prepare=self.prepare_intake_base,
             )
         except BoundaryViolation as exc:
             raise _Stop(Checkpoint.C5, str(exc)) from exc

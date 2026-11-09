@@ -14,7 +14,7 @@ import hashlib
 import json
 import re
 import subprocess
-from collections.abc import AsyncGenerator, Generator, Iterable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Iterable
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -142,25 +142,27 @@ def _unparsed(reason: str) -> tuple[OpenDecision, ...]:
 
 
 def _section_lines(text: str) -> tuple[bool, list[str]]:
-    """Return ``(found, lines)``: the lines under the open-decisions heading, up to the next heading of equal or higher rank."""
-    lines = iter(text.splitlines())
+    """Return ``(found, lines)``: the first open-decisions section with an entry, else the first section.
+
+    A section runs from its heading to the next heading of equal or higher rank.
+    """
+    sections: list[list[str]] = []
+    section: list[str] | None = None
     level = 0
-    found = False
-    for line in lines:
-        m = _HEADING.match(line)
-        if m:
-            found = True
-            level = len(m.group(1)) if m.group(1) else 7
-            break
-    section: list[str] = []
-    if not found:
-        return False, section
-    for line in lines:
+    for line in text.splitlines():
         heading = _ANY_HEADING.match(line)
-        if heading and len(heading.group(1)) <= level:
-            break
-        section.append(line)
-    return True, section
+        if section is not None and heading and len(heading.group(1)) <= level:
+            section = None
+        m = _HEADING.match(line)
+        if m and section is None:  # a nested "Open ..." line stays in the enclosing section
+            level = len(m.group(1)) if m.group(1) else 7
+            section = []
+            sections.append(section)
+        elif section is not None:
+            section.append(line)
+    if not sections:
+        return False, []
+    return True, next((s for s in sections if any(_ENTRY.match(x) for x in s)), sections[0])
 
 
 def _scan_log(text: str) -> tuple[bool, list[list[str]], list[str]]:
@@ -386,13 +388,15 @@ async def run_intake(
     runner: AgentRunner,
     record: RunRecord | None = None,
     reparse_only: bool = False,
+    prepare: Callable[[], Awaitable[None]] | None = None,
 ) -> IntakeResult:
     """Run the intake stage for ``item`` and report open decisions.
 
     Skips ``runner`` when the brief exists and the item reference plus the SHA-256 of the final
     prompt text match the sidecar written next to the brief on the last successful run. The
     ``reparse_only`` never calls the runner when the brief exists (a resume after C1 must not redraft a
-    human-edited brief); it only re-parses the open decisions. The
+    human-edited brief); it only re-parses the open decisions. ``prepare`` (for example putting the clone
+    on the resolved base) runs only when the runner will run, before the boundary snapshot. The
     stage is marked in progress before and complete after in the run record; a runner exception or
     boundary violation leaves it in progress. A blocking brief sets checkpoint C1 on the record.
     """
@@ -413,6 +417,8 @@ async def run_intake(
         if not skipped:
             brief.parent.mkdir(parents=True, exist_ok=True)
             before = _brief_stamp(brief)
+            if prepare is not None:
+                await prepare()
             async with repo_unchanged_async(repo, ignore=(brief, _sidecar(brief))):
                 await runner(prompt)
             after = _brief_stamp(brief)
