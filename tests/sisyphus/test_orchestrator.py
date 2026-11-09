@@ -125,6 +125,11 @@ class World:
         self.gate_rc = 0
         self.dirty = ""
         self.checkouts: list[str] = []
+        self.detached: list[str] = []  # `git checkout --detach <ref>` targets (intake preparation)
+        self.origin_heads: dict[str, str] = {"base-branch": SHA1, "main": SHA1}  # branch -> origin sha
+        self.local_heads: dict[str, str] = {}  # base-like local branches -> sha
+        self.ls_remote_rc: int | None = None  # forced `ls-remote --exit-code` exit code (e.g. 128)
+        self.detach_rc = 0
         self.branch_present_after_pr = False  # the local branch is still there when the cleanup probes for it
         self.branch_cmds: list[list[str]] = []
         # PR client behaviour
@@ -221,6 +226,14 @@ class World:
         sub = a[0]
         if sub == "fetch":
             return CommandResult(self.fetch_rc, "", "network down" if self.fetch_rc else "")
+        if sub == "rev-parse" and a[1] == "--verify" and a[-1].removeprefix("refs/heads/") in self.local_heads:
+            return CommandResult(0, f"{SHA1}\n")
+        if sub == "rev-parse" and a[1] == "--verify" and a[-1] in {"refs/heads/base-branch", "refs/heads/main"}:
+            return CommandResult(1)
+        if sub == "rev-parse" and len(a) == 2 and a[1] in self.local_heads:
+            return CommandResult(0, f"{self.local_heads[a[1]]}\n")
+        if sub == "rev-parse" and len(a) == 2 and a[1].startswith("origin/"):
+            return CommandResult(0, f"{self.origin_heads[a[1][7:]]}\n")
         if sub == "rev-parse" and a[1] == "--verify":
             present = self.branch_exists or (self.branch_present_after_pr and self.existing_pr is not None)
             return CommandResult(0 if present else 1)
@@ -236,6 +249,10 @@ class World:
         if sub == "log":
             self.log_calls.append(a)
             return CommandResult(self.git_log_rc, self.git_log, "boom" if self.git_log_rc else "")
+        if sub == "checkout" and a[1] == "--detach" and a[-1] != "FETCH_HEAD":
+            self.detached.append(a[-1])
+            self.current_branch = None
+            return CommandResult(self.detach_rc, "", "cannot checkout" if self.detach_rc else "")
         if sub == "checkout":
             self.checkouts.append(a[-1])
             if a[1] == "-b":
@@ -247,6 +264,10 @@ class World:
             return CommandResult(0, f"{self.current_branch}\n")
         if sub == "rev-list":
             return CommandResult(0, f"{self.ahead}\n")
+        if sub == "ls-remote" and "--exit-code" in a:
+            if self.ls_remote_rc is not None:
+                return CommandResult(self.ls_remote_rc, "", "could not read from remote")
+            return CommandResult(0, f"{SHA1}\trefs/heads/{a[-1]}\n") if a[-1] in self.origin_heads else CommandResult(2)
         if sub == "ls-remote":
             return CommandResult(0, f"{SHA1}\trefs/heads/{a[-1]}\n" if self.remote_exists else "")
         if sub == "merge-base":
@@ -384,7 +405,7 @@ async def test_happy_path_pr_gate_and_digest(world: World) -> None:
 def test_base_branch_is_a_parameter_not_a_literal() -> None:
     src = Path(orchestrator.__file__).read_text()
     assert "95_pr-review" not in src
-    assert '"main"' not in src
+    assert '"main"' not in src.replace('FALLBACK_BASE = "main"', "")  # the one named intake fallback (R3)
 
 
 async def test_prompts_carry_resolved_paths(world: World) -> None:
@@ -477,7 +498,9 @@ async def test_c2_open_questions_after_overview(world: World) -> None:
     _assert_stop(world, result, Checkpoint.C2)
     assert "agent:build" not in world.events
     assert "Which API version?" in world.digest_text()
-    assert not any(c[0][:2] == ("git", "fetch") for c in world.shell_calls)
+    assert [c[0] for c in world.shell_calls if c[0][:2] == ("git", "fetch")] == [
+        ("git", "fetch", "origin", "base-branch")
+    ]  # intake only
 
 
 async def test_c3_leaf_open_question(world: World) -> None:
@@ -616,6 +639,146 @@ async def test_c8_push_failure(world: World) -> None:
     result = await world.run()
     _assert_stop(world, result, Checkpoint.C8)
     assert world.find_calls == 0
+
+
+# ------------------------------------------------- intake base resolution (#177)
+
+
+def _git_calls(world: World) -> list[tuple[str, ...]]:
+    return [c[0][1:] for c in world.shell_calls if c[0][0] == "git"]
+
+
+async def test_intake_detaches_at_origin_base_before_the_agent(world: World) -> None:
+    result = await world.run()
+    assert result.completed
+    assert world.detached == ["origin/base-branch"]
+    calls = _git_calls(world)
+    assert calls.index(("status", "--porcelain", "--untracked-files=all")) < calls.index((
+        "ls-remote",
+        "--exit-code",
+        "--heads",
+        "origin",
+        "base-branch",
+    ))
+    assert ("fetch", "origin", "base-branch") in calls
+    assert "git ls-remote" not in world.digest_text()
+
+
+async def test_intake_prefers_intake_base_option(world: World) -> None:
+    world.origin_heads["develop"] = SHA1
+    await world.run(intake_base="develop")
+    assert world.detached == ["origin/develop"]
+
+
+async def test_intake_falls_back_to_local_base(world: World) -> None:
+    del world.origin_heads["base-branch"]
+    world.local_heads["base-branch"] = SHA2
+    assert (await world.run()).completed
+    assert world.detached == ["base-branch"]
+    assert ("ls-remote", "--exit-code", "--heads", "origin", "main") not in _git_calls(world)
+
+
+async def test_intake_falls_back_to_origin_main(world: World) -> None:
+    del world.origin_heads["base-branch"]
+    assert (await world.run()).completed
+    assert world.detached == ["origin/main"]
+    assert ("fetch", "origin", "main") in _git_calls(world)
+
+
+async def test_intake_no_candidate_stops_c8_naming_all_three(world: World) -> None:
+    world.origin_heads.clear()
+    result = await world.run()
+    _assert_stop(world, result, Checkpoint.C8)
+    for ref in ("origin/base-branch", "local base-branch", "origin/main"):
+        assert ref in result.detail
+    assert "agent:intake" not in world.events
+
+
+async def test_intake_probe_network_error_stops_c8_without_fallback(world: World) -> None:
+    world.ls_remote_rc = 128
+    world.local_heads["base-branch"] = SHA1
+    result = await world.run()
+    _assert_stop(world, result, Checkpoint.C8)
+    assert "git ls-remote --exit-code --heads origin base-branch failed (exit 128): could not read" in result.detail
+    assert world.detached == []
+    assert "agent:intake" not in world.events
+
+
+async def test_intake_checkout_failure_stops_c8(world: World) -> None:
+    world.detach_rc = 1
+    result = await world.run()
+    _assert_stop(world, result, Checkpoint.C8)
+    assert "git checkout --detach origin/base-branch failed (exit 1)" in result.detail
+
+
+async def test_intake_divergence_is_a_note_not_a_stop(world: World) -> None:
+    world.local_heads["base-branch"] = SHA2
+    world.origin_heads["base-branch"] = SHA1
+    assert (await world.run()).completed
+    assert world.detached == ["origin/base-branch"]
+    assert (
+        "intake base: local base-branch (2222222) differs from origin/base-branch (1111111); using origin/base-branch"
+        in (world.digest_text())
+    )
+
+
+async def test_intake_equal_local_and_origin_is_silent(world: World) -> None:
+    world.local_heads["base-branch"] = SHA1
+    assert (await world.run()).completed
+    assert "differs from" not in world.digest_text()
+
+
+async def test_intake_preparation_skipped_on_c1_reparse(world: World) -> None:
+    world.brief_text = BRIEF_OPEN
+    assert (await world.run()).checkpoint is Checkpoint.C1
+    assert world.detached == ["origin/base-branch"]
+    world.detached.clear()
+    world.shell_calls.clear()
+    assert (await world.run()).checkpoint is Checkpoint.C1
+    assert world.detached == []
+    assert not any(c[0][:2] in {("git", "ls-remote"), ("git", "fetch")} for c in world.shell_calls)
+
+
+async def test_intake_real_git_ignores_a_stale_local_branch(world: World) -> None:
+    """R17(d): the agent sees origin/<base>, not the stale branch checked out in the clone."""
+    origin = world.tmp / "origin.git"
+    _git(world.tmp, "init", "-q", "--bare", str(origin))
+    _git(world.repo, "add", ".")
+    _git(world.repo, "commit", "-q", "-m", "config")  # ensure_clean needs a clean tree
+    _git(world.repo, "checkout", "-q", "-b", "base-branch")
+    _git(world.repo, "remote", "add", "origin", str(origin))
+    _git(world.repo, "push", "-q", "origin", "base-branch")
+    base_sha = subprocess.run(
+        ["git", "-C", str(world.repo), "rev-parse", "HEAD"],  # noqa: S607
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    _git(world.repo, "checkout", "-q", "-b", "stale")
+    (world.repo / "stale.txt").write_text("stale\n")
+    _git(world.repo, "add", "stale.txt")
+    _git(world.repo, "commit", "-q", "-m", "stale work")
+    fake_shell, fake_agent = world.shell, world.agent
+    seen: dict[str, object] = {}
+
+    async def real_git(argv: Sequence[str], cwd: Path | None) -> CommandResult:
+        if argv[0] != "git":
+            return await fake_shell(argv, cwd)
+        done = subprocess.run(list(argv), cwd=cwd, capture_output=True, text=True, check=False)
+        return CommandResult(done.returncode, done.stdout, done.stderr)
+
+    async def agent(prompt: str) -> None:
+        if "Save the brief file to" in prompt:
+            seen["head"] = (await real_git(["git", "rev-parse", "HEAD"], world.repo)).stdout.strip()
+            seen["stale_file"] = (world.repo / "stale.txt").exists()
+        await fake_agent(prompt)
+
+    world.shell = real_git
+    world.agent = agent
+    world.brief_text = BRIEF_OPEN  # stop at C1 right after intake
+    result = await world.run()
+    assert result.checkpoint is Checkpoint.C1
+    assert seen == {"head": base_sha, "stale_file": False}
 
 
 async def test_c8_network_fetch_failure(world: World) -> None:
@@ -1408,7 +1571,7 @@ async def test_c1_resume_without_edit_stops_again_with_same_question_and_repeats
     assert second.questions == first.questions
     assert world.events == ["agent:intake"]
     assert world.counts()[0] == counts[0]  # no new agent call
-    assert not any(c[0][:2] == ("git", "fetch") for c in world.shell_calls)
+    assert not any(c[0][:2] == ("git", "fetch") for c in world.shell_calls[counts[1] :])  # the reparse fetches nothing
 
 
 async def test_resume_skips_a_stage_completed_before_a_between_stage_limit_stop(world: World) -> None:

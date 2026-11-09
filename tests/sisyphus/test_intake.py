@@ -284,6 +284,23 @@ async def test_skip_when_unchanged_and_c1_reparsed(config: SisyphusConfig) -> No
     assert RunRecord.open(Path(config.project.workspace_dir or ""), "ENG-4").checkpoint is None
 
 
+async def test_prepare_runs_once_before_the_runner_and_not_on_skip_or_reparse(config: SisyphusConfig) -> None:
+    order: list[str] = []
+
+    async def prepare() -> None:
+        order.append("prepare")
+
+    async def runner(prompt: str) -> None:
+        order.append("runner")
+        await FakeRunner()(prompt)
+
+    await run_intake("ENG-P", config, runner, prepare=prepare)
+    assert order == ["prepare", "runner"]
+    await run_intake("ENG-P", config, runner, prepare=prepare)  # sidecar match: skipped
+    await run_intake("ENG-P", config, runner, reparse_only=True, prepare=prepare)
+    assert order == ["prepare", "runner"]
+
+
 async def test_reparse_only_never_redrafts_existing_brief(config: SisyphusConfig) -> None:
     first = await run_intake("ENG-4b", config, FakeRunner(BRIEF_NONE))
     # the sidecar no longer matches (as after editing the prompt), and a human edited the brief

@@ -10,7 +10,7 @@ import ast
 import json
 import subprocess
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -1158,3 +1158,25 @@ def test_missing_config_exact_stderr_prefix(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert result.stderr.startswith("Error: config error: ")
     assert result.stderr.count("Error:") == 1
+
+
+@pytest.mark.parametrize(
+    ("flag", "config_base", "default", "base", "intake"),
+    [
+        (None, None, "trunk", "main", "trunk"),  # no base given: PR base unchanged, intake uses the default branch
+        (None, None, None, "main", "main"),
+        ("rel", "cfg", "trunk", "rel", "rel"),
+        (None, "cfg", "trunk", "cfg", "cfg"),
+    ],
+)
+async def test_resolve_options_intake_base(
+    tmp_path: Path, flag: str | None, config_base: str | None, default: str | None, base: str, intake: str
+) -> None:
+    async def repo_info() -> str | None:
+        return default
+
+    env = make_env(tmp_path, [])
+    cfg = load_config(env.config)
+    cfg = replace(cfg, project=replace(cfg.project, base_branch=config_base))
+    options = await cli._resolve_options(cfg, replace(env.services, repo_info=repo_info), flag)
+    assert (options.base_branch, options.intake_base) == (base, intake)

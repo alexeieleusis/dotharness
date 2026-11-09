@@ -14,7 +14,7 @@ import hashlib
 import json
 import re
 import subprocess
-from collections.abc import AsyncGenerator, Generator, Iterable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Iterable
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -388,13 +388,15 @@ async def run_intake(
     runner: AgentRunner,
     record: RunRecord | None = None,
     reparse_only: bool = False,
+    prepare: Callable[[], Awaitable[None]] | None = None,
 ) -> IntakeResult:
     """Run the intake stage for ``item`` and report open decisions.
 
     Skips ``runner`` when the brief exists and the item reference plus the SHA-256 of the final
     prompt text match the sidecar written next to the brief on the last successful run. The
     ``reparse_only`` never calls the runner when the brief exists (a resume after C1 must not redraft a
-    human-edited brief); it only re-parses the open decisions. The
+    human-edited brief); it only re-parses the open decisions. ``prepare`` (for example putting the clone
+    on the resolved base) runs only when the runner will run, before the boundary snapshot. The
     stage is marked in progress before and complete after in the run record; a runner exception or
     boundary violation leaves it in progress. A blocking brief sets checkpoint C1 on the record.
     """
@@ -415,6 +417,8 @@ async def run_intake(
         if not skipped:
             brief.parent.mkdir(parents=True, exist_ok=True)
             before = _brief_stamp(brief)
+            if prepare is not None:
+                await prepare()
             async with repo_unchanged_async(repo, ignore=(brief, _sidecar(brief))):
                 await runner(prompt)
             after = _brief_stamp(brief)
