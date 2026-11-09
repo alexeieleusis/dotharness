@@ -211,7 +211,7 @@ exists at the audited commit. Consumers of INV-PR-07 that are not direct gh call
 Both script copies live under `src/dotharness/scripts/` (413 lines) and `docs/pr_review/scripts/` (379 lines). The `src`
 script is stdlib only and must not import dotharness (F-DUP-8 in `docs/design/shared-async-layer.md`). The two copies differ
 (359 lines of `diff` output at the audited commit). This page RECORDS the divergence and does not reconcile it. The docs copy
-is inventoried only, not migrated; deleting it needs an issue that is not in the repo: to be filed.
+is inventoried only, not migrated; deleting it is filed in #196 (DEC-2).
 
 Phase column rule: Phase 1 = every `INV-SY-*` row; Phase 2 = every `INV-VH-*` row; Phase 3 = every `INV-PR-*` row;
 Phase 4 = every `INV-LO-*` row except INV-LO-06, whose removing phase reads "none: not migrated" (see Phase split). INV-PR-46 and INV-PR-47 are Phase 3 here; if the Phase split assigns them to Phase 4,
@@ -301,8 +301,7 @@ The audit re-ran and re-read the cited sites. Differences from the ticket's star
 ## Phase split
 
 Partition of the Inventory into four ordered phases. Row ids are those of the Inventory section; no row is restated here. The
-rename aliases that Phase 4 removes are listed in the alias section of this page, not here. Issue numbers for Phases 2 to 4 are
-not in the repo: "to be filed".
+rename aliases that Phase 4 removes are listed in the alias section of this page, not here. Issue numbers for Phases 2 to 4 are in DEC-5.
 
 ### Phase lists
 
