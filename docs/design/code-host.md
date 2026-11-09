@@ -1568,3 +1568,185 @@ All proposed defaults are accepted per human instruction.
 - D-8 (added) The `--limit 500` listings are declared under the 1000 bound of `ChangeRequests.list` (one key per method).
   The `per_page=100` sites are page sizes today; declared as bounds they cap results at 100 where the code fetches every page
   (INV-PR-07). Default: follow the leaf (declare 100); the implementer of the host raises the bound if a consumer needs more.
+
+## Factory and selection
+
+How a tool gets a code host (ticket tasks 6, 7 and 10; overview D-9). One factory takes the selection and the options and
+returns the capability interfaces of the Interfaces section. A consumer never imports an implementation. This section owns the
+factory shape, the per-tool selection settings, the extension mechanism, the version contract and the "Reserved names" table.
+The types it returns come from the Interfaces, Models, Declarations and Error model sections and are not restated.
+
+### Factory
+
+```python
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass(frozen=True)
+class HostSelection:
+    setting: str  # the setting that carried `name`, written as the user sees it (see "Selection per tool")
+    name: str | None  # registered name or dotted path; None means the reference implementation
+    options: Mapping[str, Any]  # untyped mapping from the config surface; the implementation's options model validates it
+    token_cmd: str | None  # the tool's existing token command setting, passed through unread
+
+
+@dataclass(frozen=True)
+class CodeHost:
+    session: "Session"
+    repository: "Repository"  # offers both current() (cwd mode) and resolve() (explicit mode)
+    change_requests: "ChangeRequests"
+    discussion: "Discussion"
+    checks: "Checks"
+    work_items: "WorkItems"
+    declaration: "HostDeclaration"
+
+
+def create_code_host(selection: HostSelection) -> CodeHost: ...
+
+
+@dataclass(frozen=True)
+class HostRegistration:
+    interface_version: int  # the CODE_HOST_INTERFACE_VERSION the implementation targets
+    options_model: type  # called as options_model(**options); owned by the implementation
+    factory: Callable[[Any, str | None], CodeHost]  # (validated options, token_cmd) -> CodeHost
+```
+
+- `create_code_host` is synchronous and does no host I/O; building a `CodeHost` runs no command and makes no network call.
+  Every host call happens later, through the capability objects.
+- Both repository-resolution modes are exposed by the return value (`CodeHost.repository`), not by separate factories
+  (Interfaces, "Repository resolution"). A cwd-mode consumer calls `repository.current()` once; an explicit-mode consumer
+  calls `repository.resolve(identity)`.
+- A capability the host did not declare (`declaration.capabilities`) is still present on `CodeHost`: the factory substitutes an
+  object whose methods raise `UnsupportedCapabilityError(capability=<interface name>)`. Consumers read `declaration` first
+  (Declarations, "Capabilities") and apply the Error model policy.
+- `token_cmd` is passed through to the implementation and never executed by the factory or by a config loader.
+- The reference implementation is the built-in registration named `reference`. It has an options model with no required field.
+
+#### Rules
+
+1. **Absent setting.** If `HostSelection.name` is `None`, the factory returns the reference implementation with empty options.
+   An existing config file or environment with none of the new keys behaves exactly as today, because every migrated call
+   site is served by the reference implementation (Inventory; Reference implementation values).
+2. **Typed options.** Host-specific options belong to the implementation's `options_model`. The tool reads them as an untyped
+   mapping from its config surface, passes them through and never interprets or validates them. The factory calls
+   `options_model(**options)`; any exception from it becomes `ConfigurationError` (rule 3). Options given with
+   `name = None` are an error: the reference implementation takes none (a message that names the options setting).
+3. **Fail at startup.** An unknown name, an entry point that cannot be loaded, an invalid dotted path, an options model that
+   rejects the options, a duplicate entry-point name or a version mismatch raises `ConfigurationError` from
+   `create_code_host`. The tool calls the factory at startup, before its first host call, prints the message and exits
+   non-zero. The message names the setting and its value and the reason, in the form
+   `code host setting <setting> = "<value>": <reason>`. It never contains the token, `token_cmd` or any option value: the
+   reason for an options failure lists field names and error kinds only, and the factory builds messages itself instead of
+   passing the exception text of the options model or of an import error through (Error model, "Message and secret rules").
+   `__cause__` is cleared with `from None`.
+
+### Selection per tool
+
+The exact name and location of each selection is fixed in the "Reserved names" table. This table says how each surface reads
+it.
+
+| Tool | Where the selection lives | Options | How it is read |
+| --- | --- | --- | --- |
+| pr-review | TOML key `host` in table `[harness]` of `.harness.toml`, next to `gh_token_cmd` / `host_token_cmd` (Rename plan REN-31). `src/dotharness/pr_review/config.py`. | Table `[harness.host_options]` | Plain string (or absent), validated as a string at load time. The factory validates its value at startup. |
+| sisyphus | TOML key `name` in table `[source.host]` of `.sisyphus.toml`, next to `token_cmd` (Rename plan REN-32). `src/dotharness/sisyphus/config.py`. | Table `[source.host.options]` | Plain string. The loader is stdlib only, never executes `token_cmd` and never reads the environment: it checks only that the value is a non-empty string and that `options` is a table; resolving the name belongs to the factory. |
+| vibe-heal | Settings field `code_host` plus environment variable `DOTHARNESS_CODE_HOST` on `VibeHealConfig(BaseSettings)` (`vibe_heal/config/models.py`). | Field `code_host_options` (a JSON object), environment variable `DOTHARNESS_CODE_HOST_OPTIONS` | vibe-heal has no TOML file. `VibeHealConfig` uses `env_prefix=""`, `case_sensitive=False`, `extra="ignore"` and the env files `.env.vibeheal` and `.env`; with an empty prefix a field named `code_host` would read a bare `CODE_HOST`, so the environment name carries the `DOTHARNESS_` prefix explicitly (overview D-5). The field declares `validation_alias="DOTHARNESS_CODE_HOST"` (and the options field `"DOTHARNESS_CODE_HOST_OPTIONS"`), so a bare `CODE_HOST` is not read. |
+| spec-prism-flow | No host key today (overview D-9). | n/a | If a key is added later it is validated strictly at startup (an unknown or unloadable value stops the tool with the rule 3 message). sisyphus reads the same `.spec-prism-flow.toml`; it ignores a host key placed there, so a spec-prism-flow key never selects the sisyphus host. |
+
+Relation of `[source.work_item] kind` to the sisyphus host key (OD-2, default accepted per human instruction): the new key is
+`name` under `[source.host]` and `kind` is unchanged. `kind` stays validated against `TRACKER_KINDS`, `kind = "github"` still
+conflicts with `pick_state` as today, and the value is not renamed (Rename plan REN-33, RN-OD-7). Meaning: `kind = "github"`
+selects the selected host's `WorkItems` capability; any other kind selects its own tracker and the host still serves change
+requests. If the selected host does not declare `WorkItems` and `kind = "github"`, sisyphus stops at startup with a
+`ConfigurationError` that names `kind` and its value. No value of `name` changes how `kind` is validated.
+
+### Extension mechanism
+
+A third-party implementation is installed as a Python distribution and selected by name or by dotted path. Examples use the
+placeholder `examplehost`.
+
+- **Entry-point group.** `dotharness.code_hosts` (reserved; see "Reserved names"). The entry-point name is the host name used in
+  the selection. A name is lowercase letters, digits, `_` and `-`, starting with a letter, and never contains `:`.
+- **Entry-point value.** The value names one object: a `HostRegistration` (Factory), that is the factory callable together with
+  its typed options model and the interface version it targets. Example in the distribution's own packaging metadata (not
+  part of this repository; `pyproject.toml` is not edited here):
+
+  ```toml
+  [project.entry-points."dotharness.code_hosts"]
+  examplehost = "examplehost_pkg.host:REGISTRATION"
+  ```
+
+- **Dotted path.** `package.module:attribute`. The part before `:` is imported with `importlib.import_module`; the part after is
+  an attribute name, optionally dotted (`Holder.REGISTRATION`), and must resolve to a `HostRegistration`. Both parts are
+  required and non-empty. A dotted path needs no installed distribution, so a project may point at a local module on
+  `sys.path`.
+- **Resolution order.** (1) A value containing `:` is a dotted path and is never looked up in the registry. (2) Otherwise the
+  value `reference` selects the built-in implementation; an entry point named `reference` is ignored. (3) Otherwise the value is
+  looked up in the entry-point group. Because registered names never contain `:`, a registered name and a dotted path cannot
+  both match one value; if an entry point is nonetheless registered under a name containing `:`, it is ignored, so the dotted
+  path wins (precedence: dotted path, then built-in, then entry point).
+- **Duplicate names.** If two entry points in the group share the selected name, the factory loads neither and raises
+  `ConfigurationError` that names the setting, the value and the two distribution names. Duplicates that nobody selects are
+  not an error and are not loaded. The factory never picks one by install order.
+- **Load failure.** Import errors, a missing attribute, a value that is not a `HostRegistration`, or an exception raised while
+  loading an entry point are `ConfigurationError` under rule 3. Entry points are loaded only for the selected name; no other
+  registered host is imported.
+- **Version.** The registration's `interface_version` is checked before `options_model` or `factory` is called (Version
+  and stability contract).
+
+### Version and stability contract
+
+- **Expression.** An integer constant `CODE_HOST_INTERFACE_VERSION`, defined in `src/dotharness/code_host/version.py` and
+  re-exported as `dotharness.code_host.CODE_HOST_INTERFACE_VERSION`. The first release of the interface is `1`. An integer is
+  used because a plugin either matches or does not; there is no minor-version negotiation.
+- **What counts as breaking** (the constant is incremented): removing or renaming a Protocol, a method, a model field, an enum
+  member or a `Capability` value; adding a required parameter to a method; adding a method to an existing Protocol (a plugin
+  that does not have it would fail); changing a parameter or return type incompatibly; changing which `CodeHostError`
+  subclass a method raises for a documented condition, or the meaning of a declared limit; moving an error type out of
+  the `CodeHostError` hierarchy.
+- **Not breaking** (the constant is unchanged): adding a new capability interface that hosts may leave undeclared; adding an
+  optional parameter with a default; adding a model field with a default; adding an enum member (consumers treat an unknown
+  member as the safe fallback); adding a subclass of an existing error; adding a declaration field with a default.
+- **What an implementation declares.** Its `HostRegistration.interface_version` is the one integer it was written against. It
+  is exact: a host works with the dotharness release that provides the same integer.
+- **Mismatch.** If `interface_version` differs from `CODE_HOST_INTERFACE_VERSION`, `create_code_host` raises
+  `ConfigurationError` under rule 3: `code host setting <setting> = "<value>": implementation targets interface version <n>,
+  this dotharness provides <m>`. Neither side is guessed to be newer; the message gives both numbers. A registration whose
+  `interface_version` is not an `int` is also a load failure.
+- **Aliases and the deprecation window (Rename plan, task 8).** Backward-compatible aliases for the old `GitHub*` / `Gh*`
+  names and the `gh_token_cmd` key are added in the migrating phase of each tool (Phase 1 sisyphus, Phase 2 vibe-heal,
+  Phase 3 pr-review) and removed in Phase 4 (#196). The window is therefore "until Phase 4", counted in phases and not in
+  interface versions; the aliases are not part of the interface and are not covered by `CODE_HOST_INTERFACE_VERSION`. No
+  `DeprecationWarning` is emitted (RN-OD-2). Phase 4 release notes say that `gh_token_cmd` stops working (REN-31).
+- The conformance suite (Declarations and Error model readers) runs against `CODE_HOST_INTERFACE_VERSION` and the fake
+  registers itself with that value.
+
+### Reserved names
+
+Reserved by #192 so that later phases and third parties do not collide. Nothing is added to `pyproject.toml`, `src/` or any
+config model by #192; the group name appears in this design only. Phase numbers are those of the Phase split section.
+
+| # | Name | Exact string | Where | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Entry-point group | `dotharness.code_hosts` | Python entry-point group name, read by the factory | reserved by #192, introduced by Phase 1 |
+| 2 | pr-review TOML key and table | key `host` in table `[harness]` | `.harness.toml` | reserved by #192, introduced by Phase 3 |
+| 3 | sisyphus TOML key and table | key `name` in table `[source.host]` | `.sisyphus.toml` | reserved by #192, introduced by Phase 1 |
+| 4 | vibe-heal settings field | `code_host` (options: `code_host_options`) | `VibeHealConfig` in `vibe_heal/config/models.py` | reserved by #192, introduced by Phase 2 |
+| 5 | vibe-heal environment variable | `DOTHARNESS_CODE_HOST` (options: `DOTHARNESS_CODE_HOST_OPTIONS`) | process environment, `.env.vibeheal`, `.env` | reserved by #192, introduced by Phase 2 |
+| 6 | Interface-version constant | `CODE_HOST_INTERFACE_VERSION` | `src/dotharness/code_host/version.py`, re-exported from `dotharness.code_host` | reserved by #192, introduced by Phase 1 |
+| 7 | Typed-options table in each TOML file | `[harness.host_options]` in `.harness.toml`; `[source.host.options]` in `.sisyphus.toml` | nested under the keys of rows 2 and 3 | reserved by #192, introduced by Phase 3 (`.harness.toml`) and Phase 1 (`.sisyphus.toml`) |
+
+The reference built-in name `reference` is reserved in the same way (entry points of that name are ignored). The Rename plan's
+`host_token_cmd` (REN-31) is introduced by Phase 3 and is not a selection key.
+
+### Open decisions (Factory and selection)
+
+All proposed defaults are accepted per human instruction.
+
+- OD-2 New sisyphus key `name` under `[source.host]`; `kind` unchanged (default accepted per human instruction).
+- FS-OD-1 Version match is exact, no min/max window (default accepted per human instruction; a window needs a second constant
+  and is added by a later breaking change if needed).
+- FS-OD-2 Undeclared capabilities are substituted by objects that raise `UnsupportedCapabilityError`, not `None`
+  (default accepted per human instruction).
+- FS-OD-3 The built-in reference name is `reference` (default accepted per human instruction).
