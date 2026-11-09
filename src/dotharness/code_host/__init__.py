@@ -17,6 +17,7 @@ from dotharness.code_host.errors import (
     NoChangeRequestError,
     UnsupportedCapabilityError,
 )
+from dotharness.code_host.factory import HostRegistration, HostSelection, create_code_host
 from dotharness.code_host.interfaces import (
     ChangeRequests,
     Checks,
@@ -74,6 +75,8 @@ __all__ = [
     "Discussion",
     "HostDeclaration",
     "HostLimits",
+    "HostRegistration",
+    "HostSelection",
     "InlineComment",
     "Job",
     "ListBounds",
@@ -96,4 +99,5 @@ __all__ = [
     "WorkItemState",
     "WorkItems",
     "Workflow",
+    "create_code_host",
 ]
