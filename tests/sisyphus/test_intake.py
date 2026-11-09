@@ -242,6 +242,8 @@ BRIEF_TWO_HEADINGS = (
 def test_two_headings_first_section_with_entries_wins() -> None:
     assert [d.number for d in parse_open_decisions(BRIEF_TWO_HEADINGS)] == [1]
     assert [d.number for d in parse_resolved_decisions(BRIEF_TWO_HEADINGS)] == [2]
+    log_first = "## Open decisions log\n\n1. Q?\n\n## Open decisions\n\nprose\n"
+    assert [d.number for d in parse_open_decisions(log_first)] == [1]
     bold_first = "**Open questions**\n\nprose\n\n## Open decisions log\n\n1. Q?\n"
     assert [d.number for d in parse_open_decisions(bold_first)] == [1]
 
