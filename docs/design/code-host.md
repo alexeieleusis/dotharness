@@ -816,3 +816,389 @@ owner in the Inventory is the first interface named there.
   the reference implementation and expose the names as data from Session (same as RN-OD-1).
 - Error names in rule 5 and model names are proposals until the Error model and Models sections exist; they are reconciled
   there, not here.
+
+## Models
+
+Host-neutral value types that the capability interfaces (Interfaces section) accept and return (A-2.2). This section owns the
+model names, fields, types and enums, and the mapping from every gh `--json` field (and every gh REST or GraphQL field the
+inventory rows read) to exactly one model field or to "dropped". It does not define method signatures (Interfaces), the
+inventory (Inventory), error types (Error model), or the anchor rules and limits (Declarations). Model names follow the
+Interfaces section where it already names them (`CommitInfo`, `ReviewThread`, `Check`, `Workflow`, `Job`, `Credential`,
+`ReviewPostResult`, `InlineComment`, `Anchor`).
+
+### Conventions
+
+- Every model is `@dataclass(frozen=True)` with full annotations. Collections are `tuple[...]`; optional values are `X | None`;
+  timestamps are timezone-aware `datetime`.
+- No model carries a raw host payload or a `dict[str, Any]` escape hatch. No field name contains "pull request", `pr_`, a gh
+  JSON key such as `headRefName`, or `owner`/`name` of a repository.
+- Enum member values are lower-case host-neutral words. Every enum below is host-neutral: a host maps its own vocabulary onto
+  these members and does not add members. gh values appear only in the mapping table.
+- Fields marked "only on request" are `None` or an empty tuple when the operation that produced the model did not fetch them.
+  The rule for each is stated under `ChangeRequest`. A consumer that needs one calls the interface method named there.
+- Pagination, caching, serialization and write-side request types other than `InlineComment` are out of scope here.
+- Examples write the credential as `<token>`.
+
+### Repository identity
+
+`RepositoryRef` is a single frozen dataclass with one opaque `value: str`. It is not subclassable by consumers; a host
+chooses the string it stores and is the only reader of it. The reference implementation stores a string that names the
+repository; no consumer reads, splits or builds it (the three forms observed today are: explicit `owner/name` as `--repo`;
+`gh repo view --json owner,name` or the `git remote get-url origin` URL; implicit from the cwd clone).
+
+- Supported consumer operations: pass it to an interface method, compare with `==` or use it as a dict key or set member (it
+  is hashable), and display it via `Repository.display_name(repo)` (Interfaces; open decision 1 resolved: aligned with the
+  existing Interfaces section, display is a method, not an attribute consumers read).
+- Creation is host-defined: consumers receive a ref from `Repository.current()` or `Repository.resolve(identity)` (Interfaces,
+  "Repository resolution"). How each of the three identity forms is turned into a ref is the Session and Repository
+  sections' business, not this one.
+- There is no `Repository` model: the default branch is `Repository.default_branch(repo)` (open decision 3 resolved: aligned
+  with Interfaces), so `defaultBranchRef` does not map to a field.
+
+### Models
+
+```python
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+
+# Anchor (path, line, side) is defined by the Declarations section and imported here.
+
+
+class ChangeRequestState(Enum):
+    OPEN = "open"
+    CLOSED = "closed"
+    MERGED = "merged"
+
+
+class MergeableState(Enum):
+    MERGEABLE = "mergeable"
+    CONFLICTING = "conflicting"
+    UNKNOWN = "unknown"
+
+
+class ReviewDecision(Enum):
+    APPROVED = "approved"
+    CHANGES_REQUESTED = "changes_requested"
+    REVIEW_REQUIRED = "review_required"
+
+
+class ReviewState(Enum):
+    APPROVED = "approved"
+    CHANGES_REQUESTED = "changes_requested"
+    COMMENTED = "commented"
+    DISMISSED = "dismissed"
+    PENDING = "pending"
+
+
+class CheckStatus(Enum):
+    PASS = "pass"
+    FAIL = "fail"
+    PENDING = "pending"
+    SKIPPING = "skipping"
+    CANCEL = "cancel"
+
+
+class WorkItemState(Enum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+@dataclass(frozen=True)
+class RepositoryRef:
+    """Opaque, host-defined repository identity. Consumers pass it through, compare it and hash it; only the host reads value."""
+
+    value: str
+
+
+@dataclass(frozen=True)
+class Credential:
+    """Resolved host credential. The token is never shown by repr; examples write it as <token>."""
+
+    token: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class User:
+    login: str
+    display_name: str | None = None
+    is_bot: bool = False
+
+
+@dataclass(frozen=True)
+class CommitInfo:
+    revision: str
+    message: str | None
+    authors: tuple[User, ...]
+    committed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class Comment:
+    id: str
+    author: User | None
+    body: str
+    created_at: datetime
+    url: str | None
+    is_hidden: bool = False
+    diff_hunk: str | None = None
+
+
+@dataclass(frozen=True)
+class ReviewThread:
+    id: str
+    is_resolved: bool
+    anchor: Anchor | None
+    comments: tuple[Comment, ...]
+
+
+@dataclass(frozen=True)
+class InlineComment:
+    body: str
+    anchor: Anchor
+
+
+@dataclass(frozen=True)
+class Review:
+    id: str
+    author: User | None
+    state: ReviewState
+    body: str
+    submitted_at: datetime | None
+    revision: str | None
+    comments: tuple[InlineComment, ...]
+
+
+@dataclass(frozen=True)
+class ReviewPostResult:
+    fell_back: bool
+    review: Review | None
+    comment: Comment | None
+
+
+@dataclass(frozen=True)
+class WorkItemRef:
+    repository: RepositoryRef
+    number: int
+
+
+@dataclass(frozen=True)
+class WorkItem:
+    repository: RepositoryRef
+    number: int
+    title: str
+    body: str
+    labels: tuple[str, ...]
+    assignees: tuple[User, ...]
+    created_at: datetime
+    state: WorkItemState
+
+
+@dataclass(frozen=True)
+class ChangeRequest:
+    repository: RepositoryRef
+    number: int
+    title: str
+    body: str
+    url: str
+    state: ChangeRequestState
+    is_draft: bool
+    author: User | None
+    head_reference: str
+    head_revision: str
+    base_reference: str
+    is_cross_repository: bool
+    created_at: datetime
+    mergeable: MergeableState | None = None
+    auto_merge_enabled: bool = False
+    review_decision: ReviewDecision | None = None
+    requested_reviewers: tuple[User, ...] = ()
+    additions: int | None = None
+    deletions: int | None = None
+    commits: tuple[CommitInfo, ...] = ()
+    linked_work_items: tuple[WorkItemRef, ...] = ()
+
+
+@dataclass(frozen=True)
+class Check:
+    name: str
+    status: CheckStatus
+    details_url: str | None
+    workflow_name: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    job_id: str | None
+
+
+@dataclass(frozen=True)
+class Workflow:
+    id: str
+    name: str
+
+
+@dataclass(frozen=True)
+class Job:
+    id: str
+    failed_step: str | None
+```
+
+`Anchor` (path, line, side) and its host-declared rules are owned by the Declarations section; this section only uses the
+name, so the fence does not import it.
+
+Notes on the fields:
+
+- `ChangeRequest`, only on request. Every operation of ChangeRequests (Interfaces) fills identity, title, body, url, state,
+  draft flag, author, head and base reference, head revision, cross-repository flag and creation time. `mergeable`,
+  `auto_merge_enabled`, `review_decision`, `requested_reviewers`, `additions` and `deletions` are filled by `get` only and are
+  `None`, `False` or empty from `list`, `find_by_branch` and `find_by_commit`. `commits` is always empty on a
+  `ChangeRequest`; the consumer calls `ChangeRequests.commits()`. `linked_work_items` is always empty; the consumer calls
+  `WorkItems.linked_work_items()`. These two fields therefore exist only so that a host with a cheap combined read may fill
+  them; the Interfaces section may state that none does, or the fields may be removed there (change needed in Interfaces,
+  reported as an open decision below).
+- `ChangeRequest.mergeable` and `ReviewDecision` are `None` when the host has no such concept or did not compute it.
+- `User.is_bot` exists because two consumers distinguish bot authors today (`auto_approve_github.py`, `scripts/pr-comments.py`).
+- `CommitInfo.authors` is a tuple (not the single `author` of the first draft) because the commit-clock gate counts commits
+  whose author list includes the change request author (`auto_approve_github.py`).
+- `Comment.is_hidden` is the "minimized" state read by `address_comments.py` and `common.py`. `Comment.diff_hunk` is the code
+  context printed by `scripts/pr-comments.py`; it is `None` for change-request-level comments.
+- `Review.comments` is filled when a review is the input or result of `Discussion.post_review`, and empty from
+  `ChangeRequests.reviews()`.
+- `Check.job_id` is the opaque id `Checks.get_job` accepts. Today `ci_fix.py` extracts it from the check link with a regex;
+  that URL parsing moves into the host.
+- `WorkflowRun` is omitted. The audit found no consumer of workflow runs: `ci_fix.py` reads a log for a check (`failed_log`) and
+  a job (`get_job`), `ci_checks.py` only asks whether the repository has workflows (`list_workflows`), and no row lists or
+  reads runs by id. `Workflow` carries only what `list_workflows` returns (open decision 2 resolved).
+- Work item sources other than the gh issue tracker are not in the inventory and are not modeled here (Inventory, "Not
+  inventoried").
+
+### Mapping table: gh field to model field
+
+Columns: gh field, where used, model, model field, notes. Sources are `pr`/`issue`/`repo`/`search` `--json` fields, then the
+REST and GraphQL fields the inventory rows read. Paths are under `src/dotharness/`; `runners/` is `pr_review/runners/`.
+
+Change request (`--json` on `pr view`, `pr list`, `search prs`):
+
+| gh field | Where used | Model | Model field | Notes |
+| --- | --- | --- | --- | --- |
+| `number` | `runners/common.py`, `runners/ci_fix.py`, `runners/ci_checks.py`, `sisyphus/cli.py`, `sisyphus/pick.py`, `scripts/pr-comments.py` | `ChangeRequest` | `number` | |
+| `title` | `runners/common.py` `get_pr_description`, `scripts/pr-comments.py` | `ChangeRequest` | `title` | the "## PR Description" formatting is consumer text, not a model field |
+| `body` | `runners/common.py`, `sisyphus/pick.py` `open_pr_bodies` | `ChangeRequest` | `body` | `null` becomes `""` |
+| `url` | `sisyphus/cli.py`, `runners/review_requested.py`, `scripts/pr-comments.py` | `ChangeRequest` | `url` | |
+| `state` | `runners/common.py`, `runners/auto_approve_github.py`, `sisyphus/cli.py`, `sisyphus/cleanup.py` | `ChangeRequest` | `state` | `OPEN`/`CLOSED`/`MERGED` to `ChangeRequestState` members |
+| `isDraft` | `runners/common.py`, `runners/auto_approve_github.py`, `runners/address_comments.py` | `ChangeRequest` | `is_draft` | |
+| `author` | `runners/common.py`, `runners/ci_fix.py`, `runners/self_review.py`, `runners/review_requested.py` | `ChangeRequest` | `author` | `{login, ...}` to `User`; absent author (deleted account) is `None` |
+| `headRefName` | `runners/common.py`, `runners/ci_fix.py`, `scripts/pr-comments.py` | `ChangeRequest` | `head_reference` | |
+| `headRefOid` | `runners/auto_approve_github.py`, `runners/common.py`, `sisyphus/cli.py` | `ChangeRequest` | `head_revision` | |
+| `baseRefName` | `runners/common.py`, `runners/ci_checks.py`, `runners/auto_approve_github.py` | `ChangeRequest` | `base_reference` | |
+| `isCrossRepository` | `runners/ci_fix.py`, `runners/auto_approve.py` | `ChangeRequest` | `is_cross_repository` | |
+| `mergeable` | `runners/auto_approve_github.py` `_read_pr_state` | `ChangeRequest` | `mergeable` | `MERGEABLE`/`CONFLICTING`/`UNKNOWN` to `MergeableState`; only from `get` |
+| `autoMergeRequest` | `runners/auto_approve_github.py` `_read_pr_state` | `ChangeRequest` | `auto_merge_enabled` | non-null becomes `True`; the request object itself is dropped |
+| `reviewDecision` | `scripts/pr-comments.py` | `ChangeRequest` | `review_decision` | `APPROVED`/`CHANGES_REQUESTED`/`REVIEW_REQUIRED` to `ReviewDecision`; `""` becomes `None` |
+| `reviewRequests` | `runners/common.py` `get_requested_reviewers`, `scripts/pr-comments.py` | `ChangeRequest` | `requested_reviewers` | entries with a `login` become `User`; team entries without a login are dropped as today |
+| `reviews` | `scripts/pr-comments.py` | `Review` | (list returned by `ChangeRequests.reviews()`) | not a `ChangeRequest` field; element fields are in the REST rows below |
+| `additions` | `runners/merge.py` `_read_changed_lines` | `ChangeRequest` | `additions` | only from `get` |
+| `deletions` | `runners/merge.py` `_read_changed_lines` | `ChangeRequest` | `deletions` | only from `get` |
+| `commits` | `runners/auto_approve_github.py` `_fetch_pr_commits` | `CommitInfo` | (list returned by `ChangeRequests.commits()`) | element fields below; `ChangeRequest.commits` stays empty |
+| `commits[].authors` | same | `CommitInfo` | `authors` | each `{login}` to `User` |
+| `commits[].committedDate` | same | `CommitInfo` | `committed_at` | ISO text to aware `datetime`; unparsable is `None` |
+| `commits[].oid` | same (implied by the list shape) | `CommitInfo` | `revision` | |
+| `createdAt` | `runners/self_review.py`, `runners/review_requested.py`, `runners/common.py` | `ChangeRequest` | `created_at` | ISO text to aware `datetime` |
+| `closingIssuesReferences` | `runners/self_review.py`, `runners/review_requested.py`, `runners/common.py` | `ChangeRequest` | `linked_work_items` | each reference to `WorkItemRef`; filled only if a host does it cheaply, else `WorkItems.linked_work_items()` |
+
+Work item (`issue view`, `issue list`):
+
+| gh field | Where used | Model | Model field | Notes |
+| --- | --- | --- | --- | --- |
+| `number` | `runners/common.py` `_fetch_issue`, `sisyphus/pick.py` | `WorkItem` | `number` | |
+| `title` | `runners/common.py`, `sisyphus/pick.py` | `WorkItem` | `title` | |
+| `body` | `runners/common.py` `_fetch_issue` | `WorkItem` | `body` | |
+| `createdAt` | `sisyphus/pick.py` `list_candidates` | `WorkItem` | `created_at` | text to aware `datetime` |
+| `assignees` | `sisyphus/pick.py` `list_candidates` | `WorkItem` | `assignees` | `{login}` to `User`; the consumer's filter by login stays a `list_open` parameter |
+| `labels` | `sisyphus/pick.py` `list_candidates` | `WorkItem` | `labels` | `{name}` to `str` |
+| `closedByPullRequestsReferences` | `sisyphus/pick.py` `GhPullRequestLookup.linked_prs` | (none) | dropped | first step of `WorkItems.closing_change_requests`; the host resolves each reference and returns full `ChangeRequest` models (`number`, `state` of the per-reference `pr view`) |
+
+Check run (`_CHECK_FIELDS` in `runners/ci_checks.py`; `pr checks --json`):
+
+| gh field | Where used | Model | Model field | Notes |
+| --- | --- | --- | --- | --- |
+| `name` | `runners/ci_checks.py` `_read_buckets`, `_read_root_required_names` | `Check` | `name` | |
+| `bucket` | `runners/ci_checks.py` `_read_buckets` | `Check` | `status` | `pass`/`fail`/`pending`/`skipping`/`cancel` to `CheckStatus` members of the same name |
+| `link` | `runners/ci_checks.py`, `runners/ci_fix.py` | `Check` | `details_url` | the job id the `/job/<id>` regex extracts from it is `Check.job_id`; consumers no longer parse the URL |
+| `workflow` | `runners/ci_checks.py`, `runners/ci_fix.py` | `Check` | `workflow_name` | |
+| `startedAt` | `runners/ci_checks.py` | `Check` | `started_at` | text to aware `datetime` |
+| `completedAt` | `runners/ci_checks.py` | `Check` | `completed_at` | text to aware `datetime` |
+
+Repository (`repo view --json`):
+
+| gh field | Where used | Model | Model field | Notes |
+| --- | --- | --- | --- | --- |
+| `owner` | `vibe_heal/review/github.py` `_get_owner_repo` | `RepositoryRef` | `value` | host-internal; consumers never see owner or name |
+| `name` | `vibe_heal/review/github.py` `_get_owner_repo` | `RepositoryRef` | `value` | host-internal, together with `owner` |
+| `nameWithOwner` | `scripts/pr-comments.py` | `RepositoryRef` | `value` | host-internal; never shown to consumers as a split string |
+| `defaultBranchRef` | `runners/ci_checks.py`, `sisyphus/cli.py` | (none) | dropped | `Repository.default_branch(repo)` returns the branch name `str`; no repository model |
+
+REST and GraphQL fields read by inventory rows (open decision 4 resolved: all rows needed are listed, rows added because the
+`--json` list alone misses them):
+
+| gh field | Where used | Model | Model field | Notes |
+| --- | --- | --- | --- | --- |
+| reviews `id` | `runners/auto_approve_github.py`, `scripts/pr-comments.py` | `Review` | `id` | numeric id to `str` |
+| reviews `user.login` / `author.login` | `runners/review_requested.py`, `runners/auto_approve_github.py`, `scripts/pr-comments.py` | `Review` | `author` | to `User` |
+| reviews `user.type` | `runners/auto_approve_github.py` | `User` | `is_bot` | `Bot` or login ending `[bot]` becomes `True` |
+| reviews `state` | `runners/review_requested.py`, `runners/auto_approve_github.py`, `scripts/pr-comments.py` | `Review` | `state` | `APPROVED`/`CHANGES_REQUESTED`/`COMMENTED`/`DISMISSED`/`PENDING` to `ReviewState` |
+| reviews `body` | `scripts/pr-comments.py` | `Review` | `body` | |
+| reviews `submitted_at` | `runners/auto_approve_github.py` | `Review` | `submitted_at` | `None` while pending |
+| reviews `commit_id` | `runners/auto_approve_github.py` (POST body also carries it) | `Review` | `revision` | the POST `commit_id` is `approve(head_revision=...)` |
+| reviews `html_url` | `scripts/pr-comments.py` | `Comment` | `url` | review bodies are read as `Review`; `url` is dropped for reviews (no consumer outside the script's text output) |
+| issue comments `id` | `scripts/pr-comments.py`, `runners/common.py` | `Comment` | `id` | numeric id to `str` |
+| issue comments `user.login`, `user.type` | `runners/common.py`, `scripts/pr-comments.py` | `Comment` | `author` | `login` to `User.login`, `type == "Bot"` to `User.is_bot` |
+| issue comments `body` | `runners/common.py`, `scripts/pr-comments.py` | `Comment` | `body` | |
+| issue comments `created_at` | `runners/common.py` | `Comment` | `created_at` | text to aware `datetime` |
+| issue comments `html_url` | `scripts/pr-comments.py` | `Comment` | `url` | |
+| inline comments `id` | `scripts/pr-comments.py` | `Comment` | `id` | |
+| inline comments `user.login`, `user.type` | `scripts/pr-comments.py` | `Comment` | `author` | as above |
+| inline comments `path`, `line` / `original_line`, `side` | `scripts/pr-comments.py` | `Anchor` | (Declarations section) | `ReviewThread.anchor`; `line` falls back to `original_line` in the host |
+| inline comments `body`, `html_url` | `scripts/pr-comments.py` | `Comment` | `body`, `url` | |
+| inline comments `diff_hunk` | `scripts/pr-comments.py` | `Comment` | `diff_hunk` | |
+| inline comments `in_reply_to_id` | `scripts/pr-comments.py` | `ReviewThread` | `comments` | dropped as a field: reply linkage is expressed by thread membership and order |
+| GraphQL `reviewThreads.nodes.id` | `runners/common.py` | `ReviewThread` | `id` | the id `Discussion.reply` takes |
+| GraphQL `reviewThreads.nodes.isResolved` | `runners/common.py`, `runners/address_comments.py` | `ReviewThread` | `is_resolved` | |
+| GraphQL `comments.nodes.id` | `runners/common.py` | `Comment` | `id` | node id; one `id` per comment |
+| GraphQL `comments.nodes.databaseId` | `runners/common.py`, `runners/address_comments.py` | (none) | dropped | second spelling of the comment id; the host keeps the mapping between its two id forms |
+| GraphQL `comments.nodes.isMinimized` | `runners/common.py`, `runners/address_comments.py` | `Comment` | `is_hidden` | |
+| GraphQL `pageInfo.endCursor`, `pageInfo.hasNextPage`, REST `per_page`, `page` | `runners/common.py`, `runners/auto_approve_github.py` | (none) | dropped | pagination is a host detail (Interfaces, rule 3) |
+| GraphQL `files.nodes.path` | `runners/auto_approve_github.py` | (none) | dropped | key of the `Mapping[str, bool]` returned by `viewed_files` |
+| GraphQL `files.nodes.viewerViewedState` | `runners/auto_approve_github.py` | (none) | dropped | value of the mapping; `VIEWED` becomes `True` |
+| GraphQL `files.nodes.additions`, `deletions`, `changeType` | `runners/auto_approve_github.py` | (none) | dropped | requested by the query but unused; line counts come from git numstat in `auto_approve_size.py` |
+| GraphQL `pullRequest.id` | `runners/auto_approve_github.py` | (none) | dropped | host-internal node id used by `markFileAsViewed`; the host looks it up |
+| jobs `steps[].name`, `steps[].conclusion` | `runners/ci_fix.py` `_failed_step_from_api` | `Job` | `failed_step` | name of the first step whose conclusion is `failure` |
+| jobs id (from the check link) | `runners/ci_fix.py` | `Job` | `id` | |
+| workflows `workflows[]` | `runners/ci_checks.py` `repo_has_workflows` | `Workflow` | `id`, `name` | |
+| `api user` `login` | `runners/common.py` `get_current_user`, `scripts/pr-comments.py` | (none) | dropped | `Session.current_user()` returns the login as `str` |
+| commit pulls (`commits/SHA/pulls`) `number`, `state`, `head`/`base` | `runners/regret_review.py` | `ChangeRequest` | `number`, `state`, ... | elements of `find_by_commit` |
+| `search prs --json number` | `runners/common.py` `_list_review_requested_prs` | `ChangeRequest` | `number` | stub only; the host returns full models from `list(requested_reviewer=...)` |
+
+### Coverage check
+
+The set of gh `--json` field names in the first table group must equal the set found by this grep (run from the repo root;
+anything it finds that is not in a table is a missing row, and a table row absent from the grep is a stale row):
+
+```
+grep -rnE '"--json"|_FIELDS|--json' src/dotharness --include=*.py | grep -v knowledge
+```
+
+The field lists in those hits are: `_PR_FIELDS` (ci_fix), `_CHECK_FIELDS` (ci_checks), and the quoted comma-separated lists at
+each call. GraphQL query bodies are read from `GRAPHQL_QUERY`, `GRAPHQL_QUERY_REVIEW_THREAD_STATE` and `_FILES_QUERY`.
+
+### Open decisions (Models)
+
+- Open decision 1 (display label): default accepted per human instruction and aligned with the existing Interfaces section:
+  `Repository.display_name(repo)`.
+- Open decision 2 (`WorkflowRun`): omitted; no consumer in the audit. Recorded above.
+- Open decision 3 (default branch): `Repository.default_branch`; aligned with Interfaces.
+- Open decision 4 (comment and thread fields): the REST and GraphQL rows are added to the table.
+- Models-OD-1: `ChangeRequest.commits` and `ChangeRequest.linked_work_items` are always empty given the current Interfaces
+  methods (`commits()`, `linked_work_items()`). Default: keep the fields as the leaf requires and let the Interfaces section
+  state that no host fills them from `get`. Alternative: remove the fields there. Default accepted per human instruction.
+- Names differing from the leaf's draft (`Commit` to `CommitInfo`, `Thread` to `ReviewThread`, `CheckRun` to `Check`) follow
+  the Interfaces section, not a change to it. No change is needed in Interfaces for them.
