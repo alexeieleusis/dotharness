@@ -101,9 +101,10 @@ def _resolve(selection: HostSelection, name: str) -> object:
 
 def create_code_host(selection: HostSelection) -> CodeHost:
     """Build the ``CodeHost`` for ``selection``. Synchronous; runs no command and does no network I/O."""
-    if selection.name is None and selection.options:
+    configured = (selection.name or "").strip() or None  # blank (e.g. ``DOTHARNESS_CODE_HOST=``) means unset
+    if configured is None and selection.options:
         raise _fail(selection, f"options are set but {selection.setting} has no host name") from None
-    name = REFERENCE_NAME if selection.name is None else selection.name
+    name = REFERENCE_NAME if configured is None else configured
     registration = _resolve(selection, name)
     if not isinstance(registration, HostRegistration):
         raise _fail(selection, "object is not a HostRegistration") from None

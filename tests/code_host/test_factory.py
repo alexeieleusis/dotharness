@@ -143,6 +143,12 @@ def test_name_none_selects_reference(monkeypatch: pytest.MonkeyPatch) -> None:
     assert [("opts", {}), ("factory", CALLS[1][1], None)] == CALLS
 
 
+@pytest.mark.parametrize("blank", ["", "  "])
+def test_blank_name_selects_reference(monkeypatch: pytest.MonkeyPatch, blank: str) -> None:
+    stub_reference(monkeypatch)
+    assert create_code_host(sel(blank)) is SENTINEL
+
+
 def fail(selection: HostSelection) -> ConfigurationError:
     with pytest.raises(ConfigurationError) as info:
         create_code_host(selection)
