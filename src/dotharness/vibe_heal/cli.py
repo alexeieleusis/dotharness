@@ -24,7 +24,7 @@ from dotharness.vibe_heal.cleanup_pr.orchestrator import (
     CleanupPrResult,
     FileCleanupPrResult,
 )
-from dotharness.vibe_heal.config import ConfigurationError, VibeHealConfig
+from dotharness.vibe_heal.config import ConfigurationError, InvalidConfigurationError, VibeHealConfig
 from dotharness.vibe_heal.converters.oxlint import convert_oxlint_to_eslint
 from dotharness.vibe_heal.deduplication.orchestrator import (
     DedupeBranchOrchestrator,
@@ -1056,20 +1056,22 @@ async def _run_review_post(
 def _start_code_host_for_post(env_file: str | None) -> CodeHost:
     """Create the code host for --post, which needs no SonarQube settings.
 
-    The code host settings come from the full configuration when it loads. Otherwise they come from the
-    environment variables alone.
+    Reads only the two code host settings: the environment variables over the env file(s), the same
+    precedence and default files as VibeHealConfig.
     """
-    try:
-        config = VibeHealConfig(env_file=env_file)
-    except Exception as e:
-        if "code host setting" in str(e):
-            raise
-        name = os.environ.get("DOTHARNESS_CODE_HOST") or None
-        options = VibeHealConfig.parse_code_host_options(os.environ.get("DOTHARNESS_CODE_HOST_OPTIONS"))
-        return create_code_host(
-            HostSelection(setting="DOTHARNESS_CODE_HOST", name=name, options=options, token_cmd=None)
-        )
-    return _start_code_host(config)
+    from dotenv import dotenv_values
+
+    if env_file is not None and not Path(env_file).exists():
+        msg = f"Environment file not found: {env_file}"
+        raise InvalidConfigurationError(msg)
+    files = [env_file] if env_file is not None else [".env", ".env.vibeheal"]  # later files win
+    values: dict[str, str | None] = {}
+    for f in files:
+        values.update(dotenv_values(f))
+    values.update(os.environ)
+    name = values.get("DOTHARNESS_CODE_HOST") or None
+    options = VibeHealConfig.parse_code_host_options(values.get("DOTHARNESS_CODE_HOST_OPTIONS"))
+    return create_code_host(HostSelection(setting="DOTHARNESS_CODE_HOST", name=name, options=options, token_cmd=None))
 
 
 def _review_post_mode(
