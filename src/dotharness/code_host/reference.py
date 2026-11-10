@@ -184,7 +184,7 @@ def _truncate_body(body: str) -> str:
     return body[: _MAX_REVIEW_BODY_CHARS - len(_TRUNCATION_NOTICE)] + _TRUNCATION_NOTICE
 
 
-def _coverage_table(file_reviews: Sequence[Any]) -> str:
+def coverage_table(file_reviews: Sequence[Any]) -> str:
     """Markdown table of coverage on changed lines. A percentage below 80 is bold."""
     header = "| File | Covered Lines | Instrumented Changed Lines | Coverage % |"
     alignment = "| :--- | ---: | ---: | ---: |"
@@ -280,7 +280,7 @@ def _build_review(report: Any) -> ReviewPreview:
         body_parts.append(_build_overflow_section(overflow))
     files_with_coverage = [fr for fr in report.files if fr.coverage_pct is not None]
     if files_with_coverage:
-        body_parts.append("**Coverage on changed lines:**\n\n" + _coverage_table(files_with_coverage))
+        body_parts.append("**Coverage on changed lines:**\n\n" + coverage_table(files_with_coverage))
     return ReviewPreview(
         body=_truncate_body("\n\n".join(body_parts)),
         inline_comments=[InlineComment(body, Anchor(path, line, "RIGHT")) for path, line, body in comments],
@@ -314,7 +314,7 @@ def _build_fallback_body(report: Any) -> str:
             )
     files_with_coverage = [fr for fr in report.files if fr.coverage_pct is not None]
     if files_with_coverage:
-        lines.extend(["", "**Coverage on changed lines:**\n\n" + _coverage_table(files_with_coverage)])
+        lines.extend(["", "**Coverage on changed lines:**\n\n" + coverage_table(files_with_coverage)])
     return _truncate_body("\n".join(lines))
 
 

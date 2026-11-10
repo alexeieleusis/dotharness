@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from dotharness.code_host.reference import coverage_table
 from dotharness.vibe_heal.review.models import (
     FileReview,
     ResolvedDuplication,
@@ -161,21 +162,7 @@ def format_coverage_table(file_reviews: list[FileReview]) -> str:
     non-None ``coverage_pct``.  Coverage percentages below 80 % are rendered
     in bold to draw attention.
     """
-    if not file_reviews:
-        return ""
-    header = "| File | Covered Lines | Instrumented Changed Lines | Coverage % |"
-    alignment = "| :--- | ---: | ---: | ---: |"
-    rows = []
-    for fr in file_reviews:
-        if fr.coverage_pct is None:
-            continue
-        pct_str = f"{fr.coverage_pct:.1f}%"
-        if fr.coverage_pct < 80.0:
-            pct_str = f"**{pct_str}**"
-        rows.append(f"| {fr.file_path} | {fr.covered_lines} | {fr.instrumented_changed_lines} | {pct_str} |")
-    if not rows:
-        return ""
-    return "\n".join([header, alignment, *rows])
+    return coverage_table(file_reviews)
 
 
 def _render_file_section(fr: FileReview, base_branch: str = "main") -> list[str]:
