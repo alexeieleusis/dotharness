@@ -474,7 +474,7 @@ class CodeHostConformance:
     docs/design/code-host.md, "Behaviors asserted".
     """
 
-    async def make_target(self) -> ConformanceTarget:
+    async def make_target(self) -> ConformanceTarget:  # NOSONAR python:S7503 - subclasses await their host setup
         """Return a fresh host and its seeder for one test."""
         raise NotImplementedError
 
