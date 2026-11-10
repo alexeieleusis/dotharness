@@ -475,6 +475,7 @@ class _ChangeRequests:
         raise _unsupported(Capability.CHANGE_REQUESTS, "request_reviewer")
 
     async def approve(self, repo: RepositoryRef, number: int, *, head_revision: str) -> None:
+        """Unsupported. ``head_revision`` is kept because the ``ChangeRequests`` protocol requires it."""
         raise _unsupported(Capability.CHANGE_REQUESTS, "approve")
 
     async def viewed_files(self, repo: RepositoryRef, number: int) -> Mapping[str, bool]:
