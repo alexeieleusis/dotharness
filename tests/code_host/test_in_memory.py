@@ -65,3 +65,30 @@ class TestInMemorySpecifics:
         result = await host.discussion.post_review(await host.repository.current(), 1, body="b", inline_comments=[])
         assert result.fell_back is False
         assert fake.posts() == [PostedItem("review", "b", 0)]
+
+
+class _LeakyHost(InMemoryCodeHost):
+    def require_client(self) -> None:
+        if not self._available:
+            msg = f"client unavailable (token={self._token})"
+            raise OSError(msg)
+
+
+class _LeakyConformance(CodeHostConformance):
+    async def make_target(self) -> ConformanceTarget:
+        return _LeakyHost().target()
+
+
+class _WrongSecretConformance(CodeHostConformance):
+    async def make_target(self) -> ConformanceTarget:
+        return InMemoryCodeHost(token="other").target()  # noqa: S106
+
+
+class TestSecretCheckCanFail:
+    async def test_leaking_host_fails(self) -> None:
+        with pytest.raises(AssertionError):
+            await _LeakyConformance().test_secret_sentinel_never_leaks()
+
+    async def test_host_without_sentinel_fails(self) -> None:
+        with pytest.raises(AssertionError, match="SECRET"):
+            await _WrongSecretConformance().test_secret_sentinel_never_leaks()

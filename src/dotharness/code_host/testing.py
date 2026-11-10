@@ -131,6 +131,7 @@ class ConformanceTarget:
     host: CodeHost
     seeder: HostSeeder
     repository: RepositoryRef = field(default_factory=lambda: RepositoryRef("example/repo"))
+    secret: str = ""  # the credential the host was built with. B-SEC-1 requires it to be SECRET.
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -243,7 +244,7 @@ class InMemoryCodeHost:
         )
 
     def target(self) -> ConformanceTarget:
-        return ConformanceTarget(host=self.code_host(), seeder=self, repository=self._repository)
+        return ConformanceTarget(host=self.code_host(), seeder=self, repository=self._repository, secret=self._token)
 
 
 class _FakeSession:
@@ -678,6 +679,7 @@ class CodeHostConformance:
 
     async def test_secret_sentinel_never_leaks(self) -> None:
         """B-SEC-1: the token `<token>` is in no exception message, __cause__ chain, log record or repr."""
+        assert (await self.make_target()).secret == SECRET, "make_target must build the host with SECRET as its credential"
         handler = _LogCapture()
         root = logging.getLogger()
         previous = root.level

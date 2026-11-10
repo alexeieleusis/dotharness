@@ -6,7 +6,7 @@ import pytest
 
 from dotharness.code_host import HostSelection, create_code_host
 from dotharness.code_host.errors import CodeHostTimeoutError
-from dotharness.code_host.testing import CodeHostConformance, ConformanceTarget, PostedItem
+from dotharness.code_host.testing import SECRET, CodeHostConformance, ConformanceTarget, PostedItem
 from dotharness.subprocess_runner import RunResult
 
 
@@ -81,4 +81,4 @@ class TestReferenceHostConformance(CodeHostConformance):
     async def make_target(self) -> ConformanceTarget:
         self.stub = GhStub()  # a fresh seeder per target: the suite may build several targets in one test
         host = create_code_host(HostSelection(setting="code_host", name="reference", options={}, token_cmd=None))
-        return ConformanceTarget(host=host, seeder=self.stub)
+        return ConformanceTarget(host=host, seeder=self.stub, secret=SECRET)
