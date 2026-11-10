@@ -252,19 +252,21 @@ class _FakeSession:
     def __init__(self, host: InMemoryCodeHost) -> None:
         self._host = host
 
-    async def available(self) -> bool:
+    async def available(self) -> bool:  # NOSONAR python:S7503 - implements an async protocol
         return self._host._available
 
-    async def credential(self) -> Any:
+    async def credential(self) -> Any:  # NOSONAR python:S7503 - implements an async protocol
         raise _unsupported(Capability.SESSION, "credential")
 
-    async def current_user(self) -> str:
+    async def current_user(self) -> str:  # NOSONAR python:S7503 - implements an async protocol
         return self._host._user
 
-    async def agent_environment_names(self) -> Sequence[str]:
+    async def agent_environment_names(self) -> Sequence[str]:  # NOSONAR python:S7503 - implements an async protocol
         raise _unsupported(Capability.SESSION, "agent_environment_names")
 
-    async def agent_environment(self, base: Mapping[str, str] | None = None) -> Mapping[str, str]:
+    async def agent_environment(
+        self, base: Mapping[str, str] | None = None
+    ) -> Mapping[str, str]:  # NOSONAR python:S7503 - implements an async protocol
         raise _unsupported(Capability.SESSION, "agent_environment")
 
 
@@ -272,19 +274,19 @@ class _FakeRepository:
     def __init__(self, host: InMemoryCodeHost) -> None:
         self._host = host
 
-    async def current(self) -> RepositoryRef:
+    async def current(self) -> RepositoryRef:  # NOSONAR python:S7503 - implements an async protocol
         return self._host._repository
 
-    async def resolve(self, identity: str) -> RepositoryRef:
+    async def resolve(self, identity: str) -> RepositoryRef:  # NOSONAR python:S7503 - implements an async protocol
         if not identity:
             msg = "Repository identity is empty"
             raise ConfigurationError(msg)
         return RepositoryRef(identity)
 
-    async def default_branch(self, repo: RepositoryRef) -> str:
+    async def default_branch(self, repo: RepositoryRef) -> str:  # NOSONAR python:S7503 - implements an async protocol
         return "main"
 
-    async def display_name(self, repo: RepositoryRef) -> str:
+    async def display_name(self, repo: RepositoryRef) -> str:  # NOSONAR python:S7503 - implements an async protocol
         return repo.value
 
 
