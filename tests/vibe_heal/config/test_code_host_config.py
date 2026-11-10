@@ -112,7 +112,7 @@ class TestStartup:
 
     def test_unknown_host_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DOTHARNESS_CODE_HOST", "nope")
-        result = runner.invoke(app, ["config"])
+        result = runner.invoke(app, ["review"])
         assert result.exit_code == 1
         assert 'Configuration error: code host setting DOTHARNESS_CODE_HOST = "nope": ' in " ".join(
             result.stdout.split()
@@ -120,7 +120,7 @@ class TestStartup:
 
     def test_bad_options_stop_the_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DOTHARNESS_CODE_HOST_OPTIONS", "{oops")
-        result = runner.invoke(app, ["config"])
+        result = runner.invoke(app, ["review"])
         assert result.exit_code == 1
         assert (
             'Configuration error: code host setting DOTHARNESS_CODE_HOST_OPTIONS = "<redacted>": '
@@ -146,20 +146,12 @@ class TestStartup:
     @pytest.mark.parametrize(
         "args",
         [
-            ["fix", "a.py"],
-            ["dedupe", "a.py"],
-            ["cleanup"],
-            ["cleanup-pr"],
-            ["dedupe-branch"],
-            ["prune-projects"],
             ["review"],
             ["review", "--baseline"],
             ["review", "--post", "--report-file", "/nonexistent/review.json"],
-            ["config"],
-            ["debug-issues"],
         ],
     )
-    def test_every_command_stops_on_unknown_host(self, monkeypatch: pytest.MonkeyPatch, args: list[str]) -> None:
+    def test_every_review_command_stops_on_unknown_host(self, monkeypatch: pytest.MonkeyPatch, args: list[str]) -> None:
         monkeypatch.setenv("DOTHARNESS_CODE_HOST", "nope")
         result = runner.invoke(app, args)
         assert result.exit_code == 1

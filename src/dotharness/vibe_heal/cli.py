@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import os
 import sys
 from importlib.metadata import version as _package_version
 from pathlib import Path
@@ -24,7 +23,7 @@ from dotharness.vibe_heal.cleanup_pr.orchestrator import (
     CleanupPrResult,
     FileCleanupPrResult,
 )
-from dotharness.vibe_heal.config import ConfigurationError, InvalidConfigurationError, VibeHealConfig
+from dotharness.vibe_heal.config import CodeHostSettings, ConfigurationError, VibeHealConfig
 from dotharness.vibe_heal.converters.oxlint import convert_oxlint_to_eslint
 from dotharness.vibe_heal.deduplication.orchestrator import (
     DedupeBranchOrchestrator,
@@ -86,12 +85,12 @@ VerboseOption = Annotated[
 ]
 
 
-def _start_code_host(config: VibeHealConfig) -> CodeHost:
+def _start_code_host(config: CodeHostSettings) -> CodeHost:
     """Create the code host from the settings. Runs after the config load and before the first host call."""
     return create_code_host(
         HostSelection(
             setting="DOTHARNESS_CODE_HOST",
-            name=config.code_host,
+            name=config.code_host or None,
             options=config.code_host_options,
             token_cmd=None,
         )
@@ -196,7 +195,6 @@ def fix(
     try:
         # Load configuration
         config = VibeHealConfig(env_file=env_file)
-        _start_code_host(config)
 
         # Override AI tool if specified
         if ai_tool:
@@ -271,7 +269,6 @@ def dedupe(
     try:
         # Load configuration
         config = VibeHealConfig(env_file=env_file)
-        _start_code_host(config)
 
         # Override AI tool if specified
         if ai_tool:
@@ -422,7 +419,6 @@ def cleanup(
     try:
         # Load configuration
         config = VibeHealConfig(env_file=env_file)
-        _start_code_host(config)
 
         # Override AI tool if specified
         if ai_tool:
@@ -626,7 +622,6 @@ def cleanup_pr(
 
     try:
         config = VibeHealConfig(env_file=env_file)
-        _start_code_host(config)
 
         if ai_tool:
             config.ai_tool = ai_tool
@@ -754,7 +749,6 @@ def dedupe_branch(
     try:
         # Load configuration
         config = VibeHealConfig(env_file=env_file)
-        _start_code_host(config)
 
         # Override AI tool if specified
         if ai_tool:
@@ -889,7 +883,6 @@ def prune_projects(
 
     try:
         config = VibeHealConfig(env_file=env_file)
-        _start_code_host(config)
 
         asyncio.run(
             _run_prune_projects(
@@ -1054,24 +1047,8 @@ async def _run_review_post(
 
 
 def _start_code_host_for_post(env_file: str | None) -> CodeHost:
-    """Create the code host for --post, which needs no SonarQube settings.
-
-    Reads only the two code host settings: the environment variables over the env file(s), the same
-    precedence and default files as VibeHealConfig.
-    """
-    from dotenv import dotenv_values
-
-    if env_file is not None and not Path(env_file).exists():
-        msg = f"Environment file not found: {env_file}"
-        raise InvalidConfigurationError(msg)
-    files = [env_file] if env_file is not None else [".env", ".env.vibeheal"]  # later files win
-    values: dict[str, str | None] = {}
-    for f in files:
-        values.update(dotenv_values(f))
-    values.update(os.environ)
-    name = values.get("DOTHARNESS_CODE_HOST") or None
-    options = VibeHealConfig.parse_code_host_options(values.get("DOTHARNESS_CODE_HOST_OPTIONS"))
-    return create_code_host(HostSelection(setting="DOTHARNESS_CODE_HOST", name=name, options=options, token_cmd=None))
+    """Create the code host for --post, which needs no SonarQube settings."""
+    return _start_code_host(CodeHostSettings(env_file=env_file))
 
 
 def _review_post_mode(
@@ -1305,7 +1282,6 @@ def config(
     """Show current configuration."""
     try:
         cfg = VibeHealConfig(env_file=env_file)
-        _start_code_host(cfg)
         console.print("[bold]Current Configuration:[/bold]\n")
         console.print(f"  SonarQube URL: {cfg.sonarqube_url}")
         console.print(f"  Project Key: {cfg.sonarqube_project_key}")
@@ -1348,7 +1324,6 @@ def debug_issues(
 
     try:
         config = VibeHealConfig(env_file=env_file)
-        _start_code_host(config)
 
         async def _debug() -> None:
             async with SonarQubeClient(config) as client:

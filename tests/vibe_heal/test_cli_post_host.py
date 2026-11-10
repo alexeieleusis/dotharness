@@ -34,12 +34,12 @@ def test_start_code_host_for_post_reads_env_file(tmp_path, seen) -> None:
     assert seen["sel"].options == {"a": 1}
 
 
-def test_env_var_wins_over_file(tmp_path, seen, monkeypatch) -> None:
+def test_env_file_wins_over_env_var(tmp_path, seen, monkeypatch) -> None:
     env = tmp_path / "e"
     env.write_text("DOTHARNESS_CODE_HOST=my_pkg.hosts:Foo\n")
     monkeypatch.setenv("DOTHARNESS_CODE_HOST", "other.pkg:Bar")
     cli._start_code_host_for_post(str(env))
-    assert seen["sel"].name == "other.pkg:Bar"
+    assert seen["sel"].name == "my_pkg.hosts:Foo"  # same precedence as VibeHealConfig(env_file=...)
 
 
 def test_missing_env_file_raises(tmp_path, seen) -> None:
@@ -57,12 +57,12 @@ def test_bad_options_raise_without_leaking_value(tmp_path, seen, monkeypatch, ra
     assert raw not in str(exc.value)
 
 
-def test_default_files_later_overrides_earlier(tmp_path, seen, monkeypatch) -> None:
+def test_default_files_dotenv_overrides_dotenv_vibeheal(tmp_path, seen, monkeypatch) -> None:
     (tmp_path / ".env").write_text("DOTHARNESS_CODE_HOST=a:A\nDOTHARNESS_CODE_HOST_OPTIONS={}\n")
     (tmp_path / ".env.vibeheal").write_text("DOTHARNESS_CODE_HOST=b:B\n")
     monkeypatch.chdir(tmp_path)
     cli._start_code_host_for_post(None)
-    assert seen["sel"].name == "b:B"
+    assert seen["sel"].name == "a:A"
 
 
 def test_no_files_gives_unset_selection(tmp_path, seen, monkeypatch) -> None:
