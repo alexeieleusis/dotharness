@@ -252,7 +252,8 @@ def test_no_vibe_heal_import() -> None:
 
 def test_factory_failure_is_configuration_error() -> None:
     def boom(options: Any, token_cmd: Any) -> Any:
-        raise ValueError(f"bad token cmd {token_cmd}")
+        msg = f"bad token cmd {token_cmd}"
+        raise ValueError(msg)
 
     holder = types.SimpleNamespace(REGISTRATION=HostRegistration(CODE_HOST_INTERFACE_VERSION, Opts, boom))
     sys.modules["_boom_host"] = holder  # type: ignore[assignment]

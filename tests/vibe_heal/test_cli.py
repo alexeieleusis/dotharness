@@ -1056,7 +1056,7 @@ class TestReviewCommand:
         result = runner.invoke(app, ["review", "--post", "--pr", "8", "--report-file", "/nonexistent/review.json"])
 
         assert result.exit_code == 1
-        assert "gh CLI is not installed or not in PATH." in result.stdout
+        assert "The in-memory code host client is not available" in result.stdout
 
     @patch("dotharness.vibe_heal.review.reporter.load_report_from_path")
     def test_review_report_not_found(

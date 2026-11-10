@@ -82,7 +82,9 @@ class TestReferenceHostConformance(CodeHostConformance):
 
     async def make_target(self) -> ConformanceTarget:
         self.stub = GhStub()  # a fresh seeder per target: the suite may build several targets in one test
-        host = create_code_host(HostSelection(setting="code_host", name="reference", options={}, token_cmd=["echo", SECRET]))
+        host = create_code_host(
+            HostSelection(setting="code_host", name="reference", options={}, token_cmd=["echo", SECRET])
+        )
         return ConformanceTarget(host=host, seeder=self.stub, secret=SECRET)
 
     async def test_token_cmd_is_never_used(self) -> None:

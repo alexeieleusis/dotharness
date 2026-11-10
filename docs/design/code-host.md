@@ -1060,7 +1060,9 @@ class ReviewPostResult:
     fell_back: bool
     review: Review | None
     comment: Comment | None
-    reason: str | None = None  # set by the host only when fell_back is true: the rejection text, with secrets redacted by the host
+    reason: str | None = (
+        None  # set by the host only when fell_back is true: the rejection text, with secrets redacted by the host
+    )
 
 
 @dataclass(frozen=True)
