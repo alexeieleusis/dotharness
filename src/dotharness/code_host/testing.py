@@ -39,7 +39,6 @@ from dotharness.code_host.reference import DECLARATION
 
 SECRET = "<token>"  # noqa: S105  Sentinel: it must never appear in an error, log or repr.
 NO_CHANGE_REQUEST_TEXT = "No open pull request found for the current branch"
-_MAX_REVIEW_BODY_CHARS = DECLARATION.limits.max_review_body_chars
 _TRUNCATION_NOTICE = "\n\n_...review body truncated to fit the host size limit._"
 _BASE_DATE = "2026-01-01T00:00:00Z"
 
@@ -328,7 +327,7 @@ class _FakeChangeRequests:
         return _unsupported_op
 
 
-def _build_preview(report: Any, max_inline: int) -> ReviewPreview:
+def _build_preview(report: Any, max_inline: int, max_body: int) -> ReviewPreview:
     comments: list[InlineComment] = []
     nearby: list[str] = []
     for file_review in report.files:
@@ -346,16 +345,16 @@ def _build_preview(report: Any, max_inline: int) -> ReviewPreview:
     if nearby:
         parts.append("**Issues near changed lines:**\n" + "\n".join(nearby))
     body = "\n\n".join(parts)
-    if len(body) > _MAX_REVIEW_BODY_CHARS:
-        body = body[: _MAX_REVIEW_BODY_CHARS - len(_TRUNCATION_NOTICE)] + _TRUNCATION_NOTICE
+    if len(body) > max_body:
+        body = body[: max_body - len(_TRUNCATION_NOTICE)] + _TRUNCATION_NOTICE
     return ReviewPreview(body=body, inline_comments=shown)
 
 
-def _fallback_text(report: Any) -> str:
+def _fallback_text(report: Any, max_body: int) -> str:
     lines = [f"- **{i.rule}** ({f.file_path}:{i.line}) {i.message}" for f in report.files for i in f.issues]
     text = "Fallback review\n" + "\n".join(lines)
-    if len(text) > _MAX_REVIEW_BODY_CHARS:
-        text = text[: _MAX_REVIEW_BODY_CHARS - len(_TRUNCATION_NOTICE)] + _TRUNCATION_NOTICE
+    if len(text) > max_body:
+        text = text[: max_body - len(_TRUNCATION_NOTICE)] + _TRUNCATION_NOTICE
     return text
 
 
@@ -364,7 +363,8 @@ class _FakeDiscussion:
         self._host = host
 
     async def preview_review(self, report: object) -> ReviewPreview:
-        return _build_preview(report, self._host.declaration.limits.max_inline_comments_per_review)
+        limits = self._host.declaration.limits
+        return _build_preview(report, limits.max_inline_comments_per_review, limits.max_review_body_chars)
 
     def _attempt(self, *, inline: bool) -> str | None:
         """Count one post attempt. Raise an injected error. Return a rejection reason, or None to accept."""
@@ -394,7 +394,9 @@ class _FakeDiscussion:
         if reason is None:
             self._host._posts.append(PostedItem("review", body, len(inline_comments)))
             return ReviewPostResult(fell_back=False, review=None, comment=None)
-        fallback = body if report is None else _fallback_text(report)
+        fallback = (
+            body if report is None else _fallback_text(report, self._host.declaration.limits.max_review_body_chars)
+        )
         fallback_reason = self._attempt(inline=False)
         if fallback_reason is not None:
             msg = f"Review posting failed: {fallback_reason}"
@@ -679,7 +681,9 @@ class CodeHostConformance:
 
     async def test_secret_sentinel_never_leaks(self) -> None:
         """B-SEC-1: the token `<token>` is in no exception message, __cause__ chain, log record or repr."""
-        assert (await self.make_target()).secret == SECRET, "make_target must build the host with SECRET as its credential"
+        assert (await self.make_target()).secret == SECRET, (
+            "make_target must build the host with SECRET as its credential"
+        )
         handler = _LogCapture()
         root = logging.getLogger()
         previous = root.level
