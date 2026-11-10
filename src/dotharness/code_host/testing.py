@@ -159,7 +159,7 @@ class _AbsentCapability:
             raise AttributeError(name)
         capability = self._capability
 
-        async def _unsupported(*_args: object, **_kwargs: object) -> Any:
+        async def _unsupported(*_args: object, **_kwargs: object) -> Any:  # NOSONAR python:S7503 - callers await it
             msg = f"{capability.value}.{name} is not supported by the in-memory code host"
             raise UnsupportedCapabilityError(msg, capability=capability.value)
 
@@ -323,7 +323,7 @@ class _FakeChangeRequests:
         if name.startswith("_"):
             raise AttributeError(name)
 
-        async def _unsupported_op(*_args: object, **_kwargs: object) -> Any:
+        async def _unsupported_op(*_args: object, **_kwargs: object) -> Any:  # NOSONAR python:S7503 - callers await it
             raise _unsupported(Capability.CHANGE_REQUESTS, name)
 
         return _unsupported_op
@@ -410,7 +410,7 @@ class _FakeDiscussion:
         if name.startswith("_"):
             raise AttributeError(name)
 
-        async def _unsupported_op(*_args: object, **_kwargs: object) -> Any:
+        async def _unsupported_op(*_args: object, **_kwargs: object) -> Any:  # NOSONAR python:S7503 - callers await it
             raise _unsupported(Capability.DISCUSSION, name)
 
         return _unsupported_op
