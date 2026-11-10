@@ -264,9 +264,9 @@ class _FakeSession:
     async def agent_environment_names(self) -> Sequence[str]:  # NOSONAR python:S7503 - implements an async protocol
         raise _unsupported(Capability.SESSION, "agent_environment_names")
 
-    async def agent_environment(
+    async def agent_environment(  # NOSONAR python:S7503 - implements an async protocol
         self, base: Mapping[str, str] | None = None
-    ) -> Mapping[str, str]:  # NOSONAR python:S7503 - implements an async protocol
+    ) -> Mapping[str, str]:
         raise _unsupported(Capability.SESSION, "agent_environment")
 
 
@@ -294,9 +294,9 @@ class _FakeChangeRequests:
     def __init__(self, host: InMemoryCodeHost) -> None:
         self._host = host
 
-    async def for_current_branch(
+    async def for_current_branch(  # NOSONAR python:S7503 - implements an async protocol
         self, repo: RepositoryRef
-    ) -> ChangeRequest:  # NOSONAR python:S7503 - implements an async protocol
+    ) -> ChangeRequest:
         self._host.require_client()
         current = self._host._change_request
         if current is None:
@@ -368,9 +368,9 @@ class _FakeDiscussion:
     def __init__(self, host: InMemoryCodeHost) -> None:
         self._host = host
 
-    async def preview_review(
+    async def preview_review(  # NOSONAR python:S7503 - implements an async protocol
         self, report: object
-    ) -> ReviewPreview:  # NOSONAR python:S7503 - implements an async protocol
+    ) -> ReviewPreview:
         limits = self._host.declaration.limits
         return _build_preview(report, limits.max_inline_comments_per_review, limits.max_review_body_chars)
 
