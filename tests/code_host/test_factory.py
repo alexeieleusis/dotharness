@@ -242,3 +242,18 @@ def test_sync_and_no_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_no_vibe_heal_import() -> None:
     code = "import sys, dotharness.code_host.factory; assert not [m for m in sys.modules if 'vibe_heal' in m]"
     subprocess.run([sys.executable, "-I", "-c", code], check=True)
+
+
+def test_factory_failure_is_configuration_error() -> None:
+    def boom(options: Any, token_cmd: Any) -> Any:
+        raise ValueError(f"bad token cmd {token_cmd}")
+
+    holder = types.SimpleNamespace(REGISTRATION=HostRegistration(CODE_HOST_INTERFACE_VERSION, Opts, boom))
+    sys.modules["_boom_host"] = holder  # type: ignore[assignment]
+    try:
+        exc = fail(HostSelection("s", "_boom_host:REGISTRATION", {}, CMD_SECRET))
+    finally:
+        del sys.modules["_boom_host"]
+    assert str(exc).endswith("host cannot be created")
+    assert CMD_SECRET not in str(exc)
+    assert exc.__cause__ is None

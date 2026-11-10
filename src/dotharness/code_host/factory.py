@@ -119,4 +119,7 @@ def create_code_host(selection: HostSelection) -> CodeHost:
         validated = registration.options_model(**selection.options)
     except Exception:
         raise _fail(selection, "options are not valid") from None
-    return registration.factory(validated, selection.token_cmd)
+    try:
+        return registration.factory(validated, selection.token_cmd)
+    except Exception:
+        raise _fail(selection, "host cannot be created") from None
