@@ -675,7 +675,7 @@ class CodeHostConformance:
                 else:
                     raise AssertionError(f"{capability.value}.{name} did not raise")
 
-    async def test_errors_are_code_host_errors(self) -> None:
+    async def test_errors_are_code_host_errors(self) -> None:  # NOSONAR python:S7503 - suite tests are all coroutines
         """B-ERR-6: every error the review flow raises is a CodeHostError."""
         for error in (
             NoChangeRequestError("a"),
