@@ -5,7 +5,7 @@ import json
 import pytest
 
 from dotharness.code_host import HostSelection, create_code_host
-from dotharness.code_host.errors import CodeHostTimeoutError
+from dotharness.code_host.errors import AuthenticationError, CodeHostTimeoutError
 from dotharness.code_host.testing import SECRET, CodeHostConformance, ConformanceTarget, PostedItem
 from dotharness.subprocess_runner import RunResult
 
@@ -62,6 +62,8 @@ class GhStub:
         self._attempts += 1
         if isinstance(self._error, CodeHostTimeoutError):
             return RunResult(124, "", "timed out", timed_out=True)
+        if isinstance(self._error, AuthenticationError):
+            return RunResult(1, "", f"HTTP 401 {self._error}")  # exercises the host's stderr -> error mapping
         if self._error is not None:
             raise self._error  # the runner itself fails: the host must not fall back
         inline = payload["comments"]
@@ -80,5 +82,14 @@ class TestReferenceHostConformance(CodeHostConformance):
 
     async def make_target(self) -> ConformanceTarget:
         self.stub = GhStub()  # a fresh seeder per target: the suite may build several targets in one test
-        host = create_code_host(HostSelection(setting="code_host", name="reference", options={}, token_cmd=None))
+        host = create_code_host(HostSelection(setting="code_host", name="reference", options={}, token_cmd=["echo", SECRET]))
         return ConformanceTarget(host=host, seeder=self.stub, secret=SECRET)
+
+    async def test_token_cmd_is_never_used(self) -> None:
+        """The reference host leaves credentials to ``gh``: the token command is neither run nor passed to gh."""
+        target = await self.make_target()
+        await target.host.session.available()
+        self.stub.set_current_change_request(1)
+        await target.host.change_requests.for_current_branch(target.repository)
+        assert self.stub.commands
+        assert not [c for c in self.stub.commands if SECRET in " ".join(c)]
