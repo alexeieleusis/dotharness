@@ -209,7 +209,7 @@ installed package skips it.
 
 A missing executable or cwd still raises `FileNotFoundError`, as the baseline `Popen` did.
 
-The same differences apply to `git_toplevel`, `vibe_heal` `run_command` and `GitHubReviewClient._post_json`, which now run
+The same differences apply to `git_toplevel`, `vibe_heal` `run_command` and the code_host reference `_post_json`, which now run
 through `subprocess_runner.run` (Phase 07, D-15 in `docs/design/shared-async-layer.md`). These are the accepted I-3
 differences, now applied to the async `run`. `git_toplevel` is `async def` too.
 
