@@ -1069,7 +1069,7 @@ class ReviewPostResult:
     fell_back: bool
     review: Review | None
     comment: Comment | None
-    reason: str | None = None  # set by the host only when fell_back is true: the rejection text
+    reason: str | None = None  # set by the host only when fell_back is true: the rejection text, with secrets redacted by the host
 
 
 @dataclass(frozen=True)
@@ -1976,7 +1976,7 @@ model says consumers must not retry after `write=True` and defines no idempotenc
 | B-LIM-1 | The declaration holds 50 inline comments and 60 000 body characters. |
 | B-LIM-2 | The preview carries at most the declared number of inline comments. |
 | B-LIM-3 | A body above the declared limit is cut to the limit and ends with a truncation notice. |
-| B-SEC-1 | With the sentinel `<token>`, no exception message, `__cause__` chain, log record or `repr` (host, declaration, results) contains it, across the failure scenarios above. |
+| B-SEC-1 | With the sentinel `<token>`, no exception message, `__cause__` chain, log record, `repr` (host, declaration, results) or `ReviewPostResult.reason` contains it, across the failure scenarios above. |
 
 B-ERR-4 and B-ERR-6 are run by the same class: every method of each undeclared capability raises
 `UnsupportedCapabilityError(capability=<interface name>)`, and the error types are `CodeHostError` subclasses.
