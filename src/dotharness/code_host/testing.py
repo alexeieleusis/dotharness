@@ -459,7 +459,8 @@ def _dummy_args(method: Callable[..., Any]) -> tuple[list[Any], dict[str, Any]]:
     for p in inspect.signature(method).parameters.values():
         if p.name == "self" or p.default is not inspect.Parameter.empty or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
             continue
-        value: Any = RepositoryRef("example/repo") if p.name == "repo" else 1 if p.name == "number" else "x"
+        dummies: dict[str, Any] = {"repo": RepositoryRef("example/repo"), "number": 1}
+        value = dummies.get(p.name, "x")
         if p.kind is p.KEYWORD_ONLY:
             kwargs[p.name] = value
         else:
