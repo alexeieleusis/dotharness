@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -78,4 +79,15 @@ def test_packaged_data_resolves_from_install(venv: tuple[Path, dict[str, str]]) 
         "sys.exit('missing: ' + ', '.join(bad) if bad else 0)"
     )
     result = _run([root / "bin" / "python", "-I", "-c", code, *DATA_FILES], root.parent, env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_code_host_testing_module_ships_and_imports(venv: tuple[Path, dict[str, str]]) -> None:
+    root, env = venv
+    wheel = next((root.parent / "dist").glob("dotharness-*.whl"))
+    with zipfile.ZipFile(wheel) as archive:
+        assert "dotharness/code_host/testing.py" in archive.namelist()
+    # The module imports no pytest: the clean venv has none.
+    code = "import dotharness.code_host.testing as t; assert t.InMemoryCodeHost and t.CodeHostConformance"
+    result = _run([root / "bin" / "python", "-I", "-c", code], root.parent, env)
     assert result.returncode == 0, result.stderr

@@ -1,6 +1,6 @@
 # Code host: capability interfaces and direct gh user inventory
 
-Status: Phase 0 design for #192. Decided, not implemented. Planned location of the code: `src/dotharness/code_host/`.
+Status: Phase 0 design for #192. The package `src/dotharness/code_host/` exists and the vibe-heal review flow is implemented (Phase 1, #193). The sisyphus, pr-review and leftover users are not migrated yet.
 
 This page is the contract for Phases 1 to 4 (#193 to #196). Sections: Inventory, Phase split, Rename plan, Interfaces,
 Models, Error model, Declarations, Factory and selection, Conformance suite and in-memory fake, and the Decision log
@@ -13,7 +13,7 @@ One id namespace. Every entry is decided. The entry gives the rationale.
 
 | Id | Decision | Rationale |
 |---|---|---|
-| DEC-1 | Phase 1 (#193) creates `src/dotharness/code_host/`. | Confirmed by a human. Sisyphus is the first migrating tool. |
+| DEC-1 | Phase 1 (#193) creates `src/dotharness/code_host/` and migrates vibe-heal (`INV-VH-*`). Phase 2 (#194) migrates sisyphus (`INV-SY-*`). | Confirmed by a human. Vibe-heal is the first migrating tool: its review flow needs the fewest capabilities. |
 | DEC-2 | The issue that deletes `docs/pr_review/scripts/pr-comments.py` is filed as part of #196. | Not blocking earlier phases. |
 | DEC-3 | pr-review is one phase (Phase 3). | No split was requested. Reopen only if Phase 3 review is too large. |
 | DEC-4 | `scripts/pr-comments.py` runs no dotharness entry point, so there is no command name. How it reaches the interface is decided in Phase 4 (#196). | The script only starts `gh` and `git` through its local `run()` helper. |
@@ -97,15 +97,15 @@ exactly one phase. A row touching two capabilities names one owner. Its justific
 
 | Group | Tables | Removing phase |
 | --- | --- | --- |
-| `sisyphus` | `INV-SY-*` | Phase 1 |
-| `vibe-heal` | `INV-VH-*` | Phase 2 |
+| `vibe-heal` | `INV-VH-*` | Phase 1 |
+| `sisyphus` | `INV-SY-*` | Phase 2 |
 | `pr-review` | `INV-PR-*` | Phase 3 |
 | `leftovers` (shared helper `gh.py`, both `pr-comments.py` copies) | `INV-LO-*` | Phase 4 |
 
 Check: the number of rows whose phase is not one of 1..4, or whose owner is not exactly one of Ses, Repo, CR, Disc, Chk, WI,
 must be zero. A row moves between phases only by editing its table.
 
-### Group `sisyphus` (Phase 1), `sisyphus/`
+### Group `sisyphus` (Phase 2), `sisyphus/`
 
 | Row id | Operation | Today's gh call | File and function | Owner |
 | --- | --- | --- | --- | --- |
@@ -126,19 +126,19 @@ Context, not rows: the `sisyphus/orchestrator.py` `PullRequestClient` protocol i
 It defines `GitHubError`, the error surface of INV-SY-06..08. `cleanup.py` consumes `PrInfo` (number, state, headRefOid).
 `prbody.py` `MAX_BODY_CHARS = 60000` is a host limit the contract must expose, not a gh call.
 
-### Group `vibe-heal` (Phase 2), `vibe_heal/review/github.py` class `GitHubReviewClient`
+### Group `vibe-heal` (Phase 1, migrated), `vibe_heal/review/github.py` class `GitHubReviewClient`
 
 Consumers: `vibe_heal/review/orchestrator.py`, `vibe_heal/cli.py`.
 
-| Row id | Operation | Today's gh call | File and function | Owner |
-| --- | --- | --- | --- | --- |
-| INV-VH-01 | check host tool installed | `gh --version` (10 s) | `validate_installed` | Ses |
-| INV-VH-02 | read field of current-branch CR | `pr view --json FIELD` (30 s); `NoOpenPrError` | `_view_pr_field` | CR |
-| INV-VH-03 | post review with inline comments | `api --method POST /repos/OWNER_REPO/pulls/N/reviews --input -`; `_MAX_INLINE_COMMENTS = 50`, `_MAX_REVIEW_BODY_CHARS = 60_000`; 60 s | `post_review` | Disc |
-| INV-VH-04 | fallback top-level comment when review post fails | second `gh_argv` call (line ~204) | `post_review` fallback | Disc |
-| INV-VH-05 | resolve owner/repo | `repo view --json owner,name --jq ...` | `_get_owner_repo` | Repo |
-| INV-VH-06 | resolve owner/repo fallback | `git remote get-url origin` through `_run_gh`, parsed by `_parse_remote_url` | `_get_owner_repo` | Repo (the git primitive stays in git code, and the identity it yields becomes a RepositoryRef) |
-| INV-VH-07 | `_run_gh` runner adapter and error types | `GitHubReviewError`, `NoOpenPrError`, `GitHubTimeoutError` | `_run_gh` | Ses (transport, folded into the interface error taxonomy) |
+| Row id | Operation | Today's gh call | File and function | Owner | Status |
+| --- | --- | --- | --- | --- | --- |
+| INV-VH-01 | check host tool installed | `gh --version` (10 s) | `validate_installed` | Ses | migrated (Phase 1) |
+| INV-VH-02 | read field of current-branch CR | `pr view --json FIELD` (30 s); `NoOpenPrError` | `_view_pr_field` | CR | migrated (Phase 1) |
+| INV-VH-03 | post review with inline comments | `api --method POST /repos/OWNER_REPO/pulls/N/reviews --input -`; `_MAX_INLINE_COMMENTS = 50`, `_MAX_REVIEW_BODY_CHARS = 60_000`; 60 s | `post_review` | Disc | migrated (Phase 1) |
+| INV-VH-04 | fallback top-level comment when review post fails | second `gh_argv` call (line ~204) | `post_review` fallback | Disc | migrated (Phase 1) |
+| INV-VH-05 | resolve owner/repo | `repo view --json owner,name --jq ...` | `_get_owner_repo` | Repo | migrated (Phase 1) |
+| INV-VH-06 | resolve owner/repo fallback | `git remote get-url origin` through `_run_gh`, parsed by `_parse_remote_url` | `_get_owner_repo` | Repo (the git primitive stays in git code, and the identity it yields becomes a RepositoryRef) | migrated (Phase 1) |
+| INV-VH-07 | `_run_gh` runner adapter and error types | `GitHubReviewError`, `NoOpenPrError`, `GitHubTimeoutError` | `_run_gh` | Ses (transport, folded into the interface error taxonomy) | migrated (Phase 1) |
 
 ### Group `pr-review` (Phase 3), `pr_review/runners/` unless stated
 
@@ -215,8 +215,8 @@ is inventoried only, not migrated. Deleting it is filed in #196 (DEC-2).
 
 Phase column rule:
 
-- Phase 1 = every `INV-SY-*` row.
-- Phase 2 = every `INV-VH-*` row.
+- Phase 1 = every `INV-VH-*` row.
+- Phase 2 = every `INV-SY-*` row.
 - Phase 3 = every `INV-PR-*` row.
 - Phase 4 = every `INV-LO-*` row, except INV-LO-06, whose removing phase reads "none: not migrated" (see Phase split).
 
@@ -317,8 +317,8 @@ commit: 12 + 7 + 47 + 6 = 72 rows).
 
 | Phase | Issue | Rows | Users (file and symbol) |
 | --- | --- | --- | --- |
-| 1 | #193 | `INV-SY-01` .. `INV-SY-12` | `sisyphus/pick.py` (`GhCli`, `GhLabelRemover`, `GhPullRequestLookup`, candidate lister); `sisyphus/cli.py` (`GhPullRequestClient`, `GhPrStateLookup`, `run_token_cmd` and its env); `sisyphus/config.py` `HostSource.token_cmd` (INV-SY-12, same package as `run_token_cmd`) |
-| 2 | #194 | `INV-VH-01` .. `INV-VH-07` | `vibe_heal/review/github.py` (`GitHubReviewClient`) |
+| 1 | #193 | `INV-VH-01` .. `INV-VH-07` | `vibe_heal/review/github.py` (`GitHubReviewClient`) |
+| 2 | #194 | `INV-SY-01` .. `INV-SY-12` | `sisyphus/pick.py` (`GhCli`, `GhLabelRemover`, `GhPullRequestLookup`, candidate lister); `sisyphus/cli.py` (`GhPullRequestClient`, `GhPrStateLookup`, `run_token_cmd` and its env); `sisyphus/config.py` `HostSource.token_cmd` (INV-SY-12, same package as `run_token_cmd`) |
 | 3 | #195 | `INV-PR-01` .. `INV-PR-47` | `pr_review/runners/*` (`common.py`, `ci_checks.py`, `ci_fix.py`, `auto_approve.py`, `auto_approve_github.py`, `merge.py`, `regret_review.py`, `address_comments.py`, `review_requested.py`, `self_review.py`, `focused_review.py`, `review_prs.py`), `pr_review/cli.py`, `pr_review/config.py` |
 | 4 | #196 | `INV-LO-01` .. `INV-LO-05` | `gh.py` (`GH`, `gh_argv`, `build_subprocess_env`); `src/dotharness/scripts/pr-comments.py`; removal of the rename aliases; final grep check |
 | none | filed in #196 (DEC-2) | `INV-LO-06` | `docs/pr_review/scripts/pr-comments.py`: inventoried only, not migrated or deleted. Its Inventory cell reads "none: not migrated". This is the single allowed exception to "one removing phase per row". |
@@ -330,11 +330,16 @@ from the four lists. Confirmed decisions:
 - INV-PR-46 and INV-PR-47 are Phase 3.
 - INV-LO-06 is grouped with Phase 4 although it is never migrated.
 
+Remaining direct gh users after Phase 1: the 7 vibe-heal rows (`INV-VH-01` .. `INV-VH-07`) are migrated (marked in their
+table). 65 of the 72 inventory rows are still direct users: 12 sisyphus rows (`INV-SY-*`, Phase 2), 47 pr-review rows
+(`INV-PR-*`, Phase 3) and 6 leftover rows (`INV-LO-*`, Phase 4; `INV-LO-06` is never migrated). `vibe_heal/review/github.py`
+keeps the old names as aliases of the `code_host` errors until Phase 4 (R3).
+
 Git code (`repo_guard.py` origin check, `git fetch origin refs/pull/{n}/head` in `auto_approve.py`) is in no list.
 
 Not users, named so nobody adds them: `sisyphus/orchestrator.py` `PullRequestClient` (existing seam, a Consumer contract that
-Phase 1 may re-point at the interface), `sisyphus/cleanup.py` (consumes `PrInfo`), and `vibe_heal/review/orchestrator.py`
-and `vibe_heal/cli.py` (consume `GitHubReviewClient`, updated in Phase 2 with the client).
+Phase 2 may re-point at the interface), `sisyphus/cleanup.py` (consumes `PrInfo`), and `vibe_heal/review/orchestrator.py`
+and `vibe_heal/cli.py` (consume `GitHubReviewClient`, updated in Phase 1 with the client).
 
 ### Shared users
 
@@ -358,8 +363,8 @@ user missed by step 3 still fails there.
 
 ### Package introduction (R-SPLIT-2)
 
-Phase 1 (#193) creates `src/dotharness/code_host/` (interface, reference implementation, factory, fake) and migrates sisyphus.
-See DEC-1.
+Phase 1 (#193) creates `src/dotharness/code_host/` (interface, reference implementation, factory, fake) and migrates vibe-heal
+(`INV-VH-*`). Phase 2 (#194) migrates sisyphus (`INV-SY-*`). See DEC-1.
 
 ### Alias removal (R-SPLIT-3)
 
@@ -404,8 +409,8 @@ the Phase split section refers to. Facts below were read from the code at commit
 unchanged since `f293b99`). The new names are proposals. They are placeholders until the phase that introduces them. Phase
 numbers are those of the Phase split section:
 
-- Phase 1 (#193) creates `src/dotharness/code_host/` and migrates `sisyphus`.
-- Phase 2 (#194) migrates `vibe_heal`.
+- Phase 1 (#193) creates `src/dotharness/code_host/` and migrates `vibe_heal`.
+- Phase 2 (#194) migrates `sisyphus`.
 - Phase 3 (#195) migrates `pr_review`.
 - Phase 4 (#196) removes `gh.py`, migrates both `pr-comments.py` copies' gh calls, and removes every alias.
 
@@ -435,31 +440,31 @@ and new names never name a third-party host. The "Old name" column quotes existi
 
 | Id | Old name | Where | New name | Intro | Alias / removal | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| REN-01 | module `dotharness.gh` | `src/dotharness/gh.py` | `dotharness.code_host.reference` (exact module path set by Phase 1) | 1 | Old module stays a re-export shim until Phase 4 (R3). INV-LO-01 | Package location is `src/dotharness/code_host/`. |
+| REN-01 | module `dotharness.gh` | `src/dotharness/gh.py` | `dotharness.code_host.reference` (module path fixed by Phase 1) | 1 | Old module stays a re-export shim until Phase 4 (R3). INV-LO-01 | Package location is `src/dotharness/code_host/`. |
 | REN-02 | `GH = "gh"` | `gh.py` | `REFERENCE_CLI = "gh"` in the reference module | 1 | Alias `GH` (R3) | The string `"gh"` is the executable name and does not change. The `GH` in `tests/sisyphus/test_pick.py` is a different object (REN-25). |
-| REN-03 | `gh_argv(*args)` | `gh.py`; callers in `vibe_heal/review/github.py`, `sisyphus/pick.py`, `pr_review/runners/*` and tests (49 grep hits) | `reference_argv(*args)` (reference module only) | 1 (defined). Consumers stop in 1 (sisyphus), 2 (vibe-heal), 3 (pr-review) | Alias `gh_argv` (R3) | Returns `[REFERENCE_CLI, *args]`. Semantics unchanged. Consumers call capability interfaces and stop building argv. |
+| REN-03 | `gh_argv(*args)` | `gh.py`; callers in `vibe_heal/review/github.py`, `sisyphus/pick.py`, `pr_review/runners/*` and tests (49 grep hits) | `reference_argv(*args)` (reference module only) | 1 (defined). Consumers stop in 1 (vibe-heal), 2 (sisyphus), 3 (pr-review) | Alias `gh_argv` (R3) | Returns `[REFERENCE_CLI, *args]`. Semantics unchanged. Consumers call capability interfaces and stop building argv. |
 | REN-04 | `build_subprocess_env(path_prepend, env_vars, gh_token=None)` | `gh.py` | Function name KEEPS. Parameter `gh_token` becomes `host_token`. | 3 | During transition the function accepts both `gh_token=` and `host_token=`. If both are given, `host_token` wins. Removal of the `gh_token=` keyword: R3 on `gh_token=` | Sets `env["GITHUB_TOKEN"]` when the token is truthy (variable name: Child-agent environment). All `pr_review` runners pass it positionally. `local_review/review.py`, `local_review/address.py` and `local_review/git.py` pass no token. Only the parameter name changes. |
 | REN-05 | local variable `gh_token` | `pr_review/runners/*.py` (`focused_review`, `ci_fix`, `self_review`, `auto_approve`, `review_requested`, `address_comments`, `review_prs`, `merge`) | `host_token` | 3 | none (local name, not importable) | Internal rename. |
 | REN-06 | `get_gh_token(gh_token_cmd)` | `pr_review/runners/common.py` | `get_host_token(token_cmd)` | 3 | Alias `get_gh_token` (R3). R5 applies | Runs the command with `shell=True`. The default string `gh auth token` is not moved or changed (REN-31). Imported by 8 runner modules and patched in tests. |
 | REN-07 | `PR_COMMENTS_SCRIPT_PATH` | `pr_review/runners/common.py`; used by `focused_review`, `address_comments`, `regret_review` | KEEP | n/a | n/a | It names a script path, not a host. The script `src/dotharness/scripts/pr-comments.py` is stdlib only, runs as a child process and must not import `dotharness` (F-DUP-8 in `docs/design/shared-async-layer.md`). "PR" stays per the glossary. How the script reaches the interface is a Phase 4 design question (see `scripts/pr-comments.py` in Phase split). This row does not decide it (DEC-8). |
 | REN-08 | `gh_json`, `gh_json_paginated` | `scripts/pr-comments.py` (both copies) | KEEP | n/a | n/a | Script-local helpers, never imported by `dotharness` code (the file name is not a valid module name). The file must stay dependency-free. Their gh calls are INV-LO-02..06. |
 | REN-09 | `ci_checks.gh` (`async def gh(args, env)`), imported as `_gh` by `merge.py` and `ci_fix.py` | `pr_review/runners/ci_checks.py` | `run_host_cli(args, env)` in `ci_checks.py`. Consumers move to the Checks capability | 3 | Alias `gh`; the `_gh` import alias is local to each importer and disappears when that importer is migrated (R3 covers `ci_checks.gh`) | 14 `_gh` grep hits. `merge.py`, `ci_fix.py` and `ci_checks.py` move together (R-SPLIT-5). |
-| REN-10 | `GitHubReviewClient` | `vibe_heal/review/github.py`; used in `vibe_heal/review/orchestrator.py`, `vibe_heal/cli.py` and tests (55 hits) | `ChangeRequestReviewClient` (reference module); consumers depend on the ChangeRequests and Discussion interfaces | 2 | Alias `GitHubReviewClient` (R3) | `vibe_heal/review/github.py` becomes a shim under the same alias rule. |
-| REN-11 | `GitHubReviewError` | `vibe_heal/review/github.py` | `CodeHostError` (in `code_host`. Error model, 6.1 note 1) | 2 | Alias `GitHubReviewError` (R3). Subclass relation preserved: the aliases of REN-12 and REN-13 stay subclasses, so `except GitHubReviewError` still catches them | Existing catches must keep working without edit. |
-| REN-12 | `NoOpenPrError(GitHubReviewError)` | same | `NoChangeRequestError` | 2 | Alias `NoOpenPrError` (R3) | R1. Also re-exported from `vibe_heal/review/__init__.py` and imported by `vibe_heal/cli.py`. Both keep working through the alias. |
-| REN-13 | `GitHubTimeoutError(GitHubReviewError)` | same | `CodeHostTimeoutError` | 2 | Alias `GitHubTimeoutError` (R3) | |
-| REN-14 | `GitHubError` | `sisyphus/orchestrator.py`, imported by `sisyphus/cli.py` | `CodeHostError` (in `code_host`) | 1 | Alias `GitHubError` (R3) | Raised at the sisyphus orchestration boundary. Messages unchanged. |
-| REN-15 | `GhCli` | `sisyphus/pick.py` (27 hits. Constructed as `GhCli(cwd, token, executor)`) | `HostCli` (generic command runner, reference module only) | 1 | Alias `GhCli` (R3); constructor signature unchanged | Sets `GH_TOKEN` in the child env (Child-agent environment). |
-| REN-16 | `GhLabelRemover` | `sisyphus/pick.py` | `WorkItemLabelRemover` (WorkItems capability) | 1 | Alias (R3) | `LabelRemovalError(PickError)` is REN-26. |
-| REN-17 | `GhTimeboundLabelRemover(GhLabelRemover)` | `sisyphus/cli.py` | `TimeboundWorkItemLabelRemover` | 1 | Alias (R3) | Subclass of REN-16. Its alias must point at the renamed subclass of the renamed base. |
-| REN-18 | `GhPullRequestLookup` | `sisyphus/pick.py` | `ChangeRequestLookup` | 1 | Alias (R3) | R1. |
-| REN-19 | `GhPullRequestClient` | `sisyphus/cli.py` | `ChangeRequestClient` | 1 | Alias (R3) | |
-| REN-20 | `GhPrStateLookup` | `sisyphus/cli.py` | `ChangeRequestStateLookup` | 1 | Alias (R3) | |
-| REN-21 | `GitHubIssueTracker` | `sisyphus/pick.py`, `sisyphus/cli.py` | `WorkItemTracker` (WorkItems implementation for the reference host) | 1 | Alias (R3) | The config value `kind = "github"` is not renamed (REN-33). |
-| REN-22 | `GITHUB_OPEN_STATE = "OPEN"` | `sisyphus/pick.py` | `CHANGE_REQUEST_OPEN_STATE` (value `"OPEN"` unchanged) | 1 | Alias (R3). If the neutral model exposes an enum, Phase 4 deletes the constant under the same rule | The value is the reference host's state string, compared case-insensitively. |
+| REN-10 | `GitHubReviewClient` | `vibe_heal/review/github.py`; used in `vibe_heal/review/orchestrator.py`, `vibe_heal/cli.py` and tests (55 hits) | `ChangeRequestReviewClient` (reference module); consumers depend on the ChangeRequests and Discussion interfaces | 1 | Alias `GitHubReviewClient` (R3) | `vibe_heal/review/github.py` becomes a shim under the same alias rule. |
+| REN-11 | `GitHubReviewError` | `vibe_heal/review/github.py` | `CodeHostError` (in `code_host`. Error model, 6.1 note 1) | 1 | Alias `GitHubReviewError` (R3). Subclass relation preserved: the aliases of REN-12 and REN-13 stay subclasses, so `except GitHubReviewError` still catches them | Existing catches must keep working without edit. |
+| REN-12 | `NoOpenPrError(GitHubReviewError)` | same | `NoChangeRequestError` | 1 | Alias `NoOpenPrError` (R3) | R1. Also re-exported from `vibe_heal/review/__init__.py` and imported by `vibe_heal/cli.py`. Both keep working through the alias. |
+| REN-13 | `GitHubTimeoutError(GitHubReviewError)` | same | `CodeHostTimeoutError` | 1 | Alias `GitHubTimeoutError` (R3) | |
+| REN-14 | `GitHubError` | `sisyphus/orchestrator.py`, imported by `sisyphus/cli.py` | `CodeHostError` (in `code_host`) | 2 | Alias `GitHubError` (R3) | Raised at the sisyphus orchestration boundary. Messages unchanged. |
+| REN-15 | `GhCli` | `sisyphus/pick.py` (27 hits. Constructed as `GhCli(cwd, token, executor)`) | `HostCli` (generic command runner, reference module only) | 2 | Alias `GhCli` (R3); constructor signature unchanged | Sets `GH_TOKEN` in the child env (Child-agent environment). |
+| REN-16 | `GhLabelRemover` | `sisyphus/pick.py` | `WorkItemLabelRemover` (WorkItems capability) | 2 | Alias (R3) | `LabelRemovalError(PickError)` is REN-26. |
+| REN-17 | `GhTimeboundLabelRemover(GhLabelRemover)` | `sisyphus/cli.py` | `TimeboundWorkItemLabelRemover` | 2 | Alias (R3) | Subclass of REN-16. Its alias must point at the renamed subclass of the renamed base. |
+| REN-18 | `GhPullRequestLookup` | `sisyphus/pick.py` | `ChangeRequestLookup` | 2 | Alias (R3) | R1. |
+| REN-19 | `GhPullRequestClient` | `sisyphus/cli.py` | `ChangeRequestClient` | 2 | Alias (R3) | |
+| REN-20 | `GhPrStateLookup` | `sisyphus/cli.py` | `ChangeRequestStateLookup` | 2 | Alias (R3) | |
+| REN-21 | `GitHubIssueTracker` | `sisyphus/pick.py`, `sisyphus/cli.py` | `WorkItemTracker` (WorkItems implementation for the reference host) | 2 | Alias (R3) | The config value `kind = "github"` is not renamed (REN-33). |
+| REN-22 | `GITHUB_OPEN_STATE = "OPEN"` | `sisyphus/pick.py` | `CHANGE_REQUEST_OPEN_STATE` (value `"OPEN"` unchanged) | 2 | Alias (R3). If the neutral model exposes an enum, Phase 4 deletes the constant under the same rule | The value is the reference host's state string, compared case-insensitively. |
 | REN-23 | `GITHUB_FOOTER_LINE` | `vibe_heal/cli.py` | KEEP | n/a | n/a | It is this project's own repository link, not a host dependency. Its text is user-visible output. |
-| REN-24 | `GITHUB_SOURCE` | `tests/sisyphus/test_abandon.py` (TOML snippet with `kind = "github"`) | KEEP in Phase 0. The Phase 1 test edit may rename it | 1 (optional) | none (test constant, not importable by `src`) | Listed for completeness of the grep. |
-| REN-25 | `GH` (test fixture `WorkItemSource(kind="github", ...)`) | `tests/sisyphus/test_pick.py` | KEEP in Phase 0. The Phase 1 test edit may rename it | 1 (optional) | none | Not the `GH` of `gh.py` (REN-02). The 13 `GH` grep hits are 1 definition in `gh.py`, 1 in `gh.py`'s `gh_argv`, and 11 in this test file. |
+| REN-24 | `GITHUB_SOURCE` | `tests/sisyphus/test_abandon.py` (TOML snippet with `kind = "github"`) | KEEP in Phase 0. The Phase 2 test edit may rename it | 2 (optional) | none (test constant, not importable by `src`) | Listed for completeness of the grep. |
+| REN-25 | `GH` (test fixture `WorkItemSource(kind="github", ...)`) | `tests/sisyphus/test_pick.py` | KEEP in Phase 0. The Phase 2 test edit may rename it | 2 (optional) | none | Not the `GH` of `gh.py` (REN-02). The 13 `GH` grep hits are 1 definition in `gh.py`, 1 in `gh.py`'s `gh_argv`, and 11 in this test file. |
 | REN-26 | `PickError`, `LabelRemovalError(PickError)` | `sisyphus/pick.py` | KEEP | n/a | n/a | They describe the operation, not a host. They do not match the grep patterns. I checked on purpose. |
 | REN-27 | `MergeError`, `AutoApproveError`, `CiFixError` | `pr_review/runners/merge.py`, `auto_approve.py`, `ci_fix.py` | KEEP | n/a | n/a | Named for the command. Whether Phase 3 wraps `CodeHostError` into them is a Phase 3 design point (DEC-9). |
 | REN-28 | `_IssueFetchError` | `pr_review/runners/common.py` | KEEP | n/a | n/a | Private (underscore), no host pattern, not importable by external code. |
@@ -569,10 +574,12 @@ checked, and does not restate the assignment.
    and opaque: consumers never parse, split or compare its parts and never read a remote URL to build one.
 5. Failures raise subclasses of `CodeHostError` (Error model section). A name used below is `CodeHostError` or one of
    `AuthenticationError`, `CodeHostTimeoutError`, `UnsupportedCapabilityError`, `ConfigurationError`,
-   `NoChangeRequestError`. This section is the one place that says which method raises which type. The Error model section
+   `NoChangeRequestError`. A method may also raise `OSError` when the host client is not installed or cannot be started
+   (contract change of Phase 1: `for_current_branch` and `post_review` do so for an unavailable client; `Session.available()`
+   never raises and reports the same fact as `False`). This section is the one place that says which method raises which type. The Error model section
    defines the types only. A confirmed absence is returned as `None` or an empty sequence where the signature says so (no
    not-found type exists, DEC-20). A consumer that needs exactly one change request for a branch (INV-VH-02)
-   raises `NoChangeRequestError` when `find_by_branch` returns an empty sequence.
+   raises `NoChangeRequestError` when `find_by_branch` returns an empty sequence, or calls `for_current_branch`, which raises it itself.
 6. Naming: new names use "change request". Existing code keeps "PR" until the phase that migrates it (Rename plan).
 
 ### Repository resolution: explicit and cwd-based
@@ -685,6 +692,14 @@ class ChangeRequests(Protocol):
         """Change requests whose head is `branch`. Empty when none."""
         ...
 
+    async def for_current_branch(self, repo: RepositoryRef) -> ChangeRequest:
+        """The open change request of the checked-out branch, read from the host client without a branch argument.
+
+        Raises NoChangeRequestError when there is none, CodeHostError for any other failure, and OSError when the
+        host client is unavailable.
+        """
+        ...
+
     async def list(
         self,
         repo: RepositoryRef,
@@ -735,6 +750,7 @@ class ChangeRequests(Protocol):
 | `get` | `pr view` with chosen fields: state, base, head revision, description, line counts, requested reviewers, merge state | INV-SY-07, INV-VH-02, INV-PR-02, INV-PR-04, INV-PR-05, INV-PR-14, INV-PR-15, INV-PR-16, INV-PR-32 (merge state), INV-PR-33, INV-LO-02 |
 | `state` | `pr view N --json state` (state only, no heavier fields) | INV-SY-09 |
 | `find_by_branch` | `pr list --head` | INV-SY-06, INV-PR-21 |
+| `for_current_branch` | `pr view --json ...` without a branch argument | INV-VH-02 |
 | `list` | `pr list` with author, assignee, reviewer, state, and review-requested search | INV-PR-11, INV-PR-12, INV-PR-13, INV-PR-27, INV-PR-37, INV-PR-38, INV-PR-41, INV-PR-43 |
 | `find_by_commit` | `commits/SHA/pulls` | INV-PR-35 |
 | `commits` | `pr view --json commits` | INV-PR-28 |
@@ -748,8 +764,10 @@ class ChangeRequests(Protocol):
 Notes:
 
 - "By head" and "by branch" both mean the head branch name. No inventory row looks a change request up by head revision, so
-  there is one method, `find_by_branch`. "Current branch" (INV-VH-02) is `find_by_branch` with the branch the consumer read
-  from git. There is no ambient-branch method.
+  there is one lookup by branch name, `find_by_branch`. "Current branch" (INV-VH-02) is `for_current_branch`, the one
+  ambient-branch method (Phase 1 contract change): the host client reads the checked-out branch itself, so the consumer
+  passes no branch. It returns `ChangeRequest` (number, base reference and the other fields) or raises
+  `NoChangeRequestError`.
 - "Is the user's approval current" (INV-PR-32, INV-PR-42) is computed by the consumer from `reviews()` and the
   `ChangeRequest` head revision.
 - The viewed-state owner (R-INV-3) was decided in the Inventory as ChangeRequests. Discussion does not repeat it.
@@ -776,14 +794,27 @@ class Discussion(Protocol):
         body: str,
         inline_comments: Sequence[InlineComment],
         head_revision: str | None = None,
+        report: object | None = None,
     ) -> ReviewPostResult:
-        """Post a review. If the host rejects the review or its anchors, post `body` as a top-level comment.
+        """Post a review. If the host rejects the review or its anchors, post a top-level comment instead.
 
-        The host owns this single fallback; the consumer does not catch and re-post, it reads `ReviewPostResult.fell_back`.
+        The host owns this single fallback; the consumer does not catch and re-post, it reads `ReviewPostResult.fell_back`
+        and `ReviewPostResult.reason`. `report` is the tool's host-neutral review result, typed `object | None` because
+        `code_host` imports nothing from the tool packages. It is keyword-only. With a `report` the host builds the fallback
+        text from it. With `report=None` the fallback comment is `body`.
         The host never falls back after `CodeHostTimeoutError` (the review may already exist), `AuthenticationError` or
         `UnsupportedCapabilityError`; those propagate as raised. It falls back at most once: if the top-level post also
         fails, that error propagates (`CodeHostError`) and nothing else is posted.
         Size limits and anchor rules are declared (Declarations section), not parameters.
+        May raise OSError when the host client is unavailable.
+        """
+        ...
+
+    async def preview_review(self, report: object) -> ReviewPreview:
+        """Build the review body and inline comments for `report` without posting. Makes no host call.
+
+        The body is what `post_review` posts when it does not fall back. The inline comments are capped at the declared
+        limit and the body is truncated, with a notice, at the declared limit.
         """
         ...
 
@@ -798,6 +829,7 @@ class Discussion(Protocol):
 | `review_threads` | GraphQL review-thread state and unresolved count | INV-PR-17, INV-PR-39, INV-PR-18, INV-LO-03 |
 | `post_comment` | `pr comment` | INV-PR-10, INV-PR-36 |
 | `post_review` | POST review with inline comments, and the fallback comment | INV-VH-03, INV-VH-04 |
+| `preview_review` | review text built from the report, with the declared caps (no host call) | INV-VH-03 |
 | `reply` | POST reply in a thread | INV-LO-04 |
 
 INV-LO-06 (documentation copy, not migrated) is not covered by any method. How `scripts/pr-comments.py` reaches this
@@ -1037,6 +1069,13 @@ class ReviewPostResult:
     fell_back: bool
     review: Review | None
     comment: Comment | None
+    reason: str | None = None  # set by the host only when fell_back is true: the rejection text
+
+
+@dataclass(frozen=True)
+class ReviewPreview:
+    body: str
+    inline_comments: Sequence[InlineComment]
 
 
 @dataclass(frozen=True)
@@ -1550,7 +1589,7 @@ means the default applies).
 | `timeouts.default_seconds` | 30 | | `TIMEOUT_GH` in `pr_review/runners/common.py` |
 | timeout, CR state lookup (INV-SY-09) | 10.0 | `ChangeRequests.state` | `PR_STATE_TIMEOUT` in `sisyphus/cli.py` |
 | timeout, installed check (INV-VH-01) | 10 | `Session.available` | `validate_installed` in `vibe_heal/review/github.py` |
-| timeout, CR field read of the current branch (INV-VH-02) | 30 | `ChangeRequests.find_by_branch` | `_view_pr_field` in the same file |
+| timeout, CR field read of the current branch (INV-VH-02) | 30 | `ChangeRequests.find_by_branch` | `_view_pr_field` in the same file. `ChangeRequests.for_current_branch` runs under the same 30 s |
 | timeout, review post (INV-VH-03) | 60 | `Discussion.post_review` | `_POST_TIMEOUT_SECONDS` in the same file |
 | `list_bounds.default` | 100 | | `per_page=100` in `ci_checks.py` (single call). Exhaustive reads are `None`, see below |
 | list bound, CR listings | 1000 | `ChangeRequests.list` | `--limit 1000` in `address_comments.py` (covers the `--limit 500` listings, INV-PR-11, INV-PR-27, INV-PR-41) |
@@ -1677,6 +1716,10 @@ class HostRegistration:
    passing the exception text of the options model or of an import error through (Error model, "Message and secret rules").
    `__cause__` is cleared with `from None`.
 
+   Implementation detail (N-3): the options-error message is built from a fixed reason text, for example
+   "options are not valid". It carries no option value, so an option that holds a secret never reaches the message,
+   the log or `__cause__`.
+
 ### Selection per tool
 
 The exact name and location of each selection is fixed in the "Reserved names" table. This table says how each surface reads
@@ -1756,7 +1799,7 @@ placeholder `examplehost`.
   this dotharness provides <m>`. Neither side is guessed to be newer. The message gives both numbers. A registration whose
   `interface_version` is not an `int` is also a load failure.
 - **Aliases and the deprecation window (Rename plan, task 8).** Backward-compatible aliases for the old `GitHub*` / `Gh*`
-  names and the `gh_token_cmd` key are added in the migrating phase of each tool (Phase 1 sisyphus, Phase 2 vibe-heal,
+  names and the `gh_token_cmd` key are added in the migrating phase of each tool (Phase 1 vibe-heal, Phase 2 sisyphus,
   Phase 3 pr-review) and removed in Phase 4 (#196). The window is therefore "until Phase 4", counted in phases and not in
   interface versions. The aliases are not part of the interface and are not covered by `CODE_HOST_INTERFACE_VERSION`. No
   `DeprecationWarning` is emitted (DEC-7). Phase 4 release notes say that `gh_token_cmd` stops working (REN-31).
@@ -1772,11 +1815,11 @@ config model by #192. The group name appears in this design only. Phase numbers 
 | --- | --- | --- | --- | --- |
 | 1 | Entry-point group | `dotharness.code_hosts` | Python entry-point group name, read by the factory | reserved by #192, introduced by Phase 1 |
 | 2 | pr-review TOML key and table | key `host` in table `[harness]` | `.harness.toml` | reserved by #192, introduced by Phase 3 |
-| 3 | sisyphus TOML key and table | key `name` in table `[source.host]` | `.sisyphus.toml` | reserved by #192, introduced by Phase 1 |
-| 4 | vibe-heal settings field | `code_host` (options: `code_host_options`) | `VibeHealConfig` in `vibe_heal/config/models.py` | reserved by #192, introduced by Phase 2 |
-| 5 | vibe-heal environment variable | `DOTHARNESS_CODE_HOST` (options: `DOTHARNESS_CODE_HOST_OPTIONS`) | process environment, `.env.vibeheal`, `.env` | reserved by #192, introduced by Phase 2 |
+| 3 | sisyphus TOML key and table | key `name` in table `[source.host]` | `.sisyphus.toml` | reserved by #192, introduced by Phase 2 |
+| 4 | vibe-heal settings field | `code_host` (options: `code_host_options`) | `VibeHealConfig` in `vibe_heal/config/models.py` | reserved by #192, introduced by Phase 1 |
+| 5 | vibe-heal environment variable | `DOTHARNESS_CODE_HOST` (options: `DOTHARNESS_CODE_HOST_OPTIONS`) | process environment, `.env.vibeheal`, `.env` | reserved by #192, introduced by Phase 1 |
 | 6 | Interface-version constant | `CODE_HOST_INTERFACE_VERSION` | `src/dotharness/code_host/version.py`, re-exported from `dotharness.code_host` | reserved by #192, introduced by Phase 1 |
-| 7 | Typed-options table in each TOML file | `[harness.host_options]` in `.harness.toml`, `[source.host.options]` in `.sisyphus.toml` | nested under the keys of rows 2 and 3 | reserved by #192, introduced by Phase 3 (`.harness.toml`) and Phase 1 (`.sisyphus.toml`) |
+| 7 | Typed-options table in each TOML file | `[harness.host_options]` in `.harness.toml`, `[source.host.options]` in `.sisyphus.toml` | nested under the keys of rows 2 and 3 | reserved by #192, introduced by Phase 3 (`.harness.toml`) and Phase 2 (`.sisyphus.toml`) |
 
 The reference built-in name `reference` is reserved in the same way (entry points of that name are ignored). The Rename plan's
 `host_token_cmd` (REN-31) is introduced by Phase 3 and is not a selection key.
@@ -1786,7 +1829,7 @@ The reference built-in name `reference` is reserved in the same way (entry point
 How an implementation author checks a code host, and how a consumer test runs without one (A-3-2; ticket task 9, goal G5). The
 suite and the fake ship in one module of the wheel. This section cites interfaces (Interfaces), models (Models), errors (Error
 model), declarations (Declarations) and the factory (Factory and selection) by section name and does not restate them. Names
-below that are not in those sections (`CodeHostConformance`, `InMemoryCodeHost` and their members) are owned here. Phase 0 adds
+below that are not in those sections (`CodeHostConformance`, `InMemoryCodeHost` and their members) are owned here. Phase 0 added
 no code and no test. Phase 1 (#193) implements the module and the packaging test.
 
 Non-goals:
@@ -1846,11 +1889,11 @@ class TestExampleHost(CodeHostConformance):
   (Declarations, "Capabilities"). The suite reads the declaration, skips nothing silently, and for each undeclared capability
   runs the B-ERR-4 test instead of that capability's group. A group is never skipped because a test fails.
 - **Suite validated by the fake.** `InMemoryCodeHost` must pass the whole suite. That is a requirement, and a Phase 1 test
-  (`TestInMemoryCodeHost(CodeHostConformance)`) enforces it. It is how the fake stays honest.
+  (`TestInMemoryCodeHost(CodeHostConformance)` in `tests/code_host/test_in_memory.py`) enforces it. The reference host passes the same suite in `tests/code_host/test_reference_conformance.py` with a stubbed runner. It is how the fake stays honest.
 - **Packaging check (NF-9).** A test in the style of `tests/test_wheel_install.py` (build the wheel, install it into a clean
   venv outside the repo, then exercise it) or `tests/test_package_data.py` confirms the module ships. The assertion: in the clean
   venv, `import dotharness.code_host.testing` succeeds, and `dotharness/code_host/testing.py` is in the wheel's file list.
-  Phase 0 adds no such test. It is a Phase 1 task, together with the module.
+  Phase 1 adds the test (`tests/test_wheel_install.py`, `test_code_host_testing_module_ships_and_imports`), together with the module.
 - **NF-8.** Phase 0 edits no knowledge file. `KNOWLEDGE_SHA256` in `tests/test_package_data.py` (27 entries) is untouched.
 
 ### Behaviors asserted
@@ -1911,6 +1954,39 @@ model says consumers must not retry after `write=True` and defines no idempotenc
 | B-WI-3 | `remove_label` removes the label. Removing an absent label is a no-op (DEC-42). |
 | B-WI-4 | `closing_change_requests` returns the change requests the seeder linked. `linked_work_items` is the reverse relation. With no link both are empty. |
 | B-WI-5 | `open_change_request_bodies` returns open change requests with their descriptions, separate from B-WI-4 (Interfaces: the two lookups are not merged). |
+
+**Review flow (Phase 1 extension).** These ids extend the table above for the vibe-heal review flow. They are implemented by
+`CodeHostConformance` in `dotharness.code_host.testing`. The seeder handle is `HostSeeder` (`set_available`,
+`set_current_change_request`, `reject_inline_reviews`, `reject_all_posts`, `fail_posts_with`, `posts`, `post_attempts`).
+`make_target` returns a `ConformanceTarget(host, seeder, repository)`.
+
+| ID | Statement |
+| --- | --- |
+| B-NCR-1 | `Session.available()` returns a `bool` and does not raise, available or not. |
+| B-NCR-2 | `ChangeRequests.for_current_branch(repo)` returns the `ChangeRequest` with the seeded number and base reference. |
+| B-NCR-3 | With no change request it raises `NoChangeRequestError` (a `CodeHostError`) whose text is "No open pull request found for the current branch". |
+| B-NCR-4 | An unavailable host client raises `OSError` from `for_current_branch` and `post_review`, and nothing is posted. |
+| B-REV-1 | An accepted `post_review` returns `fell_back=False` and `reason=None`, and posts the body and inline comments as given. |
+| B-REV-2 | A rejected review falls back to one top-level comment: `fell_back=True`, `reason` holds the rejection text. With `report=None` the comment is `body`. |
+| B-REV-3 | With a `report`, the fallback comment is built from the report and lists its findings. |
+| B-REV-4 | `reason` is set if and only if `fell_back` is true. |
+| B-REV-5 | `CodeHostTimeoutError`, `AuthenticationError` and `UnsupportedCapabilityError` propagate with exactly one attempt and no fallback. |
+| B-REV-6 | When the fallback is also rejected, a `CodeHostError` propagates after exactly two attempts (one fallback only). |
+| B-PRV-1 | The `ReviewPreview.body` from `preview_review` is what `post_review` posts when it does not fall back. The preview makes no host call. |
+| B-LIM-1 | The declaration holds 50 inline comments and 60 000 body characters. |
+| B-LIM-2 | The preview carries at most the declared number of inline comments. |
+| B-LIM-3 | A body above the declared limit is cut to the limit and ends with a truncation notice. |
+| B-SEC-1 | With the sentinel `<token>`, no exception message, `__cause__` chain, log record or `repr` (host, declaration, results) contains it, across the failure scenarios above. |
+
+B-ERR-4 and B-ERR-6 are run by the same class: every method of each undeclared capability raises
+`UnsupportedCapabilityError(capability=<interface name>)`, and the error types are `CodeHostError` subclasses.
+
+`InMemoryCodeHost` in Phase 1 implements the review-flow subset: Session (`available`, `current_user`), Repository, ChangeRequests
+(`for_current_branch`, `find_by_branch`) and Discussion (`preview_review`, `post_review`). It declares the limits and anchor
+rules of the reference host. Other methods, and Checks and WorkItems, raise `UnsupportedCapabilityError`. The seeding and
+injection methods of the table in "In-memory fake" below are the full design target. The review-flow seeder methods above are
+what exists. A test can set the current repository, the current-branch change request (or none), availability, a rejection
+(which forces the fallback and its reason) and a post failure (a timeout, for example), and reads the recorded posts.
 
 **Factory and version (B-FAC).** Run once per module by `CodeHostConformance` against `create_code_host` with the implementation
 registered, using only standard-library patching of entry-point discovery.
@@ -1994,12 +2070,12 @@ f293b99. "Members" are interface methods (Interfaces) served by the fake.
 | `TrackerClient` | `src/dotharness/sisyphus/pick.py` (`Protocol`, `list_candidates(source)`) | candidate listing in tracker order | WorkItems: `list_open`. Seed with `add_work_item` |
 | `PullRequestLookup` | `src/dotharness/sisyphus/pick.py` (`Protocol`, `linked_prs`, `open_pr_bodies`) | linked and open PR reads | WorkItems: `closing_change_requests` (`linked_prs`), `open_change_request_bodies` (`open_pr_bodies`). Seed with `link_closing`, `add_change_request` |
 | `GhCli` | `src/dotharness/sisyphus/pick.py` (class) | wraps the `gh` subprocess | The whole fake (all capabilities). The concrete reference wrapper itself is not replaced in Phase 0 |
-| `PullRequestClient` | `src/dotharness/sisyphus/orchestrator.py` (`Protocol`) | orchestrator PR operations | ChangeRequests: `get`, `find_by_branch`, `create_draft`. To be confirmed against the Protocol's method list in Phase 1, since the page maps by inventory rows (INV-SY-06..09) |
+| `PullRequestClient` | `src/dotharness/sisyphus/orchestrator.py` (`Protocol`) | orchestrator PR operations | ChangeRequests: `get`, `find_by_branch`, `create_draft`. To be confirmed against the Protocol's method list in Phase 2 (sisyphus), since the page maps by inventory rows (INV-SY-06..09) |
 | injected `_gh` param | pr-review `list_own_open_prs(..., _gh)` | tests pass a fake callable | ChangeRequests: `list(author=...)` with Session `current_user`. Seed with `add_change_request(author=...)`, `set_user` |
 | `gh` callable | `src/dotharness/pr_review/runners/ci_checks.py` (`async def gh(args, env)`) | runs `gh`, returns `CompletedProcess` | Checks: `list_checks`, `list_workflows`, `failed_log`, `get_job`. Seed with `add_check`, `add_workflow`, `add_job` |
 
 Gap rule: a seam the fake cannot replace without a new interface method is reported here, not worked around. No gap is found at
-this stage. The two "to be confirmed" notes are checked in Phase 1 when the Protocols are read against the code.
+this stage. The two "to be confirmed" notes are checked in Phase 2 when the Protocols are read against the code.
 
 `src/dotharness/vibe_heal/review/github.py` (`_run_gh`) is a further `gh` call site found by search. It is not in the ticket's
 call-site list (DEC-39). It is not mapped as a seam. Its operations are covered by inventory rows (INV-VH-07 for the transport

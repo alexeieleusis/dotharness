@@ -1,6 +1,6 @@
 # Code host: implementer guide
 
-Status: this guide belongs to the Phase 0 design for #192 and is not implemented. Planned code location: `src/dotharness/code_host/`.
+Status: this guide belongs to the Phase 0 design for #192. The package `src/dotharness/code_host/` exists and the vibe-heal review flow is implemented (Phase 1, #193). Code location: `src/dotharness/code_host/`.
 
 This guide is an ordered checklist for the author of a new code-host implementation. It states no contract. Each step points to
 the section of the design page [`docs/design/code-host.md`](../code-host.md) that owns the contract. The pointer names the section
@@ -35,6 +35,9 @@ values", which shows what the reference implementation declares.
 1. Map every host failure onto the design page's error types, including the three error distinctions and the
    unsupported-capability error.
 2. Never place the token (`<token>`) or the token command in an error message.
+3. Raise `OSError` from `for_current_branch` and `post_review` when the host client is not installed. `Session.available()` returns
+   `False` instead and never raises.
+4. Return `reason` in `ReviewPostResult` only when `fell_back` is true.
 
 Pointers: "Error model", subsections "Hierarchy", "Failure conventions per call site", "Unsupported-capability policy" and
 "Message and secret rules".
@@ -65,7 +68,9 @@ names", which lists the names you must not use.
    where a token value is needed.
 3. Run the subclass with your test runner. A pass means the implementation behaves as the asserted behaviors describe for every
    capability it declares.
-4. Consumer tests that need a host without a network can use the in-memory fake instead.
+4. The review-flow behaviors (B-NCR, B-REV, B-PRV, B-LIM, B-SEC) are in the same base class. The seeder you supply stubs your
+   transport and records posts (`HostSeeder` in `dotharness.code_host.testing`).
+5. Consumer tests that need a host without a network can use the in-memory fake instead.
 
 Pointers: "Conformance suite and in-memory fake", subsections "Module, packaging and run mechanism", "Behaviors asserted" and
 "In-memory fake".
