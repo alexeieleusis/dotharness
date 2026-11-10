@@ -1888,7 +1888,7 @@ class TestExampleHost(CodeHostConformance):
 - **Opting out of a capability.** An implementation that lacks a capability leaves it out of `declaration.capabilities`
   (Declarations, "Capabilities"). The suite reads the declaration, skips nothing silently, and for each undeclared capability
   runs the B-ERR-4 test instead of that capability's group. A group is never skipped because a test fails.
-- **Suite validated by the fake.** `InMemoryCodeHost` must pass the whole suite. That is a requirement, and a Phase 1 test
+- **Suite validated by the fake.** `InMemoryCodeHost` must pass every test the suite runs against it: the groups of the capabilities it declares (Session, Repository, ChangeRequests, Discussion; see the review-flow subset below) and B-ERR-4 for the two it does not (Checks, WorkItems). A declared capability's group exercises only the methods that group names, so a declared-but-partial capability is not asked to implement methods outside it. That is a requirement, and a Phase 1 test
   (`TestInMemoryCodeHost(CodeHostConformance)` in `tests/code_host/test_in_memory.py`) enforces it. The reference host passes the same suite in `tests/code_host/test_reference_conformance.py` with a stubbed runner. It is how the fake stays honest.
 - **Packaging check (NF-9).** A test in the style of `tests/test_wheel_install.py` (build the wheel, install it into a clean
   venv outside the repo, then exercise it) or `tests/test_package_data.py` confirms the module ships. The assertion: in the clean
@@ -1983,7 +1983,10 @@ B-ERR-4 and B-ERR-6 are run by the same class: every method of each undeclared c
 
 `InMemoryCodeHost` in Phase 1 implements the review-flow subset: Session (`available`, `current_user`), Repository, ChangeRequests
 (`for_current_branch`, `find_by_branch`) and Discussion (`preview_review`, `post_review`). It declares the limits and anchor
-rules of the reference host. Other methods, and Checks and WorkItems, raise `UnsupportedCapabilityError`. The seeding and
+rules of the reference host. Its declaration lists Session, Repository, ChangeRequests and Discussion; Checks and WorkItems are
+undeclared. Methods of a declared capability outside the review-flow subset also raise `UnsupportedCapabilityError`, and no suite
+group calls them (B-ERR-4 covers only undeclared capabilities). The B-NCR/B-REV/B-PRV/B-LIM/B-SEC ids above are the groups
+the fake passes; the per-method groups for the full interfaces are the design target, not a Phase 1 requirement for the fake. The seeding and
 injection methods of the table in "In-memory fake" below are the full design target. The review-flow seeder methods above are
 what exists. A test can set the current repository, the current-branch change request (or none), availability, a rejection
 (which forces the fallback and its reason) and a post failure (a timeout, for example), and reads the recorded posts.
