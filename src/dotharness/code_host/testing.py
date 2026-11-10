@@ -1,4 +1,5 @@
-# ruff: noqa: S101, TRY003  A shipped test suite: plain asserts and AssertionError messages are the point.
+# A shipped test suite: plain asserts and AssertionError messages are the point.
+# ruff: noqa: S101, TRY003
 """In-memory code host and conformance suite for the review flow.
 
 ``InMemoryCodeHost`` serves a consumer test without a real host. ``CodeHostConformance`` is a base class of
@@ -37,7 +38,8 @@ from dotharness.code_host.models import (
 )
 from dotharness.code_host.reference import DECLARATION
 
-SECRET = "<token>"  # noqa: S105  Sentinel: it must never appear in an error, log or repr.
+# Sentinel: it must never appear in an error, log or repr.
+SECRET = "<token>"  # noqa: S105
 NO_CHANGE_REQUEST_TEXT = "No open pull request found for the current branch"
 _TRUNCATION_NOTICE = "\n\n_...review body truncated to fit the host size limit._"
 _BASE_DATE = "2026-01-01T00:00:00Z"
