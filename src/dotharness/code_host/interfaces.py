@@ -17,7 +17,6 @@ from dotharness.code_host.models import (
     RepositoryRef,
     Review,
     ReviewPostResult,
-    ReviewPreview,
     ReviewThread,
     Workflow,
     WorkItem,
@@ -150,27 +149,22 @@ class Discussion(Protocol):
         body: str,
         inline_comments: Sequence[InlineComment],
         head_revision: str | None = None,
-        report: object | None = None,
+        fallback_body: str | None = None,
     ) -> ReviewPostResult:
         """Post a review. If the host rejects the review or its anchors, post a top-level comment instead.
 
-        `report` is the tool's host-neutral review result. It is typed `object | None` because code_host must
-        not import the tool packages. It is keyword-only, never a second positional argument.
+        The caller renders the text. The host applies its declared size limits: it truncates `body` and
+        `fallback_body` and drops inline comments over the cap.
 
         - No fallback: `body` and `inline_comments` are posted as given.
-        - Fallback: the host builds the fallback text from `report` and posts one top-level comment.
+        - Fallback: `fallback_body` (or `body` when it is None) is posted as one top-level comment.
           `ReviewPostResult.fell_back` is true and `reason` carries the rejection text.
-        - `report` is None: `body` is posted as the top-level comment.
 
         The host never falls back after `CodeHostTimeoutError`, `AuthenticationError` or
         `UnsupportedCapabilityError`; those propagate. It falls back at most once. If the top-level post also
         fails, that error propagates (`CodeHostError`). Size limits and anchor rules are declared, not parameters.
         May raise OSError when the host client is unavailable.
         """
-        ...
-
-    async def preview_review(self, report: object) -> ReviewPreview:
-        """Build the review text and inline comments for `report` without posting. Makes no host call."""
         ...
 
     async def reply(self, repo: RepositoryRef, number: int, thread_id: str, body: str) -> Comment:

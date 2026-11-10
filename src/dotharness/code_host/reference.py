@@ -1,8 +1,8 @@
 """Reference code host, registered under the name ``reference``. It runs the ``gh`` CLI.
 
 This module owns every host-specific rule of the review flow: the ``gh`` command lines, the remote-URL rules, the
-review text, the size limits and the fallback to a top-level comment. It imports nothing from ``vibe_heal``. The
-review result is read by duck typing (``files``, ``base_branch``, ``project_label``, ``head_sha``).
+size limits and the fallback to a top-level comment. It imports nothing from ``vibe_heal``: the caller renders the
+review text.
 """
 
 import asyncio
@@ -19,7 +19,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 from dotharness.code_host.declarations import (
-    Anchor,
     AnchorRules,
     Capability,
     HostDeclaration,
@@ -48,7 +47,6 @@ from dotharness.code_host.models import (
     RepositoryRef,
     Review,
     ReviewPostResult,
-    ReviewPreview,
     ReviewThread,
     User,
     Workflow,
@@ -62,7 +60,6 @@ logger = logging.getLogger(__name__)
 
 _MAX_INLINE_COMMENTS = 50
 _MAX_REVIEW_BODY_CHARS = 60_000  # The host limit is about 65536. Keep headroom.
-_MAX_OVERFLOW_BODY_LINES = 100
 _POST_TIMEOUT_SECONDS = 60
 _TRUNCATION_NOTICE = "\n\n_...review body truncated to fit GitHub's size limit._"
 _NOT_INSTALLED = "gh CLI is not installed or not in PATH. Install it from https://cli.github.com/"
@@ -174,7 +171,7 @@ def _parse_remote_url(remote_url: str) -> str | None:
 
 
 # --------------------------------------------------------------------------------------------------------------------
-# Review text
+# Size limits
 # --------------------------------------------------------------------------------------------------------------------
 
 
@@ -182,140 +179,6 @@ def _truncate_body(body: str) -> str:
     if len(body) <= _MAX_REVIEW_BODY_CHARS:
         return body
     return body[: _MAX_REVIEW_BODY_CHARS - len(_TRUNCATION_NOTICE)] + _TRUNCATION_NOTICE
-
-
-def coverage_table(file_reviews: Sequence[Any]) -> str:
-    """Markdown table of coverage on changed lines. A percentage below 80 is bold."""
-    header = "| File | Covered Lines | Instrumented Changed Lines | Coverage % |"
-    alignment = "| :--- | ---: | ---: | ---: |"
-    rows = []
-    for fr in file_reviews:
-        if fr.coverage_pct is None:
-            continue
-        pct_str = f"{fr.coverage_pct:.1f}%"
-        if fr.coverage_pct < 80.0:
-            pct_str = f"**{pct_str}**"
-        rows.append(f"| {fr.file_path} | {fr.covered_lines} | {fr.instrumented_changed_lines} | {pct_str} |")
-    if not rows:
-        return ""
-    return "\n".join([header, alignment, *rows])
-
-
-def _issue_body(issue: Any) -> str:
-    body = f"**{issue.rule}** {issue.message}"
-    if issue.doc_url:
-        body += f"\n\n{issue.doc_url}"
-    if issue.root_cause:
-        body += (
-            f"\n\n<details>\n\n<summary>{issue.rule} — why this matters</summary>\n\n{issue.root_cause}\n\n</details>"
-        )
-    return body
-
-
-def _collect_file_comments(
-    file_review: Any, base_branch: str, comments: list[tuple[str, int, str]], nearby_lines: list[str]
-) -> None:
-    for issue in file_review.issues:
-        body = _issue_body(issue)
-        if issue.on_changed_line:
-            comments.append((file_review.file_path, issue.line, body))
-        else:
-            nearby_lines.append(f"- **{issue.rule}** ({file_review.file_path}:{issue.line}) {issue.message}")
-    for dup in file_review.duplications:
-        locations = ", ".join(f"`{loc.file_path}` lines {loc.from_line}-{loc.to_line}" for loc in dup.other_locations)
-        body = (
-            f"**Duplication detected** (lines {dup.from_line}-{dup.to_line})\n\n"
-            f"This block is duplicated in: {locations}"
-        )
-        # anchor_line is a changed line in the diff, so the host accepts the comment. Older reports lack it.
-        anchor = dup.anchor_line if dup.anchor_line is not None else dup.from_line
-        comments.append((file_review.file_path, anchor, body))
-    for res in file_review.resolved_duplications:
-        other = "\n".join(f"- `{loc.file_path}` lines {loc.from_line}-{loc.to_line}" for loc in res.other_locations)
-        body = (
-            f"**Possible missed update** - lines {res.main_from_line}-{res.main_to_line} in `{base_branch}` were duplicated.\n\n"
-            "You modified this region. The duplication may be resolved here, but check the other instances:\n\n"
-            f"{other}"
-        )
-        comments.append((file_review.file_path, res.anchor_new_line, body))
-
-
-def _build_summary(report: Any, inline: int, capped: int, nearby: int) -> str:
-    label_suffix = f" [{report.project_label}]" if report.project_label else ""
-    sha_suffix = f" (commit {report.head_sha[:7]})" if report.head_sha else ""
-    total = inline + capped + nearby
-    if not total:
-        return f"SonarQube{label_suffix}: no findings on or near changed lines.{sha_suffix}"
-    counts = [(inline, "inline"), (capped, "capped"), (nearby, "near changed lines")]
-    breakdown = ", ".join(f"{n} {name}" for n, name in counts if n)
-    return f"SonarQube{label_suffix}: {total} finding(s) ({breakdown}).{sha_suffix}"
-
-
-def _build_overflow_section(overflow: list[tuple[str, int, str]]) -> str:
-    visible = overflow[:_MAX_OVERFLOW_BODY_LINES]
-    overflow_lines = [f"- **{path}:{line}** {body.splitlines()[0]}" for path, line, body in visible]
-    extra = len(overflow) - len(visible)
-    suffix = f"\n_...and {extra} more not shown._" if extra else ""
-    return (
-        f"**{len(overflow)} finding(s) over the {_MAX_INLINE_COMMENTS}-comment inline limit**"
-        f" (capped to avoid GitHub rate limits):\n" + "\n".join(overflow_lines) + suffix
-    )
-
-
-def _build_review(report: Any) -> ReviewPreview:
-    """Review body and inline comments for ``report``. The only place that builds review text."""
-    all_comments: list[tuple[str, int, str]] = []
-    nearby_lines: list[str] = []
-    for file_review in report.files:
-        _collect_file_comments(file_review, report.base_branch, all_comments, nearby_lines)
-
-    comments, overflow = all_comments[:_MAX_INLINE_COMMENTS], all_comments[_MAX_INLINE_COMMENTS:]
-
-    body_parts = [_build_summary(report, len(comments), len(overflow), len(nearby_lines))]
-    if nearby_lines:
-        body_parts.append(
-            "**Issues near changed lines** (outside diff — shown here instead of inline):\n" + "\n".join(nearby_lines)
-        )
-    if overflow:
-        body_parts.append(_build_overflow_section(overflow))
-    files_with_coverage = [fr for fr in report.files if fr.coverage_pct is not None]
-    if files_with_coverage:
-        body_parts.append("**Coverage on changed lines:**\n\n" + coverage_table(files_with_coverage))
-    return ReviewPreview(
-        body=_truncate_body("\n\n".join(body_parts)),
-        inline_comments=[InlineComment(body, Anchor(path, line, "RIGHT")) for path, line, body in comments],
-    )
-
-
-def _build_fallback_body(report: Any) -> str:
-    """Top-level fallback text: every issue, duplication and resolved duplication as a bullet, plus coverage."""
-    sha_suffix = f" (commit {report.head_sha[:7]})" if report.head_sha else ""
-    lines: list[str] = [f"SonarQube fallback review{sha_suffix}"] if sha_suffix else []
-    seen_rules: set[str] = set()
-    for file_review in report.files:
-        for issue in file_review.issues:
-            lines.append(f"- **{issue.rule}** ({file_review.file_path}:{issue.line}) {issue.message}")
-            if issue.root_cause and issue.rule not in seen_rules:
-                seen_rules.add(issue.rule)
-                lines.append(
-                    f"\n<details>\n\n<summary>{issue.rule} — why this matters</summary>"
-                    f"\n\n{issue.root_cause}\n\n</details>\n"
-                )
-        for dup in file_review.duplications:
-            lines.append(
-                f"- **Duplication** ({file_review.file_path} lines {dup.from_line}-{dup.to_line}) "
-                f"duplicated in {len(dup.other_locations)} other location(s)"
-            )
-        for res in file_review.resolved_duplications:
-            lines.append(
-                f"- **Possible missed update** ({file_review.file_path}) - "
-                f"lines {res.main_from_line}-{res.main_to_line} in main were duplicated; "
-                f"{len(res.other_locations)} other instance(s) may need updating"
-            )
-    files_with_coverage = [fr for fr in report.files if fr.coverage_pct is not None]
-    if files_with_coverage:
-        lines.extend(["", "**Coverage on changed lines:**\n\n" + coverage_table(files_with_coverage)])
-    return _truncate_body("\n".join(lines))
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -503,10 +366,6 @@ def _review_endpoint(repo: RepositoryRef, number: int) -> list[str]:
 
 
 class _Discussion:
-    async def preview_review(self, report: object) -> ReviewPreview:
-        """Review body and inline comments for ``report``. Makes no host call."""
-        return _build_review(report)
-
     async def post_review(
         self,
         repo: RepositoryRef,
@@ -515,7 +374,7 @@ class _Discussion:
         body: str,
         inline_comments: Sequence[InlineComment],
         head_revision: str | None = None,
-        report: object | None = None,
+        fallback_body: str | None = None,
     ) -> ReviewPostResult:
         """Post the review. On a rejection post one top-level fallback comment.
 
@@ -526,10 +385,10 @@ class _Discussion:
         cmd = _review_endpoint(repo, number)
         payload = {
             "event": "COMMENT",
-            "body": body,
+            "body": _truncate_body(body),
             "comments": [
                 {"path": c.anchor.path, "line": c.anchor.line, "side": c.anchor.side, "body": c.body}
-                for c in inline_comments
+                for c in inline_comments[:_MAX_INLINE_COMMENTS]
             ],
         }
         try:
@@ -537,9 +396,9 @@ class _Discussion:
         except _RejectedError as inline_err:  # Only a rejection is safe to retry. Anything else may have posted.
             reason = str(inline_err)
             logger.warning("Inline review failed (%s) — falling back to top-level comment", reason)
-            fallback_body = body if report is None else _build_fallback_body(report)
+            fallback = _truncate_body(body if fallback_body is None else fallback_body)
             try:
-                await _post_json(cmd, {"event": "COMMENT", "body": fallback_body, "comments": []})
+                await _post_json(cmd, {"event": "COMMENT", "body": fallback, "comments": []})
             except CodeHostTimeoutError:
                 raise  # The fallback may have posted. Keep the type that says do not retry.
             except CodeHostError as e:

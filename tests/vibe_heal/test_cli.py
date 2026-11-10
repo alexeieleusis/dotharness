@@ -1018,10 +1018,15 @@ class TestReviewCommand:
 
     @patch("dotharness.vibe_heal.review.reporter.load_report_from_path")
     def test_review_post_fallback_warning(self, mock_load_report: MagicMock, fake_code_host) -> None:
-        report = _post_report(total_issues=1)
-        issue = MagicMock(rule="r:1", message="m", line=3, on_changed_line=True)
-        report.files = [MagicMock(file_path="a.py", issues=[issue])]
-        mock_load_report.return_value = report
+        from dotharness.vibe_heal.review.models import FileReview, ReviewIssue, ReviewResult
+
+        issue = ReviewIssue(rule="r:1", message="m", line=3)
+        mock_load_report.return_value = ReviewResult(
+            project_key="p",
+            branch="feature-test",
+            base_branch="main",
+            files=[FileReview(file_path="a.py", issues=[issue])],
+        )
         fake_code_host.reject_inline_reviews("bad line")
 
         result = runner.invoke(app, ["review", "--post", "--pr", "3", "--report-file", "/nonexistent/review.json"])

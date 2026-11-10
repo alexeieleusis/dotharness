@@ -68,7 +68,7 @@ names", which lists the names you must not use.
    where a token value is needed.
 3. Run the subclass with your test runner. A pass means the implementation behaves as the asserted behaviors describe for every
    capability it declares.
-4. The review-flow behaviors (B-NCR, B-REV, B-PRV, B-LIM, B-SEC) are in the same base class. The seeder you supply stubs your
+4. The review-flow behaviors (B-NCR, B-REV, B-LIM, B-SEC) are in the same base class. The seeder you supply stubs your
    transport and records posts (`HostSeeder` in `dotharness.code_host.testing`).
 5. Consumer tests that need a host without a network can use the in-memory fake instead.
 

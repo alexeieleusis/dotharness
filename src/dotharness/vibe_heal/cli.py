@@ -42,6 +42,7 @@ from dotharness.vibe_heal.review.orchestrator import (
     post_report,
     resolve_change_request_number,
 )
+from dotharness.vibe_heal.review.render import build_review
 from dotharness.vibe_heal.review.reporter import default_report_dir
 from dotharness.vibe_heal.sonarqube.client import SonarQubeClient
 from dotharness.vibe_heal.sonarqube.project_manager import ProjectManager, StaleProject
@@ -1041,10 +1042,9 @@ async def _run_review_post(
     pr = await resolve_change_request_number(code_host, pr_number, verbose)
 
     if dry_run:
-        preview = await code_host.discussion.preview_review(report)
-        comments = preview.inline_comments
+        body, comments = build_review(report, code_host.declaration.limits.max_inline_comments_per_review)
         warn(f"[dry-run] Would post {len(comments)} inline comment(s) to PR #{pr}:")
-        dim(f"Review body: {preview.body}")
+        dim(f"Review body: {body}")
         for comment in comments:
             dim(f"\n  {comment.anchor.path}:{comment.anchor.line}")
             console.print(comment.body)

@@ -34,7 +34,6 @@ from dotharness.code_host.models import (
     InlineComment,
     RepositoryRef,
     ReviewPostResult,
-    ReviewPreview,
 )
 from dotharness.code_host.reference import DECLARATION
 
@@ -43,42 +42,6 @@ SECRET = "<token>"  # noqa: S105
 NO_CHANGE_REQUEST_TEXT = "No open pull request found for the current branch"
 _TRUNCATION_NOTICE = "\n\n_...review body truncated to fit the host size limit._"
 _BASE_DATE = "2026-01-01T00:00:00Z"
-
-# --------------------------------------------------------------------------------------------------------------------
-# Host-neutral report (duck-typed by hosts)
-# --------------------------------------------------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class ReportIssue:
-    rule: str
-    message: str
-    line: int
-    on_changed_line: bool = True
-    doc_url: str | None = None
-    root_cause: str | None = None
-
-
-@dataclass(frozen=True)
-class ReportFile:
-    file_path: str
-    issues: Sequence[ReportIssue] = ()
-    duplications: Sequence[Any] = ()
-    resolved_duplications: Sequence[Any] = ()
-    coverage_pct: float | None = None
-    covered_lines: int = 0
-    instrumented_changed_lines: int = 0
-
-
-@dataclass(frozen=True)
-class ReportResult:
-    """A review result in the shape every host reads by duck typing."""
-
-    files: Sequence[ReportFile]
-    base_branch: str = "main"
-    project_label: str | None = None
-    head_sha: str | None = None
-
 
 # --------------------------------------------------------------------------------------------------------------------
 # Seeder protocol and target
@@ -333,46 +296,13 @@ class _FakeChangeRequests:
         return _unsupported_op
 
 
-def _build_preview(report: Any, max_inline: int, max_body: int) -> ReviewPreview:
-    comments: list[InlineComment] = []
-    nearby: list[str] = []
-    for file_review in report.files:
-        for issue in file_review.issues:
-            if issue.on_changed_line:
-                comments.append(
-                    InlineComment(
-                        f"**{issue.rule}** {issue.message}", Anchor(file_review.file_path, issue.line, "RIGHT")
-                    )
-                )
-            else:
-                nearby.append(f"- **{issue.rule}** ({file_review.file_path}:{issue.line}) {issue.message}")
-    shown, extra = comments[:max_inline], len(comments) - max_inline
-    parts = [f"Review: {len(shown)} inline, {max(extra, 0)} capped, {len(nearby)} near changed lines."]
-    if nearby:
-        parts.append("**Issues near changed lines:**\n" + "\n".join(nearby))
-    body = "\n\n".join(parts)
-    if len(body) > max_body:
-        body = body[: max_body - len(_TRUNCATION_NOTICE)] + _TRUNCATION_NOTICE
-    return ReviewPreview(body=body, inline_comments=shown)
-
-
-def _fallback_text(report: Any, max_body: int) -> str:
-    lines = [f"- **{i.rule}** ({f.file_path}:{i.line}) {i.message}" for f in report.files for i in f.issues]
-    text = "Fallback review\n" + "\n".join(lines)
-    if len(text) > max_body:
-        text = text[: max_body - len(_TRUNCATION_NOTICE)] + _TRUNCATION_NOTICE
-    return text
+def _truncate(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - len(_TRUNCATION_NOTICE)] + _TRUNCATION_NOTICE
 
 
 class _FakeDiscussion:
     def __init__(self, host: InMemoryCodeHost) -> None:
         self._host = host
-
-    async def preview_review(  # NOSONAR python:S7503 - implements an async protocol
-        self, report: object
-    ) -> ReviewPreview:
-        limits = self._host.declaration.limits
-        return _build_preview(report, limits.max_inline_comments_per_review, limits.max_review_body_chars)
 
     def _attempt(self, *, inline: bool) -> str | None:
         """Count one post attempt. Raise an injected error. Return a rejection reason, or None to accept."""
@@ -395,16 +325,17 @@ class _FakeDiscussion:
         body: str,
         inline_comments: Sequence[InlineComment],
         head_revision: str | None = None,
-        report: object | None = None,
+        fallback_body: str | None = None,
     ) -> ReviewPostResult:
         self._host.require_client()
+        limits = self._host.declaration.limits
+        body = _truncate(body, limits.max_review_body_chars)
+        inline_comments = inline_comments[: limits.max_inline_comments_per_review]
         reason = self._attempt(inline=bool(inline_comments))
         if reason is None:
             self._host._posts.append(PostedItem("review", body, len(inline_comments)))
             return ReviewPostResult(fell_back=False, review=None, comment=None)
-        fallback = (
-            body if report is None else _fallback_text(report, self._host.declaration.limits.max_review_body_chars)
-        )
+        fallback = body if fallback_body is None else _truncate(fallback_body, limits.max_review_body_chars)
         fallback_reason = self._attempt(inline=False)
         if fallback_reason is not None:
             msg = f"Review posting failed: {fallback_reason}"
@@ -446,13 +377,6 @@ def _chain(exc: BaseException | None) -> list[BaseException]:
     return seen
 
 
-def _make_report(*, on_changed: int = 0, nearby_chars: int = 0) -> ReportResult:
-    issues = [ReportIssue(rule=f"rule:{i}", message=f"message {i}", line=i + 1) for i in range(on_changed)]
-    if nearby_chars:
-        issues.append(ReportIssue(rule="rule:big", message="x" * nearby_chars, line=1, on_changed_line=False))
-    return ReportResult(files=[ReportFile("src/a.py", issues)], project_label="proj", head_sha="abcdef123456")
-
-
 def _dummy_args(method: Callable[..., Any]) -> tuple[list[Any], dict[str, Any]]:
     args: list[Any] = []
     kwargs: dict[str, Any] = {}
@@ -480,11 +404,16 @@ class CodeHostConformance:
         raise NotImplementedError
 
     async def _post(
-        self, target: ConformanceTarget, *, report: object | None = None, inline: int = 1, body: str = "given body"
+        self,
+        target: ConformanceTarget,
+        *,
+        fallback_body: str | None = None,
+        inline: int = 1,
+        body: str = "given body",
     ) -> ReviewPostResult:
         comments = [InlineComment(f"c{i}", Anchor("src/a.py", i + 1, "RIGHT")) for i in range(inline)]
         return await target.host.discussion.post_review(
-            target.repository, 7, body=body, inline_comments=comments, report=report
+            target.repository, 7, body=body, inline_comments=comments, fallback_body=fallback_body
         )
 
     # -- session and change request ------------------------------------------------------------------------------
@@ -553,18 +482,16 @@ class CodeHostConformance:
         posts = target.seeder.posts()
         assert [p.kind for p in posts] == ["comment"]
         assert posts[0].inline_count == 0
-        assert posts[0].body == "given body"  # report is None: the given body is the comment
+        assert posts[0].body == "given body"  # no fallback_body: the given body is the comment
 
-    async def test_fallback_text_built_from_report(self) -> None:
-        """B-REV-3: with a report the fallback comment is built from the report and lists its findings."""
+    async def test_fallback_body_posted(self) -> None:
+        """B-REV-3: with a fallback_body the fallback comment is that text."""
         target = await self.make_target()
         target.seeder.reject_inline_reviews("rejected")
-        result = await self._post(target, report=_make_report(on_changed=2))
+        result = await self._post(target, fallback_body="fallback text")
         assert result.fell_back is True
         (post,) = target.seeder.posts()
-        assert post.kind == "comment"
-        assert "rule:0" in post.body
-        assert "rule:1" in post.body
+        assert post == PostedItem("comment", "fallback text")
 
     async def test_reason_only_when_fell_back(self) -> None:
         """B-REV-4: reason is set if and only if fell_back is true."""
@@ -612,20 +539,6 @@ class CodeHostConformance:
 
     # -- preview and limits --------------------------------------------------------------------------------------
 
-    async def test_preview_matches_post(self) -> None:
-        """B-PRV-1: the body in ReviewPreview is what post_review posts when it does not fall back."""
-        target = await self.make_target()
-        report = _make_report(on_changed=3)
-        preview = await target.host.discussion.preview_review(report)
-        assert target.seeder.post_attempts() == 0  # a preview makes no host call
-        result = await target.host.discussion.post_review(
-            target.repository, 7, body=preview.body, inline_comments=preview.inline_comments, report=report
-        )
-        assert result.fell_back is False
-        (post,) = target.seeder.posts()
-        assert post == PostedItem("review", preview.body, len(preview.inline_comments))
-        assert len(preview.inline_comments) == 3
-
     async def test_declared_limits(self) -> None:
         """B-LIM-1: the host declares 50 inline comments and 60000 body characters."""
         target = await self.make_target()
@@ -634,19 +547,27 @@ class CodeHostConformance:
         assert limits.max_review_body_chars == 60_000
 
     async def test_inline_comments_capped(self) -> None:
-        """B-LIM-2: the preview carries at most the declared number of inline comments."""
+        """B-LIM-2: a review posts at most the declared number of inline comments."""
         target = await self.make_target()
         cap = target.host.declaration.limits.max_inline_comments_per_review
-        preview = await target.host.discussion.preview_review(_make_report(on_changed=cap + 10))
-        assert len(preview.inline_comments) == cap
+        await self._post(target, inline=cap + 10)
+        (post,) = target.seeder.posts()
+        assert post.inline_count == cap
 
     async def test_body_truncated_with_notice(self) -> None:
-        """B-LIM-3: a body above the declared limit is cut to the limit and ends with a notice."""
+        """B-LIM-3: a body or fallback body above the declared limit is cut to the limit and ends with a notice."""
         target = await self.make_target()
         limit = target.host.declaration.limits.max_review_body_chars
-        preview = await target.host.discussion.preview_review(_make_report(nearby_chars=limit + 5_000))
-        assert len(preview.body) <= limit
-        assert "truncated" in preview.body[-200:].lower()
+        await self._post(target, body="x" * (limit + 5_000))
+        (post,) = target.seeder.posts()
+        assert len(post.body) <= limit
+        assert "truncated" in post.body[-200:].lower()
+        target = await self.make_target()
+        target.seeder.reject_inline_reviews("rejected")
+        await self._post(target, fallback_body="y" * (limit + 5_000))
+        (post,) = target.seeder.posts()
+        assert len(post.body) <= limit
+        assert "truncated" in post.body[-200:].lower()
 
     # -- errors --------------------------------------------------------------------------------------------------
 
@@ -714,7 +635,7 @@ class CodeHostConformance:
                 seen.extend([repr(target.host), repr(target.host.declaration)])
                 for call in (
                     target.host.change_requests.for_current_branch(target.repository),
-                    self._post(target, report=_make_report(on_changed=1)),
+                    self._post(target),
                 ):
                     try:
                         result = await call

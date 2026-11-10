@@ -26,7 +26,6 @@ from dotharness.code_host.models import (
     InlineComment,
     RepositoryRef,
     ReviewPostResult,
-    ReviewPreview,
 )
 
 
@@ -84,12 +83,11 @@ def test_review_post_result_reason_default() -> None:
     assert ReviewPostResult(True, None, None, reason="bad anchor").reason == "bad anchor"
 
 
-def test_preview_and_inline_frozen() -> None:
+def test_inline_comment_frozen() -> None:
     ic = InlineComment("b", Anchor("a.py", 3, "RIGHT"))
-    p = ReviewPreview("body", [ic])
-    assert p.inline_comments[0].anchor.line == 3
+    assert ic.anchor.line == 3
     with pytest.raises(dataclasses.FrozenInstanceError):
-        p.body = "x"  # ty: ignore[invalid-assignment]
+        ic.body = "x"  # ty: ignore[invalid-assignment]
 
 
 def test_credential_repr_hides_token() -> None:
@@ -138,22 +136,19 @@ def test_protocols_are_async() -> None:
 def test_post_review_signature() -> None:
     sig = inspect.signature(ch.Discussion.post_review)
     params = sig.parameters
-    for name in ("body", "inline_comments", "head_revision", "report"):
+    for name in ("body", "inline_comments", "head_revision", "fallback_body"):
         assert params[name].kind is inspect.Parameter.KEYWORD_ONLY
     assert params["head_revision"].default is None
-    assert params["report"].default is None
+    assert params["fallback_body"].default is None
     assert list(params)[:3] == ["self", "repo", "number"]
 
 
 def test_stub_discussion_conforms() -> None:
     class StubDiscussion:
         async def post_review(
-            self, repo, number, *, body, inline_comments, head_revision=None, report=None
+            self, repo, number, *, body, inline_comments, head_revision=None, fallback_body=None
         ) -> ReviewPostResult:
             return ReviewPostResult(False, None, None)
-
-        async def preview_review(self, report: object) -> ReviewPreview:
-            return ReviewPreview("", [])
 
     import asyncio
 

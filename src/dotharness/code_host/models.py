@@ -1,6 +1,5 @@
 """Host-neutral value types accepted and returned by the capability interfaces."""
 
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -123,14 +122,6 @@ class ReviewPostResult:
     review: Review | None
     comment: Comment | None
     reason: str | None = None
-
-
-@dataclass(frozen=True)
-class ReviewPreview:
-    """Text and inline comments a review would post, built without any host call."""
-
-    body: str
-    inline_comments: Sequence[InlineComment]
 
 
 @dataclass(frozen=True)

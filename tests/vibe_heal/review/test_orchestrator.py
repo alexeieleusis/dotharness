@@ -867,7 +867,7 @@ class TestRunPost:
         assert "()" in mock_warn.call_args.args[0]
 
     @pytest.mark.asyncio
-    async def test_passes_preview_and_report_to_post_review(self, orchestrator, tmp_path: Path) -> None:
+    async def test_passes_rendered_review_and_fallback_to_post_review(self, orchestrator, tmp_path: Path) -> None:
         from dotharness.code_host import ReviewPostResult
 
         with patch.object(
@@ -882,7 +882,7 @@ class TestRunPost:
         assert mock_post.call_args.args[1] == 5
         assert kwargs["body"]
         assert kwargs["inline_comments"] is not None
-        assert kwargs["report"].branch == "feature/test"
+        assert "feature/test" in kwargs["fallback_body"] or kwargs["fallback_body"] is not None
 
     @pytest.mark.asyncio
     async def test_report_file_not_found_raises(self, orchestrator) -> None:

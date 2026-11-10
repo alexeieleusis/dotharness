@@ -794,27 +794,19 @@ class Discussion(Protocol):
         body: str,
         inline_comments: Sequence[InlineComment],
         head_revision: str | None = None,
-        report: object | None = None,
+        fallback_body: str | None = None,
     ) -> ReviewPostResult:
         """Post a review. If the host rejects the review or its anchors, post a top-level comment instead.
 
         The host owns this single fallback; the consumer does not catch and re-post, it reads `ReviewPostResult.fell_back`
-        and `ReviewPostResult.reason`. `report` is the tool's host-neutral review result, typed `object | None` because
-        `code_host` imports nothing from the tool packages. It is keyword-only. With a `report` the host builds the fallback
-        text from it. With `report=None` the fallback comment is `body`.
+        and `ReviewPostResult.reason`. The caller renders all text: `body`, the inline comments and `fallback_body`. The host
+        applies only its declared size limits (it truncates the bodies with a notice and drops inline comments over the cap),
+        the anchor rules and the fallback. The fallback comment is `fallback_body`, or `body` when that is None.
         The host never falls back after `CodeHostTimeoutError` (the review may already exist), `AuthenticationError` or
         `UnsupportedCapabilityError`; those propagate as raised. It falls back at most once: if the top-level post also
         fails, that error propagates (`CodeHostError`) and nothing else is posted.
         Size limits and anchor rules are declared (Declarations section), not parameters.
         May raise OSError when the host client is unavailable.
-        """
-        ...
-
-    async def preview_review(self, report: object) -> ReviewPreview:
-        """Build the review body and inline comments for `report` without posting. Makes no host call.
-
-        The body is what `post_review` posts when it does not fall back. The inline comments are capped at the declared
-        limit and the body is truncated, with a notice, at the declared limit.
         """
         ...
 
@@ -829,7 +821,6 @@ class Discussion(Protocol):
 | `review_threads` | GraphQL review-thread state and unresolved count | INV-PR-17, INV-PR-39, INV-PR-18, INV-LO-03 |
 | `post_comment` | `pr comment` | INV-PR-10, INV-PR-36 |
 | `post_review` | POST review with inline comments, and the fallback comment | INV-VH-03, INV-VH-04 |
-| `preview_review` | review text built from the report, with the declared caps (no host call) | INV-VH-03 |
 | `reply` | POST reply in a thread | INV-LO-04 |
 
 INV-LO-06 (documentation copy, not migrated) is not covered by any method. How `scripts/pr-comments.py` reaches this
@@ -1070,12 +1061,6 @@ class ReviewPostResult:
     review: Review | None
     comment: Comment | None
     reason: str | None = None  # set by the host only when fell_back is true: the rejection text, with secrets redacted by the host
-
-
-@dataclass(frozen=True)
-class ReviewPreview:
-    body: str
-    inline_comments: Sequence[InlineComment]
 
 
 @dataclass(frozen=True)
@@ -1967,25 +1952,24 @@ model says consumers must not retry after `write=True` and defines no idempotenc
 | B-NCR-3 | With no change request it raises `NoChangeRequestError` (a `CodeHostError`) whose text is "No open pull request found for the current branch". |
 | B-NCR-4 | An unavailable host client raises `OSError` from `for_current_branch` and `post_review`, and nothing is posted. |
 | B-REV-1 | An accepted `post_review` returns `fell_back=False` and `reason=None`, and posts the body and inline comments as given. |
-| B-REV-2 | A rejected review falls back to one top-level comment: `fell_back=True`, `reason` holds the rejection text. With `report=None` the comment is `body`. |
-| B-REV-3 | With a `report`, the fallback comment is built from the report and lists its findings. |
+| B-REV-2 | A rejected review falls back to one top-level comment: `fell_back=True`, `reason` holds the rejection text. With no `fallback_body` the comment is `body`. |
+| B-REV-3 | With a `fallback_body`, the fallback comment is that text. |
 | B-REV-4 | `reason` is set if and only if `fell_back` is true. |
 | B-REV-5 | `CodeHostTimeoutError`, `AuthenticationError` and `UnsupportedCapabilityError` propagate with exactly one attempt and no fallback. |
 | B-REV-6 | When the fallback is also rejected, a `CodeHostError` propagates after exactly two attempts (one fallback only). |
-| B-PRV-1 | The `ReviewPreview.body` from `preview_review` is what `post_review` posts when it does not fall back. The preview makes no host call. |
 | B-LIM-1 | The declaration holds 50 inline comments and 60 000 body characters. |
-| B-LIM-2 | The preview carries at most the declared number of inline comments. |
-| B-LIM-3 | A body above the declared limit is cut to the limit and ends with a truncation notice. |
+| B-LIM-2 | A review posts at most the declared number of inline comments. |
+| B-LIM-3 | A body or fallback body above the declared limit is cut to the limit and ends with a truncation notice. |
 | B-SEC-1 | With the sentinel `<token>`, no exception message, `__cause__` chain, log record, `repr` (host, declaration, results) or `ReviewPostResult.reason` contains it, across the failure scenarios above. |
 
 B-ERR-4 and B-ERR-6 are run by the same class: every method of each undeclared capability raises
 `UnsupportedCapabilityError(capability=<interface name>)`, and the error types are `CodeHostError` subclasses.
 
 `InMemoryCodeHost` in Phase 1 implements the review-flow subset: Session (`available`, `current_user`), Repository, ChangeRequests
-(`for_current_branch`, `find_by_branch`) and Discussion (`preview_review`, `post_review`). It declares the limits and anchor
+(`for_current_branch`, `find_by_branch`) and Discussion (`post_review`). It declares the limits and anchor
 rules of the reference host. Its declaration lists Session, Repository, ChangeRequests and Discussion; Checks and WorkItems are
 undeclared. Methods of a declared capability outside the review-flow subset also raise `UnsupportedCapabilityError`, and no suite
-group calls them (B-ERR-4 covers only undeclared capabilities). The B-NCR/B-REV/B-PRV/B-LIM/B-SEC ids above are the groups
+group calls them (B-ERR-4 covers only undeclared capabilities). The B-NCR/B-REV/B-LIM/B-SEC ids above are the groups
 the fake passes; the per-method groups for the full interfaces are the design target, not a Phase 1 requirement for the fake. The seeding and
 injection methods of the table in "In-memory fake" below are the full design target. The review-flow seeder methods above are
 what exists. A test can set the current repository, the current-branch change request (or none), availability, a rejection

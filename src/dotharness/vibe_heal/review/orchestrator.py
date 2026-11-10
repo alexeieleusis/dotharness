@@ -29,6 +29,7 @@ from dotharness.vibe_heal.review.models import (
     ReviewIssue,
     ReviewResult,
 )
+from dotharness.vibe_heal.review.render import build_fallback_body, build_review
 from dotharness.vibe_heal.review.reporter import (
     default_report_dir,
     load_report_from_path,
@@ -123,16 +124,12 @@ async def resolve_change_request_number(code_host: CodeHost, pr_number: int | No
 
 
 async def post_report(code_host: CodeHost, report: ReviewResult, number: int) -> None:
-    """Preview the review, post it and print the outcome (a warning first when the host fell back)."""
+    """Render the review, post it and print the outcome (a warning first when the host fell back)."""
     await ensure_host_available(code_host)
     repo = await code_host.repository.current()
-    preview = await code_host.discussion.preview_review(report)
+    body, inline_comments = build_review(report, code_host.declaration.limits.max_inline_comments_per_review)
     result = await code_host.discussion.post_review(
-        repo,
-        number,
-        body=preview.body,
-        inline_comments=preview.inline_comments,
-        report=report,
+        repo, number, body=body, inline_comments=inline_comments, fallback_body=build_fallback_body(report)
     )
     if result.fell_back:
         warn(
