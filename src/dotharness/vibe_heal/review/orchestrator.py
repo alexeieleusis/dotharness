@@ -5,6 +5,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from dotharness.code_host import CodeHost, CodeHostError
+from dotharness.code_host.reference import _NOT_INSTALLED as NOT_INSTALLED_MESSAGE
 from dotharness.vibe_heal.config import VibeHealConfig
 from dotharness.vibe_heal.deduplication.client import DuplicationClient
 from dotharness.vibe_heal.deduplication.models import DuplicationGroup, DuplicationsResponse
@@ -18,7 +20,6 @@ from dotharness.vibe_heal.review.duplication_scope import (
     changed_lines_in_block,
     get_resolved_duplications,
 )
-from dotharness.vibe_heal.review.github import GitHubReviewClient
 from dotharness.vibe_heal.review.line_filter import IssueLineFilter
 from dotharness.vibe_heal.review.models import (
     FileDiagnostics,
@@ -87,6 +88,64 @@ class BaselineScanResult(BaseModel):
     error_message: str | None = None
 
 
+async def ensure_host_available(code_host: CodeHost) -> None:
+    """Raise OSError with the host's own text when its client is not available."""
+    if not await code_host.session.available():
+        raise OSError(NOT_INSTALLED_MESSAGE)
+
+
+async def detect_base_branch(code_host: CodeHost) -> str | None:
+    """Return the base branch of the current change request, or None. Never raises (a failure means None)."""
+    try:
+        repo = await code_host.repository.current()
+        change_request = await code_host.change_requests.for_current_branch(repo)
+    except (CodeHostError, OSError):
+        return None
+    return change_request.base_reference or None
+
+
+async def resolve_change_request_number(code_host: CodeHost, pr_number: int | None, verbose: bool) -> int:
+    """Return the explicit number unchanged (no host call), else the number of the current branch's request.
+
+    Raises:
+        NoChangeRequestError: If the current branch has no open change request.
+    """
+    if pr_number is not None:
+        if verbose:
+            dim(f"  Using explicit PR #{pr_number}")
+        return pr_number
+    await ensure_host_available(code_host)
+    repo = await code_host.repository.current()
+    change_request = await code_host.change_requests.for_current_branch(repo)
+    if verbose:
+        dim(f"  Auto-detected PR #{change_request.number}")
+    return change_request.number
+
+
+async def post_report(code_host: CodeHost, report: ReviewResult, number: int) -> None:
+    """Preview the review, post it and print the outcome (a warning first when the host fell back)."""
+    await ensure_host_available(code_host)
+    repo = await code_host.repository.current()
+    preview = await code_host.discussion.preview_review(report)
+    result = await code_host.discussion.post_review(
+        repo,
+        number,
+        body=preview.body,
+        inline_comments=preview.inline_comments,
+        report=report,
+    )
+    if result.fell_back:
+        warn(
+            f"Warning: inline review rejected by GitHub ({result.reason or ''}) — "
+            "posting as a top-level comment instead."
+        )
+    success(
+        f"Posted {report.total_issues} issue(s) and "
+        f"{report.total_duplications} duplication finding(s) "
+        f"as review comments on PR #{number}."
+    )
+
+
 class ReviewOrchestrator:
     """Orchestrates the review workflow: analyze changed lines for SonarQube issues.
 
@@ -106,6 +165,8 @@ class ReviewOrchestrator:
         client: SonarQubeClient,
         branch_analyzer: BranchAnalyzer | None = None,
         diff_parser: DiffParser | None = None,
+        *,
+        code_host: CodeHost,
     ) -> None:
         """Initialize the review orchestrator.
 
@@ -114,6 +175,7 @@ class ReviewOrchestrator:
             client: SonarQube API client.
             branch_analyzer: Optional BranchAnalyzer instance (for testing).
             diff_parser: Optional DiffParser instance (for testing).
+            code_host: The code host bundle created at startup.
         """
         self.config = config
         self.client = client
@@ -121,7 +183,7 @@ class ReviewOrchestrator:
         self.diff_parser = diff_parser if diff_parser is not None else DiffParser(Path.cwd())
         self.project_manager = ProjectManager(client)
         self.analysis_runner = AnalysisRunner(config, client)
-        self.github_client = GitHubReviewClient()
+        self.code_host = code_host
         self._rule_cache: dict[str, SonarQubeRule | None] = {}
 
     async def _resolve_base_branch(self, base_branch: str | None, verbose: bool) -> str:
@@ -130,7 +192,7 @@ class ReviewOrchestrator:
         Returns base_branch unchanged if the caller passed one explicitly
         (no gh call is made in that case — explicit intent always wins).
         Otherwise, attempts to auto-detect the real PR base via
-        GitHubReviewClient.detect_pr_base_branch(), prefixed with "origin/"
+        the code host's ChangeRequests.for_current_branch(), prefixed with "origin/"
         to match this codebase's remote-ref convention. Falls back to
         DEFAULT_BASE_BRANCH when no open PR is found (or gh is unavailable),
         preserving the pre-existing behavior for that case.
@@ -138,7 +200,7 @@ class ReviewOrchestrator:
         if base_branch is not None:
             return base_branch
 
-        detected = await self.github_client.detect_pr_base_branch()
+        detected = await detect_base_branch(self.code_host)
         if detected is None:
             if verbose:
                 dim(f"No open PR found; using default base branch: {DEFAULT_BASE_BRANCH}")
@@ -361,7 +423,7 @@ class ReviewOrchestrator:
         Workflow:
         1. Load report from JSON
         2. Detect or use explicit PR number
-        3. Post review comments via GitHubReviewClient
+        3. Post review comments via the code host
 
         Args:
             report_file: Path to the saved review.json file.
@@ -375,22 +437,10 @@ class ReviewOrchestrator:
             dim(f"  Report: branch={report.branch}, {report.total_issues} issue(s), {len(report.files)} file(s)")
 
         # Step 2: Detect PR number
-        if pr_number is not None:
-            pr = pr_number
-            if verbose:
-                dim(f"  Using explicit PR #{pr}")
-        else:
-            pr = await self.github_client.detect_pr()
-            if verbose:
-                dim(f"  Auto-detected PR #{pr}")
+        pr = await resolve_change_request_number(self.code_host, pr_number, verbose)
 
         # Step 3: Post review
-        await self.github_client.post_review(pr, report)
-        success(
-            f"Posted {report.total_issues} issue(s) and "
-            f"{report.total_duplications} duplication finding(s) "
-            f"as review comments on PR #{pr}."
-        )
+        await post_report(self.code_host, report, pr)
 
     async def _enrich_issues_with_descriptions(self, issues: list[ReviewIssue]) -> None:
         """Populate root_cause on each issue by fetching rule details from SonarQube.
@@ -504,6 +554,9 @@ class ReviewOrchestrator:
             return [], diag
 
         strict_lines = strict_changed_lines_map.get(repo_relative) if strict_changed_lines_map else None
+        if not self.code_host.declaration.anchors.requires_line_in_diff:
+            # The host accepts an inline comment on any line, so nothing needs the changed-line flag.
+            strict_lines = None
         filtered = IssueLineFilter.filter_issues(issues, changed_lines, strict_changed_lines=strict_lines)
 
         if verbose and filtered:

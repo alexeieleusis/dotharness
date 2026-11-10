@@ -1,13 +1,15 @@
 """Configuration models."""
 
+import json
 from pathlib import Path
-from typing import Any, Self, cast
+from typing import Annotated, Any, Self, cast
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
     InitSettingsSource,
+    NoDecode,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
@@ -15,6 +17,8 @@ from pydantic_settings import (
 from dotharness.vibe_heal.ai_tools.base import AIToolType
 from dotharness.vibe_heal.config.exceptions import InvalidConfigurationError
 from dotharness.vibe_heal.config.scanner_discovery import resolve_scanner_auth, resolve_scanner_host_url
+
+REDACTED_VALUE = "<redacted>"
 
 
 class VibeHealConfig(BaseSettings):
@@ -70,6 +74,18 @@ class VibeHealConfig(BaseSettings):
     pre_commit_timeout_seconds: int = Field(
         default=300,
         description="Max seconds to wait for the pre-commit hook subprocess before killing it",
+    )
+
+    # Code host settings (the env prefix is empty, so the aliases carry the full variable names)
+    code_host: str | None = Field(
+        default=None,
+        validation_alias="DOTHARNESS_CODE_HOST",
+        description="Code host name or 'module:attribute' path (the reference host when unset)",
+    )
+    code_host_options: Annotated[dict[str, Any], NoDecode] = Field(
+        default_factory=dict,
+        validation_alias="DOTHARNESS_CODE_HOST_OPTIONS",
+        description="Code host options as a JSON object",
     )
 
     model_config = SettingsConfigDict(
@@ -179,6 +195,31 @@ class VibeHealConfig(BaseSettings):
                 raise InvalidConfigurationError(msg) from e
         msg = f"Invalid AI tool type: {type(v)}"
         raise InvalidConfigurationError(msg)
+
+    @field_validator("code_host_options", mode="before")
+    @classmethod
+    def parse_code_host_options(cls, v: Any) -> Any:
+        """Parse the options JSON object from the environment variable.
+
+        The message names the field and the error kind only. The raw value may hold a secret, so it is redacted.
+
+        Raises:
+            InvalidConfigurationError: If the value is not valid JSON or not a JSON object
+        """
+        if v is None or v == "":
+            return {}
+        if not isinstance(v, str):
+            return v
+        prefix = f'code host setting DOTHARNESS_CODE_HOST_OPTIONS = "{REDACTED_VALUE}": '
+        try:
+            parsed = json.loads(v)
+        except ValueError:
+            msg = prefix + "value is not valid JSON"
+            raise InvalidConfigurationError(msg) from None
+        if not isinstance(parsed, dict):
+            msg = prefix + "value is not a JSON object"
+            raise InvalidConfigurationError(msg) from None
+        return parsed
 
     @field_validator("sonarqube_url")
     @classmethod

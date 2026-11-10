@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from dotharness.code_host.testing import InMemoryCodeHost
+
 if TYPE_CHECKING:
     from dotharness.vibe_heal.config import VibeHealConfig
     from dotharness.vibe_heal.review.orchestrator import ReviewOrchestrator
@@ -126,7 +128,9 @@ class TestReviewOrchestratorInit:
         mock_client = AsyncMock()
         mock_analyzer = MagicMock()
         mock_parser = MagicMock()
-        orchestrator = ReviewOrchestrator(config, mock_client, mock_analyzer, mock_parser)
+        orchestrator = ReviewOrchestrator(
+            config, mock_client, mock_analyzer, mock_parser, code_host=InMemoryCodeHost().code_host()
+        )
 
         assert orchestrator.config == config
         assert orchestrator.client == mock_client
@@ -134,7 +138,8 @@ class TestReviewOrchestratorInit:
         assert orchestrator.diff_parser is mock_parser
         assert orchestrator.project_manager is not None
         assert orchestrator.analysis_runner is not None
-        assert orchestrator.github_client is not None
+        assert orchestrator.code_host is not None
+        assert not hasattr(orchestrator, "github_client")
 
 
 class TestResolveBaseBranch:
@@ -148,14 +153,17 @@ class TestResolveBaseBranch:
         mock_client = AsyncMock()
         mock_analyzer = MagicMock()
         mock_parser = MagicMock()
-        return ReviewOrchestrator(config, mock_client, mock_analyzer, mock_parser)
+        fake = InMemoryCodeHost()
+        orchestrator = ReviewOrchestrator(config, mock_client, mock_analyzer, mock_parser, code_host=fake.code_host())
+        orchestrator.fake = fake  # ty: ignore[unresolved-attribute]
+        return orchestrator
 
     @pytest.mark.asyncio
     async def test_explicit_base_branch_skips_detection(self, orchestrator) -> None:
-        """An explicit base_branch is returned as-is; gh is never called."""
+        """An explicit base_branch is returned as-is; the host is never called."""
         with patch.object(
-            orchestrator.github_client,
-            "detect_pr_base_branch",
+            orchestrator.code_host.change_requests,
+            "for_current_branch",
             new_callable=AsyncMock,
         ) as mock_detect:
             result = await orchestrator._resolve_base_branch("origin/develop", verbose=False)
@@ -166,24 +174,37 @@ class TestResolveBaseBranch:
     @pytest.mark.asyncio
     async def test_auto_detects_when_omitted(self, orchestrator) -> None:
         """When base_branch is None, the detected PR base is used with an origin/ prefix."""
-        with patch.object(
-            orchestrator.github_client,
-            "detect_pr_base_branch",
-            new_callable=AsyncMock,
-            return_value="feature/lower-in-stack",
-        ):
-            result = await orchestrator._resolve_base_branch(None, verbose=False)
+        orchestrator.fake.set_current_change_request(5, "feature/lower-in-stack")
+        result = await orchestrator._resolve_base_branch(None, verbose=False)
 
         assert result == "origin/feature/lower-in-stack"
 
     @pytest.mark.asyncio
     async def test_falls_back_to_default_when_no_pr_found(self, orchestrator) -> None:
-        """When detection returns None (no PR / gh unavailable), fall back to origin/main."""
+        """When there is no change request, fall back to origin/main."""
+        orchestrator.fake.set_current_change_request(None)
+        result = await orchestrator._resolve_base_branch(None, verbose=False)
+
+        assert result == "origin/main"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_default_when_client_unavailable(self, orchestrator) -> None:
+        """The OSError of a missing client never escapes (the never-raises rule)."""
+        orchestrator.fake.set_available(False)
+        result = await orchestrator._resolve_base_branch(None, verbose=False)
+
+        assert result == "origin/main"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_default_on_code_host_error(self, orchestrator) -> None:
+        """A CodeHostError from the host also means the default base branch."""
+        from dotharness.code_host import CodeHostError
+
         with patch.object(
-            orchestrator.github_client,
-            "detect_pr_base_branch",
+            orchestrator.code_host.change_requests,
+            "for_current_branch",
             new_callable=AsyncMock,
-            return_value=None,
+            side_effect=CodeHostError("boom"),
         ):
             result = await orchestrator._resolve_base_branch(None, verbose=False)
 
@@ -192,13 +213,8 @@ class TestResolveBaseBranch:
     @pytest.mark.asyncio
     async def test_detected_main_resolves_like_fallback(self, orchestrator) -> None:
         """A direct (non-stacked) PR targeting main resolves to the same value as the fallback."""
-        with patch.object(
-            orchestrator.github_client,
-            "detect_pr_base_branch",
-            new_callable=AsyncMock,
-            return_value="main",
-        ):
-            result = await orchestrator._resolve_base_branch(None, verbose=False)
+        orchestrator.fake.set_current_change_request(7, "main")
+        result = await orchestrator._resolve_base_branch(None, verbose=False)
 
         assert result == "origin/main"
 
@@ -229,7 +245,12 @@ class TestRunAnalysis:
         from dotharness.vibe_heal.review.orchestrator import ReviewOrchestrator
 
         mock_client = AsyncMock()
-        return ReviewOrchestrator(config, mock_client, mock_branch_analyzer, mock_diff_parser)
+        fake = InMemoryCodeHost()
+        orchestrator = ReviewOrchestrator(
+            config, mock_client, mock_branch_analyzer, mock_diff_parser, code_host=fake.code_host()
+        )
+        orchestrator.fake = fake  # ty: ignore[unresolved-attribute]
+        return orchestrator
 
     @pytest.mark.asyncio
     async def test_no_modified_files_returns_empty_result(
@@ -268,32 +289,24 @@ class TestRunAnalysis:
         mock_run.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_base_branch_none_resolves_via_github_client(
+    async def test_base_branch_none_resolves_via_code_host(
         self,
         orchestrator,
         tmp_path: Path,
     ) -> None:
-        """When base_branch is None, run_analysis resolves it via GitHubReviewClient
+        """When base_branch is None, run_analysis resolves it via the code host
         before doing anything else, and the resolved value ends up on the result."""
-        with (
-            patch.object(
-                orchestrator.branch_analyzer,
-                "get_modified_files",
-                return_value=[],
-            ),
-            patch.object(
-                orchestrator.github_client,
-                "detect_pr_base_branch",
-                new_callable=AsyncMock,
-                return_value="feature/lower-in-stack",
-            ) as mock_detect,
+        orchestrator.fake.set_current_change_request(3, "feature/lower-in-stack")
+        with patch.object(
+            orchestrator.branch_analyzer,
+            "get_modified_files",
+            return_value=[],
         ):
             result = await orchestrator.run_analysis(
                 base_branch=None,
                 report_file=tmp_path / "review.json",
             )
 
-        mock_detect.assert_called_once()
         assert result.base_branch == "origin/feature/lower-in-stack"
         assert result.success is True
 
@@ -698,7 +711,9 @@ class TestCreateTempProjectExclusions:
         mock_analyzer = MagicMock()
         mock_analyzer.get_current_branch.return_value = "feature/test"
         mock_analyzer.get_user_email.return_value = "user@example.com"
-        return ReviewOrchestrator(config, AsyncMock(), mock_analyzer, MagicMock())
+        return ReviewOrchestrator(
+            config, AsyncMock(), mock_analyzer, MagicMock(), code_host=InMemoryCodeHost().code_host()
+        )
 
     async def _run(self, orchestrator, **copy_kwargs):
         temp_project = MagicMock()
@@ -749,86 +764,125 @@ class TestRunPost:
     """Tests for ReviewOrchestrator.run_post()."""
 
     @pytest.fixture
-    def orchestrator(self, config: VibeHealConfig):
-        """Create ReviewOrchestrator with mocked dependencies."""
+    def fake(self) -> InMemoryCodeHost:
+        return InMemoryCodeHost()
+
+    @pytest.fixture
+    def orchestrator(self, config: VibeHealConfig, fake: InMemoryCodeHost):
+        """Create ReviewOrchestrator with mocked dependencies and the in-memory host."""
         from dotharness.vibe_heal.review.orchestrator import ReviewOrchestrator
 
-        mock_client = AsyncMock()
-        mock_analyzer = MagicMock()
-        mock_parser = MagicMock()
-        return ReviewOrchestrator(config, mock_client, mock_analyzer, mock_parser)
+        return ReviewOrchestrator(config, AsyncMock(), MagicMock(), MagicMock(), code_host=fake.code_host())
+
+    @staticmethod
+    def _report_file(tmp_path: Path) -> Path:
+        report_dir = tmp_path / "reports"
+        write_reports(_make_review_result(), report_dir)
+        return report_dir / "review.json"
 
     @pytest.mark.asyncio
     async def test_reads_saved_report_and_posts_review(
         self,
         orchestrator,
+        fake: InMemoryCodeHost,
         tmp_path: Path,
     ) -> None:
-        """run_post loads the saved report and posts review comments."""
-        # Write a report to disk
-        result = _make_review_result()
-        report_dir = tmp_path / "reports"
-        write_reports(result, report_dir)
-        report_file = report_dir / "review.json"
+        """run_post loads the saved report, detects the PR and posts a review."""
+        fake.set_current_change_request(42)
 
-        with (
-            patch.object(
-                orchestrator.github_client,
-                "detect_pr",
-                return_value=42,
-            ) as mock_detect,
-            patch.object(
-                orchestrator.github_client,
-                "post_review",
-                new_callable=AsyncMock,
-            ) as mock_post,
-        ):
-            await orchestrator.run_post(
-                report_file=report_file,
-                pr_number=None,
-            )
+        with patch("dotharness.vibe_heal.review.orchestrator.success") as mock_success:
+            await orchestrator.run_post(report_file=self._report_file(tmp_path), pr_number=None)
 
-        mock_detect.assert_called_once()
-        mock_post.assert_called_once()
-        # Verify the posted report matches what was saved
-        posted_report = mock_post.call_args[0][1]
-        assert posted_report.total_issues == 2
-        assert posted_report.branch == "feature/test"
+        assert [p.kind for p in fake.posts()] == ["review"]
+        mock_success.assert_called_once()
+        assert "PR #42" in mock_success.call_args.args[0]
 
     @pytest.mark.asyncio
     async def test_explicit_pr_number_skips_detection(
         self,
         orchestrator,
+        fake: InMemoryCodeHost,
         tmp_path: Path,
     ) -> None:
-        """When pr_number is provided, detect_pr is not called."""
-        result = _make_review_result()
-        report_dir = tmp_path / "reports"
-        write_reports(result, report_dir)
-        report_file = report_dir / "review.json"
+        """When pr_number is provided, the host is not asked for the change request."""
+        fake.set_current_change_request(42)
 
         with (
             patch.object(
-                orchestrator.github_client,
-                "detect_pr",
-                return_value=42,
-            ) as mock_detect,
-            patch.object(
-                orchestrator.github_client,
-                "post_review",
+                orchestrator.code_host.change_requests,
+                "for_current_branch",
                 new_callable=AsyncMock,
-            ) as mock_post,
+            ) as mock_detect,
+            patch("dotharness.vibe_heal.review.orchestrator.success") as mock_success,
         ):
-            await orchestrator.run_post(
-                report_file=report_file,
-                pr_number=99,
-            )
+            await orchestrator.run_post(report_file=self._report_file(tmp_path), pr_number=99)
 
         mock_detect.assert_not_called()
-        # post_review should be called with explicit PR number
-        assert mock_post.call_count == 1
-        posted_pr = mock_post.call_args[0][0]
-        assert posted_pr == 99
+        assert len(fake.posts()) == 1
+        assert "PR #99" in mock_success.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_no_change_request_raises(self, orchestrator, fake: InMemoryCodeHost, tmp_path: Path) -> None:
+        from dotharness.code_host import NoChangeRequestError
+
+        fake.set_current_change_request(None)
+        with pytest.raises(NoChangeRequestError, match="No open pull request found for the current branch"):
+            await orchestrator.run_post(report_file=self._report_file(tmp_path))
+        assert fake.posts() == []
+
+    @pytest.mark.asyncio
+    async def test_unavailable_client_shows_install_message(
+        self, orchestrator, fake: InMemoryCodeHost, tmp_path: Path
+    ) -> None:
+        fake.set_available(False)
+        with pytest.raises(OSError, match=r"gh CLI is not installed or not in PATH\. Install it from"):
+            await orchestrator.run_post(report_file=self._report_file(tmp_path), pr_number=5)
+
+    @pytest.mark.asyncio
+    async def test_fallback_prints_warning(self, orchestrator, fake: InMemoryCodeHost, tmp_path: Path) -> None:
+        fake.reject_inline_reviews("line not in diff")
+        with patch("dotharness.vibe_heal.review.orchestrator.warn") as mock_warn:
+            await orchestrator.run_post(report_file=self._report_file(tmp_path), pr_number=5)
+
+        mock_warn.assert_called_once_with(
+            "Warning: inline review rejected by GitHub (line not in diff) — posting as a top-level comment instead."
+        )
+        assert [p.kind for p in fake.posts()] == ["comment"]
+
+    @pytest.mark.asyncio
+    async def test_fallback_without_reason_does_not_crash(self, orchestrator, tmp_path: Path) -> None:
+        from dotharness.code_host import ReviewPostResult
+
+        with (
+            patch.object(
+                orchestrator.code_host.discussion,
+                "post_review",
+                new_callable=AsyncMock,
+                return_value=ReviewPostResult(fell_back=True, review=None, comment=None, reason=None),
+            ),
+            patch("dotharness.vibe_heal.review.orchestrator.warn") as mock_warn,
+        ):
+            await orchestrator.run_post(report_file=self._report_file(tmp_path), pr_number=5)
+
+        assert "()" in mock_warn.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_passes_preview_and_report_to_post_review(self, orchestrator, tmp_path: Path) -> None:
+        from dotharness.code_host import ReviewPostResult
+
+        with patch.object(
+            orchestrator.code_host.discussion,
+            "post_review",
+            new_callable=AsyncMock,
+            return_value=ReviewPostResult(fell_back=False, review=None, comment=None),
+        ) as mock_post:
+            await orchestrator.run_post(report_file=self._report_file(tmp_path), pr_number=5)
+
+        kwargs = mock_post.call_args.kwargs
+        assert mock_post.call_args.args[1] == 5
+        assert kwargs["body"]
+        assert kwargs["inline_comments"] is not None
+        assert kwargs["report"].branch == "feature/test"
 
     @pytest.mark.asyncio
     async def test_report_file_not_found_raises(self, orchestrator) -> None:
@@ -850,7 +904,9 @@ class TestToRepoRelative:
         mock_analyzer = MagicMock()
         mock_analyzer.repo.working_dir = "/repo"
         mock_parser = MagicMock()
-        return ReviewOrchestrator(config, mock_client, mock_analyzer, mock_parser)
+        return ReviewOrchestrator(
+            config, mock_client, mock_analyzer, mock_parser, code_host=InMemoryCodeHost().code_host()
+        )
 
     def test_absolute_path_made_repo_relative(self, orchestrator) -> None:
         result = orchestrator._to_repo_relative(Path("/repo/src/file.py"))
@@ -886,7 +942,9 @@ class TestGetActiveDuplications:
         mock_analyzer = MagicMock()
         mock_analyzer.repo.working_dir = "/repo"
         mock_parser = MagicMock()
-        return ReviewOrchestrator(config, mock_client, mock_analyzer, mock_parser)
+        return ReviewOrchestrator(
+            config, mock_client, mock_analyzer, mock_parser, code_host=InMemoryCodeHost().code_host()
+        )
 
     def _make_response(self, from_line: int, size: int, other_file: str = "src/other.py") -> MagicMock:
         """Build a mock DuplicationsResponse with one group."""
@@ -1045,7 +1103,9 @@ class TestGetResolvedDuplications:
         mock_analyzer = MagicMock()
         mock_analyzer.repo.working_dir = "/repo"
         mock_parser = MagicMock()
-        return ReviewOrchestrator(config, mock_client, mock_analyzer, mock_parser)
+        return ReviewOrchestrator(
+            config, mock_client, mock_analyzer, mock_parser, code_host=InMemoryCodeHost().code_host()
+        )
 
     def _make_diag(self, file_path: str = "src/file.py") -> FileDiagnostics:
         return FileDiagnostics(file_path=file_path, lookup_key=file_path)
@@ -1212,7 +1272,9 @@ class TestSameFileDuplication:
         mock_analyzer = MagicMock()
         mock_analyzer.repo.working_dir = "/repo"
         mock_parser = MagicMock()
-        return ReviewOrchestrator(config, mock_client, mock_analyzer, mock_parser)
+        return ReviewOrchestrator(
+            config, mock_client, mock_analyzer, mock_parser, code_host=InMemoryCodeHost().code_host()
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1317,7 +1379,9 @@ class TestRunAnalysisCoverage:
         mock_client = AsyncMock()
         mock_analyzer = MagicMock()
         mock_analyzer.get_head_sha.return_value = "deadbeef" * 5
-        return ReviewOrchestrator(config, mock_client, mock_analyzer, mock_diff_parser)
+        return ReviewOrchestrator(
+            config, mock_client, mock_analyzer, mock_diff_parser, code_host=InMemoryCodeHost().code_host()
+        )
 
     def _standard_patches(self, orchestrator):
         """All patches needed to reach the per-file loop."""
@@ -1451,7 +1515,9 @@ class TestRunBaselineScan:
         from dotharness.vibe_heal.review.orchestrator import ReviewOrchestrator
 
         mock_client = AsyncMock()
-        return ReviewOrchestrator(config, mock_client, MagicMock(), MagicMock())
+        return ReviewOrchestrator(
+            config, mock_client, MagicMock(), MagicMock(), code_host=InMemoryCodeHost().code_host()
+        )
 
     @pytest.mark.asyncio
     async def test_success_returns_dashboard_url(self, orchestrator: ReviewOrchestrator) -> None:
@@ -1535,3 +1601,36 @@ class TestRunBaselineScan:
 
         mock_create.assert_not_called()
         mock_delete.assert_not_called()
+
+
+class TestAnchorRulesFromDeclaration:
+    """The host's anchor rules decide whether the changed-line flag matters."""
+
+    @staticmethod
+    def _orchestrator(config: VibeHealConfig, requires_line_in_diff: bool):
+        import dataclasses
+
+        from dotharness.vibe_heal.review.orchestrator import ReviewOrchestrator
+
+        fake = InMemoryCodeHost()
+        anchors = dataclasses.replace(fake.declaration.anchors, requires_line_in_diff=requires_line_in_diff)
+        fake.declaration = dataclasses.replace(fake.declaration, anchors=anchors)
+        client = AsyncMock()
+        client.get_issues.return_value = [_make_sonar_issue(12, "proj:a.py")]
+        return ReviewOrchestrator(config, client, MagicMock(), MagicMock(), code_host=fake.code_host())
+
+    @pytest.mark.asyncio
+    async def test_line_in_diff_required_marks_nearby_issue(self, config: VibeHealConfig) -> None:
+        orchestrator = self._orchestrator(config, requires_line_in_diff=True)
+        issues, _ = await orchestrator._get_filtered_issues(
+            Path("a.py"), {"a.py": {10, 11, 12}}, False, "proj", strict_changed_lines_map={"a.py": {10}}
+        )
+        assert [i.on_changed_line for i in issues] == [False]
+
+    @pytest.mark.asyncio
+    async def test_line_in_diff_not_required_keeps_issue_inline(self, config: VibeHealConfig) -> None:
+        orchestrator = self._orchestrator(config, requires_line_in_diff=False)
+        issues, _ = await orchestrator._get_filtered_issues(
+            Path("a.py"), {"a.py": {10, 11, 12}}, False, "proj", strict_changed_lines_map={"a.py": {10}}
+        )
+        assert [i.on_changed_line for i in issues] == [True]
