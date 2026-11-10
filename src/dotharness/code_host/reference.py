@@ -539,6 +539,8 @@ class _Discussion:
             fallback_body = body if report is None else _build_fallback_body(report)
             try:
                 await _post_json(cmd, {"event": "COMMENT", "body": fallback_body, "comments": []})
+            except CodeHostTimeoutError:
+                raise  # The fallback may have posted. Keep the type that says do not retry.
             except CodeHostError as e:
                 msg = f"Review posting failed: {e}"
                 raise CodeHostError(msg) from e

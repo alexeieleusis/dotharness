@@ -619,10 +619,10 @@ class TestFallback:
         assert info.value.__cause__ is not None
         assert len(_posts(mock_run)) == 2  # nothing else is posted
 
-    async def test_fallback_timeout_is_wrapped(self, sample_report, mocker) -> None:
+    async def test_fallback_timeout_stays_a_timeout(self, sample_report, mocker) -> None:
         results = iter([RunResult(1, "", "HTTP 422 bad"), RunResult(124, "", "", timed_out=True)])
         _stub(mocker, lambda cmd, kw: GH_OK if "--version" in cmd else next(results))
-        with pytest.raises(CodeHostError, match="Review posting failed"):
+        with pytest.raises(CodeHostTimeoutError, match="timed out after 60s"):
             await _post(sample_report)
 
     async def test_timeout_does_not_trigger_fallback(self, sample_report, mocker) -> None:
