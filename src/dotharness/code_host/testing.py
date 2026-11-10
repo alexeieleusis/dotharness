@@ -294,7 +294,9 @@ class _FakeChangeRequests:
     def __init__(self, host: InMemoryCodeHost) -> None:
         self._host = host
 
-    async def for_current_branch(self, repo: RepositoryRef) -> ChangeRequest:
+    async def for_current_branch(
+        self, repo: RepositoryRef
+    ) -> ChangeRequest:  # NOSONAR python:S7503 - implements an async protocol
         self._host.require_client()
         current = self._host._change_request
         if current is None:
@@ -316,7 +318,7 @@ class _FakeChangeRequests:
             created_at=datetime.fromisoformat(_BASE_DATE),
         )
 
-    async def find_by_branch(
+    async def find_by_branch(  # NOSONAR python:S7503 - implements an async protocol
         self, repo: RepositoryRef, branch: str, *, state: ChangeRequestState = ChangeRequestState.OPEN
     ) -> Sequence[ChangeRequest]:
         return []
@@ -366,7 +368,9 @@ class _FakeDiscussion:
     def __init__(self, host: InMemoryCodeHost) -> None:
         self._host = host
 
-    async def preview_review(self, report: object) -> ReviewPreview:
+    async def preview_review(
+        self, report: object
+    ) -> ReviewPreview:  # NOSONAR python:S7503 - implements an async protocol
         limits = self._host.declaration.limits
         return _build_preview(report, limits.max_inline_comments_per_review, limits.max_review_body_chars)
 
@@ -383,7 +387,7 @@ class _FakeDiscussion:
             return failure.reject_inline
         return None
 
-    async def post_review(
+    async def post_review(  # NOSONAR python:S7503 - implements an async protocol
         self,
         repo: RepositoryRef,
         number: int,
