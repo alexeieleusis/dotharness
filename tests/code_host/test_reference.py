@@ -503,11 +503,11 @@ class TestPostReview:
 
 class TestFallback:
     async def test_fallback_comment_for_rejected_lines(self, sample_report, mocker) -> None:
-        mock_run = _flow(mocker, (1, '{"message": "Unprocessable Entity"}', ""), (0, "{}", ""))
+        mock_run = _flow(mocker, (1, "", "HTTP 422 Unprocessable Entity"), (0, "{}", ""))
         result = await _post(sample_report)
 
         assert result.fell_back is True
-        assert result.reason == '{"message": "Unprocessable Entity"}'
+        assert result.reason == "HTTP 422 Unprocessable Entity"
         posts = _posts(mock_run)
         assert len(posts) == 2
         assert posts[1]["event"] == "COMMENT"
@@ -516,11 +516,11 @@ class TestFallback:
         assert "python:S1192" in posts[1]["body"]
 
     async def test_fallback_without_report_posts_body(self, sample_report, mocker) -> None:
-        mock_run = _flow(mocker, (1, "", "line outside diff"), (0, "{}", ""))
+        mock_run = _flow(mocker, (1, "", "HTTP 422 line outside diff"), (0, "{}", ""))
         result = await _post(sample_report, with_report=False)
 
         assert result.fell_back is True
-        assert result.reason == "line outside diff"
+        assert result.reason == "HTTP 422 line outside diff"
         posts = _posts(mock_run)
         assert posts[1]["comments"] == []
         assert posts[1]["body"] == posts[0]["body"]
@@ -553,7 +553,7 @@ class TestFallback:
                 ),
             ],
         )
-        mock_run = _flow(mocker, (1, '{"message": "Unprocessable Entity"}', ""), (0, "{}", ""))
+        mock_run = _flow(mocker, (1, "", "HTTP 422 Unprocessable Entity"), (0, "{}", ""))
         await _post(report)
 
         body = _posts(mock_run)[1]["body"]
@@ -585,7 +585,7 @@ class TestFallback:
                 )
             ],
         )
-        mock_run = _flow(mocker, (1, "", "bad anchor"), (0, "{}", ""))
+        mock_run = _flow(mocker, (1, "", "HTTP 422 bad anchor"), (0, "{}", ""))
         await _post(report)
 
         body = _posts(mock_run)[1]["body"]
@@ -600,7 +600,7 @@ class TestFallback:
             base_branch="main",
             files=[FileReview(file_path="a.py", coverage_pct=50.0, covered_lines=5, instrumented_changed_lines=10)],
         )
-        mock_run = _flow(mocker, (1, "", "bad"), (0, "{}", ""))
+        mock_run = _flow(mocker, (1, "", "HTTP 422 bad"), (0, "{}", ""))
         await _post(report)
         body = _posts(mock_run)[1]["body"]
         assert "**50.0%**" in body
@@ -611,16 +611,16 @@ class TestFallback:
     async def test_raises_when_fallback_also_fails(self, sample_report, mocker) -> None:
         mock_run = _flow(
             mocker,
-            (1, '{"message": "Server error"}', "internal error"),
-            (1, '{"message": "Server error"}', "internal error"),
+            (1, "", "HTTP 422 internal error"),
+            (1, "", "HTTP 422 internal error"),
         )
-        with pytest.raises(CodeHostError, match=r"^Review posting failed: internal error") as info:
+        with pytest.raises(CodeHostError, match=r"^Review posting failed: HTTP 422 internal error") as info:
             await _post(sample_report)
         assert info.value.__cause__ is not None
         assert len(_posts(mock_run)) == 2  # nothing else is posted
 
     async def test_fallback_timeout_is_wrapped(self, sample_report, mocker) -> None:
-        results = iter([RunResult(1, "", "bad"), RunResult(124, "", "", timed_out=True)])
+        results = iter([RunResult(1, "", "HTTP 422 bad"), RunResult(124, "", "", timed_out=True)])
         _stub(mocker, lambda cmd, kw: GH_OK if "--version" in cmd else next(results))
         with pytest.raises(CodeHostError, match="Review posting failed"):
             await _post(sample_report)
@@ -642,6 +642,22 @@ class TestFallback:
             await _post(sample_report)
         assert post.await_count == 1
 
+    @pytest.mark.parametrize(
+        ("stderr", "error"),
+        [
+            ("gh: Bad credentials (HTTP 401)", AuthenticationError),
+            ("HTTP 403 Forbidden", AuthenticationError),
+            ("HTTP 502 Bad Gateway", CodeHostError),
+            ("HTTP 504", CodeHostError),
+            ("connection reset by peer", CodeHostError),
+        ],
+    )
+    async def test_non_validation_failures_post_once(self, sample_report, mocker, stderr, error) -> None:
+        mock_run = _flow(mocker, (1, "", stderr), (0, "{}", ""))
+        with pytest.raises(error):
+            await _post(sample_report)
+        assert len(_posts(mock_run)) == 1
+
     async def test_not_found_propagates_without_fallback(self, sample_report, mocker) -> None:
         mock_run = _stub(
             mocker,
@@ -652,7 +668,7 @@ class TestFallback:
         assert len(_posts(mock_run)) == 1
 
     async def test_fallback_logs_warning_with_inline_error(self, sample_report, mocker, caplog) -> None:
-        _flow(mocker, (1, "", "validation error: line outside diff"), (0, "{}", ""))
+        _flow(mocker, (1, "", "HTTP 422 validation error: line outside diff"), (0, "{}", ""))
         with caplog.at_level(logging.WARNING, logger="dotharness.code_host.reference"):
             await _post(sample_report)
         assert any("Inline review failed" in r.message for r in caplog.records)
@@ -660,7 +676,7 @@ class TestFallback:
         assert any("line outside diff" in r.message for r in caplog.records)
 
     async def test_host_does_not_print_warning(self, sample_report, mocker, capsys) -> None:
-        _flow(mocker, (1, "", "bad"), (0, "{}", ""))
+        _flow(mocker, (1, "", "HTTP 422 bad"), (0, "{}", ""))
         await _post(sample_report)
         captured = capsys.readouterr()
         assert captured.out == ""
@@ -753,7 +769,7 @@ class TestPreviewReview:
         assert len(preview.body) <= _MAX_REVIEW_BODY_CHARS
         assert "review body truncated" in preview.body
 
-        mock_run = _flow(mocker, (1, "", "bad"), (0, "{}", ""))
+        mock_run = _flow(mocker, (1, "", "HTTP 422 bad"), (0, "{}", ""))
         await _post(report)
         assert len(_posts(mock_run)[1]["body"]) <= _MAX_REVIEW_BODY_CHARS
         assert "review body truncated" in _posts(mock_run)[1]["body"]
@@ -912,7 +928,7 @@ class TestPreviewProjectLabelAndSha:
         assert "(commit" not in preview.body
 
     async def test_commit_included_in_fallback_body(self, mocker) -> None:
-        mock_run = _flow(mocker, (1, "", "bad"), (0, "{}", ""))
+        mock_run = _flow(mocker, (1, "", "HTTP 422 bad"), (0, "{}", ""))
         await _post(self._report(head_sha="abcdef1234567890", files=self._one_issue()))
         assert "(commit abcdef1)" in _posts(mock_run)[1]["body"]
 

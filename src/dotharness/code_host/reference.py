@@ -111,13 +111,22 @@ async def _require_gh() -> None:
         raise OSError(_NOT_INSTALLED)
 
 
+class _RejectedError(CodeHostError):
+    """The host rejected the payload (HTTP 422), so nothing was created and a fallback is safe."""
+
+
+_AUTH_MARKERS = ("http 401", "http 403", "bad credentials", "gh auth login")
+
+
 async def _post_json(cmd: list[str], payload: dict[str, Any]) -> None:
     """Post JSON to a ``gh api`` endpoint on stdin (no token in the arguments).
 
     Raises:
         CodeHostTimeoutError: On timeout. The write may have succeeded.
         FileNotFoundError: When the program is not found.
-        CodeHostError: On a non-zero exit.
+        AuthenticationError: On HTTP 401/403 or a ``gh auth login`` hint.
+        _RejectedError: On a validation rejection (HTTP 422).
+        CodeHostError: On any other non-zero exit (5xx, dropped connection). The write may have succeeded.
     """
     result: RunResult = await run(cmd, timeout=_POST_TIMEOUT_SECONDS, stdin=json.dumps(payload))
     if result.timed_out:
@@ -128,6 +137,11 @@ async def _post_json(cmd: list[str], payload: dict[str, Any]) -> None:
     if result.returncode != 0:
         parts = [p for p in (result.stderr.strip(), result.stdout.strip()) if p]
         error_msg = " — ".join(parts) if parts else "Unknown error"
+        lowered = error_msg.lower()
+        if any(m in lowered for m in _AUTH_MARKERS):
+            raise AuthenticationError(error_msg)
+        if "http 422" in lowered or "unprocessable" in lowered or "validation" in lowered:
+            raise _RejectedError(error_msg)
         raise CodeHostError(error_msg)
 
 
@@ -504,7 +518,8 @@ class _Discussion:
     ) -> ReviewPostResult:
         """Post the review. On a rejection post one top-level fallback comment.
 
-        A timeout, an authentication failure or an unsupported capability is never followed by a fallback.
+        Only a validation rejection (HTTP 422) is followed by a fallback. A timeout, 5xx, dropped connection,
+        authentication failure or unsupported capability is re-raised, because the write may have succeeded.
         """
         await _require_gh()
         cmd = _review_endpoint(repo, number)
@@ -518,10 +533,7 @@ class _Discussion:
         }
         try:
             await _post_json(cmd, payload)
-        except (CodeHostTimeoutError, AuthenticationError, UnsupportedCapabilityError):
-            # A timed-out post may have succeeded. A fallback would risk a duplicate review.
-            raise
-        except CodeHostError as inline_err:
+        except _RejectedError as inline_err:  # Only a rejection is safe to retry. Anything else may have posted.
             reason = str(inline_err)
             logger.warning("Inline review failed (%s) — falling back to top-level comment", reason)
             fallback_body = body if report is None else _build_fallback_body(report)

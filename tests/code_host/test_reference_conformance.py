@@ -68,7 +68,7 @@ class GhStub:
         reason = self._reject_all or (self._reject_inline if inline else None)
         if reason is not None:
             self._rejected = True
-            return RunResult(1, "", reason)
+            return RunResult(1, "", f"HTTP 422 {reason}")
         self._posts.append(PostedItem("comment" if self._rejected else "review", payload["body"], len(inline)))
         return RunResult(0, "{}", "")
 
