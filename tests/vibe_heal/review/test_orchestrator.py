@@ -831,11 +831,11 @@ class TestRunPost:
         assert fake.posts() == []
 
     @pytest.mark.asyncio
-    async def test_unavailable_client_shows_install_message(
+    async def test_unavailable_client_raises_host_oserror(
         self, orchestrator, fake: InMemoryCodeHost, tmp_path: Path
     ) -> None:
         fake.set_available(False)
-        with pytest.raises(OSError, match=r"gh CLI is not installed or not in PATH\. Install it from"):
+        with pytest.raises(OSError, match="not available"):
             await orchestrator.run_post(report_file=self._report_file(tmp_path), pr_number=5)
 
     @pytest.mark.asyncio

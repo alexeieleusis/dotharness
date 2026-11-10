@@ -6,7 +6,6 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from dotharness.code_host import CodeHost, CodeHostError
-from dotharness.code_host.reference import _NOT_INSTALLED as NOT_INSTALLED_MESSAGE
 from dotharness.vibe_heal.config import VibeHealConfig
 from dotharness.vibe_heal.deduplication.client import DuplicationClient
 from dotharness.vibe_heal.deduplication.models import DuplicationGroup, DuplicationsResponse
@@ -89,12 +88,6 @@ class BaselineScanResult(BaseModel):
     error_message: str | None = None
 
 
-async def ensure_host_available(code_host: CodeHost) -> None:
-    """Raise OSError with the host's own text when its client is not available."""
-    if not await code_host.session.available():
-        raise OSError(NOT_INSTALLED_MESSAGE)
-
-
 async def detect_base_branch(code_host: CodeHost) -> str | None:
     """Return the base branch of the current change request, or None. Never raises (a failure means None)."""
     try:
@@ -115,7 +108,6 @@ async def resolve_change_request_number(code_host: CodeHost, pr_number: int | No
         if verbose:
             dim(f"  Using explicit PR #{pr_number}")
         return pr_number
-    await ensure_host_available(code_host)
     repo = await code_host.repository.current()
     change_request = await code_host.change_requests.for_current_branch(repo)
     if verbose:
@@ -125,7 +117,6 @@ async def resolve_change_request_number(code_host: CodeHost, pr_number: int | No
 
 async def post_report(code_host: CodeHost, report: ReviewResult, number: int) -> None:
     """Render the review, post it and print the outcome (a warning first when the host fell back)."""
-    await ensure_host_available(code_host)
     repo = await code_host.repository.current()
     body, inline_comments = build_review(report, code_host.declaration.limits.max_inline_comments_per_review)
     result = await code_host.discussion.post_review(
