@@ -66,7 +66,7 @@ class AgentConfig:
 class LimitsConfig:
     max_run_minutes: int = 180
     max_tickets_per_run: int = 1
-    max_leaves_per_run: int = 4
+    max_leaves_per_run: int = 32
 
 
 @dataclass(frozen=True)

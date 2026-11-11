@@ -119,7 +119,7 @@ def test_ticket_limit_boundary() -> None:
 
 
 def test_leaf_limit_boundary() -> None:
-    tr = LimitTracker(clock=Clock())
+    tr = LimitTracker(LimitsConfig(max_leaves_per_run=4), Clock())
     for _ in range(3):
         tr.record_leaf()
     assert not tr.status().tripped
