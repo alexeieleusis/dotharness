@@ -584,6 +584,7 @@ async def test_c6_five_leaves(world: World) -> None:
 
 
 async def test_four_leaves_is_allowed(world: World) -> None:
+    world.limits = LimitsConfig(max_leaves_per_run=4)
     world.leaves = 4
     assert (await world.run()).completed
 
