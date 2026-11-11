@@ -380,6 +380,9 @@ class _Discussion:
 
         Only a validation rejection (HTTP 422) is followed by a fallback. A timeout, 5xx, dropped connection,
         authentication failure or unsupported capability is re-raised, because the write may have succeeded.
+
+        ``head_revision`` is accepted but unused: the ``Discussion`` protocol requires it, and the reference host
+        posts the review against the pull request's current head.
         """
         await _require_gh()
         cmd = _review_endpoint(repo, number)
