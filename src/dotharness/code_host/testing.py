@@ -34,11 +34,20 @@ from dotharness.code_host.interfaces import CodeHost
 from dotharness.code_host.models import (
     ChangeRequest,
     ChangeRequestState,
+    Check,
+    CheckStatus,
+    Comment,
+    CommitInfo,
     Credential,
     InlineComment,
+    Job,
     RepositoryRef,
+    Review,
     ReviewPostResult,
+    ReviewState,
+    ReviewThread,
     User,
+    Workflow,
     WorkItem,
     WorkItemState,
 )
@@ -201,13 +210,9 @@ def _public_methods(protocol: type) -> list[str]:
     return [n for n, _ in inspect.getmembers(protocol, inspect.isfunction) if not n.startswith("_")]
 
 
-def _unsupported(capability: Capability, operation: str) -> UnsupportedCapabilityError:
-    msg = f"{capability.value}.{operation} is not supported by the in-memory code host"
-    return UnsupportedCapabilityError(msg, capability=capability.value)
-
-
-# Capabilities the fake implements. Checks is not implemented yet: the fake never declares it.
-_IMPLEMENTED = frozenset(Capability) - {Capability.CHECKS}
+# Every capability is implemented by the fake. Selecting a subset is still possible.
+_IMPLEMENTED = frozenset(Capability)
+_AGENT_ENVIRONMENT_NAMES = ("GITHUB_TOKEN", "GH_TOKEN")
 _OPERATIONS = frozenset(
     f"{capability.value}.{method}"
     for capability in Capability
@@ -226,20 +231,25 @@ _WRITES = frozenset({
     "WorkItems.remove_label",
 })
 _EPOCH = datetime.fromisoformat(_BASE_DATE)
+# Per repository, per change request number, in insertion order.
+_PerChangeRequest = dict[RepositoryRef, dict[int, list[_T]]]
 
 
 class InMemoryCodeHost:
     """A host that keeps everything in memory. It is its own seeder.
 
     ``capabilities`` selects the declared subset (default: ``declaration.capabilities`` when a declaration is given,
-    else every capability the fake implements, which is all but Checks; giving both with different sets raises
+    else all six capabilities; giving both with different sets raises
     ``ConfigurationError``). An undeclared capability raises ``UnsupportedCapabilityError`` from each method. Limits and anchors are
     the reference host values unless ``declaration`` is given. No network, no subprocess, no clock: timestamps come
     from a counter that adds one second per created object.
 
-    Seeding: ``add_work_item``, ``add_change_request``, ``link_closing``, ``set_default_branch``, ``set_repository``,
-    ``set_user``, and the review-flow methods. Failure injection: ``fail_next``, ``fail_always``, ``clear_failures``.
-    Inspection: ``calls``, ``writes``, ``work_items``, ``change_requests``, ``posts``.
+    Seeding: ``add_repository``, ``add_work_item``, ``add_change_request``, ``add_commit``, ``add_review``,
+    ``add_comment``, ``add_thread``, ``add_check``, ``add_workflow``, ``add_job``, ``link_closing``,
+    ``set_default_branch`` (global, not per repository), ``set_repository``, ``set_user``, and the review-flow
+    methods. Failure injection: ``fail_next``, ``fail_always``, ``clear_failures``.
+    Inspection: ``calls``, ``writes``, ``work_items``, ``change_requests``, ``comments``, ``threads``, ``reviews``,
+    ``checks`` (the last four map a repository to a mapping of change request number to a tuple), ``posts``.
     """
 
     def __init__(
@@ -260,11 +270,6 @@ class InMemoryCodeHost:
             declared = declaration.capabilities
         else:
             declared = _IMPLEMENTED
-        if declared - _IMPLEMENTED:
-            msg = "the in-memory code host does not implement: " + ", ".join(
-                sorted(c.value for c in declared - _IMPLEMENTED)
-            )
-            raise ConfigurationError(msg)
         self._repository = RepositoryRef(repository)
         self._user = user
         self._token = token
@@ -278,6 +283,16 @@ class InMemoryCodeHost:
         self._change_requests: dict[RepositoryRef, list[ChangeRequest]] = {}
         self._links: dict[RepositoryRef, list[tuple[int, int]]] = {}
         self._labels: dict[RepositoryRef, set[str]] = {}
+        self._commits: _PerChangeRequest[CommitInfo] = {}
+        self._reviews: _PerChangeRequest[Review] = {}
+        self._comments: _PerChangeRequest[Comment] = {}
+        self._threads: _PerChangeRequest[ReviewThread] = {}
+        self._checks: _PerChangeRequest[Check] = {}
+        self._required: set[tuple[RepositoryRef, int, str]] = set()
+        self._workflows: dict[RepositoryRef, list[Workflow]] = {}
+        self._jobs: dict[RepositoryRef, dict[str, tuple[Job, str]]] = {}
+        self._viewed: dict[tuple[RepositoryRef, int], dict[str, bool]] = {}
+        self._ids = 0
         self._clock = 0
         self._version = 0  # grows with every state change: a call that moves it is a write
         self._next: dict[str, list[_Injected]] = {}
@@ -303,6 +318,22 @@ class InMemoryCodeHost:
     @property
     def change_requests(self) -> Mapping[RepositoryRef, tuple[ChangeRequest, ...]]:
         return MappingProxyType({repo: tuple(items) for repo, items in self._change_requests.items()})
+
+    @property
+    def comments(self) -> Mapping[RepositoryRef, Mapping[int, tuple[Comment, ...]]]:
+        return _view(self._comments)
+
+    @property
+    def threads(self) -> Mapping[RepositoryRef, Mapping[int, tuple[ReviewThread, ...]]]:
+        return _view(self._threads)
+
+    @property
+    def reviews(self) -> Mapping[RepositoryRef, Mapping[int, tuple[Review, ...]]]:
+        return _view(self._reviews)
+
+    @property
+    def checks(self) -> Mapping[RepositoryRef, Mapping[int, tuple[Check, ...]]]:
+        return _view(self._checks)
 
     # -- seeder: review flow -------------------------------------------------------------------------------------
 
@@ -438,6 +469,150 @@ class InMemoryCodeHost:
         self._version += 1
         return change_request
 
+    def _next_id(self) -> str:
+        self._ids += 1
+        return str(self._ids)
+
+    def _require_change_request(self, repo: RepositoryRef, number: int) -> ChangeRequest:
+        for change_request in self._change_requests.get(repo, []):
+            if change_request.number == number:
+                return change_request
+        msg = f"change request {number} does not exist"
+        raise ValueError(msg)
+
+    def add_repository(self, identity: str, *, default_branch: str = "main", is_current: bool = False) -> RepositoryRef:
+        """Add a repository. ``is_current=True`` makes it the answer of ``Repository.current()``.
+
+        The default branch is global (``set_default_branch``), not per repository: ``default_branch`` is applied
+        only together with ``is_current=True``.
+        """
+        repo = RepositoryRef(identity)
+        if is_current:
+            self._repository = repo
+            self._default_branch = default_branch
+            self._version += 1
+        return repo
+
+    def add_commit(
+        self,
+        repo: RepositoryRef,
+        number: int,
+        *,
+        revision: str,
+        message: str | None = None,
+        authors: Sequence[str] = (),
+    ) -> CommitInfo:
+        """Append a commit to the change request. Commits are listed oldest first."""
+        self._require_change_request(repo, number)
+        commit = CommitInfo(
+            revision=revision, message=message, authors=tuple(User(a) for a in authors), committed_at=self._tick()
+        )
+        self._commits.setdefault(repo, {}).setdefault(number, []).append(commit)
+        self._version += 1
+        return commit
+
+    def add_review(
+        self,
+        repo: RepositoryRef,
+        number: int,
+        *,
+        author: str,
+        state: ReviewState,
+        revision: str | None = None,
+        body: str = "",
+    ) -> Review:
+        """Append a review (without inline comments) to the change request."""
+        self._require_change_request(repo, number)
+        review = Review(
+            id=self._next_id(),
+            author=User(author),
+            state=state,
+            body=body,
+            submitted_at=self._tick(),
+            revision=revision,
+            comments=(),
+        )
+        self._reviews.setdefault(repo, {}).setdefault(number, []).append(review)
+        self._version += 1
+        return review
+
+    def add_comment(self, repo: RepositoryRef, number: int, *, author: str, body: str) -> Comment:
+        """Append a change-request-level comment."""
+        self._require_change_request(repo, number)
+        comment = self._new_comment(repo, number, User(author), body)
+        self._comments.setdefault(repo, {}).setdefault(number, []).append(comment)
+        self._version += 1
+        return comment
+
+    def _new_comment(self, repo: RepositoryRef, number: int, author: User, body: str) -> Comment:
+        comment_id = self._next_id()
+        return Comment(
+            id=comment_id,
+            author=author,
+            body=body,
+            created_at=self._tick(),
+            url=f"https://example.test/{repo.value}/pull/{number}#comment-{comment_id}",
+        )
+
+    def add_thread(
+        self,
+        repo: RepositoryRef,
+        number: int,
+        *,
+        anchor: Anchor | None,
+        comments: Sequence[Comment],
+        is_resolved: bool = False,
+    ) -> ReviewThread:
+        """Append a review thread built from the given comments."""
+        self._require_change_request(repo, number)
+        thread = ReviewThread(
+            id=f"thread-{self._next_id()}", is_resolved=is_resolved, anchor=anchor, comments=tuple(comments)
+        )
+        self._threads.setdefault(repo, {}).setdefault(number, []).append(thread)
+        self._version += 1
+        return thread
+
+    def add_check(
+        self,
+        repo: RepositoryRef,
+        number: int,
+        *,
+        name: str,
+        status: CheckStatus,
+        required: bool = False,
+        job_id: str | None = None,
+    ) -> Check:
+        """Append a check run. A pending check has no completion time."""
+        self._require_change_request(repo, number)
+        started = self._tick()
+        url = f"https://example.test/{repo.value}/runs/{self._next_id()}"
+        check = Check(
+            name=name,
+            status=status,
+            details_url=url if job_id is None else f"{url}/job/{job_id}",
+            workflow_name=None,
+            started_at=started,
+            completed_at=None if status is CheckStatus.PENDING else started + timedelta(seconds=1),
+            job_id=job_id,
+        )
+        self._checks.setdefault(repo, {}).setdefault(number, []).append(check)
+        if required:
+            self._required.add((repo, number, name))
+        self._version += 1
+        return check
+
+    def add_workflow(self, repo: RepositoryRef, *, name: str) -> Workflow:
+        workflow = Workflow(id=self._next_id(), name=name)
+        self._workflows.setdefault(repo, []).append(workflow)
+        self._version += 1
+        return workflow
+
+    def add_job(self, repo: RepositoryRef, *, job_id: str, failed_step: str | None = None, log: str = "") -> Job:
+        job = Job(id=job_id, failed_step=failed_step)
+        self._jobs.setdefault(repo, {})[job_id] = (job, log)
+        self._version += 1
+        return job
+
     def link_closing(self, repo: RepositoryRef, *, work_item: int, change_request: int) -> None:
         """Record that the change request closes the work item. Both must exist."""
         if not any(w.number == work_item for w in self._work_items.get(repo, [])):
@@ -541,7 +716,7 @@ class InMemoryCodeHost:
             repository=facet(Capability.REPOSITORY, _FakeRepository(self)),
             change_requests=facet(Capability.CHANGE_REQUESTS, _FakeChangeRequests(self)),
             discussion=facet(Capability.DISCUSSION, _FakeDiscussion(self)),
-            checks=facet(Capability.CHECKS, None),
+            checks=facet(Capability.CHECKS, _FakeChecks(self)),
             work_items=facet(Capability.WORK_ITEMS, _FakeWorkItems(self)),
             declaration=self.declaration,
         )
@@ -552,6 +727,13 @@ class InMemoryCodeHost:
     def _bound(self, operation: str) -> int | None:
         bounds = self.declaration.limits.list_bounds
         return bounds.per_operation.get(operation, bounds.default)
+
+
+def _view(store: _PerChangeRequest[_T]) -> Mapping[RepositoryRef, Mapping[int, tuple[_T, ...]]]:
+    return MappingProxyType({
+        repo: MappingProxyType({number: tuple(items) for number, items in by_number.items()})
+        for repo, by_number in store.items()
+    })
 
 
 class _Facet:
@@ -581,17 +763,27 @@ class _FakeSession(_Facet):
         return self._do("Session.current_user", lambda: self._host._user)
 
     async def agent_environment_names(self) -> Sequence[str]:  # NOSONAR python:S7503 - implements an async protocol
-        raise _unsupported(Capability.SESSION, "agent_environment_names")
+        return self._do("Session.agent_environment_names", lambda: _AGENT_ENVIRONMENT_NAMES)
 
     async def agent_environment(  # NOSONAR python:S7503 - implements an async protocol
         self, base: Mapping[str, str] | None = None
     ) -> Mapping[str, str]:
-        raise _unsupported(Capability.SESSION, "agent_environment")
+        def action() -> Mapping[str, str]:
+            # Base first, so a credential variable wins over a base entry of the same name.
+            return {**(base or {}), **dict.fromkeys(_AGENT_ENVIRONMENT_NAMES, self._host._token)}
+
+        return self._do("Session.agent_environment", action, base)
 
 
 class _FakeRepository(_Facet):
     async def current(self) -> RepositoryRef:  # NOSONAR python:S7503 - implements an async protocol
-        return self._do("Repository.current", lambda: self._host._repository)
+        def action() -> RepositoryRef:
+            if not self._host._repository.value:
+                msg = "No repository is marked as the current one"
+                raise ConfigurationError(msg)
+            return self._host._repository
+
+        return self._do("Repository.current", action)
 
     async def resolve(self, identity: str) -> RepositoryRef:  # NOSONAR python:S7503 - implements an async protocol
         def action() -> RepositoryRef:
@@ -677,14 +869,134 @@ class _FakeChangeRequests(_Facet):
 
         return self._do("ChangeRequests.create_draft", action, repo, head=head, base=base, title=title, body=body)
 
-    def __getattr__(self, name: str) -> Callable[..., Any]:
-        if name.startswith("_"):
-            raise AttributeError(name)
+    async def list(  # NOSONAR python:S7503 - implements an async protocol
+        self,
+        repo: RepositoryRef,
+        *,
+        state: ChangeRequestState = ChangeRequestState.OPEN,
+        author: str | None = None,
+        assignee: str | None = None,
+        requested_reviewer: str | None = None,
+    ) -> Sequence[ChangeRequest]:
+        def action() -> list[ChangeRequest]:
+            # Filters are logins. An empty string means "no filter". Change requests carry no assignees: a login
+            # filter on assignee matches nothing.
+            found = [
+                c
+                for c in self._host._change_requests.get(repo, [])
+                if c.state is state
+                and (not author or (c.author is not None and c.author.login == author))
+                and (not requested_reviewer or requested_reviewer in {u.login for u in c.requested_reviewers})
+            ]
+            if assignee:
+                found = []
+            bound = self._host._bound("ChangeRequests.list")
+            return found if bound is None else found[:bound]
 
-        async def _unsupported_op(*_args: object, **_kwargs: object) -> Any:  # NOSONAR python:S7503 - callers await it
-            raise _unsupported(Capability.CHANGE_REQUESTS, name)
+        return self._do(
+            "ChangeRequests.list",
+            action,
+            repo,
+            state=state,
+            author=author,
+            assignee=assignee,
+            requested_reviewer=requested_reviewer,
+        )
 
-        return _unsupported_op
+    async def find_by_commit(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, revision: str
+    ) -> Sequence[ChangeRequest]:
+        def action() -> list[ChangeRequest]:
+            commits = self._host._commits.get(repo, {})
+            return [
+                c
+                for c in self._host._change_requests.get(repo, [])
+                if c.head_revision == revision or any(k.revision == revision for k in commits.get(c.number, []))
+            ]
+
+        return self._do("ChangeRequests.find_by_commit", action, repo, revision)
+
+    async def commits(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int
+    ) -> Sequence[CommitInfo]:
+        def action() -> list[CommitInfo]:
+            self._find(repo, number)
+            return list(self._host._commits.get(repo, {}).get(number, []))
+
+        return self._do("ChangeRequests.commits", action, repo, number)
+
+    async def reviews(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int
+    ) -> Sequence[Review]:
+        def action() -> list[Review]:
+            self._find(repo, number)
+            return list(self._host._reviews.get(repo, {}).get(number, []))
+
+        return self._do("ChangeRequests.reviews", action, repo, number)
+
+    def _replace(self, repo: RepositoryRef, updated: ChangeRequest) -> None:
+        items = self._host._change_requests[repo]
+        index = next(i for i, c in enumerate(items) if c.number == updated.number)
+        items[index] = updated
+        self._host._version += 1
+
+    async def squash_merge(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int, *, expected_head: str
+    ) -> None:
+        def action() -> None:
+            change_request = self._find(repo, number)
+            if change_request.head_revision != expected_head:
+                msg = f"head revision of change request {number} is not {expected_head}"
+                raise CodeHostError(msg)
+            if change_request.state is not ChangeRequestState.OPEN:
+                msg = f"change request {number} is not open"
+                raise CodeHostError(msg)
+            self._replace(repo, replace(change_request, state=ChangeRequestState.MERGED))
+
+        self._do("ChangeRequests.squash_merge", action, repo, number, expected_head=expected_head)
+
+    async def request_reviewer(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int, login: str
+    ) -> None:
+        def action() -> None:
+            change_request = self._find(repo, number)
+            if login not in {u.login for u in change_request.requested_reviewers}:
+                reviewers = (*change_request.requested_reviewers, User(login))
+                self._replace(repo, replace(change_request, requested_reviewers=reviewers))
+
+        self._do("ChangeRequests.request_reviewer", action, repo, number, login)
+
+    async def approve(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int, *, head_revision: str
+    ) -> None:
+        def action() -> None:
+            self._find(repo, number)
+            self._host.add_review(
+                repo, number, author=self._host._user, state=ReviewState.APPROVED, revision=head_revision
+            )
+
+        self._do("ChangeRequests.approve", action, repo, number, head_revision=head_revision)
+
+    async def viewed_files(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int
+    ) -> Mapping[str, bool]:
+        def action() -> Mapping[str, bool]:
+            self._find(repo, number)
+            return dict(self._host._viewed.get((repo, number), {}))
+
+        return self._do("ChangeRequests.viewed_files", action, repo, number)
+
+    async def mark_viewed(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int, path: str
+    ) -> None:
+        def action() -> None:
+            self._find(repo, number)
+            viewed = self._host._viewed.setdefault((repo, number), {})
+            if not viewed.get(path, False):  # marking a viewed file again is a no-op
+                viewed[path] = True
+                self._host._version += 1
+
+        self._do("ChangeRequests.mark_viewed", action, repo, number, path)
 
 
 class _FakeWorkItems(_Facet):
@@ -819,14 +1131,91 @@ class _FakeDiscussion(_Facet):
             fallback_body=fallback_body,
         )
 
-    def __getattr__(self, name: str) -> Callable[..., Any]:
-        if name.startswith("_"):
-            raise AttributeError(name)
+    async def comments(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int
+    ) -> Sequence[Comment]:
+        def action() -> list[Comment]:
+            return list(self._host._comments.get(repo, {}).get(number, []))
 
-        async def _unsupported_op(*_args: object, **_kwargs: object) -> Any:  # NOSONAR python:S7503 - callers await it
-            raise _unsupported(Capability.DISCUSSION, name)
+        return self._do("Discussion.comments", action, repo, number)
 
-        return _unsupported_op
+    async def review_threads(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int
+    ) -> Sequence[ReviewThread]:
+        def action() -> list[ReviewThread]:
+            return list(self._host._threads.get(repo, {}).get(number, []))
+
+        return self._do("Discussion.review_threads", action, repo, number)
+
+    async def post_comment(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int, body: str
+    ) -> Comment:
+        def action() -> Comment:
+            self._host.require_client()
+            comment = self._host._new_comment(repo, number, User(self._host._user), body)
+            self._host._comments.setdefault(repo, {}).setdefault(number, []).append(comment)
+            self._host._version += 1
+            return comment
+
+        return self._do("Discussion.post_comment", action, repo, number, body)
+
+    async def reply(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int, thread_id: str, body: str
+    ) -> Comment:
+        def action() -> Comment:
+            threads = self._host._threads.get(repo, {}).get(number, [])
+            index = next((i for i, t in enumerate(threads) if t.id == thread_id), None)
+            if index is None:
+                msg = f"review thread {thread_id!r} not found"
+                raise CodeHostError(msg)
+            comment = self._host._new_comment(repo, number, User(self._host._user), body)
+            thread = threads[index]
+            threads[index] = replace(thread, comments=(*thread.comments, comment))
+            self._host._version += 1
+            return comment
+
+        return self._do("Discussion.reply", action, repo, number, thread_id, body)
+
+
+class _FakeChecks(_Facet):
+    async def list_checks(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int, *, required_only: bool = False
+    ) -> Sequence[Check]:
+        def action() -> list[Check]:
+            found = list(self._host._checks.get(repo, {}).get(number, []))
+            if required_only:
+                found = [c for c in found if (repo, number, c.name) in self._host._required]
+            return found
+
+        return self._do("Checks.list_checks", action, repo, number, required_only=required_only)
+
+    async def list_workflows(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef
+    ) -> Sequence[Workflow]:
+        return self._do("Checks.list_workflows", lambda: list(self._host._workflows.get(repo, [])), repo)
+
+    async def failed_log(self, repo: RepositoryRef, check: Check) -> str:  # NOSONAR python:S7503 - async protocol
+        def action() -> str:
+            if check.job_id is None:
+                msg = f"check {check.name!r} has no job to read a log from"
+                raise CodeHostError(msg)
+            found = self._host._jobs.get(repo, {}).get(check.job_id)
+            if found is None:
+                msg = f"job {check.job_id!r} not found"
+                raise CodeHostError(msg)
+            return found[1]
+
+        return self._do("Checks.failed_log", action, repo, check)
+
+    async def get_job(self, repo: RepositoryRef, job_id: str) -> Job:  # NOSONAR python:S7503 - async protocol
+        def action() -> Job:
+            found = self._host._jobs.get(repo, {}).get(job_id)
+            if found is None:
+                msg = f"job {job_id!r} not found"
+                raise CodeHostError(msg)
+            return found[0]
+
+        return self._do("Checks.get_job", action, repo, job_id)
 
 
 @dataclass(frozen=True)
