@@ -6,11 +6,13 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import MappingProxyType
+from typing import Literal, TypeVar
 
 from dotharness.code_host import (
     ChangeRequestState,
@@ -19,6 +21,7 @@ from dotharness.code_host import (
     ConfigurationError,
     HostSelection,
     RepositoryRef,
+    UnsupportedCapabilityError,
     create_code_host,
 )
 from dotharness.gh import gh_argv
@@ -416,6 +419,63 @@ async def host_current_user(host: CodeHost) -> str:
     except CodeHostError as e:
         logger.error("get_current_user: the host could not resolve a login: %s", e)  # noqa: TRY400
         return ""
+
+
+# -- Unsupported-capability policy (docs/pr_review/configuration.md, "Unsupported-capability policy") ---------------
+
+UnsupportedPolicy = Literal["degrade", "warn", "stop"]
+
+# One table: (site, operation) -> policy. ``Interface.*`` covers every operation of that capability at the site. The
+# same rows are documented in docs/pr_review/configuration.md; tests/pr_review/test_policy.py keeps them in sync.
+# degrade: skip silently. warn: log the capability name and continue. stop: re-raise (the top-level handler exits
+# non-zero). A pair not listed is "stop".
+UNSUPPORTED_CAPABILITY_POLICY: Mapping[tuple[str, str], UnsupportedPolicy] = MappingProxyType({
+    ("merge", "ChangeRequests.squash_merge"): "stop",
+    ("merge", "ChangeRequests.get"): "stop",
+    ("auto_approve", "ChangeRequests.approve"): "stop",
+    ("auto_approve", "ChangeRequests.reviews"): "stop",
+    ("auto_approve", "ChangeRequests.commits"): "stop",
+    ("auto_approve_viewed", "ChangeRequests.viewed_files"): "degrade",
+    ("auto_approve_viewed", "ChangeRequests.mark_viewed"): "degrade",
+    ("ci_fix", "Checks.*"): "stop",
+    ("ci_checks_workflows", "Checks.list_workflows"): "degrade",
+    ("required_checks", "Checks.list_checks"): "stop",
+    ("reviewer_request", "ChangeRequests.request_reviewer"): "warn",
+    ("reviewer_request", "ChangeRequests.get"): "warn",
+    ("regret_review", "ChangeRequests.find_by_commit"): "stop",
+    ("traceability", "WorkItems.get"): "stop",
+    ("traceability", "WorkItems.linked_work_items"): "stop",
+    ("current_user", "Session.current_user"): "warn",
+})
+
+_T = TypeVar("_T")
+
+
+def unsupported_policy(site: str, operation: str) -> UnsupportedPolicy:
+    """The policy for ``operation`` (``Interface.method``) at ``site``: exact row, then ``Interface.*``, else stop."""
+    table = UNSUPPORTED_CAPABILITY_POLICY
+    exact = table.get((site, operation))
+    if exact is not None:
+        return exact
+    return table.get((site, f"{operation.split('.', 1)[0]}.*"), "stop")
+
+
+async def call_with_policy(site: str, operation: str, call: Callable[[], Awaitable[_T]], fallback: _T) -> _T:
+    """Await ``call()`` under the unsupported-capability policy of ``(site, operation)``.
+
+    Only ``UnsupportedCapabilityError`` is handled; any other ``CodeHostError`` propagates. stop re-raises, degrade
+    returns ``fallback`` silently, warn logs the capability name and returns ``fallback``. The log line holds the
+    capability name only, never a token or token command.
+    """
+    try:
+        return await call()
+    except UnsupportedCapabilityError as e:
+        policy = unsupported_policy(site, operation)
+        if policy == "stop":
+            raise
+        if policy == "warn":
+            logger.warning("%s: host capability %s is not supported; continuing without it", site, e.capability)
+        return fallback
 
 
 async def pr_from_url(url: str, repo: str, env: dict, fields: str) -> dict:

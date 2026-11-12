@@ -203,6 +203,47 @@ Optional. Used only by `pr_review run local-review`. All other commands ignore i
 | `authors` | string or list of strings | `"*"` | Which PR authors the pass applies to. `"*"` means all authors. Otherwise it is a list of GitHub usernames. Applies to the **current** PR's author. The introducing PR's author is never filtered. The point is tracing *whoever's* old comment was ignored. |
 | `regret_review_timeout` | integer | `300` | Per-PR wall-clock budget (seconds) for the pass's own git/`gh` calls (blame, commit→PR lookups, comment fetches), checked and decremented before each call. Does not bound the backend invocation itself, which uses `harness.backend_timeout_seconds` independently. |
 
+## Unsupported-capability policy
+
+A code host declares which capabilities it supports. When a runner calls an operation of a capability the host does not
+declare, the host raises `UnsupportedCapabilityError`, which carries the capability name. Each runner site declares one
+of three behaviours in the `UNSUPPORTED_CAPABILITY_POLICY` constant in `src/dotharness/pr_review/runners/common.py`:
+
+- **degrade**: skip the operation silently and continue with reduced behaviour.
+- **warn**: log a warning naming the capability, continue, and fail open.
+- **stop**: re-raise. The runner's top-level handler exits non-zero, with the code used today for an uncaught host error.
+
+Only `UnsupportedCapabilityError` is handled. Any other host error follows the site's existing handling. A stop site never
+swallows `UnsupportedCapabilityError` in a broad host-error handler. No log line written by the policy holds the token or
+the token command. The reference host declares all six capabilities, so no policy fires with the default configuration.
+
+| Site | Capability, operation | Policy |
+|---|---|---|
+| `merge` | `ChangeRequests.squash_merge` | stop |
+| `merge` | `ChangeRequests.get` | stop |
+| `auto_approve` | `ChangeRequests.approve` | stop |
+| `auto_approve` | `ChangeRequests.reviews` | stop |
+| `auto_approve` | `ChangeRequests.commits` | stop |
+| `auto_approve_viewed` | `ChangeRequests.viewed_files` | degrade |
+| `auto_approve_viewed` | `ChangeRequests.mark_viewed` | degrade |
+| `ci_fix` | `Checks.*` | stop |
+| `ci_checks_workflows` | `Checks.list_workflows` | degrade |
+| `required_checks` | `Checks.list_checks` | stop |
+| `reviewer_request` | `ChangeRequests.request_reviewer` | warn |
+| `reviewer_request` | `ChangeRequests.get` | warn |
+| `regret_review` | `ChangeRequests.find_by_commit` | stop |
+| `traceability` | `WorkItems.get` | stop |
+| `traceability` | `WorkItems.linked_work_items` | stop |
+| `current_user` | `Session.current_user` | warn |
+
+Why: `merge`, `auto_approve` approval, `ci_fix`, required checks, regret review and traceability stop because a silent
+degrade would change what pr-review posts or approves (for example a false "no linked ticket" comment, or a gate that
+reads all checks instead of required ones). Viewed state and the workflow listing are conveniences. Reviewer requests are
+a best-effort side effect. The current user keeps the fail-open `""`.
+
+Any host call not listed above (for example `ChangeRequests.list` in the review runners, or `Discussion` reads and writes
+such as `post_comment` in regret review and `Discussion.comments` in idempotency checks) is **stop**.
+
 ## Path defaults when installed
 
 Three settings depend on where files live once dotharness is installed as a package.
