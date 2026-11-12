@@ -19,6 +19,19 @@ class AuthenticationError(CodeHostError):
     """
 
 
+class TokenCommandError(AuthenticationError):
+    """The token command failed. The data fields let a consumer build its own text. No message holds argv or stderr.
+
+    ``exit_code`` is the command's exit status, or ``None`` when it did not run to an exit. ``detail`` names the cause
+    when it did not run (an exception class name).
+    """
+
+    def __init__(self, message: str, *, exit_code: int | None = None, detail: str | None = None) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+        self.detail = detail
+
+
 class CodeHostTimeoutError(CodeHostError):
     """The call timed out; the host may already have processed the request.
 

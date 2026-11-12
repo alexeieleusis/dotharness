@@ -14,6 +14,7 @@ import importlib
 import importlib.metadata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from dotharness.code_host.errors import ConfigurationError
@@ -31,12 +32,16 @@ TokenCmd = str | Sequence[str] | None
 
 @dataclass(frozen=True)
 class HostSelection:
-    """The host choice for one tool. ``token_cmd`` is passed through; the factory never runs it."""
+    """The host choice for one tool. ``token_cmd`` is passed through; the factory never runs it.
+
+    ``working_directory`` is the clone the host runs its commands in. ``None`` means the process cwd.
+    """
 
     setting: str
     name: str | None
     options: Mapping[str, Any]
     token_cmd: TokenCmd
+    working_directory: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -45,7 +50,7 @@ class HostRegistration:
 
     interface_version: int
     options_model: type | Callable[..., Any]
-    factory: Callable[[Any, TokenCmd], CodeHost]
+    factory: Callable[[Any, TokenCmd, Path | None], CodeHost]
 
 
 def _fail(selection: HostSelection, reason: str) -> ConfigurationError:
@@ -121,6 +126,6 @@ def create_code_host(selection: HostSelection) -> CodeHost:
     except Exception:
         raise _fail(selection, "options are not valid") from None
     try:
-        return registration.factory(validated, selection.token_cmd)
+        return registration.factory(validated, selection.token_cmd, selection.working_directory)
     except Exception:
         raise _fail(selection, "host cannot be created") from None

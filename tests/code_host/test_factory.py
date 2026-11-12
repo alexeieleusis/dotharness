@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import types
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -37,8 +38,8 @@ class StrictOpts:
         self.flag = flag
 
 
-def _build(options: Any, token_cmd: Any) -> Any:
-    CALLS.append(("factory", options, token_cmd))
+def _build(options: Any, token_cmd: Any, working_directory: Any = None) -> Any:
+    CALLS.append(("factory", options, token_cmd, working_directory))
     return SENTINEL
 
 
@@ -140,7 +141,7 @@ def test_unselected_duplicates_not_loaded(monkeypatch: pytest.MonkeyPatch) -> No
 def test_name_none_selects_reference(monkeypatch: pytest.MonkeyPatch) -> None:
     stub_reference(monkeypatch)
     assert create_code_host(sel(None)) is SENTINEL
-    assert [("opts", {}), ("factory", CALLS[1][1], None)] == CALLS
+    assert [("opts", {}), ("factory", CALLS[1][1], None, None)] == CALLS
 
 
 @pytest.mark.parametrize("blank", ["", "  "])
@@ -182,7 +183,7 @@ def failure_cases(monkeypatch: pytest.MonkeyPatch) -> list[tuple[HostSelection, 
         (sel("badver"), "interface version is not an integer"),
         (
             sel("oldver"),
-            f"implementation targets interface version 2, this dotharness provides {CODE_HOST_INTERFACE_VERSION}",
+            f"implementation targets interface version {CODE_HOST_INTERFACE_VERSION + 1}, this dotharness provides {CODE_HOST_INTERFACE_VERSION}",
         ),
         (sel("strict", {"flag": OPT_SECRET, "bad": OPT_SECRET}), "options are not valid"),
         (sel(None, {"x": OPT_SECRET}), "options are set but [harness] host has no host name"),
@@ -251,7 +252,7 @@ def test_no_vibe_heal_import() -> None:
 
 
 def test_factory_failure_is_configuration_error() -> None:
-    def boom(options: Any, token_cmd: Any) -> Any:
+    def boom(options: Any, token_cmd: Any, working_directory: Any = None) -> Any:
         msg = f"bad token cmd {token_cmd}"
         raise ValueError(msg)
 
@@ -264,3 +265,14 @@ def test_factory_failure_is_configuration_error() -> None:
     assert str(exc).endswith("host cannot be created")
     assert CMD_SECRET not in str(exc)
     assert exc.__cause__ is None
+
+
+def test_working_directory_defaults_to_none() -> None:
+    assert sel("x").working_directory is None
+
+
+def test_working_directory_reaches_registration_factory(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_eps(monkeypatch, FakeEP("mine", reg()))
+    selection = HostSelection("[harness] host", "mine", {}, None, Path("clone-dir"))
+    assert create_code_host(selection) is SENTINEL
+    assert CALLS[-1][3] == Path("clone-dir")

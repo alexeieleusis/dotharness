@@ -64,6 +64,23 @@ the token, passed to `gh` as `GH_TOKEN` only). Linear always reads its API key f
 environment. `token_cmd` is never sent to Linear. `gh` must be installed and able to reach the repository. The `file` kind needs no API key and makes no network
 call to pick an item.
 
+Sisyphus reaches the code host through the code-host interface (see
+[`docs/design/code-host.md`](../design/code-host.md)). `[source.host].name` and `[source.host].options` select the
+host (see [Configuration](configuration.md#sourcehost)). With no `name`, Sisyphus uses the reference host. A
+command that builds the services (for example `run`) runs `token_cmd` once at startup, before any work. If it fails, the command
+stops with exit code 1 and one of these messages (they never show the command line or the token):
+
+- `config error: [source.host] token_cmd failed (exit N) or printed no token`
+- `config error: [source.host] token_cmd failed to run (<Detail>)`, where `<Detail>` is `TimeoutExpired`,
+  `OSError` or `ValueError`
+
+If `name` is not a known host, the command stops with exit code 1 and
+`config error: code host setting [source.host] name = "<value>": <reason>`.
+
+Code-host calls have a 30 second limit. The calls that read a PR state or remove a label have a 10 second
+limit. Sisyphus calls to `gh` used a 3600 second limit before. The shorter limit is a documented deviation from
+that earlier value.
+
 `[agent].backend` selects the agent command, run inside `repo_dir`:
 
 | backend | command |
@@ -170,7 +187,9 @@ order, cheapest first): (1) the head is an ancestor of `origin/<branch>`. (2) th
 `origin/<base>` (a merge-commit or rebase merge, even after GitHub deleted the remote branch). (3) `gh pr view`
 says the PR is MERGED with a head equal to the local head. After (1) or (2) `git branch -d` must agree (a refusal keeps the branch). A squash-merged branch is proven by (3)
 and deleted with `git branch -D`, which is used on that path only (never `--force`, no recovery ref. The reflog is
-the last resort). When nothing is proven the note lists each proof tried and why it failed.
+the last resort). When nothing is proven the note lists each proof tried and why it failed. When the code host
+lookup of the PR fails, the reason reads `code host lookup of <ref> failed (<ErrorType>): <detail>`. When no code
+host client is available, it reads `no code host client available`. A failed lookup always keeps the branch.
 Never a remote branch or PR change. A deletion is shown under Done and names the proof used. For proof (3) it gives
 the full head SHA, the PR number and `git fetch origin pull/<N>/head`, which recovers the commit from GitHub. Rerunning after the branch is gone
 is a silent no-op. The run record, digest, stop and answer
@@ -197,8 +216,21 @@ run record or the item is not stopped, and exits 0 quietly if another invocation
 | C5 | retries exhausted or scope violation; also intake changing the target repository | decide: change the leaf or config, or fix the cause. For an intake stop, revert or remove the paths listed in the detail by hand and run `sisyphus resume REF --config F`; no `--reset-retries` is needed. To give the build another budget, run `sisyphus resume REF --config F --reset-retries` | explicit | re-runs the stage. The build retry budget (3) is kept, so an exhausted budget stops again at C5 without a new agent run, unless you pass `--reset-retries` (below), which gives the build a fresh budget of 3 (it does not skip the build) |
 | C6 | a limit was hit | raise the limit in `.sisyphus.toml` (`max_run_minutes` needs nothing: the clock is per invocation) | explicit | leaf limit: re-counts the leaves, no re-plan. Time limit: continues at the next stage |
 | C7 | branch cannot be updated without rebase | no automatic way out: run `sisyphus abandon REF --config F` (the branch and any PR stay as they are for you to handle) | explicit | after you fixed the branch outside Sisyphus: re-runs the push stage on the same branch and PR |
-| C8 | gh, Linear, git network call failed, or a dirty clone | fix access. For a dirty clone, clean it yourself | automatic retry after 30 minutes, 3 times, then explicit | retries the failed call in the same stage |
+| C8 | a code host call (see "Failure text" below), Linear or git network call failed, or a dirty clone | fix access. For a dirty clone, clean it yourself | automatic retry after 30 minutes, 3 times, then explicit | retries the failed call in the same stage |
 | error | unexpected exception | fix the cause shown | explicit | re-runs the in-progress stage |
+
+**Failure text.** The text of a code host failure is new and may change. It holds the exit code and a short reason
+from the host. It never holds the command line or the token. A C8 stop for a code host call shows this text as its
+detail. The same text appears in these places:
+
+- Digest: `Label kept: <item> label '<label>' removal failed: <ExcType>: <message>`. `<ExcType>` is the class name
+  of a `CodeHostError` subclass, such as `CodeHostTimeoutError`. A label removal failure is a digest note and never a
+  stop.
+- Branch cleanup: the keep-reason in "Local branch cleanup" above.
+- `sisyphus status --check-prs`: the `warning:` line (see "`sisyphus status`").
+- With `kind = "github"`, a host without the `WorkItems` capability stops the command at startup, before any host
+  call, with exit code 1 and a `config error:` line (see the policy table in
+  [Configuration](configuration.md#unsupported-capability-policy)).
 
 ## Fresh retry budget: `resume --reset-retries`
 
@@ -239,7 +271,8 @@ message otherwise) and then:
 - for a GitHub item, removes the issue's pick label after the abandoned stop record is written. This runs only
   when `pick_label` is set, `remove_label_when_settled` is on (default) and `REF` has the form `#<number>`; any
   other ref form, `kind = "linear"` or `"file"`, or the key off makes no call. If the removal fails, `abandon`
-  prints one stderr line, `<ref>: pick label '<label>' not removed: <ExcType>: <message>`, and still exits 0: the
+  prints one stderr line, `<ref>: pick label '<label>' not removed: <ExcType>: <message>`, and still exits 0 (`<ExcType>` is the class name of a
+  `CodeHostError` subclass, such as `CodeHostTimeoutError`): the
   item stays abandoned. A label the issue does not carry is not an error; a label that does not exist in the
   repository is a configuration error you must fix, and shows up as that stderr line.
 - never touches the remote branch or any PR, never rewrites history or force-pushes. What happens to them is for
@@ -305,7 +338,7 @@ By default `sisyphus status` hides settled items: abandoned items, and finished 
 
 `--all` is a boolean flag that shows every item; the output is identical to the previous behavior. An explicit REF always prints that item, even if settled, without `--all`. An unknown REF exits 1 with `no run record for <ref>`.
 
-`--check-prs` is an opt-in flag (off by default; there is no config-file setting). It queries GitHub for each record that would otherwise be shown and has a recorded PR number (`retries["pr-number"]`), running `gh pr view <n> --json state` once per record with a fixed 10 second timeout, one after another. An item whose PR is `MERGED` or `CLOSED` is hidden, even with a checkpoint or stop record and whatever its stage, and counts in the hidden total N. Items that may need you keep showing: an open PR, a checkpoint with an open or unknown PR, and an `in_progress` item with no checkpoint and no stop record (never looked up). If a lookup fails (offline, `gh` missing, PR deleted, timeout), the item is shown, one `warning:` line goes to stderr and the exit code stays 0. `--all` and an explicit REF skip the lookup. `status` never writes run records or sidecars.
+`--check-prs` is an opt-in flag (off by default; there is no config-file setting). It queries GitHub for each record that would otherwise be shown and has a recorded PR number (`retries["pr-number"]`), asking the code host for the PR state once per record (10 second limit), one after another. An item whose PR is `MERGED` or `CLOSED` is hidden, even with a checkpoint or stop record and whatever its stage, and counts in the hidden total N. Items that may need you keep showing: an open PR, a checkpoint with an open or unknown PR, and an `in_progress` item with no checkpoint and no stop record (never looked up). If a lookup fails (offline, `gh` missing, PR deleted, timeout), the item is shown, one `warning:` line goes to stderr and the exit code stays 0. The line reads `warning: cannot check PR #<n> for <item>: <host error text>`. `--all` and an explicit REF skip the lookup. `status` never writes run records or sidecars.
 
 Without `--check-prs`, an item stopped at a checkpoint (for example C5) stays visible even when its PR is already merged. Run `sisyphus abandon <ref>` to hide it, or use `sisyphus status --check-prs`.
 
