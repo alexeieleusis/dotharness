@@ -275,7 +275,10 @@ class InMemoryCodeHost:
         self._always: dict[str, _Injected] = {}
         self.calls: list[Call] = []
         self._writes: list[Call] = []
-        self.declaration: HostDeclaration = replace(declaration or DECLARATION, capabilities=declared)
+        base = declaration or DECLARATION
+        self.declaration: HostDeclaration = HostDeclaration(
+            capabilities=declared, limits=base.limits, anchors=base.anchors
+        )
 
     # -- state views ---------------------------------------------------------------------------------------------
 
