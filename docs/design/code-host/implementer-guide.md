@@ -1,6 +1,6 @@
 # Code host: implementer guide
 
-Status: this guide belongs to the Phase 0 design for #192. The package `src/dotharness/code_host/` exists and the vibe-heal review flow is implemented (Phase 1, #193). Code location: `src/dotharness/code_host/`.
+Status: this guide belongs to the Phase 0 design for #192. The package `src/dotharness/code_host/` exists and the vibe-heal review flow (Phase 1, #193) and the sisyphus flow (Phase 2, #194) are implemented. The interface version is 2. Code location: `src/dotharness/code_host/`.
 
 This guide is an ordered checklist for the author of a new code-host implementation. It states no contract. Each step points to
 the section of the design page [`docs/design/code-host.md`](../code-host.md) that owns the contract. The pointer names the section

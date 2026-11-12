@@ -15,6 +15,7 @@ from dotharness.code_host.errors import (
     CodeHostTimeoutError,
     ConfigurationError,
     NoChangeRequestError,
+    TokenCommandError,
     UnsupportedCapabilityError,
 )
 from dotharness.code_host.factory import HostRegistration, HostSelection, create_code_host
@@ -90,6 +91,7 @@ __all__ = [
     "ReviewState",
     "ReviewThread",
     "Session",
+    "TokenCommandError",
     "UnsupportedCapabilityError",
     "User",
     "WorkItem",

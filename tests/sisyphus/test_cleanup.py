@@ -299,9 +299,12 @@ async def test_draft_pr_is_open_so_cleanup_keeps_the_branch(repo: Repo) -> None:
     [
         (PrInfo(5, "OPEN", "x"), "PR #5 is OPEN, not MERGED"),
         (PrInfo(5, "CLOSED", "x"), "PR #5 is CLOSED, not MERGED"),
-        (GitHubError("gh pr view failed (exit 1): boom"), "gh lookup of " + BRANCH + " failed: gh pr view failed"),
+        (
+            GitHubError("gh pr view failed (exit 1): boom"),
+            "code host lookup of " + BRANCH + " failed (CodeHostError): gh pr view failed",
+        ),
         (None, "no PR found for " + BRANCH),
-        ("none-client", "no GitHub client available"),
+        ("none-client", "no code host client available"),
     ],
 )
 async def test_proof_three_failures_keep_the_branch_and_name_the_proofs(repo: Repo, info: object, needle: str) -> None:

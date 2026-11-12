@@ -4,17 +4,19 @@ import json
 import logging
 import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
-from dotharness.code_host import HostSelection, create_code_host
+from dotharness.code_host import CODE_HOST_INTERFACE_VERSION, HostSelection, create_code_host
 from dotharness.code_host.declarations import Anchor, Capability
 from dotharness.code_host.errors import (
     AuthenticationError,
     CodeHostError,
     CodeHostTimeoutError,
     NoChangeRequestError,
+    TokenCommandError,
     UnsupportedCapabilityError,
 )
 from dotharness.code_host.models import ChangeRequestState, InlineComment, RepositoryRef
@@ -22,9 +24,12 @@ from dotharness.code_host.reference import (
     _MAX_INLINE_COMMENTS,
     _MAX_REVIEW_BODY_CHARS,
     _POST_TIMEOUT_SECONDS,
+    _STDERR_TAIL,
     DECLARATION,
     REGISTRATION,
     _create,
+    _Gh,
+    _Outcome,
     _parse_remote_url,
     _post_json,
 )
@@ -151,7 +156,7 @@ class TestSession:
 
     async def test_unimplemented_session_operations_raise_unsupported(self) -> None:
         with pytest.raises(UnsupportedCapabilityError) as info:
-            await _host().session.credential()
+            await _host().session.current_user()
         assert info.value.capability == "Session"
 
 
@@ -253,8 +258,8 @@ class TestForCurrentBranch:
         assert cr.author is None
         assert cr.base_reference == ""
 
-    async def test_read_timeout_raises_plain_code_host_error(self, mocker) -> None:
-        """D-8: a read timeout is a CodeHostError, not CodeHostTimeoutError."""
+    async def test_read_timeout_raises_read_timeout_error(self, mocker) -> None:
+        """Error model R3: a read timeout is CodeHostTimeoutError with write=False."""
 
         async def _run(cmd, **kw):
             if "--version" in cmd:
@@ -262,13 +267,13 @@ class TestForCurrentBranch:
             raise TimeoutError
 
         mocker.patch("dotharness.code_host.reference.run", side_effect=_run)
-        with pytest.raises(CodeHostError, match=r"`gh pr` timed out after 30s") as info:
+        with pytest.raises(CodeHostTimeoutError, match=r"`gh pr` timed out after 30s") as info:
             await _host().change_requests.for_current_branch(REPO)
-        assert not isinstance(info.value, CodeHostTimeoutError)
+        assert info.value.write is False
 
     async def test_unimplemented_operation_raises_unsupported(self) -> None:
         with pytest.raises(UnsupportedCapabilityError) as info:
-            await _host().change_requests.get(REPO, 1)
+            await _host().change_requests.list(REPO)
         assert info.value.capability == "ChangeRequests"
 
 
@@ -767,15 +772,15 @@ class TestDeclaration:
         assert anchors.supports_ranges is False
         assert anchors.fallback == "top_level_comment"
 
-    def test_checks_and_work_items_are_absent(self) -> None:
+    def test_checks_absent_and_work_items_declared(self) -> None:
         assert Capability.CHECKS not in DECLARATION.capabilities
-        assert Capability.WORK_ITEMS not in DECLARATION.capabilities
+        assert Capability.WORK_ITEMS in DECLARATION.capabilities
         assert Capability.DISCUSSION in DECLARATION.capabilities
 
 
 class TestRegistration:
     def test_registration_values(self) -> None:
-        assert REGISTRATION.interface_version == 1
+        assert REGISTRATION.interface_version == CODE_HOST_INTERFACE_VERSION
         assert REGISTRATION.options_model() is not None
         assert callable(REGISTRATION.factory)
 
@@ -810,10 +815,6 @@ class TestAbsentCapabilities:
             ("checks", lambda o: o.failed_log(REPO, None), "Checks"),
             ("checks", lambda o: o.get_job(REPO, "1"), "Checks"),
             ("work_items", lambda o: o.get(REPO, 1), "WorkItems"),
-            ("work_items", lambda o: o.list_open(REPO), "WorkItems"),
-            ("work_items", lambda o: o.remove_label(REPO, 1, "x"), "WorkItems"),
-            ("work_items", lambda o: o.closing_change_requests(REPO, 1), "WorkItems"),
-            ("work_items", lambda o: o.open_change_request_bodies(REPO), "WorkItems"),
             ("work_items", lambda o: o.linked_work_items(REPO, 1), "WorkItems"),
         ],
     )
@@ -831,15 +832,11 @@ class TestAbsentCapabilities:
             ("session", lambda o: o.agent_environment_names()),
             ("session", lambda o: o.agent_environment()),
             ("repository", lambda o: o.resolve("x")),
-            ("repository", lambda o: o.default_branch(REPO)),
             ("repository", lambda o: o.display_name(REPO)),
-            ("change_requests", lambda o: o.state(REPO, 1)),
-            ("change_requests", lambda o: o.find_by_branch(REPO, "b")),
             ("change_requests", lambda o: o.list(REPO)),
             ("change_requests", lambda o: o.find_by_commit(REPO, "r")),
             ("change_requests", lambda o: o.commits(REPO, 1)),
             ("change_requests", lambda o: o.reviews(REPO, 1)),
-            ("change_requests", lambda o: o.create_draft(REPO, head="h", base="b", title="t", body="b")),
             ("change_requests", lambda o: o.squash_merge(REPO, 1, expected_head="h")),
             ("change_requests", lambda o: o.request_reviewer(REPO, 1, "u")),
             ("change_requests", lambda o: o.approve(REPO, 1, head_revision="h")),
@@ -854,3 +851,378 @@ class TestAbsentCapabilities:
     async def test_out_of_flow_operations_are_unsupported(self, attr, call) -> None:
         with pytest.raises(UnsupportedCapabilityError):
             await call(getattr(_host(), attr))
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# Phase 2 capabilities: exact gh argv, directory, environment, errors
+# --------------------------------------------------------------------------------------------------------------------
+
+SECRET = "s3cr3t-value"  # noqa: S105
+
+
+def _recorder(mocker, *results: RunResult | tuple[int, str, str]) -> AsyncMock:
+    queue = [r if isinstance(r, RunResult) else RunResult(*r) for r in results]
+    return _stub(mocker, lambda cmd, kw: queue.pop(0))
+
+
+def _argv(mock_run, index: int = 0) -> list[str]:
+    return mock_run.call_args_list[index].args[0]
+
+
+class TestArgv:
+    """R-7.1.2: every argv equals today's sisyphus argv, element for element, with no extra call."""
+
+    async def test_list_open(self, mocker) -> None:
+        rows = [
+            {
+                "number": 7,
+                "title": "T",
+                "createdAt": "2024-01-02T03:04:05Z",
+                "assignees": [{"login": "bob"}],
+                "labels": [{"name": "ready"}],
+            }
+        ]
+        mock_run = _recorder(mocker, (0, json.dumps(rows), ""))
+        items = await _host().work_items.list_open(REPO, assignee="bob", label="ready")
+        assert mock_run.await_count == 1
+        assert _argv(mock_run) == [
+            "gh", "issue", "list", "--state", "open", "--assignee", "bob", "--label", "ready",
+            "--limit", "100", "--json", "number,title,createdAt,assignees,labels",
+        ]  # fmt: skip
+        (item,) = items
+        assert (item.number, item.title, item.labels, item.assignees[0].login) == (7, "T", ("ready",), "bob")
+        assert item.created_at.isoformat() == "2024-01-02T03:04:05+00:00"
+        assert item.repository == REPO
+
+    async def test_list_open_keeps_gh_order(self, mocker) -> None:
+        rows = [{"number": n} for n in (9, 3, 5)]
+        _recorder(mocker, (0, json.dumps(rows), ""))
+        assert [i.number for i in await _host().work_items.list_open(REPO, assignee="a", label="l")] == [9, 3, 5]
+
+    async def test_list_open_omits_unset_filters(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, "[]", ""))
+        assert await _host().work_items.list_open(REPO) == []
+        assert "--assignee" not in _argv(mock_run)
+        assert "--label" not in _argv(mock_run)
+
+    async def test_list_open_unread_fields_take_defaults(self, mocker) -> None:
+        _recorder(mocker, (0, '[{"number": 1, "createdAt": "garbage"}]', ""))
+        (item,) = await _host().work_items.list_open(REPO, assignee="a", label="l")
+        assert (item.title, item.body, item.labels, item.assignees) == ("", "", (), ())
+        assert item.created_at.timestamp() == 0
+
+    async def test_remove_label(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, "", ""))
+        await _host().work_items.remove_label(REPO, 12, "ready")
+        assert mock_run.await_count == 1
+        assert _argv(mock_run) == ["gh", "issue", "edit", "12", "--remove-label", "ready"]
+
+    async def test_closing_change_requests(self, mocker) -> None:
+        mock_run = _recorder(
+            mocker,
+            (0, '{"closedByPullRequestsReferences": [{"number": 4}, {"number": 8}]}', ""),
+            (0, '{"number": 4, "state": "OPEN"}', ""),
+            (0, '{"number": 8, "state": "MERGED"}', ""),
+        )
+        found = await _host().work_items.closing_change_requests(REPO, 3)
+        assert [_argv(mock_run, i) for i in range(3)] == [
+            ["gh", "issue", "view", "3", "--json", "closedByPullRequestsReferences"],
+            ["gh", "pr", "view", "4", "--json", "number,state"],
+            ["gh", "pr", "view", "8", "--json", "number,state"],
+        ]
+        assert [(c.number, c.state) for c in found] == [
+            (4, ChangeRequestState.OPEN),
+            (8, ChangeRequestState.MERGED),
+        ]
+
+    async def test_closing_change_requests_none(self, mocker) -> None:
+        _recorder(mocker, (0, '{"closedByPullRequestsReferences": []}', ""))
+        assert await _host().work_items.closing_change_requests(REPO, 3) == []
+
+    async def test_open_change_request_bodies(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, '[{"body": "Fixes #3"}, {"body": null}]', ""))
+        found = await _host().work_items.open_change_request_bodies(REPO)
+        assert _argv(mock_run) == ["gh", "pr", "list", "--state", "open", "--limit", "200", "--json", "body"]
+        assert [c.body for c in found] == ["Fixes #3", ""]
+
+    async def test_find_by_branch_open(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, '[{"number": 5, "url": "https://h/pull/5"}]', ""))
+        (cr,) = await _host().change_requests.find_by_branch(REPO, "feat/x")
+        assert _argv(mock_run) == ["gh", "pr", "list", "--head", "feat/x", "--state", "open", "--json", "number,url"]
+        assert (cr.number, cr.url, cr.state, cr.head_reference) == (
+            5,
+            "https://h/pull/5",
+            ChangeRequestState.OPEN,
+            "feat/x",
+        )
+
+    async def test_find_by_branch_other_state(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, "[]", ""))
+        assert await _host().change_requests.find_by_branch(REPO, "b", state=ChangeRequestState.MERGED) == []
+        assert _argv(mock_run)[5:7] == ["--state", "merged"]
+
+    async def test_find_by_branch_any_state_is_pr_view(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, '{"number": 9, "state": "MERGED", "headRefOid": "abc"}', ""))
+        (cr,) = await _host().change_requests.find_by_branch(REPO, "feat/x", state=None)
+        assert _argv(mock_run) == ["gh", "pr", "view", "feat/x", "--json", "number,state,headRefOid"]
+        assert (cr.number, cr.state, cr.head_revision) == (9, ChangeRequestState.MERGED, "abc")
+
+    async def test_find_by_branch_any_state_none_found_is_empty(self, mocker) -> None:
+        _recorder(mocker, (1, "", "no pull requests found for branch"))
+        assert await _host().change_requests.find_by_branch(REPO, "b", state=None) == []
+
+    async def test_find_by_branch_any_state_other_failure_raises(self, mocker) -> None:
+        _recorder(mocker, (1, "", "boom"))
+        with pytest.raises(CodeHostError, match=r"gh pr view failed \(exit 1\): boom"):
+            await _host().change_requests.find_by_branch(REPO, "b", state=None)
+
+    async def test_get(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, '{"number": 6, "state": "CLOSED", "headRefOid": "sha"}', ""))
+        cr = await _host().change_requests.get(REPO, 6)
+        assert _argv(mock_run) == ["gh", "pr", "view", "6", "--json", "number,state,headRefOid"]
+        assert (cr.number, cr.state, cr.head_revision, cr.repository) == (6, ChangeRequestState.CLOSED, "sha", REPO)
+
+    async def test_state(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, '{"state": "MERGED"}', ""))
+        assert await _host().change_requests.state(REPO, 6) is ChangeRequestState.MERGED
+        assert _argv(mock_run) == ["gh", "pr", "view", "6", "--json", "state"]
+
+    async def test_state_missing_raises(self, mocker) -> None:
+        _recorder(mocker, (0, "{}", ""))
+        with pytest.raises(CodeHostError, match="no state"):
+            await _host().change_requests.state(REPO, 6)
+
+    async def test_create_draft(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, "Creating draft\nhttps://h/o/r/pull/31\n", ""))
+        cr = await _host().change_requests.create_draft(REPO, head="feat", base="main", title="T", body="B")
+        assert mock_run.await_count == 1
+        assert _argv(mock_run) == [
+            "gh", "pr", "create", "--draft", "--head", "feat", "--base", "main", "--title", "T", "--body", "B",
+        ]  # fmt: skip
+        assert (cr.number, cr.url, cr.is_draft, cr.head_reference, cr.base_reference) == (
+            31, "https://h/o/r/pull/31", True, "feat", "main",
+        )  # fmt: skip
+
+    async def test_create_draft_without_url_raises(self, mocker) -> None:
+        _recorder(mocker, (0, "no url here", ""))
+        with pytest.raises(CodeHostError, match=r"gh pr create failed \(exit 0\)"):
+            await _host().change_requests.create_draft(REPO, head="h", base="b", title="t", body="b")
+
+    async def test_create_draft_nonzero_raises_with_exit_code(self, mocker) -> None:
+        _recorder(mocker, (1, "", "already exists"))
+        with pytest.raises(CodeHostError, match=r"gh pr create failed \(exit 1\): already exists"):
+            await _host().change_requests.create_draft(REPO, head="h", base="b", title="t", body="b")
+
+    async def test_default_branch(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, '{"defaultBranchRef": {"name": "trunk"}}', ""))
+        assert await _host().repository.default_branch(REPO) == "trunk"
+        assert mock_run.await_count == 1
+        assert _argv(mock_run) == ["gh", "repo", "view", "--json", "defaultBranchRef"]
+
+    @pytest.mark.parametrize("payload", ["{}", '{"defaultBranchRef": null}', '{"defaultBranchRef": {"name": ""}}'])
+    async def test_default_branch_missing_raises(self, mocker, payload) -> None:
+        _recorder(mocker, (0, payload, ""))
+        with pytest.raises(CodeHostError, match="no default branch"):
+            await _host().repository.default_branch(REPO)
+
+    async def test_read_failure_carries_exit_code(self, mocker) -> None:
+        _recorder(mocker, (4, "", "x" * 400))
+        with pytest.raises(CodeHostError, match=r"gh issue list failed \(exit 4\): x{300}$"):
+            await _host().work_items.list_open(REPO, assignee="a", label="l")
+
+    async def test_invalid_json_raises(self, mocker) -> None:
+        _recorder(mocker, (0, "not json", ""))
+        with pytest.raises(CodeHostError, match="invalid JSON"):
+            await _host().work_items.list_open(REPO, assignee="a", label="l")
+
+    async def test_auth_failure_is_authentication_error(self, mocker) -> None:
+        _recorder(mocker, (1, "", "To get started with GitHub CLI, please run: gh auth login"))
+        with pytest.raises(AuthenticationError):
+            await _host().repository.default_branch(REPO)
+
+
+class TestRemoveLabel:
+    async def test_nonzero_exit_raises(self, mocker) -> None:
+        """R-7.1.4: a label that does not exist in the repository exits non-zero and raises."""
+        _recorder(mocker, (1, "", "'nope' not found"))
+        with pytest.raises(CodeHostError, match=r"gh issue edit failed \(exit 1\): 'nope' not found"):
+            await _host().work_items.remove_label(REPO, 1, "nope")
+
+    async def test_timeout_is_a_write_timeout_at_10s(self, mocker) -> None:
+        async def _hang(cmd, **kw):
+            raise TimeoutError
+
+        mocker.patch("dotharness.code_host.reference.run", side_effect=_hang)
+        with pytest.raises(CodeHostTimeoutError, match="timed out after 10s") as info:
+            await _host().work_items.remove_label(REPO, 1, "x")
+        assert info.value.write is True
+
+    async def test_declared_timeout_is_10s(self) -> None:
+        assert DECLARATION.limits.timeouts.per_operation["WorkItems.remove_label"] == 10.0
+
+
+class TestTimeouts:
+    @pytest.mark.parametrize(
+        ("call", "seconds"),
+        [
+            (lambda h: h.change_requests.state(REPO, 1), "10s"),
+            (lambda h: h.work_items.list_open(REPO, assignee="a", label="l"), "30s"),
+            (lambda h: h.change_requests.get(REPO, 1), "30s"),
+            (lambda h: h.repository.default_branch(REPO), "30s"),
+        ],
+    )
+    async def test_read_timeout_uses_declared_seconds(self, mocker, call, seconds) -> None:
+        async def _hang(cmd, **kw):
+            raise TimeoutError
+
+        mocker.patch("dotharness.code_host.reference.run", side_effect=_hang)
+        with pytest.raises(CodeHostTimeoutError, match=f"timed out after {seconds}") as info:
+            await call(_host())
+        assert info.value.write is False
+
+    async def test_create_draft_timeout_is_a_write_timeout(self, mocker) -> None:
+        async def _hang(cmd, **kw):
+            raise TimeoutError
+
+        mocker.patch("dotharness.code_host.reference.run", side_effect=_hang)
+        with pytest.raises(CodeHostTimeoutError) as info:
+            await _host().change_requests.create_draft(REPO, head="h", base="b", title="t", body="b")
+        assert info.value.write is True
+
+
+class TestWorkingDirectoryAndEnvironment:
+    async def test_gh_runs_in_working_directory(self, mocker, tmp_path: Path) -> None:
+        mock_run = _recorder(mocker, (0, "[]", ""), (0, '{"state": "OPEN"}', ""), (0, "", ""))
+        host = _create(REGISTRATION.options_model(), None, tmp_path)
+        await host.work_items.list_open(REPO, assignee="a", label="l")
+        await host.change_requests.state(REPO, 1)
+        await host.work_items.remove_label(REPO, 1, "x")
+        assert [c.kwargs["cwd"] for c in mock_run.call_args_list] == [tmp_path] * 3
+
+    async def test_default_directory_is_process_cwd(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, "[]", ""))
+        await _host().work_items.list_open(REPO)
+        assert mock_run.call_args.kwargs["cwd"] == Path.cwd()
+
+    async def test_no_repo_flag(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, "[]", ""))
+        await _host().work_items.list_open(REPO, assignee="a", label="l")
+        assert "--repo" not in _argv(mock_run)
+
+    async def test_no_token_command_inherits_environment(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, "[]", ""))
+        await _host().work_items.list_open(REPO)
+        assert mock_run.call_args.kwargs["env"] is None
+
+    async def test_token_is_gh_token_in_gh_env_only(self, mocker, monkeypatch) -> None:
+        monkeypatch.setenv("GITHUB_TOKEN", "inherited")
+        monkeypatch.setenv("KEEP", "me")
+        mock_run = _recorder(mocker, (0, f"{SECRET}\n", ""), (0, "[]", ""), (0, "[]", ""))
+        host = _create(REGISTRATION.options_model(), "tokencmd --flag 'a b'", None)
+        await host.work_items.list_open(REPO)
+        await host.work_items.list_open(REPO)
+        token_call, first, second = mock_run.call_args_list
+        assert token_call.args[0] == ["tokencmd", "--flag", "a b"]  # shlex.split, no shell
+        assert token_call.kwargs["timeout"] == 30
+        assert "env" not in token_call.kwargs
+        for call in (first, second):
+            env = call.kwargs["env"]
+            assert env["GH_TOKEN"] == SECRET
+            assert env["GITHUB_TOKEN"] == "inherited"  # noqa: S105  # inherited untouched, never set from the token
+            assert env["KEEP"] == "me"
+            assert SECRET not in " ".join(call.args[0])
+        assert mock_run.await_count == 3  # the command ran once
+
+    async def test_credential_returns_token_hidden_from_repr(self, mocker) -> None:
+        _recorder(mocker, (0, f"  {SECRET}  \n", ""))
+        host = _create(REGISTRATION.options_model(), ["tokencmd"], None)
+        credential = await host.session.credential()
+        assert credential.token == SECRET
+        assert SECRET not in repr(credential)
+
+    async def test_credential_without_command_raises_authentication_error(self) -> None:
+        with pytest.raises(AuthenticationError):
+            await _host().session.credential()
+
+    async def test_gh_failure_message_never_holds_the_token(self, mocker) -> None:
+        _recorder(mocker, (0, f"{SECRET}\n", ""), (1, "", f"bad {SECRET} here"))
+        host = _create(REGISTRATION.options_model(), "tokencmd", None)
+        with pytest.raises(CodeHostError) as info:
+            await host.work_items.list_open(REPO)
+        assert SECRET not in str(info.value)
+
+    async def test_factory_runs_no_command(self, mocker) -> None:
+        mock_run = mocker.patch("dotharness.code_host.reference.run", new_callable=AsyncMock)
+        create_code_host(HostSelection(setting="s", name="reference", options={}, token_cmd="tokencmd"))  # noqa: S106
+        assert mock_run.await_count == 0
+
+    async def test_factory_passes_working_directory(self, mocker, tmp_path: Path) -> None:
+        mock_run = _recorder(mocker, (0, "[]", ""))
+        host = create_code_host(
+            HostSelection(setting="s", name="reference", options={}, token_cmd=None, working_directory=tmp_path)
+        )
+        await host.work_items.list_open(REPO)
+        assert mock_run.call_args.kwargs["cwd"] == tmp_path
+
+
+class TestTokenCommand:
+    """R-7.2.2: shlex.split, no shell, 30 s, no argv or stderr in any message."""
+
+    async def test_nonzero_exit_carries_exit_code_as_data(self, mocker) -> None:
+        _recorder(mocker, (3, "", f"secret stderr {SECRET}"))
+        host = _create(REGISTRATION.options_model(), f"mycmd {SECRET}", None)
+        with pytest.raises(TokenCommandError) as info:
+            await host.session.credential()
+        assert info.value.exit_code == 3
+        assert str(info.value) == "token command failed (exit 3) or printed no token"
+        for text in (str(info.value), repr(info.value), str(info.value.__cause__)):
+            assert SECRET not in text
+            assert "mycmd" not in text
+
+    async def test_empty_output_raises(self, mocker) -> None:
+        _recorder(mocker, (0, "  \n", ""))
+        with pytest.raises(TokenCommandError) as info:
+            await _create(REGISTRATION.options_model(), "mycmd", None).session.credential()
+        assert info.value.exit_code == 0
+
+    async def test_timeout(self, mocker) -> None:
+        _recorder(mocker, RunResult(124, "", "timed out after 30s", timed_out=True))
+        with pytest.raises(TokenCommandError) as info:
+            await _create(REGISTRATION.options_model(), "mycmd", None).session.credential()
+        assert (info.value.exit_code, info.value.detail) == (None, "TimeoutExpired")
+        assert str(info.value) == "token command failed to run (TimeoutExpired)"
+
+    async def test_not_found(self, mocker) -> None:
+        _recorder(mocker, RunResult(127, "", f"No such file: {SECRET}", not_found=True))
+        with pytest.raises(TokenCommandError) as info:
+            await _create(REGISTRATION.options_model(), "mycmd", None).session.credential()
+        assert info.value.detail == "OSError"
+        assert SECRET not in str(info.value)
+
+    @pytest.mark.parametrize("cmd", ["'unterminated", "   "])
+    async def test_unparsable_command(self, mocker, cmd) -> None:
+        mock_run = mocker.patch("dotharness.code_host.reference.run", new_callable=AsyncMock)
+        with pytest.raises(TokenCommandError) as info:
+            await _create(REGISTRATION.options_model(), cmd, None).session.credential()
+        assert info.value.detail == "ValueError"
+        assert mock_run.await_count == 0
+
+    async def test_failed_command_stops_the_gh_call(self, mocker) -> None:
+        mock_run = _recorder(mocker, (1, "", ""))
+        host = _create(REGISTRATION.options_model(), "mycmd", None)
+        with pytest.raises(AuthenticationError):
+            await host.work_items.list_open(REPO)
+        assert mock_run.await_count == 1  # gh never ran
+
+
+def test_failure_redacts_token_cut_by_stderr_tail() -> None:
+    """The token is redacted before the tail is cut, so a token straddling the tail boundary never leaks."""
+    token = "t0k3n" + "abcdefghij" * 3 + "XYZ12"
+    gh = _Gh("echo", None)
+    from dotharness.code_host.models import Credential
+
+    gh._credential = Credential(token=token)
+    stderr = "x" * 100 + token + "y" * (_STDERR_TAIL - 10)
+    error = gh._failure(["pr", "view"], _Outcome(success=False, stdout="", stderr=stderr, returncode=1))
+    assert token not in str(error)
+    assert token[-10:] not in str(error)

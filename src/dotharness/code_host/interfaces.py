@@ -73,9 +73,12 @@ class ChangeRequests(Protocol):
         ...
 
     async def find_by_branch(
-        self, repo: RepositoryRef, branch: str, *, state: ChangeRequestState = ChangeRequestState.OPEN
+        self, repo: RepositoryRef, branch: str, *, state: ChangeRequestState | None = ChangeRequestState.OPEN
     ) -> Sequence[ChangeRequest]:
-        """Change requests whose head is `branch`. Empty when none."""
+        """Change requests whose head is `branch`. Empty when none.
+
+        `state=None` matches any state. When several match, the most recent one comes first.
+        """
         ...
 
     async def for_current_branch(self, repo: RepositoryRef) -> ChangeRequest:
