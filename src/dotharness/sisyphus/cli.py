@@ -21,7 +21,6 @@ import asyncio
 import os
 import re
 import shlex
-import subprocess
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -32,6 +31,10 @@ from typing import Annotated, Any
 import typer
 
 from dotharness.cli_common import fail
+from dotharness.code_host import CodeHost, ConfigurationError
+from dotharness.code_host.errors import AuthenticationError
+from dotharness.code_host.factory import HostSelection, create_code_host
+from dotharness.code_host.reference import TokenCommandError
 from dotharness.sisyphus.agent import make_agent_runner
 from dotharness.sisyphus.archive import archive_item, check_archive_dir, resolve_archive_dir
 from dotharness.sisyphus.cleanup import PrInfo
@@ -96,26 +99,46 @@ from dotharness.sisyphus.stoprecord import (
 )
 from dotharness.sisyphus.subproc import run_command as run_subprocess
 
-TOKEN_CMD_TIMEOUT = 30
 DEFAULT_BASE_BRANCH = "main"
 
 
 # ------------------------------------------------------------- real services
 
 
-def run_token_cmd(token_cmd: str | None, run: Callable[..., Any] = subprocess.run) -> str | None:
-    """Run ``[source.host].token_cmd`` (no shell) and return its stripped stdout; ``None`` when unset."""
-    if not token_cmd:
-        return None
+def _token_config_error(exc: TokenCommandError) -> ConfigError:
+    """The startup text for a failed token command. Built from data only: no argv, stderr or token."""
+    if exc.exit_code is None:
+        return ConfigError(f"[source.host] token_cmd failed to run ({exc.detail})")
+    return ConfigError(f"[source.host] token_cmd failed (exit {exc.exit_code}) or printed no token")
+
+
+def create_host(config: SisyphusConfig, repo_dir: Path) -> tuple[CodeHost, str | None]:
+    """Build the code host for ``config`` and resolve its credential eagerly; ``None`` token when no command is set.
+
+    Raises :class:`ConfigError` for an unknown host, bad options, or a failing token command.
+    """
+    source = config.source.host
+    token_cmd = source.token_cmd if source and source.token_cmd else None
+    selection = HostSelection(
+        setting="[source.host] name",
+        name=source.name if source else None,
+        options=source.options if source else {},
+        token_cmd=token_cmd,
+        working_directory=repo_dir,
+    )
     try:
-        proc = run(shlex.split(token_cmd), capture_output=True, text=True, check=False, timeout=TOKEN_CMD_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
-        # Never interpolate str(exc): TimeoutExpired/FileNotFoundError embed argv, which may hold a secret.
-        why = type(exc).__name__ + (f": {exc.strerror}" if isinstance(exc, OSError) and exc.strerror else "")
-        raise ConfigError(f"[source.host] token_cmd failed to run ({why})") from None
-    if proc.returncode != 0 or not proc.stdout.strip():
-        raise ConfigError(f"[source.host] token_cmd failed (exit {proc.returncode}) or printed no token")
-    return proc.stdout.strip()
+        host = create_code_host(selection)
+    except ConfigurationError as exc:
+        raise ConfigError(str(exc)) from None
+    if token_cmd is None:
+        return host, None
+    try:
+        credential = asyncio.run(host.session.credential())
+    except TokenCommandError as exc:
+        raise _token_config_error(exc) from None
+    except AuthenticationError:
+        raise ConfigError("[source.host] token_cmd failed or printed no token") from None
+    return host, credential.token
 
 
 _PR_URL = re.compile(r"/pull/(\d+)")
@@ -223,7 +246,7 @@ async def _no_backend(_prompt: str) -> None:
 def default_services(config: SisyphusConfig) -> Services:
     """Real services for ``config``: ``gh``, Linear, the configured agent backend and ``git``."""
     repo_dir = Path(config.project.repo_dir or ".").expanduser()
-    token = run_token_cmd(config.source.host.token_cmd if config.source.host else None)
+    _host, token = create_host(config, repo_dir)
     gh = GhCli(repo_dir, token)
     work_item = config.source.work_item
     if work_item is not None and work_item.kind == "linear":

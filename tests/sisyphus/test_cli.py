@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ast
 import json
-import subprocess
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -774,39 +774,63 @@ def test_agent_runner_requires_timeout(tmp_path: Path) -> None:
         make_agent_runner("claude", tmp_path)  # ty: ignore[missing-argument]
 
 
-def test_token_cmd() -> None:
-    assert cli.run_token_cmd(None) is None
-    seen: list[list[str]] = []
-
-    def ok(argv: list[str], **_k: Any) -> Proc:
-        seen.append(argv)
-        return Proc(0, "  tok\n")
-
-    assert cli.run_token_cmd("gh auth token --user me", ok) == "tok"
-    assert seen == [["gh", "auth", "token", "--user", "me"]]
-    with pytest.raises(ConfigError):
-        cli.run_token_cmd("x", lambda *_a, **_k: Proc(1, ""))
-    with pytest.raises(ConfigError):
-        cli.run_token_cmd("x", lambda *_a, **_k: Proc(0, "  "))
-
-    def timeout(*_a: Any, **_k: Any) -> Proc:
-        raise subprocess.TimeoutExpired("x", 1)
-
-    with pytest.raises(ConfigError):
-        cli.run_token_cmd("x", timeout)
+def _host_config(tmp_path: Path, host_toml: str) -> Any:
+    tmp_path.mkdir(exist_ok=True)
+    env = make_env(tmp_path)
+    env.config.write_text(env.config.read_text() + "\n[source.host]\n" + host_toml)
+    return load_config(env.config)
 
 
-def test_token_cmd_error_hides_argv() -> None:
-    def timeout(*_a: Any, **_k: Any) -> Proc:
-        raise subprocess.TimeoutExpired(["sleep", "s3cret"], 1)
+def test_create_host_no_token_cmd(tmp_path: Path) -> None:
+    host, token = cli.create_host(_host_config(tmp_path, ""), tmp_path)
+    assert token is None
+    assert host is not None
 
-    def missing(*_a: Any, **_k: Any) -> Proc:
-        raise FileNotFoundError(2, "No such file or directory", "s3cret-prog")
 
-    for fn in (timeout, missing):
-        with pytest.raises(ConfigError) as ei:
-            cli.run_token_cmd("s3cret", fn)
-        assert "s3cret" not in str(ei.value)
+def test_create_host_runs_token_cmd_eagerly(tmp_path: Path) -> None:
+    cfg = _host_config(tmp_path, f"token_cmd = \"{sys.executable} -c 'print(1234)'\"\n")
+    _host, token = cli.create_host(cfg, tmp_path)
+    assert token == "1234"  # noqa: S105
+
+
+def test_create_host_token_cmd_failure_text(tmp_path: Path) -> None:
+    cfg = _host_config(tmp_path, f"token_cmd = \"{sys.executable} -c 'import sys; sys.exit(3)'\"\n")
+    with pytest.raises(ConfigError) as ei:
+        cli.create_host(cfg, tmp_path)
+    assert str(ei.value) == "[source.host] token_cmd failed (exit 3) or printed no token"
+    empty = _host_config(tmp_path / "second", f'token_cmd = "{sys.executable} -c pass"\n')
+    with pytest.raises(ConfigError, match=r"failed \(exit 0\) or printed no token"):
+        cli.create_host(empty, tmp_path)
+
+
+def test_create_host_token_cmd_cannot_run_hides_argv(tmp_path: Path) -> None:
+    cfg = _host_config(tmp_path, 'token_cmd = "/nonexistent/s3cret-prog"\n')
+    with pytest.raises(ConfigError, match=r"failed to run \(OSError\)") as ei:
+        cli.create_host(cfg, tmp_path)
+    assert "s3cret" not in str(ei.value)
+
+
+def test_create_host_unknown_name(tmp_path: Path) -> None:
+    cfg = _host_config(tmp_path, 'name = "nope"\n')
+    with pytest.raises(ConfigError) as ei:
+        cli.create_host(cfg, tmp_path)
+    assert str(ei.value) == 'code host setting [source.host] name = "nope": host is not found'
+
+
+def test_create_host_options_without_name(tmp_path: Path) -> None:
+    cfg = _host_config(tmp_path, "[source.host.options]\nx = 1\n")
+    with pytest.raises(
+        ConfigError, match=r'name = "<unset>": options are set but \[source.host\] name has no host name'
+    ):
+        cli.create_host(cfg, tmp_path)
+
+
+def test_default_services_unknown_host_exits_1(tmp_path: Path) -> None:
+    env = make_env(tmp_path)
+    env.config.write_text(env.config.read_text() + '\n[source.host]\nname = "nope"\n')
+    cfg = load_config(env.config)
+    with pytest.raises(ConfigError, match="code host setting"):
+        cli.default_services(cfg)
 
 
 async def test_gh_pull_request_client() -> None:
