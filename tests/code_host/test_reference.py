@@ -24,6 +24,8 @@ from dotharness.code_host.errors import (
 )
 from dotharness.code_host.models import (
     ChangeRequestState,
+    Check,
+    CheckStatus,
     InlineComment,
     MergeableState,
     RepositoryRef,
@@ -755,7 +757,7 @@ class TestPostJson:
 
 
 # --------------------------------------------------------------------------------------------------------------------
-# Declaration, registration, absent capabilities
+# Declaration and registration
 # --------------------------------------------------------------------------------------------------------------------
 
 
@@ -782,8 +784,9 @@ class TestDeclaration:
         assert anchors.supports_ranges is False
         assert anchors.fallback == "top_level_comment"
 
-    def test_checks_absent_and_work_items_declared(self) -> None:
-        assert Capability.CHECKS not in DECLARATION.capabilities
+    def test_every_capability_is_declared(self) -> None:
+        assert DECLARATION.capabilities == frozenset(Capability)
+        assert Capability.CHECKS in DECLARATION.capabilities
         assert Capability.WORK_ITEMS in DECLARATION.capabilities
         assert Capability.DISCUSSION in DECLARATION.capabilities
 
@@ -814,24 +817,6 @@ class TestRegistration:
     def test_importing_loads_no_vibe_heal(self) -> None:
         code = "import sys, dotharness.code_host.reference; sys.exit(1 if [m for m in sys.modules if 'vibe_heal' in m] else 0)"
         assert subprocess.run([sys.executable, "-I", "-c", code], check=False).returncode == 0
-
-
-class TestAbsentCapabilities:
-    @pytest.mark.parametrize(
-        ("attr", "call", "capability"),
-        [
-            ("checks", lambda o: o.list_checks(REPO, 1), "Checks"),
-            ("checks", lambda o: o.list_workflows(REPO), "Checks"),
-            ("checks", lambda o: o.failed_log(REPO, None), "Checks"),
-            ("checks", lambda o: o.get_job(REPO, "1"), "Checks"),
-        ],
-    )
-    async def test_raises_unsupported_and_runs_no_gh(self, mocker, attr, call, capability) -> None:
-        mock_run = mocker.patch("dotharness.code_host.reference.run", new_callable=AsyncMock)
-        with pytest.raises(UnsupportedCapabilityError) as info:
-            await call(getattr(_host(), attr))
-        assert info.value.capability == capability
-        assert mock_run.await_count == 0
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -1208,7 +1193,7 @@ def test_failure_redacts_token_cut_by_stderr_tail() -> None:
 
     gh._credential = Credential(token=token)
     stderr = "x" * 100 + token + "y" * (_STDERR_TAIL - 10)
-    error = gh._failure(["pr", "view"], _Outcome(success=False, stdout="", stderr=stderr, returncode=1))
+    error = gh.failure(["pr", "view"], _Outcome(success=False, stdout="", stderr=stderr, returncode=1))
     assert token not in str(error)
     assert token[-10:] not in str(error)
 
@@ -1258,6 +1243,10 @@ async def _hang(cmd, **kw):
 
 
 READS = [
+    ("list_checks", lambda h: h.checks.list_checks(REPO, 1)),
+    ("list_workflows", lambda h: h.checks.list_workflows(REPO)),
+    ("failed_log", lambda h: h.checks.failed_log(REPO, Check("c", CheckStatus.FAIL, None, None, None, None, "9"))),
+    ("get_job", lambda h: h.checks.get_job(REPO, "9")),
     ("current_user", lambda h: h.session.current_user()),
     ("get", lambda h: h.change_requests.get(REPO, 1)),
     ("list", lambda h: h.change_requests.list(REPO)),
@@ -1973,3 +1962,239 @@ class TestPhase3Environment:
         assert gh_env["GH_TOKEN"] == SECRET
         assert gh_env["GITHUB_TOKEN"] == INHERITED
         assert SECRET not in " ".join(c.args[0][0] + " ".join(c.args[0]) for c in mock_run.call_args_list[1:])
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# Checks: exact gh argv, mapping, exit codes, environment, errors
+# --------------------------------------------------------------------------------------------------------------------
+
+_CHECK_JSON = "name,bucket,link,workflow,startedAt,completedAt"
+_RUN_URL = "https://examplehost.test/myorg/myrepo/actions/runs/55/job/77"
+
+
+def _check_row(**over) -> dict:
+    row = {
+        "name": "build",
+        "bucket": "pass",
+        "link": _RUN_URL,
+        "workflow": "CI",
+        "startedAt": "2024-01-02T03:04:05Z",
+        "completedAt": "2024-01-02T03:10:05Z",
+    }
+    return {**row, **over}
+
+
+def _check(
+    *,
+    details_url: str | None = None,
+    job_id: str | None = None,
+    name: str = "c",
+    status: CheckStatus = CheckStatus.FAIL,
+) -> Check:
+    return Check(name, status, details_url, None, None, None, job_id)
+
+
+class TestChecks:
+    async def test_list_checks_argv_and_mapping(self, mocker) -> None:
+        mock_run = _recorder(mocker, _ok([_check_row()]))
+        (check,) = await _host().checks.list_checks(REPO, 4)
+        assert mock_run.await_count == 1
+        assert _argv(mock_run) == ["gh", "pr", "checks", "4", "--repo", "myorg/myrepo", "--json", _CHECK_JSON]
+        assert (check.name, check.status, check.details_url, check.workflow_name, check.job_id) == (
+            "build",
+            CheckStatus.PASS,
+            _RUN_URL,
+            "CI",
+            "77",
+        )
+        assert check.started_at.isoformat() == "2024-01-02T03:04:05+00:00"
+        assert check.completed_at.isoformat() == "2024-01-02T03:10:05+00:00"
+
+    async def test_list_checks_required_only_adds_the_flag(self, mocker) -> None:
+        mock_run = _recorder(mocker, _ok([]))
+        assert await _host().checks.list_checks(REPO, 4, required_only=True) == []
+        assert _argv(mock_run) == [
+            "gh", "pr", "checks", "4", "--repo", "myorg/myrepo", "--json", _CHECK_JSON, "--required",
+        ]  # fmt: skip
+
+    @pytest.mark.parametrize(
+        ("bucket", "status"),
+        [
+            ("pass", CheckStatus.PASS),
+            ("fail", CheckStatus.FAIL),
+            ("pending", CheckStatus.PENDING),
+            ("skipping", CheckStatus.SKIPPING),
+            ("cancel", CheckStatus.CANCEL),
+        ],
+    )
+    async def test_every_bucket_maps(self, mocker, bucket, status) -> None:
+        _recorder(mocker, _ok([_check_row(bucket=bucket)]))
+        assert (await _host().checks.list_checks(REPO, 1))[0].status is status
+
+    async def test_zero_year_completed_at_is_none(self, mocker) -> None:
+        _recorder(mocker, _ok([_check_row(bucket="pending", completedAt="0001-01-01T00:00:00Z")]))
+        (check,) = await _host().checks.list_checks(REPO, 1)
+        assert check.completed_at is None
+        assert check.started_at is not None
+
+    async def test_missing_optional_fields_are_none(self, mocker) -> None:
+        _recorder(mocker, _ok([{"bucket": "fail", "startedAt": "garbage", "completedAt": "", "link": ""}]))
+        (check,) = await _host().checks.list_checks(REPO, 1)
+        assert (check.name, check.details_url, check.workflow_name, check.job_id) == ("<unnamed>", None, None, None)
+        assert (check.started_at, check.completed_at) == (None, None)
+
+    async def test_naive_timestamp_gets_utc(self, mocker) -> None:
+        _recorder(mocker, _ok([_check_row(startedAt="2024-01-02T03:04:05")]))
+        (check,) = await _host().checks.list_checks(REPO, 1)
+        assert check.started_at.isoformat() == "2024-01-02T03:04:05+00:00"
+
+    async def test_all_runs_are_kept_in_order(self, mocker) -> None:
+        _recorder(mocker, _ok([_check_row(bucket="fail"), _check_row(bucket="pass")]))
+        got = await _host().checks.list_checks(REPO, 1)
+        assert [c.status for c in got] == [CheckStatus.FAIL, CheckStatus.PASS]
+
+    async def test_pending_exit_with_json_is_not_a_failure(self, mocker) -> None:
+        _recorder(mocker, (8, json.dumps([_check_row(bucket="pending")]), ""))
+        (check,) = await _host().checks.list_checks(REPO, 1)
+        assert check.status is CheckStatus.PENDING
+
+    async def test_pending_exit_without_json_raises(self, mocker) -> None:
+        _recorder(mocker, (8, " ", "pending"))
+        with pytest.raises(CodeHostError, match=r"gh pr checks failed \(exit 8\)"):
+            await _host().checks.list_checks(REPO, 1)
+
+    async def test_no_checks_reported_is_empty(self, mocker) -> None:
+        _recorder(mocker, (1, "", "no checks reported on the 'x' branch"))
+        assert await _host().checks.list_checks(REPO, 1) == []
+
+    async def test_no_required_checks_reported_is_empty_only_when_required(self, mocker) -> None:
+        _recorder(mocker, (1, "", "no required checks reported on the 'x' branch"))
+        assert await _host().checks.list_checks(REPO, 1, required_only=True) == []
+        _recorder(mocker, (1, "", "no required checks reported on the 'x' branch"))
+        with pytest.raises(CodeHostError):
+            await _host().checks.list_checks(REPO, 1)
+
+    async def test_no_checks_text_does_not_hide_a_required_read_failure(self, mocker) -> None:
+        _recorder(mocker, (1, "", "no checks reported"))
+        with pytest.raises(CodeHostError):
+            await _host().checks.list_checks(REPO, 1, required_only=True)
+
+    async def test_failure_raises_with_exit_code_and_auth_is_distinct(self, mocker) -> None:
+        _recorder(mocker, (1, "", "boom"), (1, "", "HTTP 401: Bad credentials"), (4, "", "x"))
+        with pytest.raises(CodeHostError, match=r"gh pr checks failed \(exit 1\): boom"):
+            await _host().checks.list_checks(REPO, 1)
+        with pytest.raises(AuthenticationError):
+            await _host().checks.list_checks(REPO, 1)
+        with pytest.raises(CodeHostError, match="exit 4"):
+            await _host().checks.list_checks(REPO, 1)
+
+    @pytest.mark.parametrize("stdout", ["not json", "{}", "[1]", '[{"bucket": "weird"}]', '[{"name": "a"}]'])
+    async def test_unusable_output_raises(self, mocker, stdout) -> None:
+        _recorder(mocker, (0, stdout, ""))
+        with pytest.raises(CodeHostError):
+            await _host().checks.list_checks(REPO, 1)
+
+    async def test_list_workflows_argv_and_mapping(self, mocker) -> None:
+        payload = {
+            "total_count": 3,
+            "workflows": [
+                {"id": 1, "name": "CI", "state": "active"},
+                {"id": 2, "name": "Old", "state": "disabled_manually"},
+                {"id": 3, "name": "Lint", "state": "active"},
+            ],
+        }
+        mock_run = _recorder(mocker, _ok(payload))
+        got = await _host().checks.list_workflows(REPO)
+        assert _argv(mock_run) == ["gh", "api", "repos/myorg/myrepo/actions/workflows?per_page=100"]
+        assert [(w.id, w.name) for w in got] == [("1", "CI"), ("3", "Lint")]
+
+    async def test_list_workflows_none_is_empty(self, mocker) -> None:
+        _recorder(mocker, _ok({"total_count": 0, "workflows": []}))
+        assert await _host().checks.list_workflows(REPO) == []
+
+    async def test_list_workflows_over_the_bound_raises(self, mocker) -> None:
+        _recorder(
+            mocker,
+            _ok({"total_count": 150, "workflows": [{"id": i, "name": "w", "state": "active"} for i in range(100)]}),
+        )
+        with pytest.raises(CodeHostError, match="more than the declared bound of 100"):
+            await _host().checks.list_workflows(REPO)
+
+    async def test_list_workflows_failure_is_not_empty(self, mocker) -> None:
+        _recorder(mocker, (1, "", "boom"), (0, "[]", ""), (0, "nope", ""))
+        with pytest.raises(CodeHostError, match="exit 1"):
+            await _host().checks.list_workflows(REPO)
+        with pytest.raises(CodeHostError, match="unexpected response"):
+            await _host().checks.list_workflows(REPO)
+        with pytest.raises(CodeHostError, match="invalid JSON"):
+            await _host().checks.list_workflows(REPO)
+
+    async def test_failed_log_by_job(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, "job\tstep\tboom\n", ""))
+        log = await _host().checks.failed_log(REPO, _check(details_url=_RUN_URL, job_id="77"))
+        assert log == "job\tstep\tboom\n"
+        assert _argv(mock_run) == ["gh", "run", "view", "--job", "77", "--repo", "myorg/myrepo", "--log-failed"]
+
+    async def test_failed_log_by_run_when_no_job(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, "log", ""))
+        url = "https://examplehost.test/myorg/myrepo/actions/runs/55"
+        assert await _host().checks.failed_log(REPO, _check(details_url=url)) == "log"
+        assert _argv(mock_run) == ["gh", "run", "view", "55", "--repo", "myorg/myrepo", "--log-failed"]
+
+    @pytest.mark.parametrize("url", [None, "https://examplehost.test/elsewhere"])
+    async def test_failed_log_without_job_or_run_raises_and_runs_nothing(self, mocker, url) -> None:
+        mock_run = _recorder(mocker)
+        with pytest.raises(CodeHostError, match="no job or run"):
+            await _host().checks.failed_log(REPO, _check(details_url=url))
+        assert mock_run.await_count == 0
+
+    async def test_failed_log_failure_raises(self, mocker) -> None:
+        _recorder(mocker, (1, "", "gone"))
+        with pytest.raises(CodeHostError, match=r"gh run view failed \(exit 1\): gone"):
+            await _host().checks.failed_log(REPO, _check(job_id="1"))
+
+    async def test_get_job_first_failed_step(self, mocker) -> None:
+        steps = [
+            {"name": "Set up", "conclusion": "success"},
+            {"name": "Test", "conclusion": "failure"},
+            {"name": "Later", "conclusion": "failure"},
+        ]
+        mock_run = _recorder(mocker, _ok({"steps": steps}))
+        job = await _host().checks.get_job(REPO, "77")
+        assert _argv(mock_run) == ["gh", "api", "repos/myorg/myrepo/actions/jobs/77"]
+        assert (job.id, job.failed_step) == ("77", "Test")
+
+    @pytest.mark.parametrize("payload", [{"steps": [{"name": "a", "conclusion": "success"}]}, {}, {"steps": None}])
+    async def test_get_job_without_a_failed_step(self, mocker, payload) -> None:
+        _recorder(mocker, _ok(payload))
+        assert (await _host().checks.get_job(REPO, "77")).failed_step is None
+
+    async def test_get_job_failure_and_bad_payload_raise(self, mocker) -> None:
+        _recorder(mocker, (1, "", "Not Found"), _ok([]))
+        with pytest.raises(CodeHostError, match="exit 1"):
+            await _host().checks.get_job(REPO, "1")
+        with pytest.raises(CodeHostError, match="unexpected response"):
+            await _host().checks.get_job(REPO, "1")
+
+    async def test_token_is_gh_token_only_and_never_in_argv_or_errors(self, mocker) -> None:
+        seen: list[tuple[list[str], dict | None]] = []
+
+        def handler(cmd, kw):
+            seen.append((cmd, kw.get("env")))
+            if cmd[0] != "gh":
+                return RunResult(0, SECRET, "")
+            return RunResult(1, "", f"denied {SECRET}")
+
+        _stub(mocker, handler)
+        host = _create(REGISTRATION.options_model(), ["echo", "x"])
+        with pytest.raises(CodeHostError) as info:
+            await host.checks.list_checks(REPO, 1)
+        assert SECRET not in str(info.value)
+        assert SECRET not in repr(info.value)
+        gh_calls = [(c, e) for c, e in seen if c[0] == "gh"]
+        assert gh_calls
+        for cmd, env in gh_calls:
+            assert SECRET not in " ".join(cmd)
+            assert env is not None
+            assert env["GH_TOKEN"] == SECRET
+            assert env.get("GITHUB_TOKEN") != SECRET

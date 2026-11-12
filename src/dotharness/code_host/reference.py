@@ -37,7 +37,6 @@ from dotharness.code_host.errors import (
     ConfigurationError,
     NoChangeRequestError,
     TokenCommandError,
-    UnsupportedCapabilityError,
 )
 from dotharness.code_host.factory import HostRegistration, TokenCmd
 from dotharness.code_host.interfaces import CodeHost
@@ -45,6 +44,7 @@ from dotharness.code_host.models import (
     ChangeRequest,
     ChangeRequestState,
     Check,
+    CheckStatus,
     Comment,
     CommitInfo,
     Credential,
@@ -288,7 +288,7 @@ class _Gh:
             write=write,
         )
 
-    def _failure(self, args: Sequence[str], outcome: _Outcome) -> CodeHostError:
+    def failure(self, args: Sequence[str], outcome: _Outcome) -> CodeHostError:
         """Error for a non-zero exit: exit code and the stderr tail. No command line, no token."""
         tail = outcome.stderr.strip()
         if self._credential is not None:
@@ -304,7 +304,7 @@ class _Gh:
         """Run and raise on a non-zero exit."""
         outcome = await self.run(args, operation, write=write)
         if not outcome.success:
-            raise self._failure(args, outcome)
+            raise self.failure(args, outcome)
         return outcome
 
     async def json(self, args: Sequence[str], operation: str) -> Any:
@@ -331,7 +331,7 @@ class _Gh:
                     msg = "gh api returned an unexpected response"
                     raise CodeHostError(msg)
                 return rows
-            error = self._failure(args, outcome)
+            error = self.failure(args, outcome)
             if isinstance(error, AuthenticationError) or attempt == limits.page_attempts:
                 raise error
             logger.warning("%s (attempt %d/%d)", error, attempt, limits.page_attempts)
@@ -381,11 +381,6 @@ class _Gh:
 
 _AGENT_ENV_NAMES = ("GITHUB_TOKEN", "GH_TOKEN")
 _IDENTITY = re.compile(r"[^/\s]+/[^/\s]+")
-
-
-def _unsupported(capability: Capability, operation: str) -> UnsupportedCapabilityError:
-    msg = f"{capability.value}.{operation} is not supported by the reference code host"
-    return UnsupportedCapabilityError(msg, capability=capability.value)
 
 
 class _Session:
@@ -752,7 +747,7 @@ class _ChangeRequests:
             if not outcome.success:
                 if "no pull requests found" in outcome.stderr.lower():
                     return []
-                raise self._gh._failure(args, outcome)
+                raise self._gh.failure(args, outcome)
             try:
                 data = json.loads(outcome.stdout or "null")
             except ValueError:
@@ -811,7 +806,7 @@ class _ChangeRequests:
         outcome = await self._gh.run(args, "ChangeRequests.create_draft", write=True)
         match = _PR_URL.search(outcome.stdout)
         if not outcome.success or not match:
-            raise self._gh._failure(
+            raise self._gh.failure(
                 args, _Outcome(False, outcome.stdout, outcome.stderr or outcome.stdout, outcome.returncode)
             )
         return ChangeRequest(
@@ -1101,20 +1096,128 @@ def _review_thread(node: Mapping[str, Any]) -> ReviewThread:
     )
 
 
-class _AbsentChecks:
-    """Checks are not declared. Every call raises and runs no ``gh``."""
+_CHECK_FIELDS = "name,bucket,link,workflow,startedAt,completedAt"
+_ZERO_YEAR = 1  # gh reports an unset completedAt as 0001-01-01T00:00:00Z
+_NO_CHECKS_TEXT = "no checks reported"
+_NO_REQUIRED_CHECKS_TEXT = "no required checks reported"
+_PENDING_EXIT = 8  # ``gh pr checks`` exits 8 while checks are pending and still prints the JSON
+_JOB_ID_RE = re.compile(r"/job/(\d+)")
+_RUN_ID_RE = re.compile(r"/actions/runs/(\d+)")
+_UNNAMED_CHECK = "<unnamed>"
+
+
+def _check_time(value: object) -> datetime | None:
+    """A check timestamp, or ``None`` when it is unset (empty, unparseable or the zero value)."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        when = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if when.year <= _ZERO_YEAR:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=UTC)
+
+
+def _check(row: Mapping[str, Any]) -> Check:
+    """A ``Check`` from one ``gh pr checks --json`` entry. The ``/job/<id>`` of the link is the job id."""
+    status = _enum(CheckStatus, row.get("bucket"), None)
+    if status is None:
+        msg = "gh pr checks returned a check with an unknown bucket"
+        raise CodeHostError(msg)
+    name = row.get("name")
+    link = row.get("link")
+    workflow = row.get("workflow")
+    job = _JOB_ID_RE.search(link) if isinstance(link, str) else None
+    return Check(
+        name=name if isinstance(name, str) and name else _UNNAMED_CHECK,
+        status=status,
+        details_url=link if isinstance(link, str) and link else None,
+        workflow_name=workflow if isinstance(workflow, str) and workflow else None,
+        started_at=_check_time(row.get("startedAt")),
+        completed_at=_check_time(row.get("completedAt")),
+        job_id=job.group(1) if job else None,
+    )
+
+
+class _Checks:
+    def __init__(self, gh: _Gh) -> None:
+        self._gh = gh
 
     async def list_checks(self, repo: RepositoryRef, number: int, *, required_only: bool = False) -> Sequence[Check]:
-        raise _unsupported(Capability.CHECKS, "list_checks")
+        """Every run of every check, as ``gh`` reports it. Pending checks (exit 8 with JSON) are not a failure.
+
+        No checks (or no required checks) is an empty result. A non-zero exit, or exit 8 with no JSON, raises.
+        """
+        args = ["pr", "checks", str(number), "--repo", repo.value, "--json", _CHECK_FIELDS]
+        if required_only:
+            args.append("--required")
+        outcome = await self._gh.run(args, "Checks.list_checks")
+        stderr = outcome.stderr.lower()
+        if outcome.returncode == 1 and (_NO_REQUIRED_CHECKS_TEXT if required_only else _NO_CHECKS_TEXT) in stderr:
+            return []
+        if outcome.returncode not in (0, _PENDING_EXIT) or (
+            outcome.returncode == _PENDING_EXIT and not outcome.stdout.strip()
+        ):
+            raise self._gh.failure(args, outcome)
+        try:
+            rows = json.loads(outcome.stdout or "null")
+        except ValueError:
+            msg = "gh pr checks returned invalid JSON"
+            raise CodeHostError(msg) from None
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            msg = "gh pr checks returned an unexpected response"
+            raise CodeHostError(msg)
+        return [_check(row) for row in rows]
 
     async def list_workflows(self, repo: RepositoryRef) -> Sequence[Workflow]:
-        raise _unsupported(Capability.CHECKS, "list_workflows")
+        """The active workflows. More than the declared bound raises: the result is never cut short."""
+        operation = "Checks.list_workflows"
+        bound = _bound(operation)
+        data = await self._gh.json(["api", f"repos/{repo.value}/actions/workflows?per_page=100"], operation)
+        rows = data.get("workflows") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            msg = "gh api returned an unexpected response"
+            raise CodeHostError(msg)
+        total = data.get("total_count")
+        if bound is not None and (len(rows) > bound or (isinstance(total, int) and total > len(rows))):
+            msg = f"{operation} found more than the declared bound of {bound}"
+            raise CodeHostError(msg)
+        return [
+            Workflow(id=str(row["id"]), name=_str(row, "name"))
+            for row in rows
+            if isinstance(row, dict) and row.get("state") == "active" and "id" in row
+        ]
 
     async def failed_log(self, repo: RepositoryRef, check: Check) -> str:
-        raise _unsupported(Capability.CHECKS, "failed_log")
+        """The failing part of the log: the job when the check has a job id, else the run of its link."""
+        link = check.details_url or ""
+        run_match = _RUN_ID_RE.search(link)
+        if check.job_id:
+            args = ["run", "view", "--job", check.job_id, "--repo", repo.value, "--log-failed"]
+        elif run_match:
+            args = ["run", "view", run_match.group(1), "--repo", repo.value, "--log-failed"]
+        else:
+            msg = "the check names no job or run to read a log from"
+            raise CodeHostError(msg)
+        return (await self._gh.ok(args, "Checks.failed_log")).stdout
 
     async def get_job(self, repo: RepositoryRef, job_id: str) -> Job:
-        raise _unsupported(Capability.CHECKS, "get_job")
+        """The job with its first failed step, or ``None`` as the step when no step failed."""
+        data = await self._gh.json(["api", f"repos/{repo.value}/actions/jobs/{job_id}"], "Checks.get_job")
+        if not isinstance(data, dict):
+            msg = "gh api returned an unexpected response"
+            raise CodeHostError(msg)
+        steps = data.get("steps")
+        failed = next(
+            (
+                str(step["name"])
+                for step in (steps if isinstance(steps, list) else [])
+                if isinstance(step, dict) and step.get("conclusion") == "failure" and step.get("name")
+            ),
+            None,
+        )
+        return Job(id=job_id, failed_step=failed)
 
 
 class _WorkItems:
@@ -1128,7 +1231,7 @@ class _WorkItems:
         if not outcome.success:
             if _ISSUE_NOT_FOUND_RE.search(outcome.stderr):
                 return None
-            raise self._gh._failure(args, outcome)
+            raise self._gh.failure(args, outcome)
         try:
             data = json.loads(outcome.stdout or "null")
         except ValueError:
@@ -1266,6 +1369,7 @@ DECLARATION = HostDeclaration(
         Capability.CHANGE_REQUESTS,
         Capability.DISCUSSION,
         Capability.WORK_ITEMS,
+        Capability.CHECKS,
     }),
     limits=HostLimits(
         max_inline_comments_per_review=_MAX_INLINE_COMMENTS,
@@ -1326,7 +1430,7 @@ def _create(options: ReferenceOptions, token_cmd: TokenCmd, working_directory: P
         repository=_Repository(gh),
         change_requests=_ChangeRequests(gh),
         discussion=_Discussion(gh),
-        checks=_AbsentChecks(),
+        checks=_Checks(gh),
         work_items=_WorkItems(gh),
         declaration=DECLARATION,
     )
