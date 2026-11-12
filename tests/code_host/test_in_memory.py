@@ -277,6 +277,17 @@ class TestFailureInjectionAndInspection:
         assert [c.operation for c in fake.writes] == ["WorkItems.remove_label"]
         assert fake.writes[0].outcome == "CodeHostTimeoutError"
 
+    async def test_apply_true_injection_wins_when_the_action_itself_raises(self) -> None:
+        fake = InMemoryCodeHost()
+        repo = RepositoryRef("o/a")
+        fake.add_change_request(repo, head_reference="feature/x", base_reference="main")
+        fake.fail_next("ChangeRequests.create_draft", CodeHostTimeoutError("took effect", write=True), apply=True)
+        with pytest.raises(CodeHostTimeoutError):
+            await fake.code_host().change_requests.create_draft(
+                repo, head="feature/x", base="main", title="t", body="b"
+            )
+        assert fake.calls[-1].outcome == "CodeHostTimeoutError"
+
     async def test_apply_false_does_not_change_state(self) -> None:
         fake = InMemoryCodeHost()
         repo = RepositoryRef("o/a")

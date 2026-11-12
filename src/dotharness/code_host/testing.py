@@ -486,10 +486,14 @@ class InMemoryCodeHost:
         try:
             result = action()
         except Exception as exc:
-            call = self._record(operation, args, kwargs, type(exc).__name__)
+            # An injection that was selected always wins: the caller asked for this error, even if the action failed.
+            surfaced = exc if injected is None else injected.error
+            call = self._record(operation, args, kwargs, type(surfaced).__name__)
             if self._version != before:
                 self._writes.append(call)
-            raise
+            if injected is None:
+                raise
+            raise injected.error from exc
         outcome = "ok" if injected is None else type(injected.error).__name__
         call = self._record(operation, args, kwargs, outcome)
         if self._version != before:
