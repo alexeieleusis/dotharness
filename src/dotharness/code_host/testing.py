@@ -282,7 +282,7 @@ class _FakeChangeRequests:
         )
 
     async def find_by_branch(  # NOSONAR python:S7503 - implements an async protocol
-        self, repo: RepositoryRef, branch: str, *, state: ChangeRequestState = ChangeRequestState.OPEN
+        self, repo: RepositoryRef, branch: str, *, state: ChangeRequestState | None = ChangeRequestState.OPEN
     ) -> Sequence[ChangeRequest]:
         return []
 

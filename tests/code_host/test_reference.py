@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dotharness.code_host import HostSelection, create_code_host
+from dotharness.code_host import CODE_HOST_INTERFACE_VERSION, HostSelection, create_code_host
 from dotharness.code_host.declarations import Anchor, Capability
 from dotharness.code_host.errors import (
     AuthenticationError,
@@ -775,7 +775,7 @@ class TestDeclaration:
 
 class TestRegistration:
     def test_registration_values(self) -> None:
-        assert REGISTRATION.interface_version == 1
+        assert REGISTRATION.interface_version == CODE_HOST_INTERFACE_VERSION
         assert REGISTRATION.options_model() is not None
         assert callable(REGISTRATION.factory)
 

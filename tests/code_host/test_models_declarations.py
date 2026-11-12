@@ -50,7 +50,7 @@ def _cr(**kw: object) -> ChangeRequest:
 
 
 def test_exports() -> None:
-    assert ch.CODE_HOST_INTERFACE_VERSION == 1
+    assert ch.CODE_HOST_INTERFACE_VERSION == 2
     for name in (
         "CodeHost",
         "HostDeclaration",

@@ -42,6 +42,7 @@ class TestInMemorySpecifics:
         host = InMemoryCodeHost().code_host()
         repo = await host.repository.current()
         assert await host.change_requests.find_by_branch(repo, "b") == []
+        assert await host.change_requests.find_by_branch(repo, "b", state=None) == []
         with pytest.raises(UnsupportedCapabilityError):
             await host.change_requests.get(repo, 1)
         with pytest.raises(UnsupportedCapabilityError):

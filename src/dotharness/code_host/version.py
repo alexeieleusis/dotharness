@@ -1,3 +1,3 @@
 """Interface version of the code-host contract."""
 
-CODE_HOST_INTERFACE_VERSION = 1
+CODE_HOST_INTERFACE_VERSION = 2

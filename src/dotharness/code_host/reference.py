@@ -304,7 +304,7 @@ class _ChangeRequests:
         raise _unsupported(Capability.CHANGE_REQUESTS, "state")
 
     async def find_by_branch(
-        self, repo: RepositoryRef, branch: str, *, state: ChangeRequestState = ChangeRequestState.OPEN
+        self, repo: RepositoryRef, branch: str, *, state: ChangeRequestState | None = ChangeRequestState.OPEN
     ) -> Sequence[ChangeRequest]:
         raise _unsupported(Capability.CHANGE_REQUESTS, "find_by_branch")
 
@@ -517,7 +517,7 @@ class ReferenceOptions:
     """Options of the reference host. There are none yet."""
 
 
-def _create(options: ReferenceOptions, token_cmd: TokenCmd) -> CodeHost:
+def _create(options: ReferenceOptions, token_cmd: TokenCmd, working_directory: Path | None = None) -> CodeHost:
     """Build the reference ``CodeHost``. Runs no command. ``gh`` owns its own authentication."""
     return CodeHost(
         session=_Session(),
