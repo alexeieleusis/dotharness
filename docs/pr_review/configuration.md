@@ -30,12 +30,27 @@ repo's.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `backend` | string | `"opencode"` | Which coding-agent CLI to shell out to. Must be `"opencode"` or `"claude"`. Any other value raises a `ConfigError` at load time. `"opencode"` invokes `opencode run --standalone <instructions>`. `"claude"` invokes `claude --dangerously-skip-permissions --disable-slash-commands -p <instructions>`. Both run with `cwd` set to `repo.working_dir`. |
-| `gh_token_cmd` | string | `"gh auth token"` | Shell command whose stdout is the GitHub token. The token is exported to subprocesses as `GITHUB_TOKEN`. |
+| `gh_token_cmd` | string | `"gh auth token"` | Command whose stdout is the host token. The token is exported to subprocesses as `GITHUB_TOKEN`. Kept as an alias of `host_token_cmd` until a later release removes it. |
+| `host_token_cmd` | string | absent | Host-neutral name for the token command, with the same meaning as `gh_token_cmd`. When both are set, `host_token_cmd` wins and no warning is shown. When neither is set, the effective command is `gh auth token`. |
+| `host` | string | absent | Name of the code host. Absent means `reference` (the built-in GitHub-compatible host). A name is resolved as the built-in `reference`, an installed entry point in the group `dotharness.code_hosts`, or a `module:attribute` path. |
+| `[harness.host_options]` | table | `{}` (empty) | Options passed to the selected host. Their meaning is defined by the host. |
 | `backend_timeout_seconds` | integer | `900` | Wall-clock timeout (seconds) for a single backend invocation before it is killed. |
 | `knowledge_dir` | path | `"~/.harness/knowledge"` | Directory holding the review prompt templates and other knowledge files the runners read. `~` is expanded. When the key is not set and `~/.harness/knowledge` does not exist, the knowledge shipped inside the package is used (see [Path defaults when installed](#path-defaults-when-installed)). |
 | `[harness.path_prepend]` | table (string → string) | `{}` (empty) | Keys map to directories. All of the *values* are joined with `:` and prepended to `PATH` for every subprocess harness spawns (backend CLI, `git`, `gh`, pre-commands, etc.). Keys are labels for readability (e.g. `java`, `node`). Only the values matter, and they are joined in the order they appear in the TOML table. |
 | `[harness.env]` | table (string → string) | `{}` (empty) | Arbitrary `KEY = "value"` pairs merged into the environment of every subprocess harness spawns, overriding any inherited environment variable of the same name. |
 | `review_knowledge_file` | path or unset | `None` | Optional path to a markdown file with extra review guidance. `~` is expanded. When unset, no extra file is loaded. |
+
+#### Host selection and token command
+
+The loader checks that `host` is a string, `host_options` is a table and `host_token_cmd` is a string. It does not run the token command and does not read the environment.
+
+The effective token command is `host_token_cmd`, else `gh_token_cmd`, else `gh auth token`.
+
+**Startup failure.** An unknown host name, or a host that cannot load, stops `pr_review validate` with exit code 1 (the same code as any other configuration error) and a message that names the key and its value, for example `code host setting host = "unknown-name": host is not found`. The message never holds the token or the token command.
+
+**Deviation DEV-6.** The token command runs through `shlex.split` with a 30 s timeout and without a shell. A custom `gh_token_cmd` or `host_token_cmd` that uses pipes, `$(...)` or variable expansion may stop working. Wrap such a command in a script and point the key at the script.
+
+`pr_review validate` asks the host whether it is available (10 s, never raises) instead of looking for `gh` on `PATH`. For the reference host the error text is still `gh: binary not found on PATH`. The check for the backend binary stays.
 
 ### `[repo]`
 
@@ -231,7 +246,12 @@ out of the fallback.
 [harness]
 backend = "opencode"               # "opencode" or "claude"
 gh_token_cmd = "gh auth token"
+# host_token_cmd = "gh auth token"  # host-neutral name; wins over gh_token_cmd when both are set
+# host = "reference"                # code host; absent means "reference"
 backend_timeout_seconds = 900
+
+# [harness.host_options]
+# (options passed to the selected host)
 
 # [harness.path_prepend]
 # java = "/Users/you/.sdkman/candidates/java/current/bin"

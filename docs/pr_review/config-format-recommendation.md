@@ -36,6 +36,8 @@ The one recommendation that changes practice is about secrets, in
 ### `[harness]`
 
 - **Types in use:** `backend: str`, `gh_token_cmd: str`,
+  `host_token_cmd: str | None`, `host: str | None`,
+  `host_options: dict[str, Any]`,
   `backend_timeout_seconds: int`, `knowledge_dir: Path`,
   `path_prepend: list[str]`, `env: dict[str, str]`,
   `review_knowledge_file: Path | None`.
@@ -138,10 +140,12 @@ Three fields touch secrets or secret-bearing files. The config file itself
 (`.harness*.toml`, `.sisyphus*.toml`) should be treated as non-secret: safe to
 read in a screen share and safe to copy between machines.
 
-### `gh_token_cmd`
+### `gh_token_cmd` and `host_token_cmd`
 
 - **Today:** `HarnessSection.gh_token_cmd: str`, default `"gh auth token"`
   (marked `# noqa: S105` because the name looks like a password to the linter).
+  `HarnessSection.host_token_cmd: str | None` is the host-neutral name and wins
+  when both are set. The command runs without a shell (`shlex.split`).
   The config stores a **command that yields the token**, never the token.
 - **Recommendation:** keep this pattern.
 - **Rule:** the command string must not embed a literal token. Values such as

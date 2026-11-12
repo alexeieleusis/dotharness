@@ -86,9 +86,20 @@ def test_init_aborts_if_exists(tmp_path, monkeypatch):
     assert "already exists" in result.output
 
 
+def _stub_host(available=True):
+    from dotharness.code_host.testing import InMemoryCodeHost
+
+    fake = InMemoryCodeHost()
+    fake.set_available(available)
+    return fake.code_host()
+
+
 def test_validate_exits_0_on_valid(minimal_toml):
     runner = CliRunner()
-    with patch("shutil.which", return_value="/usr/bin/stub"):
+    with (
+        patch("shutil.which", return_value="/usr/bin/stub"),
+        patch("dotharness.pr_review.cli.create_code_host", return_value=_stub_host()),
+    ):
         result = runner.invoke(cli, ["validate", "--config", str(minimal_toml)])
     assert result.exit_code == 0
 
@@ -412,3 +423,62 @@ def test_init_aborts_if_exists_exact_stderr(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert result.stderr == f"Error: .harness.toml already exists in {tmp_path.resolve()}\n"
     assert result.stdout == ""
+
+
+def test_validate_uses_session_available_and_not_which_gh(minimal_toml):
+    runner = CliRunner()
+    with (
+        patch("shutil.which", return_value="/usr/bin/stub") as which,
+        patch("dotharness.pr_review.cli.create_code_host", return_value=_stub_host(available=False)),
+    ):
+        result = runner.invoke(cli, ["validate", "--config", str(minimal_toml)])
+    assert result.exit_code == 1
+    assert "gh: binary not found on PATH" in result.output
+    assert all(call.args != ("gh",) for call in which.call_args_list)
+
+
+def test_validate_still_checks_backend_binary(minimal_toml):
+    runner = CliRunner()
+    with (
+        patch("shutil.which", return_value=None),
+        patch("dotharness.pr_review.cli.create_code_host", return_value=_stub_host()),
+    ):
+        result = runner.invoke(cli, ["validate", "--config", str(minimal_toml)])
+    assert result.exit_code == 1
+    assert "binary 'opencode' not found on PATH" in result.output
+    assert "gh: binary" not in result.output
+
+
+def test_validate_unknown_host_fails_naming_key_and_value(minimal_toml):
+    minimal_toml.write_text(minimal_toml.read_text().replace("[harness]\n", '[harness]\nhost = "unknown-name"\n', 1))
+    result = CliRunner().invoke(cli, ["validate", "--config", str(minimal_toml)])
+    assert result.exit_code == 1
+    assert "host" in result.output
+    assert "unknown-name" in result.output
+
+
+def test_validate_passes_effective_token_cmd_and_host_selection(minimal_toml):
+    text = minimal_toml.read_text().replace(
+        "[harness]\n", '[harness]\nhost = "examplehost"\nhost_token_cmd = "echo h"\n', 1
+    )
+    minimal_toml.write_text(text + '\n[harness.host_options]\nk = "v"\n')
+    with (
+        patch("shutil.which", return_value="/usr/bin/stub"),
+        patch("dotharness.pr_review.cli.create_code_host", return_value=_stub_host()) as create,
+    ):
+        result = CliRunner().invoke(cli, ["validate", "--config", str(minimal_toml)])
+    assert result.exit_code == 0
+    selection = create.call_args.args[0]
+    assert (selection.setting, selection.name, dict(selection.options), selection.token_cmd) == (
+        "host",
+        "examplehost",
+        {"k": "v"},
+        "echo h",
+    )
+
+
+def test_template_shows_host_token_cmd_and_keeps_default():
+    from dotharness.pr_review.cli import TEMPLATE
+
+    assert '\ngh_token_cmd = "gh auth token"\n' in TEMPLATE
+    assert "host_token_cmd" in TEMPLATE

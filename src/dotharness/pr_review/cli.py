@@ -10,9 +10,12 @@ from typing import Annotated
 import typer
 
 from dotharness.cli_common import fail
+from dotharness.code_host.errors import ConfigurationError
+from dotharness.code_host.factory import HostSelection, create_code_host
+from dotharness.code_host.interfaces import CodeHost
 from dotharness.paths import data_dir
 from dotharness.pr_review import state as state_mod
-from dotharness.pr_review.config import load_config
+from dotharness.pr_review.config import HarnessConfig, load_config
 from dotharness.pr_review.runners import (
     address_comments,
     auto_approve,
@@ -32,7 +35,12 @@ TEMPLATE = """\
 [harness]
 backend = "opencode"               # "opencode" or "claude"
 gh_token_cmd = "gh auth token"
+# host_token_cmd = "gh auth token"  # host-neutral name; wins over gh_token_cmd when both are set
+# host = "reference"                # code host; absent means "reference"
 backend_timeout_seconds = 900
+
+# [harness.host_options]
+# (options passed to the selected host)
 
 # [harness.path_prepend]
 # java = "/Users/you/.sdkman/candidates/java/current/bin"
@@ -119,6 +127,22 @@ def cmd_init(directory: Annotated[str, typer.Argument(metavar="DIRECTORY")] = ".
     typer.echo(f"Created {p.resolve()}")
 
 
+def _create_host(cfg: HarnessConfig) -> CodeHost:
+    """Build the configured code host or stop with the factory's message (exit code 1, like other config errors)."""
+    selection = HostSelection(
+        setting="host",
+        name=cfg.harness.host,
+        options=cfg.harness.host_options,
+        token_cmd=cfg.harness.effective_token_cmd,
+        working_directory=cfg.repo.working_dir if cfg.repo.working_dir.is_dir() else None,
+    )
+    try:
+        return create_code_host(selection)
+    except ConfigurationError as e:
+        typer.echo(str(e), err=True)
+        sys.exit(1)
+
+
 @app.command("validate")
 def cmd_validate(
     directory: Annotated[str, typer.Argument(metavar="DIRECTORY")] = ".",
@@ -141,7 +165,8 @@ def cmd_validate(
     backend_bin = "opencode" if cfg.harness.backend == "opencode" else "claude"
     if not shutil.which(backend_bin):
         errors.append(f"harness.backend: binary '{backend_bin}' not found on PATH")
-    if not shutil.which("gh"):
+    host = _create_host(cfg)
+    if not asyncio.run(host.session.available()):
         errors.append("gh: binary not found on PATH")
     if cfg.vibe_heal.enabled and cfg.vibe_heal.python and not Path(cfg.vibe_heal.python).expanduser().exists():
         errors.append(f"vibe_heal.python: path does not exist: {cfg.vibe_heal.python}")
