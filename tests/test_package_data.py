@@ -12,6 +12,17 @@ PACKAGE_DIR = REPO_ROOT / "src" / "dotharness"
 # SHA-256 of each tracked file under the old root knowledge/ at commit cb0efc1 (pre-move), except files edited since:
 # the I-5 prompt rewording (spec_prism_flow naming) and the lifecycle cheat sheet added for sisyphus.
 KNOWLEDGE_SHA256 = {
+    "patterns/fastapi/FASTAPI_ORGANIZATION_CONVENTION.md": "3a6d2a7fea735597a7536837568a65b3815eef8076f433a8dbdf8801836ff732",
+    "patterns/fastapi/QUICK_REF_PATTERNS.md": "97cbd99721d2f907aeff185fe95b10cf9e2ee92a99591bbf45a5c85815629f7d",
+    "patterns/fastapi/QUICK_START_MIGRATION.md": "240b3893b9fffa62481df1576a728ea464e5e485663702f89e29084dd27bfcb5",
+    "patterns/fastapi/QUICK_START_NEW_ENDPOINT.md": "41e87dd1379d78acd6b03fe0e8b90d4164778e9db7af31d931ea37630be8f059",
+    "patterns/fastapi/README.md": "dea4fa9bbf3653f8edfdda5e2fb646a4bd69f9f34f5b9a455f25cea11dc42727",
+    "patterns/generic/ADAPTING_TO_A_CODEBASE.md": "d92a1744ad01d2f6717963426804ba9ba73d4b1719e3d1c58109857eac442503",
+    "patterns/generic/CODE_ORGANIZATION_CONVENTION.md": "4decffd2cc32907aceaabde3b526d718d1845a91575a81d145eacb432cdcd300",
+    "patterns/generic/QUICK_REF_PATTERNS.md": "f4bd85245cac42843340b0f1ccfccd8c31529de491302eb06898527d5b75679d",
+    "patterns/generic/QUICK_START_MIGRATION.md": "2447db786b1f9c808f386f514410bc8812e34b01edc48c06d656bad3894a99c3",
+    "patterns/generic/QUICK_START_NEW_FEATURE.md": "64a4e732233aa9f05b44f9545eb9e6db1fcc7422535c329f8d0138a10dbe0e29",
+    "patterns/generic/README.md": "8d68d02b150692dd96fea863ac80e12a364f3a49a52ba1022ca3c2a75d456839",
     "patterns/react/COMPONENT_ORGANIZATION_CONVENTION.md": "2c6a3ffcb255055323370074f66511b0c828426cf2ff819a63fd820c9256497e",
     "patterns/react/QUICK_REF_PATTERNS.md": "a862de1be5bf6a93d75a9b08f8f077ad9d00a197185d361877ca1dc5f3376fb4",
     "patterns/react/QUICK_START_MIGRATION.md": "b5e52bbf85e255d767438dfcb041e7ea6aa9c938957409f7fd6aa1c459ee6ce5",
@@ -46,8 +57,8 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_manifest_has_27_files() -> None:
-    assert len(KNOWLEDGE_SHA256) == 27
+def test_manifest_has_38_files() -> None:
+    assert len(KNOWLEDGE_SHA256) == 38
 
 
 @pytest.mark.parametrize(("rel", "digest"), sorted(KNOWLEDGE_SHA256.items()))
