@@ -573,6 +573,7 @@ async def test_c5_intake_resume_after_manual_revert_reruns_intake(world: World) 
 
 
 async def test_c6_five_leaves(world: World) -> None:
+    world.limits = LimitsConfig(max_leaves_per_run=4)
     world.leaves = 5
     result = await world.run()
     _assert_stop(world, result, Checkpoint.C6)
@@ -583,11 +584,13 @@ async def test_c6_five_leaves(world: World) -> None:
 
 
 async def test_four_leaves_is_allowed(world: World) -> None:
+    world.limits = LimitsConfig(max_leaves_per_run=4)
     world.leaves = 4
     assert (await world.run()).completed
 
 
 async def test_c6_leaf_limit_rerun_does_not_replan(world: World) -> None:
+    world.limits = LimitsConfig(max_leaves_per_run=4)
     world.leaves = 5
     await world.run()
     plans_before = world.events.count("agent:plan")
@@ -1460,6 +1463,7 @@ def _stop_c5(world: World) -> None:
 
 
 def _stop_c6(world: World) -> None:
+    world.limits = LimitsConfig(max_leaves_per_run=4)
     world.leaves = 5
 
 

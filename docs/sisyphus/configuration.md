@@ -92,7 +92,7 @@ All values are positive integers.
 |---|---|---|
 | `max_run_minutes` | integer | 180 |
 | `max_tickets_per_run` | integer | 1 |
-| `max_leaves_per_run` | integer | 4 |
+| `max_leaves_per_run` | integer | 32 |
 
 ### Ignored sections
 

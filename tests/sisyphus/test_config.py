@@ -23,7 +23,7 @@ def test_minimal_defaults(tmp_path: Path) -> None:
     cfg = load_config(write(tmp_path, MIN))
     assert isinstance(cfg, SisyphusConfig)
     assert cfg.limits.max_tickets_per_run == 1
-    assert cfg.limits.max_leaves_per_run == 4
+    assert cfg.limits.max_leaves_per_run == 32
     assert cfg.limits.max_run_minutes == 180
     assert not hasattr(cfg, "merge")
     assert cfg.project.repo_dir is None
