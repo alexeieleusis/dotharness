@@ -23,6 +23,7 @@ class GhStub:
         self._attempts = 0
         self._rejected = False
         self.commands: list[list[str]] = []
+        self.envs: list[dict[str, str] | None] = []
 
     def set_available(self, available: bool) -> None:
         self._available = available
@@ -46,7 +47,10 @@ class GhStub:
         return self._attempts
 
     async def run(self, cmd: list[str], **kwargs: object) -> RunResult:
+        if cmd == ["echo", SECRET]:  # the token command: it is not a gh call
+            return RunResult(0, f"{SECRET}\n", "")
         self.commands.append(cmd)
+        self.envs.append(kwargs.get("env"))  # type: ignore[arg-type]
         if "--version" in cmd:
             return RunResult(0, "gh version 2.52.0", "") if self._available else RunResult(1, "", "gh missing")
         if "pr" in cmd and "view" in cmd:
@@ -87,11 +91,15 @@ class TestReferenceHostConformance(CodeHostConformance):
         )
         return ConformanceTarget(host=host, seeder=self.stub, secret=SECRET)
 
-    async def test_token_cmd_is_never_used(self) -> None:
-        """The reference host leaves credentials to ``gh``: the token command is neither run nor passed to gh."""
+    async def test_token_reaches_gh_only_as_gh_token_in_the_environment(self) -> None:
+        """The token command runs once. Its token is ``GH_TOKEN`` in the gh environment, never in argv or GITHUB_TOKEN."""
         target = await self.make_target()
         await target.host.session.available()
         self.stub.set_current_change_request(1)
         await target.host.change_requests.for_current_branch(target.repository)
         assert self.stub.commands
         assert not [c for c in self.stub.commands if SECRET in " ".join(c)]
+        env = self.stub.envs[-1]
+        assert env is not None
+        assert env["GH_TOKEN"] == SECRET
+        assert "GITHUB_TOKEN" not in env or env["GITHUB_TOKEN"] != SECRET

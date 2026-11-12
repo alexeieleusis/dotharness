@@ -9,7 +9,9 @@ import asyncio
 import json
 import logging
 import math
+import os
 import re
+import shlex
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -51,6 +53,7 @@ from dotharness.code_host.models import (
     User,
     Workflow,
     WorkItem,
+    WorkItemState,
 )
 from dotharness.code_host.version import CODE_HOST_INTERFACE_VERSION
 from dotharness.gh import gh_argv
@@ -76,26 +79,37 @@ class _Outcome:
     success: bool
     stdout: str
     stderr: str
+    returncode: int = 0
 
 
 @asynccontextmanager
-async def _deadline(cmd: list[str], seconds: float) -> AsyncGenerator[None]:
-    """Bound the enclosed block by a deadline. A read that expires raises CodeHostError (not the timeout error)."""
+async def _deadline(cmd: list[str], seconds: float, *, write: bool = False) -> AsyncGenerator[None]:
+    """Bound the enclosed block by a deadline. Expiry raises CodeHostTimeoutError (``write`` says if it was a write)."""
     try:
         async with asyncio.timeout(seconds):
             yield
     except TimeoutError:
         msg = f"`{cmd[0]} {cmd[1] if len(cmd) > 1 else ''}`".strip() + f" timed out after {seconds:g}s"
-        raise CodeHostError(msg) from None
+        raise CodeHostTimeoutError(msg, write=write) from None
 
 
-async def _run_gh(cmd: list[str], seconds: float) -> _Outcome:
-    """Run a command under a caller-chosen deadline. The deadline kills the child process group on expiry."""
-    async with _deadline(cmd, seconds):
-        result = await run(cmd, cwd=Path.cwd(), timeout=math.inf)
+async def _run_gh(
+    cmd: list[str],
+    seconds: float,
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    write: bool = False,
+) -> _Outcome:
+    """Run a command under a caller-chosen deadline. The deadline kills the child process group on expiry.
+
+    ``cwd`` defaults to the process directory. ``env`` replaces the child environment (``None`` inherits it).
+    """
+    async with _deadline(cmd, seconds, write=write):
+        result = await run(cmd, cwd=cwd or Path.cwd(), env=env, timeout=math.inf)
     if result.not_found:
         raise FileNotFoundError(result.stderr)
-    return _Outcome(result.returncode == 0, result.stdout, result.stderr)
+    return _Outcome(result.returncode == 0, result.stdout, result.stderr, result.returncode)
 
 
 async def _require_gh() -> None:
@@ -182,6 +196,119 @@ def _truncate_body(body: str) -> str:
 
 
 # --------------------------------------------------------------------------------------------------------------------
+# Host context: working directory, credential and the ``gh`` environment
+# --------------------------------------------------------------------------------------------------------------------
+
+_TOKEN_CMD_TIMEOUT_SECONDS = 30
+_STDERR_TAIL = 300
+
+
+class TokenCommandError(AuthenticationError):
+    """The token command failed. The data fields let a consumer build its own text. No message holds argv or stderr.
+
+    ``exit_code`` is the command's exit status, or ``None`` when it did not run to an exit. ``detail`` names the cause
+    when it did not run (an exception class name).
+    """
+
+    def __init__(self, message: str, *, exit_code: int | None = None, detail: str | None = None) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+        self.detail = detail
+
+
+def _seconds(operation: str) -> float:
+    timeouts = DECLARATION.limits.timeouts
+    return timeouts.per_operation.get(operation, timeouts.default_seconds)
+
+
+def _bound(operation: str) -> int | None:
+    bounds = DECLARATION.limits.list_bounds
+    return bounds.per_operation.get(operation, bounds.default)
+
+
+class _Gh:
+    """Runs ``gh`` for one host: in the working directory, with ``GH_TOKEN`` when a token command is set."""
+
+    def __init__(self, token_cmd: TokenCmd, working_directory: Path | None) -> None:
+        self.cwd = working_directory
+        self._token_cmd = token_cmd
+        self._credential: Credential | None = None
+
+    def __repr__(self) -> str:
+        return f"_Gh(cwd={self.cwd!r})"
+
+    async def credential(self) -> Credential:
+        """Run the token command once (``shlex.split``, no shell, 30 s) and keep the token for the process."""
+        if self._credential is not None:
+            return self._credential
+        if not self._token_cmd:
+            msg = "no token command is configured"
+            raise AuthenticationError(msg)
+        try:
+            argv = shlex.split(self._token_cmd) if isinstance(self._token_cmd, str) else list(self._token_cmd)
+        except ValueError:
+            argv = []
+        if not argv:
+            msg = "token command failed to run (ValueError)"
+            raise TokenCommandError(msg, detail="ValueError") from None
+        result = await run(argv, timeout=_TOKEN_CMD_TIMEOUT_SECONDS)
+        # Never put argv or stderr in a message: the command may hold a secret.
+        if result.timed_out or result.not_found:
+            detail = "TimeoutExpired" if result.timed_out else "OSError"
+            msg = f"token command failed to run ({detail})"
+            raise TokenCommandError(msg, detail=detail)
+        if result.returncode != 0 or not result.stdout.strip():
+            msg = f"token command failed (exit {result.returncode}) or printed no token"
+            raise TokenCommandError(msg, exit_code=result.returncode)
+        self._credential = Credential(token=result.stdout.strip())
+        return self._credential
+
+    async def _env(self) -> dict[str, str] | None:
+        """The child environment: the inherited one plus ``GH_TOKEN`` only. ``None`` when no token command is set."""
+        if not self._token_cmd:
+            return None
+        return {**os.environ, "GH_TOKEN": (await self.credential()).token}
+
+    async def run(
+        self, args: Sequence[str], operation: str, *, write: bool = False, seconds: float | None = None
+    ) -> _Outcome:
+        """Run ``gh <args>`` under the declared timeout of ``operation`` (``Interface.method``)."""
+        return await _run_gh(
+            gh_argv(*args),
+            _seconds(operation) if seconds is None else seconds,
+            cwd=self.cwd,
+            env=await self._env(),
+            write=write,
+        )
+
+    def _failure(self, args: Sequence[str], outcome: _Outcome) -> CodeHostError:
+        """Error for a non-zero exit: exit code and the stderr tail. No command line, no token."""
+        tail = outcome.stderr.strip()[-_STDERR_TAIL:]
+        if self._credential is not None:
+            tail = tail.replace(self._credential.token, "<token>")
+        msg = f"gh {' '.join(args[:2])} failed (exit {outcome.returncode}): {tail}"
+        if any(marker in tail.lower() for marker in _AUTH_MARKERS):
+            return AuthenticationError(msg)
+        return CodeHostError(msg)
+
+    async def ok(self, args: Sequence[str], operation: str, *, write: bool = False) -> _Outcome:
+        """Run and raise on a non-zero exit."""
+        outcome = await self.run(args, operation, write=write)
+        if not outcome.success:
+            raise self._failure(args, outcome)
+        return outcome
+
+    async def json(self, args: Sequence[str], operation: str) -> Any:
+        """Run a read and parse its JSON output. Raises CodeHostError on a non-zero exit or invalid JSON."""
+        outcome = await self.ok(args, operation)
+        try:
+            return json.loads(outcome.stdout or "null")
+        except ValueError:
+            msg = f"gh {' '.join(args[:2])} returned invalid JSON"
+            raise CodeHostError(msg) from None
+
+
+# --------------------------------------------------------------------------------------------------------------------
 # Capability objects
 # --------------------------------------------------------------------------------------------------------------------
 
@@ -192,15 +319,19 @@ def _unsupported(capability: Capability, operation: str) -> UnsupportedCapabilit
 
 
 class _Session:
+    def __init__(self, gh: _Gh) -> None:
+        self._gh = gh
+
     async def available(self) -> bool:
         """True when ``gh --version`` succeeds within 10 s. Never raises."""
         try:
-            return (await _run_gh(gh_argv("--version"), 10)).success
+            return (await _run_gh(gh_argv("--version"), _seconds("Session.available"), cwd=self._gh.cwd)).success
         except Exception:
             return False
 
     async def credential(self) -> Credential:
-        raise _unsupported(Capability.SESSION, "credential")
+        """The token from the configured token command. Raises AuthenticationError (no command, failure)."""
+        return await self._gh.credential()
 
     async def current_user(self) -> str:
         raise _unsupported(Capability.SESSION, "current_user")
@@ -213,16 +344,21 @@ class _Session:
 
 
 class _Repository:
+    def __init__(self, gh: _Gh) -> None:
+        self._gh = gh
+
     async def current(self) -> RepositoryRef:
         """Owner and repository of the clone, from ``gh`` and then from the ``origin`` remote."""
-        outcome = await _run_gh(
-            gh_argv("repo", "view", "--json", "owner,name", "--jq", '"\\(.owner.login)/\\(.name)"'), 15
+        outcome = await self._gh.run(
+            ("repo", "view", "--json", "owner,name", "--jq", '"\\(.owner.login)/\\(.name)"'),
+            "Repository.current",
+            seconds=15,
         )
         if outcome.success and outcome.stdout.strip():
             return RepositoryRef(outcome.stdout.strip())
 
         try:
-            git_outcome = await _run_gh(["git", "remote", "get-url", "origin"], 10)
+            git_outcome = await _run_gh(["git", "remote", "get-url", "origin"], 10, cwd=self._gh.cwd)
         except (OSError, CodeHostError):
             git_outcome = None
         if git_outcome is not None and git_outcome.success:
@@ -237,7 +373,14 @@ class _Repository:
         raise _unsupported(Capability.REPOSITORY, "resolve")
 
     async def default_branch(self, repo: RepositoryRef) -> str:
-        raise _unsupported(Capability.REPOSITORY, "default_branch")
+        """Name of the default branch (``gh repo view --json defaultBranchRef``). Raises CodeHostError."""
+        data = await self._gh.json(("repo", "view", "--json", "defaultBranchRef"), "Repository.default_branch")
+        ref = data.get("defaultBranchRef") if isinstance(data, dict) else None
+        name = ref.get("name") if isinstance(ref, dict) else None
+        if not isinstance(name, str) or not name:
+            msg = "gh repo view returned no default branch"
+            raise CodeHostError(msg)
+        return name
 
     async def display_name(self, repo: RepositoryRef) -> str:
         raise _unsupported(Capability.REPOSITORY, "display_name")
@@ -257,11 +400,50 @@ def _str(data: Mapping[str, Any], key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
+_PR_URL = re.compile(r"/pull/(\d+)")
+
+
+def _int(data: Mapping[str, Any], key: str) -> int:
+    value = data.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _summary(
+    repo: RepositoryRef, data: Mapping[str, Any], *, state: ChangeRequestState | None = None, head: str = ""
+) -> ChangeRequest:
+    """A ``ChangeRequest`` from the few fields sisyphus reads. Unread fields take the empty defaults (decision 4)."""
+    return ChangeRequest(
+        repository=repo,
+        number=_int(data, "number"),
+        title=_str(data, "title"),
+        body=_str(data, "body"),
+        url=_str(data, "url"),
+        state=_state(_str(data, "state")) if state is None else state,
+        is_draft=False,
+        author=None,
+        head_reference=head,
+        head_revision=_str(data, "headRefOid"),
+        base_reference="",
+        is_cross_repository=False,
+        created_at=_parse_time(None),
+    )
+
+
+def _object(value: Any, what: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        msg = f"gh {what} returned an unexpected response"
+        raise CodeHostError(msg)
+    return value
+
+
 class _ChangeRequests:
+    def __init__(self, gh: _Gh) -> None:
+        self._gh = gh
+
     async def for_current_branch(self, repo: RepositoryRef) -> ChangeRequest:
         """The open pull request of the checked-out branch (``gh pr view``, no branch argument)."""
         await _require_gh()
-        outcome = await _run_gh(gh_argv("pr", "view", "--json", _PR_FIELDS), 30)
+        outcome = await self._gh.run(("pr", "view", "--json", _PR_FIELDS), "ChangeRequests.for_current_branch")
         if not outcome.success:
             stderr = outcome.stderr.strip()
             if "no pull requests found" in stderr.lower():
@@ -298,15 +480,47 @@ class _ChangeRequests:
         )
 
     async def get(self, repo: RepositoryRef, number: int) -> ChangeRequest:
-        raise _unsupported(Capability.CHANGE_REQUESTS, "get")
+        """Number, state and head revision (``gh pr view N --json number,state,headRefOid``)."""
+        data = await self._gh.json(
+            ("pr", "view", str(number), "--json", "number,state,headRefOid"), "ChangeRequests.get"
+        )
+        return _summary(repo, _object(data, "pr view"))
 
     async def state(self, repo: RepositoryRef, number: int) -> ChangeRequestState:
-        raise _unsupported(Capability.CHANGE_REQUESTS, "state")
+        """Lifecycle state only (``gh pr view N --json state``)."""
+        data = await self._gh.json(("pr", "view", str(number), "--json", "state"), "ChangeRequests.state")
+        value = data.get("state") if isinstance(data, dict) else None
+        if not isinstance(value, str) or not value:
+            msg = "gh pr view returned no state"
+            raise CodeHostError(msg)
+        return _state(value)
 
     async def find_by_branch(
         self, repo: RepositoryRef, branch: str, *, state: ChangeRequestState | None = ChangeRequestState.OPEN
     ) -> Sequence[ChangeRequest]:
-        raise _unsupported(Capability.CHANGE_REQUESTS, "find_by_branch")
+        """Change requests whose head is ``branch``. ``state=None`` means any state: the most recent one, if any.
+
+        ``gh pr view <branch>`` picks the most recent match. It exits non-zero with "no pull requests found" when there
+        is none, which is an empty result here.
+        """
+        if state is None:
+            args = ("pr", "view", branch, "--json", "number,state,headRefOid")
+            outcome = await self._gh.run(args, "ChangeRequests.find_by_branch")
+            if not outcome.success:
+                if "no pull requests found" in outcome.stderr.lower():
+                    return []
+                raise self._gh._failure(args, outcome)
+            try:
+                data = json.loads(outcome.stdout or "null")
+            except ValueError:
+                msg = "gh pr view returned invalid JSON"
+                raise CodeHostError(msg) from None
+            return [_summary(repo, _object(data, "pr view"), head=branch)]
+        rows = await self._gh.json(
+            ("pr", "list", "--head", branch, "--state", state.value, "--json", "number,url"),
+            "ChangeRequests.find_by_branch",
+        )
+        return [_summary(repo, row, state=state, head=branch) for row in rows or [] if isinstance(row, dict)]
 
     async def list(
         self,
@@ -329,7 +543,29 @@ class _ChangeRequests:
         raise _unsupported(Capability.CHANGE_REQUESTS, "reviews")
 
     async def create_draft(self, repo: RepositoryRef, *, head: str, base: str, title: str, body: str) -> ChangeRequest:
-        raise _unsupported(Capability.CHANGE_REQUESTS, "create_draft")
+        """Create a draft (``gh pr create --draft``). The number comes from the printed URL; no URL is an error."""
+        args = ("pr", "create", "--draft", "--head", head, "--base", base, "--title", title, "--body", body)
+        outcome = await self._gh.run(args, "ChangeRequests.create_draft", write=True)
+        match = _PR_URL.search(outcome.stdout)
+        if not outcome.success or not match:
+            raise self._gh._failure(
+                args, _Outcome(False, outcome.stdout, outcome.stderr or outcome.stdout, outcome.returncode)
+            )
+        return ChangeRequest(
+            repository=repo,
+            number=int(match.group(1)),
+            title=title,
+            body=body,
+            url=outcome.stdout.strip().splitlines()[-1],
+            state=ChangeRequestState.OPEN,
+            is_draft=True,
+            author=None,
+            head_reference=head,
+            head_revision="",
+            base_reference=base,
+            is_cross_repository=False,
+            created_at=_parse_time(None),
+        )
 
     async def squash_merge(self, repo: RepositoryRef, number: int, *, expected_head: str) -> None:
         raise _unsupported(Capability.CHANGE_REQUESTS, "squash_merge")
@@ -439,8 +675,9 @@ class _AbsentChecks:
         raise _unsupported(Capability.CHECKS, "get_job")
 
 
-class _AbsentWorkItems:
-    """WorkItems are not declared. Every call raises and runs no ``gh``."""
+class _WorkItems:
+    def __init__(self, gh: _Gh) -> None:
+        self._gh = gh
 
     async def get(self, repo: RepositoryRef, number: int) -> WorkItem | None:
         raise _unsupported(Capability.WORK_ITEMS, "get")
@@ -448,19 +685,68 @@ class _AbsentWorkItems:
     async def list_open(
         self, repo: RepositoryRef, *, assignee: str | None = None, label: str | None = None
     ) -> Sequence[WorkItem]:
-        raise _unsupported(Capability.WORK_ITEMS, "list_open")
+        """Open issues in ``gh`` order, bounded by the declared list bound."""
+        args = ["issue", "list", "--state", "open"]
+        if assignee is not None:
+            args += ["--assignee", assignee]
+        if label is not None:
+            args += ["--label", label]
+        bound = _bound("WorkItems.list_open")
+        args += ["--limit", str(bound), "--json", "number,title,createdAt,assignees,labels"]
+        rows = await self._gh.json(args, "WorkItems.list_open")
+        return [_work_item(repo, row) for row in rows or [] if isinstance(row, dict)]
 
     async def remove_label(self, repo: RepositoryRef, number: int, label: str) -> None:
-        raise _unsupported(Capability.WORK_ITEMS, "remove_label")
+        """Remove ``label`` (``gh issue edit N --remove-label L``). A non-zero exit raises, a timeout is a write timeout.
+
+        A label the issue does not carry exits 0 (no-op). A label that does not exist in the repository exits non-zero.
+        """
+        await self._gh.ok(("issue", "edit", str(number), "--remove-label", label), "WorkItems.remove_label", write=True)
 
     async def closing_change_requests(self, repo: RepositoryRef, number: int) -> Sequence[ChangeRequest]:
-        raise _unsupported(Capability.WORK_ITEMS, "closing_change_requests")
+        """Change requests GitHub links as closing the issue, any state, each resolved by ``gh pr view``."""
+        view = await self._gh.json(
+            ("issue", "view", str(number), "--json", "closedByPullRequestsReferences"),
+            "WorkItems.closing_change_requests",
+        )
+        found: list[ChangeRequest] = []
+        for ref in (
+            (view or {}).get("closedByPullRequestsReferences", []) if isinstance(view, dict) or view is None else []
+        ):
+            pr = await self._gh.json(
+                ("pr", "view", str(_int(ref, "number")), "--json", "number,state"), "WorkItems.closing_change_requests"
+            )
+            found.append(_summary(repo, _object(pr, "pr view")))
+        return found
 
     async def open_change_request_bodies(self, repo: RepositoryRef) -> Sequence[ChangeRequest]:
-        raise _unsupported(Capability.WORK_ITEMS, "open_change_request_bodies")
+        """Open change requests with their bodies, bounded by the declared list bound."""
+        bound = _bound("WorkItems.open_change_request_bodies")
+        rows = await self._gh.json(
+            ("pr", "list", "--state", "open", "--limit", str(bound), "--json", "body"),
+            "WorkItems.open_change_request_bodies",
+        )
+        return [_summary(repo, row, state=ChangeRequestState.OPEN) for row in rows or [] if isinstance(row, dict)]
 
     async def linked_work_items(self, repo: RepositoryRef, number: int) -> Sequence[WorkItem]:
         raise _unsupported(Capability.WORK_ITEMS, "linked_work_items")
+
+
+def _work_item(repo: RepositoryRef, row: Mapping[str, Any]) -> WorkItem:
+    assignees = row.get("assignees")
+    labels = row.get("labels")
+    return WorkItem(
+        repository=repo,
+        number=_int(row, "number"),
+        title=_str(row, "title"),
+        body="",
+        labels=tuple(_str(lbl, "name") for lbl in labels if isinstance(lbl, dict)) if isinstance(labels, list) else (),
+        assignees=tuple(u for u in (_user(a) for a in assignees) if u is not None)
+        if isinstance(assignees, list)
+        else (),
+        created_at=_parse_time(row.get("createdAt")),
+        state=WorkItemState.OPEN,
+    )
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -473,6 +759,7 @@ DECLARATION = HostDeclaration(
         Capability.REPOSITORY,
         Capability.CHANGE_REQUESTS,
         Capability.DISCUSSION,
+        Capability.WORK_ITEMS,
     }),
     limits=HostLimits(
         max_inline_comments_per_review=_MAX_INLINE_COMMENTS,
@@ -484,6 +771,7 @@ DECLARATION = HostDeclaration(
                 "ChangeRequests.state": 10.0,
                 "Session.available": 10,
                 "ChangeRequests.find_by_branch": 30,
+                "WorkItems.remove_label": 10.0,
                 "Discussion.post_review": _POST_TIMEOUT_SECONDS,
             },
         ),
@@ -518,14 +806,20 @@ class ReferenceOptions:
 
 
 def _create(options: ReferenceOptions, token_cmd: TokenCmd, working_directory: Path | None = None) -> CodeHost:
-    """Build the reference ``CodeHost``. Runs no command. ``gh`` owns its own authentication."""
+    """Build the reference ``CodeHost``. Runs no command: the token command runs at ``Session.credential()``.
+
+    ``working_directory`` is the directory of every ``gh`` call (the process directory when ``None``). With a token
+    command, ``gh`` calls get ``GH_TOKEN`` in their child environment (never ``GITHUB_TOKEN``). Without one, ``gh``
+    owns its own authentication.
+    """
+    gh = _Gh(token_cmd, working_directory)
     return CodeHost(
-        session=_Session(),
-        repository=_Repository(),
-        change_requests=_ChangeRequests(),
+        session=_Session(gh),
+        repository=_Repository(gh),
+        change_requests=_ChangeRequests(gh),
         discussion=_Discussion(),
         checks=_AbsentChecks(),
-        work_items=_AbsentWorkItems(),
+        work_items=_WorkItems(gh),
         declaration=DECLARATION,
     )
 

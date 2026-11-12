@@ -13,7 +13,7 @@ Examples use the placeholder token ``<token>``.
 import inspect
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Protocol, cast
 
@@ -155,7 +155,10 @@ class InMemoryCodeHost:
         self._failure = _Failure()
         self._posts: list[PostedItem] = []
         self._attempts = 0
-        self.declaration: HostDeclaration = DECLARATION
+        # The fake serves the review flow only: it does not declare WorkItems (the reference host does).
+        self.declaration: HostDeclaration = replace(
+            DECLARATION, capabilities=DECLARATION.capabilities - {Capability.WORK_ITEMS}
+        )
 
     # -- seeder --------------------------------------------------------------------------------------------------
 
