@@ -1,7 +1,11 @@
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from dotharness.pr_review.runners.common import build_early_comment_context, resolve_linked_tickets
+from dotharness.pr_review.runners.common import (
+    PR_LIST_JSON_FIELDS,
+    build_early_comment_context,
+    resolve_linked_tickets,
+)
 
 REPO = "acme/repo"
 
@@ -591,3 +595,10 @@ async def test_resolve_linked_tickets_and_build_early_comment_context_share_one_
         and call.args[0][4] == f"repos/{REPO}/issues/39/comments"
     ]
     assert len(comment_fetch_calls) == 1
+
+
+def test_pr_list_json_fields_cover_traceability_inputs():
+    # resolve_linked_tickets reads these PR fields; a missing one silently means "no ticket".
+    fields = PR_LIST_JSON_FIELDS.split(",")
+    for needed in ("createdAt", "closingIssuesReferences", "body", "author"):
+        assert needed in fields

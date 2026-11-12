@@ -21,6 +21,11 @@ TIMEOUT_GH = 30
 TIMEOUT_GIT = 60
 TIMEOUT_FETCH_COMMENTS = 120
 
+# `gh pr list/view --json` fields every PR-listing call site must request: resolve_linked_tickets
+# reads closingIssuesReferences, createdAt and body from the PR dict, and a missing field
+# silently degrades to "no linked ticket". Keep all call sites on this one constant.
+PR_LIST_JSON_FIELDS = "number,url,headRefName,createdAt,closingIssuesReferences,author,body"
+
 
 def resolve_env_file(repo: RepoConfig, subdir: SubDir) -> Path | None:
     """Absolute path of the subdir's vibe_heal env file, or None when unset.

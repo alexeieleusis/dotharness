@@ -13,6 +13,7 @@ from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
+    PR_LIST_JSON_FIELDS,
     TIMEOUT_GH,
     build_design_review_prompt,
     build_early_comment_context,
@@ -756,7 +757,7 @@ async def _list_prs_by_flag(repo: str, env: dict, filter_flag: str) -> list[dict
             "--state",
             "open",
             "--json",
-            "number,url,headRefName,createdAt,closingIssuesReferences,author,body",
+            PR_LIST_JSON_FIELDS,
             "--limit",
             "500",
         ),

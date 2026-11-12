@@ -11,6 +11,7 @@ from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
+    PR_LIST_JSON_FIELDS,
     TIMEOUT_GH,
     FatalGitError,
     build_design_review_prompt,
@@ -67,11 +68,7 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
     current_user = await get_current_user(env)
 
     if pr_url:
-        prs = [
-            await pr_from_url(
-                pr_url, config.repo.name, env, "number,url,headRefName,createdAt,closingIssuesReferences,author,body"
-            )
-        ]
+        prs = [await pr_from_url(pr_url, config.repo.name, env, PR_LIST_JSON_FIELDS)]
     else:
         prs = [p for p in await _get_prs(config.repo.name, env) if p.get("headRefName")]
 
@@ -146,7 +143,7 @@ async def _get_prs(repo: str, env: dict) -> list[dict]:
             "--search",
             "user-review-requested:@me",
             "--json",
-            "number,url,headRefName,createdAt,closingIssuesReferences,author,body",
+            PR_LIST_JSON_FIELDS,
             "--limit",
             "500",
         ),
