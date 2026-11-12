@@ -469,7 +469,7 @@ router = APIRouter(prefix="/orders", tags=["orders"])
     "",
     response_model=OrderOut,
     status_code=status.HTTP_201_CREATED,
-    responses={422: {"model": ErrorOut}},
+    responses={409: {"model": ErrorOut}},  # policy rejection; 422 stays FastAPI's HTTPValidationError
 )
 def place_order(body: PlaceOrderIn, orders: OrdersDep, catalog: CatalogDep, now: NowDep, new_id: NewIdDep):
     return service.place_order(
@@ -500,7 +500,7 @@ from app.orders.service import OrderNotFound, OrderRejected
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(OrderRejected)
     async def _rejected(_: Request, exc: OrderRejected) -> JSONResponse:
-        return JSONResponse(status_code=422, content={"detail": "order rejected", "reasons": exc.reasons})
+        return JSONResponse(status_code=409, content={"detail": "order rejected", "reasons": exc.reasons})
 
     @app.exception_handler(OrderNotFound)
     async def _missing(_: Request, exc: OrderNotFound) -> JSONResponse:
@@ -605,11 +605,13 @@ def test_place_then_get(client):
 def test_shape_error_is_422_from_pydantic(client):
     r = client.post("/orders", json={"customer_id": "c1", "lines": [{"sku": "widget", "quantity": 0}]})
     assert r.status_code == 422
+    assert isinstance(r.json()["detail"], list)  # HTTPValidationError shape: detail is a list
 
 
-def test_policy_rejection_maps_to_422_with_reasons(client):
+def test_policy_rejection_maps_to_409_with_reasons(client):
     r = client.post("/orders", json={"customer_id": "c1", "lines": []})
-    assert r.status_code == 422 and r.json()["reasons"] == ["order must have at least one line"]
+    assert r.status_code == 409
+    assert r.json() == {"detail": "order rejected", "reasons": ["order must have at least one line"]}  # ErrorOut shape
 
 
 def test_missing_is_404(client):

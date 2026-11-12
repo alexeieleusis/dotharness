@@ -214,7 +214,7 @@ The most common FastAPI placement mistake. Rule of thumb:
 
 Corollary: Pydantic `@field_validator`s stay *syntactic* (normalize case, strip whitespace, parse). If a validator contains a number a product manager would recognize, move it to the domain and keep a named constant there.
 
-Two kinds of 422 may appear (Pydantic's `detail` array vs. your domain `reasons`). Decide once, repo-wide, whether to unify them (an exception handler for `RequestValidationError` can reshape it) and document it.
+Don't return two different bodies under one status. Pydantic's 422 has a `detail` array; give domain rejections their own status (e.g. 409) and model, or, if you reuse 422, document a union (`ErrorOut | HTTPValidationError`) or reshape `RequestValidationError` repo-wide.
 
 ---
 
@@ -383,7 +383,7 @@ def place_order(
   ```python
   @app.exception_handler(OrderRejected)
   async def _rejected(_: Request, exc: OrderRejected):
-      return JSONResponse(status_code=422, content={"detail": "order rejected", "reasons": exc.reasons})
+      return JSONResponse(status_code=409, content={"detail": "order rejected", "reasons": exc.reasons})
   ```
 
   | Layer | Owns |
@@ -393,7 +393,7 @@ def place_order(
   | Service | *when* to raise (`OrderRejected`, `OrderNotFound`) |
   | Exception handler | status code + body shape |
 
-- Document error shapes in the route (`responses={422: {"model": ErrorOut}}`) so OpenAPI and clients know them.
+- Document error shapes in the route (`responses={409: {"model": ErrorOut}}`; declaring a model on 422 replaces FastAPI's `HTTPValidationError` entry) so OpenAPI and clients know them.
 - Keep non-trivial formatting (CSV export, report rendering, pagination envelopes) in pure functions; test with fixtures.
 
 ---
