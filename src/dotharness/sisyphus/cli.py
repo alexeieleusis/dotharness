@@ -196,16 +196,22 @@ async def _no_backend(_prompt: str) -> None:
     raise ConfigError("[agent] backend is not set")
 
 
+def _uses_host_items(work_item: WorkItemSource | None) -> bool:
+    """True when the host issue tracker serves work items (no ``[source.work_item]`` or ``kind = "github"``)."""
+    return work_item is None or work_item.kind == "github"
+
+
 def _require_work_items(host: CodeHost, work_item: WorkItemSource | None) -> None:
-    """Policy (WorkItems unsupported, ``kind = "github"``): stop at startup, before any host call."""
-    if (
-        work_item is not None
-        and work_item.kind == "github"
-        and Capability.WORK_ITEMS not in host.declaration.capabilities
-    ):
+    """Policy (WorkItems unsupported, host-backed items): stop at startup, before any host call."""
+    if _uses_host_items(work_item) and Capability.WORK_ITEMS not in host.declaration.capabilities:
+        kind = "github" if work_item is None else work_item.kind
+        origin = (
+            "no [source.work_item] (defaults to the host tracker)"
+            if work_item is None
+            else f'[source.work_item] kind = "{kind}"'
+        )
         raise ConfigurationError(
-            f'[source.work_item] kind = "{work_item.kind}" needs a code host with the WorkItems capability, '
-            f"which the configured host does not declare"
+            f"{origin} needs a code host with the WorkItems capability, which the configured host does not declare"
         )
 
 
@@ -220,7 +226,7 @@ def default_services(config: SisyphusConfig) -> Services:
         tracker: TrackerClient = LinearTracker(os.environ.get("LINEAR_API_KEY", ""))
     elif work_item is not None and work_item.kind == "file":
         tracker = FileTracker()
-    else:
+    else:  # host-backed: exactly when _uses_host_items(work_item)
         tracker = HostIssueTracker(repo)
     runner = (
         make_agent_runner(config.agent.backend, repo_dir, timeout_minutes=config.limits.max_run_minutes)

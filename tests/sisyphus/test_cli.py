@@ -955,6 +955,16 @@ def test_default_services_github_kind_needs_work_items(tmp_path: Path, monkeypat
     assert isinstance(cli.default_services(cfg).tracker, HostIssueTracker)
 
 
+def test_default_services_default_tracker_needs_work_items(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = _github_config(tmp_path)
+    cfg = replace(cfg, source=replace(cfg.source, work_item=None))
+    fake = InMemoryCodeHost(capabilities=frozenset(Capability) - {Capability.CHECKS, Capability.WORK_ITEMS})
+    monkeypatch.setattr(cli, "create_host", lambda _config, _repo_dir: (fake.code_host(), None))
+    with pytest.raises(ConfigurationError, match=r"WorkItems capability"):
+        cli.default_services(cfg)
+    assert fake.calls == []
+
+
 def test_services_turns_configuration_error_into_config_error_exit(tmp_path: Path) -> None:
     def factory(_config: SisyphusConfig) -> cli.Services:
         raise ConfigurationError('[source.work_item] kind = "github" needs WorkItems')
