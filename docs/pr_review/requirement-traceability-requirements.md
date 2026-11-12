@@ -153,10 +153,10 @@ expensive point to discover a mismatch.
 - **PR-level pass**, **Backend**, **invocation**, **Knowledge dir**, **Marker** — defined
   identically to `design-review-requirements.md` §5. Not redefined here.
 - **Linked ticket** — a GitHub Issue resolved as "what this PR was asked to do," via
-  either of two mechanisms (§7.2): **native linking** (GitHub's own closing-keyword
-  parsing, exposed as `closingIssuesReferences`) or, only as a **fallback** when native
+  one of three mechanisms (§7.2): **native linking** (GitHub's own closing-keyword
+  parsing, exposed as `closingIssuesReferences`) or, only as **fallbacks** when native
   linking finds nothing, an issue reference found by scanning comments posted in the
-  **early-comment window** (§7.2) after the PR opened.
+  **early-comment window** (§7.2) after the PR opened, then by scanning the PR **body**.
 - **Early-comment window** — the fixed period starting at the PR's `createdAt` timestamp
   and lasting `TRACEABILITY_COMMENT_WINDOW_SECONDS` (300, i.e. 5 minutes — §7.2, §11.2).
   Because it's anchored to PR creation time rather than "now," it's the same fixed window
