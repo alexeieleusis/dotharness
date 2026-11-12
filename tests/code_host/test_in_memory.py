@@ -145,6 +145,21 @@ class TestSeeding:
         explicit = fake.add_change_request(repo, head_reference="g", head_revision="sha", number=9, author="zed")
         assert (explicit.number, explicit.head_revision, explicit.author) == (9, "sha", User("zed"))
 
+    async def test_current_change_request_shares_the_store_read_by_get_and_state(self) -> None:
+        host = InMemoryCodeHost()
+        target = host.target()
+        repo = target.repository
+        crs = target.host.change_requests
+        host.set_current_change_request(7, "release")
+        current = await crs.for_current_branch(repo)
+        assert (current.number, current.base_reference) == (7, "release")
+        assert (await crs.get(repo, 7)).number == 7
+        assert await crs.state(repo, 7) is ChangeRequestState.OPEN
+        host.set_current_change_request(None)
+        with pytest.raises(NoChangeRequestError):
+            await crs.for_current_branch(repo)
+        assert (await crs.get(repo, 7)).number == 7
+
     async def test_link_closing_needs_both_sides(self) -> None:
         fake = InMemoryCodeHost()
         repo = RepositoryRef("o/a")

@@ -261,7 +261,7 @@ class InMemoryCodeHost:
         self._token = token
         self._default_branch = "main"
         self._available = True
-        self._change_request: tuple[int, str] | None = None
+        self._current_change_request: int | None = None
         self._failure = _Failure()
         self._posts: list[PostedItem] = []
         self._attempts = 0
@@ -310,7 +310,22 @@ class InMemoryCodeHost:
         self._available = available
 
     def set_current_change_request(self, number: int | None, base: str = "main") -> None:
-        self._change_request = None if number is None else (number, base)
+        """Mark ``number`` as the current branch's change request, stored in the same set ``get`` and ``state`` read.
+
+        An existing change request with that number is kept and only gets the new base; otherwise one is added.
+        """
+        if number is None:
+            self._current_change_request = None
+            return
+        items = self._change_requests.setdefault(self._repository, [])
+        for index, existing in enumerate(items):
+            if existing.number == number:
+                items[index] = replace(existing, base_reference=base)
+                break
+        else:
+            self.add_change_request(self._repository, head_reference="", base_reference=base, number=number)
+        self._current_change_request = number
+        self._version += 1
 
     def reject_inline_reviews(self, reason: str) -> None:
         self._failure = _Failure(reject_inline=reason)
@@ -598,25 +613,13 @@ class _FakeChangeRequests(_Facet):
     ) -> ChangeRequest:
         def action() -> ChangeRequest:
             self._host.require_client()
-            current = self._host._change_request
+            current = self._host._current_change_request
             if current is None:
                 raise NoChangeRequestError(NO_CHANGE_REQUEST_TEXT)
-            number, base = current
-            return ChangeRequest(
-                repository=repo,
-                number=number,
-                title="",
-                body="",
-                url="",
-                state=ChangeRequestState.OPEN,
-                is_draft=False,
-                author=None,
-                head_reference="",
-                head_revision="",
-                base_reference=base,
-                is_cross_repository=False,
-                created_at=_EPOCH,
-            )
+            try:
+                return self._find(repo, current)
+            except CodeHostError:
+                raise NoChangeRequestError(NO_CHANGE_REQUEST_TEXT) from None
 
         return self._do("ChangeRequests.for_current_branch", action, repo)
 
