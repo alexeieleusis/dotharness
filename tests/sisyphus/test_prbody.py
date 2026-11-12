@@ -28,6 +28,7 @@ from dotharness.sisyphus.prbody import (
     redact_paths,
     sanitise,
     select_handoffs,
+    work_item_header,
 )
 from tests.sisyphus.conftest import forbidden_imports
 
@@ -456,3 +457,7 @@ def test_fallback_title_and_cap() -> None:
     assert len(out) == 256
     assert out.startswith("Sisyphus: yyy")
     assert out.endswith("...")
+
+
+def test_work_item_header_is_closing_reference() -> None:
+    assert work_item_header("o/r#109") == "Closes o/r#109"
