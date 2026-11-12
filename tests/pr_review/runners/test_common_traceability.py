@@ -479,6 +479,29 @@ async def test_resolve_linked_tickets_body_scan_resolves_multiple_and_dedupes():
     assert [(t["number"], t["source"]) for t in tickets] == [(170, "body"), (171, "body")]
 
 
+async def test_resolve_linked_tickets_body_scan_ignores_cross_repo_refs():
+    pr = _body_pr(body="see other-org/private-repo#12 and https://github.com/other/repo/issues/5")
+    fetch = AsyncMock(return_value=_issue(12))
+    with (
+        patch("dotharness.pr_review.runners.common._fetch_early_window_comments", new=AsyncMock(return_value=[])),
+        patch("dotharness.pr_review.runners.common._fetch_issue", new=fetch),
+    ):
+        assert await resolve_linked_tickets(pr, REPO, {}) == []
+    fetch.assert_not_called()
+
+
+async def test_resolve_linked_tickets_body_scan_caps_distinct_refs():
+    refs = " ".join(f"#{n}" for n in range(1, 21))
+    pr = _body_pr(body=refs)
+    fetch = AsyncMock(return_value=None)
+    with (
+        patch("dotharness.pr_review.runners.common._fetch_early_window_comments", new=AsyncMock(return_value=[])),
+        patch("dotharness.pr_review.runners.common._fetch_issue", new=fetch),
+    ):
+        assert await resolve_linked_tickets(pr, REPO, {}) == []
+    assert fetch.await_count == 5
+
+
 # --- build_early_comment_context --------------------------------------------------------
 
 

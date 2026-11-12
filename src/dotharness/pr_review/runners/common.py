@@ -792,8 +792,18 @@ def _parse_linear_linkback_comment(body: str) -> dict | None:
     }
 
 
+_MAX_BODY_ISSUE_REFS = 5
+
+
 async def _resolve_comment_issue_refs(
-    body: str, repo: str, env: dict, seen: set[tuple[str, int | str]], *, source: str = "comment"
+    body: str,
+    repo: str,
+    env: dict,
+    seen: set[tuple[str, int | str]],
+    *,
+    source: str = "comment",
+    same_repo_only: bool = False,
+    max_refs: int | None = None,
 ) -> list[dict]:
     """Scans a single comment body (or, with source="body", the PR body) for GitHub issue references and resolves each via `gh
     issue view`, split out of _resolve_comment_linked_tickets purely to keep that
@@ -804,15 +814,24 @@ async def _resolve_comment_issue_refs(
     here doesn't warrant the same inconclusive-vs-absent distinction resolve_linked_tickets
     makes for closing-keyword references. `seen` is shared and mutated across every
     comment in the scan, so a ticket already found (by this or the Linear-linkback path)
-    isn't re-fetched or duplicated. `source` is the tag stamped on each returned ticket."""
+    isn't re-fetched or duplicated. `source` is the tag stamped on each returned ticket.
+    `same_repo_only` drops refs naming any repo other than `repo` before any fetch — used
+    for the author-controlled PR body so it can't steer cross-repo reads with the harness
+    token. `max_refs` bounds the number of distinct refs fetched (sequential `gh` calls)."""
     tickets: list[dict] = []
+    attempted: set[tuple[str, int]] = set()
     for match in _ISSUE_REF_RE.finditer(body):
         ticket_repo, number = _resolve_match_repo_and_number(match, repo)
         if number is None:
             continue
-        key = (ticket_repo, number)
-        if key in seen:
+        if same_repo_only and ticket_repo.lower() != repo.lower():
             continue
+        key = (ticket_repo, number)
+        if key in seen or key in attempted:
+            continue
+        if max_refs is not None and len(attempted) >= max_refs:
+            break
+        attempted.add(key)
         try:
             issue = await _fetch_issue(number, ticket_repo, env)
         except _IssueFetchError:
@@ -871,7 +890,9 @@ async def resolve_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | N
     `source` being "closing_keyword", "comment", "linear_linkback", or "body" — or None if the
     native mechanism found a closing-keyword reference it couldn't resolve due to an API
     failure rather than a confirmed absence (see
-    _resolve_native_linked_tickets). Callers must treat None as "inconclusive, retry next
+    _resolve_native_linked_tickets). The body scan only resolves refs to this PR's own repo
+    (cross-repo refs in the author-controlled body are ignored) and fetches at most
+    _MAX_BODY_ISSUE_REFS distinct refs. Callers must treat None as "inconclusive, retry next
     run" and never as "no linked ticket" — the comment-scan fallback is skipped in that
     case rather than risked as a second source of false negatives (the body scan is
     skipped too). Pass the same `cache`
@@ -886,7 +907,10 @@ async def resolve_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | N
     if tickets:
         return tickets
     # Fresh `seen`: equivalent to sharing the comment scan's, since that scan found nothing.
-    return await _resolve_comment_issue_refs(pr.get("body") or "", repo, env, set(), source="body")
+    # The body is author-controlled: same-repo refs only, and a bounded number of fetches.
+    return await _resolve_comment_issue_refs(
+        pr.get("body") or "", repo, env, set(), source="body", same_repo_only=True, max_refs=_MAX_BODY_ISSUE_REFS
+    )
 
 
 async def post_no_linked_ticket_comment(pr_number: int, repo: str, env: dict) -> bool:
