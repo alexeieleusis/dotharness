@@ -231,8 +231,9 @@ _EPOCH = datetime.fromisoformat(_BASE_DATE)
 class InMemoryCodeHost:
     """A host that keeps everything in memory. It is its own seeder.
 
-    ``capabilities`` selects the declared subset (default: every capability the fake implements, which is all but
-    Checks). An undeclared capability raises ``UnsupportedCapabilityError`` from each method. Limits and anchors are
+    ``capabilities`` selects the declared subset (default: ``declaration.capabilities`` when a declaration is given,
+    else every capability the fake implements, which is all but Checks; giving both with different sets raises
+    ``ConfigurationError``). An undeclared capability raises ``UnsupportedCapabilityError`` from each method. Limits and anchors are
     the reference host values unless ``declaration`` is given. No network, no subprocess, no clock: timestamps come
     from a counter that adds one second per created object.
 
@@ -250,7 +251,15 @@ class InMemoryCodeHost:
         capabilities: frozenset[Capability] | None = None,
         declaration: HostDeclaration | None = None,
     ) -> None:
-        declared = _IMPLEMENTED if capabilities is None else frozenset(capabilities)
+        if capabilities is not None:
+            declared = frozenset(capabilities)
+            if declaration is not None and declaration.capabilities != declared:
+                msg = "capabilities and declaration.capabilities disagree; pass only one"
+                raise ConfigurationError(msg)
+        elif declaration is not None:
+            declared = declaration.capabilities
+        else:
+            declared = _IMPLEMENTED
         if declared - _IMPLEMENTED:
             msg = "the in-memory code host does not implement: " + ", ".join(
                 sorted(c.value for c in declared - _IMPLEMENTED)

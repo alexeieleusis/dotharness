@@ -56,6 +56,18 @@ class TestInMemorySpecifics:
         with pytest.raises(ConfigurationError, match="Checks"):
             InMemoryCodeHost(capabilities=frozenset(Capability))
 
+    def test_declaration_capabilities_are_kept(self) -> None:
+        from dataclasses import replace
+
+        from dotharness.code_host.testing import DECLARATION
+
+        declaration = replace(DECLARATION, capabilities=frozenset({Capability.SESSION}))
+        assert InMemoryCodeHost(declaration=declaration).declaration.capabilities == {Capability.SESSION}
+        with pytest.raises(ConfigurationError, match="disagree"):
+            InMemoryCodeHost(declaration=declaration, capabilities=frozenset({Capability.REPOSITORY}))
+        with pytest.raises(ConfigurationError, match="Checks"):
+            InMemoryCodeHost(declaration=replace(DECLARATION, capabilities=frozenset(Capability)))
+
     async def test_repository_and_user(self) -> None:
         fake = InMemoryCodeHost(repository="o/r", user="me")
         host = fake.code_host()
