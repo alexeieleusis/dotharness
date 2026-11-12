@@ -4,6 +4,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pytest
 
@@ -235,7 +236,7 @@ class GhStub:
             self.token_runs += 1
             return RunResult(0, f"{SECRET}\n", "")
         self.commands.append(cmd)
-        self.envs.append(kwargs.get("env"))  # type: ignore[arg-type]
+        self.envs.append(cast("dict[str, str] | None", kwargs.get("env")))
         if "--version" in cmd:
             return RunResult(0, "gh version 2.52.0", "") if self._available else RunResult(1, "", "gh missing")
         if cmd[1:2] == ["issue"]:
