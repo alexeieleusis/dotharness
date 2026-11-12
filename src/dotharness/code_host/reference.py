@@ -69,6 +69,7 @@ _NOT_INSTALLED = "gh CLI is not installed or not in PATH. Install it from https:
 _PR_VIEW = "pr view"
 _FIND_BY_BRANCH_OP = "ChangeRequests.find_by_branch"
 _LIST_OPEN_OP = "WorkItems.list_open"
+_OPEN_CR_BODIES_OP = "WorkItems.open_change_request_bodies"
 _PR_FIELDS = "number,baseRefName,title,body,url,state,isDraft,headRefName,headRefOid,isCrossRepository,createdAt,author"
 
 
@@ -724,10 +725,10 @@ class _WorkItems:
 
     async def open_change_request_bodies(self, repo: RepositoryRef) -> Sequence[ChangeRequest]:
         """Open change requests with their bodies, bounded by the declared list bound."""
-        bound = _bound("WorkItems.open_change_request_bodies")
+        bound = _bound(_OPEN_CR_BODIES_OP)
         rows = await self._gh.json(
             ("pr", "list", "--state", "open", "--limit", str(bound), "--json", "body"),
-            "WorkItems.open_change_request_bodies",
+            _OPEN_CR_BODIES_OP,
         )
         return [_summary(repo, row, state=ChangeRequestState.OPEN) for row in rows or [] if isinstance(row, dict)]
 
@@ -783,7 +784,7 @@ DECLARATION = HostDeclaration(
             per_operation={
                 "ChangeRequests.list": 1000,
                 _LIST_OPEN_OP: 100,
-                "WorkItems.open_change_request_bodies": 200,
+                _OPEN_CR_BODIES_OP: 200,
                 "Discussion.comments": None,
                 "Discussion.review_threads": None,
                 "ChangeRequests.reviews": None,
