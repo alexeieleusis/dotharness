@@ -22,6 +22,7 @@ DEFAULT_CONFIG_FILE = ".sisyphus.toml"
 TRACKER_KINDS = ("linear", "github", "file")
 AGENT_BACKENDS: tuple[str, ...] = BACKEND_NAMES
 DEFAULT_PICK_LABEL = "sisyphus"
+_HOST_SECTION = "source.host"
 
 
 class ConfigError(Exception):
@@ -210,14 +211,14 @@ def _parse_source(raw: Any) -> SourceConfig:
         _table(raw["ci"], "source.ci", (), passthrough=True)
     host = None
     if "host" in raw:
-        t = _table(raw["host"], "source.host", ("token_cmd", "name", "options"))
-        name = _str(t, "source.host", "name")
+        t = _table(raw["host"], _HOST_SECTION, ("token_cmd", "name", "options"))
+        name = _str(t, _HOST_SECTION, "name")
         if name is not None and not name.strip():
             raise ConfigError("[source.host] name must be a non-empty string")
         options = t.get("options", {})
         if not isinstance(options, dict):
             raise ConfigError(f"[source.host] options must be a table, got {type(options).__name__}")
-        host = HostSource(token_cmd=_str(t, "source.host", "token_cmd"), name=name, options=dict(options))
+        host = HostSource(token_cmd=_str(t, _HOST_SECTION, "token_cmd"), name=name, options=dict(options))
     return SourceConfig(work_item=work_item, host=host)
 
 
