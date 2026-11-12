@@ -223,8 +223,9 @@ run record or the item is not stopped, and exits 0 quietly if another invocation
 from the host. It never holds the command line or the token. A C8 stop for a code host call shows this text as its
 detail. The same text appears in these places:
 
-- Digest: `Label kept: <item> label '<label>' removal failed: CodeHostError: <message>`. A label removal failure is a
-  digest note and never a stop.
+- Digest: `Label kept: <item> label '<label>' removal failed: <ExcType>: <message>`. `<ExcType>` is the class name
+  of a `CodeHostError` subclass, such as `CodeHostTimeoutError`. A label removal failure is a digest note and never a
+  stop.
 - Branch cleanup: the keep-reason in "Local branch cleanup" above.
 - `sisyphus status --check-prs`: the `warning:` line (see "`sisyphus status`").
 - With `kind = "github"`, a host without the `WorkItems` capability stops the command at startup, before any host
@@ -270,7 +271,8 @@ message otherwise) and then:
 - for a GitHub item, removes the issue's pick label after the abandoned stop record is written. This runs only
   when `pick_label` is set, `remove_label_when_settled` is on (default) and `REF` has the form `#<number>`; any
   other ref form, `kind = "linear"` or `"file"`, or the key off makes no call. If the removal fails, `abandon`
-  prints one stderr line, `<ref>: pick label '<label>' not removed: CodeHostError: <message>`, and still exits 0: the
+  prints one stderr line, `<ref>: pick label '<label>' not removed: <ExcType>: <message>`, and still exits 0 (`<ExcType>` is the class name of a
+  `CodeHostError` subclass, such as `CodeHostTimeoutError`): the
   item stays abandoned. A label the issue does not carry is not an error; a label that does not exist in the
   repository is a configuration error you must fix, and shows up as that stderr line.
 - never touches the remote branch or any PR, never rewrites history or force-pushes. What happens to them is for
