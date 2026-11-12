@@ -257,6 +257,7 @@ async def test_resolve_linked_tickets_comment_window_is_anchored_to_created_at()
     )
     with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=router):
         tickets = await resolve_linked_tickets(pr, REPO, {})
+    assert tickets is not None
     assert [(t["number"], t["source"]) for t in tickets] == [(3, "comment")]
 
 
@@ -396,6 +397,7 @@ async def test_resolve_linked_tickets_body_scan_skipped_when_native_found_ticket
 
     with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=_dispatch):
         tickets = await resolve_linked_tickets(pr, REPO, {})
+    assert tickets is not None
     assert [t["number"] for t in tickets] == [3]
     assert 99 not in seen_issues
 
@@ -413,6 +415,7 @@ async def test_resolve_linked_tickets_body_scan_skipped_when_comment_scan_found_
 
     with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=_dispatch):
         tickets = await resolve_linked_tickets(pr, REPO, {})
+    assert tickets is not None
     assert [(t["number"], t["source"]) for t in tickets] == [(3, "comment")]
     assert 99 not in seen_issues
 
@@ -472,6 +475,7 @@ async def test_resolve_linked_tickets_body_scan_resolves_multiple_and_dedupes():
     router = _router(_NO_COMMENTS, {(REPO, 170): _issue(170), (REPO, 171): _issue(171)})
     with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=router):
         tickets = await resolve_linked_tickets(pr, REPO, {})
+    assert tickets is not None
     assert [(t["number"], t["source"]) for t in tickets] == [(170, "body"), (171, "body")]
 
 
