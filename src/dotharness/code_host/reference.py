@@ -715,10 +715,12 @@ class _WorkItems:
             ("issue", "view", str(number), "--json", "closedByPullRequestsReferences"),
             "WorkItems.closing_change_requests",
         )
+        # gh returns each reference as {number, repository: {name, owner: {login}}, ...}.
+        refs = view.get("closedByPullRequestsReferences") if isinstance(view, dict) else None
         found: list[ChangeRequest] = []
-        for ref in (
-            (view or {}).get("closedByPullRequestsReferences", []) if isinstance(view, dict) or view is None else []
-        ):
+        for ref in refs if isinstance(refs, list) else []:
+            if not isinstance(ref, dict) or _int(ref, "number") == 0 or not _same_repository(repo, ref):
+                continue
             pr = await self._gh.json(
                 ("pr", "view", str(_int(ref, "number")), "--json", "number,state"), "WorkItems.closing_change_requests"
             )
@@ -736,6 +738,22 @@ class _WorkItems:
 
     async def linked_work_items(self, repo: RepositoryRef, number: int) -> Sequence[WorkItem]:
         raise _unsupported(Capability.WORK_ITEMS, "linked_work_items")
+
+
+def _same_repository(repo: RepositoryRef, ref: Mapping[str, Any]) -> bool:
+    """False only when ``ref`` names a different repository. A reference without repository data is taken as local."""
+    repository = ref.get("repository")
+    if not isinstance(repository, dict):
+        return True
+    full = repository.get("nameWithOwner")
+    if not isinstance(full, str):
+        owner = repository.get("owner")
+        login = owner.get("login") if isinstance(owner, dict) else None
+        name = repository.get("name")
+        if not isinstance(login, str) or not isinstance(name, str):
+            return True
+        full = f"{login}/{name}"
+    return full.lower() == repo.value.lower()
 
 
 def _work_item(repo: RepositoryRef, row: Mapping[str, Any]) -> WorkItem:
