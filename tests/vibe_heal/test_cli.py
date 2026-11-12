@@ -18,6 +18,15 @@ from dotharness.vibe_heal.sonarqube.project_manager import PruneResult, StalePro
 runner = CliRunner()
 
 
+def _post_report(total_issues: int) -> MagicMock:
+    report = MagicMock()
+    report.total_issues = total_issues
+    report.total_duplications = 0
+    report.branch = "feature-test"
+    report.files = []
+    return report
+
+
 class TestFixCommand:
     """Tests for fix command."""
 
@@ -956,60 +965,98 @@ class TestReviewCommand:
         assert "Per-File Breakdown" in result.stdout
         assert "src/test.py" in result.stdout
 
-    @patch("dotharness.vibe_heal.review.github.GitHubReviewClient.post_review", new_callable=AsyncMock)
-    @patch("dotharness.vibe_heal.review.github.GitHubReviewClient.detect_pr", new_callable=AsyncMock)
     @patch("dotharness.vibe_heal.review.reporter.load_report_from_path")
     @patch("dotharness.vibe_heal.cli.VibeHealConfig")
     def test_review_post_basic(
         self,
         mock_config_class: MagicMock,
         mock_load_report: MagicMock,
-        mock_detect_pr: AsyncMock,
-        mock_post_review: AsyncMock,
+        fake_code_host,
     ) -> None:
         """Test review command in post mode."""
         mock_config = MagicMock(spec=VibeHealConfig)
         mock_config.sonarqube_project_key = "test-project"
         mock_config_class.return_value = mock_config
 
-        mock_report = MagicMock()
-        mock_report.total_issues = 2
-        mock_report.total_duplications = 0
-        mock_report.branch = "feature-test"
-        mock_report.files = []
-        mock_load_report.return_value = mock_report
-        mock_detect_pr.return_value = 10
+        mock_load_report.return_value = _post_report(total_issues=2)
+        fake_code_host.set_current_change_request(10)
 
         # Pass --report-file so config lookup is skipped
         result = runner.invoke(app, ["review", "--post", "--report-file", "/nonexistent/review.json"])
 
         assert result.exit_code == 0
-        mock_detect_pr.assert_called_once()
-        mock_post_review.assert_called_once()
+        assert "Posted 2 issue(s) and 0 duplication finding(s) as review comments on PR #10." in result.stdout
+        assert [p.kind for p in fake_code_host.posts()] == ["review"]
 
-    @patch("dotharness.vibe_heal.review.github.GitHubReviewClient.post_review", new_callable=AsyncMock)
-    @patch("dotharness.vibe_heal.review.github.GitHubReviewClient.detect_pr", new_callable=AsyncMock)
     @patch("dotharness.vibe_heal.review.reporter.load_report_from_path")
     def test_review_post_with_pr_number(
         self,
         mock_load_report: MagicMock,
-        mock_detect_pr: AsyncMock,
-        mock_post_review: AsyncMock,
+        fake_code_host,
     ) -> None:
         """Test review command in post mode with explicit PR number."""
-        mock_report = MagicMock()
-        mock_report.total_issues = 1
-        mock_report.total_duplications = 0
-        mock_report.branch = "feature-test"
-        mock_report.files = []
-        mock_load_report.return_value = mock_report
+        mock_load_report.return_value = _post_report(total_issues=1)
+        fake_code_host.set_current_change_request(None)  # a host call would raise
 
         result = runner.invoke(app, ["review", "--post", "--pr", "42", "--report-file", "/nonexistent/review.json"])
 
         assert result.exit_code == 0
-        # detect_pr should not be called when explicit PR number is given
-        mock_detect_pr.assert_not_called()
-        mock_post_review.assert_called_once()
+        assert "PR #42" in result.stdout
+        assert len(fake_code_host.posts()) == 1
+
+    @patch("dotharness.vibe_heal.review.reporter.load_report_from_path")
+    def test_review_post_no_change_request(self, mock_load_report: MagicMock, fake_code_host) -> None:
+        mock_load_report.return_value = _post_report(total_issues=1)
+        fake_code_host.set_current_change_request(None)
+
+        result = runner.invoke(app, ["review", "--post", "--report-file", "/nonexistent/review.json"])
+
+        assert result.exit_code == 0
+        assert "No open pull request found for the current branch" in result.stdout
+        assert "Report saved; use --post later when a PR is available." in result.stdout
+        assert fake_code_host.posts() == []
+
+    @patch("dotharness.vibe_heal.review.reporter.load_report_from_path")
+    def test_review_post_fallback_warning(self, mock_load_report: MagicMock, fake_code_host) -> None:
+        from dotharness.vibe_heal.review.models import FileReview, ReviewIssue, ReviewResult
+
+        issue = ReviewIssue(rule="r:1", message="m", line=3)
+        mock_load_report.return_value = ReviewResult(
+            project_key="p",
+            branch="feature-test",
+            base_branch="main",
+            files=[FileReview(file_path="a.py", issues=[issue])],
+        )
+        fake_code_host.reject_inline_reviews("bad line")
+
+        result = runner.invoke(app, ["review", "--post", "--pr", "3", "--report-file", "/nonexistent/review.json"])
+
+        assert result.exit_code == 0
+        assert "inline review rejected by GitHub (bad line)" in result.stdout.replace("\n", " ")
+        assert [p.kind for p in fake_code_host.posts()] == ["comment"]
+
+    @patch("dotharness.vibe_heal.review.reporter.load_report_from_path")
+    def test_review_post_dry_run_posts_nothing(self, mock_load_report: MagicMock, fake_code_host) -> None:
+        mock_load_report.return_value = _post_report(total_issues=1)
+
+        result = runner.invoke(
+            app, ["review", "--post", "--dry-run", "--pr", "8", "--report-file", "/nonexistent/review.json"]
+        )
+
+        assert result.exit_code == 0
+        assert "[dry-run] Would post 0 inline comment(s) to PR #8:" in result.stdout
+        assert "Review body:" in result.stdout
+        assert fake_code_host.post_attempts() == 0
+
+    @patch("dotharness.vibe_heal.review.reporter.load_report_from_path")
+    def test_review_post_client_missing(self, mock_load_report: MagicMock, fake_code_host) -> None:
+        mock_load_report.return_value = _post_report(total_issues=1)
+        fake_code_host.set_available(False)
+
+        result = runner.invoke(app, ["review", "--post", "--pr", "8", "--report-file", "/nonexistent/review.json"])
+
+        assert result.exit_code == 1
+        assert "The in-memory code host client is not available" in result.stdout
 
     @patch("dotharness.vibe_heal.review.reporter.load_report_from_path")
     def test_review_report_not_found(

@@ -1,13 +1,15 @@
 """Configuration models."""
 
+import json
 from pathlib import Path
-from typing import Any, Self, cast
+from typing import Annotated, Any, Self, cast
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
     InitSettingsSource,
+    NoDecode,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
@@ -16,60 +18,22 @@ from dotharness.vibe_heal.ai_tools.base import AIToolType
 from dotharness.vibe_heal.config.exceptions import InvalidConfigurationError
 from dotharness.vibe_heal.config.scanner_discovery import resolve_scanner_auth, resolve_scanner_host_url
 
+REDACTED_VALUE = "<redacted>"
 
-class VibeHealConfig(BaseSettings):
-    """Configuration for vibe_heal application."""
 
-    # SonarQube settings
-    sonarqube_url: str = Field(description="SonarQube server URL")
-    sonarqube_token: str | None = Field(
+class CodeHostSettings(BaseSettings):
+    """Code host settings and the env-file loading shared by every settings model."""
+
+    # Code host settings (the env prefix is empty, so the aliases carry the full variable names)
+    code_host: str | None = Field(
         default=None,
-        description="SonarQube authentication token (preferred)",
+        validation_alias="DOTHARNESS_CODE_HOST",
+        description="Code host name or 'module:attribute' path (the reference host when unset)",
     )
-    sonarqube_username: str | None = Field(
-        default=None,
-        description="SonarQube username (alternative to token)",
-    )
-    sonarqube_password: str | None = Field(
-        default=None,
-        description="SonarQube password (alternative to token)",
-    )
-    sonarqube_project_key: str = Field(description="SonarQube project key")
-
-    # AI Tool settings
-    ai_tool: AIToolType | None = Field(
-        default=None,
-        description="AI tool to use (auto-detect if not specified)",
-    )
-
-    # Context enrichment settings
-    code_context_lines: int = Field(
-        default=5,
-        description="Number of lines to show before/after the issue line for context",
-    )
-    include_rule_description: bool = Field(
-        default=True,
-        description="Include full rule description in AI prompts",
-    )
-
-    # Scanner execution settings
-    scanner_timeout_seconds: int = Field(
-        default=300,
-        description="Max seconds to wait for the sonar-scanner subprocess before killing it",
-    )
-
-    # Pre-commit hook settings
-    pre_commit_command: str | None = Field(
-        default=None,
-        description=(
-            "Command to run before committing (e.g. 'pre-commit run --files'). "
-            "Set to empty string to disable. Auto-detects pre-commit if not set."
-        ),
-    )
-
-    pre_commit_timeout_seconds: int = Field(
-        default=300,
-        description="Max seconds to wait for the pre-commit hook subprocess before killing it",
+    code_host_options: Annotated[dict[str, Any], NoDecode] = Field(
+        default_factory=dict,
+        validation_alias="DOTHARNESS_CODE_HOST_OPTIONS",
+        description="Code host options as a JSON object",
     )
 
     model_config = SettingsConfigDict(
@@ -151,6 +115,87 @@ class VibeHealConfig(BaseSettings):
 
         # Default behavior: use standard dotenv settings
         return (init_settings, env_settings, dotenv_settings, file_secret_settings)
+
+    @field_validator("code_host_options", mode="before")
+    @classmethod
+    def parse_code_host_options(cls, v: Any) -> Any:
+        """Parse the options JSON object from the environment variable.
+
+        The message names the field and the error kind only. The raw value may hold a secret, so it is redacted.
+
+        Raises:
+            InvalidConfigurationError: If the value is not valid JSON or not a JSON object
+        """
+        if v is None or v == "":
+            return {}
+        if not isinstance(v, str):
+            return v
+        prefix = f'code host setting DOTHARNESS_CODE_HOST_OPTIONS = "{REDACTED_VALUE}": '
+        try:
+            parsed = json.loads(v)
+        except ValueError:
+            msg = prefix + "value is not valid JSON"
+            raise InvalidConfigurationError(msg) from None
+        if not isinstance(parsed, dict):
+            msg = prefix + "value is not a JSON object"
+            raise InvalidConfigurationError(msg) from None
+        return parsed
+
+
+class VibeHealConfig(CodeHostSettings):
+    """Configuration for vibe_heal application."""
+
+    # SonarQube settings
+    sonarqube_url: str = Field(description="SonarQube server URL")
+    sonarqube_token: str | None = Field(
+        default=None,
+        description="SonarQube authentication token (preferred)",
+    )
+    sonarqube_username: str | None = Field(
+        default=None,
+        description="SonarQube username (alternative to token)",
+    )
+    sonarqube_password: str | None = Field(
+        default=None,
+        description="SonarQube password (alternative to token)",
+    )
+    sonarqube_project_key: str = Field(description="SonarQube project key")
+
+    # AI Tool settings
+    ai_tool: AIToolType | None = Field(
+        default=None,
+        description="AI tool to use (auto-detect if not specified)",
+    )
+
+    # Context enrichment settings
+    code_context_lines: int = Field(
+        default=5,
+        description="Number of lines to show before/after the issue line for context",
+    )
+    include_rule_description: bool = Field(
+        default=True,
+        description="Include full rule description in AI prompts",
+    )
+
+    # Scanner execution settings
+    scanner_timeout_seconds: int = Field(
+        default=300,
+        description="Max seconds to wait for the sonar-scanner subprocess before killing it",
+    )
+
+    # Pre-commit hook settings
+    pre_commit_command: str | None = Field(
+        default=None,
+        description=(
+            "Command to run before committing (e.g. 'pre-commit run --files'). "
+            "Set to empty string to disable. Auto-detects pre-commit if not set."
+        ),
+    )
+
+    pre_commit_timeout_seconds: int = Field(
+        default=300,
+        description="Max seconds to wait for the pre-commit hook subprocess before killing it",
+    )
 
     @field_validator("ai_tool", mode="before")
     @classmethod
