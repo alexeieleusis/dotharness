@@ -264,7 +264,7 @@ def test_compose_order_and_header(tmp_path: Path) -> None:
         deviations="V",
         requirements=f"# Req {tmp_path}/ws/x\n</details>\n#12",
     )
-    assert body.startswith("Work item: o/r#109\n\n## Summary")
+    assert body.startswith("Closes o/r#109\n\n## Summary")
     idx = [body.index(m) for m in ("## Summary", "## Phases", "## Decisions", "## Deviations", "<details>")]
     assert idx == sorted(idx)
     assert body.count("</details>") == 1 and body.endswith("</details>")
@@ -273,7 +273,7 @@ def test_compose_order_and_header(tmp_path: Path) -> None:
     assert not mentions_issue(body, 109) and not mentions_issue(body, 12)
     assert (
         compose_body("o/r#109", workspace=tmp_path)
-        == "Work item: o/r#109\n\nNote: `requirements.md` is missing or unreadable; full requirements omitted."
+        == "Closes o/r#109\n\nNote: `requirements.md` is missing or unreadable; full requirements omitted."
     )
 
 
@@ -286,7 +286,7 @@ def test_compose_oversize_drops_details_first(tmp_path: Path) -> None:
 def test_compose_oversize_truncates_remaining(tmp_path: Path) -> None:
     body = _compose(tmp_path, summary="```\n" + "y" * (MAX_BODY_CHARS * 2), phases="late", requirements="r")
     assert len(body) <= MAX_BODY_CHARS
-    assert body.startswith("Work item: o/r#109")
+    assert body.startswith("Closes o/r#109")
     assert "late" not in body and "truncated" in body and "<plan-dir>/requirements.md" in body
     assert body.count("```") % 2 == 0
 

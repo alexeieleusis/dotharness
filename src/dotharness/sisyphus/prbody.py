@@ -367,7 +367,7 @@ def compose_body(
     Never raises for missing content: empty sections are omitted, ``requirements=None`` becomes a one-line note.
     ``len(result) <= MAX_BODY_CHARS`` always holds; the header is never truncated.
     """
-    header = f"Work item: {item}"
+    header = f"Closes {item}"
 
     def emb(text: str) -> str:
         return embed(text, workspace, plan_dir, home).strip()
