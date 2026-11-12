@@ -287,9 +287,11 @@ class _Gh:
 
     def _failure(self, args: Sequence[str], outcome: _Outcome) -> CodeHostError:
         """Error for a non-zero exit: exit code and the stderr tail. No command line, no token."""
-        tail = outcome.stderr.strip()[-_STDERR_TAIL:]
+        tail = outcome.stderr.strip()
         if self._credential is not None:
+            # Redact before truncating: a cut through the token would leave a suffix that no longer matches.
             tail = tail.replace(self._credential.token, "<token>")
+        tail = tail[-_STDERR_TAIL:]
         msg = f"gh {' '.join(args[:2])} failed (exit {outcome.returncode}): {tail}"
         if any(marker in tail.lower() for marker in _AUTH_MARKERS):
             return AuthenticationError(msg)

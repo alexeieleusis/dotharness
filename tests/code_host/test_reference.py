@@ -23,10 +23,13 @@ from dotharness.code_host.reference import (
     _MAX_INLINE_COMMENTS,
     _MAX_REVIEW_BODY_CHARS,
     _POST_TIMEOUT_SECONDS,
+    _STDERR_TAIL,
     DECLARATION,
     REGISTRATION,
     TokenCommandError,
     _create,
+    _Gh,
+    _Outcome,
     _parse_remote_url,
     _post_json,
 )
@@ -1210,3 +1213,16 @@ class TestTokenCommand:
         with pytest.raises(AuthenticationError):
             await host.work_items.list_open(REPO)
         assert mock_run.await_count == 1  # gh never ran
+
+
+def test_failure_redacts_token_cut_by_stderr_tail() -> None:
+    """The token is redacted before the tail is cut, so a token straddling the tail boundary never leaks."""
+    token = "t0k3n" + "abcdefghij" * 3 + "XYZ12"
+    gh = _Gh("echo", None)
+    from dotharness.code_host.models import Credential
+
+    gh._credential = Credential(token=token)
+    stderr = "x" * 100 + token + "y" * (_STDERR_TAIL - 10)
+    error = gh._failure(["pr", "view"], _Outcome(success=False, stdout="", stderr=stderr, returncode=1))
+    assert token not in str(error)
+    assert token[-10:] not in str(error)
