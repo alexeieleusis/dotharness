@@ -68,6 +68,7 @@ _TRUNCATION_NOTICE = "\n\n_...review body truncated to fit GitHub's size limit._
 _NOT_INSTALLED = "gh CLI is not installed or not in PATH. Install it from https://cli.github.com/"
 _PR_VIEW = "pr view"
 _FIND_BY_BRANCH_OP = "ChangeRequests.find_by_branch"
+_LIST_OPEN_OP = "WorkItems.list_open"
 _PR_FIELDS = "number,baseRefName,title,body,url,state,isDraft,headRefName,headRefOid,isCrossRepository,createdAt,author"
 
 
@@ -693,9 +694,9 @@ class _WorkItems:
             args += ["--assignee", assignee]
         if label is not None:
             args += ["--label", label]
-        bound = _bound("WorkItems.list_open")
+        bound = _bound(_LIST_OPEN_OP)
         args += ["--limit", str(bound), "--json", "number,title,createdAt,assignees,labels"]
-        rows = await self._gh.json(args, "WorkItems.list_open")
+        rows = await self._gh.json(args, _LIST_OPEN_OP)
         return [_work_item(repo, row) for row in rows or [] if isinstance(row, dict)]
 
     async def remove_label(self, repo: RepositoryRef, number: int, label: str) -> None:
@@ -781,7 +782,7 @@ DECLARATION = HostDeclaration(
             default=100,
             per_operation={
                 "ChangeRequests.list": 1000,
-                "WorkItems.list_open": 100,
+                _LIST_OPEN_OP: 100,
                 "WorkItems.open_change_request_bodies": 200,
                 "Discussion.comments": None,
                 "Discussion.review_threads": None,
