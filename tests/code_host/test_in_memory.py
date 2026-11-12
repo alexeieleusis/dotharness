@@ -1,5 +1,7 @@
 """The in-memory fake passes the conformance suite and behaves as a consumer test needs."""
 
+from dataclasses import replace
+
 import pytest
 
 from dotharness.code_host import HostSelection, create_code_host
@@ -42,6 +44,39 @@ class TestInMemoryWithoutWorkItems(CodeHostConformance):
         return InMemoryCodeHost(
             capabilities=frozenset(Capability) - {Capability.WORK_ITEMS, Capability.CHECKS}
         ).target()
+
+
+class _NoJobChecks:
+    """A Checks facet that declares ``get_job`` unsupported and delegates the rest."""
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._inner, name)
+
+    async def get_job(self, repo: RepositoryRef, job_id: str) -> object:
+        msg = "no jobs"
+        raise UnsupportedCapabilityError(msg, capability="Checks")
+
+
+class TestInMemoryWithAnUnsupportedOperation(CodeHostConformance):
+    """An operation listed in ``ConformanceTarget.unsupported`` must raise, and the rest of the suite still runs."""
+
+    async def make_target(self) -> ConformanceTarget:
+        target = InMemoryCodeHost().target()
+        host = replace(target.host, checks=_NoJobChecks(target.host.checks))
+        return replace(target, host=host, unsupported=frozenset({"Checks.get_job"}))
+
+    async def test_failed_log_and_get_job(self) -> None:
+        """The inherited group reads ``get_job``. This target lists it as unsupported, so only ``failed_log`` runs."""
+        target = await self.make_target()
+        repo = target.repository
+        cr = target.seeder.add_change_request(repo, head_reference="feature/a")
+        target.seeder.add_job(repo, job_id="900", log="boom")
+        target.seeder.add_check(repo, cr.number, name="build", status=CheckStatus.FAIL, job_id="900")
+        (check,) = await target.host.checks.list_checks(repo, cr.number)
+        assert await target.host.checks.failed_log(repo, check) == "boom"
 
 
 class TestInMemorySpecifics:

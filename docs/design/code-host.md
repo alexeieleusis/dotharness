@@ -1,6 +1,6 @@
 # Code host: capability interfaces and direct gh user inventory
 
-Status: Phase 0 design for #192. The package `src/dotharness/code_host/` exists and the vibe-heal review flow is implemented (Phase 1, #193). The sisyphus flow is implemented (Phase 2, #194). The interface version is 2. The pr-review and leftover users are not migrated yet.
+Status: Phase 0 design for #192. The package `src/dotharness/code_host/` exists and the vibe-heal review flow is implemented (Phase 1, #193). The sisyphus flow is implemented (Phase 2, #194). The reference host and the in-memory fake implement every method of the six interfaces (A-1). The interface version is 2. The pr-review and leftover users are not migrated yet.
 
 This page is the contract for Phases 1 to 4 (#193 to #196). Sections: Inventory, Phase split, Rename plan, Interfaces,
 Models, Error model, Declarations, Factory and selection, Conformance suite and in-memory fake, and the Decision log
@@ -144,6 +144,10 @@ Consumers: `vibe_heal/review/orchestrator.py`, `vibe_heal/cli.py`.
 | INV-VH-07 | `_run_gh` runner adapter and error types | `GitHubReviewError`, `NoOpenPrError`, `GitHubTimeoutError` | `_run_gh` | Ses (transport, folded into the interface error taxonomy) | migrated (Phase 1) |
 
 ### Group `pr-review` (Phase 3), `pr_review/runners/` unless stated
+
+Host side: the reference host and the fake implement every method these rows need (A-1), and the shared conformance suite
+covers them. The consumers still call `gh` directly. Each row below becomes "migrated (Phase 3)" when the consumer part that
+removes it lands, and this heading then reads "(Phase 3, migrated)", as the `sisyphus` heading does.
 
 | Row id | Operation | Today's gh call | File and function | Owner |
 | --- | --- | --- | --- | --- |
@@ -1193,7 +1197,7 @@ Change request (`--json` on `pr view`, `pr list`, `search prs`):
 | `commits[].committedDate` | same | `CommitInfo` | `committed_at` | ISO text to aware `datetime`. Unparsable is `None` |
 | `commits[].oid` | same (implied by the list shape) | `CommitInfo` | `revision` | |
 | `createdAt` | `runners/self_review.py`, `runners/review_requested.py`, `runners/common.py` | `ChangeRequest` | `created_at` | ISO text to aware `datetime` |
-| `closingIssuesReferences` | `runners/self_review.py`, `runners/review_requested.py`, `runners/common.py` | `ChangeRequest` | (none) | not a `ChangeRequest` field. Each reference becomes a `WorkItemRef` returned by `WorkItems.linked_work_items()` |
+| `closingIssuesReferences` | `runners/self_review.py`, `runners/review_requested.py`, `runners/common.py` | `ChangeRequest` | (none) | not a `ChangeRequest` field. Each reference becomes a `WorkItem` in the `Sequence[WorkItem]` that `WorkItems.linked_work_items()` returns. The Protocol wins over this table (D-11, DEC-36), so the earlier `WorkItemRef` wording is wrong |
 
 Work item (`issue view`, `issue list`):
 
@@ -1561,6 +1565,8 @@ class HostLimits:
     max_change_request_body_chars: int
     timeouts: OperationTimeouts
     list_bounds: ListBounds
+    page_attempts: int = 3  # tries for each page of a paged read
+    page_retry_delay_seconds: float = 2.0  # pause before a retry, times the attempt number
 ```
 
 - The keys of both `per_operation` maps are written `Interface.method`, using the Protocol and method names of the Interfaces
@@ -1573,6 +1579,10 @@ class HostLimits:
   - `timeouts`: the host implementation, which applies them to its own calls. A consumer never passes a timeout.
   - `list_bounds`: the host implementation of every list-returning operation, which returns at most that many items. A bound of `None` means the host returns every item. A host never
     truncates silently: if it cannot return the whole result under the bound that applies, it raises `CodeHostError` instead.
+- `page_attempts` and `page_retry_delay_seconds` (added in A-1, with defaults, so the interface version stays 2): a host that
+  reads a list page by page tries each page `page_attempts` times and pauses `page_retry_delay_seconds` times the attempt
+  number between tries. A timeout or an authentication error is not retried. The page loops of `common.py` and
+  `review_requested.py` retry the same way today.
 - A list size bound is a declared limit, never a paging parameter. No operation takes a page, cursor or `--limit` argument and
   no caller passes one. Each declared bound replaces `--limit 1000` (`address_comments.py`), `--limit 500` (the four
   `@me` listings), the single-call `per_page=100` (`ci_checks.py`. The paged loops in `common.py` and `review_requested.py`
@@ -1604,6 +1614,24 @@ means the default applies).
 | list bound, open CR bodies (INV-SY-05) | 200 | `WorkItems.open_change_request_bodies` | `GhPullRequestLookup.__init__(limit=200)` in `sisyphus/pick.py` |
 | list bound, exhaustive reads (INV-PR-07, INV-PR-17, INV-PR-29, INV-PR-39, INV-PR-40, INV-PR-42) | `None` | `Discussion.comments`, `Discussion.review_threads`, `ChangeRequests.reviews`, `ChangeRequests.commits`, `ChangeRequests.viewed_files` | `fetch_all_pages`, `--paginate` and cursor loops page to exhaustion today (safety gates read them in full) |
 | list bound, workflows | 100 | `Checks.list_workflows` | `per_page=100` in `ci_checks.py` |
+| `page_attempts` | 3 | | the page loops of `common.py` (A-1, DS-2: a declaration field, not an operation key) |
+| `page_retry_delay_seconds` | 2.0 | | the same loops |
+
+DS-2: no new operation key was added for A-1. `Session.credential` and every new method run under the 30 s default. If a
+consumer reads `is_pr_open` with `ChangeRequests.state`, that read keeps the declared 10.0 s key (DEV-7). If it reads it with
+`ChangeRequests.get`, the 30 s default applies.
+
+Deviations of the reference implementation from today's `gh` calls (A-1). Each is a behavior change a consumer sees:
+
+| ID | Deviation |
+| --- | --- |
+| DEV-1 | `--author @me` becomes `--author <login>`, with one `Session.current_user` call to get the login. |
+| DEV-2 | `user-review-requested:@me` becomes `user-review-requested:<login>`, the same login. |
+| DEV-3 | Single-field `pr view` reads (INV-PR-14, INV-PR-15, INV-PR-16 and similar) become `ChangeRequests.get`, which reads the full field set in one call. |
+| DEV-4 | `--limit 500` becomes the declared bound 1000 for `ChangeRequests.list`. |
+| DEV-5 | `Session.agent_environment` sets `GITHUB_TOKEN` and `GH_TOKEN` for an agent child process. The `gh` children of the host get `GH_TOKEN` only. Whether the extra `GH_TOKEN` in an agent child is acceptable under the parity goal is open decision OD-3: DEC-6 does not say. This page records the behavior as built. The conformance case B-SES-4 asserts both names. |
+| DEV-6 | The token command runs through `shlex.split`, with no shell, under a 30 s timeout. A command that needs a shell no longer works. A timeout is `CodeHostTimeoutError(write=False)`. |
+| DEV-7 | Conditional (DS-2). If `is_pr_open` reads the state with `ChangeRequests.state`, its timeout is 10 s, as today. If it reads with `ChangeRequests.get`, the 30 s default applies and the timeout changes from 10 s to 30 s. |
 
 Phase 2 deviation from G1: the reference host applies these declared limits. The other sisyphus `gh` calls ran with a
 3600 s limit before. They now run under the 30 s default. The two sisyphus listings use the host's own list bounds. The
@@ -1901,7 +1929,7 @@ class TestExampleHost(CodeHostConformance):
 - **Opting out of a capability.** An implementation that lacks a capability leaves it out of `declaration.capabilities`
   (Declarations, "Capabilities"). The suite reads the declaration, skips nothing silently, and for each undeclared capability
   runs the B-ERR-4 test instead of that capability's group. A group is never skipped because a test fails.
-- **Suite validated by the fake.** `InMemoryCodeHost` must pass every test the suite runs against it: the groups of the capabilities it declares (Session, Repository, ChangeRequests, Discussion; see the review-flow subset below) and B-ERR-4 for the two it does not (Checks, WorkItems). A declared capability's group exercises only the methods that group names, so a declared-but-partial capability is not asked to implement methods outside it. That is a requirement, and a Phase 1 test
+- **Suite validated by the fake.** `InMemoryCodeHost` must pass every test the suite runs against it: the groups of the capabilities it declares (all six by default) and B-ERR-4 for any it does not declare. A declared capability's group exercises only the methods that group names, so a declared-but-partial capability is not asked to implement methods outside it. That is a requirement, and a Phase 1 test
   (`TestInMemoryCodeHost(CodeHostConformance)` in `tests/code_host/test_in_memory.py`) enforces it. The reference host passes the same suite in `tests/code_host/test_reference_conformance.py` with a stubbed runner. It is how the fake stays honest.
 - **Packaging check (NF-9).** A test in the style of `tests/test_wheel_install.py` (build the wheel, install it into a clean
   venv outside the repo, then exercise it) or `tests/test_package_data.py` confirms the module ships. The assertion: in the clean
@@ -1931,6 +1959,10 @@ Types and error names come from the sections cited above. Each behavior has a st
 | B-ERR-4 | For each capability absent from `declaration.capabilities`, every method of that interface (taken from `CodeHost`, Factory) raises `UnsupportedCapabilityError` whose `capability` equals the interface name. Not `AttributeError`, not a stub result. |
 | B-ERR-5 | No error raised by the host carries a token value: with a credential `<token>` and a token command string, `str(exc)`, `repr(exc)` and `str(exc.__cause__)` of every error type from B-ERR-1..4 contain neither (Error model, "Message and secret rules"). |
 | B-ERR-6 | Each of the six error types is a subclass of `CodeHostError` (Error model R5). |
+| B-ERR-7 | A request that failed raises `CodeHostError`. A result that is empty (an empty sequence, an empty mapping, or `None` for `WorkItems.get`) is returned, never raised. The suite runs one table of every method added in A-1: it seeds the data, then makes the host fail with `fail_next` and expects the error. |
+| B-ERR-8 | For every method in that table, a read that times out raises `CodeHostTimeoutError` with `write=False`, and a write raises it with `write=True`. |
+| B-ERR-9 | For every method in that table and for six error types (plain, timeout, authentication, unsupported capability, configuration, no change request), `str(exc)`, `repr(exc)`, `exc.args`, the `__cause__` chain, the host `repr` and the log records hold no token. The suite asserts the sentinel `<token>`. A host's stub keeps the token out of its own failure text, because the reference redacts the token to the same `<token>` placeholder. |
+| B-LIM-4 | A read that the declaration bounds with `None` returns every item over a page boundary: the suite seeds 201 items for `ChangeRequests.commits`, `ChangeRequests.reviews`, `ChangeRequests.viewed_files`, `Discussion.comments` and `Discussion.review_threads` and expects all of them. A bounded read over its bound (`ChangeRequests.find_by_commit`, `Checks.list_workflows`) raises `CodeHostError` or returns every item. It never cuts the result short (DEC-31). |
 
 B-ERR-2 asserts the error type and the `write` flag only. It does not assert that the write is retry-safe, because the Error
 model says consumers must not retry after `write=True` and defines no idempotency promise (DEC-41).
@@ -1942,13 +1974,13 @@ model says consumers must not retry after `write=True` and defines no idempotenc
 | B-SES-1 | `available()` returns a `bool` and does not raise, with and without credentials. |
 | B-SES-2 | `current_user()` returns the login the seeder configured. Without credentials it raises `AuthenticationError`. |
 | B-SES-3 | `credential()` returns a `Credential`. Its `repr` does not contain the token (Models: `token` is `repr=False`). |
-| B-SES-4 | `agent_environment_names()` returns the names as data. `agent_environment(base)` contains every base entry and each credential variable, and a credential variable wins over a base entry of the same name. |
+| B-SES-4 | `agent_environment_names()` returns the names as data: `GITHUB_TOKEN`, `GH_TOKEN`, in that order (DEV-5). `agent_environment(base)` lists the base entries first and in their own order, then the credential variables not in `base`. Each credential variable holds the credential, so it wins over a base entry of the same name. `base` is not changed. |
 | B-REP-1 | `resolve(identity)` for a seeded identity returns a `RepositoryRef`. For an unknown identity it raises `ConfigurationError`. |
 | B-REP-2 | A `RepositoryRef` is opaque: passing the ref from `resolve()` to another method works without the test parsing it, and two `resolve()` calls for one identity return equal refs. |
 | B-REP-3 | `current()` returns a ref for the repository the target was created for (`ConfigurationError` when the target has none). `default_branch(ref)` returns the seeded name. `display_name(ref)` returns a non-empty `str`. |
 | B-CR-1 | `get(repo, n)` returns the seeded `ChangeRequest`. For a missing number it raises `CodeHostError`. |
 | B-CR-2 | `find_by_branch` returns the change requests whose `head_reference` equals the branch, honoring `state` (default open). |
-| B-CR-3 | `list` returns seeded change requests in insertion order, filtered by `state`, `author`, `assignee` and `requested_reviewer` when given. |
+| B-CR-3 | `list` returns seeded change requests, filtered by `state`, `author` and `requested_reviewer` when given. The order is the host's (the fake: insertion order), so the suite compares sets. A host that has no assignee data matches nothing for a non-empty `assignee`. |
 | B-CR-4 | `find_by_commit`, `commits` (oldest first) and `reviews` return what was seeded. A change request with none returns an empty sequence. A fake seeded with more items than the default list bound returns all of `reviews` and `commits` (their declared bound is `None`). |
 | B-CR-5 | `create_draft` returns a `ChangeRequest` with `is_draft` true and visible to a following `get` and `find_by_branch`. Creating a second one for the same head and base raises `CodeHostError`. |
 | B-CR-6 | `squash_merge(expected_head=...)` with the current head revision makes the state merged. With a different revision it raises `CodeHostError` and changes nothing. |
@@ -1969,7 +2001,15 @@ model says consumers must not retry after `write=True` and defines no idempotenc
 | B-WI-5 | `open_change_request_bodies` returns open change requests with their descriptions, separate from B-WI-4 (Interfaces: the two lookups are not merged). |
 
 Conformance groups built in Phase 2: B-SES-3, B-REP-3, B-CR-1, B-CR-2, B-CR-5 and B-WI-1 to B-WI-5, run against the reference
-host (with a stubbed `gh`) and the fake. B-CR-3/4/6/7/8, B-DIS-1..3 and the Checks groups stay for Phase 3.
+host (with a stubbed `gh`) and the fake. A-1 adds B-SES-2, B-SES-4, B-REP-1, B-CR-3, B-CR-4, B-CR-6 to B-CR-8, B-DIS-1 to
+B-DIS-3, B-CHK-1 to B-CHK-3, B-ERR-7 to B-ERR-9 and B-LIM-4, and extends B-CR-1 to the full field set. The reference run uses
+`GhStub` in `tests/code_host/test_reference_conformance.py`, which plays `gh` for the REST, GraphQL and command-line calls
+of the new methods. The fake run is `TestInMemoryCodeHost`. `ConformanceTarget.unsupported` lists a declared operation a host
+does not implement. The suite asserts that each one raises.
+
+`HostSeeder` gains `set_user`, `add_commit`, `add_review`, `add_comment`, `add_thread`, `add_check`, `add_workflow`,
+`add_job` and `fail_next(operation, error)`. A host's seeder maps `fail_next` onto its transport: a timeout, a rejected
+call, or the runner itself failing. The host maps it back to the error type.
 
 **Review flow (Phase 1 extension).** These ids extend the table above for the vibe-heal review flow. They are implemented by
 `CodeHostConformance` in `dotharness.code_host.testing`. The seeder handle is `HostSeeder` (`set_available`,
@@ -2006,6 +2046,8 @@ injection methods of the table in "In-memory fake" below are the full design tar
 what exists. A test can set the current repository, the current-branch change request (or none), availability, a rejection
 (which forces the fallback and its reason) and a post failure (a timeout, for example), and reads the recorded posts.
 
+That paragraph describes Phase 1 only. Phases 2 and 3 replaced it: the fake now implements and declares all six capabilities and every method, and the per-method groups above run against it.
+
 **Factory and version (B-FAC).** Run once per module by `CodeHostConformance` against `create_code_host` with the implementation
 registered, using only standard-library patching of entry-point discovery.
 
@@ -2021,7 +2063,7 @@ registered, using only standard-library patching of entry-point discovery.
 One class, `InMemoryCodeHost`, in `code_host/testing.py`. It implements all six capability Protocols and serves as its own
 `HostSeeder`. Constructor (all keyword-only):
 `InMemoryCodeHost(*, repository: str = "example/repo", user: str = "fake-user", token: str = "<token>", capabilities: frozenset[Capability] | None = None, declaration: HostDeclaration | None = None)`.
-The default `capabilities` is every capability except Checks (Phase 2 does not build Checks). Passing Checks raises `ConfigurationError`.
+The default `capabilities` is every capability. Passing a subset leaves the other capabilities undeclared.
 `capabilities` selects the declared subset (this is how B-ERR-4 is exercised). An undeclared interface raises
 `UnsupportedCapabilityError(capability=<name>)` from each method, as the factory substitutes (Factory, "Factory"). The fake
 registers itself as `FAKE_REGISTRATION` (a `HostRegistration` with `interface_version=CODE_HOST_INTERFACE_VERSION`), selectable by
@@ -2049,12 +2091,12 @@ Models types. Each returns the created model so a test can use it as an expected
 | `link_closing` | `repo, *, work_item: int, change_request: int` | `None` |
 | `set_user` | `login: str` | `None` |
 
-Built so far (Phases 1 to 2): `capabilities=`, `add_work_item`, `add_change_request`, `link_closing`, `set_default_branch`,
-`set_user`, `fail_next`, `fail_always`, `clear_failures`, `calls`, `writes`, read-only `work_items` and `change_requests`, and
-`FAKE_REGISTRATION` (with `FakeOptions(repository, user)`). The fake implements Session `credential`, Repository
-`default_branch`, ChangeRequests `get`, `state`, `find_by_branch` and `create_draft`, and all six WorkItems methods. The other
-seeders (`add_repository`, `add_commit`, `add_review`, `add_comment`, `add_thread`, `add_check`, `add_workflow`, `add_job`) and the
-`comments`, `threads`, `reviews` and `checks` views stay for Phase 3. `set_default_branch` is global, not per repository.
+Built so far (Phases 1 to 3): every seeder in the table (`add_repository`, `add_work_item`, `add_change_request`,
+`add_commit`, `add_review`, `add_comment`, `add_thread`, `add_check`, `add_workflow`, `add_job`, `link_closing`,
+`set_default_branch`, `set_user`), the failure methods (`fail_next`, `fail_always`, `clear_failures`), `calls`, `writes`, the
+read-only views `work_items`, `change_requests`, `comments`, `threads`, `reviews` and `checks`, `capabilities=`, and
+`FAKE_REGISTRATION` (with `FakeOptions(repository, user)`). The fake implements every method of the six Protocols.
+`set_default_branch` is global, not per repository.
 
 `number=None` assigns the next number for that repository. `add_repository(..., is_current=True)` makes it the answer of
 `Repository.current()`. None marked makes `current()` raise `ConfigurationError`.
@@ -2095,7 +2137,7 @@ f293b99. "Members" are interface methods (Interfaces) served by the fake.
 | `LabelRemover` | `src/dotharness/sisyphus/pick.py` (`Protocol`) | label removal | WorkItems: `remove_label`. Inspect via `calls` / `work_items` |
 | `TrackerClient` | `src/dotharness/sisyphus/pick.py` (`Protocol`, `list_candidates(source)`) | candidate listing in tracker order | WorkItems: `list_open`. Seed with `add_work_item` |
 | `PullRequestLookup` | `src/dotharness/sisyphus/pick.py` (`Protocol`, `linked_prs`, `open_pr_bodies`) | linked and open PR reads | WorkItems: `closing_change_requests` (`linked_prs`), `open_change_request_bodies` (`open_pr_bodies`). Seed with `link_closing`, `add_change_request` |
-| `GhCli` | `src/dotharness/sisyphus/pick.py` (class, removed in Phase 2) | wrapped the `gh` subprocess | The whole fake (all capabilities except Checks) |
+| `GhCli` | `src/dotharness/sisyphus/pick.py` (class, removed in Phase 2) | wrapped the `gh` subprocess | The whole fake (all six capabilities) |
 | `PullRequestClient` | `src/dotharness/sisyphus/orchestrator.py` (`Protocol`) | orchestrator PR operations | ChangeRequests: `get`, `find_by_branch`, `create_draft`. Confirmed in Phase 2: `find_pr` is `find_by_branch` (open), `open_pr` is `create_draft`, `pr_state` is `get` (a number) or `find_by_branch(state=None)` (a branch) |
 | injected `_gh` param | pr-review `list_own_open_prs(..., _gh)` | tests pass a fake callable | ChangeRequests: `list(author=...)` with Session `current_user`. Seed with `add_change_request(author=...)`, `set_user` |
 | `gh` callable | `src/dotharness/pr_review/runners/ci_checks.py` (`async def gh(args, env)`) | runs `gh`, returns `CompletedProcess` | Checks: `list_checks`, `list_workflows`, `failed_log`, `get_job`. Seed with `add_check`, `add_workflow`, `add_job` |
