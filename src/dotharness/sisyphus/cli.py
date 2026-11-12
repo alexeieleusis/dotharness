@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 import shlex
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -31,14 +30,14 @@ from typing import Annotated, Any
 import typer
 
 from dotharness.cli_common import fail
-from dotharness.code_host import CodeHost, ConfigurationError
-from dotharness.code_host.errors import AuthenticationError
+from dotharness.code_host import Capability, CodeHost, ConfigurationError
+from dotharness.code_host.errors import AuthenticationError, CodeHostError
 from dotharness.code_host.factory import HostSelection, create_code_host
 from dotharness.code_host.reference import TokenCommandError
 from dotharness.sisyphus.agent import make_agent_runner
 from dotharness.sisyphus.archive import archive_item, check_archive_dir, resolve_archive_dir
 from dotharness.sisyphus.cleanup import PrInfo
-from dotharness.sisyphus.config import ConfigError, SisyphusConfig, load_config
+from dotharness.sisyphus.config import ConfigError, SisyphusConfig, WorkItemSource, load_config
 from dotharness.sisyphus.digest import (
     DigestReport,
     DigestWriteError,
@@ -51,7 +50,6 @@ from dotharness.sisyphus.intake import AgentRunner, run_intake
 from dotharness.sisyphus.lock import LockHeld, clone_lock
 from dotharness.sisyphus.orchestrator import (
     PR_NUMBER_KEY,
-    GitHubError,
     OrchestratorOptions,
     PullRequest,
     PullRequestClient,
@@ -63,10 +61,10 @@ from dotharness.sisyphus.orchestrator import (
 from dotharness.sisyphus.pick import (
     Candidate,
     FileTracker,
-    GhCli,
-    GhLabelRemover,
-    GhPullRequestLookup,
-    GitHubIssueTracker,
+    HostIssueTracker,
+    HostLabelRemover,
+    HostPullRequestLookup,
+    HostRepository,
     LabelRemover,
     LinearTracker,
     PickError,
@@ -97,7 +95,6 @@ from dotharness.sisyphus.stoprecord import (
     read_stop_record,
     write_stop_record,
 )
-from dotharness.sisyphus.subproc import run_command as run_subprocess
 
 DEFAULT_BASE_BRANCH = "main"
 
@@ -141,79 +138,35 @@ def create_host(config: SisyphusConfig, repo_dir: Path) -> tuple[CodeHost, str |
     return host, credential.token
 
 
-_PR_URL = re.compile(r"/pull/(\d+)")
+class HostPullRequestClient:
+    """:class:`PullRequestClient` over ``ChangeRequests`` and one lazily resolved repository.
 
+    Policy (ChangeRequests unsupported): ``find_pr`` and ``open_pr`` raise :class:`CodeHostError`, which the
+    orchestrator maps to a C8 stop; ``pr_state`` raises too and branch cleanup degrades (branch kept with a note).
+    """
 
-class GhPullRequestClient:
-    """Real :class:`PullRequestClient`: ``gh pr list`` / ``gh pr create`` in the dedicated clone."""
-
-    def __init__(self, gh: GhCli) -> None:
-        self.gh = gh
+    def __init__(self, repo: HostRepository) -> None:
+        self.repo = repo
 
     async def find_pr(self, branch: str) -> PullRequest | None:
-        try:
-            rows = await self.gh.json("pr", "list", "--head", branch, "--state", "open", "--json", "number,url")
-        except PickError as exc:
-            raise GitHubError(str(exc)) from exc
-        for row in rows or []:
-            return PullRequest(int(row["number"]), row.get("url", ""))
-        return None
+        found = await self.repo.host.change_requests.find_by_branch(await self.repo.ref(), branch)
+        return PullRequest(found[0].number, found[0].url) if found else None
 
     async def pr_state(self, ref: str) -> PrInfo | None:
-        """``gh pr view <number or branch> --json number,state,headRefOid``; any state (used by branch cleanup)."""
-        try:
-            row = await self.gh.json("pr", "view", ref, "--json", "number,state,headRefOid")
-        except PickError as exc:
-            raise GitHubError(str(exc)) from exc
-        return _pr_info(row) if isinstance(row, dict) else None
+        """State and head SHA, any state: by number when ``ref`` is all digits, else the newest PR for the branch."""
+        crs = self.repo.host.change_requests
+        repo = await self.repo.ref()
+        if ref.isdigit():
+            found = [await crs.get(repo, int(ref))]
+        else:
+            found = list(await crs.find_by_branch(repo, ref, state=None))
+        return PrInfo(found[0].number, found[0].state.name, found[0].head_revision) if found else None
 
     async def open_pr(self, branch: str, base: str, title: str, body: str) -> PullRequest:
-        res = await self.gh.run(
-            "pr", "create", "--draft", "--head", branch, "--base", base, "--title", title, "--body", body
+        created = await self.repo.host.change_requests.create_draft(
+            await self.repo.ref(), head=branch, base=base, title=title, body=body
         )
-        match = _PR_URL.search(res.stdout)
-        if res.returncode != 0 or not match:
-            raise GitHubError(
-                f"gh pr create failed (exit {res.returncode}): {(res.stderr or res.stdout).strip()[-300:]}"
-            )
-        return PullRequest(int(match.group(1)), res.stdout.strip().splitlines()[-1])
-
-
-def _pr_info(row: dict[str, Any]) -> PrInfo:
-    number = row.get("number")
-    return PrInfo(
-        int(number) if isinstance(number, int) else None, str(row.get("state") or ""), str(row.get("headRefOid") or "")
-    )
-
-
-PR_STATE_TIMEOUT = 10.0  # seconds per `gh pr view`; fixed, not configurable
-
-
-class GhPrStateLookup:
-    """PR state by number: ``gh pr view <n> --json state`` through :class:`GhCli`, bounded by a fixed timeout."""
-
-    def __init__(self, repo_dir: Path, token: str | None, timeout: float = PR_STATE_TIMEOUT) -> None:
-        async def run(argv: Sequence[str], cwd: Path | None, env: Any) -> Any:
-            return await run_subprocess(argv, cwd, env, timeout=timeout)
-
-        self.gh = GhCli(repo_dir, token, run)
-
-    async def __call__(self, number: int) -> str:
-        row = await self.gh.json("pr", "view", str(number), "--json", "state")
-        state = row.get("state") if isinstance(row, dict) else None
-        if not isinstance(state, str) or not state:
-            raise PickError(f"gh pr view {number} returned no state")
-        return state.upper()
-
-
-class GhTimeboundLabelRemover(GhLabelRemover):
-    """:class:`GhLabelRemover` whose ``gh`` call is bounded by :data:`PR_STATE_TIMEOUT` (a timeout is exit 124)."""
-
-    def __init__(self, repo_dir: Path, token: str | None, timeout: float = PR_STATE_TIMEOUT) -> None:
-        async def run(argv: Sequence[str], cwd: Path | None, env: Any) -> Any:
-            return await run_subprocess(argv, cwd, env, timeout=timeout)
-
-        super().__init__(GhCli(repo_dir, token, run))
+        return PullRequest(created.number, created.url)
 
 
 @dataclass
@@ -230,7 +183,7 @@ class Services:
     today: datetime | None = None
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
     repo_info: Callable[[], Awaitable[str | None]] | None = field(default=None)
-    # `status --check-prs`: PR number -> state (OPEN, MERGED, CLOSED); raises PickError when it cannot be read.
+    # `status --check-prs`: PR number -> state (OPEN, MERGED, CLOSED); raises CodeHostError when it cannot be read.
     pr_state: Callable[[int], Awaitable[str]] | None = None
     # Removes the pick label from a settled GitHub issue; `None` means no removal is available.
     label_remover: LabelRemover | None = None
@@ -243,18 +196,32 @@ async def _no_backend(_prompt: str) -> None:
     raise ConfigError("[agent] backend is not set")
 
 
+def _require_work_items(host: CodeHost, work_item: WorkItemSource | None) -> None:
+    """Policy (WorkItems unsupported, ``kind = "github"``): stop at startup, before any host call."""
+    if (
+        work_item is not None
+        and work_item.kind == "github"
+        and Capability.WORK_ITEMS not in host.declaration.capabilities
+    ):
+        raise ConfigurationError(
+            f'[source.work_item] kind = "{work_item.kind}" needs a code host with the WorkItems capability, '
+            f"which the configured host does not declare"
+        )
+
+
 def default_services(config: SisyphusConfig) -> Services:
-    """Real services for ``config``: ``gh``, Linear, the configured agent backend and ``git``."""
+    """Real services for ``config``: the code host, Linear, the configured agent backend and ``git``."""
     repo_dir = Path(config.project.repo_dir or ".").expanduser()
-    _host, token = create_host(config, repo_dir)
-    gh = GhCli(repo_dir, token)
+    host, _token = create_host(config, repo_dir)
     work_item = config.source.work_item
+    _require_work_items(host, work_item)
+    repo = HostRepository(host)
     if work_item is not None and work_item.kind == "linear":
         tracker: TrackerClient = LinearTracker(os.environ.get("LINEAR_API_KEY", ""))
     elif work_item is not None and work_item.kind == "file":
         tracker = FileTracker()
     else:
-        tracker = GitHubIssueTracker(gh)
+        tracker = HostIssueTracker(repo)
     runner = (
         make_agent_runner(config.agent.backend, repo_dir, timeout_minutes=config.limits.max_run_minutes)
         if config.agent.backend
@@ -262,21 +229,24 @@ def default_services(config: SisyphusConfig) -> Services:
     )
 
     async def repo_info() -> str | None:
-        """The repository default branch from ``gh repo view``, or ``None`` if it cannot be read."""
+        """The repository default branch, or ``None`` if it cannot be read (policy: Repository failure degrades)."""
         try:
-            data = await gh.json("repo", "view", "--json", "defaultBranchRef")
-            return (data.get("defaultBranchRef") or {}).get("name")
-        except (PickError, KeyError, TypeError, AttributeError):
+            return await host.repository.default_branch(await repo.ref())
+        except CodeHostError:
             return None
+
+    async def pr_state(number: int) -> str:
+        """Policy (ChangeRequests unsupported): raises; ``status --check-prs`` warns on stderr and shows the item."""
+        return (await host.change_requests.state(await repo.ref(), number)).name
 
     return Services(
         tracker=tracker,
-        lookup=GhPullRequestLookup(gh),
-        pr_client=GhPullRequestClient(gh),
+        lookup=HostPullRequestLookup(repo),
+        pr_client=HostPullRequestClient(repo),
         agent_runner=runner,
         repo_info=repo_info,
-        pr_state=GhPrStateLookup(repo_dir, token),
-        label_remover=GhTimeboundLabelRemover(repo_dir, token),
+        pr_state=pr_state,
+        label_remover=HostLabelRemover(repo),
     )
 
 
@@ -299,7 +269,7 @@ def _require(config: SisyphusConfig, *keys: str) -> None:
 def _services(factory: ServicesFactory | None, config: SisyphusConfig) -> Services:
     try:
         return (factory or default_services)(config)
-    except (ConfigError, PickError) as exc:
+    except (ConfigError, PickError, ConfigurationError) as exc:
         fail(f"config error: {exc}")
 
 
@@ -826,7 +796,10 @@ def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_
 
 
 async def _pr_closed(rec: RunRecord, stop: Any, pr_state: Callable[[int], Awaitable[str]]) -> bool:
-    """True if the record's PR is MERGED or CLOSED. Fails open: any lookup failure warns on stderr and returns False."""
+    """True if the record's PR is MERGED or CLOSED. Fails open: any lookup failure warns on stderr and returns False.
+
+    Policy (ChangeRequests unsupported): warn with one ``warning:`` line, the item stays shown.
+    """
     number = rec.retries.get(PR_NUMBER_KEY)
     if not number:
         return False
@@ -834,7 +807,7 @@ async def _pr_closed(rec: RunRecord, stop: Any, pr_state: Callable[[int], Awaita
         return False  # in progress with no stop record: may be running now, never hidden or looked up
     try:
         return await pr_state(number) in ("MERGED", "CLOSED")
-    except (PickError, OSError, ValueError) as exc:
+    except (CodeHostError, OSError, ValueError) as exc:
         typer.echo(f"warning: cannot check PR #{number} for {rec.item}: {exc}", err=True)
         return False
 

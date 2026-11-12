@@ -7,7 +7,6 @@ No test runs an agent, the harness, gh, spec-prism-flow or ``git push``.
 from __future__ import annotations
 
 import ast
-import json
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -16,14 +15,23 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from dotharness.ai_backend import ClaudeOptions, OpencodeOptions, RunResult
+from dotharness.code_host import (
+    Capability,
+    ChangeRequestState,
+    CodeHostError,
+    ConfigurationError,
+    UnsupportedCapabilityError,
+)
+from dotharness.code_host.testing import InMemoryCodeHost
 from dotharness.sisyphus import cli
 from dotharness.sisyphus.agent import AgentError, make_agent_runner
 from dotharness.sisyphus.cleanup import PrInfo
 from dotharness.sisyphus.cli import Services, app
-from dotharness.sisyphus.config import ConfigError, WorkItemSource, load_config
+from dotharness.sisyphus.config import ConfigError, SisyphusConfig, WorkItemSource, load_config
 from dotharness.sisyphus.intake import IntakeResult, OpenDecision
 from dotharness.sisyphus.lock import LockHeld, clone_lock
 from dotharness.sisyphus.orchestrator import (
@@ -35,7 +43,14 @@ from dotharness.sisyphus.orchestrator import (
     PullRequest,
     branch_name,
 )
-from dotharness.sisyphus.pick import Candidate, ExecResult, GhCli, GhPullRequestLookup, LinkedPr, PickError
+from dotharness.sisyphus.pick import (
+    Candidate,
+    HostIssueTracker,
+    HostLabelRemover,
+    HostPullRequestLookup,
+    HostRepository,
+    LinkedPr,
+)
 from dotharness.sisyphus.rails import Checkpoint
 from dotharness.sisyphus.runrecord import RunRecord, record_path
 from dotharness.sisyphus.stoprecord import build_abandoned_record, build_stop_record, write_stop_record
@@ -375,7 +390,7 @@ def _spy_pr_state(env: Any) -> list[int]:
     async def pr_state(number: int) -> str:
         looked_up.append(number)
         if number not in PR_STATES:
-            raise PickError(f"gh pr view failed (exit 1): no PR {number}")
+            raise CodeHostError(f"gh pr view failed (exit 1): no PR {number}")
         return PR_STATES[number]
 
     env.services.pr_state = pr_state
@@ -833,72 +848,120 @@ def test_default_services_unknown_host_exits_1(tmp_path: Path) -> None:
         cli.default_services(cfg)
 
 
-async def test_gh_pull_request_client() -> None:
-    replies = [
-        ExecResult(0, json.dumps([{"number": 4, "url": "u"}])),
-        ExecResult(0, "[]"),
-        ExecResult(0, "https://github.com/o/r/pull/12\n"),
-        ExecResult(1, "", "no auth"),
-        ExecResult(1, "", "no auth"),
-    ]
-    calls: list[list[str]] = []
+def _client(**kwargs: Any) -> tuple[InMemoryCodeHost, cli.HostPullRequestClient, HostRepository]:
+    fake = InMemoryCodeHost(**kwargs)
+    repo = HostRepository(fake.code_host())
+    return fake, cli.HostPullRequestClient(repo), repo
 
-    async def ex(argv: Sequence[str], _cwd: Path | None, _env: Any) -> ExecResult:
-        calls.append(list(argv))
-        return replies.pop(0)
 
-    client = cli.GhPullRequestClient(GhCli(None, None, ex))
-    assert await client.find_pr("b") == PullRequest(4, "u")
+async def test_host_pull_request_client_find_and_open() -> None:
+    fake, client, repo = _client()
+    ref = await repo.ref()
     assert await client.find_pr("b") is None
-    assert await client.open_pr("b", "base", "T", "B") == PullRequest(12, "https://github.com/o/r/pull/12")
-    assert calls[2][:3] == ["gh", "pr", "create"]
-    assert "--draft" in calls[2]
-    assert "base" in calls[2]
-    with pytest.raises(GitHubError):
-        await client.open_pr("b", "base", "T", "B")
+    opened = await client.open_pr("b", "base", "T", "B")
+    created = fake.change_requests[ref][0]
+    assert opened == PullRequest(created.number, created.url)
+    assert (created.head_reference, created.base_reference, created.title, created.body, created.is_draft) == (
+        "b", "base", "T", "B", True
+    )  # fmt: skip
+    assert await client.find_pr("b") == opened
+    fake.fail_next("ChangeRequests.create_draft", CodeHostError("exit 1: no auth"))
+    with pytest.raises(GitHubError, match="no auth"):
+        await client.open_pr("c", "base", "T", "B")
+    fake.fail_next("ChangeRequests.find_by_branch", CodeHostError("exit 1: no auth"))
     with pytest.raises(GitHubError):
         await client.find_pr("b")
 
 
-async def test_draft_pr_is_still_found_and_reported_open() -> None:
-    replies = [
-        ExecResult(0, json.dumps([{"number": 9, "url": "u9", "isDraft": True}])),
-        ExecResult(0, '{"number": 9, "state": "OPEN", "isDraft": true, "headRefOid": "abc"}'),
-    ]
-
-    async def ex(_argv: Sequence[str], _cwd: Path | None, _env: Any) -> ExecResult:
-        return replies.pop(0)
-
-    client = cli.GhPullRequestClient(GhCli(None, None, ex))
-    assert await client.find_pr("b") == PullRequest(9, "u9")
-    assert await client.pr_state("9") == PrInfo(9, "OPEN", "abc")
+async def test_host_client_draft_pr_is_found_and_reported_open() -> None:
+    fake, client, repo = _client()
+    cr = fake.add_change_request(await repo.ref(), head_reference="b", is_draft=True, head_revision="abc")
+    assert await client.find_pr("b") == PullRequest(cr.number, cr.url)
+    assert await client.pr_state(str(cr.number)) == PrInfo(cr.number, "OPEN", "abc")
 
 
-async def test_gh_client_pr_state_reads_state_and_head_oid() -> None:
-    replies = [
-        ExecResult(0, '{"number": 7, "state": "MERGED", "headRefOid": "abc"}'),
-        ExecResult(1, "", "no pull requests found"),
-    ]
-    calls: list[list[str]] = []
-
-    async def ex(argv: Sequence[str], _cwd: Path | None, _env: Any) -> ExecResult:
-        calls.append(list(argv))
-        return replies.pop(0)
-
-    client = cli.GhPullRequestClient(GhCli(None, None, ex))
-    assert await client.pr_state("7") == PrInfo(7, "MERGED", "abc")
-    assert calls[0] == ["gh", "pr", "view", "7", "--json", "number,state,headRefOid"]
+async def test_host_client_pr_state_by_number_or_branch_any_state() -> None:
+    fake, client, repo = _client()
+    ref = await repo.ref()
+    fake.add_change_request(ref, head_reference="old", state=ChangeRequestState.CLOSED, head_revision="c1")
+    merged = fake.add_change_request(ref, head_reference="b", state=ChangeRequestState.MERGED, head_revision="abc")
+    assert await client.pr_state(str(merged.number)) == PrInfo(merged.number, "MERGED", "abc")
+    assert await client.pr_state("b") == PrInfo(merged.number, "MERGED", "abc")  # a branch ref sees any state
+    assert await client.pr_state("nobranch") is None  # an empty result is None, not an error
     with pytest.raises(GitHubError):
-        await client.pr_state("b")
+        await client.pr_state("99")  # a missing number raises; cleanup keeps the branch with a note
 
 
-def test_default_services_builds_clients(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_host_client_without_change_requests_raises() -> None:
+    _fake, client, _repo = _client(capabilities=frozenset(Capability) - {Capability.CHECKS, Capability.CHANGE_REQUESTS})
+    for call in (client.find_pr("b"), client.open_pr("b", "m", "T", "B"), client.pr_state("b")):
+        with pytest.raises(UnsupportedCapabilityError):
+            await call
+
+
+def _fake_host_services(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host_fake: InMemoryCodeHost) -> cli.Services:
     monkeypatch.setenv("LINEAR_API_KEY", "k")
     env = make_env(tmp_path)
-    services = cli.default_services(load_config(env.config))
-    assert isinstance(services.lookup, GhPullRequestLookup)
-    assert isinstance(services.pr_client, cli.GhPullRequestClient)
+    monkeypatch.setattr(cli, "create_host", lambda _config, _repo_dir: (host_fake.code_host(), None))
+    return cli.default_services(load_config(env.config))
+
+
+def _github_config(tmp_path: Path) -> SisyphusConfig:
+    env = make_env(tmp_path)
+    text = env.config.read_text().replace(
+        'kind = "linear"\nassignee = "me@x.io"\npick_state = "Todo"',
+        'kind = "github"\nassignee = "me"\npick_label = "bot"',
+    )
+    env.config.write_text(text)
+    return load_config(env.config)
+
+
+def test_default_services_wires_the_created_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    services = _fake_host_services(tmp_path, monkeypatch, InMemoryCodeHost())
+    assert isinstance(services.lookup, HostPullRequestLookup)
+    assert isinstance(services.pr_client, cli.HostPullRequestClient)
+    assert isinstance(services.label_remover, HostLabelRemover)
     assert services.repo_info is not None
+    assert services.pr_state is not None
+
+
+async def test_default_services_repo_info_and_pr_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = InMemoryCodeHost()
+    fake.set_default_branch("trunk")
+    services = _fake_host_services(tmp_path, monkeypatch, fake)
+    assert services.repo_info is not None and services.pr_state is not None
+    assert await services.repo_info() == "trunk"
+    repo_ref = await fake.code_host().repository.current()
+    cr = fake.add_change_request(repo_ref, head_reference="b", state=ChangeRequestState.MERGED)
+    assert await services.pr_state(cr.number) == "MERGED"
+    # Policy: a failing default-branch lookup degrades to None; a failing state lookup raises (status warns).
+    fake.fail_always("Repository.default_branch", CodeHostError("boom"))
+    assert await services.repo_info() is None
+    fake.fail_always("ChangeRequests.state", CodeHostError("boom"))
+    with pytest.raises(CodeHostError):
+        await services.pr_state(cr.number)
+
+
+def test_default_services_github_kind_needs_work_items(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = _github_config(tmp_path)
+    fake = InMemoryCodeHost(capabilities=frozenset(Capability) - {Capability.CHECKS, Capability.WORK_ITEMS})
+    monkeypatch.setattr(cli, "create_host", lambda _config, _repo_dir: (fake.code_host(), None))
+    with pytest.raises(ConfigurationError, match=r'kind = "github"'):
+        cli.default_services(cfg)
+    assert fake.calls == []  # stops before the first host call
+    # With WorkItems the same config starts and uses the host tracker.
+    ok = InMemoryCodeHost()
+    monkeypatch.setattr(cli, "create_host", lambda _config, _repo_dir: (ok.code_host(), None))
+    assert isinstance(cli.default_services(cfg).tracker, HostIssueTracker)
+
+
+def test_services_turns_configuration_error_into_config_error_exit(tmp_path: Path) -> None:
+    def factory(_config: SisyphusConfig) -> cli.Services:
+        raise ConfigurationError('[source.work_item] kind = "github" needs WorkItems')
+
+    with pytest.raises(typer.Exit) as exc:
+        cli._services(factory, _github_config(tmp_path))
+    assert exc.value.exit_code == 1
 
 
 def test_default_services_file_kind_builds_file_tracker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
