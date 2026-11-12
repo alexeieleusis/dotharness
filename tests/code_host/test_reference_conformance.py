@@ -176,6 +176,20 @@ class GhStub:
             return self._ok(rows)
         number = int(cmd[3])
         if verb == "view":
+            if "closedByPullRequestsReferences" not in (self._flag(cmd, "--json") or ""):
+                found = [w for w in self.work_items if w.number == number]
+                if not found:
+                    return RunResult(1, "", f"GraphQL: Could not resolve to an issue with the number of {number}.")
+                item = found[0]
+                return self._ok({
+                    "number": item.number,
+                    "title": item.title,
+                    "body": item.body,
+                    "labels": [{"name": name} for name in item.labels],
+                    "assignees": [{"login": u.login} for u in item.assignees],
+                    "createdAt": item.created_at.isoformat().replace("+00:00", "Z"),
+                    "state": item.state.value.upper(),
+                })
             refs = [{"number": cr} for wi, cr in self.links if wi == number]
             return self._ok({"closedByPullRequestsReferences": refs})
         if verb == "edit":
@@ -216,6 +230,9 @@ class GhStub:
             return self._ok([self._pr_row(c, self._flag(cmd, "--json") or "") for c in found[:limit]])
         ref = cmd[3]
         fields = self._flag(cmd, "--json") or ""
+        if ref.isdecimal() and "closingIssuesReferences" in fields:
+            refs = [{"number": wi} for wi, cr in self.links if cr == int(ref)]
+            return self._ok({"closingIssuesReferences": refs})
         if ref.isdecimal():
             by_number = [c for c in self.change_requests if c.number == int(ref)]
             if not by_number:
@@ -285,9 +302,7 @@ class TestReferenceHostConformance(CodeHostConformance):
         host = create_code_host(
             HostSelection(setting="code_host", name="reference", options={}, token_cmd=["echo", SECRET])
         )
-        # ``get`` and ``linked_work_items`` of WorkItems and ``display_name`` of Repository are declared but not implemented.
-        unsupported = frozenset({"WorkItems.get", "WorkItems.linked_work_items", "Repository.display_name"})
-        return ConformanceTarget(host=host, seeder=self.stub, secret=SECRET, unsupported=unsupported)
+        return ConformanceTarget(host=host, seeder=self.stub, secret=SECRET)
 
     async def test_token_reaches_gh_only_as_gh_token_in_the_environment(self) -> None:
         """The token command runs once. Its token is ``GH_TOKEN`` in the gh environment, never in argv or GITHUB_TOKEN."""
