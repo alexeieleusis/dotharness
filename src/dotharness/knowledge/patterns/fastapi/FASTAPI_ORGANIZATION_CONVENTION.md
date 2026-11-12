@@ -237,7 +237,7 @@ The service types its parameters against the Protocol; production passes the SQL
 - Expose **domain operations** (`add`, `get`, `list_for_customer`), not session handles, query builders or ORM objects.
 - **Translate** ORM rows to domain dataclasses (`_to_domain(row)`) and back (`_to_row(order)`) inside the adapter. ORM models never cross the boundary.
 - **Map external failures** to a few meaningful exceptions (`NotFound`, `Conflict`, `Unavailable`), e.g. `IntegrityError` -> `Conflict`.
-- **Who commits?** The unit of work owns commit/rollback ([Session and transaction scoping](#session-and-transaction-scoping)); repositories `add`/`flush` only.
+- **Who commits?** The unit of work owns the commit, called explicitly by the service inside the request path, and maps `IntegrityError` -> `Conflict` ([Session and transaction scoping](#session-and-transaction-scoping)); repositories `add`/`flush` only.
 - Retries, timeouts, circuit breakers belong in gateways for remote APIs, configured via settings.
 
 ### Sync vs. async adapters
@@ -287,7 +287,7 @@ Use `lifespan` (not deprecated `@app.on_event`). Providers read from `request.ap
 Actions are the feature's use-cases: `place_order`, `cancel_order`. In FastAPI they are **service functions** (or methods of a small class when the repo prefers constructor injection).
 
 ```python
-def place_order(customer_id, requested, *, orders, catalog, now, new_id) -> Order:
+def place_order(customer_id, requested, *, orders, catalog, uow, now, new_id) -> Order:
     prices = catalog.prices_for([l.sku for l in requested])  # adapter
     outcome = domain.decide_order(
         order_id=new_id(), customer_id=customer_id, requested=requested, prices=prices, now=now()
@@ -295,6 +295,7 @@ def place_order(customer_id, requested, *, orders, catalog, now, new_id) -> Orde
     if isinstance(outcome, domain.Rejection):  # surface
         raise OrderRejected(outcome.reasons)
     orders.add(outcome)  # adapter
+    uow.commit()  # adapter: constraint violations surface here as Conflict, inside the request path
     return outcome
 ```
 
@@ -331,7 +332,12 @@ def get_now() -> Callable[[], datetime]:
     return lambda: datetime.now(timezone.utc)
 
 
+def get_uow(session: SessionDep) -> UnitOfWork:
+    return SqlUnitOfWork(session)
+
+
 OrdersDep = Annotated[OrderRepository, Depends(get_orders)]
+UowDep = Annotated[UnitOfWork, Depends(get_uow)]
 ```
 
 - Providers construct adapters and return them typed as the **Protocol**, not the implementation.
@@ -351,9 +357,9 @@ The path operation function: translate in, delegate, translate out.
 
 ```python
 @router.post("", response_model=OrderOut, status_code=201)
-def place_order(body: PlaceOrderIn, orders: OrdersDep, catalog: CatalogDep, now: NowDep, new_id: NewIdDep):
+def place_order(body: PlaceOrderIn, orders: OrdersDep, catalog: CatalogDep, uow: UowDep, now: NowDep, new_id: NewIdDep):
     return service.place_order(
-        body.customer_id, body.to_domain(), orders=orders, catalog=catalog, now=now, new_id=new_id
+        body.customer_id, body.to_domain(), orders=orders, catalog=catalog, uow=uow, now=now, new_id=new_id
     )
 ```
 
@@ -524,18 +530,31 @@ Run each test in a transaction rolled back at the end (session fixture with `beg
 
   ```python
   def get_session() -> Iterator[Session]:
-      with SessionLocal() as session:
+      with SessionLocal() as session:  # close on exit
           try:
               yield session
-              session.commit()  # unit-of-work boundary: one place
           except Exception:
               session.rollback()
               raise
+
+
+  class SqlUnitOfWork:  # adapter implementing the UnitOfWork port (ports.py: `def commit(self) -> None`)
+      def __init__(self, session: Session) -> None:
+          self._session = session
+
+      def commit(self) -> None:
+          try:
+              self._session.commit()
+          except IntegrityError as exc:
+              self._session.rollback()
+              raise Conflict(str(exc.orig)) from exc
   ```
+
+  The service calls `uow.commit()` as its last step (see [Actions](#actions)), so a duplicate key or other commit-time failure raises `Conflict` *before* the response is built and an exception handler maps it to 409. The dependency only rolls back (on error) and closes.
 
 - Repositories use the injected session and `add`/`flush`; **they do not commit**. A use-case that spans two repositories is one transaction by construction.
 - Do not share a session across requests, threads or background tasks. Background work builds its own session.
-- Teardown (code after `yield`) may run after the response has started (behavior varies by FastAPI version), so a commit failure there may not be able to change the status code. If the caller must learn about commit failures, commit explicitly in a unit-of-work step inside the request path, and keep the dependency's job to rollback/close.
+- **Do not commit in the dependency's teardown.** Code after `yield` may run after the response has started (behavior varies by FastAPI version), so a commit failure there cannot change the status code and bypasses the adapter's error mapping: the client could get a 2xx (or a bare 500) for data that was never persisted. If you make `add` flush so violations surface earlier, the final commit can still fail, so keep the explicit commit.
 - Mind lazy loading: with `AsyncSession`, touching an unloaded relationship outside the session raises. Load what you need inside the repository and translate to domain values before returning (this also fixes ORM leakage). Set `expire_on_commit=False` if returned objects are read after commit.
 
 ### ORM models leaking into responses
@@ -650,9 +669,9 @@ async def place(body: PlaceOrderIn, db: Session = Depends(get_db)):
 ```python
 # GOOD: router parses/delegates; rule is pure; I/O behind ports; values injected
 @router.post("", response_model=OrderOut, status_code=201)
-def place(body: PlaceOrderIn, orders: OrdersDep, catalog: CatalogDep, now: NowDep, new_id: NewIdDep):
+def place(body: PlaceOrderIn, orders: OrdersDep, catalog: CatalogDep, uow: UowDep, now: NowDep, new_id: NewIdDep):
     return service.place_order(
-        body.customer_id, body.to_domain(), orders=orders, catalog=catalog, now=now, new_id=new_id
+        body.customer_id, body.to_domain(), orders=orders, catalog=catalog, uow=uow, now=now, new_id=new_id
     )
 ```
 
@@ -663,7 +682,7 @@ def place(body: PlaceOrderIn, orders: OrdersDep, catalog: CatalogDep, now: NowDe
 1. **Rules in pure Python** (`domain.py`): no fastapi/pydantic/sqlalchemy, injected time and ids, outcomes as data.
 2. **Schemas are boundary contracts**: Pydantic v2, separate in/out, separate from ORM and domain. Shape in schemas, policy in domain.
 3. **Services are actions**: keyword-injected ports, "call, call, call", raise application exceptions.
-4. **Adapters hide I/O** behind Protocols; ORM models never leave them; the unit of work owns the commit.
+4. **Adapters hide I/O** behind Protocols; ORM models never leave them; the unit of work owns the commit, called explicitly from the service.
 5. **`Depends` + `create_app()` + `lifespan` are the composition root**, boring on purpose; `dependency_overrides` is the test seam.
 6. **Routers are thin**: parse, delegate, `response_model`; exception handlers map errors.
 7. **Test the domain first** with parametrized tables, then services with fakes, then the API with `TestClient`.

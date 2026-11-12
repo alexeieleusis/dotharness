@@ -127,7 +127,7 @@ Does it need a DB/API lookup? -> domain (service fetches, passes in)
 | Route returns an ORM instance | repository returns dataclass and route sets `response_model=OrderOut` |
 | One model for request, response and table | `OrderIn`, `OrderOut`, ORM model |
 | `service.py` imports `SqlOrderRepository` | `service.py` depends on `OrderRepository` Protocol |
-| `session.commit()` scattered in repositories | one commit point in the session dependency/unit of work |
+| `session.commit()` scattered in repositories | one explicit `uow.commit()` in the service (not in dependency teardown) |
 | `async def` route calling sync SQLAlchemy / `requests` | `def` route, or async driver + `await` |
 | Pydantic validator that queries the DB | domain rule with data passed in |
 | Reusing the request session in `BackgroundTasks` | task opens its own session. Pass ids |
