@@ -30,7 +30,7 @@ One id namespace. Every entry is decided. The entry gives the rationale.
 | DEC-15 | Default branch is `Repository.default_branch(repo)`. | There is no `Repository` model. |
 | DEC-16 | The REST and GraphQL fields read by inventory rows are all listed in the mapping table. | Coverage check requires every field a row reads. |
 | DEC-17 | `ChangeRequest` has no `commits` or `linked_work_items` field. Consumers call `ChangeRequests.commits()` and `WorkItems.linked_work_items()`. | A host read that returns them with the change request for free, if a consumer needs it. |
-| DEC-18 | Model names are `CommitInfo`, `ReviewThread`, `Check`. Error names are `CodeHostError`, `AuthenticationError`, `CodeHostTimeoutError`, `UnsupportedCapabilityError`, `ConfigurationError`, `NoChangeRequestError`. | The Interfaces section is the naming authority. |
+| DEC-18 | Model names are `CommitInfo`, `ReviewThread`, `Check`. Error names are `CodeHostError`, `AuthenticationError`, `CodeHostTimeoutError`, `UnsupportedCapabilityError`, `ConfigurationError`, `NoChangeRequestError`, `TokenCommandError` (subclass of `AuthenticationError`). | The Interfaces section is the naming authority. |
 | DEC-19 | `PickError` covers gh failures. The Linear path keeps a consumer-local error. | The Linear path is not a code host. |
 | DEC-20 | No type or discriminator for rate limiting (such as `retry_after`) until a consumer needs it. | No current consumer. |
 | DEC-21 | At F1 the host skips the fallback post on `AuthenticationError` and `UnsupportedCapabilityError`. | A plain post would fail the same way. |
@@ -1385,6 +1385,20 @@ class AuthenticationError(CodeHostError):
 
     The message never contains the token or the token command (message and secret rules).
     """
+
+
+class TokenCommandError(AuthenticationError):
+    """The configured token command failed. A host raises this, not a plain ``AuthenticationError``, so a consumer can
+    report the exit code and cause (``token_cmd failed (exit N)``). The message never holds argv or stderr.
+
+    ``exit_code`` is the command's exit status, or ``None`` when it did not run to an exit. ``detail`` names the cause
+    when it did not run (an exception class name).
+    """
+
+    def __init__(self, message: str, *, exit_code: int | None = None, detail: str | None = None) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+        self.detail = detail
 
 
 class CodeHostTimeoutError(CodeHostError):

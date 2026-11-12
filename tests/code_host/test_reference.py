@@ -16,6 +16,7 @@ from dotharness.code_host.errors import (
     CodeHostError,
     CodeHostTimeoutError,
     NoChangeRequestError,
+    TokenCommandError,
     UnsupportedCapabilityError,
 )
 from dotharness.code_host.models import ChangeRequestState, InlineComment, RepositoryRef
@@ -26,7 +27,6 @@ from dotharness.code_host.reference import (
     _STDERR_TAIL,
     DECLARATION,
     REGISTRATION,
-    TokenCommandError,
     _create,
     _Gh,
     _Outcome,

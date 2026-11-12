@@ -31,9 +31,8 @@ import typer
 
 from dotharness.cli_common import fail
 from dotharness.code_host import Capability, CodeHost, ConfigurationError
-from dotharness.code_host.errors import AuthenticationError, CodeHostError
+from dotharness.code_host.errors import AuthenticationError, CodeHostError, TokenCommandError
 from dotharness.code_host.factory import HostSelection, create_code_host
-from dotharness.code_host.reference import TokenCommandError
 from dotharness.sisyphus.agent import make_agent_runner
 from dotharness.sisyphus.archive import archive_item, check_archive_dir, resolve_archive_dir
 from dotharness.sisyphus.cleanup import PrInfo
