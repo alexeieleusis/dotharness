@@ -158,7 +158,10 @@ def place_order(customer_id, requested, *, orders, catalog, now, new_id) -> Orde
 Reduce the path operation to: **parse -> delegate -> respond.**
 
 ```python
-@router.post("", response_model=OrderOut, status_code=201)
+# status_code=200 keeps the legacy behavior pinned in Step 0; change to 201 in a separate PR.
+# OrderOut must still carry the legacy fields (including leaked columns) pinned in Step 1.
+# `def` (vs the smell's `async def`) is the separate scheduling change described below.
+@router.post("", response_model=OrderOut, status_code=200)
 def place(body: PlaceOrderIn, orders: OrdersDep, catalog: CatalogDep, now: NowDep, new_id: NewIdDep):
     return service.place_order(
         body.customer_id, body.to_domain(), orders=orders, catalog=catalog, now=now, new_id=new_id
