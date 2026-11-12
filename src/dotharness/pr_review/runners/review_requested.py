@@ -69,7 +69,7 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
     if pr_url:
         prs = [
             await pr_from_url(
-                pr_url, config.repo.name, env, "number,url,headRefName,createdAt,closingIssuesReferences,author"
+                pr_url, config.repo.name, env, "number,url,headRefName,createdAt,closingIssuesReferences,author,body"
             )
         ]
     else:
@@ -146,7 +146,7 @@ async def _get_prs(repo: str, env: dict) -> list[dict]:
             "--search",
             "user-review-requested:@me",
             "--json",
-            "number,url,headRefName,createdAt,closingIssuesReferences,author",
+            "number,url,headRefName,createdAt,closingIssuesReferences,author,body",
             "--limit",
             "500",
         ),

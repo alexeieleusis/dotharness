@@ -756,7 +756,7 @@ async def _list_prs_by_flag(repo: str, env: dict, filter_flag: str) -> list[dict
             "--state",
             "open",
             "--json",
-            "number,url,headRefName,createdAt,closingIssuesReferences,author",
+            "number,url,headRefName,createdAt,closingIssuesReferences,author,body",
             "--limit",
             "500",
         ),

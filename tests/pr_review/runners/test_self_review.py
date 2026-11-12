@@ -550,6 +550,7 @@ async def test_list_my_prs_requests_author_field_in_both_queries():
         args = call[0][0]
         fields = args[args.index("--json") + 1].split(",")
         assert "author" in fields
+        assert "body" in fields
 
 
 async def test_list_my_prs_includes_assigned_prs_not_authored(tmp_xdg, tmp_path):
