@@ -27,6 +27,7 @@ class GhStub:
         self._attempts = 0
         self._rejected = False
         self.commands: list[list[str]] = []
+        self.token_runs = 0
         self.envs: list[dict[str, str] | None] = []
         # Seeded work items and change requests. ``run`` renders them as ``gh`` output.
         self.repository = RepositoryRef("example/repo")
@@ -231,6 +232,7 @@ class GhStub:
 
     async def run(self, cmd: list[str], **kwargs: object) -> RunResult:
         if cmd == ["echo", SECRET]:  # the token command: it is not a gh call
+            self.token_runs += 1
             return RunResult(0, f"{SECRET}\n", "")
         self.commands.append(cmd)
         self.envs.append(kwargs.get("env"))  # type: ignore[arg-type]
@@ -292,9 +294,14 @@ class TestReferenceHostConformance(CodeHostConformance):
         await target.host.session.available()
         self.stub.set_current_change_request(1)
         await target.host.change_requests.for_current_branch(target.repository)
+        await target.host.change_requests.for_current_branch(target.repository)
         assert self.stub.commands
+        assert self.stub.token_runs == 1
         assert not [c for c in self.stub.commands if SECRET in " ".join(c)]
-        env = self.stub.envs[-1]
-        assert env is not None
-        assert env["GH_TOKEN"] == SECRET
-        assert "GITHUB_TOKEN" not in env or env["GITHUB_TOKEN"] != SECRET
+        # ``gh --version`` (``Session.available``) needs no credential, so it runs without a ``GH_TOKEN`` environment.
+        gh_calls = [(c, e) for c, e in zip(self.stub.commands, self.stub.envs, strict=True) if "--version" not in c]
+        assert gh_calls
+        for _, env in gh_calls:
+            assert env is not None
+            assert env["GH_TOKEN"] == SECRET
+            assert env.get("GITHUB_TOKEN") != SECRET
