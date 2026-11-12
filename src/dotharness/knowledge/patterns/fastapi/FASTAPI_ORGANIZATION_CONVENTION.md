@@ -126,7 +126,7 @@ class LineIn(BaseModel):
 
 
 class PlaceOrderIn(BaseModel):
-    customer_id: str = Field(min_length=1)
+    # No customer_id: identity comes from the authenticated principal, never the body.
     lines: list[LineIn]
 
 
@@ -357,9 +357,11 @@ The path operation function: translate in, delegate, translate out.
 
 ```python
 @router.post("", response_model=OrderOut, status_code=201)
-def place_order(body: PlaceOrderIn, orders: OrdersDep, catalog: CatalogDep, uow: UowDep, now: NowDep, new_id: NewIdDep):
+def place_order(
+    body: PlaceOrderIn, principal: PrincipalDep, orders: OrdersDep, catalog: CatalogDep, uow: UowDep, now: NowDep, new_id: NewIdDep
+):
     return service.place_order(
-        body.customer_id, body.to_domain(), orders=orders, catalog=catalog, uow=uow, now=now, new_id=new_id
+        principal.id, body.to_domain(), orders=orders, catalog=catalog, uow=uow, now=now, new_id=new_id
     )
 ```
 
@@ -669,9 +671,11 @@ async def place(body: PlaceOrderIn, db: Session = Depends(get_db)):
 ```python
 # GOOD: router parses/delegates; rule is pure; I/O behind ports; values injected
 @router.post("", response_model=OrderOut, status_code=201)
-def place(body: PlaceOrderIn, orders: OrdersDep, catalog: CatalogDep, uow: UowDep, now: NowDep, new_id: NewIdDep):
+def place(
+    body: PlaceOrderIn, principal: PrincipalDep, orders: OrdersDep, catalog: CatalogDep, uow: UowDep, now: NowDep, new_id: NewIdDep
+):
     return service.place_order(
-        body.customer_id, body.to_domain(), orders=orders, catalog=catalog, uow=uow, now=now, new_id=new_id
+        principal.id, body.to_domain(), orders=orders, catalog=catalog, uow=uow, now=now, new_id=new_id
     )
 ```
 
