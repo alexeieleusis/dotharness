@@ -319,14 +319,21 @@ class SqlOrderRepository:  # implements OrderRepository
         self._s = session
 
     def add(self, order: Order) -> None:
-        self._s.add(OrderRow.from_domain(order))  # flush, do NOT commit here
+        self._s.add(OrderRow.from_domain(order))
+        try:
+            self._s.flush()  # surface constraint violations now; do NOT commit here
+        except IntegrityError as exc:
+            self._s.rollback()
+            raise Conflict(str(exc.orig)) from exc
 
     def get(self, order_id: str) -> Order | None:
         row = self._s.get(OrderRow, order_id)
         return row.to_domain() if row else None  # ORM row never leaves the adapter
 ```
 
-Map external failures (`IntegrityError` -> `Conflict`) here. Commit belongs to the session dependency ([Session scoping](./FASTAPI_ORGANIZATION_CONVENTION.md#session-and-transaction-scoping)).
+Map external failures (`IntegrityError` -> `Conflict`) here. `add` flushes so a duplicate key surfaces inside the request path, but the flush does not make the write durable.
+
+**Do not commit in the `yield` dependency's teardown.** Code after `yield` may run after the response has started, so a commit failure there (duplicate key, deadlock) cannot change the status code: the client could get a `201` for an order that was never persisted. Instead, the service calls an explicit unit-of-work `commit()` as its last step, which maps commit-time `IntegrityError` to `Conflict` before the response is built; the dependency only rolls back on error and closes. See [Session scoping](./FASTAPI_ORGANIZATION_CONVENTION.md#session-and-transaction-scoping) for the `SqlUnitOfWork` adapter. (The in-memory demo below has no transaction, so it omits the unit of work.)
 
 ---
 
@@ -626,7 +633,7 @@ Async tests: `httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url
 - [ ] `grep -nE "^(from|import) (fastapi|pydantic|sqlalchemy)" app/<feature>/domain.py` is empty
 - [ ] Router and `deps.py` contain no rules; service reads "call, call, call"
 - [ ] Separate In/Out schemas; no ORM objects in responses, ports, or domain
-- [ ] `now`/ids injected via `Depends`; one session per request; one commit point
+- [ ] `now`/ids injected via `Depends`; one session per request; one explicit commit point in the request path (not in dependency teardown)
 - [ ] `def` vs. `async def` matches the I/O clients used; no blocking in `async def`
 - [ ] Errors mapped by exception handlers; documented with `responses=`
 - [ ] Domain tests run without importing the app
