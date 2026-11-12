@@ -346,6 +346,118 @@ async def test_resolve_linked_tickets_returns_empty_when_comment_fetch_fails():
     assert tickets == []
 
 
+# --- resolve_linked_tickets: PR body scan -----------------------------------------------
+
+
+def _body_pr(**extra) -> dict:
+    return {"number": 39, "createdAt": "2026-01-01T00:00:00Z", "closingIssuesReferences": [], **extra}
+
+
+_NO_COMMENTS = {(f"repos/{REPO}/issues/39/comments", 1): []}
+
+
+async def test_resolve_linked_tickets_body_scan_resolves_reference():
+    pr = _body_pr(body="Work item: #170")
+    router = _router(_NO_COMMENTS, {(REPO, 170): _issue(170, "Body ticket")})
+    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=router):
+        tickets = await resolve_linked_tickets(pr, REPO, {})
+    assert tickets == [{"number": 170, "repo": REPO, "title": "Body ticket", "body": "Ticket body", "source": "body"}]
+
+
+async def test_resolve_linked_tickets_body_scan_skipped_when_native_found_ticket():
+    pr = _body_pr(
+        body="See #99",
+        closingIssuesReferences=[{"number": 3, "repository": {"name": "repo", "owner": {"login": "acme"}}}],
+    )
+    seen_issues: list[int] = []
+    inner = _router({}, {(REPO, 3): _issue(3), (REPO, 99): _issue(99)})
+
+    def _dispatch(cmd, **kwargs):
+        if cmd[:2] == ["gh", "issue"]:
+            seen_issues.append(int(cmd[3]))
+        return inner(cmd, **kwargs)
+
+    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=_dispatch):
+        tickets = await resolve_linked_tickets(pr, REPO, {})
+    assert [t["number"] for t in tickets] == [3]
+    assert 99 not in seen_issues
+
+
+async def test_resolve_linked_tickets_body_scan_skipped_when_comment_scan_found_ticket():
+    pr = _body_pr(body="See #99")
+    comments = [_comment("Related: #3", "2026-01-01T00:01:00Z")]
+    seen_issues: list[int] = []
+    inner = _router({(f"repos/{REPO}/issues/39/comments", 1): comments}, {(REPO, 3): _issue(3), (REPO, 99): _issue(99)})
+
+    def _dispatch(cmd, **kwargs):
+        if cmd[:2] == ["gh", "issue"]:
+            seen_issues.append(int(cmd[3]))
+        return inner(cmd, **kwargs)
+
+    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=_dispatch):
+        tickets = await resolve_linked_tickets(pr, REPO, {})
+    assert [(t["number"], t["source"]) for t in tickets] == [(3, "comment")]
+    assert 99 not in seen_issues
+
+
+async def test_resolve_linked_tickets_body_scan_skipped_when_native_inconclusive():
+    pr = _body_pr(
+        body="See #99",
+        closingIssuesReferences=[{"number": 3, "repository": {"name": "repo", "owner": {"login": "acme"}}}],
+    )
+    seen_issues: list[int] = []
+
+    def _dispatch(cmd, **_kwargs):
+        assert cmd[:2] == ["gh", "issue"], f"comment scan must not run, got: {cmd}"
+        seen_issues.append(int(cmd[3]))
+        return MagicMock(returncode=1, stdout=b"", stderr=b"API rate limit exceeded")
+
+    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=_dispatch):
+        tickets = await resolve_linked_tickets(pr, REPO, {})
+    assert tickets is None
+    assert 99 not in seen_issues
+
+
+async def test_resolve_linked_tickets_body_scan_missing_or_none_body_yields_empty():
+    router = _router(_NO_COMMENTS, {})
+    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=router):
+        assert await resolve_linked_tickets(_body_pr(), REPO, {}) == []
+        assert await resolve_linked_tickets(_body_pr(body=None), REPO, {}) == []
+
+
+async def test_resolve_linked_tickets_body_scan_drops_fetch_error():
+    pr = _body_pr(body="Work item: #170")
+
+    def _dispatch(cmd, **_kwargs):
+        if cmd[:2] == ["gh", "api"]:
+            return MagicMock(returncode=0, stdout=b"[]")
+        return MagicMock(returncode=1, stdout=b"", stderr=b"API rate limit exceeded")
+
+    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=_dispatch):
+        tickets = await resolve_linked_tickets(pr, REPO, {})
+    assert tickets == []
+
+
+async def test_resolve_linked_tickets_body_scan_drops_pull_request_or_nonexistent_issue():
+    pr = _body_pr(body="Work item: #170")
+    router = _router(_NO_COMMENTS, {})  # 404-style "could not resolve" for #170
+    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=router):
+        assert await resolve_linked_tickets(pr, REPO, {}) == []
+    with (
+        patch("dotharness.pr_review.runners.common._fetch_early_window_comments", new=AsyncMock(return_value=[])),
+        patch("dotharness.pr_review.runners.common._fetch_issue", new=AsyncMock(return_value=None)),
+    ):
+        assert await resolve_linked_tickets(pr, REPO, {}) == []
+
+
+async def test_resolve_linked_tickets_body_scan_resolves_multiple_and_dedupes():
+    pr = _body_pr(body="Work item: #170, also #171 and again #170")
+    router = _router(_NO_COMMENTS, {(REPO, 170): _issue(170), (REPO, 171): _issue(171)})
+    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=router):
+        tickets = await resolve_linked_tickets(pr, REPO, {})
+    assert [(t["number"], t["source"]) for t in tickets] == [(170, "body"), (171, "body")]
+
+
 # --- build_early_comment_context --------------------------------------------------------
 
 

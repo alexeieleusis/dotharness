@@ -792,8 +792,10 @@ def _parse_linear_linkback_comment(body: str) -> dict | None:
     }
 
 
-async def _resolve_comment_issue_refs(body: str, repo: str, env: dict, seen: set[tuple[str, int | str]]) -> list[dict]:
-    """Scans a single comment body for GitHub issue references and resolves each via `gh
+async def _resolve_comment_issue_refs(
+    body: str, repo: str, env: dict, seen: set[tuple[str, int | str]], *, source: str = "comment"
+) -> list[dict]:
+    """Scans a single comment body (or, with source="body", the PR body) for GitHub issue references and resolves each via `gh
     issue view`, split out of _resolve_comment_linked_tickets purely to keep that
     function's branching complexity down. A match that 404s, names a pull request rather
     than an issue, or fails to resolve for any other reason (rate limit, transient 5xx) is
@@ -802,7 +804,7 @@ async def _resolve_comment_issue_refs(body: str, repo: str, env: dict, seen: set
     here doesn't warrant the same inconclusive-vs-absent distinction resolve_linked_tickets
     makes for closing-keyword references. `seen` is shared and mutated across every
     comment in the scan, so a ticket already found (by this or the Linear-linkback path)
-    isn't re-fetched or duplicated."""
+    isn't re-fetched or duplicated. `source` is the tag stamped on each returned ticket."""
     tickets: list[dict] = []
     for match in _ISSUE_REF_RE.finditer(body):
         ticket_repo, number = _resolve_match_repo_and_number(match, repo)
@@ -823,7 +825,7 @@ async def _resolve_comment_issue_refs(body: str, repo: str, env: dict, seen: set
             "repo": ticket_repo,
             "title": issue.get("title", ""),
             "body": issue.get("body", ""),
-            "source": "comment",
+            "source": source,
         })
     return tickets
 
@@ -861,15 +863,18 @@ async def resolve_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | N
     §7.2, §4/G5 update): GitHub's own closing-keyword linking is tried first and, only if
     it finds nothing, an early-comment scan is tried as a fallback — a `linear[bot]`
     linkback comment first, then a GitHub issue reference (see
-    _resolve_comment_linked_tickets). `pr` must carry `closingIssuesReferences` and
-    `createdAt` (both runners' PR-listing --json field lists are extended to include
-    them). Returns a possibly-empty list of {number, repo, title, body, source} dicts,
-    `source` being "closing_keyword", "comment", or "linear_linkback" — or None if the
+    _resolve_comment_linked_tickets). If both find nothing, the PR body is scanned last
+    for GitHub issue references (source "body"). `pr` must carry `closingIssuesReferences`
+    and `createdAt` (both runners' PR-listing --json field lists are extended to include
+    them), and also `body` for the final body scan (a missing or None body is treated as
+    empty). Returns a possibly-empty list of {number, repo, title, body, source} dicts,
+    `source` being "closing_keyword", "comment", "linear_linkback", or "body" — or None if the
     native mechanism found a closing-keyword reference it couldn't resolve due to an API
     failure rather than a confirmed absence (see
     _resolve_native_linked_tickets). Callers must treat None as "inconclusive, retry next
     run" and never as "no linked ticket" — the comment-scan fallback is skipped in that
-    case rather than risked as a second source of false negatives. Pass the same `cache`
+    case rather than risked as a second source of false negatives (the body scan is
+    skipped too). Pass the same `cache`
     dict to a later build_early_comment_context call for this PR so its comment-scan
     fallback's paginated fetch (if it ran) is reused instead of repeated."""
     tickets = await _resolve_native_linked_tickets(pr, env)
@@ -877,7 +882,11 @@ async def resolve_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | N
         return None
     if tickets:
         return tickets
-    return await _resolve_comment_linked_tickets(pr, repo, env, cache)
+    tickets = await _resolve_comment_linked_tickets(pr, repo, env, cache)
+    if tickets:
+        return tickets
+    # Fresh `seen`: equivalent to sharing the comment scan's, since that scan found nothing.
+    return await _resolve_comment_issue_refs(pr.get("body") or "", repo, env, set(), source="body")
 
 
 async def post_no_linked_ticket_comment(pr_number: int, repo: str, env: dict) -> bool:
