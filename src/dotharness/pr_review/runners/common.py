@@ -4,12 +4,23 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from dotharness.code_host import (
+    ChangeRequestState,
+    CodeHost,
+    CodeHostError,
+    ConfigurationError,
+    HostSelection,
+    RepositoryRef,
+    create_code_host,
+)
 from dotharness.gh import gh_argv
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig, RepoConfig, SubDir
@@ -321,6 +332,90 @@ async def get_current_user(env: dict) -> str:
             result.stderr.decode("utf-8", errors="replace").strip(),
         )
     return login
+
+
+@dataclass(frozen=True)
+class HostScaffold:
+    """What every ``_run_locked`` builds once: the host, the resolved repository and the child-process environment."""
+
+    host: CodeHost
+    repo: RepositoryRef
+    env: dict[str, str]
+
+
+def host_selection(config: HarnessConfig) -> HostSelection:
+    """The ``HostSelection`` for ``config``: host name, options and the effective token command (never empty)."""
+    return HostSelection(
+        setting="host",
+        name=config.harness.host,
+        options=config.harness.host_options,
+        token_cmd=config.harness.effective_token_cmd,
+        working_directory=config.repo.working_dir if config.repo.working_dir.is_dir() else None,
+    )
+
+
+def build_agent_base_env(path_prepend: list[str], env_vars: dict[str, str]) -> dict[str, str]:
+    """``os.environ`` with ``path_prepend`` ahead of ``PATH`` and ``[harness] env`` applied; no credential yet.
+
+    Pass the result to ``Session.agent_environment``, which adds the credential variables (and lets them win).
+    """
+    base = os.environ.copy()
+    if path_prepend:
+        base["PATH"] = ":".join(path_prepend) + ":" + base.get("PATH", "")
+    base.update(env_vars)
+    return base
+
+
+async def agent_env(host: CodeHost, config: HarnessConfig) -> dict[str, str]:
+    """Child-process environment for git and agents: base environment plus the host's credential variables.
+
+    Raises ``TokenCommandError``, ``AuthenticationError`` or ``CodeHostTimeoutError`` when the credential cannot be
+    resolved; a runner lets them stop the command (nonzero exit, as the old ``RuntimeError`` did).
+    """
+    base = build_agent_base_env(config.harness.path_prepend, config.harness.env)
+    return dict(await host.session.agent_environment(base))
+
+
+async def open_host(config: HarnessConfig) -> HostScaffold:
+    """Steps (1) to (4) of the runner scaffold, once per command: selection, host, repository, environment.
+
+    A ``ConfigurationError`` from the factory or from ``Repository.resolve`` prints its message to stderr and exits
+    with code 1 (the startup message). Credential failures propagate (see ``agent_env``).
+    """
+    try:
+        host = create_code_host(host_selection(config))
+        repo = await host.repository.resolve(config.repo.name)
+    except ConfigurationError as e:
+        sys.stderr.write(f"{e}\n")
+        sys.exit(1)
+    return HostScaffold(host=host, repo=repo, env=await agent_env(host, config))
+
+
+async def host_token(host: CodeHost) -> str:
+    """The host credential's token. Raises ``TokenCommandError``, ``AuthenticationError``, ``CodeHostTimeoutError``.
+
+    Replaces ``get_gh_token``. The 30 s limit lives in the host's declaration. Callers must not log the result.
+    """
+    return (await host.session.credential()).token
+
+
+async def is_change_request_open(host: CodeHost, repo: RepositoryRef, number: int) -> bool:
+    """True when change request ``number`` is open right now. Fails closed: any ``CodeHostError`` gives False."""
+    try:
+        return await host.change_requests.state(repo, number) is ChangeRequestState.OPEN
+    except CodeHostError:
+        return False
+
+
+async def host_current_user(host: CodeHost) -> str:
+    """Login of the acting user. Fails open: any ``CodeHostError`` (including ``AuthenticationError``) is logged
+    and gives ``""``. The log line is where a revoked token shows; it carries the error's text, which never holds
+    the token or the token command."""
+    try:
+        return await host.session.current_user()
+    except CodeHostError as e:
+        logger.error("get_current_user: the host could not resolve a login: %s", e)  # noqa: TRY400
+        return ""
 
 
 async def pr_from_url(url: str, repo: str, env: dict, fields: str) -> dict:
