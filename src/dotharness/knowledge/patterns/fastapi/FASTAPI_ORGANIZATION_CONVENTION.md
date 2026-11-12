@@ -358,7 +358,13 @@ The path operation function: translate in, delegate, translate out.
 ```python
 @router.post("", response_model=OrderOut, status_code=201)
 def place_order(
-    body: PlaceOrderIn, principal: PrincipalDep, orders: OrdersDep, catalog: CatalogDep, uow: UowDep, now: NowDep, new_id: NewIdDep
+    body: PlaceOrderIn,
+    principal: PrincipalDep,
+    orders: OrdersDep,
+    catalog: CatalogDep,
+    uow: UowDep,
+    now: NowDep,
+    new_id: NewIdDep,
 ):
     return service.place_order(
         principal.id, body.to_domain(), orders=orders, catalog=catalog, uow=uow, now=now, new_id=new_id
@@ -672,7 +678,13 @@ async def place(body: PlaceOrderIn, db: Session = Depends(get_db)):
 # GOOD: router parses/delegates; rule is pure; I/O behind ports; values injected
 @router.post("", response_model=OrderOut, status_code=201)
 def place(
-    body: PlaceOrderIn, principal: PrincipalDep, orders: OrdersDep, catalog: CatalogDep, uow: UowDep, now: NowDep, new_id: NewIdDep
+    body: PlaceOrderIn,
+    principal: PrincipalDep,
+    orders: OrdersDep,
+    catalog: CatalogDep,
+    uow: UowDep,
+    now: NowDep,
+    new_id: NewIdDep,
 ):
     return service.place_order(
         principal.id, body.to_domain(), orders=orders, catalog=catalog, uow=uow, now=now, new_id=new_id
