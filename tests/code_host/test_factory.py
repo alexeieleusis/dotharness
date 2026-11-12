@@ -255,8 +255,8 @@ def test_factory_failure_is_configuration_error() -> None:
         msg = f"bad token cmd {token_cmd}"
         raise ValueError(msg)
 
-    holder = types.SimpleNamespace(REGISTRATION=HostRegistration(CODE_HOST_INTERFACE_VERSION, Opts, boom))
-    sys.modules["_boom_host"] = holder  # type: ignore[assignment]
+    holder: Any = types.SimpleNamespace(REGISTRATION=HostRegistration(CODE_HOST_INTERFACE_VERSION, Opts, boom))
+    sys.modules["_boom_host"] = holder
     try:
         exc = fail(HostSelection("s", "_boom_host:REGISTRATION", {}, CMD_SECRET))
     finally:
