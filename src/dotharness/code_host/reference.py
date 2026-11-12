@@ -66,6 +66,7 @@ _MAX_REVIEW_BODY_CHARS = 60_000  # The host limit is about 65536. Keep headroom.
 _POST_TIMEOUT_SECONDS = 60
 _TRUNCATION_NOTICE = "\n\n_...review body truncated to fit GitHub's size limit._"
 _NOT_INSTALLED = "gh CLI is not installed or not in PATH. Install it from https://cli.github.com/"
+_PR_VIEW = "pr view"
 _PR_FIELDS = "number,baseRefName,title,body,url,state,isDraft,headRefName,headRefOid,isCrossRepository,createdAt,author"
 
 
@@ -484,7 +485,7 @@ class _ChangeRequests:
         data = await self._gh.json(
             ("pr", "view", str(number), "--json", "number,state,headRefOid"), "ChangeRequests.get"
         )
-        return _summary(repo, _object(data, "pr view"))
+        return _summary(repo, _object(data, _PR_VIEW))
 
     async def state(self, repo: RepositoryRef, number: int) -> ChangeRequestState:
         """Lifecycle state only (``gh pr view N --json state``)."""
@@ -515,7 +516,7 @@ class _ChangeRequests:
             except ValueError:
                 msg = "gh pr view returned invalid JSON"
                 raise CodeHostError(msg) from None
-            return [_summary(repo, _object(data, "pr view"), head=branch)]
+            return [_summary(repo, _object(data, _PR_VIEW), head=branch)]
         rows = await self._gh.json(
             ("pr", "list", "--head", branch, "--state", state.value, "--json", "number,url"),
             "ChangeRequests.find_by_branch",
@@ -716,7 +717,7 @@ class _WorkItems:
             pr = await self._gh.json(
                 ("pr", "view", str(_int(ref, "number")), "--json", "number,state"), "WorkItems.closing_change_requests"
             )
-            found.append(_summary(repo, _object(pr, "pr view")))
+            found.append(_summary(repo, _object(pr, _PR_VIEW)))
         return found
 
     async def open_change_request_bodies(self, repo: RepositoryRef) -> Sequence[ChangeRequest]:
