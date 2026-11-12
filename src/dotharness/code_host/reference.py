@@ -67,6 +67,7 @@ _POST_TIMEOUT_SECONDS = 60
 _TRUNCATION_NOTICE = "\n\n_...review body truncated to fit GitHub's size limit._"
 _NOT_INSTALLED = "gh CLI is not installed or not in PATH. Install it from https://cli.github.com/"
 _PR_VIEW = "pr view"
+_FIND_BY_BRANCH_OP = "ChangeRequests.find_by_branch"
 _PR_FIELDS = "number,baseRefName,title,body,url,state,isDraft,headRefName,headRefOid,isCrossRepository,createdAt,author"
 
 
@@ -506,7 +507,7 @@ class _ChangeRequests:
         """
         if state is None:
             args = ("pr", "view", branch, "--json", "number,state,headRefOid")
-            outcome = await self._gh.run(args, "ChangeRequests.find_by_branch")
+            outcome = await self._gh.run(args, _FIND_BY_BRANCH_OP)
             if not outcome.success:
                 if "no pull requests found" in outcome.stderr.lower():
                     return []
@@ -519,7 +520,7 @@ class _ChangeRequests:
             return [_summary(repo, _object(data, _PR_VIEW), head=branch)]
         rows = await self._gh.json(
             ("pr", "list", "--head", branch, "--state", state.value, "--json", "number,url"),
-            "ChangeRequests.find_by_branch",
+            _FIND_BY_BRANCH_OP,
         )
         return [_summary(repo, row, state=state, head=branch) for row in rows or [] if isinstance(row, dict)]
 
@@ -771,7 +772,7 @@ DECLARATION = HostDeclaration(
             per_operation={
                 "ChangeRequests.state": 10.0,
                 "Session.available": 10,
-                "ChangeRequests.find_by_branch": 30,
+                _FIND_BY_BRANCH_OP: 30,
                 "WorkItems.remove_label": 10.0,
                 "Discussion.post_review": _POST_TIMEOUT_SECONDS,
             },
