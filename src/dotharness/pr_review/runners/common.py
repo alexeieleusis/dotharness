@@ -892,13 +892,13 @@ async def resolve_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | N
 async def post_no_linked_ticket_comment(pr_number: int, repo: str, env: dict) -> bool:
     """Posts the §7.3 "no linked ticket found" PR-level comment directly — no backend
     invocation, since there's nothing for a model to judge when resolve_linked_tickets
-    found nothing via either mechanism. This outcome is terminal (§7.3/§11.1): once
+    found nothing via native linking, the comment scan or the PR body scan. This outcome is terminal (§7.3/§11.1): once
     posted, has_traceability_review_comment treats this PR as done forever. Returns True
     if the comment was posted successfully."""
     body = (
         "# Requirement Traceability\n"
-        "No linked ticket found (no closing-keyword link and no issue reference in the "
-        "first 5 minutes of comments) — skipping scope/gap comparison.\n"
+        "No linked ticket found (no closing-keyword link, no issue reference in the PR body, "
+        "and none in the first 5 minutes of comments) — skipping scope/gap comparison.\n"
         f"{TRACEABILITY_REVIEW_MARKER}"
     )
     result = await run_cmd(

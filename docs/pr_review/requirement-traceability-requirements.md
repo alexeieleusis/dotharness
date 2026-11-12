@@ -280,11 +280,18 @@ New functions in `harness/runners/common.py`:
      issue (GitHub shares one number sequence between issues and PRs per repo), is
      dropped rather than treated as a ticket. Successfully resolved tickets are tagged
      `source: "comment"`, deduplicated by `(repo, number)`.
-  2. Requires `pr` to carry `closingIssuesReferences` (and, for §7.3's window
+  3. **PR body scan:** only attempted if native linking returned a list (not `None`)
+     and both the native and comment-scan steps found nothing. A native result of `None`
+     stays inconclusive, so the body scan does not run. Every `#N` and URL in the PR
+     body counts, using the same reference forms as the comment scan (same-repo
+     shorthand, full URL, cross-repo shorthand). Resolved tickets are tagged
+     `source: "body"`. The source tags are therefore `closing_keyword`,
+     `linear_linkback`, `comment` and `body`.
+  4. Requires `pr` to carry `closingIssuesReferences` (and, for §7.3's window
      computation, `createdAt`) — **both runners' PR-listing `--json` field lists must be
      extended** from `number,url,headRefName` to
-     `number,url,headRefName,createdAt,closingIssuesReferences`
-     (`harness/runners/review_requested.py:111`, `harness/runners/self_review.py:456`).
+     `number,url,headRefName,createdAt,closingIssuesReferences,author,body`
+     (the `body` addition belongs to a sibling work order; `harness/runners/review_requested.py:111`, `harness/runners/self_review.py:456`).
      Both fields are supported by `gh pr list --json` (verified via `gh pr list --help`),
      so this adds zero extra API calls.
 
@@ -314,10 +321,10 @@ New functions in `harness/runners/common.py`:
 
 ### 7.3 No linked ticket found
 
-If `resolve_linked_tickets` returns an empty list (both mechanisms found nothing):
+If `resolve_linked_tickets` returns an empty list (all steps — native, comment, body — found nothing):
 
 ```
-gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Requirement Traceability\nNo linked ticket found (no closing-keyword link and no issue reference in the first 5 minutes of comments) — skipping scope/gap comparison.\n<!-- dotharness-review-traceability -->'
+gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Requirement Traceability\nNo linked ticket found (no closing-keyword link, no issue reference in the PR body, and none in the first 5 minutes of comments) — skipping scope/gap comparison.\n<!-- dotharness-review-traceability -->'
 ```
 
 posted directly by the runner (no backend invocation — see §7.1). **This outcome is
@@ -491,6 +498,14 @@ decision must never silently disappear back into ambiguity.
    in `common.py`, not a `harness.toml` field in this iteration — a config surface can be
    added later without changing this design if real usage calls for tuning it — see §7.2,
    §8.
+3. **PR-body scan added after the comment scan (2026-11-12).** Tickets linked only in
+   the PR description were being missed, so `resolve_linked_tickets` now also scans the PR
+   body (source `body`) when native linking and the comment scan found nothing — see
+   §7.2, §7.3. Decision 1 (terminal) and decision 2 (300 s window, hardcoded) are
+   unchanged. PR #179 finding: the ticket's "late review drops early comments" cause did
+   not hold, because the window is anchored to `createdAt`, not "now"; its first comment
+   arrived 71 minutes after creation, outside the window by design. This is pinned by
+   `test_resolve_linked_tickets_comment_window_is_anchored_to_created_at`.
 
 ## 12. Next step
 

@@ -243,6 +243,23 @@ async def test_resolve_linked_tickets_comment_scan_excludes_comments_outside_win
     assert tickets == []
 
 
+async def test_resolve_linked_tickets_comment_window_is_anchored_to_created_at():
+    # Regression pin: the window is createdAt + 300 s (inclusive), not "now", so a late
+    # review still sees early comments and never sees later ones.
+    pr = {"number": 40, "createdAt": "2026-01-01T00:00:00Z", "closingIssuesReferences": []}
+    comments = [
+        _comment("Boundary: #3", "2026-01-01T00:05:00Z", comment_id=1),
+        _comment("Too late: #4", "2026-01-01T01:11:00Z", comment_id=2),
+    ]
+    router = _router(
+        {(f"repos/{REPO}/issues/40/comments", 1): comments},
+        {(REPO, 3): _issue(3), (REPO, 4): _issue(4)},
+    )
+    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=router):
+        tickets = await resolve_linked_tickets(pr, REPO, {})
+    assert [(t["number"], t["source"]) for t in tickets] == [(3, "comment")]
+
+
 async def test_resolve_linked_tickets_comment_scan_dedupes_repeated_references():
     pr = {"number": 39, "createdAt": "2026-01-01T00:00:00Z", "closingIssuesReferences": []}
     comments = [
