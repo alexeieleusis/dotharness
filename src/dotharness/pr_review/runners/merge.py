@@ -4,16 +4,17 @@ Public entry point (takes the shared working-directory lock itself, like the sib
 
     run(config: HarnessConfig, *, dry_run: bool = False, pr: int | None = None) -> None
 
-* ``config.merge.enabled`` false: returns immediately, no lock, no gh call.
+* ``config.merge.enabled`` false: returns immediately, no lock, no host call.
 * Otherwise processes every open PR authored by the acting user (or only ``pr``).
 * A PR is merged only when every condition holds (checked in this order, first failure wins, one
   skip reason, no merge call): author is the acting user, open/non-draft/no conflict, required
   checks pass, the gate record matches the head SHA, changed lines <= ``max_changed_lines``, and
   (``require_all_files_viewed``) every file is viewed. Viewed state is read fresh on every run.
-* The only write is ``gh pr merge N --repo R --squash --match-head-commit <sha>``. Never approves,
-  never ``--admin``/``--auto``/``--delete-branch``. ``dry_run=True`` logs "would merge" instead.
+* The only write is ``ChangeRequests.squash_merge(expected_head=<sha>)``. Never approves, never merges
+  with admin rights, auto-merge or branch deletion. ``dry_run=True`` logs "would merge" instead. A timeout of the
+  merge call may have taken effect: it is never retried and is collected as a failure.
 * A skip is logged as ``PR #N: skipped: <reason>`` and is not an error. A per-PR exception (or a
-  failed merge call) is collected and raised as :class:`MergeError` after the loop.
+  failed merge call, a ``CodeHostError`` wrapped in :class:`MergeError`) is collected and raised as :class:`MergeError` after the loop.
 
 Gate record: the evidence that ``build.commands`` passed on the head SHA is written by Package A
 (the sisyphus gate-record writer). The format is settled: a JSON file
@@ -26,24 +27,28 @@ import json
 import logging
 from pathlib import Path
 
-from dotharness.gh import build_subprocess_env
+from dotharness.code_host import (
+    ChangeRequest,
+    CodeHost,
+    CodeHostError,
+    RepositoryRef,
+    UnsupportedCapabilityError,
+)
 from dotharness.pr_review import state
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
-from dotharness.pr_review.runners.auto_approve_github import (
-    VIEWED_STATE,
-    SafetyStatus,
-    _check_ci,
-    _read_pr_state,
-    _state_skip_reason,
-    list_own_open_prs,
-    read_viewed_states,
+from dotharness.pr_review.runners.ci_checks import (
+    change_request_skip_reason,
+    ci_blocker,
+    guarded_read,
+    list_own_open_change_requests,
+    read_change_request,
 )
-from dotharness.pr_review.runners.ci_checks import gh as _gh
-from dotharness.pr_review.runners.ci_checks import text as _text
-from dotharness.pr_review.runners.common import get_current_user, get_gh_token
+from dotharness.pr_review.runners.common import call_with_policy, host_current_user, open_host
 
 logger = logging.getLogger(__name__)
+
+_SITE = "merge"
 
 SKIP_NOT_AUTHOR = "not_author"
 SKIP_STATE_READ_FAILED = "state_read_failed"
@@ -55,7 +60,7 @@ SKIP_OVER_MAX_CHANGED_LINES = "over_max_changed_lines"
 SKIP_UNVIEWED_FILES = "unviewed_files"
 SKIP_VIEWED_READ_FAILED = "viewed_read_failed"
 
-# Reasons from _state_skip_reason (auto_approve_github) and _check_ci: "not-open", "draft",
+# Reasons from ``change_request_skip_reason`` and ``ci_blocker`` (ci_checks): "not-open", "draft",
 # "conflicting", "mergeable-unknown", "auto-merge", "ci-blocked".
 MERGED = "merged"
 WOULD_MERGE = "would-merge"
@@ -74,17 +79,18 @@ async def run(config: HarnessConfig, *, dry_run: bool = False, pr: int | None = 
 
 
 async def _run_locked(config: HarnessConfig, dry_run: bool, pr: int | None) -> None:
-    gh_token = await get_gh_token(config.harness.gh_token_cmd)
-    env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
-    current_user = await get_current_user(env)
-    repo = config.repo.name
+    scaffold = await open_host(config)
+    host, repo = scaffold.host, scaffold.repo
+    current_user = await host_current_user(host)
     failures: list[str] = []
-    prs = await list_own_open_prs(repo, pr, env, failures, "number,author", _gh)
+    prs = await list_own_open_change_requests(host, repo, current_user, pr, failures, _SITE)
     summary: dict[int, str] = {}
-    for item in sorted(prs, key=lambda p: p["number"]):
-        number = item["number"]
+    for item in prs:
+        number = item.number
         try:
-            summary[number] = await _process_pr(item, config, env, current_user, dry_run)
+            summary[number] = await _process_pr(item, config, host, repo, current_user, dry_run)
+        except UnsupportedCapabilityError:
+            raise
         except Exception as e:
             logger.exception("PR #%d: error", number)
             failures.append(f"#{number}: {e}")
@@ -108,42 +114,39 @@ def read_gate_record(repo_slug: str, pr_number: int) -> str | None:
     return sha if isinstance(sha, str) and sha else None
 
 
-async def _read_changed_lines(repo: str, number: int, env: dict) -> int | None:
-    result = await _gh(["pr", "view", str(number), "--repo", repo, "--json", "additions,deletions"], env)
-    if result.returncode != 0:
+async def _read_changed_lines(host: CodeHost, repo: RepositoryRef, number: int) -> int | None:
+    change_request = await read_change_request(host, repo, number, _SITE)
+    if change_request is None or change_request.additions is None or change_request.deletions is None:
         return None
-    try:
-        data = json.loads(_text(result.stdout))
-        return int(data["additions"]) + int(data["deletions"])
-    except (ValueError, KeyError, TypeError):
-        return None
+    return change_request.additions + change_request.deletions
 
 
-async def _evaluate(pr: dict, config: HarnessConfig, env: dict, current_user: str) -> tuple[str | None, str]:
-    """Return (skip reason or None, evaluated head SHA). Stops at the first failed condition."""
-    number = pr["number"]
-    repo = config.repo.name
-    author = (pr.get("author") or {}).get("login", "")
+async def _evaluate(
+    pr: ChangeRequest, config: HarnessConfig, host: CodeHost, repo: RepositoryRef, current_user: str
+) -> tuple[str | None, str]:
+    """Return (skip reason or None, evaluated head revision). Stops at the first failed condition."""
+    number = pr.number
+    author = pr.author.login if pr.author else ""
     if not current_user or author != current_user:
         return SKIP_NOT_AUTHOR, ""
-    pr_state = await _read_pr_state(repo, number, env)
-    if pr_state is None:
+    fresh = await read_change_request(host, repo, number, _SITE)
+    if fresh is None:
         return SKIP_STATE_READ_FAILED, ""
-    head_sha = pr_state["headRefOid"]
-    reason = _state_skip_reason(pr_state)
+    head_sha = fresh.head_revision
+    reason = change_request_skip_reason(fresh)
     if reason is None:
-        reason = await _check_ci_and_record(config, number, head_sha, pr_state.get("baseRefName", ""), env)
+        reason = await _check_ci_and_record(config, host, repo, number, head_sha, fresh.base_reference)
     if reason is None:
-        reason = await _check_size_and_viewed(config, number, env)
+        reason = await _check_size_and_viewed(config, host, repo, number)
     return reason, head_sha
 
 
 async def _check_ci_and_record(
-    config: HarnessConfig, number: int, head_sha: str, base_branch: str, env: dict
+    config: HarnessConfig, host: CodeHost, repo: RepositoryRef, number: int, head_sha: str, base_branch: str
 ) -> str | None:
-    ci = await _check_ci(config.repo.name, number, base_branch, env)
+    ci = await ci_blocker(host, repo, number, base_branch)
     if ci is not None:
-        return SKIP_CHECKS_READ_FAILED if ci.status is SafetyStatus.READ_FAILED else ci.reason
+        return SKIP_CHECKS_READ_FAILED if ci.read_failed else ci.reason
     recorded = read_gate_record(config.repo_slug, number)
     if recorded is None:
         return SKIP_GATE_RECORD_MISSING
@@ -152,38 +155,49 @@ async def _check_ci_and_record(
     return None
 
 
-async def _check_size_and_viewed(config: HarnessConfig, number: int, env: dict) -> str | None:
-    repo = config.repo.name
-    lines = await _read_changed_lines(repo, number, env)
+async def _check_size_and_viewed(config: HarnessConfig, host: CodeHost, repo: RepositoryRef, number: int) -> str | None:
+    lines = await _read_changed_lines(host, repo, number)
     if lines is None:
         return SKIP_SIZE_READ_FAILED
     if lines > config.merge.max_changed_lines:
         return SKIP_OVER_MAX_CHANGED_LINES
     if config.merge.require_all_files_viewed:
-        viewed = await read_viewed_states(repo, number, env)  # always fresh, never cached
+        viewed = await guarded_read(  # always fresh, never cached
+            _SITE,
+            "ChangeRequests.viewed_files",
+            lambda: host.change_requests.viewed_files(repo, number),
+            f"PR #{number}: reading viewed files",
+        )
         if viewed is None:
             return SKIP_VIEWED_READ_FAILED
-        states = viewed[1]
-        if not states or any(s != VIEWED_STATE for s in states.values()):
+        if not viewed or not all(viewed.values()):
             return SKIP_UNVIEWED_FILES
     return None
 
 
-async def _process_pr(pr: dict, config: HarnessConfig, env: dict, current_user: str, dry_run: bool) -> str:
+async def _process_pr(
+    pr: ChangeRequest, config: HarnessConfig, host: CodeHost, repo: RepositoryRef, current_user: str, dry_run: bool
+) -> str:
     """Process one PR; return its outcome (a skip reason, MERGED or WOULD_MERGE)."""
-    number = pr["number"]
-    reason, head_sha = await _evaluate(pr, config, env, current_user)
+    number = pr.number
+    reason, head_sha = await _evaluate(pr, config, host, repo, current_user)
     if reason:
         logger.info("PR #%d: skipped: %s", number, reason)
         return reason
     if dry_run:
         logger.info("PR #%d: would merge (dry-run) at %s", number, head_sha)
         return WOULD_MERGE
-    result = await _gh(
-        ["pr", "merge", str(number), "--repo", config.repo.name, "--squash", "--match-head-commit", head_sha],
-        env,
-    )
-    if result.returncode != 0:
-        raise MergeError(f"gh pr merge failed (exit {result.returncode}): {_text(result.stderr).strip()}")  # noqa: TRY003
+    try:
+        await call_with_policy(
+            _SITE,
+            "ChangeRequests.squash_merge",
+            lambda: host.change_requests.squash_merge(repo, number, expected_head=head_sha),
+            None,
+        )
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as e:
+        # A timeout may have taken effect: the error carries that text; the merge is never retried here.
+        raise MergeError(f"merge of #{number} failed: {e}") from e  # noqa: TRY003
     logger.info("PR #%d: merged at %s", number, head_sha)
     return MERGED
