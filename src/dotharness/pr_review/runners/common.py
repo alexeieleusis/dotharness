@@ -331,7 +331,7 @@ async def open_host(config: HarnessConfig) -> HostScaffold:
 async def host_token(host: CodeHost) -> str:
     """The host credential's token. Raises ``TokenCommandError``, ``AuthenticationError``, ``CodeHostTimeoutError``.
 
-    Replaces ``get_gh_token``. The 30 s limit lives in the host's declaration. Callers must not log the result.
+    The 30 s limit lives in the host's declaration. Callers must not log the result.
     """
     return (await host.session.credential()).token
 

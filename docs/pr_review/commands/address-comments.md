@@ -17,14 +17,14 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
 ## What it does
 
 1. Acquires an exclusive file lock keyed on the resolved `repo.working_dir` path (not `repo.name`/`repo_slug` — see [Shared behavior](index.md#shared-behavior)). The lock is shared with the other four commands. A second concurrent invocation against the same working directory — running this or any other command — exits immediately with an error instead of waiting.
-2. Resolves a GitHub token via `harness.gh_token_cmd`. It builds the subprocess environment from `harness.path_prepend` / `harness.env` plus `GITHUB_TOKEN`.
-3. Lists the open PRs to check: `gh pr list --repo <repo.name> --author @me ...` and `gh pr list --repo <repo.name> --assignee @me ...`. Both use the same `--state open --json number,headRefName,isDraft --limit 500` flags. The results are merged and deduplicated by PR number, then sorted ascending.
+2. Resolves the host token via `harness.host_token_cmd` (else `harness.gh_token_cmd`). It builds the subprocess environment from `harness.path_prepend` / `harness.env` plus `GITHUB_TOKEN`.
+3. Lists the open PRs to check: two code-host listings of open PRs, one with the current user's login as author and one as assignee (the login replaces `@me`; each is limited to 1000). An empty login lists nothing. The results are merged and deduplicated by PR number, then sorted ascending.
 4. Loads the single prompt template `pr-review/address-comment.md` from `harness.knowledge_dir`. It constructs a `Backend` for `harness.backend` (`opencode` or `claude`), with `GITHUB_TOKEN` merged into its environment.
 5. If `repo.opencode_dir` is set, it computes that path relative to `repo.working_dir` (`plugin_prefix`). That path is used later to restrict which inline comments are considered.
 6. Detaches HEAD and records the current commit so it can restore the working tree after each PR.
 7. For each PR, in ascending order:
    - Calls a GraphQL query for unresolved review threads. If any thread is unresolved, the PR has "pending feedback." Otherwise, it falls back to checking for any issue/timeline comment not authored by `github-actions[bot]` or `dependabot[bot]`. If neither check finds anything, the PR is skipped entirely — no checkout, no backend calls.
-   - Resolves the current `gh` user's login the first time it's needed (`gh api user --jq .login`), then reuses it for the rest of the run.
+   - Resolves the current host user's login once, before listing PRs, and reuses it for the rest of the run.
    - Checks whether the current user is currently a requested reviewer on this PR, before doing anything else with it.
    - Fetches and checks out the PR's head branch (using `git checkout -B` to `origin/<branch>` — see [Shared behavior](index.md#shared-behavior)).
    - Fetches all comments via `scripts/pr-comments.py fetch --pr <N>` and reads the JSON it caches at `~/.harness/cache/pr-<N>-comments.json`. The actionable set is:
@@ -58,10 +58,10 @@ Only these `.harness.toml` fields affect `address-comments`. See [`../configurat
 |---|---|
 | `harness.backend` | Which AI backend (`opencode`/`claude`) evaluates and addresses each comment |
 | `harness.backend_timeout_seconds` | Timeout for each backend invocation (one per actionable comment) |
-| `harness.gh_token_cmd` | Command used to fetch the GitHub token exported as `GITHUB_TOKEN` |
+| `harness.host_token_cmd` / `harness.gh_token_cmd` | Command used to fetch the host token exported as `GITHUB_TOKEN`. `host_token_cmd` wins when both are set |
 | `harness.knowledge_dir` | Must contain `pr-review/address-comment.md`, the prompt template for this runner |
 | `harness.path_prepend` / `harness.env` | Extra `PATH` entries / env vars for git, `gh`, and the backend subprocess |
-| `repo.name` | GitHub repo (`org/repo`) queried via `gh` |
+| `repo.name` | GitHub repo (`org/repo`) queried through the code host |
 | `repo.working_dir` | Local git checkout that gets detached, fetched, and checked out branch-by-branch. Its resolved path is also the basis of the lock key (see [Shared behavior](index.md#shared-behavior)) |
 | `repo.opencode_dir` | If set: passed to the backend as its `--dir`, and used to restrict inline comments to that subdirectory |
 | `address_comments.enabled` | Turns the command on. `false` skips the run entirely (default `true`) |
@@ -91,7 +91,7 @@ Because none of this is state-file-based, resolving a thread on GitHub (or havin
   - The pending-feedback check's own issue-comment check separately hardcodes excluding `github-actions[bot]` and `dependabot[bot]`.
 
   Inline and review-level comments are never bot-filtered by the runner itself. That judgment is left entirely to the backend via the template's Step 0.
-- PRs you authored (`gh pr list --author @me`) and PRs assigned to you (`gh pr list --assignee @me`) are both considered — the two lists are merged and deduplicated by PR number. A PR you're merely a *requested reviewer* on (not assigned) is still never touched by this command. That's `review-requested`'s job.
+- PRs you authored (listed by author) and PRs assigned to you (listed by assignee) are both considered — the two lists are merged and deduplicated by PR number. A PR you're merely a *requested reviewer* on (not assigned) is still never touched by this command. That's `review-requested`'s job.
 - Draft PRs are processed exactly like non-draft PRs. There's no draft-specific behavior and no config flag.
 - A backend exception for one comment (e.g. a timeout) is logged and only skips that comment. It doesn't stop the rest of the PR's comment list or the rest of the batch.
 - Subject to the shared locking, `gh` account, and working-directory-mutation caveats in [Shared behavior](index.md#shared-behavior).

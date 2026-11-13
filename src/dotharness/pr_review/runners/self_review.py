@@ -419,7 +419,7 @@ async def _run_regret_review(
     (regret-review-requirements.md §7.3): this pass's own retry never forces, or is
     forced by, any other pass's retry. The upfront comment check is an optimization to
     skip a redundant run; on a rerun, a PR that already carries a regret comment makes
-    zero git or gh calls for this pass beyond that check itself.
+    zero git or host calls for this pass beyond that check itself.
 
     Unlike the other passes, the backend posts nothing here (review-regret.md): it
     replies with one verdict line per candidate, and this wrapper parses those lines

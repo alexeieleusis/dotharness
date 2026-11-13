@@ -182,7 +182,7 @@ async def _process_pr(
 async def _checkout_pr_head(pr_number: int, wdir: str, env: dict) -> str:
     """Detach at the PR's real head (``refs/pull/<n>/head``) and return its SHA.
 
-    Unlike ``origin/<headRefName>``, this is the commit GitHub reviews, also for fork PRs, so the
+    Unlike the remote head branch, this is the commit GitHub reviews, also for fork PRs, so the
     size measured here is the size of the commit that gets approved.
     """
     try:

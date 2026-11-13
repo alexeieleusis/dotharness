@@ -16,8 +16,8 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
 ## What it does
 
 1. Acquires an exclusive file lock keyed on the resolved `repo.working_dir` path (not `repo.name`/`repo_slug` — see [Shared behavior](index.md#shared-behavior)). The lock is shared with the other four commands. Two invocations against the same working directory, whether `self-review` or any of the other four, can't run concurrently. A second run exits immediately with an error instead of racing the first.
-2. Resolves a GitHub token by running `harness.gh_token_cmd` (default `gh auth token`). It builds the subprocess environment from `harness.path_prepend` / `harness.env` plus `GITHUB_TOKEN`.
-3. Loads the set of PR numbers already recorded as reviewed from state. It then lists the caller's own open PRs via `gh pr list --repo <repo> --author @me --state open --json number,url,headRefName,createdAt,closingIssuesReferences`, sorted by PR number. The last two fields — GitHub's own closing-keyword-derived issue links and the PR's creation time — are returned by the same call at no extra `gh` cost. They feed the traceability pass's ticket resolution below.
+2. Resolves the host token by running `harness.host_token_cmd`, else `harness.gh_token_cmd` (default `gh auth token`), through the code host's session. It builds the subprocess environment from `harness.path_prepend` / `harness.env` plus `GITHUB_TOKEN`.
+3. Loads the set of PR numbers already recorded as reviewed from state. It then lists the caller's own open PRs through the code host (author is the current user's login, not `@me`; up to 1000 PRs), sorted by PR number. A failed read or an empty login yields no list and no host call for it. The PR's linked work items (GitHub's own closing-keyword-derived issue links) and creation time come from the same read at no extra cost. They feed the traceability pass's ticket resolution below.
 4. Loads the shared prompt templates `review-file.md`, `review-summary.md`, `review-design.md`, and `review-traceability.md` from `harness.knowledge_dir/pr-review/`. It also loads the optional `harness.review_knowledge_file`, appended to every prompt as an "Additional Review Guide" section.
 5. Constructs the `Backend` (opencode or claude, per `harness.backend`). It records the repo's current `HEAD` as a detached commit, so the working tree can always be restored.
 6. For each PR, it decides independently whether the file+summary pipeline, the design-review pass, the traceability-review pass, and (when enabled) the regret-review pass each still need to run (see [State and idempotency](#state-and-idempotency)). A PR already fully reviewed for files/summary can still get a design or traceability pass, and vice versa, in any combination. If none of the four is outstanding, the PR is skipped entirely with no checkout. Otherwise:
@@ -40,11 +40,11 @@ Only these `.harness.toml` fields affect `self-review`. See [`../configuration.m
 |---|---|
 | `harness.backend` | Which AI backend (`opencode` or `claude`) runs the review, summary, design, and traceability prompts, and — only when `[regret_review].enabled` is `true` — the regret-judgment prompt |
 | `harness.backend_timeout_seconds` | Timeout for each backend invocation (one per changed file, one for the summary, one for the design pass when it hasn't already succeeded, one for the traceability pass when it hasn't already succeeded, and — only when `[regret_review].enabled` is `true` — one for the regret pass when it hasn't already succeeded) |
-| `harness.gh_token_cmd` | Command used to fetch the GitHub token exported as `GITHUB_TOKEN` |
+| `harness.host_token_cmd` / `harness.gh_token_cmd` | Command used to fetch the host token exported as `GITHUB_TOKEN`. `host_token_cmd` wins when both are set |
 | `harness.knowledge_dir` | Must contain `pr-review/review-file.md`, `pr-review/review-summary.md`, `pr-review/review-design.md`, `pr-review/review-traceability.md`, and — only when `[regret_review].enabled` is `true` — `pr-review/review-regret.md` prompt templates |
 | `harness.review_knowledge_file` | Optional extra guidance appended to every prompt, if the path exists |
 | `harness.path_prepend` / `harness.env` | Extra `PATH` entries / env vars for both git subprocesses and the backend |
-| `repo.name` | The GitHub repo (`owner/name`) queried via `gh` |
+| `repo.name` | The GitHub repo (`owner/name`) queried through the code host |
 | `repo.working_dir` | Local git checkout used to fetch/checkout PR branches and diff files. Its resolved path is also the basis of the lock key (see [Shared behavior](index.md#shared-behavior)) |
 | `repo.subdir[].path` | Only used to locate each subdir's `sonar-project.properties`, so a matching vibe-heal `review.md` (if one exists on disk) can be included as static-analysis context |
 

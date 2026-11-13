@@ -164,7 +164,7 @@ def _budget_clock(budget_start: float | None) -> float:
 def _remaining_budget(budget_start: float, budget_seconds: int) -> int | None:
     """Whole seconds left in the pass's shared wall-clock budget, or None once it is
     exhausted. The budget is config.regret_review.regret_review_timeout: one overall cap
-    on this pass's per-PR git/gh calls (regret-review-requirements.md §7.5/§8), checked
+    on this pass's per-PR git/host calls (regret-review-requirements.md §7.5/§8), checked
     and decremented before every call rather than spent as fresh per-call constants —
     the remaining seconds are what the next call's run_cmd timeout gets, so every call
     in the sequence shares one budget instead of each getting a full one."""
@@ -283,7 +283,7 @@ async def _pr_gate_setup(
     config.regret_review.authors (an empty login never matches: author_matches does a
     substring check against string-form allowlists, where the empty string would
     vacuously match, so an authorless PR is treated as non-matching, fail-closed), or an
-    undeterminable base branch. Checked before any git/gh work, so a non-matching PR
+    undeterminable base branch. Checked before any git/host work, so a non-matching PR
     does zero subprocess calls."""
     number = pr.number
     login = pr.author.login if pr.author else ""
@@ -484,7 +484,7 @@ async def find_introducing_prs(
     resolved to its PR(s) via ``ChangeRequests.find_by_commit`` (G5); multiple PR results are
     all kept.
 
-    The whole per-PR sequence of git/gh calls (diffs, merge-base, blames, commit→PR
+    The whole per-PR sequence of git/host calls (diffs, merge-base, blames, commit→PR
     lookups) shares one wall-clock budget — config.regret_review.regret_review_timeout,
     checked and decremented via _run_within_budget before every call, each call's
     timeout being the remaining seconds. An exhausted budget stops the sequence and
@@ -615,7 +615,7 @@ async def find_regret_candidates(
     distinct blamed ranges yields one candidate per range, the full pair set the
     next leaf batches into one prompt.
 
-    The whole per-PR sequence of git/gh calls (the comment fetches and the hunk-diff
+    The whole per-PR sequence of git/host calls (the comment fetches and the hunk-diff
     calls) shares one wall-clock budget — config.regret_review.regret_review_timeout,
     checked and decremented via _run_within_budget / _remaining_budget the same way
     find_introducing_prs does; an exhausted budget stops the sequence and fails open
