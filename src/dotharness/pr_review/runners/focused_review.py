@@ -3,6 +3,14 @@ import logging
 import re
 from pathlib import Path
 
+from dotharness.code_host import (
+    ChangeRequest,
+    ChangeRequestState,
+    CodeHost,
+    CodeHostError,
+    RepositoryRef,
+    UnsupportedCapabilityError,
+)
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock, working_dir_lock_key
@@ -19,7 +27,6 @@ from dotharness.pr_review.runners.common import (
     git_fetch_and_checkout,
     git_restore,
     host_current_user,
-    list_open_prs_for_current_user,
     merge_thread_state,
     open_host,
     preserve_reviewer_request,
@@ -62,15 +69,15 @@ async def _run_locked(config: HarnessConfig) -> None:
     )
 
     wdir = str(config.repo.working_dir)
-    prs = await list_open_prs_for_current_user(config.repo.name, wdir, env)
+    prs = await _list_prs_for_user(host, repo, current_user)
     if not prs:
         return
 
     original_sha = await git_detach_and_record(wdir, env)
 
     for pr in prs:
-        number = pr["number"]
-        branch = pr["headRefName"]
+        number = pr.number
+        branch = pr.head_reference
         checkout_attempted = False
         try:
             comments = await fetch_pr_comments(number, script_path, wdir, env)
@@ -103,6 +110,30 @@ async def _run_locked(config: HarnessConfig) -> None:
         finally:
             if checkout_attempted:
                 await git_restore(original_sha, branch, wdir, env)
+
+
+async def _list_prs_for_user(host: CodeHost, repo: RepositoryRef, login: str) -> list[ChangeRequest]:
+    """Open PRs (drafts included) where the running user is the author, is assigned, or has a review
+    requested from them (union of the three), deduplicated by PR number, sorted ascending.
+
+    A failed read is logged and contributes nothing; an unsupported capability follows the policy of
+    ``(focused_review, ChangeRequests.list)`` (unlisted: stop).
+    """
+    if not login:
+        logger.warning("No login for the acting user; no PRs to check")
+        return []
+    by_number: dict[int, ChangeRequest] = {}
+    for filter_name in ("author", "assignee", "requested_reviewer"):
+        try:
+            found = await host.change_requests.list(repo, state=ChangeRequestState.OPEN, **{filter_name: login})
+        except UnsupportedCapabilityError:
+            raise
+        except CodeHostError as e:
+            logger.warning("Could not list PRs by %s: %s", filter_name, e)
+            continue
+        for pr in found:
+            by_number.setdefault(pr.number, pr)
+    return sorted(by_number.values(), key=lambda p: p.number)
 
 
 async def _process_matches(

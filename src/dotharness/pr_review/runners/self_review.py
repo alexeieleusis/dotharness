@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import subprocess
@@ -7,14 +6,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from dotharness.code_host import ChangeRequest, CodeHost, RepositoryRef
-from dotharness.gh import gh_argv
+from dotharness.code_host import (
+    ChangeRequest,
+    ChangeRequestState,
+    CodeHost,
+    CodeHostError,
+    RepositoryRef,
+    UnsupportedCapabilityError,
+)
 from dotharness.pr_review import state
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
-    TIMEOUT_GH,
     LinkedTicket,
     build_design_review_prompt,
     build_early_comment_context,
@@ -44,7 +48,6 @@ from dotharness.pr_review.runners.common import (
     post_no_linked_ticket_comment,
     preserve_reviewer_request,
     resolve_linked_tickets,
-    run_cmd,
     run_pr_level_pass,
 )
 from dotharness.pr_review.runners.regret_review import (
@@ -97,10 +100,10 @@ async def _should_skip_pr(
 
 
 async def _gather_pr_context(
-    pr: dict, number: int, config, host: CodeHost, repo: RepositoryRef, wdir: str, env: dict
+    pr: ChangeRequest, number: int, config, host: CodeHost, repo: RepositoryRef, wdir: str, env: dict
 ) -> dict:
-    await git_fetch_and_checkout(pr["headRefName"], wdir, env)
-    vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr["headRefName"])
+    await git_fetch_and_checkout(pr.head_reference, wdir, env)
+    vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr.head_reference)
     pr_description = await get_pr_description(host, repo, number)
     base_branch = await get_pr_base_branch(host, repo, number)
     commit_sha = await get_pr_head_sha(host, repo, number)
@@ -141,7 +144,7 @@ def _build_file_review_prompt(
     abs_path: str,
     file_instructions: str,
     extra_knowledge: str | None,
-    pr: dict,
+    pr: ChangeRequest,
     number: int,
     config,
     commit_sha: str,
@@ -153,7 +156,7 @@ def _build_file_review_prompt(
         file_instructions
         + (f"\n\n## Additional Review Guide\n{extra_knowledge}" if extra_knowledge else "")
         + file_section
-        + f"\n\nPR URL: {pr.get('url', '')}\nPR number: {number}\n"
+        + f"\n\nPR URL: {pr.url}\nPR number: {number}\n"
         + f"Repo: {config.repo.name}\nCommit: {commit_sha}"
         + (f"\n\n{pr_description}" if pr_description else "")
         + (f"\n\n## Static Analysis\n{vibe_heal_context}" if vibe_heal_context else "")
@@ -185,7 +188,7 @@ async def _review_files(
     backend: Backend,
     file_instructions: str,
     extra_knowledge: str | None,
-    pr: dict,
+    pr: ChangeRequest,
     number: int,
     config,
     partial_files: set[str],
@@ -226,7 +229,7 @@ async def _review_files(
 async def _build_design_prompt(
     design_instructions: str,
     extra_knowledge: str | None,
-    pr: dict,
+    pr: ChangeRequest,
     number: int,
     config,
     ctx: dict,
@@ -256,7 +259,7 @@ async def _build_design_prompt(
 async def _run_design_review(
     design_instructions: str,
     extra_knowledge: str | None,
-    pr: dict,
+    pr: ChangeRequest,
     number: int,
     config,
     ctx: dict,
@@ -296,7 +299,7 @@ async def _run_design_review(
 async def _build_traceability_prompt(
     traceability_instructions: str,
     extra_knowledge: str | None,
-    pr: dict,
+    pr: ChangeRequest,
     number: int,
     config,
     ctx: dict,
@@ -336,7 +339,7 @@ async def _build_traceability_prompt(
 async def _run_traceability_review(
     traceability_instructions: str,
     extra_knowledge: str | None,
-    pr: dict,
+    pr: ChangeRequest,
     number: int,
     config,
     ctx: dict,
@@ -402,7 +405,7 @@ async def _run_traceability_review(
 async def _run_regret_review(
     regret_instructions: str,
     extra_knowledge: str | None,
-    pr: dict,
+    pr: ChangeRequest,
     number: int,
     config,
     ctx: dict,
@@ -507,7 +510,7 @@ async def _run_regret_review(
 async def _run_summary(
     summary_instructions: str,
     extra_knowledge: str | None,
-    pr: dict,
+    pr: ChangeRequest,
     number: int,
     config,
     host: CodeHost,
@@ -523,7 +526,7 @@ async def _run_summary(
     summary_prompt = (
         summary_instructions
         + (f"\n\n## Additional Review Guide\n{extra_knowledge}" if extra_knowledge else "")
-        + f"\n\nPR URL: {pr.get('url', '')}\nPR number: {number}\n"
+        + f"\n\nPR URL: {pr.url}\nPR number: {number}\n"
         + f"Repo: {config.repo.name}\nFiles reviewed:\n"
         + "\n".join(files)
         + (f"\n\n{pr_description}" if pr_description else "")
@@ -587,7 +590,7 @@ class _PassFlags:
 
 
 async def _process_single_pr(
-    pr: dict,
+    pr: ChangeRequest,
     number: int,
     cycle: _CycleContext,
     partial_files: set[str],
@@ -689,7 +692,7 @@ async def _process_single_pr(
     except Exception:
         logger.exception("PR #%d: error", number)
     finally:
-        await git_restore(cycle.original_sha, pr["headRefName"], wdir, env)
+        await git_restore(cycle.original_sha, pr.head_reference, wdir, env)
 
 
 async def _run_locked(config: HarnessConfig) -> None:
@@ -697,11 +700,11 @@ async def _run_locked(config: HarnessConfig) -> None:
     host, repo, env = scaffold.host, scaffold.repo, scaffold.env
     current_user = await host_current_user(host)
 
-    prs = await _list_my_prs(config.repo.name, env)
+    prs = await _list_my_prs(host, repo, current_user)
     if prs is None:
         logger.warning("Failed to fetch open PRs; skipping this cycle without touching self_review state")
         return
-    pruned_state = state.prune_self_review_state(config.repo_slug, {p["number"] for p in prs})
+    pruned_state = state.prune_self_review_state(config.repo_slug, {p.number for p in prs})
     reviewed = set(pruned_state["reviewed_prs"])
     design_reviewed = set(pruned_state["design_reviewed_prs"])
     traceability_reviewed = set(pruned_state["traceability_reviewed_prs"])
@@ -738,7 +741,7 @@ async def _run_locked(config: HarnessConfig) -> None:
     )
 
     for pr in prs:
-        number = pr["number"]
+        number = pr.number
         run_design = number not in design_reviewed
         run_traceability = number not in traceability_reviewed
         run_regret = config.regret_review.enabled and number not in regret_reviewed
@@ -770,49 +773,39 @@ async def _run_locked(config: HarnessConfig) -> None:
         )
 
 
-async def _list_prs_by_flag(repo: str, env: dict, filter_flag: str) -> list[dict] | None:
-    """Returns None (rather than []) on fetch failure, so callers can distinguish "gh pr list
-    failed" from "confirmed zero open PRs" instead of treating a transient API hiccup as an
-    authoritative empty set."""
-    result = await run_cmd(
-        gh_argv(
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            filter_flag,
-            "@me",
-            "--state",
-            "open",
-            "--json",
-            "number,url,headRefName,createdAt,closingIssuesReferences,author",
-            "--limit",
-            "500",
-        ),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return None
+async def _list_prs_by_flag(
+    host: CodeHost, repo: RepositoryRef, login: str, filter_name: str
+) -> list[ChangeRequest] | None:
+    """Open PRs filtered by ``filter_name`` ("author" or "assignee") = ``login``.
+
+    Returns None (rather than []) on fetch failure, so callers can distinguish "the list
+    request failed" from "confirmed zero open PRs" instead of treating a transient API
+    hiccup as an authoritative empty set. An unsupported capability follows the policy of
+    ``(self_review, ChangeRequests.list)`` (unlisted: stop).
+    """
     try:
-        return json.loads(result.stdout)
-    except ValueError:
-        logger.exception("_list_my_prs: malformed JSON from gh CLI")
+        return list(await host.change_requests.list(repo, state=ChangeRequestState.OPEN, **{filter_name: login}))
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as e:
+        logger.warning("_list_my_prs: could not list PRs by %s: %s", filter_name, e)
         return None
 
 
-async def _list_my_prs(repo: str, env: dict) -> list[dict] | None:
+async def _list_my_prs(host: CodeHost, repo: RepositoryRef, login: str) -> list[ChangeRequest] | None:
     """PRs the user is responsible for self-reviewing: authored by them, or assigned to
     them (e.g. a bot-authored PR opened on their behalf), deduplicated by number. Returns
-    None if either underlying query fails (see _list_prs_by_flag), rather than treating a
+    None if either underlying query fails (see _list_prs_by_flag), or if the acting user's
+    login is unknown (an empty filter would list every PR), rather than treating a
     partial result from only one of the two as the authoritative set."""
-    by_number: dict[int, dict] = {}
-    for flag in ("--author", "--assignee"):
-        prs = await _list_prs_by_flag(repo, env, flag)
+    if not login:
+        logger.warning("_list_my_prs: no login for the acting user")
+        return None
+    by_number: dict[int, ChangeRequest] = {}
+    for filter_name in ("author", "assignee"):
+        prs = await _list_prs_by_flag(host, repo, login, filter_name)
         if prs is None:
             return None
         for pr in prs:
-            by_number.setdefault(pr["number"], pr)
-    return sorted(by_number.values(), key=lambda p: p["number"])
+            by_number.setdefault(pr.number, pr)
+    return sorted(by_number.values(), key=lambda p: p.number)

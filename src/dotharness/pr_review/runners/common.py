@@ -28,14 +28,12 @@ from dotharness.code_host import (
     WorkItem,
     create_code_host,
 )
-from dotharness.gh import gh_argv
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig, RepoConfig, SubDir
 from dotharness.subprocess_runner import run
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT_GH = 30
 TIMEOUT_GIT = 60
 TIMEOUT_FETCH_COMMENTS = 120
 
@@ -1125,84 +1123,6 @@ async def list_open_change_requests_matching_authors(
         c for c in found if not c.is_draft and author_matches(c.author.login if c.author else "", authors_config)
     ]
     return sorted(eligible, key=lambda c: c.number)
-
-
-async def _list_prs_by_flag(repo: str, cwd: str, env: dict, filter_flag: str) -> list[dict]:
-    result = await run_cmd(
-        gh_argv(
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            filter_flag,
-            "@me",
-            "--state",
-            "open",
-            "--json",
-            "number,headRefName,isDraft",
-            "--limit",
-            "500",
-        ),
-        cwd=cwd,
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return []
-    return json.loads(result.stdout)
-
-
-async def _list_review_requested_prs(repo: str, cwd: str, env: dict) -> list[dict]:
-    # gh search prs does not support headRefName/isDraft in --json; fetch numbers first,
-    # then hydrate each with the fields we need via gh pr view.
-    result = await run_cmd(
-        gh_argv(
-            "search",
-            "prs",
-            "user-review-requested:@me",
-            "--repo",
-            repo,
-            "--state",
-            "open",
-            "--json",
-            "number",
-            "--limit",
-            "500",
-        ),
-        cwd=cwd,
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return []
-    stubs = json.loads(result.stdout)
-    prs = []
-    for stub in stubs:
-        detail = await run_cmd(
-            gh_argv("pr", "view", str(stub["number"]), "--repo", repo, "--json", "number,headRefName,isDraft"),
-            cwd=cwd,
-            env=env,
-            timeout=TIMEOUT_GH,
-            check=False,
-        )
-        if detail.returncode == 0:
-            prs.append(json.loads(detail.stdout))
-    return prs
-
-
-async def list_open_prs_for_current_user(repo: str, cwd: str, env: dict) -> list[dict]:
-    """List open PRs (drafts included) where the running user is the author, is assigned, or has a review
-    requested from them (union of the three), deduplicated by PR number, sorted ascending."""
-    by_number: dict[int, dict] = {}
-    for pr in (
-        (await _list_prs_by_flag(repo, cwd, env, "--author"))
-        + (await _list_prs_by_flag(repo, cwd, env, "--assignee"))
-        + (await _list_review_requested_prs(repo, cwd, env))
-    ):
-        by_number.setdefault(pr["number"], pr)
-    return sorted(by_number.values(), key=lambda p: p["number"])
 
 
 async def get_pr_base_branch(host: CodeHost, repo: RepositoryRef, pr_number: int) -> str:

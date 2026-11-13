@@ -1,6 +1,3 @@
-import json
-from unittest.mock import MagicMock, patch
-
 import pytest
 
 from dotharness.code_host import (
@@ -23,7 +20,6 @@ from dotharness.pr_review.runners.common import (
     is_inline_review_comment,
     is_review_summary_comment,
     is_traceability_review_comment,
-    list_open_prs_for_current_user,
     pr_from_url,
     preserve_reviewer_request,
     was_review_requested,
@@ -41,84 +37,6 @@ def test_author_matches_list_rejects_unknown():
 
 def test_author_matches_list_allows_known():
     assert author_matches("alice", ["alice", "bob"]) is True
-
-
-def _run_cmd_router(responses):
-    """Build a run_cmd side_effect that dispatches on argv shape, for tests exercising
-    list_open_prs_for_current_user (which issues several distinct gh invocations)."""
-
-    def _router(cmd, **_kwargs):
-        if "--author" in cmd:
-            return responses["author"]
-        if "--assignee" in cmd:
-            return responses["assignee"]
-        if "search" in cmd:
-            return responses["search"]
-        if "view" in cmd:
-            number = int(cmd[cmd.index("view") + 1])
-            return responses["view"][number]
-        msg = f"unexpected cmd: {cmd}"
-        raise AssertionError(msg)
-
-    return _router
-
-
-async def test_list_open_prs_for_current_user_unions_author_assignee_review_requested():
-    author_payload = [{"number": 1, "headRefName": "a", "isDraft": False}]
-    assignee_payload = [{"number": 2, "headRefName": "b", "isDraft": False}]
-    search_payload = [{"number": 3}]
-    view_payload = {3: {"number": 3, "headRefName": "c", "isDraft": False}}
-    responses = {
-        "author": MagicMock(returncode=0, stdout=json.dumps(author_payload).encode()),
-        "assignee": MagicMock(returncode=0, stdout=json.dumps(assignee_payload).encode()),
-        "search": MagicMock(returncode=0, stdout=json.dumps(search_payload).encode()),
-        "view": {3: MagicMock(returncode=0, stdout=json.dumps(view_payload[3]).encode())},
-    }
-    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=_run_cmd_router(responses)):
-        result = await list_open_prs_for_current_user("acme/repo", "/", {})
-    assert [p["number"] for p in result] == [1, 2, 3]
-
-
-async def test_list_open_prs_for_current_user_dedupes_overlapping_sources():
-    shared = {"number": 1, "headRefName": "a", "isDraft": False}
-    search_payload = [{"number": 1}]
-    responses = {
-        "author": MagicMock(returncode=0, stdout=json.dumps([shared]).encode()),
-        "assignee": MagicMock(returncode=0, stdout=json.dumps([shared]).encode()),
-        "search": MagicMock(returncode=0, stdout=json.dumps(search_payload).encode()),
-        "view": {1: MagicMock(returncode=0, stdout=json.dumps(shared).encode())},
-    }
-    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=_run_cmd_router(responses)):
-        result = await list_open_prs_for_current_user("acme/repo", "/", {})
-    assert [p["number"] for p in result] == [1]
-
-
-async def test_list_open_prs_for_current_user_includes_drafts():
-    author_payload = [
-        {"number": 1, "headRefName": "a", "isDraft": True},
-        {"number": 2, "headRefName": "b", "isDraft": False},
-    ]
-    responses = {
-        "author": MagicMock(returncode=0, stdout=json.dumps(author_payload).encode()),
-        "assignee": MagicMock(returncode=0, stdout=json.dumps([]).encode()),
-        "search": MagicMock(returncode=0, stdout=json.dumps([]).encode()),
-        "view": {},
-    }
-    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=_run_cmd_router(responses)):
-        result = await list_open_prs_for_current_user("acme/repo", "/", {})
-    assert [p["number"] for p in result] == [1, 2]
-
-
-async def test_list_open_prs_for_current_user_handles_gh_failures():
-    responses = {
-        "author": MagicMock(returncode=1, stdout=b"", stderr=b"boom"),
-        "assignee": MagicMock(returncode=1, stdout=b"", stderr=b"boom"),
-        "search": MagicMock(returncode=1, stdout=b"", stderr=b"boom"),
-        "view": {},
-    }
-    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=_run_cmd_router(responses)):
-        result = await list_open_prs_for_current_user("acme/repo", "/", {})
-    assert result == []
 
 
 @pytest.mark.parametrize(
