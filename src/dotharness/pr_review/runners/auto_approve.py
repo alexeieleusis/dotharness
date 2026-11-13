@@ -4,15 +4,15 @@ Public entry point (takes the shared working-directory lock itself, like the sib
 
     run(config: HarnessConfig, *, dry_run: bool = False) -> None
 
-* ``config.auto_approve.enabled`` false: returns immediately, no gh/git call at all.
-* Otherwise processes every open, non-draft PR in ``user-review-requested:@me``; each PR is
+* ``config.auto_approve.enabled`` false: returns immediately, no host/git call at all.
+* Otherwise processes every open, non-draft PR with a pending review request for the acting user; each PR is
   isolated (a failure is logged and the loop continues).
 * ``dry_run=True`` performs every read and check but no write: the sibling write functions
   in ``auto_approve_github`` (the only write points: ``markFileAsViewed`` and the review POST)
   receive ``dry_run`` and log what they would do.
 * Raises :class:`AutoApproveError` if the PR list itself cannot be read (e.g. bad token), or after
   the loop if any PR hit a git error or an unexpected exception, so the CLI exits non-zero. A failed
-  ``gh`` read or write on a PR is logged at ERROR and does not fail the run; the PR is retried next run.
+  host read or write on a PR is logged at ERROR and does not fail the run; the PR is retried next run.
 
 Per PR: size evaluation, timing gate, approval-safety reads (all reads before any write; any
 read failure means no write on that PR), then mark small files viewed (gate open), then approve
@@ -34,12 +34,17 @@ safety checks. Moving size to GraphQL (dropping the checkout, the lock dependenc
 colour workaround) is a possible follow-up if the binary and head-binding cases are handled.
 """
 
-import json
 import logging
 import subprocess
 
-from dotharness.code_host import CodeHost, RepositoryRef
-from dotharness.gh import gh_argv
+from dotharness.code_host import (
+    ChangeRequest,
+    ChangeRequestState,
+    CodeHost,
+    CodeHostError,
+    RepositoryRef,
+    UnsupportedCapabilityError,
+)
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.auto_approve_github import (
@@ -54,9 +59,9 @@ from dotharness.pr_review.runners.auto_approve_github import (
 )
 from dotharness.pr_review.runners.auto_approve_size import SizeEvaluation, evaluate_size
 from dotharness.pr_review.runners.common import (
-    TIMEOUT_GH,
     TIMEOUT_GIT,
     FatalGitError,
+    call_with_policy,
     get_head_sha,
     git_detach_and_record,
     git_restore,
@@ -84,20 +89,20 @@ async def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
     scaffold = await open_host(config)
     host, repo, env = scaffold.host, scaffold.repo, scaffold.env
     current_user = await host_current_user(host)
-    prs = await _list_prs(config.repo.name, env)
+    prs = await _list_prs(host, repo, current_user)
     wdir = str(config.repo.working_dir)
     if not prs:
         logger.info(
             "auto-approve: no open PRs with a pending review request for %s on %s, nothing to do",
             current_user,
-            config.repo.name,
+            await host.repository.display_name(repo),
         )
 
     failures: list[str] = []
     for pr in prs:
         if not _is_candidate(pr):
             continue
-        pr_number = pr["number"]
+        pr_number = pr.number
         try:
             await _process_pr(pr, config, wdir, env, host, repo, current_user, dry_run)
         except FatalGitError as e:
@@ -112,51 +117,47 @@ async def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
         raise AutoApproveError("auto-approve failed for: " + "; ".join(failures))
 
 
-async def _list_prs(repo: str, env: dict) -> list[dict]:
-    result = await run_cmd(
-        gh_argv(
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            "--state",
-            "open",
-            "--search",
-            "user-review-requested:@me",
-            "--json",
-            "number,headRefName,baseRefName,isDraft,isCrossRepository,state,author",
-            "--limit",
-            "500",
-        ),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
-        raise AutoApproveError(f"gh pr list failed (exit {result.returncode}): {stderr}")  # noqa: TRY003
-    return sorted(json.loads(result.stdout), key=lambda p: p["number"])
+async def _list_prs(host: CodeHost, repo: RepositoryRef, current_user: str) -> list[ChangeRequest]:
+    """Open change requests with a pending review request for ``current_user``, sorted by number.
+
+    A failed read raises :class:`AutoApproveError` (distinct from an empty list). An unsupported
+    capability follows the ``auto_approve`` policy (stop) and propagates unwrapped.
+    """
+    if not current_user:
+        raise AutoApproveError("cannot list review requests: the acting user is unknown")  # noqa: TRY003
+
+    async def list_requested() -> list[ChangeRequest]:
+        return list(
+            await host.change_requests.list(repo, state=ChangeRequestState.OPEN, requested_reviewer=current_user)
+        )
+
+    try:
+        found = await call_with_policy("auto_approve", "ChangeRequests.list", list_requested, [])
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as exc:
+        raise AutoApproveError(f"listing change requests failed: {exc}") from exc  # noqa: TRY003
+    return sorted(found, key=lambda c: c.number)
 
 
-def _is_candidate(pr: dict) -> bool:
-    if pr.get("isDraft"):
-        logger.info("PR #%d: draft, skipping", pr["number"])
+def _is_candidate(pr: ChangeRequest) -> bool:
+    if pr.is_draft:
+        logger.info("PR #%d: draft, skipping", pr.number)
         return False
-    if pr.get("state", "OPEN") != "OPEN":
-        logger.info("PR #%d: not open (%s), skipping", pr["number"], pr.get("state"))
+    if pr.state is not ChangeRequestState.OPEN:
+        logger.info("PR #%d: not open (%s), skipping", pr.number, pr.state.value)
         return False
-    if pr.get("isCrossRepository"):
-        logger.info("PR #%d: from a fork, skipping", pr["number"])
+    if pr.is_cross_repository:
+        logger.info("PR #%d: from a fork, skipping", pr.number)
         return False
-    if not pr.get("headRefName") or not pr.get("baseRefName"):
-        logger.info("PR #%d: missing head/base branch, skipping", pr["number"])
+    if not pr.head_reference or not pr.base_reference:
+        logger.info("PR #%d: missing head/base branch, skipping", pr.number)
         return False
     return True
 
 
 async def _process_pr(
-    pr: dict,
+    pr: ChangeRequest,
     config: HarnessConfig,
     wdir: str,
     env: dict,
@@ -165,13 +166,13 @@ async def _process_pr(
     current_user: str,
     dry_run: bool,
 ) -> None:
-    """Process one PR. gh read/write failures are logged, not returned; git errors raise."""
-    pr_number = pr["number"]
+    """Process one PR. host read/write failures are logged, not returned; git errors raise."""
+    pr_number = pr.number
     logger.info("PR #%d: starting%s", pr_number, " (dry-run)" if dry_run else "")
     original_sha = await git_detach_and_record(wdir, env)
     try:
         checked_out_sha = await _checkout_pr_head(pr_number, wdir, env)
-        size = await evaluate_size(pr["baseRefName"], wdir, env, config.auto_approve)
+        size = await evaluate_size(pr.base_reference, wdir, env, config.auto_approve)
         await _decide_and_act(pr, size, checked_out_sha, config, host, repo, current_user, dry_run)
     finally:
         # Detached checkout: no local branch was created, so there is none to delete.
@@ -211,7 +212,7 @@ def _log_size(pr_number: int, size: SizeEvaluation, config: HarnessConfig) -> No
 
 
 async def _decide_and_act(
-    pr: dict,
+    pr: ChangeRequest,
     size: SizeEvaluation,
     checked_out_sha: str,
     config: HarnessConfig,
@@ -220,11 +221,11 @@ async def _decide_and_act(
     current_user: str,
     dry_run: bool,
 ) -> None:
-    pr_number = pr["number"]
+    pr_number = pr.number
     _log_size(pr_number, size, config)
 
     # All reads first (NFR-1): any read failure means no write on this PR this run.
-    author = (pr.get("author") or {}).get("login", "")
+    author = pr.author.login if pr.author else ""
     gate = await check_timing_gate(host, repo, pr_number, author, current_user)
     logger.info("PR #%d: timing gate %s (%s)", pr_number, gate.status.value, gate.reason)
     safety = await check_approval_safety(host, repo, pr_number, current_user)
