@@ -2062,7 +2062,7 @@ class CodeHostConformance:
 
     # -- empty, failed, timed out: one table for every method added after the review flow -------------------------
 
-    async def _calls(self, target: ConformanceTarget) -> dict[str, tuple[bool, Callable[[], Awaitable[Any]]]]:
+    def _calls(self, target: ConformanceTarget) -> dict[str, tuple[bool, Callable[[], Awaitable[Any]]]]:
         """Seed one change request with everything on it. Return ``operation -> (is a write, call)``.
 
         Only operations of declared capabilities that the target does not list as unsupported are returned.
@@ -2137,9 +2137,9 @@ class CodeHostConformance:
     async def test_failed_result_raises_code_host_error(self) -> None:
         """A request that failed raises CodeHostError. It is never returned as an empty result."""
         probe = await self.make_target()
-        for operation in await self._calls(probe):
+        for operation in self._calls(probe):
             target = await self.make_target()
-            _, call = (await self._calls(target))[operation]
+            _, call = self._calls(target)[operation]
             target.seeder.fail_next(operation, CodeHostError("the request failed"))
             try:
                 await call()
@@ -2155,9 +2155,9 @@ class CodeHostConformance:
     async def test_timeout_flag_follows_read_or_write(self) -> None:
         """B-ERR-2: a read raises CodeHostTimeoutError with ``write=False``, a write with ``write=True``."""
         probe = await self.make_target()
-        for operation, (is_write, _) in (await self._calls(probe)).items():
+        for operation, (is_write, _) in self._calls(probe).items():
             target = await self.make_target()
-            _, call = (await self._calls(target))[operation]
+            _, call = self._calls(target)[operation]
             target.seeder.fail_next(operation, CodeHostTimeoutError("timed out", write=is_write))
             try:
                 await call()
@@ -2171,7 +2171,7 @@ class CodeHostConformance:
         target = await self.make_target()
         if not target.unsupported:
             return
-        everything = await self._calls(replace(target, unsupported=frozenset()))
+        everything = self._calls(replace(target, unsupported=frozenset()))
         for operation in target.unsupported & everything.keys():
             _, call = everything[operation]
             assert await self._unsupported_op(target, operation, call)
@@ -2275,7 +2275,7 @@ class CodeHostConformance:
         seen: list[str] = []
         try:
             probe = await self.make_target()
-            for operation, (is_write, _) in (await self._calls(probe)).items():
+            for operation, (is_write, _) in self._calls(probe).items():
                 capability = operation.split(".")[0]
                 errors: list[CodeHostError] = [
                     CodeHostError("request failed"),
@@ -2287,7 +2287,7 @@ class CodeHostConformance:
                 ]
                 for error in errors:
                     target = await self.make_target()
-                    _, call = (await self._calls(target))[operation]
+                    _, call = self._calls(target)[operation]
                     target.seeder.fail_next(operation, error)
                     try:
                         result = await call()
