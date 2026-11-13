@@ -11,7 +11,9 @@ Path values (`repo_dir`, `workspace_dir`, `brief_path_template`, `[source.work_i
 `digest.path_template`, `[archive]` `dir` and the `[knowledge]` paths) are returned exactly as written.
 Relative paths resolve against the invoking working directory, not the directory that holds the config file.
 The loader never touches the filesystem for them. The one exception is `[archive] dir`, which commands resolve
-against `[project].workspace_dir` (see [`[archive]`](#archive)).
+against `[project].workspace_dir` (see [`[archive]`](#archive)). The loader does read one location of its own: it lists the directory names under
+the packaged `knowledge/patterns/` to validate `[refactor] pattern_set` (see [`[refactor]`](#refactor)). That is
+packaged data, not a user-supplied path value, so it is not an exception to this rule.
 
 ## Secrets
 
@@ -111,6 +113,25 @@ in the file and have no effect.
 |---|---|---|
 | `sizing_file` | string | none |
 | `conventions_path` | string | none |
+
+### `[refactor]`
+
+Optional.
+
+| Key | Type | Default |
+|---|---|---|
+| `enabled` | bool | `true` |
+| `pattern_set` | string | none |
+
+- `enabled = false` records the `refactor` stage as skipped. It shows as `stages_skipped` in the digest.
+- `pattern_set` names a directory under `knowledge/patterns/`. The packaged sets are `generic`, `fastapi` and
+  `react`.
+- An unknown `pattern_set` name is a `ConfigError` at load time, and the message lists the valid names (the
+  directories present under `knowledge/patterns/`, so the three packaged sets are the current ones, not a fixed
+  list).
+- With `pattern_set` set, all added files get that one set.
+- A `.sisyphus.toml` without `[refactor]` loads unchanged, with `enabled = true`.
+- There is no per-run CLI override: the `[refactor]` config table is the only switch.
 
 ### `[archive]`
 
