@@ -222,6 +222,38 @@ def _handoff_deviation(stem: str, path: Path) -> tuple[str | None, str | None]:
     return None, None
 
 
+_EDITS_BULLET = re.compile(r"^- Edits to existing files:[ \t]*(.*)$")
+
+
+def _edits_text(handoff: str) -> str | None:
+    """Text after the edits bullet up to the next top-level ``- `` bullet; ``None`` when the bullet is absent."""
+    lines = handoff.splitlines()
+    for i, line in enumerate(lines):
+        m = _EDITS_BULLET.match(line)
+        if m is None:
+            continue
+        body = [m.group(1)]
+        for nxt in lines[i + 1 :]:
+            if nxt.startswith("- "):
+                break
+            body.append(nxt)
+        return "\n".join(body).strip()
+    return None
+
+
+def _handoff_edits(path: Path) -> tuple[str | None, str | None]:
+    """``(edits_text, note)`` for one handoff file; at most one of them is set."""
+    try:
+        text = _edits_text(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, f"Note: cannot read handoff {path.name}."
+    if text is None:
+        return None, f"Note: no edits bullet found in handoff {path.name}."
+    if text and not _is_none(text):
+        return text, None
+    return None, None
+
+
 def extract_deviations(handoff_dir: Path, stems: Sequence[str]) -> str:
     """Deviations from each leaf's handoff(s); notes for missing handoffs or bullets."""
     try:

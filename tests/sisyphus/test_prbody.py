@@ -479,3 +479,51 @@ def test_fallback_title_and_cap() -> None:
 
 def test_work_item_header_is_closing_reference() -> None:
     assert work_item_header("o/r#109") == "Closes o/r#109"
+
+
+def test_edits_text_unit():
+    assert prbody._edits_text("- Done: x\n") is None
+    assert prbody._edits_text("- Edits to existing files: a.py: r") == "a.py: r"
+    assert prbody._edits_text("- Edits to existing files:\n  - a.py: r\n- Next: y\n") == "- a.py: r"
+
+
+def test_handoff_edits_no_bullet_note(tmp_path):
+    p = tmp_path / "refactor-x.md"
+    p.write_text("- Done: x\n", encoding="utf-8")
+    assert prbody._handoff_edits(p) == (None, "Note: no edits bullet found in handoff refactor-x.md.")
+
+
+def test_handoff_edits_indented_paths(tmp_path):
+    p = tmp_path / "refactor-x.md"
+    p.write_text(
+        "- Edits to existing files:\n  - a.py: reason\n  - b.py: reason\n- Deviations from the plan: x\n",
+        encoding="utf-8",
+    )
+    assert prbody._handoff_edits(p) == ("- a.py: reason\n  - b.py: reason", None)
+
+
+def test_handoff_edits_inline_text(tmp_path):
+    p = tmp_path / "refactor-x.md"
+    p.write_text("- Edits to existing files: a.py: r\n  - b.py: r2\n", encoding="utf-8")
+    assert prbody._handoff_edits(p) == ("a.py: r\n  - b.py: r2", None)
+
+
+def test_handoff_edits_none_bullet(tmp_path):
+    p = tmp_path / "refactor-x.md"
+    for body in ("None", "None.", "None (no edits)"):
+        p.write_text(f"- Edits to existing files: {body}\n", encoding="utf-8")
+        assert prbody._handoff_edits(p) == (None, None)
+
+
+def test_handoff_edits_empty_bullet(tmp_path):
+    p = tmp_path / "refactor-x.md"
+    p.write_text("- Edits to existing files:", encoding="utf-8")
+    assert prbody._handoff_edits(p) == (None, None)
+
+
+def test_handoff_edits_unreadable(tmp_path):
+    note = "Note: cannot read handoff refactor-x.md."
+    assert prbody._handoff_edits(tmp_path / "refactor-x.md") == (None, note)
+    p = tmp_path / "refactor-x.md"
+    p.write_bytes(b"\xff\xfe\x00bad")
+    assert prbody._handoff_edits(p) == (None, note)
