@@ -44,11 +44,11 @@ from dotharness.pr_review.runners.ci_checks import (
     list_own_open_change_requests,
     read_change_request,
 )
-from dotharness.pr_review.runners.common import call_with_policy, host_current_user, open_host
+from dotharness.pr_review.runners.common import Site, call_with_policy, host_current_user, open_host
 
 logger = logging.getLogger(__name__)
 
-_SITE = "merge"
+_SITE = Site.MERGE
 
 SKIP_NOT_AUTHOR = "not_author"
 SKIP_STATE_READ_FAILED = "state_read_failed"

@@ -61,6 +61,7 @@ from dotharness.pr_review.runners.auto_approve_size import SizeEvaluation, evalu
 from dotharness.pr_review.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
+    Site,
     call_with_policy,
     get_head_sha,
     git_detach_and_record,
@@ -132,7 +133,7 @@ async def _list_prs(host: CodeHost, repo: RepositoryRef, current_user: str) -> l
         )
 
     try:
-        found = await call_with_policy("auto_approve", "ChangeRequests.list", list_requested, [])
+        found = await call_with_policy(Site.AUTO_APPROVE, "ChangeRequests.list", list_requested, [])
     except UnsupportedCapabilityError:
         raise
     except CodeHostError as exc:

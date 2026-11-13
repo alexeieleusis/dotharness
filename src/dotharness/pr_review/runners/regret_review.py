@@ -17,6 +17,7 @@ from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.runners.common import (
     PR_COMMENTS_SCRIPT_PATH,
     REGRET_REVIEW_MARKER,
+    Site,
     _build_pr_metadata_trailer,
     author_matches,
     call_with_policy,
@@ -431,7 +432,7 @@ async def _resolve_commit_prs(
 
         try:
             async with asyncio.timeout(remaining):
-                numbers = await call_with_policy("regret_review", "ChangeRequests.find_by_commit", lookup, [])
+                numbers = await call_with_policy(Site.REGRET_REVIEW, "ChangeRequests.find_by_commit", lookup, [])
         except UnsupportedCapabilityError:
             raise
         except TimeoutError:

@@ -56,6 +56,7 @@ from dotharness.pr_review.runners.ci_checks import text as _text
 from dotharness.pr_review.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
+    Site,
     call_with_policy,
     git_detach_and_record,
     git_fetch_and_checkout,
@@ -85,7 +86,7 @@ OUTCOME_UNSAFE_CHANGE = "unsafe-change"
 TIMEOUT_REPRO = 1200  # seconds, per workflow step command
 LOG_EXCERPT_MAX = 20_000  # characters of the failing log given to the agent
 
-_SITE = "ci_fix"
+_SITE = Site.CI_FIX
 _PUSH_REJECTED_RE = re.compile(r"non-fast-forward|fetch first|\[rejected\]|failed to push some refs", re.IGNORECASE)
 
 

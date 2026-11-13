@@ -36,7 +36,7 @@ from dotharness.code_host import (
     UnsupportedCapabilityError,
 )
 from dotharness.code_host import Check as HostCheck
-from dotharness.pr_review.runners.common import call_with_policy
+from dotharness.pr_review.runners.common import Site, call_with_policy
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ REASON_CONFLICTING = "conflicting"
 REASON_MERGEABLE_UNKNOWN = "mergeable-unknown"
 REASON_AUTO_MERGE = "auto-merge"
 _MAX_NAMED_CHECKS = 10
-_REQUIRED_SITE = "required_checks"
+_REQUIRED_SITE = Site.REQUIRED_CHECKS
 
 _T = TypeVar("_T")
 
@@ -75,7 +75,7 @@ class CiBlock(NamedTuple):
     reason: str
 
 
-async def guarded_read(site: str, operation: str, call: Callable[[], Awaitable[_T]], what: str) -> _T | None:
+async def guarded_read(site: Site | str, operation: str, call: Callable[[], Awaitable[_T]], what: str) -> _T | None:
     """Await a host read; None (logged) on any ``CodeHostError``. Fails closed for the callers.
 
     ``UnsupportedCapabilityError`` is handled by the policy of ``(site, operation)``: stop re-raises it past the
@@ -246,7 +246,7 @@ async def read_host_checks(
 async def host_has_workflows(host: CodeHost, repo: RepositoryRef) -> bool | None:
     """True when the repository has workflows; None on read failure or an unsupported ``Checks.list_workflows``."""
     found = await guarded_read(
-        "ci_checks_workflows",
+        Site.CI_CHECKS_WORKFLOWS,
         "Checks.list_workflows",
         lambda: host.checks.list_workflows(repo),
         "listing workflows",
@@ -305,7 +305,9 @@ def change_request_skip_reason(change_request: ChangeRequest) -> str | None:
     return None
 
 
-async def read_change_request(host: CodeHost, repo: RepositoryRef, number: int, site: str) -> ChangeRequest | None:
+async def read_change_request(
+    host: CodeHost, repo: RepositoryRef, number: int, site: Site | str
+) -> ChangeRequest | None:
     """One change request, fresh, or None (logged) when it cannot be read. ``site`` selects the policy row."""
     return await guarded_read(
         site,
@@ -321,7 +323,7 @@ async def list_own_open_change_requests(
     current_user: str,
     only_pr: int | None,
     failures: list[str],
-    site: str,
+    site: Site | str,
 ) -> list[ChangeRequest]:
     """Open change requests authored by the acting user, or just ``only_pr``, sorted by number.
 

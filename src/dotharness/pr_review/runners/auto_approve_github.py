@@ -64,6 +64,7 @@ from dotharness.pr_review.runners.ci_checks import (
     read_change_request,
 )
 from dotharness.pr_review.runners.common import (
+    Site,
     call_with_policy,
     is_design_review_comment,
     is_inline_review_comment,
@@ -75,9 +76,9 @@ logger = logging.getLogger(__name__)
 
 REASON_ZERO_FINDINGS = "zero-findings"
 REASON_AUTHOR_ACTIVITY = "author-activity-after-T"
-_SITE = "auto_approve"
+_SITE = Site.AUTO_APPROVE
 _REVIEWS_READ_FAILED = "reviews read failed"
-_VIEWED_SITE = "auto_approve_viewed"
+_VIEWED_SITE = Site.AUTO_APPROVE_VIEWED
 
 
 class GateStatus(Enum):

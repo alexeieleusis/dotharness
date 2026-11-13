@@ -10,6 +10,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequen
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, TypeVar
@@ -370,35 +371,54 @@ async def host_current_user(host: CodeHost) -> str:
 
 UnsupportedPolicy = Literal["degrade", "warn", "stop"]
 
+
+class Site(StrEnum):
+    """Where a host call is made: the first half of a policy key. A ``StrEnum``, so a mistyped member is an
+    ``AttributeError`` at import time instead of a silent fall back to ``stop``; the values are the names the
+    documentation table uses."""
+
+    MERGE = "merge"
+    AUTO_APPROVE = "auto_approve"
+    AUTO_APPROVE_VIEWED = "auto_approve_viewed"
+    CI_FIX = "ci_fix"
+    CI_CHECKS_WORKFLOWS = "ci_checks_workflows"
+    REQUIRED_CHECKS = "required_checks"
+    REVIEWER_REQUEST = "reviewer_request"
+    REGRET_REVIEW = "regret_review"
+    TRACEABILITY = "traceability"
+    CURRENT_USER = "current_user"
+    CHANGE_REQUEST_READ = "change_request_read"
+
+
 _CR_GET = "ChangeRequests.get"
 
 # One table: (site, operation) -> policy. ``Interface.*`` covers every operation of that capability at the site. The
 # same rows are documented in docs/pr_review/configuration.md; tests/pr_review/test_policy.py keeps them in sync.
 # degrade: skip silently. warn: log the capability name and continue. stop: re-raise (the top-level handler exits
 # non-zero). A pair not listed is "stop".
-UNSUPPORTED_CAPABILITY_POLICY: Mapping[tuple[str, str], UnsupportedPolicy] = MappingProxyType({
-    ("merge", "ChangeRequests.squash_merge"): "stop",
-    ("merge", _CR_GET): "stop",
-    ("auto_approve", "ChangeRequests.approve"): "stop",
-    ("auto_approve", "ChangeRequests.reviews"): "stop",
-    ("auto_approve", "ChangeRequests.commits"): "stop",
-    ("auto_approve_viewed", "ChangeRequests.viewed_files"): "degrade",
-    ("auto_approve_viewed", "ChangeRequests.mark_viewed"): "degrade",
-    ("ci_fix", "Checks.*"): "stop",
-    ("ci_checks_workflows", "Checks.list_workflows"): "degrade",
-    ("required_checks", "Checks.list_checks"): "stop",
-    ("reviewer_request", "ChangeRequests.request_reviewer"): "warn",
-    ("reviewer_request", _CR_GET): "warn",
-    ("regret_review", "ChangeRequests.find_by_commit"): "stop",
-    ("traceability", "WorkItems.get"): "stop",
-    ("traceability", "WorkItems.linked_work_items"): "stop",
-    ("current_user", "Session.current_user"): "warn",
+UNSUPPORTED_CAPABILITY_POLICY: Mapping[tuple[Site, str], UnsupportedPolicy] = MappingProxyType({
+    (Site.MERGE, "ChangeRequests.squash_merge"): "stop",
+    (Site.MERGE, _CR_GET): "stop",
+    (Site.AUTO_APPROVE, "ChangeRequests.approve"): "stop",
+    (Site.AUTO_APPROVE, "ChangeRequests.reviews"): "stop",
+    (Site.AUTO_APPROVE, "ChangeRequests.commits"): "stop",
+    (Site.AUTO_APPROVE_VIEWED, "ChangeRequests.viewed_files"): "degrade",
+    (Site.AUTO_APPROVE_VIEWED, "ChangeRequests.mark_viewed"): "degrade",
+    (Site.CI_FIX, "Checks.*"): "stop",
+    (Site.CI_CHECKS_WORKFLOWS, "Checks.list_workflows"): "degrade",
+    (Site.REQUIRED_CHECKS, "Checks.list_checks"): "stop",
+    (Site.REVIEWER_REQUEST, "ChangeRequests.request_reviewer"): "warn",
+    (Site.REVIEWER_REQUEST, _CR_GET): "warn",
+    (Site.REGRET_REVIEW, "ChangeRequests.find_by_commit"): "stop",
+    (Site.TRACEABILITY, "WorkItems.get"): "stop",
+    (Site.TRACEABILITY, "WorkItems.linked_work_items"): "stop",
+    (Site.CURRENT_USER, "Session.current_user"): "warn",
 })
 
 _T = TypeVar("_T")
 
 
-def unsupported_policy(site: str, operation: str) -> UnsupportedPolicy:
+def unsupported_policy(site: Site | str, operation: str) -> UnsupportedPolicy:
     """The policy for ``operation`` (``Interface.method``) at ``site``: exact row, then ``Interface.*``, else stop."""
     table = UNSUPPORTED_CAPABILITY_POLICY
     exact = table.get((site, operation))
@@ -407,7 +427,7 @@ def unsupported_policy(site: str, operation: str) -> UnsupportedPolicy:
     return table.get((site, f"{operation.split('.', 1)[0]}.*"), "stop")
 
 
-async def call_with_policy(site: str, operation: str, call: Callable[[], Awaitable[_T]], fallback: _T) -> _T:
+async def call_with_policy(site: Site | str, operation: str, call: Callable[[], Awaitable[_T]], fallback: _T) -> _T:
     """Await ``call()`` under the unsupported-capability policy of ``(site, operation)``.
 
     Only ``UnsupportedCapabilityError`` is handled; any other ``CodeHostError`` propagates. stop re-raises, degrade
@@ -425,8 +445,32 @@ async def call_with_policy(site: str, operation: str, call: Callable[[], Awaitab
         return fallback
 
 
-# Site name of the plain change-request reads below. It has no policy row, so an unsupported capability stops.
-_READ_SITE = "change_request_read"
+async def call_or(
+    site: Site | str,
+    operation: str,
+    call: Callable[[], Awaitable[_T]],
+    fallback: _T,
+    *,
+    on_error: Callable[[CodeHostError], None] | None = None,
+) -> _T:
+    """``call_with_policy`` plus the fallback for every other ``CodeHostError``.
+
+    ``UnsupportedCapabilityError`` follows the policy of ``(site, operation)`` (stop re-raises it). Any other
+    ``CodeHostError`` is passed to ``on_error`` (when given, e.g. to log it) and gives ``fallback``. This replaces
+    the ``except UnsupportedCapabilityError: raise`` / ``except CodeHostError`` pair at a call site.
+    """
+    try:
+        return await call_with_policy(site, operation, call, fallback)
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as e:
+        if on_error is not None:
+            on_error(e)
+        return fallback
+
+
+# The plain change-request reads below use ``Site.CHANGE_REQUEST_READ``. It has no policy row, so an unsupported
+# capability stops.
 
 
 async def get_change_request(host: CodeHost, repo: RepositoryRef, number: int) -> ChangeRequest | None:
@@ -434,13 +478,13 @@ async def get_change_request(host: CodeHost, repo: RepositoryRef, number: int) -
 
     ``UnsupportedCapabilityError`` follows the policy of ``(change_request_read, ChangeRequests.get)`` and stops.
     """
-    try:
-        return await host.change_requests.get(repo, number)
-    except UnsupportedCapabilityError:
-        raise
-    except CodeHostError as e:
-        logger.error("Failed to fetch PR #%d: %s", number, e)  # noqa: TRY400
-        return None
+    return await call_or(
+        Site.CHANGE_REQUEST_READ,
+        _CR_GET,
+        lambda: host.change_requests.get(repo, number),
+        None,
+        on_error=lambda e: logger.error("Failed to fetch PR #%d: %s", number, e),
+    )
 
 
 async def pr_from_url(host: CodeHost, repo: RepositoryRef, url: str) -> ChangeRequest | None:
@@ -456,12 +500,7 @@ async def get_requested_reviewers(host: CodeHost, repo: RepositoryRef, number: i
     async def read() -> list[str]:
         return [u.login for u in (await host.change_requests.get(repo, number)).requested_reviewers]
 
-    try:
-        return await call_with_policy("reviewer_request", _CR_GET, read, [])
-    except UnsupportedCapabilityError:
-        raise
-    except CodeHostError:
-        return []
+    return await call_or(Site.REVIEWER_REQUEST, _CR_GET, read, [])
 
 
 async def was_review_requested(host: CodeHost, repo: RepositoryRef, number: int, login: str) -> bool:
@@ -482,7 +521,7 @@ async def add_reviewer(host: CodeHost, repo: RepositoryRef, number: int, login: 
     ``reviewer_request`` policy (warn)."""
     try:
         await call_with_policy(
-            "reviewer_request",
+            Site.REVIEWER_REQUEST,
             "ChangeRequests.request_reviewer",
             lambda: host.change_requests.request_reviewer(repo, number, login),
             None,
