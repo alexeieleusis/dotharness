@@ -69,3 +69,26 @@ The stop report is a JSON object with the keys `checkpoint` (one of the codes ab
 (the group's set name, or an empty string), and `detail` (what a person needs to decide, in plain
 words), written to `<stop report path>`. When the stage finishes without a stop, do not write the
 stop report. Finish by listing every commit, every deviation, and every edit to an existing file.
+
+## Handoff
+
+Before you finish, save the handoff for this group as `refactor-<refactor_set>.md`, directly in `<handoff dir>`, not in a subdirectory of it. Write it even when the refactor changed nothing: the orchestrator checks that it exists. The name starts with `refactor-`, never with two digits and a hyphen, so it cannot be mistaken for a file another stage wrote.
+
+The file holds these two bullets. Each one starts at the beginning of a line. Write them exactly as shown, with this text before the colon, because the orchestrator finds them by that text. Put nothing between the two bullets, and put the second one after the first. Any further notes go below both bullets, after a blank line.
+
+- `- Deviations from the plan:` followed, on the same line, by every deviation: a guide step you skipped or changed, a defect you found and left as it is, anything you did differently from this prompt. Separate several deviations with `; `. Write `none` when there are none.
+- `- Edits to existing files:` followed, on the same line, by one item for each existing file you edited that is not listed under Files in this group. Write each item as `path (reason)`: the path relative to the repository root, then the reason in parentheses, with no `;` inside the reason. Separate items with `; `. Write `none` when there are none. List a file even when the edit is one import line. Do not list files you only added.
+
+Example of a handoff for a refactor that changed nothing outside the group:
+
+```
+- Deviations from the plan: none
+- Edits to existing files: none
+```
+
+Example of a handoff with entries:
+
+```
+- Deviations from the plan: skipped the guide's step 3, the group has no I/O to extract; found an unchecked None in the parser and left it as it is
+- Edits to existing files: src/app/main.py (import of the extracted module); src/app/routes.py (call site of the moved handler)
+```
