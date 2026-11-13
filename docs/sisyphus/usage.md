@@ -35,7 +35,7 @@ sisyphus archive --config <file>
      whose front matter is invalid (see "Ticket files and the producer") is skipped with a one-line note on
      stderr. Finished ticket files stay in place: they are skipped because the item has a run record, not
      because the file is removed.
-5. Runs each item through the orchestrator (intake, plan, build, push, open PR) and
+5. Runs each item through the orchestrator (intake, plan, build, refactor, push, open PR) and
    stops at the first checkpoint (C1..C8). Before starting each further item it checks `max_run_minutes`. Once
    exceeded it starts nothing else and notes it under "Limits hit" (exit 0).
    An item is finished when its draft PR is open: "draft PR open, handed to the human". Nothing runs after
@@ -192,9 +192,9 @@ run record or the item is not stopped, and exits 0 quietly if another invocation
 |---|---|---|---|---|
 | C1 | brief has open decisions | edit the brief, mark them resolved | automatic (brief re-parsed) | re-parses the brief (never redrafts it), then plan init, plan, build, push, PR |
 | C2 | OPEN_QUESTIONS.md unresolved after draft-overview | write the answer file | automatic (answer file) | re-runs the plan stage with your answer, then build |
-| C3 | a leaf has an open question | write the answer file | automatic (answer file) | re-runs build with your answer. The build prompt continues from the stopped leaf |
+| C3 | a leaf has an open question | write the answer file | automatic (answer file) | re-runs build with your answer. The build prompt continues from the stopped leaf. A refactor stop at C3 or C4 uses the same answer-file flow |
 | C4 | a leaf deviation may change later leaves | write the answer file (accept or redirect) | automatic (answer file) | same as C3 |
-| C5 | retries exhausted or scope violation; also intake changing the target repository | decide: change the leaf or config, or fix the cause. For an intake stop, revert or remove the paths listed in the detail by hand and run `sisyphus resume REF --config F`; no `--reset-retries` is needed. To give the build another budget, run `sisyphus resume REF --config F --reset-retries` | explicit | re-runs the stage. The build retry budget (3) is kept, so an exhausted budget stops again at C5 without a new agent run, unless you pass `--reset-retries` (below), which gives the build a fresh budget of 3 (it does not skip the build) |
+| C5 | retries exhausted or scope violation; also intake changing the target repository. In the refactor stage: retries exhausted, a refactor gate failure, or a scope violation (code edits outside the group's added files without a listed reason) | decide: change the leaf or config, or fix the cause. For an intake stop, revert or remove the paths listed in the detail by hand and run `sisyphus resume REF --config F`; no `--reset-retries` is needed. To give the stage that stopped another budget, run `sisyphus resume REF --config F --reset-retries` | explicit | re-runs the stage. Build and refactor each have their own retry budget, 3 each (`DEFAULT_MAX_RETRY_CYCLES`; build: `build:retry-cycles`, refactor: `refactor:retry-cycles`). The budget of the stage that stopped is kept, so an exhausted budget stops again at C5 without a new agent run, unless you pass `--reset-retries` (below), which gives that stage a fresh budget of 3 (it does not skip the stage) |
 | C6 | a limit was hit | raise the limit in `.sisyphus.toml` (`max_run_minutes` needs nothing: the clock is per invocation) | explicit | leaf limit: re-counts the leaves, no re-plan. Time limit: continues at the next stage |
 | C7 | branch cannot be updated without rebase | no automatic way out: run `sisyphus abandon REF --config F` (the branch and any PR stay as they are for you to handle) | explicit | after you fixed the branch outside Sisyphus: re-runs the push stage on the same branch and PR |
 | C8 | gh, Linear, git network call failed, or a dirty clone | fix access. For a dirty clone, clean it yourself | automatic retry after 30 minutes, 3 times, then explicit | retries the failed call in the same stage |
@@ -204,8 +204,8 @@ run record or the item is not stopped, and exits 0 quietly if another invocation
 
 `sisyphus resume REF --config F [--base B] --reset-retries` is the only way to zero retry counters, and it is
 explicit: `run`, auto-resume, plain `resume` and loading a record never reset anything. Use it after you fixed the
-cause by hand (in the brief or the answer file) or decided to give the build another budget. It does **not** skip
-the stage: it gives the recorded stage a fresh budget (build: `max_retry_cycles`, 3) and then continues the
+cause by hand (in the brief or the answer file) or decided to give the stage another budget. It does **not** skip
+the stage: it gives the recorded stage a fresh budget (build or refactor: `max_retry_cycles`, 3) and then continues the
 resume as usual. It is only valid for a stopped item (same errors as `resume`), takes the same lock, and
 combines with `--again` for an abandoned item.
 
@@ -213,12 +213,13 @@ It resets the counters of the stage recorded in the item's run record, nothing e
 
 | recorded stage | counters set to 0 | never touched |
 |---|---|---|
-| intake, plan, push, open-pr | `auto-retry` | `build:retry-cycles`, `plan:leaf-limit`, `branch-created` |
-| build | `build:retry-cycles`, `auto-retry` | `plan:leaf-limit`, `branch-created` |
+| intake, plan, push, open-pr | `auto-retry` | `build:retry-cycles`, `refactor:retry-cycles`, `plan:leaf-limit`, `branch-created` |
+| build | `build:retry-cycles`, `auto-retry` | `refactor:retry-cycles`, `plan:leaf-limit`, `branch-created` |
+| refactor | `refactor:retry-cycles`, `auto-retry` | `plan:leaf-limit`, `build:retry-cycles`, `branch-created` |
 
 `auto-retry` is the C8 automatic-resume count (stage independent). `branch-created` is not a retry counter (it
 records that Sisyphus made the branch, which the push guard relies on) and `plan:leaf-limit` is a marker that
-stops a C6 resume re-planning. Neither is ever reset. The mapping is `resume.RESET_KEYS`. If the recorded stage
+stops a C6 resume re-planning. Neither is ever reset. The table mirrors `resume.RESET_KEYS`: one row per recorded stage (intake, plan, push and open-pr share the first row). If the recorded stage
 has no counter above zero (for example an item stopped at C1) the flag is still accepted: it records a reset with
 no keys ("no counters to reset") and continues.
 
