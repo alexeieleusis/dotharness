@@ -86,12 +86,14 @@ def _build_backend(config, env: dict) -> Backend:
     )
 
 
-async def _should_skip_pr(number: int, repo: str, current_user: str, reviewed: set, env: dict) -> bool | None:
+async def _should_skip_pr(
+    number: int, host: CodeHost, repo: RepositoryRef, current_user: str, reviewed: set
+) -> bool | None:
     """Returns True to skip (confirmed done), False to process, or None if the comment
     check was inconclusive (API failure) and the caller should defer judgment."""
     if number in reviewed:
         return True
-    return await check_review_summary_comment_status(number, repo, current_user, env)
+    return await check_review_summary_comment_status(host, repo, number, current_user)
 
 
 async def _gather_pr_context(
@@ -236,7 +238,7 @@ async def _build_design_prompt(
         build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
         for file in ctx["files"]
     ])
-    prior_flagged_locations = await get_design_review_flagged_locations(number, config.repo.name, current_user, env)
+    prior_flagged_locations = await get_design_review_flagged_locations(ctx["host"], ctx["repo"], number, current_user)
     return build_design_review_prompt(
         design_instructions,
         extra_knowledge,
@@ -275,7 +277,7 @@ async def _run_design_review(
     shared with _run_traceability_review below, and with review_requested.py's equivalent
     pair, via common.run_pr_level_pass; this wrapper only adds the persisted-state
     mutation run_pr_level_pass has no reason to know about."""
-    is_done = await has_design_review_comment(number, config.repo.name, current_user, env)
+    is_done = await has_design_review_comment(ctx["host"], ctx["repo"], number, current_user)
     result = await run_pr_level_pass(
         number,
         backend,
@@ -284,7 +286,7 @@ async def _run_design_review(
         build_prompt=lambda: _build_design_prompt(
             design_instructions, extra_knowledge, pr, number, config, ctx, wdir, current_user, env
         ),
-        has_comment_fn=lambda: check_design_review_comment_status(number, config.repo.name, current_user, env),
+        has_comment_fn=lambda: check_design_review_comment_status(ctx["host"], ctx["repo"], number, current_user),
         label="design review",
     )
     if result:
@@ -309,7 +311,7 @@ async def _build_traceability_prompt(
         for file in ctx["files"]
     ])
     prior_flagged_locations = await get_traceability_review_flagged_locations(
-        number, config.repo.name, current_user, env
+        ctx["host"], ctx["repo"], number, current_user
     )
     change_request = _change_request(ctx, number)
     early_comment_context = await build_early_comment_context(
@@ -354,7 +356,7 @@ async def _run_traceability_review(
     a resolved ticket list is stashed in `resolved` for build_prompt to pick up once
     short_circuit itself declines to handle the pass (returns None, meaning "a ticket was
     found, proceed normally")."""
-    is_done = await has_traceability_review_comment(number, config.repo.name, current_user, env)
+    is_done = await has_traceability_review_comment(ctx["host"], ctx["repo"], number, current_user)
     comment_cache: dict = {}
     resolved: dict = {}
 
@@ -389,7 +391,7 @@ async def _run_traceability_review(
             resolved["tickets"],
             comment_cache,
         ),
-        has_comment_fn=lambda: check_traceability_review_comment_status(number, config.repo.name, current_user, env),
+        has_comment_fn=lambda: check_traceability_review_comment_status(ctx["host"], ctx["repo"], number, current_user),
         label="traceability review",
         short_circuit=short_circuit,
     )
@@ -436,7 +438,7 @@ async def _run_regret_review(
     "no linked ticket" outcome, that skip is not terminal: the PR is not marked
     regret-reviewed, so a later PR update that changes the blamed lines gets a fresh
     candidate search on the next run."""
-    is_done = await has_regret_review_comment(number, config.repo.name, current_user, env)
+    is_done = await has_regret_review_comment(ctx["host"], ctx["repo"], number, current_user)
     candidates: list[RegretCandidate] = []
     reply: dict[str, str] = {}
 
@@ -484,7 +486,7 @@ async def _run_regret_review(
         if not await post_regret_comment(number, config.repo.name, build_regret_comment_body(findings), env):
             logger.error("PR #%d: failed to post the regret comment — will retry next run", number)
             return False
-        return await check_regret_review_comment_status(number, config.repo.name, current_user, env)
+        return await check_regret_review_comment_status(ctx["host"], ctx["repo"], number, current_user)
 
     result = await run_pr_level_pass(
         number,
@@ -506,6 +508,8 @@ async def _run_summary(
     pr: dict,
     number: int,
     config,
+    host: CodeHost,
+    repo: RepositoryRef,
     files: list[str],
     pr_description: str | None,
     vibe_heal_context: str | None,
@@ -531,7 +535,7 @@ async def _run_summary(
     except subprocess.TimeoutExpired:
         logger.exception("PR #%d: summary backend timed out", number)
         return True
-    comment_status = await check_review_summary_comment_status(number, config.repo.name, current_user, env)
+    comment_status = await check_review_summary_comment_status(host, repo, number, current_user)
     if comment_status is None:
         logger.warning(
             "PR #%d: could not confirm summary comment status (comment check failed) — "
@@ -624,6 +628,8 @@ async def _process_single_pr(
                     pr,
                     number,
                     config,
+                    cycle.host,
+                    cycle.repo,
                     ctx["files"],
                     ctx["pr_description"],
                     ctx["vibe_heal_context"],
@@ -734,7 +740,7 @@ async def _run_locked(config: HarnessConfig) -> None:
         run_design = number not in design_reviewed
         run_traceability = number not in traceability_reviewed
         run_regret = config.regret_review.enabled and number not in regret_reviewed
-        skip = await _should_skip_pr(number, config.repo.name, current_user, reviewed, env)
+        skip = await _should_skip_pr(number, host, repo, current_user, reviewed)
         run_files_summary = skip is False
         if skip is None:
             logger.warning(

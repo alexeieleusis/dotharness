@@ -1,10 +1,23 @@
 import json
 import subprocess
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from dotharness.code_host import (
+    Anchor,
+    Capability,
+    CodeHost,
+    CodeHostError,
+    Comment,
+    RepositoryRef,
+    ReviewThread,
+    UnsupportedCapabilityError,
+    User,
+)
 from dotharness.opencode_guards import BackendCwdDivergedError, OpencodePluginError
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.runners import address_comments
@@ -14,7 +27,33 @@ from dotharness.pr_review.runners.address_comments import (
 )
 from dotharness.pr_review.runners.common import FOCUSED_REVIEW_MARKER
 from dotharness.repo_guard import RepoIdentityError
+from tests.pr_review.runners.approve_support import T, make_host, put_comment
 from tests.pr_review.runners.runner_support import REPO, make_scaffold
+
+
+def _seed_thread(host, comment_id, *, resolved=False, minimized=False, replies=(), number=1):
+    """A review thread whose root comment has host id ``comment_id`` (the id the comments cache carries)."""
+    root = Comment(id=str(comment_id), author=User("bob"), body="fix this", created_at=T, url=None, is_hidden=minimized)
+    comments = (root, *replies)
+    host._threads.setdefault(REPO, {}).setdefault(number, []).append(
+        ReviewThread(
+            id=f"thread-{comment_id}", is_resolved=resolved, anchor=Anchor("a.py", 1, "RIGHT"), comments=comments
+        )
+    )
+    host._version += 1
+
+
+def _scaffold(comment_ids=(42, 43), *, number=None):
+    """A scaffold on an in-memory host holding one unresolved review thread per id, on every PR number used here."""
+    host = make_host()
+    for n in (1, 2) if number is None else (number,):
+        for cid in comment_ids:
+            _seed_thread(host, cid, number=n)
+    return make_scaffold(host)
+
+
+def _hr() -> tuple[CodeHost, RepositoryRef]:
+    return make_host().code_host(), REPO
 
 
 def _state(*unresolved, minimized=()):
@@ -57,7 +96,7 @@ async def test_skips_pr_with_no_pending_feedback(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path, "address-comment.md")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -88,7 +127,7 @@ async def test_runs_backend_when_unresolved_threads(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     with (
-        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -114,7 +153,7 @@ async def test_processes_draft_pr_with_pending_feedback(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     with (
-        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
         patch("dotharness.pr_review.runners.address_comments.fetch_pr_comments", return_value=[_FAKE_COMMENT]),
         patch("dotharness.pr_review.runners.address_comments.git_detach_and_record", return_value="sha"),
@@ -146,7 +185,7 @@ async def test_pushes_branch_after_backend(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     with (
-        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 2, "headRefName": "my-branch"}],
@@ -174,7 +213,7 @@ async def test_pushes_after_each_comment_not_once_at_end(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     comment_2 = {**_FAKE_COMMENT, "id": 43}
     with (
-        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 2, "headRefName": "my-branch"}],
@@ -212,12 +251,12 @@ async def test_skips_comment_whose_thread_resolves_mid_run(tmp_xdg, tmp_path):
     # call after that is a per-comment recheck — comment 43's thread has since resolved.
     call_count = {"n": 0}
 
-    def fake_unresolved_ids(pr_number, repo, env):
+    def fake_unresolved_ids(host, repo, pr_number):
         call_count["n"] += 1
         return _state(42, 43) if call_count["n"] == 1 else _state(42)
 
     with (
-        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 2, "headRefName": "my-branch"}],
@@ -249,14 +288,14 @@ async def test_skips_comment_whose_thread_resolves_mid_run(tmp_xdg, tmp_path):
 
 async def test_comment_still_unresolved_fails_open_when_check_returns_none():
     with patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=None):
-        result = await address_comments._comment_still_unresolved(_FAKE_COMMENT, 2, "acme/frontend", {})
+        result = await address_comments._comment_still_unresolved(_FAKE_COMMENT, *_hr(), 2)
     assert result is True
 
 
 async def test_comment_still_unresolved_true_for_non_int_id():
     comment = {**_FAKE_COMMENT, "id": "not-an-int"}
     with patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids") as mock_ids:
-        result = await address_comments._comment_still_unresolved(comment, 2, "acme/frontend", {})
+        result = await address_comments._comment_still_unresolved(comment, *_hr(), 2)
     mock_ids.assert_not_called()
     assert result is True
 
@@ -273,7 +312,7 @@ async def test_stops_processing_comments_after_push_failure(tmp_xdg, tmp_path):
         return MagicMock(returncode=0, stdout=b"", stderr=b"")
 
     with (
-        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 2, "headRefName": "my-branch"}],
@@ -318,7 +357,7 @@ async def test_stops_processing_comments_after_history_rewrite(tmp_xdg, tmp_path
 
     mock_run = AsyncMock(side_effect=run_cmd_side_effect)
     with (
-        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 2, "headRefName": "my-branch"}],
@@ -367,7 +406,7 @@ async def test_restores_head_even_on_backend_failure(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     with (
-        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 3, "headRefName": "b"}],
@@ -397,7 +436,7 @@ async def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     with (
-        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch("dotharness.pr_review.runners.address_comments.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
@@ -427,7 +466,7 @@ async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, t
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     with (
-        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch("dotharness.pr_review.runners.address_comments.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
@@ -459,7 +498,7 @@ async def test_re_requests_review_even_when_backend_raises(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     with (
-        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch("dotharness.pr_review.runners.address_comments.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
@@ -508,7 +547,7 @@ async def test_address_single_comment_history_rewrite_detection(
         caplog.at_level("ERROR"),
     ):
         post_sha, rewritten = await _address_single_comment(
-            _FAKE_COMMENT, 1, "instructions", mock_backend, "/repo", "acme/frontend", {}, "sha-before"
+            _FAKE_COMMENT, 1, "instructions", mock_backend, "/repo", "acme/frontend", {}, *_hr(), "sha-before"
         )
     assert any("not a fast-forward" in r.message for r in caplog.records) == expect_error
     assert post_sha == post_sha_stdout.decode().strip()
@@ -686,14 +725,14 @@ async def test_filter_comments_admits_marked_comment_transformed_without_reactio
         patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=_state(1)),
         patch("dotharness.pr_review.runners.common.run_cmd") as mock_run,
     ):
-        result = await address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
+        result = await address_comments._filter_comments([_MARKED_COMMENT], 1, *_hr(), "alexei")
     assert result == [_FOCUSED_REVIEW_COMMENT]
     mock_run.assert_not_called()
 
 
 async def test_filter_comments_does_not_affect_plain_comments():
     with patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=None):
-        result = await address_comments._filter_comments([_PLAIN_COMMENT], 1, "acme/frontend", "alexei", {})
+        result = await address_comments._filter_comments([_PLAIN_COMMENT], 1, *_hr(), "alexei")
     assert result == [_PLAIN_COMMENT]
 
 
@@ -701,7 +740,7 @@ async def test_filter_comments_does_not_reprocess_already_addressed_thread():
     # A thread whose marker reply has already been superseded by our own completion reply
     # must be dropped by the ordinary our_login-last-reply skip, not resent to the backend.
     with patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=None):
-        result = await address_comments._filter_comments([_ADDRESSED_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
+        result = await address_comments._filter_comments([_ADDRESSED_MARKED_COMMENT], 1, *_hr(), "alexei")
     assert result == []
 
 
@@ -710,7 +749,7 @@ async def test_filter_comments_plugin_prefix_drops_inline_comments_outside_subdi
     outside_subdir = {**_MARKED_COMMENT, "path": "a.py", "author": "sonar", "replies": []}
     with patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=None):
         result = await address_comments._filter_comments(
-            [in_subdir, outside_subdir], 1, "acme/frontend", None, {}, plugin_prefix="plugins/foo"
+            [in_subdir, outside_subdir], 1, *_hr(), None, plugin_prefix="plugins/foo"
         )
     assert result == [in_subdir]
 
@@ -718,9 +757,7 @@ async def test_filter_comments_plugin_prefix_drops_inline_comments_outside_subdi
 async def test_filter_comments_plugin_prefix_keeps_non_inline_comments():
     issue_comment = {"type": "issue", "id": 3, "author": "bob", "body": "please fix", "url": "http://z"}
     with patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=None):
-        result = await address_comments._filter_comments(
-            [issue_comment], 1, "acme/frontend", None, {}, plugin_prefix="plugins/foo"
-        )
+        result = await address_comments._filter_comments([issue_comment], 1, *_hr(), None, plugin_prefix="plugins/foo")
     assert result == [issue_comment]
 
 
@@ -737,6 +774,7 @@ async def test_address_single_comment_passes_opencode_dir_to_backend():
             "/repo",
             "acme/frontend",
             {},
+            *_hr(),
             "sha-before",
             opencode_dir="/repo/plugins/foo",
         )
@@ -745,125 +783,169 @@ async def test_address_single_comment_passes_opencode_dir_to_backend():
     )
 
 
-def _graphql_page(nodes, cursor=None, has_next=False):
-    return {
-        "data": {
-            "repository": {
-                "pullRequest": {
-                    "reviewThreads": {
-                        "pageInfo": {"endCursor": cursor, "hasNextPage": has_next},
-                        "nodes": nodes,
-                    }
-                }
-            }
-        }
-    }
+def _reply(login, *, at=T):
+    return Comment(id=f"reply-{login}", author=User(login), body="reply", created_at=at, url=None)
 
 
-async def test_get_unresolved_comment_ids_paginates_across_multiple_pages():
-    page1 = _graphql_page(
-        [{"isResolved": False, "comments": {"nodes": [{"databaseId": 1}]}}], cursor="CURSOR1", has_next=True
-    )
-    page2 = _graphql_page([{"isResolved": False, "comments": {"nodes": [{"databaseId": 2}]}}])
-    responses = iter([
-        MagicMock(returncode=0, stdout=json.dumps(page1).encode()),
-        MagicMock(returncode=0, stdout=json.dumps(page2).encode()),
-    ])
-    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=lambda *a, **k: next(responses)):
-        ids = await address_comments._get_unresolved_comment_ids(1, "acme/frontend", {})
+def _unresolved_host(*, threads=()):
+    """Host with the given (resolved, root id) threads on PR 1."""
+    host = make_host()
+    for resolved, cid in threads:
+        _seed_thread(host, cid, resolved=resolved, number=1)
+    return host
+
+
+async def test_get_unresolved_comment_ids_collects_unresolved_threads_only():
+    host = _unresolved_host(threads=[(False, 1), (True, 5), (False, 2)])
+    ids = await address_comments._get_unresolved_comment_ids(host.code_host(), REPO, 1)
     assert ids == _state(1, 2)
+    assert [c.operation for c in host.calls] == ["Discussion.review_threads"]
+    assert host.writes == []
 
 
-async def test_has_pending_feedback_finds_unresolved_thread_on_second_page():
-    page1 = _graphql_page([{"isResolved": True}], cursor="CURSOR1", has_next=True)
-    page2 = _graphql_page([{"isResolved": False}])
-    responses = iter([
-        MagicMock(returncode=0, stdout=json.dumps(page1).encode()),
-        MagicMock(returncode=0, stdout=json.dumps(page2).encode()),
-    ])
-    with patch("dotharness.pr_review.runners.address_comments.run_cmd", side_effect=lambda *a, **k: next(responses)):
-        result = await address_comments._has_pending_feedback(1, "acme/frontend", {})
-    assert result is True
+async def test_get_unresolved_comment_ids_reads_every_comment_and_minimized_roots():
+    host = make_host()
+    _seed_thread(host, 7, minimized=True, replies=(Comment("8", User("bob"), "r", T, None),))
+    _seed_thread(host, 9, replies=(Comment("not-numeric", User("bob"), "r", T, None),))
+    ids = await address_comments._get_unresolved_comment_ids(host.code_host(), REPO, 1)
+    assert ids == _state(7, 8, 9, minimized=[7])
 
 
-async def test_reply_observed_inline_matches_by_in_reply_to_id():
-    replies = [{"in_reply_to_id": 42, "user": {"login": "harness-bot"}}]
-    with patch(
-        "dotharness.pr_review.runners.common.run_cmd",
-        return_value=MagicMock(returncode=0, stdout=json.dumps(replies).encode()),
-    ):
-        assert await address_comments._reply_observed(
-            _FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {}
-        )
+async def test_get_unresolved_comment_ids_is_none_on_a_failed_read_and_empty_state_when_no_threads():
+    host = make_host()
+    assert (await address_comments._get_unresolved_comment_ids(host.code_host(), REPO, 1)) == _state()
+    host.fail_next("Discussion.review_threads", CodeHostError("boom"))
+    assert (await address_comments._get_unresolved_comment_ids(host.code_host(), REPO, 1)) is None
 
 
-async def test_reply_observed_inline_false_when_reply_from_someone_else():
-    replies = [{"in_reply_to_id": 42, "user": {"login": "alice"}}]
-    with patch(
-        "dotharness.pr_review.runners.common.run_cmd",
-        return_value=MagicMock(returncode=0, stdout=json.dumps(replies).encode()),
-    ):
-        assert not await address_comments._reply_observed(
-            _FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {}
-        )
+async def test_has_pending_feedback_finds_an_unresolved_thread_among_resolved_ones():
+    host = _unresolved_host(threads=[(True, 1), (True, 2), (False, 3)])
+    assert (await address_comments._has_pending_feedback(host.code_host(), REPO, 1)) is True
 
 
-async def test_reply_observed_issue_falls_back_to_timestamp():
-    issue_comment = {**_FAKE_COMMENT, "type": "issue", "url": "http://x/issue/1"}
-    # A reply posted by us that does NOT quote the parent URL: issue comments have no
-    # reply linkage, so it must be detected via the timestamp fallback (the old
-    # URL-substring check missed it and logged a false "no reply detected" warning).
-    comments = [{"user": {"login": "harness-bot"}, "created_at": "2026-01-02T00:00:00Z", "body": "some reply"}]
-    with patch(
-        "dotharness.pr_review.runners.common.run_cmd",
-        return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
-    ):
-        assert await address_comments._reply_observed(
-            issue_comment, 1, "acme/frontend", "harness-bot", "2026-01-01T00:00:00Z", {}
-        )
+async def test_has_pending_feedback_false_when_all_threads_resolved_and_only_bot_comments():
+    host = _unresolved_host(threads=[(True, 1)])
+    put_comment(host, "github-actions[bot]", "ci", T, 1)
+    put_comment(host, "coderabbit", "summary", T, 1, bot=True)
+    assert (await address_comments._has_pending_feedback(host.code_host(), REPO, 1)) is False
 
 
-async def test_reply_observed_issue_false_when_reply_not_from_us():
-    issue_comment = {**_FAKE_COMMENT, "type": "issue", "url": "http://x/issue/1"}
-    comments = [{"user": {"login": "alice"}, "created_at": "2026-01-02T00:00:00Z", "body": "> http://x/issue/1"}]
-    with patch(
-        "dotharness.pr_review.runners.common.run_cmd",
-        return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
-    ):
-        assert not await address_comments._reply_observed(
-            issue_comment, 1, "acme/frontend", "harness-bot", "2026-01-01T00:00:00Z", {}
-        )
+async def test_has_pending_feedback_true_for_a_human_issue_comment():
+    host = _unresolved_host()
+    put_comment(host, "github-actions[bot]", "ci", T, 1)
+    put_comment(host, "bob", "please look", T, 1)
+    assert (await address_comments._has_pending_feedback(host.code_host(), REPO, 1)) is True
 
 
-async def test_reply_observed_review_falls_back_to_timestamp():
-    review_comment = {**_FAKE_COMMENT, "type": "review"}
-    comments = [{"user": {"login": "harness-bot"}, "created_at": "2026-01-02T00:00:00Z", "body": "reply"}]
-    with patch(
-        "dotharness.pr_review.runners.common.run_cmd",
-        return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
-    ):
-        assert await address_comments._reply_observed(
-            review_comment, 1, "acme/frontend", "harness-bot", "2026-01-01T00:00:00Z", {}
-        )
+async def test_has_pending_feedback_falls_back_to_comments_when_the_thread_read_fails():
+    host = _unresolved_host(threads=[(False, 1)])
+    host.fail_next("Discussion.review_threads", CodeHostError("boom"))
+    assert (await address_comments._has_pending_feedback(host.code_host(), REPO, 1)) is False
+    put_comment(host, "bob", "please look", T, 1)
+    host.fail_next("Discussion.review_threads", CodeHostError("boom"))
+    assert (await address_comments._has_pending_feedback(host.code_host(), REPO, 1)) is True
+
+
+async def test_check_human_issue_comments_counts_an_authorless_comment_as_human():
+    host = make_host()
+    put_comment(host, None, "ghost", T, 1)
+    assert (await address_comments._check_human_issue_comments(host.code_host(), REPO, 1)) is True
+
+
+async def test_check_human_issue_comments_returns_false_on_failed_read():
+    host = make_host()
+    put_comment(host, "bob", "please look", T, 1)
+    host.fail_next("Discussion.comments", CodeHostError("boom"))
+    assert (await address_comments._check_human_issue_comments(host.code_host(), REPO, 1)) is False
+
+
+async def test_count_threads_reports_totals_and_failure():
+    host = _unresolved_host(threads=[(True, 1), (False, 2), (False, 3)])
+    assert (await address_comments._count_threads(host.code_host(), REPO, 1)) == (3, 2, True)
+    host.fail_next("Discussion.review_threads", CodeHostError("boom"))
+    assert (await address_comments._count_threads(host.code_host(), REPO, 1)) == (0, 0, False)
+
+
+@pytest.mark.parametrize("operation", ["Discussion.comments", "Discussion.review_threads"])
+async def test_unsupported_discussion_stops_the_readers(operation):
+    host = make_host(capabilities=frozenset(Capability) - {Capability.DISCUSSION})
+    code_host = host.code_host()
+    with pytest.raises(UnsupportedCapabilityError):
+        if operation == "Discussion.comments":
+            await address_comments._check_human_issue_comments(code_host, REPO, 1)
+        else:
+            await address_comments._get_unresolved_comment_ids(code_host, REPO, 1)
+    with pytest.raises(UnsupportedCapabilityError):
+        await address_comments._reply_observed(_FAKE_COMMENT, code_host, REPO, 1, "bot", "2026-01-01T00:00:00Z")
+
+
+async def test_reply_observed_inline_matches_a_reply_by_us_in_the_comments_thread():
+    host = make_host()
+    _seed_thread(host, 42, replies=(_reply("harness-bot"),))
+    assert await address_comments._reply_observed(_FAKE_COMMENT, host.code_host(), REPO, 1, "harness-bot", "2026-01-01")
+
+
+async def test_reply_observed_inline_false_when_reply_from_someone_else_or_in_another_thread():
+    host = make_host()
+    _seed_thread(host, 42, replies=(_reply("alice"),))
+    _seed_thread(host, 43, replies=(_reply("harness-bot"),))
+    assert not await address_comments._reply_observed(
+        _FAKE_COMMENT, host.code_host(), REPO, 1, "harness-bot", "2026-01-01"
+    )
+
+
+async def test_reply_observed_inline_does_not_count_our_own_root_comment_as_a_reply():
+    host = make_host()
+    _seed_thread(host, 42)
+    host._threads[REPO][1][0] = replace(
+        host._threads[REPO][1][0], comments=(Comment("42", User("harness-bot"), "mine", T, None),)
+    )
+    assert not await address_comments._reply_observed(
+        _FAKE_COMMENT, host.code_host(), REPO, 1, "harness-bot", "2026-01-01"
+    )
+
+
+@pytest.mark.parametrize("ctype", ["issue", "review"])
+async def test_reply_observed_issue_and_review_fall_back_to_timestamp(ctype):
+    # A reply posted by us that does NOT quote the parent URL: such comments have no reply linkage,
+    # so it must be detected via the timestamp fallback.
+    comment = {**_FAKE_COMMENT, "type": ctype, "url": "http://x/issue/1"}
+    host = make_host()
+    put_comment(host, "harness-bot", "some reply", datetime(2026, 1, 2, tzinfo=UTC), 1)
+    assert await address_comments._reply_observed(
+        comment, host.code_host(), REPO, 1, "harness-bot", "2026-01-01T00:00:00Z"
+    )
+
+
+async def test_reply_observed_issue_false_when_reply_not_from_us_or_before_the_window():
+    comment = {**_FAKE_COMMENT, "type": "issue", "url": "http://x/issue/1"}
+    host = make_host()
+    put_comment(host, "alice", "> http://x/issue/1", datetime(2026, 1, 2, tzinfo=UTC), 1)
+    put_comment(host, "harness-bot", "old", datetime(2025, 12, 31, tzinfo=UTC), 1)
+    put_comment(host, None, "ghost", datetime(2026, 1, 2, tzinfo=UTC), 1)
+    assert not await address_comments._reply_observed(
+        comment, host.code_host(), REPO, 1, "harness-bot", "2026-01-01T00:00:00Z"
+    )
 
 
 async def test_reply_observed_review_matches_reply_in_same_second_as_since_iso():
-    review_comment = {**_FAKE_COMMENT, "type": "review"}
-    comments = [{"user": {"login": "harness-bot"}, "created_at": "2026-01-01T00:00:00Z", "body": "reply"}]
-    with patch(
-        "dotharness.pr_review.runners.common.run_cmd",
-        return_value=MagicMock(returncode=0, stdout=json.dumps(comments).encode()),
-    ):
-        assert await address_comments._reply_observed(
-            review_comment, 1, "acme/frontend", "harness-bot", "2026-01-01T00:00:00Z", {}
-        )
+    comment = {**_FAKE_COMMENT, "type": "review"}
+    host = make_host()
+    put_comment(host, "harness-bot", "reply", datetime(2026, 1, 1, tzinfo=UTC), 1)
+    assert await address_comments._reply_observed(
+        comment, host.code_host(), REPO, 1, "harness-bot", "2026-01-01T00:00:00Z"
+    )
 
 
-async def test_reply_observed_returns_true_when_api_fails_inconclusive():
-    with patch("dotharness.pr_review.runners.common.run_cmd", return_value=MagicMock(returncode=1, stdout=b"")):
-        assert await address_comments._reply_observed(
-            _FAKE_COMMENT, 1, "acme/frontend", "harness-bot", "2026-01-01", {}
-        )
+@pytest.mark.parametrize(
+    ("ctype", "operation"), [("inline", "Discussion.review_threads"), ("issue", "Discussion.comments")]
+)
+async def test_reply_observed_returns_true_when_the_read_fails_inconclusively(ctype, operation):
+    host = make_host()
+    host.fail_next(operation, CodeHostError("boom"))
+    assert await address_comments._reply_observed(
+        {**_FAKE_COMMENT, "type": ctype}, host.code_host(), REPO, 1, "harness-bot", "2026-01-01T00:00:00Z"
+    )
 
 
 async def test_address_single_comment_warns_when_no_commit_and_no_reply_observed(caplog):
@@ -883,6 +965,7 @@ async def test_address_single_comment_warns_when_no_commit_and_no_reply_observed
             "/repo",
             "acme/frontend",
             {},
+            *_hr(),
             "sha-before",
             our_login="harness-bot",
         )
@@ -907,6 +990,7 @@ async def test_address_single_comment_no_warning_when_commit_made(caplog):
             "/repo",
             "acme/frontend",
             {},
+            *_hr(),
             "sha-before",
             our_login="harness-bot",
         )
@@ -931,6 +1015,7 @@ async def test_address_single_comment_no_warning_when_reply_observed_check_raise
             "/repo",
             "acme/frontend",
             {},
+            *_hr(),
             "sha-before",
             our_login="harness-bot",
         )
@@ -947,7 +1032,7 @@ async def test_address_single_comment_skips_reply_check_when_our_login_not_provi
         caplog.at_level("WARNING"),
     ):
         await _address_single_comment(
-            _FAKE_COMMENT, 1, "instructions", mock_backend, "/repo", "acme/frontend", {}, "sha-before"
+            _FAKE_COMMENT, 1, "instructions", mock_backend, "/repo", "acme/frontend", {}, *_hr(), "sha-before"
         )
     mock_reply_observed.assert_not_called()
 
@@ -989,7 +1074,7 @@ async def test_address_single_comment_records_issue_comment_after_clean_run(monk
     backend.run = AsyncMock()
     backend.run.return_value = None
     await address_comments._address_single_comment(
-        _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, None, "acme-frontend"
+        _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, *_hr(), "sha", None, None, "acme-frontend"
     )
     assert recorded == [("acme-frontend", 7, "issue:6161750034")]
 
@@ -1004,7 +1089,7 @@ async def test_address_single_comment_does_not_record_when_backend_raises(monkey
     boom.run.side_effect = RuntimeError("boom")
 
     await address_comments._address_single_comment(
-        _ISSUE_COMMENT, 7, "tmpl", boom, "/w", "acme/frontend", {}, "sha", None, None, "acme-frontend"
+        _ISSUE_COMMENT, 7, "tmpl", boom, "/w", "acme/frontend", {}, *_hr(), "sha", None, None, "acme-frontend"
     )
     assert recorded == []
 
@@ -1030,7 +1115,7 @@ async def test_backend_failure_is_swallowed_and_loop_continues_and_pushes(failur
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     comment_2 = {**_FAKE_COMMENT, "id": 43}
     with (
-        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 2, "headRefName": "my-branch"}],
@@ -1075,7 +1160,7 @@ async def test_address_single_comment_does_not_record_for_any_backend_failure(fa
     backend.run.side_effect = failure
 
     post_sha, rewritten = await address_comments._address_single_comment(
-        _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, None, "acme-frontend"
+        _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, *_hr(), "sha", None, None, "acme-frontend"
     )
     assert recorded == []
     assert post_sha == "sha-after"
@@ -1091,7 +1176,7 @@ async def test_address_single_comment_does_not_record_when_no_commit_and_no_repl
     backend.run = AsyncMock()
     backend.run.return_value = None
     await address_comments._address_single_comment(
-        _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, "bot", "acme-frontend"
+        _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, *_hr(), "sha", None, "bot", "acme-frontend"
     )
     assert recorded == []
 
@@ -1105,7 +1190,7 @@ async def test_address_single_comment_records_when_reply_observed_without_commit
     backend.run = AsyncMock()
     backend.run.return_value = None
     await address_comments._address_single_comment(
-        _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, "sha", None, "bot", "acme-frontend"
+        _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, *_hr(), "sha", None, "bot", "acme-frontend"
     )
     assert recorded == [("acme-frontend", 7, "issue:6161750034")]
 
@@ -1121,18 +1206,9 @@ async def test_list_all_open_pr_numbers_returns_none_on_failure():
         assert (await ac._list_all_open_pr_numbers("o/r", {})) == {7}
 
 
-def _thread(root_id, *, resolved=False, minimized=False):
-    return {
-        "isResolved": resolved,
-        "comments": {"nodes": [{"id": f"n{root_id}", "databaseId": root_id, "isMinimized": minimized}]},
-    }
-
-
 async def test_filter_comments_drops_marked_comment_in_resolved_thread():
-    with patch(
-        "dotharness.pr_review.runners.address_comments.fetch_review_threads", return_value=[_thread(1, resolved=True)]
-    ):
-        result = await address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
+    host = _unresolved_host(threads=[(True, 1)])
+    result = await address_comments._filter_comments([_MARKED_COMMENT], 1, host.code_host(), REPO, "alexei")
     assert result == []
 
 
@@ -1178,34 +1254,31 @@ def test_select_focused_review_comments_drops_marked_comment_not_in_unresolved_i
 
 
 async def test_filter_comments_drops_minimized_marked_thread_and_does_not_forward_to_rest():
-    threads = [_thread(1, minimized=True), _thread(2)]
-    with patch("dotharness.pr_review.runners.address_comments.fetch_review_threads", return_value=threads):
-        result = await address_comments._filter_comments(
-            [_MARKED_COMMENT, _PLAIN_COMMENT], 1, "acme/frontend", "alexei", {}
-        )
+    host = make_host()
+    _seed_thread(host, 1, minimized=True)
+    _seed_thread(host, 2)
+    result = await address_comments._filter_comments(
+        [_MARKED_COMMENT, _PLAIN_COMMENT], 1, host.code_host(), REPO, "alexei"
+    )
     assert result == [_PLAIN_COMMENT]
 
 
 async def test_filter_comments_selects_unresolved_unminimized_marked_thread():
-    with patch("dotharness.pr_review.runners.address_comments.fetch_review_threads", return_value=[_thread(1)]):
-        result = await address_comments._filter_comments([_MARKED_COMMENT], 1, "acme/frontend", "alexei", {})
+    host = _unresolved_host(threads=[(False, 1)])
+    result = await address_comments._filter_comments([_MARKED_COMMENT], 1, host.code_host(), REPO, "alexei")
     assert result == [_FOCUSED_REVIEW_COMMENT]
 
 
-@pytest.mark.parametrize("patch_target", ["fetch_review_threads", "_get_unresolved_comment_ids"])
-async def test_filter_comments_lookup_failure_fails_closed_for_marked_threads(patch_target, caplog):
-    with (
-        patch(f"dotharness.pr_review.runners.address_comments.{patch_target}", return_value=None),
-        caplog.at_level("WARNING"),
-    ):
+async def test_filter_comments_lookup_failure_fails_closed_for_marked_threads(caplog):
+    host = make_host()
+    host.fail_next("Discussion.review_threads", CodeHostError("boom"))
+    with caplog.at_level("WARNING"):
         result = await address_comments._filter_comments(
-            [_MARKED_COMMENT, _PLAIN_COMMENT], 7, "acme/frontend", "alexei", {}
+            [_MARKED_COMMENT, _PLAIN_COMMENT], 7, host.code_host(), REPO, "alexei"
         )
     assert result == [_PLAIN_COMMENT]
-    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
-    assert len(warnings) == 1
-    assert "#7" in warnings[0].getMessage()
-    assert "1 marked" in warnings[0].getMessage()
+    messages = [r.getMessage() for r in caplog.records if "#7" in r.getMessage() and "1 marked" in r.getMessage()]
+    assert len(messages) == 1
 
 
 async def test_filter_comments_lookup_failure_without_marked_threads_logs_no_warning(caplog):
@@ -1213,14 +1286,14 @@ async def test_filter_comments_lookup_failure_without_marked_threads_logs_no_war
         patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=None),
         caplog.at_level("WARNING"),
     ):
-        result = await address_comments._filter_comments([_PLAIN_COMMENT], 1, "acme/frontend", "alexei", {})
+        result = await address_comments._filter_comments([_PLAIN_COMMENT], 1, *_hr(), "alexei")
     assert result == [_PLAIN_COMMENT]
     assert not [r for r in caplog.records if r.levelname == "WARNING"]
 
 
 async def test_comment_still_unresolved_returns_true_on_lookup_failure_for_unmarked_comment():
     with patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids", return_value=None):
-        assert (await address_comments._comment_still_unresolved(_PLAIN_COMMENT, 1, "acme/frontend", {})) is True
+        assert (await address_comments._comment_still_unresolved(_PLAIN_COMMENT, *_hr(), 1)) is True
 
 
 async def _run_pending(comments, lookup_return):
@@ -1298,22 +1371,6 @@ def test_build_comment_instructions_fences_replies_and_original():
     begins = [ln for ln in instructions.splitlines() if ln.startswith("-- USER-SUPPLIED CONTENT BEGINS [")]
     ends = [ln for ln in instructions.splitlines() if ln.startswith("-- USER-SUPPLIED CONTENT ENDS [")]
     assert len(begins) == len(ends) == 3  # body, reply, original finding
-
-
-@pytest.mark.parametrize(
-    "stdout",
-    [b'{"data": {"repository": null}}', b"null", b"not json", b'{"data": {"repository": {"pullRequest": null}}}'],
-)
-async def test_check_gql_unresolved_threads_malformed_payload_fails_soft(stdout):
-    result = MagicMock(returncode=0, stdout=stdout)
-    with patch("dotharness.pr_review.runners.address_comments.run_cmd", return_value=result):
-        assert (await address_comments._check_gql_unresolved_threads(1, "o/r", {})) == (0, 0, False)
-
-
-async def test_check_human_issue_comments_malformed_payload_returns_false():
-    result = MagicMock(returncode=0, stdout=b"{truncated")
-    with patch("dotharness.pr_review.runners.address_comments.run_cmd", return_value=result):
-        assert (await address_comments._check_human_issue_comments(1, "o/r", {})) is False
 
 
 async def test_list_prs_malformed_payload_returns_empty():

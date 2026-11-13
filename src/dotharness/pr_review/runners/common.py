@@ -6,7 +6,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -23,6 +23,7 @@ from dotharness.code_host import (
     ConfigurationError,
     HostSelection,
     RepositoryRef,
+    ReviewThread,
     UnsupportedCapabilityError,
     WorkItem,
     create_code_host,
@@ -637,133 +638,154 @@ async def fetch_all_pages(path: str, env: dict) -> list[dict] | None:
         page += 1
 
 
-async def _fetch_matching_comments(
-    comments_path: str, current_user: str, env: dict, predicate: Callable[[str], bool]
-) -> list[dict] | None:
-    """Returns the current_user's comments matching predicate (possibly empty), or None
-    if the GitHub API call itself failed (e.g. rate limit, transient 5xx) and the result
-    is inconclusive."""
-    comments = await fetch_all_pages(comments_path, env)
+def _is_author(comment: Comment, login: str) -> bool:
+    return comment.author is not None and comment.author.login == login
+
+
+async def _read_or_none(read: Callable[[], Awaitable[_T]], what: str, pr_number: int) -> _T | None:
+    """Result of a host read, or None (logged) when the host could not answer, so a failed read stays distinct
+    from an empty result. An unsupported capability stops (no policy row, default "stop")."""
+    try:
+        return await read()
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as e:
+        logger.warning("PR #%d: reading %s failed: %s", pr_number, what, e)
+        return None
+
+
+async def _matching_comments(
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str, predicate: Callable[[str], bool]
+) -> list[Comment] | None:
+    """Returns the current_user's change-request-level comments matching predicate (possibly empty), or None
+    if the host call itself failed (e.g. rate limit, transient 5xx) and the result is inconclusive."""
+    comments = await _read_or_none(lambda: host.discussion.comments(repo, pr_number), "comments", pr_number)
     if comments is None:
         return None
-    return [c for c in comments if c.get("user", {}).get("login") == current_user and predicate(c.get("body", ""))]
+    return [c for c in comments if _is_author(c, current_user) and predicate(c.body or "")]
 
 
-async def _has_matching_comment(
-    comments_path: str, current_user: str, env: dict, predicate: Callable[[str], bool]
+async def _matching_inline_comments(
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str, predicate: Callable[[str], bool]
+) -> list[tuple[Comment, ReviewThread]] | None:
+    """The current_user's inline review comments matching predicate, each with its thread (possibly empty),
+    or None if the host call itself failed."""
+    threads = await _read_or_none(lambda: host.discussion.review_threads(repo, pr_number), "review threads", pr_number)
+    if threads is None:
+        return None
+    return [(c, t) for t in threads for c in t.comments if _is_author(c, current_user) and predicate(c.body or "")]
+
+
+async def has_review_summary_comment(host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str) -> bool:
+    return bool(await check_review_summary_comment_status(host, repo, pr_number, current_user))
+
+
+async def check_review_summary_comment_status(
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str
 ) -> bool | None:
-    """Returns True/False for a confirmed match/no-match, or None if the GitHub API
-    call itself failed (e.g. rate limit, transient 5xx) and the result is inconclusive."""
-    matches = await _fetch_matching_comments(comments_path, current_user, env, predicate)
-    return None if matches is None else bool(matches)
-
-
-async def has_review_summary_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
-    return bool(await check_review_summary_comment_status(pr_number, repo, current_user, env))
-
-
-async def check_review_summary_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
     """Tri-state version of has_review_summary_comment: None means the check itself was
     inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return await _has_matching_comment(
-        f"repos/{repo}/issues/{pr_number}/comments", current_user, env, is_review_summary_comment
-    )
+    matches = await _matching_comments(host, repo, pr_number, current_user, is_review_summary_comment)
+    return None if matches is None else bool(matches)
 
 
 def is_inline_review_comment(body: str) -> bool:
     return INLINE_REVIEW_MARKER in body
 
 
-async def has_inline_review_comments(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
-    return bool(
-        await _has_matching_comment(
-            f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, is_inline_review_comment
-        )
-    )
+async def has_inline_review_comments(host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str) -> bool:
+    return bool(await _matching_inline_comments(host, repo, pr_number, current_user, is_inline_review_comment))
 
 
-async def has_pr_level_pass_comment(marker: str, pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+async def has_pr_level_pass_comment(
+    host: CodeHost, repo: RepositoryRef, marker: str, pr_number: int, current_user: str
+) -> bool:
     """Shared by every PR-level pass (design review, requirement-traceability review,
     ...) whose completion signal is "did I already post an issue-level PR comment
     containing this marker" — extracted per requirement-traceability-requirements.md §7.6,
     closing the reuse pointer design-review-requirements.md §11.5 left here. A PR-level
     pass always posts exactly one PR-level comment per successful run (findings, or a
     "nothing to report" quiet path), so checking issue-level comments alone is enough —
-    no need to also check the inline pulls/comments endpoint the way
+    no need to also check the inline review comments the way
     has_inline_review_comments does."""
-    return bool(await check_pr_level_pass_comment_status(marker, pr_number, repo, current_user, env))
+    return bool(await check_pr_level_pass_comment_status(host, repo, marker, pr_number, current_user))
 
 
 async def check_pr_level_pass_comment_status(
-    marker: str, pr_number: int, repo: str, current_user: str, env: dict
+    host: CodeHost, repo: RepositoryRef, marker: str, pr_number: int, current_user: str
 ) -> bool | None:
     """Tri-state version of has_pr_level_pass_comment: None means the check itself was
     inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return await _has_matching_comment(
-        f"repos/{repo}/issues/{pr_number}/comments", current_user, env, lambda body: marker in body
-    )
+    matches = await _matching_comments(host, repo, pr_number, current_user, lambda body: marker in body)
+    return None if matches is None else bool(matches)
 
 
 def is_design_review_comment(body: str) -> bool:
     return DESIGN_REVIEW_MARKER in body
 
 
-async def has_design_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+async def has_design_review_comment(host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str) -> bool:
     """This is the design pass's *only* idempotency signal in review-requested (no
     persisted state there); self-review uses it only as defense-in-depth alongside its
     own persisted design_reviewed_prs state."""
-    return await has_pr_level_pass_comment(DESIGN_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await has_pr_level_pass_comment(host, repo, DESIGN_REVIEW_MARKER, pr_number, current_user)
 
 
-async def check_design_review_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
+async def check_design_review_comment_status(
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str
+) -> bool | None:
     """Tri-state version of has_design_review_comment: None means the check itself was
     inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return await check_pr_level_pass_comment_status(DESIGN_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await check_pr_level_pass_comment_status(host, repo, DESIGN_REVIEW_MARKER, pr_number, current_user)
 
 
 def is_traceability_review_comment(body: str) -> bool:
     return TRACEABILITY_REVIEW_MARKER in body
 
 
-async def has_traceability_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+async def has_traceability_review_comment(
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str
+) -> bool:
     """Mirrors has_design_review_comment exactly (see requirement-traceability-requirements.md
     §7.4/§7.5): review-requested's only idempotency signal for this pass; self-review's
     defense-in-depth check alongside its own persisted traceability_reviewed_prs state.
     Also covers the "no linked ticket found" outcome, which is terminal (§7.3/§11.1) —
     any comment carrying this marker, including that one, counts as done."""
-    return await has_pr_level_pass_comment(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await has_pr_level_pass_comment(host, repo, TRACEABILITY_REVIEW_MARKER, pr_number, current_user)
 
 
 async def check_traceability_review_comment_status(
-    pr_number: int, repo: str, current_user: str, env: dict
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str
 ) -> bool | None:
     """Tri-state version of has_traceability_review_comment: None means the check itself
     was inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return await check_pr_level_pass_comment_status(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await check_pr_level_pass_comment_status(host, repo, TRACEABILITY_REVIEW_MARKER, pr_number, current_user)
 
 
-async def has_regret_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+async def has_regret_review_comment(host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str) -> bool:
     """Mirrors has_design_review_comment / has_traceability_review_comment exactly
     (regret-review-requirements.md §7.4/§7.6): review-requested's only idempotency signal
     for this pass (no persisted state there); self-review's defense-in-depth check
     alongside its own persisted regret_reviewed_prs state (§7.3)."""
-    return await has_pr_level_pass_comment(REGRET_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await has_pr_level_pass_comment(host, repo, REGRET_REVIEW_MARKER, pr_number, current_user)
 
 
-async def check_regret_review_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
+async def check_regret_review_comment_status(
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str
+) -> bool | None:
     """Tri-state version of has_regret_review_comment: None means the check itself was
     inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return await check_pr_level_pass_comment_status(REGRET_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await check_pr_level_pass_comment_status(host, repo, REGRET_REVIEW_MARKER, pr_number, current_user)
 
 
 async def get_pr_level_flagged_locations(
-    marker: str, pr_number: int, repo: str, current_user: str, env: dict
+    host: CodeHost, repo: RepositoryRef, marker: str, pr_number: int, current_user: str
 ) -> list[tuple[str, int]]:
     """Shared by every PR-level pass's flagged-locations fetch (design review,
     requirement-traceability review, ...), mirroring has_pr_level_pass_comment's
     extraction (requirement-traceability-requirements.md §7.6). (path, line) pairs
-    already flagged by a prior inline comment containing marker on this PR. Checks the
-    pulls/comments endpoint directly and is meant to be called on every invocation, not
+    already flagged by a prior inline comment containing marker on this PR. Reads the
+    inline review threads directly and is meant to be called on every invocation, not
     just when deciding whether to skip the pass: a pass posts inline findings and the
     closing PR-level comment as separate calls, so a crash in between leaves the
     PR-level marker comment absent while inline comments already exist. Feeding those
@@ -771,29 +793,22 @@ async def get_pr_level_flagged_locations(
     list on an inconclusive API failure, rather than blocking the run — worst case a
     retry re-flags an already-posted location instead of the whole pass silently never
     running."""
-    matches = await _fetch_matching_comments(
-        f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, lambda body: marker in body
-    )
+    matches = await _matching_inline_comments(host, repo, pr_number, current_user, lambda body: marker in body)
     if not matches:
         return []
-    locations = []
-    for comment in matches:
-        path, line = comment.get("path"), comment.get("line")
-        if path and line is not None:
-            locations.append((path, line))
-    return locations
+    return [(t.anchor.path, t.anchor.line) for _c, t in matches if t.anchor is not None and t.anchor.path]
 
 
 async def get_design_review_flagged_locations(
-    pr_number: int, repo: str, current_user: str, env: dict
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str
 ) -> list[tuple[str, int]]:
-    return await get_pr_level_flagged_locations(DESIGN_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await get_pr_level_flagged_locations(host, repo, DESIGN_REVIEW_MARKER, pr_number, current_user)
 
 
 async def get_traceability_review_flagged_locations(
-    pr_number: int, repo: str, current_user: str, env: dict
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str
 ) -> list[tuple[str, int]]:
-    return await get_pr_level_flagged_locations(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await get_pr_level_flagged_locations(host, repo, TRACEABILITY_REVIEW_MARKER, pr_number, current_user)
 
 
 def _window_end(created_at: datetime) -> datetime:
@@ -1571,98 +1586,32 @@ async def fetch_pr_comments(pr_number: int, script_path: Path, wdir: str, env: d
     return comments
 
 
-GRAPHQL_QUERY_REVIEW_THREAD_STATE = """
-query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
-  repository(owner:$owner,name:$repo){
-    pullRequest(number:$number){
-      reviewThreads(first:100,after:$cursor){
-        pageInfo{endCursor hasNextPage}
-        nodes{
-          id
-          isResolved
-          comments(first:100){nodes{id databaseId isMinimized}}
-        }
-      }
-    }
-  }
-}
-""".strip()
-
-
-async def _fetch_review_threads_page(pr_number: int, repo: str, cursor: str | None, env: dict) -> dict | None:
-    """Fetch one page of review threads. Returns the `reviewThreads` object, or None on
-    any failure (non-zero exit, unparsable JSON, missing data)."""
-    owner, repo_name = repo.split("/")
-    cmd = gh_argv(
-        "api",
-        "graphql",
-        "-f",
-        f"query={GRAPHQL_QUERY_REVIEW_THREAD_STATE}",
-        "-F",
-        f"owner={owner}",
-        "-F",
-        f"repo={repo_name}",
-        "-F",
-        f"number={pr_number}",
+async def fetch_review_threads(host: CodeHost, repo: RepositoryRef, pr_number: int) -> list[ReviewThread] | None:
+    """Every review thread of a PR (all pages, with ids, resolved state and comments), or None if the host
+    could not answer. An unsupported capability stops."""
+    threads = await _read_or_none(
+        lambda: host.discussion.review_threads(repo, pr_number), "review thread state", pr_number
     )
-    if cursor:
-        cmd += ["-f", f"cursor={cursor}"]
-    result = await run_cmd(cmd, cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
-    if result.returncode != 0:
-        logger.warning("PR #%d: could not fetch review thread state (rc=%d)", pr_number, result.returncode)
-        return None
-    try:
-        data = json.loads(result.stdout)
-        threads = data["data"]["repository"]["pullRequest"]["reviewThreads"]
-    except (ValueError, KeyError, TypeError):
-        logger.warning("PR #%d: could not parse GraphQL review thread state response", pr_number)
-        return None
-    if not isinstance(threads, dict) or not isinstance(threads.get("nodes"), list):
-        logger.warning("PR #%d: GraphQL review thread state response had no thread nodes", pr_number)
-        return None
-    return threads
+    return None if threads is None else list(threads)
 
 
-async def fetch_review_threads(pr_number: int, repo: str, env: dict) -> list[dict] | None:
-    """Return the review thread nodes (all pages) of a PR with ids and resolved/minimised
-    state, or None if any page fails to fetch or parse."""
-    nodes: list[dict] = []
-    cursor: str | None = None
-    while True:
-        page = await _fetch_review_threads_page(pr_number, repo, cursor, env)
-        if page is None:
-            return None
-        nodes.extend(page["nodes"])
-        page_info = page.get("pageInfo") or {}
-        cursor = page_info.get("endCursor")
-        if not page_info.get("hasNextPage") or not cursor:
-            return nodes
-
-
-def merge_thread_state(comments: list[dict], threads: list[dict]) -> None:
-    """Add thread_id, thread_resolved, node_id and is_minimized to each inline comment
-    that is the root comment of one of `threads`. Mutates the comment dicts in place.
-    Other comments, and threads whose root is not in `comments`, are left alone."""
-    by_root: dict[int, tuple[dict, dict]] = {}
-    for thread in threads:
-        root_nodes = (thread.get("comments") or {}).get("nodes") or []
-        if not root_nodes:
-            continue
-        root = root_nodes[0]
-        db_id = root.get("databaseId")
-        if db_id is not None:
-            by_root[db_id] = (thread, root)
+def merge_thread_state(comments: list[dict], threads: Sequence[ReviewThread]) -> None:
+    """Add thread_id, thread_resolved and is_minimized to each inline comment that is the
+    root comment of one of `threads` (matched on the host comment id, which is the id the
+    comments cache carries). Mutates the comment dicts in place. Other comments, and
+    threads whose root is not in `comments`, are left alone. No node_id is set: the host
+    comment id is not a GraphQL node id, so the prompt shows "?" and skips that mutation."""
+    by_root = {t.comments[0].id: (t, t.comments[0]) for t in threads if t.comments}
     for comment in comments:
         if comment.get("type") != "inline":
             continue
-        found = by_root.get(comment.get("id"))
+        found = by_root.get(str(comment.get("id")))
         if found is None:
             continue
         thread, root = found
-        comment["thread_id"] = thread.get("id")
-        comment["thread_resolved"] = bool(thread.get("isResolved"))
-        comment["node_id"] = root.get("id")
-        comment["is_minimized"] = bool(root.get("isMinimized"))
+        comment["thread_id"] = thread.id
+        comment["thread_resolved"] = thread.is_resolved
+        comment["is_minimized"] = root.is_hidden
 
 
 def find_reply_with_marker(comment: dict, marker: str = FOCUSED_REVIEW_MARKER) -> dict | None:

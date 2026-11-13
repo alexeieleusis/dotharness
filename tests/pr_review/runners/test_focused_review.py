@@ -1,18 +1,19 @@
-import json
 from importlib.resources import files
 from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from dotharness.code_host import Anchor, Comment, ReviewThread, User
 from dotharness.pr_review.config import FocusedReviewConfig, HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
-from dotharness.pr_review.runners import common, focused_review
+from dotharness.pr_review.runners import focused_review
 from dotharness.pr_review.runners.focused_review import (
     FOCUSED_REVIEW_MARKER,
     _build_prompt,
     _matching_comments,
     _resolve_knowledge_file,
 )
+from tests.pr_review.runners.approve_support import T
 from tests.pr_review.runners.runner_support import REPO, make_scaffold
 
 _USER = "bot"
@@ -532,105 +533,19 @@ def _no_real_thread_fetch():
 
 
 def _thread(thread_id, resolved, comments):
-    return {
-        "id": thread_id,
-        "isResolved": resolved,
-        "comments": {"nodes": [{"id": n, "databaseId": d, "isMinimized": m} for n, d, m in comments]},
-    }
+    """A review thread; ``comments`` are (id, database id, hidden) tuples, the host comment id being the database id."""
+    return ReviewThread(
+        id=thread_id,
+        is_resolved=resolved,
+        anchor=Anchor("a.py", 1, "RIGHT"),
+        comments=tuple(
+            Comment(id=str(d), author=User("bob"), body="x", created_at=T, url=None, is_hidden=m)
+            for _n, d, m in comments
+        ),
+    )
 
 
-def _page(nodes, has_next=False, cursor=None):
-    payload = {
-        "data": {
-            "repository": {
-                "pullRequest": {
-                    "reviewThreads": {"pageInfo": {"hasNextPage": has_next, "endCursor": cursor}, "nodes": nodes}
-                }
-            }
-        }
-    }
-    return MagicMock(returncode=0, stdout=json.dumps(payload).encode())
-
-
-def test_merge_single_page():
-    comments = [{"type": "inline", "id": 10}]
-    common.merge_thread_state(comments, [_thread("T1", True, [("C10", 10, True), ("C11", 11, False)])])
-    assert comments[0] == {
-        "type": "inline",
-        "id": 10,
-        "thread_id": "T1",
-        "thread_resolved": True,
-        "node_id": "C10",
-        "is_minimized": True,
-    }
-
-
-def test_merge_unresolved_thread_sets_false_values():
-    comments = [{"type": "inline", "id": 10}]
-    common.merge_thread_state(comments, [_thread("T1", False, [("C10", 10, False)])])
-    assert comments[0]["thread_resolved"] is False
-    assert comments[0]["is_minimized"] is False
-
-
-def test_merge_matches_only_root_comment():
-    comments = [{"type": "inline", "id": 11}]
-    common.merge_thread_state(comments, [_thread("T1", False, [("C10", 10, False), ("C11", 11, False)])])
-    assert "thread_id" not in comments[0]
-
-
-def test_merge_thread_root_not_in_comments_is_ignored():
-    comments = [{"type": "inline", "id": 10}]
-    common.merge_thread_state(comments, [_thread("T9", False, [("C99", 99, False)])])
-    assert comments == [{"type": "inline", "id": 10}]
-
-
-def test_merge_comment_not_in_any_thread_gets_no_keys():
-    comments = [{"type": "inline", "id": 10}]
-    common.merge_thread_state(comments, [])
-    assert comments == [{"type": "inline", "id": 10}]
-
-
-def test_merge_non_inline_untouched():
-    comments = [{"type": "review", "id": 10}, {"type": "issue", "id": 10}]
-    common.merge_thread_state(comments, [_thread("T1", True, [("C10", 10, False)])])
-    assert comments == [{"type": "review", "id": 10}, {"type": "issue", "id": 10}]
-
-
-async def test_fetch_review_threads_follows_pagination():
-    pages = [
-        _page([_thread("T1", False, [("C1", 1, False)])], has_next=True, cursor="CUR1"),
-        _page([_thread("T2", True, [("C2", 2, False)])]),
-    ]
-    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=pages) as mock_run:
-        nodes = await common.fetch_review_threads(7, "acme/frontend", {})
-    assert nodes is not None
-    assert [n["id"] for n in nodes] == ["T1", "T2"]
-    first, second = (c.args[0] for c in mock_run.call_args_list)
-    assert "cursor=CUR1" not in " ".join(first)
-    assert second[-2:] == ["-f", "cursor=CUR1"]
-    assert "owner=acme" in first
-    assert "repo=frontend" in first
-    assert "number=7" in first
-
-
-@pytest.mark.parametrize(
-    "result",
-    [
-        MagicMock(returncode=1, stdout=b""),
-        MagicMock(returncode=0, stdout=b"not json"),
-        MagicMock(returncode=0, stdout=b"{}"),
-        MagicMock(returncode=0, stdout=b'{"data": {"repository": {"pullRequest": null}}}'),
-    ],
-)
-async def test_fetch_review_threads_failure_returns_none(result):
-    with patch("dotharness.pr_review.runners.common.run_cmd", return_value=result):
-        assert (await common.fetch_review_threads(7, "acme/frontend", {})) is None
-
-
-async def test_fetch_review_threads_failure_on_later_page_returns_none():
-    pages = [_page([], has_next=True, cursor="C"), MagicMock(returncode=1, stdout=b"")]
-    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=pages):
-        assert (await common.fetch_review_threads(7, "acme/frontend", {})) is None
+# fetch_review_threads and merge_thread_state are covered in test_common_comments.py (InMemoryCodeHost).
 
 
 async def _run_with_threads(tmp_path, comments, threads):
@@ -698,7 +613,7 @@ async def test_run_merges_thread_state_into_target_comment(tmp_xdg, tmp_path):
     threads = [_thread("T1", False, [("C1", 1, False)])]
     _t, _c, mock_be = await _run_with_threads(tmp_path, [comment], threads)
     assert comment["thread_id"] == "T1"
-    assert comment["node_id"] == "C1"
+    assert "node_id" not in comment
     mock_be.return_value.run.assert_awaited_once()
 
 
@@ -735,7 +650,8 @@ async def test_runner_passes_node_ids_to_backend_prompt(tmp_xdg, tmp_path):
     mock_be.return_value.run.assert_awaited_once()
     prompt = mock_be.return_value.run.call_args.args[0]
     assert "Thread node ID: PRRT_T1" in prompt
-    assert "Comment node ID: PRRC_C1" in prompt
+    # The host exposes no GraphQL node id for a comment, so the prompt renders "?" and the agent skips that mutation.
+    assert "Comment node ID: ?\n" in prompt
 
 
 # --- Template string assertions (read the template shipped in the package) ---

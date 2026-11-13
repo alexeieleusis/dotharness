@@ -6,7 +6,14 @@ import time
 from pathlib import Path
 from typing import cast
 
-from dotharness.code_host import ChangeRequest, CodeHost, RepositoryRef
+from dotharness.code_host import (
+    ChangeRequest,
+    CodeHost,
+    CodeHostError,
+    RepositoryRef,
+    ReviewState,
+    UnsupportedCapabilityError,
+)
 from dotharness.gh import gh_argv
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
@@ -91,14 +98,14 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
 
     for pr in prs:
         pr_number = pr["number"]
-        files_summary_done = await _should_skip_pr(pr, config.repo.name, current_user, env)
-        design_done = await has_design_review_comment(pr_number, config.repo.name, current_user, env)
-        traceability_done = await has_traceability_review_comment(pr_number, config.repo.name, current_user, env)
+        files_summary_done = await _should_skip_pr(pr, host, repo, current_user)
+        design_done = await has_design_review_comment(host, repo, pr_number, current_user)
+        traceability_done = await has_traceability_review_comment(host, repo, pr_number, current_user)
         # The regret pass is the only config-gated PR-level pass here (off by default);
         # when disabled, regret_done is True so the gate below and the call in
         # _process_pr are both unchanged, and no extra gh marker check runs.
         regret_done = (
-            await has_regret_review_comment(pr_number, config.repo.name, current_user, env)
+            await has_regret_review_comment(host, repo, pr_number, current_user)
             if config.regret_review.enabled
             else True
         )
@@ -171,46 +178,29 @@ async def _get_prs(repo: str, env: dict) -> list[dict]:
     return sorted(json.loads(result.stdout), key=lambda p: p["number"])
 
 
-async def _has_user_approved(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
-    page = 1
-    while True:
-        result = await run_cmd(
-            gh_argv(
-                "api",
-                "--method",
-                "GET",
-                f"repos/{repo}/pulls/{pr_number}/reviews",
-                "-F",
-                "per_page=100",
-                "-F",
-                f"page={page}",
-            ),
-            cwd="/",
-            env=env,
-            timeout=TIMEOUT_GH,
-            check=False,
-        )
-        if result.returncode != 0:
-            return False
-        reviews = json.loads(result.stdout)
-        if not reviews or not isinstance(reviews, list):
-            return False
-        if any(r["state"] == "APPROVED" and r["user"]["login"] == current_user for r in reviews):
-            return True
-        if len(reviews) < 100:
-            return False
-        page += 1
+async def _has_user_approved(host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str) -> bool:
+    """Whether current_user has an approving review on the PR (every review is read). A failed read counts as
+    not approved."""
+    try:
+        reviews = await host.change_requests.reviews(repo, pr_number)
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError:
+        return False
+    return any(
+        r.state is ReviewState.APPROVED and r.author is not None and r.author.login == current_user for r in reviews
+    )
 
 
-async def _should_skip_pr(pr: dict, repo: str, current_user: str, env: dict) -> bool:
+async def _should_skip_pr(pr: dict, host: CodeHost, repo: RepositoryRef, current_user: str) -> bool:
     pr_number = pr["number"]
-    if await _has_user_approved(pr_number, repo, current_user, env):
+    if await _has_user_approved(host, repo, pr_number, current_user):
         logger.info("PR #%d already approved by self, skipping", pr_number)
         return True
-    if await has_review_summary_comment(pr_number, repo, current_user, env):
+    if await has_review_summary_comment(host, repo, pr_number, current_user):
         logger.info("PR #%d already has review summary comment, skipping", pr_number)
         return True
-    if await has_inline_review_comments(pr_number, repo, current_user, env):
+    if await has_inline_review_comments(host, repo, pr_number, current_user):
         logger.info("PR #%d has partial inline review comments, skipping", pr_number)
         return True
     return False
@@ -425,7 +415,9 @@ async def _run_design_review(
             build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
             for file in ctx["files"]
         ])
-        prior_flagged_locations = await get_design_review_flagged_locations(pr_number, repo_name, current_user, env)
+        prior_flagged_locations = await get_design_review_flagged_locations(
+            ctx["host"], ctx["repo"], pr_number, current_user
+        )
         return build_design_review_prompt(
             design_instructions,
             extra_knowledge,
@@ -446,7 +438,7 @@ async def _run_design_review(
             wdir,
             is_done=design_done,
             build_prompt=build_prompt,
-            has_comment_fn=lambda: has_design_review_comment(pr_number, repo_name, current_user, env),
+            has_comment_fn=lambda: has_design_review_comment(ctx["host"], ctx["repo"], pr_number, current_user),
             label="design review",
         )
     )
@@ -501,7 +493,7 @@ async def _run_traceability_review(
             for file in ctx["files"]
         ])
         prior_flagged_locations = await get_traceability_review_flagged_locations(
-            pr_number, repo_name, current_user, env
+            ctx["host"], ctx["repo"], pr_number, current_user
         )
         change_request = _change_request(ctx, pr_number)
         early_comment_context = await build_early_comment_context(
@@ -529,7 +521,7 @@ async def _run_traceability_review(
             wdir,
             is_done=traceability_done,
             build_prompt=build_prompt,
-            has_comment_fn=lambda: has_traceability_review_comment(pr_number, repo_name, current_user, env),
+            has_comment_fn=lambda: has_traceability_review_comment(ctx["host"], ctx["repo"], pr_number, current_user),
             label="traceability review",
             short_circuit=short_circuit,
         )
@@ -620,7 +612,7 @@ async def _run_regret_review(
         if not await post_regret_comment(pr_number, repo_name, build_regret_comment_body(findings), env):
             logger.error("PR #%d: failed to post the regret comment — will retry next run", pr_number)
             return False
-        return await has_regret_review_comment(pr_number, repo_name, current_user, env)
+        return await has_regret_review_comment(ctx["host"], ctx["repo"], pr_number, current_user)
 
     return bool(
         await run_pr_level_pass(

@@ -3,9 +3,19 @@ import json
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+import pytest
+
+from dotharness.code_host import Capability, CodeHostError, ReviewState, UnsupportedCapabilityError
 from dotharness.pr_review.runners import review_requested
-from dotharness.pr_review.runners.common import REGRET_REVIEW_MARKER, LinkedTicket
+from dotharness.pr_review.runners.common import (
+    DESIGN_REVIEW_MARKER,
+    INLINE_REVIEW_MARKER,
+    REGRET_REVIEW_MARKER,
+    TRACEABILITY_REVIEW_MARKER,
+    LinkedTicket,
+)
 from dotharness.pr_review.runners.regret_review import IntroducingHunk, RegretCandidate
+from tests.pr_review.runners.approve_support import T, make_host, put_comment, put_review, put_thread, seed_pr
 from tests.pr_review.runners.runner_support import REPO, make_change_request, make_scaffold
 
 
@@ -110,45 +120,54 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
         )
 
 
-async def test_skips_already_approved_pr(tmp_xdg, tmp_path):
+def _seeded_scaffold():
+    host = make_host()
+    seed_pr(host, 1)
+    return host, make_scaffold(host)
+
+
+async def _run_skip_scenario(tmp_path, scaffold, *, design_and_traceability_done=True):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.review_requested.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_requested.open_host", return_value=scaffold),
         patch("dotharness.pr_review.runners.review_requested.host_current_user", return_value="me"),
         patch(
             "dotharness.pr_review.runners.review_requested._get_prs",
             return_value=[{"number": 1, "url": "u", "headRefName": "b"}],
         ),
-        patch("dotharness.pr_review.runners.review_requested._has_user_approved", return_value=True),
-        patch("dotharness.pr_review.runners.review_requested.has_review_summary_comment", return_value=False),
-        patch("dotharness.pr_review.runners.review_requested.has_design_review_comment", return_value=True),
-        patch("dotharness.pr_review.runners.review_requested.has_traceability_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.review_requested.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.review_requested.Backend") as mock_be,
     ):
         await review_requested._run_locked(cfg, pr_url=None)
+    return mock_be
+
+
+async def test_skips_already_approved_pr(tmp_xdg, tmp_path):
+    host, scaffold = _seeded_scaffold()
+    put_review(host, "me", ReviewState.APPROVED, T, 1)
+    put_comment(host, "me", f"Design.{DESIGN_REVIEW_MARKER}", T, 1)
+    put_comment(host, "me", f"Trace.{TRACEABILITY_REVIEW_MARKER}", T, 1)
+    mock_be = await _run_skip_scenario(tmp_path, scaffold)
     mock_be.return_value.run.assert_not_called()
+    assert host.writes == []
 
 
 async def test_skips_pr_with_existing_dotharness_review(tmp_xdg, tmp_path):
-    _setup_knowledge(tmp_path)
-    cfg = _cfg(tmp_path)
-    with (
-        patch("dotharness.pr_review.runners.review_requested.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_requested.host_current_user", return_value="me"),
-        patch(
-            "dotharness.pr_review.runners.review_requested._get_prs",
-            return_value=[{"number": 1, "url": "u", "headRefName": "b"}],
-        ),
-        patch("dotharness.pr_review.runners.review_requested._has_user_approved", return_value=False),
-        patch("dotharness.pr_review.runners.review_requested.has_review_summary_comment", return_value=True),
-        patch("dotharness.pr_review.runners.review_requested.has_design_review_comment", return_value=True),
-        patch("dotharness.pr_review.runners.review_requested.has_traceability_review_comment", return_value=True),
-        patch("dotharness.pr_review.runners.review_requested.git_detach_and_record", return_value="sha"),
-        patch("dotharness.pr_review.runners.review_requested.Backend") as mock_be,
-    ):
-        await review_requested._run_locked(cfg, pr_url=None)
+    host, scaffold = _seeded_scaffold()
+    put_comment(host, "me", "# Review Summary\nNo blocking issues found.", T, 1)
+    put_comment(host, "me", f"Design.{DESIGN_REVIEW_MARKER}", T, 1)
+    put_comment(host, "me", f"Trace.{TRACEABILITY_REVIEW_MARKER}", T, 1)
+    mock_be = await _run_skip_scenario(tmp_path, scaffold)
+    mock_be.return_value.run.assert_not_called()
+
+
+async def test_skips_pr_with_partial_inline_review_comments(tmp_xdg, tmp_path):
+    host, scaffold = _seeded_scaffold()
+    put_thread(host, [("me", f"Nitpick.{INLINE_REVIEW_MARKER}", T)], 1)
+    put_comment(host, "me", f"Design.{DESIGN_REVIEW_MARKER}", T, 1)
+    put_comment(host, "me", f"Trace.{TRACEABILITY_REVIEW_MARKER}", T, 1)
+    mock_be = await _run_skip_scenario(tmp_path, scaffold)
     mock_be.return_value.run.assert_not_called()
 
 
@@ -215,14 +234,30 @@ async def test_get_prs_searches_user_review_requested_not_reviewer(tmp_xdg, tmp_
     assert args[args.index("--search") + 1] == "user-review-requested:@me"
 
 
-async def test_has_user_approved_returns_false_on_non_list_response(tmp_xdg, tmp_path):
-    # gh api can return a JSON error object (e.g. {"message": "Not Found"}) instead
-    # of a list of reviews; iterating over that dict yields its keys as strings,
-    # which used to crash with "string indices must be integers, not 'str'".
-    with patch("dotharness.pr_review.runners.review_requested.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps({"message": "Not Found"}).encode())
-        approved = await review_requested._has_user_approved(1, "acme/frontend", "me", {})
-    assert approved is False
+async def test_has_user_approved_reads_every_review_for_an_approval_by_the_user():
+    host = make_host()
+    seed_pr(host, 1)
+    put_review(host, "someone-else", ReviewState.APPROVED, T, 1)
+    put_review(host, "me", ReviewState.COMMENTED, T, 1)
+    put_review(host, None, ReviewState.APPROVED, T, 1)
+    assert (await review_requested._has_user_approved(host.code_host(), REPO, 1, "me")) is False
+    put_review(host, "me", ReviewState.APPROVED, T, 1)
+    assert (await review_requested._has_user_approved(host.code_host(), REPO, 1, "me")) is True
+    assert {c.operation for c in host.calls} == {"ChangeRequests.reviews"}
+
+
+async def test_has_user_approved_is_false_on_a_failed_read():
+    host = make_host()
+    seed_pr(host, 1)
+    put_review(host, "me", ReviewState.APPROVED, T, 1)
+    host.fail_next("ChangeRequests.reviews", CodeHostError("boom"))
+    assert (await review_requested._has_user_approved(host.code_host(), REPO, 1, "me")) is False
+
+
+async def test_has_user_approved_unsupported_capability_stops():
+    host = make_host(capabilities=frozenset(Capability) - {Capability.CHANGE_REQUESTS})
+    with pytest.raises(UnsupportedCapabilityError):
+        await review_requested._has_user_approved(host.code_host(), REPO, 1, "me")
 
 
 async def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):

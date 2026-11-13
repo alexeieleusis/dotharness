@@ -77,7 +77,7 @@ async def _run_locked(config: HarnessConfig) -> None:
             matches = _matching_comments(comments, current_user)
             if not matches:
                 continue
-            threads = await fetch_review_threads(number, config.repo.name, env)
+            threads = await fetch_review_threads(host, repo, number)
             if threads is None:
                 logger.warning("PR #%d: could not fetch review thread state, skipping focused review", number)
                 continue
