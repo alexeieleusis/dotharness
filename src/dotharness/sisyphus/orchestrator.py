@@ -26,6 +26,7 @@ from datetime import time as dtime
 from pathlib import Path
 from typing import Any, Protocol
 
+from dotharness.code_host.errors import CodeHostError
 from dotharness.fileio import TOMLDecodeError
 from dotharness.sisyphus import prbody
 from dotharness.sisyphus.cleanup import DELETED, KEPT, PrInfo, cleanup_branch
@@ -87,7 +88,7 @@ BRANCH_PREFIX = "sisyphus/"
 PACKAGE_MARKERS = ("Makefile", "pyproject.toml", "package.json", "Cargo.toml", "go.mod")
 
 BRANCH_CREATED_KEY = "branch-created"
-PR_NUMBER_KEY = "pr-number"  # additive: the PR number, so the branch cleanup can ask gh about it by number
+PR_NUMBER_KEY = "pr-number"  # additive: the PR number, so the branch cleanup can ask the code host about it by number
 
 _STOP_CHECKPOINTS = {PLAN_STAGE: {"C2"}, BUILD_STAGE: {"C3", "C4", "C5"}}
 
@@ -96,8 +97,7 @@ class OrchestratorError(Exception):
     """Raised for an unusable setup or an unexpected state that is not one of C1..C8."""
 
 
-class GitHubError(Exception):
-    """Raised by a :class:`PullRequestClient` for an unrecoverable failure (auth, network). Maps to C8."""
+GitHubError = CodeHostError  # REN-14: a PullRequestClient raises this for an unrecoverable failure; it maps to C8.
 
 
 SubprocessRunner = Callable[[Sequence[str], Path | None], Awaitable[CommandResult]]
@@ -115,7 +115,11 @@ class PullRequest:
 
 
 class PullRequestClient(Protocol):
-    """GitHub access for the open-PR stage. Raise :class:`GitHubError` on unrecoverable failures."""
+    """Code-host access for the open-PR stage. Raise :class:`CodeHostError` on unrecoverable failures.
+
+    Policy (ChangeRequests unsupported): ``find_pr`` and ``open_pr`` stop the run at C8; ``pr_state`` (branch cleanup)
+    degrades: the branch is kept with a note.
+    """
 
     async def find_pr(self, branch: str) -> PullRequest | None:
         """Return the open PR whose head is ``branch``, or ``None``."""
@@ -126,7 +130,7 @@ class PullRequestClient(Protocol):
         ...
 
     async def pr_state(self, ref: str) -> PrInfo | None:
-        """``gh pr view <number or branch>``: the PR's state and head SHA (any state), or ``None`` if none."""
+        """The PR's state and head SHA for a number or a branch (any state), or ``None`` if none."""
         ...
 
 
@@ -567,7 +571,9 @@ class _Run:
         label = (wi.pick_label if wi else None) or ""  # label_removal_number ensured both are set
         try:
             await self.label_remover.remove_label(number, label)
-        except Exception as exc:  # never alters the exit code or the records (LabelRemovalError and anything else)
+        except (
+            Exception
+        ) as exc:  # never alters the exit code or the records; policy: WorkItems unsupported -> warn here
             self.note(f"Label kept: {self.item} label '{label}' removal failed: {type(exc).__name__}: {exc}")
 
     def resume_command(self) -> str:
@@ -875,7 +881,7 @@ class _Run:
         if self.pr is None:
             try:
                 self.pr = await self.gh.find_pr(self.branch)
-            except GitHubError as exc:
+            except CodeHostError as exc:  # policy: ChangeRequests unsupported or failing -> stop at C8
                 raise _Stop(Checkpoint.C8, str(exc)) from exc
             if self.pr is None:
                 raise OrchestratorError(f"no open PR found for branch {self.branch}")
@@ -892,7 +898,7 @@ class _Run:
                 if self.pr is None:
                     body = await self.build_pr_body()
                     self.pr = await self.gh.open_pr(self.branch, self.opt.base_branch, self.build_pr_title(), body)
-            except GitHubError as exc:
+            except CodeHostError as exc:  # policy: ChangeRequests unsupported or failing -> stop at C8
                 raise _Stop(Checkpoint.C8, str(exc)) from exc
             if self.rec.retries.get(PR_NUMBER_KEY) != self.pr.number:
                 self.rec.retries[PR_NUMBER_KEY] = self.pr.number

@@ -13,6 +13,8 @@ from rich.logging import RichHandler
 from rich.markup import escape as rich_escape
 from rich.table import Table
 
+from dotharness.code_host import CodeHost, HostSelection, NoChangeRequestError, create_code_host
+from dotharness.code_host import ConfigurationError as CodeHostConfigurationError
 from dotharness.vibe_heal.ai_tools.base import AITool, AIToolType
 from dotharness.vibe_heal.ai_tools.factory import AIToolFactory
 from dotharness.vibe_heal.cleanup.orchestrator import CleanupOrchestrator, CleanupResult
@@ -21,7 +23,7 @@ from dotharness.vibe_heal.cleanup_pr.orchestrator import (
     CleanupPrResult,
     FileCleanupPrResult,
 )
-from dotharness.vibe_heal.config import ConfigurationError, VibeHealConfig
+from dotharness.vibe_heal.config import CodeHostSettings, ConfigurationError, VibeHealConfig
 from dotharness.vibe_heal.converters.oxlint import convert_oxlint_to_eslint
 from dotharness.vibe_heal.deduplication.orchestrator import (
     DedupeBranchOrchestrator,
@@ -30,9 +32,16 @@ from dotharness.vibe_heal.deduplication.orchestrator import (
 )
 from dotharness.vibe_heal.orchestrator import VibeHealOrchestrator
 from dotharness.vibe_heal.output import bold, bold_cyan, console, cyan, dim, error, info, success, warn
-from dotharness.vibe_heal.review import NoOpenPrError, ReviewOrchestrator
+from dotharness.vibe_heal.review import ReviewOrchestrator
 from dotharness.vibe_heal.review.models import ReviewIssue
-from dotharness.vibe_heal.review.orchestrator import DEFAULT_BASE_BRANCH, BaselineScanResult, ReviewAnalysisResult
+from dotharness.vibe_heal.review.orchestrator import (
+    DEFAULT_BASE_BRANCH,
+    BaselineScanResult,
+    ReviewAnalysisResult,
+    post_report,
+    resolve_change_request_number,
+)
+from dotharness.vibe_heal.review.render import build_review
 from dotharness.vibe_heal.review.reporter import default_report_dir
 from dotharness.vibe_heal.sonarqube.client import SonarQubeClient
 from dotharness.vibe_heal.sonarqube.project_manager import ProjectManager, StaleProject
@@ -74,6 +83,18 @@ VerboseOption = Annotated[
     bool,
     typer.Option("--verbose", "-v", help=VERBOSE_OUTPUT_HELP),
 ]
+
+
+def _start_code_host(config: CodeHostSettings) -> CodeHost:
+    """Create the code host from the settings. Runs after the config load and before the first host call."""
+    return create_code_host(
+        HostSelection(
+            setting="DOTHARNESS_CODE_HOST",
+            name=config.code_host or None,
+            options=config.code_host_options,
+            token_cmd=None,
+        )
+    )
 
 
 def setup_logging(verbose: bool) -> None:
@@ -199,7 +220,7 @@ def fix(
         if summary.has_failures:
             sys.exit(1)
 
-    except ConfigurationError as e:
+    except (ConfigurationError, CodeHostConfigurationError) as e:
         error(f"Configuration error: {e}")
         sys.exit(1)
     except Exception as e:
@@ -275,7 +296,7 @@ def dedupe(
         if summary.has_failures:
             sys.exit(1)
 
-    except ConfigurationError as e:
+    except (ConfigurationError, CodeHostConfigurationError) as e:
         error(f"Configuration error: {e}")
         sys.exit(1)
     except Exception as e:
@@ -426,7 +447,7 @@ def cleanup(
             )
         )
 
-    except ConfigurationError as e:
+    except (ConfigurationError, CodeHostConfigurationError) as e:
         error(f"Configuration error: {e}")
         sys.exit(1)
     except Exception as e:
@@ -629,7 +650,7 @@ def cleanup_pr(
             )
         )
 
-    except ConfigurationError as e:
+    except (ConfigurationError, CodeHostConfigurationError) as e:
         error(f"Configuration error: {e}")
         sys.exit(1)
     except Exception as e:
@@ -756,7 +777,7 @@ def dedupe_branch(
             )
         )
 
-    except ConfigurationError as e:
+    except (ConfigurationError, CodeHostConfigurationError) as e:
         error(f"Configuration error: {e}")
         sys.exit(1)
     except Exception as e:
@@ -871,7 +892,7 @@ def prune_projects(
                 yes=yes,
             )
         )
-    except ConfigurationError as e:
+    except (ConfigurationError, CodeHostConfigurationError) as e:
         error(f"Configuration error: {e}")
         sys.exit(1)
     except Exception as e:
@@ -957,6 +978,7 @@ async def _run_review(
     file_patterns: list[str] | None,
     report_file: Path | None,
     verbose: bool,
+    code_host: CodeHost,
     coverage: bool = False,
 ) -> None:
     """Run review analysis workflow.
@@ -967,10 +989,11 @@ async def _run_review(
         file_patterns: Optional file patterns to filter.
         report_file: Optional path override for the report; None uses the default.
         verbose: Enable verbose output.
+        code_host: The code host created at startup.
         coverage: When True, fetch and display line coverage for changed lines.
     """
     async with SonarQubeClient(config) as client:
-        orchestrator = ReviewOrchestrator(config, client)
+        orchestrator = ReviewOrchestrator(config, client, code_host=code_host)
         result = await orchestrator.run_analysis(
             base_branch=base_branch,
             file_patterns=file_patterns,
@@ -989,51 +1012,43 @@ async def _run_review_post(
     report_file: Path,
     pr_number: int | None,
     verbose: bool,
+    code_host: CodeHost,
     dry_run: bool = False,
 ) -> None:
     """Run review post workflow (no SonarQube config needed).
 
-    Loads a previously saved report and posts it to GitHub PR.
+    Loads a previously saved report and posts it to the pull request through the code host.
 
     Args:
         report_file: Path to the saved review.json file.
         pr_number: Optional explicit PR number.
         verbose: Enable verbose output.
-        dry_run: Preview what would be posted without making GitHub API calls.
+        code_host: The code host created at startup.
+        dry_run: Preview what would be posted without making host API calls.
     """
-    from dotharness.vibe_heal.review.github import GitHubReviewClient
     from dotharness.vibe_heal.review.reporter import load_report_from_path
 
-    github_client = GitHubReviewClient()
     report = load_report_from_path(report_file)
     if verbose:
         dim(f"  Report: branch={report.branch}, {report.total_issues} issue(s), {len(report.files)} file(s)")
 
-    if pr_number is not None:
-        pr = pr_number
-        if verbose:
-            dim(f"  Using explicit PR #{pr}")
-    else:
-        pr = await github_client.detect_pr()
-        if verbose:
-            dim(f"  Auto-detected PR #{pr}")
+    pr = await resolve_change_request_number(code_host, pr_number, verbose)
 
     if dry_run:
-        payload = github_client.build_payload(report)
-        comments = payload["comments"]
+        body, comments = build_review(report, code_host.declaration.limits.max_inline_comments_per_review)
         warn(f"[dry-run] Would post {len(comments)} inline comment(s) to PR #{pr}:")
-        dim(f"Review body: {payload['body']}")
+        dim(f"Review body: {body}")
         for comment in comments:
-            dim(f"\n  {comment['path']}:{comment['line']}")
-            console.print(comment["body"])
+            dim(f"\n  {comment.anchor.path}:{comment.anchor.line}")
+            console.print(comment.body)
         return
 
-    await github_client.post_review(pr, report)
-    success(
-        f"Posted {report.total_issues} issue(s) and "
-        f"{report.total_duplications} duplication finding(s) "
-        f"as review comments on PR #{pr}."
-    )
+    await post_report(code_host, report, pr)
+
+
+def _start_code_host_for_post(env_file: str | None) -> CodeHost:
+    """Create the code host for --post, which needs no SonarQube settings."""
+    return _start_code_host(CodeHostSettings(env_file=env_file))
 
 
 def _review_post_mode(
@@ -1057,6 +1072,7 @@ def _review_post_mode(
         dry_run: Preview what would be posted without making GitHub API calls.
     """
     try:
+        code_host = _start_code_host_for_post(env_file)
         if report_file is None:
             from dotharness.vibe_heal.git.branch_analyzer import BranchAnalyzer
 
@@ -1076,12 +1092,16 @@ def _review_post_mode(
                 report_file=report_file,
                 pr_number=pr_number,
                 verbose=verbose,
+                code_host=code_host,
                 dry_run=dry_run,
             )
         )
-    except NoOpenPrError as e:
+    except NoChangeRequestError as e:
         warn(str(e))
         console.print("[dim]Report saved; use --post later when a PR is available.[/dim]")
+    except (ConfigurationError, CodeHostConfigurationError) as e:
+        error(f"Configuration error: {e}")
+        sys.exit(1)
     except FileNotFoundError as e:
         error(str(e))
         sys.exit(1)
@@ -1106,14 +1126,15 @@ def _display_baseline_results(result: BaselineScanResult) -> None:
         error(f"Baseline scan failed: {result.error_message}")
 
 
-async def _run_baseline(config: VibeHealConfig) -> None:
+async def _run_baseline(config: VibeHealConfig, code_host: CodeHost) -> None:
     """Run the baseline scan workflow.
 
     Args:
         config: Configuration object.
+        code_host: The code host created at startup.
     """
     async with SonarQubeClient(config) as client:
-        orchestrator = ReviewOrchestrator(config, client)
+        orchestrator = ReviewOrchestrator(config, client, code_host=code_host)
         result = await orchestrator.run_baseline_scan()
         _display_baseline_results(result)
         if not result.success:
@@ -1129,8 +1150,9 @@ def _review_baseline_mode(env_file: str | None, verbose: bool) -> None:
     """
     try:
         config = VibeHealConfig(env_file=env_file)
-        asyncio.run(_run_baseline(config=config))
-    except ConfigurationError as e:
+        code_host = _start_code_host(config)
+        asyncio.run(_run_baseline(config=config, code_host=code_host))
+    except (ConfigurationError, CodeHostConfigurationError) as e:
         error(f"Configuration error: {e}")
         sys.exit(1)
     except Exception as e:
@@ -1219,10 +1241,12 @@ def review(
 
     try:
         config = VibeHealConfig(env_file=env_file)
+        code_host = _start_code_host(config)
 
         asyncio.run(
             _run_review(
                 config=config,
+                code_host=code_host,
                 base_branch=base_branch,
                 file_patterns=file_patterns,
                 report_file=report_file,
@@ -1231,13 +1255,13 @@ def review(
             )
         )
 
-    except ConfigurationError as e:
+    except (ConfigurationError, CodeHostConfigurationError) as e:
         error(f"Configuration error: {e}")
         sys.exit(1)
     except FileNotFoundError as e:
         error(str(e))
         sys.exit(1)
-    except NoOpenPrError as e:
+    except NoChangeRequestError as e:
         warn(str(e))
         console.print("[dim]Report saved; use --post later when a PR is available.[/dim]")
     except Exception as e:
@@ -1269,7 +1293,7 @@ def config(
         console.print("\n[bold]Context Enrichment:[/bold]")
         console.print(f"  Code Context Lines: {cfg.code_context_lines}")
         console.print(f"  Include Rule Description: {cfg.include_rule_description}")
-    except ConfigurationError as e:
+    except (ConfigurationError, CodeHostConfigurationError) as e:
         error(f"Configuration error: {e}")
         sys.exit(1)
 
@@ -1329,7 +1353,7 @@ def debug_issues(
 
         asyncio.run(_debug())
 
-    except ConfigurationError as e:
+    except (ConfigurationError, CodeHostConfigurationError) as e:
         error(f"Configuration error: {e}")
         sys.exit(1)
     except Exception as e:

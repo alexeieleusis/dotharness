@@ -77,6 +77,41 @@ keep the label. Merged or closed PRs still do not exclude an issue from the pick
 | Key | Type | Default |
 |---|---|---|
 | `token_cmd` | string | none |
+| `name` | string, the name of a code host | none (the reference host) |
+| `options` | table | `{}` |
+
+`name` selects the code host. It must be a non-empty string. Without it, Sisyphus uses the reference host.
+`options` holds the settings of that host and is passed to it as given. `options` without `name` is a config error.
+The loader checks only the types. It does not run `token_cmd`.
+
+`token_cmd` runs once at startup, with no shell. Its stdout is the token. The reference host passes the token to
+`gh` as `GH_TOKEN` only. If the command fails, the CLI stops with a `config error:` line (see
+[Credentials and backends](usage.md#credentials-and-backends)). The host runs in `[project].repo_dir`.
+
+#### Unsupported-capability policy
+
+Sisyphus uses the `Repository`, `ChangeRequests` and `WorkItems` capabilities of the code host. A host may not
+declare one of them. The table shows what Sisyphus does at each call site.
+
+| Call site | Capability | Policy | Basis |
+|---|---|---|---|
+| `pick_items` candidate listing and linked/open-PR check (`github` kind) | WorkItems | stop | design (DEC-22) |
+| Label removal (finish and `abandon`) | WorkItems | warn (digest note or one stderr line, never a stop) | design (DEC-22) |
+| `find_pr`, `open_pr` in the open-PR stage | ChangeRequests | stop (a host error is a C8 stop) | inferred |
+| `pr_state` in branch cleanup | ChangeRequests | degrade (a failed lookup keeps the branch with a note) | inferred |
+| `status --check-prs` state lookup | ChangeRequests | warn (one `warning:` line to stderr, item shown) | inferred |
+| default-branch lookup for intake | Repository | degrade (any failure returns `None`) | inferred |
+
+For the first row, Sisyphus checks the capability at startup. With `kind = "github"` and no `WorkItems` capability,
+the command stops before any host call with exit code 1 and this message: `config error: [source.work_item] kind =
+"github" needs a code host with the WorkItems capability, which the configured host does not declare`.
+
+#### Timeouts
+
+The reference host applies the limits it declares: 30 seconds by default, and 10 seconds for the PR state lookup
+and for label removal. Earlier, other Sisyphus calls to `gh` had a 3600 second limit. They now have 30 seconds.
+This is a documented deviation from the design goal G1. A read timeout raises `CodeHostTimeoutError` with
+`write=False`. A label removal timeout raises it with `write=True`.
 
 ### `[agent]`
 

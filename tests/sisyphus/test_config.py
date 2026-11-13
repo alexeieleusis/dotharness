@@ -344,3 +344,28 @@ def test_remove_label_when_settled_must_be_boolean(tmp_path: Path) -> None:
     text = MIN + '[source.work_item]\nkind = "github"\nremove_label_when_settled = "yes"\n'
     with pytest.raises(ConfigError, match="remove_label_when_settled must be a boolean"):
         load_config(write(tmp_path, text))
+
+
+def test_host_name_and_options(tmp_path: Path) -> None:
+    cfg = load_config(write(tmp_path, MIN + '[source.host]\nname = "x:y"\n[source.host.options]\na = 1\n'))
+    assert cfg.source.host is not None
+    assert cfg.source.host.name == "x:y"
+    assert cfg.source.host.options == {"a": 1}
+
+
+def test_host_defaults(tmp_path: Path) -> None:
+    cfg = load_config(write(tmp_path, MIN + '[source.host]\ntoken_cmd = "t"\n'))
+    assert cfg.source.host is not None
+    assert cfg.source.host.name is None
+    assert cfg.source.host.options == {}
+
+
+def test_host_name_must_be_nonempty_string(tmp_path: Path) -> None:
+    for bad in ('name = ""', 'name = "  "', "name = 3"):
+        with pytest.raises(ConfigError, match="name"):
+            load_config(write(tmp_path, MIN + f"[source.host]\n{bad}\n"))
+
+
+def test_host_options_must_be_table(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="options must be a table"):
+        load_config(write(tmp_path, MIN + "[source.host]\noptions = 3\n"))
