@@ -26,7 +26,7 @@ from datetime import time as dtime
 from pathlib import Path
 from typing import Any, Protocol
 
-from dotharness.fileio import TOMLDecodeError
+from dotharness.fileio import TOMLDecodeError, atomic_write_json
 from dotharness.sisyphus import prbody
 from dotharness.sisyphus.cleanup import DELETED, KEPT, PrInfo, cleanup_branch
 from dotharness.sisyphus.config import SisyphusConfig
@@ -55,6 +55,7 @@ from dotharness.sisyphus.rails import (
 from dotharness.sisyphus.resume import answer_path, consume_answer, read_answer
 from dotharness.sisyphus.runrecord import STAGE_COMPLETE, RunRecord, fold_item
 from dotharness.sisyphus.settled import is_settled
+from dotharness.sisyphus.stack import StackGroup, group_added_files
 from dotharness.sisyphus.stages import (
     BUILD_RETRY_KEY,
     BUILD_STAGE,
@@ -86,6 +87,8 @@ PLAN_PROMPT_FILE = "spec-prism-flow/plan-generation-prompt.md"
 BUILD_PROMPT_FILE = "spec-prism-flow/build-execution-prompt.md"
 SPF_CONFIG_NAME = ".spec-prism-flow.toml"
 STOP_SUFFIX = ".stop.json"
+REFACTOR_INPUT_FILE = "refactor-input.json"
+_REFACTOR_INPUT_KEYS = ("set", "files", "tests", "evidence", "fallback", "head_before")
 BRANCH_PREFIX = "sisyphus/"
 PACKAGE_MARKERS = ("Makefile", "pyproject.toml", "package.json", "Cargo.toml", "go.mod")
 
@@ -456,6 +459,69 @@ class _Run:
 
     async def rev_parse_head(self) -> str:
         return (await self.git("rev-parse", "HEAD")).stdout.strip()
+
+    # -- refactor input
+
+    async def list_added_paths(self) -> list[str]:
+        """Paths with git status ``A`` in ``origin/<base>...HEAD`` (default rename detection), in git order."""
+        res = await self.git("diff", "--name-status", "-z", f"origin/{self.opt.base_branch}...HEAD")
+        tokens = res.stdout.split("\0")
+        added: list[str] = []
+        i = 0
+        while i + 1 < len(tokens):
+            status = tokens[i]
+            if status[:1] in ("R", "C"):
+                i += 3
+                continue
+            if status == "A":
+                added.append(tokens[i + 1])
+            i += 2
+        return added
+
+    async def refactor_groups(self, pattern_set: str | None = None) -> tuple[StackGroup, ...]:
+        """Selection records for the added paths; empty when no added source file exists."""
+        return group_added_files(self.repo, await self.list_added_paths(), pattern_set=pattern_set)
+
+    @property
+    def refactor_input_path(self) -> Path:
+        return self.handoff_dir / REFACTOR_INPUT_FILE
+
+    def read_refactor_input(self) -> list[dict[str, Any]]:
+        """Entries of ``refactor-input.json`` (``[]`` if absent); malformed content raises."""
+        path = self.refactor_input_path
+        if not path.exists():
+            return []
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, list):
+                raise TypeError("not a list")  # noqa: TRY301
+            for entry in data:
+                if not isinstance(entry, dict):
+                    raise TypeError("entry is not an object")  # noqa: TRY301
+                missing = [k for k in _REFACTOR_INPUT_KEYS if k not in entry]
+                if missing:
+                    raise KeyError(", ".join(missing))  # noqa: TRY301
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise OrchestratorError(f"unreadable refactor input {path}: {exc}") from exc
+        return data
+
+    async def record_group_entry(self, record: StackGroup) -> dict[str, Any]:
+        """Return the group's entry, writing it (with ``head_before``) only if its ``set`` is not recorded yet."""
+        entries = self.read_refactor_input()
+        for entry in entries:
+            if entry["set"] == record.set:
+                return entry
+        self.handoff_dir.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "set": record.set,
+            "files": list(record.files),
+            "tests": list(record.tests),
+            "evidence": list(record.evidence),
+            "fallback": record.fallback,
+            "head_before": await self.rev_parse_head(),
+        }
+        atomic_write_json(self.refactor_input_path, [*entries, entry])
+        return entry
 
     def created_branches(self) -> set[str]:
         return {self.branch} if self.rec.retries.get(BRANCH_CREATED_KEY) else set()
