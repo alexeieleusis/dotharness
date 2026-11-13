@@ -9,7 +9,6 @@ from dotharness.code_host import (
     ChangeRequest,
     CodeHost,
     CodeHostError,
-    CodeHostTimeoutError,
     RepositoryRef,
     UnsupportedCapabilityError,
 )
@@ -435,7 +434,10 @@ async def _resolve_commit_prs(
                 numbers = await call_with_policy("regret_review", "ChangeRequests.find_by_commit", lookup, [])
         except UnsupportedCapabilityError:
             raise
-        except (TimeoutError, CodeHostTimeoutError):
+        except TimeoutError:
+            # Only the asyncio.timeout expiry means the regret-review budget ran out. A
+            # CodeHostTimeoutError is the host's own per-call limit and can fire with most
+            # of the budget left, so it falls through to the CodeHostError branch (skip SHA).
             logger.debug(
                 "PR #%d: regret-review budget (%ds) exhausted during commit %s PR lookup — stopping the sequence",
                 number,

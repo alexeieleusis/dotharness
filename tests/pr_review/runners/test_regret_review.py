@@ -525,7 +525,7 @@ async def test_find_introducing_prs_api_failure_skips_lines_silently(tmp_path, c
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
-async def test_find_introducing_prs_lookup_timeout_stops_sequence_fail_open(tmp_path):
+async def test_find_introducing_prs_host_lookup_timeout_skips_only_that_sha(tmp_path):
     diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -5,1 +5,1 @@\n-old a\n+new a\n@@ -9,1 +9,1 @@\n-old b\n+new b\n"
 
     def side_effect(cmd, cwd, env, timeout, check=False):
@@ -544,9 +544,11 @@ async def test_find_introducing_prs_lookup_timeout_stops_sequence_fail_open(tmp_
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        # The first lookup times out: the sequence stops with no partial result, and the second SHA is not looked up.
-        assert (await find_introducing_prs(host.code_host(), REPO, _pr(), _config(), str(tmp_path), {})) == []
-    assert _lookups(host) == ["aaa111aaa111"]
+        # The host's own per-call timeout on the first lookup is not budget exhaustion: that SHA is
+        # skipped and the second is still resolved.
+        hunks = await find_introducing_prs(host.code_host(), REPO, _pr(), _config(), str(tmp_path), {})
+    assert [h.introducing_pr_number for h in hunks] == [8]
+    assert _lookups(host) == ["aaa111aaa111", "bbb222bbb222"]
 
 
 async def test_find_introducing_prs_stops_when_the_host_cannot_find_changes_by_commit(tmp_path):
