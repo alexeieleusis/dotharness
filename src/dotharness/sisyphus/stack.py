@@ -15,14 +15,22 @@ Paths are repo-relative POSIX strings. A path is classified as follows:
   only paths with a source extension are eligible to be tests.
 - The test check runs first, so ``foo.test.ts`` is a test, not a source.
 - Every other source-extension path is a source.
+
+The manifest readers below (``nearest_manifest_dir``, ``python_declaration``,
+``package_declaration``) read only manifest files and use the standard library
+only. A manifest is a regular file named ``pyproject.toml``, ``package.json`` or
+matching ``requirements*.txt``.
 """
 
 from __future__ import annotations
 
+import json
+import re
+import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 _SOURCE_SUFFIXES = frozenset({".py", ".ts", ".tsx", ".js", ".jsx"})
@@ -79,3 +87,171 @@ def classify_paths(paths: Sequence[str]) -> Classified:
         elif kind == "test":
             tests.add(path)
     return Classified(sources=tuple(sorted(sources)), tests=tuple(sorted(tests)))
+
+
+_MANIFEST_NAMES = frozenset({"pyproject.toml", "package.json"})
+_REQUIREMENTS_PATTERN = "requirements*.txt"
+_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+def _is_manifest_name(name: str) -> bool:
+    return name in _MANIFEST_NAMES or fnmatchcase(name, _REQUIREMENTS_PATTERN)
+
+
+def _dir_str(directory: PurePosixPath) -> str:
+    return "" if directory == PurePosixPath("") else directory.as_posix()
+
+
+def nearest_manifest_dir(root: Path, rel_path: str) -> str | None:
+    """Return the closest ancestor directory of ``rel_path`` holding a manifest.
+
+    Starts at the file's own directory and walks up to and including the repo
+    root. Returns a repo-relative POSIX string (``""`` for the root) or ``None``.
+    An ``OSError`` on a directory means it holds no manifest. Never opens a file.
+    """
+    directory = PurePosixPath(rel_path).parent
+    while True:
+        try:
+            for entry in (root / directory).iterdir():
+                if _is_manifest_name(entry.name) and entry.is_file():
+                    return _dir_str(directory)
+        except OSError:
+            pass
+        if directory == PurePosixPath(""):
+            return None
+        directory = directory.parent
+
+
+@dataclass(frozen=True)
+class Declaration:
+    """Result of a dependency reader: evidence if declared, plus read/parse errors."""
+
+    evidence: str | None
+    errors: tuple[str, ...]
+
+
+def _normalize(value: str) -> str:
+    return re.sub(r"[-_.]+", "-", value).lower()
+
+
+def _matches(dependency: str, name: str) -> bool:
+    found = _NAME_RE.match(dependency)
+    return found is not None and _normalize(found.group(1)) == _normalize(name)
+
+
+def _prefix(manifest_dir: str) -> str:
+    return manifest_dir + "/" if manifest_dir != "" else ""
+
+
+def _read_text(path: Path) -> str:
+    return path.read_bytes().decode("utf-8")
+
+
+def _error(manifest: str, exc: Exception) -> str:
+    return f"{manifest}: {type(exc).__name__}: {exc}"
+
+
+def _first_match(items: object, name: str) -> str | None:
+    if not isinstance(items, list):
+        return None
+    for dep in items:
+        if isinstance(dep, str) and _matches(dep, name):
+            return dep
+    return None
+
+
+def _project_evidence(project: object, name: str, manifest: str) -> str | None:
+    if not isinstance(project, dict):
+        return None
+    dep = _first_match(project.get("dependencies"), name)
+    if dep is not None:
+        return f"{manifest}: project.dependencies: {dep}"
+    extras = project.get("optional-dependencies")
+    if isinstance(extras, dict):
+        for extra in sorted(extras):
+            dep = _first_match(extras[extra], name)
+            if dep is not None:
+                return f"{manifest}: project.optional-dependencies.{extra}: {dep}"
+    return None
+
+
+def _poetry_evidence(tool: object, name: str, manifest: str) -> str | None:
+    poetry = tool.get("poetry") if isinstance(tool, dict) else None
+    deps = poetry.get("dependencies") if isinstance(poetry, dict) else None
+    if isinstance(deps, dict):
+        for key in deps:
+            if isinstance(key, str) and _matches(key, name):
+                return f"{manifest}: tool.poetry.dependencies: {key}"
+    return None
+
+
+def _pyproject_evidence(data: object, name: str, manifest: str) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    return _project_evidence(data.get("project"), name, manifest) or _poetry_evidence(data.get("tool"), name, manifest)
+
+
+def _requirements_evidence(text: str, name: str, manifest: str) -> str | None:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "" or stripped.startswith(("#", "-")):
+            continue
+        if _matches(stripped, name):
+            return f"{manifest}: {stripped}"
+    return None
+
+
+def python_declaration(root: Path, manifest_dir: str, name: str = "fastapi") -> Declaration:
+    """Report whether ``manifest_dir`` declares ``name`` in a Python manifest.
+
+    Consults ``pyproject.toml`` then ``requirements*.txt`` sorted by file name;
+    the first manifest declaring ``name`` supplies the evidence and later ones
+    are not read. Read and parse failures become ``errors`` entries.
+    """
+    directory = root / manifest_dir
+    prefix = _prefix(manifest_dir)
+    errors: list[str] = []
+    candidates: list[str] = []
+    if (directory / "pyproject.toml").is_file():
+        candidates.append("pyproject.toml")
+    try:
+        names = sorted(
+            entry.name
+            for entry in directory.iterdir()
+            if fnmatchcase(entry.name, _REQUIREMENTS_PATTERN) and entry.is_file()
+        )
+    except OSError:
+        names = []
+    candidates.extend(names)
+    for file_name in candidates:
+        manifest = prefix + file_name
+        try:
+            text = _read_text(directory / file_name)
+            if file_name == "pyproject.toml":
+                evidence = _pyproject_evidence(tomllib.loads(text), name, manifest)
+            else:
+                evidence = _requirements_evidence(text, name, manifest)
+        except (tomllib.TOMLDecodeError, json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            errors.append(_error(manifest, exc))
+            continue
+        if evidence is not None:
+            return Declaration(evidence, tuple(errors))
+    return Declaration(None, tuple(errors))
+
+
+def package_declaration(root: Path, manifest_dir: str, name: str = "react") -> Declaration:
+    """Report whether ``package.json`` in ``manifest_dir`` lists ``name`` under ``dependencies``."""
+    path = root / manifest_dir / "package.json"
+    if not path.is_file():
+        return Declaration(None, ())
+    manifest = _prefix(manifest_dir) + "package.json"
+    try:
+        data = json.loads(_read_text(path))
+    except (tomllib.TOMLDecodeError, json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        return Declaration(None, (_error(manifest, exc),))
+    deps = data.get("dependencies") if isinstance(data, dict) else None
+    if isinstance(deps, dict):
+        for key in deps:
+            if _normalize(key) == _normalize(name):
+                return Declaration(f"{manifest}: dependencies: {key}", ())
+    return Declaration(None, ())
