@@ -273,33 +273,6 @@ async def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:
         )
 
 
-async def get_gh_token(gh_token_cmd: str) -> str:
-    """Resolve the GitHub token `gh_token_cmd` (e.g. `gh auth token --user <login>`)
-    prints, so the caller can pin every subsequent `gh`/backend call to that specific
-    account via GITHUB_TOKEN (see build_subprocess_env) regardless of which account
-    `gh auth switch` last left active.
-
-    Raises on a failed command or blank stdout rather than returning "" the way a
-    quieter helper might: build_subprocess_env only sets GITHUB_TOKEN when this
-    returns something truthy, so silently returning "" here would silently drop back
-    to whatever account `gh auth status` currently has active — precisely the
-    cross-loop account drift `gh_token_cmd` exists to avoid (see .harness.toml)."""
-    try:
-        result = await run_cmd(  # noqa: S604
-            gh_token_cmd, cwd="/", env=os.environ.copy(), timeout=TIMEOUT_GH, check=False, shell=True
-        )
-    except subprocess.TimeoutExpired:
-        # Re-raise without the command: TimeoutExpired stringifies it, and it may embed a credential.
-        raise RuntimeError(f"gh_token_cmd timed out after {TIMEOUT_GH}s") from None  # noqa: TRY003
-    token = result.stdout.decode("utf-8", errors="replace").strip()
-    if result.returncode != 0 or not token:
-        raise RuntimeError(  # noqa: TRY003
-            f"gh_token_cmd did not produce a token "
-            f"(exit {result.returncode}): {result.stderr.decode('utf-8', errors='replace').strip()}"
-        )
-    return token
-
-
 def is_draft_pr(pr: dict) -> bool:
     return bool(pr.get("isDraft"))
 
@@ -320,25 +293,6 @@ async def is_pr_open(pr_number: int, repo: str, env: dict) -> bool:
     if result.returncode != 0:
         return False
     return result.stdout.decode("utf-8").strip() == "OPEN"
-
-
-async def get_current_user(env: dict) -> str:
-    """Unlike get_gh_token, deliberately fails *open* (returns "" rather than raising)
-    on a failed lookup: every caller either treats a blank current_user as "nothing
-    matches me" for its idempotency/comment checks (safe no-op, at worst a wasted or
-    duplicate pass this cycle that self-corrects once the lookup succeeds again) or, in
-    preserve_reviewer_request, skips its reviewer check entirely on a falsy login rather
-    than querying GitHub for one that could never match. Logged so a persistently blank
-    current_user (e.g. GITHUB_TOKEN pointing at a revoked token) is still visible."""
-    result = await run_cmd(gh_argv("api", "user", "--jq", ".login"), cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
-    login = result.stdout.decode("utf-8", errors="replace").strip()
-    if result.returncode != 0 or not login:
-        logger.error(
-            "get_current_user: 'gh api user' failed to resolve a login (exit %d): %s",
-            result.returncode,
-            result.stderr.decode("utf-8", errors="replace").strip(),
-        )
-    return login
 
 
 @dataclass(frozen=True)
@@ -588,54 +542,6 @@ def is_review_summary_comment(body: str) -> bool:
         return False
     lower = body.lower()
     return "review summary" in lower or "dotharness-review" in lower
-
-
-_PAGE_ATTEMPTS = 3
-_PAGE_RETRY_DELAY = 2.0
-
-
-async def _fetch_page(path: str, page: int, env: dict) -> list[dict] | None:
-    """One page of a REST list endpoint. Retries transient gh failures; None if all attempts fail."""
-    for attempt in range(1, _PAGE_ATTEMPTS + 1):
-        result = await run_cmd(
-            gh_argv("api", "--method", "GET", path, "-F", "per_page=100", "-F", f"page={page}"),
-            cwd="/",
-            env=env,
-            timeout=TIMEOUT_GH,
-            check=False,
-        )
-        if result.returncode == 0:
-            return json.loads(result.stdout)
-        stderr = result.stderr.decode("utf-8", errors="replace") if isinstance(result.stderr, bytes) else result.stderr
-        logger.warning(
-            "gh api %s page %d failed (exit %d, attempt %d/%d): %s",
-            path,
-            page,
-            result.returncode,
-            attempt,
-            _PAGE_ATTEMPTS,
-            (stderr or "").strip(),
-        )
-        if attempt < _PAGE_ATTEMPTS:
-            await asyncio.sleep(_PAGE_RETRY_DELAY * attempt)
-    return None
-
-
-async def fetch_all_pages(path: str, env: dict) -> list[dict] | None:
-    """GET-paginate a GitHub REST list endpoint, returning every item. Unlike
-    fetch_pr_comments (which goes through scripts/pr-comments.py's cache), this returns
-    raw REST dicts that keep the snake_case `created_at` timestamp the cache drops.
-    Transient page failures are retried; returns None if a page still fails."""
-    items: list[dict] = []
-    page = 1
-    while True:
-        batch = await _fetch_page(path, page, env)
-        if batch is None:
-            return None
-        items.extend(batch)
-        if len(batch) < 100:
-            return items
-        page += 1
 
 
 def _is_author(comment: Comment, login: str) -> bool:

@@ -18,7 +18,6 @@ from dotharness.pr_review.runners.common import (
     TRACEABILITY_REVIEW_MARKER,
     add_reviewer,
     author_matches,
-    get_current_user,
     get_requested_reviewers,
     is_design_review_comment,
     is_inline_review_comment,
@@ -169,12 +168,6 @@ async def test_list_open_prs_for_current_user_handles_gh_failures():
     with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=_run_cmd_router(responses)):
         result = await list_open_prs_for_current_user("acme/repo", "/", {})
     assert result == []
-
-
-async def test_get_current_user_returns_login():
-    with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"alice\n")
-        assert (await get_current_user({})) == "alice"
 
 
 @pytest.mark.parametrize(
