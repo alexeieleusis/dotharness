@@ -12,6 +12,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 from dotharness.sisyphus.intake import parse_resolved_decisions, split_resolved_decision
 from dotharness.sisyphus.plan import leaf_stems as _plan_leaf_stems
@@ -279,6 +280,31 @@ def extract_deviations(handoff_dir: Path, stems: Sequence[str]) -> str:
     parts = list(entries)
     parts.extend(notes)
     return "\n".join(parts)
+
+
+class RefactorHandoff(NamedTuple):
+    set: str
+    deviation: str | None
+    edits: str | None
+    notes: tuple[str, ...]
+
+
+def _refactor_set_name(path: Path) -> str:
+    return path.name.removeprefix("refactor-").removesuffix(".md")
+
+
+def extract_refactor_handoffs(paths: Sequence[Path]) -> list[RefactorHandoff]:
+    """One result per refactor handoff, in input order; missing bullets and unreadable files become notes."""
+    results: list[RefactorHandoff] = []
+    for path in paths:
+        name = _refactor_set_name(path)
+        entry, dev_note = _handoff_deviation(name, path)
+        edits, edits_note = _handoff_edits(path)
+        notes = [n for n in (dev_note, edits_note) if n]
+        if dev_note and dev_note == edits_note:
+            notes = [dev_note]
+        results.append(RefactorHandoff(name, entry, edits, tuple(notes)))
+    return results
 
 
 # ---------------------------------------------------------------- FR-6 decisions

@@ -527,3 +527,92 @@ def test_handoff_edits_unreadable(tmp_path):
     p = tmp_path / "refactor-x.md"
     p.write_bytes(b"\xff\xfe\x00bad")
     assert prbody._handoff_edits(p) == (None, note)
+
+
+def _rh(tmp_path, name, text):
+    p = tmp_path / name
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def test_refactor_handoffs_both_bullets(tmp_path):
+    p = _rh(
+        tmp_path,
+        "refactor-fastapi.md",
+        "- Deviations from the plan: split the router\n- Edits to existing files:\n  - app/main.py: import the new router\n",
+    )
+    [r] = prbody.extract_refactor_handoffs([p])
+    assert r == prbody.RefactorHandoff(
+        "fastapi", "- fastapi: split the router", "- app/main.py: import the new router", ()
+    )
+
+
+def test_refactor_handoffs_no_edits_bullet(tmp_path):
+    p = _rh(tmp_path, "refactor-a.md", "- Deviations from the plan: x\n")
+    [r] = prbody.extract_refactor_handoffs([p])
+    assert r.deviation == "- a: x"
+    assert r.edits is None
+    assert r.notes == ("Note: no edits bullet found in handoff refactor-a.md.",)
+
+
+def test_refactor_handoffs_none_edits(tmp_path):
+    p = _rh(tmp_path, "refactor-a.md", "- Deviations from the plan: x\n- Edits to existing files: None\n")
+    [r] = prbody.extract_refactor_handoffs([p])
+    assert r.edits is None
+    assert r.notes == ()
+
+
+def test_refactor_handoffs_no_deviations_bullet(tmp_path):
+    p = _rh(tmp_path, "refactor-a.md", "- Edits to existing files: a.py: r\n")
+    [r] = prbody.extract_refactor_handoffs([p])
+    assert r.deviation is None
+    assert r.edits == "a.py: r"
+    assert r.notes == ("Note: no deviations bullet found in handoff refactor-a.md.",)
+    q = _rh(tmp_path, "refactor-b.md", "nothing\n")
+    [r2] = prbody.extract_refactor_handoffs([q])
+    assert r2.notes == (
+        "Note: no deviations bullet found in handoff refactor-b.md.",
+        "Note: no edits bullet found in handoff refactor-b.md.",
+    )
+
+
+def test_refactor_handoffs_unreadable(tmp_path):
+    note = ("Note: cannot read handoff refactor-x.md.",)
+    [r] = prbody.extract_refactor_handoffs([tmp_path / "refactor-x.md"])
+    assert (r.deviation, r.edits, r.notes) == (None, None, note)
+    p = tmp_path / "refactor-x.md"
+    p.write_bytes(b"\xff\xfe\x00bad")
+    [r] = prbody.extract_refactor_handoffs([p])
+    assert (r.deviation, r.edits, r.notes) == (None, None, note)
+
+
+def test_refactor_handoffs_set_name(tmp_path):
+    names = ["refactor-react.md", "refactor-refactor-x.md", "notes.md", "refactor-x", "refactor-x.MD"]
+    sub = tmp_path / "refactor-dir"
+    sub.mkdir()
+    got = [r.set for r in prbody.extract_refactor_handoffs([sub / n for n in names])]
+    assert got == ["react", "refactor-x", "notes", "x", "x.MD"]
+
+
+def test_refactor_handoffs_order(tmp_path):
+    paths = [_rh(tmp_path, f"refactor-{n}.md", "") for n in "cab"]
+    assert [r.set for r in prbody.extract_refactor_handoffs(paths)] == ["c", "a", "b"]
+
+
+def test_refactor_handoffs_empty():
+    assert prbody.extract_refactor_handoffs([]) == []
+
+
+def test_refactor_handoffs_deviation_none(tmp_path):
+    p = _rh(tmp_path, "refactor-a.md", "- Deviations from the plan: None\n- Edits to existing files: a.py: r\n")
+    [r] = prbody.extract_refactor_handoffs([p])
+    assert r.deviation is None
+    assert r.notes == ()
+
+
+def test_refactor_handoffs_is_namedtuple(tmp_path):
+    p = _rh(tmp_path, "refactor-a.md", "")
+    [r] = prbody.extract_refactor_handoffs([p])
+    assert isinstance(r, tuple)
+    assert r._fields == ("set", "deviation", "edits", "notes")
+    assert isinstance(r.notes, tuple)
