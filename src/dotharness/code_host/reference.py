@@ -81,6 +81,7 @@ _PR_FIELDS = "number,baseRefName,title,body,url,state,isDraft,headRefName,headRe
 _PR_FULL_FIELDS = f"{_PR_FIELDS},mergeable,autoMergeRequest,reviewDecision,reviewRequests,additions,deletions"
 _PAGE_SIZE = 100
 _PAGE_ATTEMPTS = 3
+_GH_API_UNEXPECTED = "gh api returned an unexpected response"
 _PAGE_RETRY_DELAY = 2.0
 _ISSUE_NOT_FOUND_RE = re.compile(r"could not resolve to an issue", re.IGNORECASE)
 _ISSUE_COMMENT_ID = re.compile(r"issuecomment-(\d+)")
@@ -328,7 +329,7 @@ class _Gh:
                     msg = "gh api returned invalid JSON"
                     raise CodeHostError(msg) from None
                 if not isinstance(rows, list):
-                    msg = "gh api returned an unexpected response"
+                    msg = _GH_API_UNEXPECTED
                     raise CodeHostError(msg)
                 return rows
             error = self.failure(args, outcome)
@@ -1177,7 +1178,7 @@ class _Checks:
         data = await self._gh.json(["api", f"repos/{repo.value}/actions/workflows?per_page=100"], operation)
         rows = data.get("workflows") if isinstance(data, dict) else None
         if not isinstance(rows, list):
-            msg = "gh api returned an unexpected response"
+            msg = _GH_API_UNEXPECTED
             raise CodeHostError(msg)
         total = data.get("total_count")
         if bound is not None and (len(rows) > bound or (isinstance(total, int) and total > len(rows))):
@@ -1206,7 +1207,7 @@ class _Checks:
         """The job with its first failed step, or ``None`` as the step when no step failed."""
         data = await self._gh.json(["api", f"repos/{repo.value}/actions/jobs/{job_id}"], "Checks.get_job")
         if not isinstance(data, dict):
-            msg = "gh api returned an unexpected response"
+            msg = _GH_API_UNEXPECTED
             raise CodeHostError(msg)
         steps = data.get("steps")
         failed = next(
