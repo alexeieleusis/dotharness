@@ -87,6 +87,24 @@ def test_select_handoffs(tmp_path: Path) -> None:
     assert [p.name for p in got["02-beta-leaf"]] == ["02-02-beta-leaf.md"]
 
 
+def test_select_handoffs_ignores_refactor_handoffs(tmp_path: Path) -> None:
+    for n in (
+        "refactor-generic.md",
+        "refactor-fastapi.md",
+        "refactor-react.md",
+        "refactor-01-alpha-leaf.md",
+        "refactor-02-beta-leaf.md",
+        "refactor-alpha-leaf.md",
+        "refactor-beta-leaf.md",
+    ):
+        (tmp_path / n).write_text("")
+    assert select_handoffs(tmp_path, STEMS) == {"01-alpha-leaf": [], "02-beta-leaf": []}
+    (tmp_path / "01-alpha-leaf.md").write_text("")
+    got = select_handoffs(tmp_path, STEMS)
+    assert [p.name for p in got["01-alpha-leaf"]] == ["01-alpha-leaf.md"]
+    assert got["02-beta-leaf"] == []
+
+
 def test_summary(tmp_path: Path) -> None:
     (tmp_path / "requirements.md").write_text(
         "# T\n## 1. Purpose\nP\n## 2. Problem\nQ\nmore\n## 3. Goals\nG\n## 5. Glossary\nX\n"
