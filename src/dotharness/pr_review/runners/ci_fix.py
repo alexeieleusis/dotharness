@@ -161,7 +161,7 @@ async def _run_locked(config: HarnessConfig, dry_run: bool, only_pr: int | None)
     if only_pr is None and not dry_run and not failures:
         _prune_counters(config.repo_slug, {p.number for p in prs})
     if not prs and not failures:
-        logger.info("ci-fix: no open PRs to check on %s, nothing to do", await host.repository.display_name(repo))
+        logger.info("ci-fix: no open PRs to check on %s, nothing to do", config.repo.name)
 
     prompt = (config.harness.knowledge_dir / "pr-review" / PROMPT_FILE).read_text(encoding="utf-8") if prs else ""
     failures.extend(await _process_prs(prs, config, host, repo, env, current_user, prompt, dry_run))
