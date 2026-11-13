@@ -64,6 +64,8 @@ from dotharness.sisyphus.stages import (
     OPEN_PR_STAGE,
     PLAN_STAGE,
     PUSH_STAGE,
+    REFACTOR_RETRY_KEY,
+    REFACTOR_STAGE,
     STAGE_ORDER,
 )
 from dotharness.sisyphus.stoprecord import (
@@ -89,7 +91,7 @@ PACKAGE_MARKERS = ("Makefile", "pyproject.toml", "package.json", "Cargo.toml", "
 BRANCH_CREATED_KEY = "branch-created"
 PR_NUMBER_KEY = "pr-number"  # additive: the PR number, so the branch cleanup can ask gh about it by number
 
-_STOP_CHECKPOINTS = {PLAN_STAGE: {"C2"}, BUILD_STAGE: {"C3", "C4", "C5"}}
+_STOP_CHECKPOINTS = {PLAN_STAGE: {"C2"}, BUILD_STAGE: {"C3", "C4", "C5"}, REFACTOR_STAGE: {"C3", "C4", "C5"}}
 
 
 class OrchestratorError(Exception):
@@ -460,7 +462,7 @@ class _Run:
     # -- stage driver
 
     def stages(self) -> list[str]:
-        return [INTAKE_STAGE, PLAN_STAGE, BUILD_STAGE, PUSH_STAGE, OPEN_PR_STAGE]
+        return [INTAKE_STAGE, PLAN_STAGE, BUILD_STAGE, REFACTOR_STAGE, PUSH_STAGE, OPEN_PR_STAGE]
 
     def start_index(self) -> int:
         """Index into ``STAGE_ORDER`` of the first stage that must still run."""
@@ -484,6 +486,7 @@ class _Run:
             INTAKE_STAGE: self.stage_intake,
             PLAN_STAGE: self.stage_plan,
             BUILD_STAGE: self.stage_build,
+            REFACTOR_STAGE: self.stage_refactor,
             PUSH_STAGE: self.stage_push,
             OPEN_PR_STAGE: self.stage_open_pr,
         }
@@ -762,6 +765,8 @@ class _Run:
         text = f"leaf {leaf}: {detail}" if leaf else detail
         if stage == BUILD_STAGE and cp == "C5":
             self.rec.increment_retry(BUILD_RETRY_KEY)
+        if stage == REFACTOR_STAGE and cp == "C5":
+            self.rec.increment_retry(REFACTOR_RETRY_KEY)
         raise _Stop(Checkpoint(cp), text)
 
     async def stage_plan(self) -> None:
@@ -803,6 +808,11 @@ class _Run:
             return
         await self.git("checkout", "-b", self.branch, f"origin/{base}")
         self.rec.increment_retry(BRANCH_CREATED_KEY)
+
+    async def stage_refactor(self) -> None:
+        """Placeholder: the refactor stage body is added by a later phase."""
+        with self.rec.stage_scope(REFACTOR_STAGE):
+            pass
 
     async def stage_build(self) -> None:
         with self.rec.stage_scope(BUILD_STAGE):

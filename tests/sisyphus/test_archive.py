@@ -527,3 +527,9 @@ def test_is_settled_abandoned_override(tmp_path: Path) -> None:
     assert is_settled(rec, None, abandoned=True)
     assert not is_settled(rec, None, abandoned=False)
     assert not is_settled(rec, None)
+
+
+def test_is_settled_with_the_refactor_stage(tmp_path: Path) -> None:
+    assert not is_settled(_rec(tmp_path, "refactor"), None)  # between build and push: not finished
+    assert not is_settled(_rec(tmp_path, "refactor", "in_progress"), None)
+    assert is_settled(_rec(tmp_path, OPEN_PR_STAGE), None)

@@ -54,3 +54,11 @@ def test_every_reset_key_is_written_by_sisyphus() -> None:
 
 def test_reset_keys_cover_every_stage() -> None:
     assert tuple(RESET_KEYS) == stages.STAGE_ORDER
+
+
+def test_refactor_stage_sits_between_build_and_push() -> None:
+    assert stages.REFACTOR_STAGE == "refactor"
+    assert stages.STAGE_ORDER.index("refactor") == 3
+    assert stages.STAGE_ORDER[2:5] == (stages.BUILD_STAGE, stages.REFACTOR_STAGE, stages.PUSH_STAGE)
+    assert stages.REFACTOR_RETRY_KEY == "refactor:retry-cycles"
+    assert RESET_KEYS["refactor"] == (stages.REFACTOR_RETRY_KEY, stages.AUTO_RETRY_KEY)

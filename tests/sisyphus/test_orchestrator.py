@@ -377,7 +377,7 @@ async def test_stage_order_and_record_writes(world: World, monkeypatch: pytest.M
     log = world.mark_log(monkeypatch)
     result = await world.run()
     assert result.completed
-    assert result.stages_run == ("intake", "plan", "build", "push", "open-pr")
+    assert result.stages_run == ("intake", "plan", "build", "refactor", "push", "open-pr")
     expected = []
     for stage in result.stages_run:
         expected += [(stage, "in_progress"), (stage, "complete")]
@@ -812,7 +812,7 @@ async def test_resume_after_c3_relaunches_build_without_replanning(world: World)
     world.branch_exists = True
     result = await world.run()
     assert result.completed
-    assert result.stages_run == ("build", "push", "open-pr")
+    assert result.stages_run == ("build", "refactor", "push", "open-pr")
     assert result.stages_skipped == ("intake", "plan")
     assert world.events.count("agent:plan") == 1
     assert world.events.count("agent:build") == 2
@@ -862,7 +862,7 @@ async def test_rerun_with_unchanged_inputs_repeats_nothing(world: World) -> None
     result = await world.run()
     assert result.completed
     assert result.stages_run == ()
-    assert result.stages_skipped == ("intake", "plan", "build", "push", "open-pr")
+    assert result.stages_skipped == ("intake", "plan", "build", "refactor", "push", "open-pr")
     agents, _shells, finds = world.counts()
     assert (agents, finds) == (before[0], before[2])
     # the only extra call is the read-only "is the local branch still there?" probe of the branch cleanup
@@ -1686,7 +1686,7 @@ async def test_resume_checks_out_the_items_own_branch(world: World) -> None:
     result = await world.run()
     assert result.completed
     assert world.checkouts[-1] == branch_name(ITEM)
-    assert result.stages_skipped == ("intake", "plan", "build")
+    assert result.stages_skipped == ("intake", "plan", "build", "refactor")
     assert world.events.count("agent:build") == 1  # committed work not redone
 
 
@@ -2052,3 +2052,57 @@ async def test_build_with_uncommitted_changes_stops_at_c5(world: World) -> None:
     assert not result.completed
     assert "uncommitted changes" in world.digest_text()
     assert "agent:push" not in world.events
+
+
+# ------------------------------------------------------------- refactor stage plumbing (#208)
+
+
+async def test_legacy_build_complete_record_resumes_into_refactor(world: World) -> None:
+    world.push_rc = 1
+    assert (await world.run()).checkpoint is Checkpoint.C8
+    world.push_rc = 0
+    world.branch_exists = True
+    world.current_branch = "sisyphus/other-item-12345678"
+    world.ancestor_rc_after_pr = 1
+    rec = RunRecord.open(world.tmp / "ws", ITEM)
+    rec.mark_stage("build", "complete")  # a record written before the refactor stage existed
+    result = await world.run()
+    assert result.completed
+    assert result.stages_skipped == ("intake", "plan", "build")
+    assert result.stages_run == ("refactor", "push", "open-pr")
+    assert branch_name(ITEM) in world.checkouts  # a resume at refactor returns the clone to the item branch
+    assert world.events.count("agent:build") == 1
+
+
+def _bare_run(world: World) -> orchestrator._Run:
+    run = object.__new__(orchestrator._Run)
+    run.rec = RunRecord.open(world.tmp / "ws", ITEM)
+    return run
+
+
+def test_refactor_stop_checkpoints_and_c5_counter(world: World) -> None:
+    run = _bare_run(world)
+    path = world.tmp / "stop.json"
+    path.write_text(json.dumps({"checkpoint": "C5", "detail": "again"}))
+    with pytest.raises(orchestrator._Stop) as exc:
+        run.raise_stop_report("refactor", path)
+    assert exc.value.checkpoint is Checkpoint.C5
+    assert run.rec.retries == {orchestrator.REFACTOR_RETRY_KEY: 1}
+    for cp in ("C3", "C4"):
+        path.write_text(json.dumps({"checkpoint": cp, "detail": "x"}))
+        with pytest.raises(orchestrator._Stop):
+            run.raise_stop_report("refactor", path)
+    assert run.rec.retries == {orchestrator.REFACTOR_RETRY_KEY: 1}  # only C5 counts
+
+
+def test_c2_stop_in_the_refactor_stage_is_rejected(world: World) -> None:
+    path = world.tmp / "stop.json"
+    path.write_text(json.dumps({"checkpoint": "C2", "detail": "x"}))
+    with pytest.raises(OrchestratorError, match="not valid for stage refactor"):
+        _bare_run(world).raise_stop_report("refactor", path)
+
+
+async def test_stages_lists_refactor_in_order(world: World) -> None:
+    run = _bare_run(world)
+    assert run.stages() == list(orchestrator.STAGE_ORDER)
+    assert run.stages().index("refactor") == 3
