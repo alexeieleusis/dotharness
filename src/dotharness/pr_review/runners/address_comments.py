@@ -21,6 +21,7 @@ from dotharness.pr_review.runners.common import (
     FOCUSED_REVIEW_MARKER,
     PR_COMMENTS_SCRIPT_PATH,
     TIMEOUT_GIT,
+    backend_env,
     fetch_pr_comments,
     fetch_review_threads,
     find_last_reply_if_marked,
@@ -110,7 +111,7 @@ async def _run_locked(config: HarnessConfig) -> None:
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
-        {**config.harness.env, "GITHUB_TOKEN": env.get("GITHUB_TOKEN", "")},
+        backend_env(config, env),
         expected_repo_name=config.repo.name,
     )
 

@@ -20,6 +20,7 @@ from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
     FatalGitError,
+    backend_env,
     build_design_review_prompt,
     build_early_comment_context,
     build_file_review_section,
@@ -89,7 +90,7 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
-        {**config.harness.env, "GITHUB_TOKEN": env.get("GITHUB_TOKEN", "")},
+        backend_env(config, env),
         expected_repo_name=config.repo.name,
     )
     wdir = str(config.repo.working_dir)

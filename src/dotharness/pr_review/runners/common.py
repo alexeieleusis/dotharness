@@ -313,6 +313,17 @@ async def agent_env(host: CodeHost, config: HarnessConfig) -> dict[str, str]:
     return dict(await host.session.agent_environment(base))
 
 
+def backend_env(config: HarnessConfig, env: Mapping[str, str]) -> dict[str, str]:
+    """``[harness] env`` plus ``GITHUB_TOKEN`` from the scaffold env, only when the scaffold has a non-empty one.
+
+    An absent or empty scaffold token must not overwrite a ``GITHUB_TOKEN`` the user configured in ``[harness.env]``.
+    """
+    merged = dict(config.harness.env)
+    if token := env.get("GITHUB_TOKEN"):
+        merged["GITHUB_TOKEN"] = token
+    return merged
+
+
 async def open_host(config: HarnessConfig) -> HostScaffold:
     """Steps (1) to (4) of the runner scaffold, once per command: selection, host, repository, environment.
 
