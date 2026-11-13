@@ -127,8 +127,8 @@ def cmd_init(directory: Annotated[str, typer.Argument(metavar="DIRECTORY")] = ".
     typer.echo(f"Created {p.resolve()}")
 
 
-def _create_host(cfg: HarnessConfig) -> CodeHost:
-    """Build the configured code host or stop with the factory's message (exit code 1, like other config errors)."""
+def _build_host(cfg: HarnessConfig) -> CodeHost:
+    """Build the configured code host; raises ConfigurationError on bad host config."""
     selection = HostSelection(
         setting="host",
         name=cfg.harness.host,
@@ -136,11 +136,30 @@ def _create_host(cfg: HarnessConfig) -> CodeHost:
         token_cmd=cfg.harness.effective_token_cmd,
         working_directory=cfg.repo.working_dir if cfg.repo.working_dir.is_dir() else None,
     )
+    return create_code_host(selection)
+
+
+def _create_host(cfg: HarnessConfig) -> CodeHost:
+    """Build the configured code host or stop with the factory's message (exit code 1, like other config errors)."""
     try:
-        return create_code_host(selection)
+        return _build_host(cfg)
     except ConfigurationError as e:
         typer.echo(str(e), err=True)
         sys.exit(1)
+
+
+def _check_host(cfg: HarnessConfig) -> str | None:
+    """Return a validation error for the configured host, or None when it is usable."""
+    host_name = cfg.harness.host or "reference"
+    try:
+        host = _build_host(cfg)
+    except ConfigurationError as e:
+        return str(e)
+    try:
+        available = asyncio.run(host.session.available())
+    except Exception as e:
+        return f"harness.host: availability check for host '{host_name}' failed: {e}"
+    return None if available else f"harness.host: host '{host_name}' is not available"
 
 
 @app.command("validate")
@@ -165,9 +184,9 @@ def cmd_validate(
     backend_bin = "opencode" if cfg.harness.backend == "opencode" else "claude"
     if not shutil.which(backend_bin):
         errors.append(f"harness.backend: binary '{backend_bin}' not found on PATH")
-    host = _create_host(cfg)
-    if not asyncio.run(host.session.available()):
-        errors.append("gh: binary not found on PATH")
+    host_error = _check_host(cfg)
+    if host_error:
+        errors.append(host_error)
     if cfg.vibe_heal.enabled and cfg.vibe_heal.python and not Path(cfg.vibe_heal.python).expanduser().exists():
         errors.append(f"vibe_heal.python: path does not exist: {cfg.vibe_heal.python}")
 

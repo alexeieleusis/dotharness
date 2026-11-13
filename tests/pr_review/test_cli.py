@@ -433,7 +433,8 @@ def test_validate_uses_session_available_and_not_which_gh(minimal_toml):
     ):
         result = runner.invoke(cli, ["validate", "--config", str(minimal_toml)])
     assert result.exit_code == 1
-    assert "gh: binary not found on PATH" in result.output
+    assert "harness.host: host 'reference' is not available" in result.output
+    assert "gh: binary" not in result.output
     assert all(call.args != ("gh",) for call in which.call_args_list)
 
 
@@ -455,6 +456,28 @@ def test_validate_unknown_host_fails_naming_key_and_value(minimal_toml):
     assert result.exit_code == 1
     assert "host" in result.output
     assert "unknown-name" in result.output
+
+
+def test_validate_aggregates_host_error_with_other_errors(minimal_toml):
+    minimal_toml.write_text(minimal_toml.read_text().replace("[harness]\n", '[harness]\nhost = "nope"\n', 1))
+    with patch("shutil.which", return_value=None):
+        result = CliRunner().invoke(cli, ["validate", "--config", str(minimal_toml)])
+    assert result.exit_code == 1
+    assert "nope" in result.output
+    assert "binary 'opencode' not found on PATH" in result.output
+
+
+def test_validate_available_raising_is_reported_as_error(minimal_toml):
+    host = _stub_host()
+    with (
+        patch.object(host.session, "available", side_effect=RuntimeError("net down")),
+        patch("shutil.which", return_value="/usr/bin/stub"),
+        patch("dotharness.pr_review.cli.create_code_host", return_value=host),
+    ):
+        result = CliRunner().invoke(cli, ["validate", "--config", str(minimal_toml)])
+    assert result.exit_code == 1
+    assert "net down" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_validate_passes_effective_token_cmd_and_host_selection(minimal_toml):
