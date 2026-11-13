@@ -241,11 +241,29 @@ async def _process_pr(
                 pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, pr_level_done.design, ctx
             )
             await _run_traceability_review(
-                pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, pr_level_done.traceability, ctx
+                pr,
+                config,
+                knowledge_dir,
+                extra_knowledge,
+                backend,
+                wdir,
+                env,
+                current_user,
+                pr_level_done.traceability,
+                ctx,
             )
             if config.regret_review.enabled:
                 await _run_regret_review(
-                    pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, pr_level_done.regret, ctx
+                    pr,
+                    config,
+                    knowledge_dir,
+                    extra_knowledge,
+                    backend,
+                    wdir,
+                    env,
+                    current_user,
+                    pr_level_done.regret,
+                    ctx,
                 )
     except FatalGitError:
         raise
