@@ -1,12 +1,18 @@
-import json
 import logging
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dotharness.code_host import CodeHost, CodeHostError, Comment, RepositoryRef, UnsupportedCapabilityError
-from dotharness.gh import gh_argv
+from dotharness.code_host import (
+    ChangeRequest,
+    ChangeRequestState,
+    CodeHost,
+    CodeHostError,
+    Comment,
+    RepositoryRef,
+    UnsupportedCapabilityError,
+)
 from dotharness.pr_review import state
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
@@ -14,7 +20,6 @@ from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
     FOCUSED_REVIEW_MARKER,
     PR_COMMENTS_SCRIPT_PATH,
-    TIMEOUT_GH,
     TIMEOUT_GIT,
     fetch_pr_comments,
     fetch_review_threads,
@@ -96,7 +101,8 @@ async def _run_locked(config: HarnessConfig) -> None:
     scaffold = await open_host(config)
     host, repo_ref, env = scaffold.host, scaffold.repo, scaffold.env
 
-    prs = await _list_prs_to_check(config.repo.name, env)
+    our_login = await host_current_user(host)
+    prs = await _list_prs_to_check(host, repo_ref, our_login)
     script_path = PR_COMMENTS_SCRIPT_PATH
     knowledge_file = config.harness.knowledge_dir / "pr-review" / "address-comment.md"
     instructions_template = knowledge_file.read_text(encoding="utf-8")
@@ -114,7 +120,6 @@ async def _run_locked(config: HarnessConfig) -> None:
         str(config.repo.opencode_dir.relative_to(config.repo.working_dir)) if config.repo.opencode_dir else None
     )
     original_sha = await git_detach_and_record(wdir, env)
-    our_login = await host_current_user(host)
 
     ctx = _ProcessPrContext(
         script_path=script_path,
@@ -134,15 +139,15 @@ async def _run_locked(config: HarnessConfig) -> None:
     )
     # Prune against *all* open PRs (not the author/assignee-filtered list), and skip on fetch failure,
     # so a PR that temporarily drops out of `prs` doesn't lose its replied keys.
-    open_numbers = await _list_all_open_pr_numbers(config.repo.name, env)
+    open_numbers = await _list_all_open_pr_numbers(host, repo_ref)
     if open_numbers is not None:
         state.prune_address_comments_state(config.repo_slug, open_numbers)
 
     logger.info("Found %d open PR(s) to check", len(prs))
     try:
         for pr in prs:
-            number = pr["number"]
-            branch = pr["headRefName"]
+            number = pr.number
+            branch = pr.head_reference
             logger.debug("PR #%d (branch=%s): checking for pending feedback", number, branch)
             try:
                 has_feedback = await _has_pending_feedback(host, repo_ref, number)
@@ -724,60 +729,44 @@ def _build_comment_instructions(template: str, comment: dict, pr_number: int, re
     return f"{template}\n\n---\n\n## Comment to address\n\n{detail}\n\nPR number: {pr_number}\nRepo: {repo}\n"
 
 
-async def _list_prs_to_check(repo: str, env: dict) -> list[dict]:
+async def _list_prs_to_check(host: CodeHost, repo: RepositoryRef, login: str) -> list[ChangeRequest]:
     """PRs to process: ones authored by us, plus ones assigned to us (e.g. as a fix-it assignee
     on someone else's PR) — deduplicated by PR number."""
     by_number = {
-        pr["number"]: pr for pr in (await _list_prs(repo, env, "--author")) + (await _list_prs(repo, env, "--assignee"))
+        pr.number: pr
+        for pr in (await _list_prs(host, repo, login, "author")) + (await _list_prs(host, repo, login, "assignee"))
     }
-    return sorted(by_number.values(), key=lambda p: p["number"])
+    return sorted(by_number.values(), key=lambda p: p.number)
 
 
-async def _list_all_open_pr_numbers(repo: str, env: dict) -> set[int] | None:
-    """Numbers of every open PR in the repo, or None if the fetch failed (caller must not prune)."""
-    result = await run_cmd(
-        gh_argv("pr", "list", "--repo", repo, "--state", "open", "--json", "number", "--limit", "1000"),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return None
+async def _list_all_open_pr_numbers(host: CodeHost, repo: RepositoryRef) -> set[int] | None:
+    """Numbers of every open PR in the repo, or None if the fetch failed (caller must not prune).
+
+    An unsupported capability follows the policy of ``(address_comments, ChangeRequests.list)`` (unlisted: stop).
+    """
     try:
-        return {pr["number"] for pr in json.loads(result.stdout)}
-    except (ValueError, KeyError, TypeError):
+        return {cr.number for cr in await host.change_requests.list(repo, state=ChangeRequestState.OPEN)}
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as e:
+        logger.warning("Could not list open PRs for %s: %s", await host.repository.display_name(repo), e)
         return None
 
 
-async def _list_prs(repo: str, env: dict, filter_flag: str) -> list[dict]:
-    result = await run_cmd(
-        gh_argv(
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            filter_flag,
-            "@me",
-            "--state",
-            "open",
-            "--json",
-            "number,headRefName,isDraft",
-            "--limit",
-            "500",
-        ),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
+async def _list_prs(host: CodeHost, repo: RepositoryRef, login: str, filter_name: str) -> list[ChangeRequest]:
+    """Open PRs filtered by ``filter_name`` ("author" or "assignee") = ``login``; [] when the read failed.
+
+    An unsupported capability follows the policy of ``(address_comments, ChangeRequests.list)`` (unlisted: stop).
+    """
+    if not login:
+        logger.warning("No login for the acting user; treating as no PRs for %s", filter_name)
         return []
     try:
-        prs = json.loads(result.stdout)
-        return [pr for pr in prs if isinstance(pr, dict) and "number" in pr and "headRefName" in pr]
-    except (ValueError, AttributeError, KeyError, TypeError):
-        logger.warning("Could not parse `gh pr list %s` output; treating as no PRs", filter_flag)
+        return list(await host.change_requests.list(repo, state=ChangeRequestState.OPEN, **{filter_name: login}))
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as e:
+        logger.warning("Could not list PRs by %s for %s: %s", filter_name, await host.repository.display_name(repo), e)
         return []
 
 

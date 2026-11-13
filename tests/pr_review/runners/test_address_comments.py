@@ -1,4 +1,3 @@
-import json
 import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -10,6 +9,7 @@ import pytest
 from dotharness.code_host import (
     Anchor,
     Capability,
+    ChangeRequestState,
     CodeHost,
     CodeHostError,
     Comment,
@@ -28,7 +28,7 @@ from dotharness.pr_review.runners.address_comments import (
 from dotharness.pr_review.runners.common import FOCUSED_REVIEW_MARKER
 from dotharness.repo_guard import RepoIdentityError
 from tests.pr_review.runners.approve_support import T, make_host, put_comment
-from tests.pr_review.runners.runner_support import REPO, make_scaffold
+from tests.pr_review.runners.runner_support import REPO, make_change_request, make_scaffold
 
 
 def _seed_thread(host, comment_id, *, resolved=False, minimized=False, replies=(), number=1):
@@ -99,7 +99,7 @@ async def test_skips_pr_with_no_pending_feedback(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
-            return_value=[{"number": 1, "headRefName": "b"}],
+            return_value=[make_change_request(1, head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=False),
         patch("dotharness.pr_review.runners.address_comments.git_detach_and_record", return_value="sha"),
@@ -130,7 +130,7 @@ async def test_runs_backend_when_unresolved_threads(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
-            return_value=[{"number": 1, "headRefName": "b"}],
+            return_value=[make_change_request(1, head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
         patch("dotharness.pr_review.runners.address_comments.fetch_pr_comments", return_value=[_FAKE_COMMENT]),
@@ -152,8 +152,14 @@ async def test_processes_draft_pr_with_pending_feedback(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
+    # `_list_prs_to_check` runs for real against the fake: the only PR is an open draft authored by the acting
+    # user, so a re-added draft filter would drop it.
+    fake = make_host()
+    fake.add_change_request(REPO, head_reference="b", number=1, is_draft=True, author="reviewer")
+    _seed_thread(fake, 42, number=1)
+    scaffold = make_scaffold(fake)
     with (
-        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=scaffold),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
         patch("dotharness.pr_review.runners.address_comments.fetch_pr_comments", return_value=[_FAKE_COMMENT]),
         patch("dotharness.pr_review.runners.address_comments.git_detach_and_record", return_value="sha"),
@@ -165,17 +171,6 @@ async def test_processes_draft_pr_with_pending_feedback(tmp_xdg, tmp_path):
     ):
         mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        # `_list_prs_to_check` runs for real; the only draft PR comes back from the `gh pr list` call
-        # for --author and nothing for --assignee, so a re-added isDraft filter would drop it.
-        draft_listing = json.dumps([{"number": 1, "headRefName": "b", "isDraft": True}]).encode()
-
-        def fake_run_cmd(cmd, *args, **kwargs):
-            if cmd[:3] == ["gh", "pr", "list"]:
-                stdout = draft_listing if "--author" in cmd else b"[]"
-                return MagicMock(returncode=0, stdout=stdout, stderr=b"")
-            return MagicMock(returncode=0, stdout=b"", stderr=b"")
-
-        mock_run.side_effect = fake_run_cmd
         await address_comments._run_locked(cfg)
     mock_be.return_value.run.assert_called_once()
 
@@ -188,7 +183,7 @@ async def test_pushes_branch_after_backend(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
-            return_value=[{"number": 2, "headRefName": "my-branch"}],
+            return_value=[make_change_request(2, head_reference="my-branch")],
         ),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
         patch("dotharness.pr_review.runners.address_comments.fetch_pr_comments", return_value=[_FAKE_COMMENT]),
@@ -216,7 +211,7 @@ async def test_pushes_after_each_comment_not_once_at_end(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
-            return_value=[{"number": 2, "headRefName": "my-branch"}],
+            return_value=[make_change_request(2, head_reference="my-branch")],
         ),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
         patch(
@@ -259,7 +254,7 @@ async def test_skips_comment_whose_thread_resolves_mid_run(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
-            return_value=[{"number": 2, "headRefName": "my-branch"}],
+            return_value=[make_change_request(2, head_reference="my-branch")],
         ),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
         patch(
@@ -315,7 +310,7 @@ async def test_stops_processing_comments_after_push_failure(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
-            return_value=[{"number": 2, "headRefName": "my-branch"}],
+            return_value=[make_change_request(2, head_reference="my-branch")],
         ),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
         patch(
@@ -360,7 +355,7 @@ async def test_stops_processing_comments_after_history_rewrite(tmp_xdg, tmp_path
         patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
-            return_value=[{"number": 2, "headRefName": "my-branch"}],
+            return_value=[make_change_request(2, head_reference="my-branch")],
         ),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
         patch(
@@ -385,20 +380,61 @@ async def test_stops_processing_comments_after_history_rewrite(tmp_xdg, tmp_path
 
 
 async def test_list_prs_to_check_merges_author_and_assignee_deduped():
-    author_payload = [{"number": 1, "headRefName": "a", "isDraft": False}]
-    assignee_payload = [
-        {"number": 1, "headRefName": "a", "isDraft": False},
-        {"number": 2, "headRefName": "b", "isDraft": False},
-    ]
-    responses = [
-        MagicMock(returncode=0, stdout=json.dumps(payload).encode(), stderr=b"")
-        for payload in (author_payload, assignee_payload)
-    ]
+    host, repo = _hr()
+    author = [make_change_request(1, head_reference="a")]
+    assignee = [make_change_request(1, head_reference="a"), make_change_request(2, head_reference="b")]
+    with patch.object(address_comments, "_list_prs", side_effect=[author, assignee]) as mock_list:
+        prs = await address_comments._list_prs_to_check(host, repo, "alice")
 
-    with patch("dotharness.pr_review.runners.address_comments.run_cmd", side_effect=responses):
-        prs = await address_comments._list_prs_to_check("acme/frontend", {})
+    assert [p.number for p in prs] == [1, 2]
+    assert [c.args[2:] for c in mock_list.call_args_list] == [("alice", "author"), ("alice", "assignee")]
 
-    assert [p["number"] for p in prs] == [1, 2]
+
+async def test_list_prs_filters_by_login_and_open_state():
+    fake = make_host()
+    fake.add_change_request(REPO, head_reference="mine", number=1, author="reviewer")
+    fake.add_change_request(REPO, head_reference="theirs", number=2, author="alice")
+    fake.add_change_request(REPO, head_reference="closed", number=3, author="reviewer", state=ChangeRequestState.CLOSED)
+    prs = await address_comments._list_prs(fake.code_host(), REPO, "reviewer", "author")
+    assert [(p.number, p.head_reference) for p in prs] == [(1, "mine")]
+    listed = [c for c in fake.calls if c.operation == "ChangeRequests.list"]
+    assert len(listed) == 1
+    assert listed[0].kwargs["author"] == "reviewer"
+    assert listed[0].kwargs["state"] is ChangeRequestState.OPEN
+
+
+async def test_list_prs_empty_login_lists_nothing_and_makes_no_call():
+    fake = make_host()
+    fake.add_change_request(REPO, head_reference="mine", number=1, author="reviewer")
+    assert await address_comments._list_prs(fake.code_host(), REPO, "", "author") == []
+    assert [c for c in fake.calls if c.operation == "ChangeRequests.list"] == []
+
+
+async def test_list_prs_failure_is_empty():
+    fake = make_host()
+    fake.fail_next("ChangeRequests.list", CodeHostError("boom"))
+    assert await address_comments._list_prs(fake.code_host(), REPO, "reviewer", "author") == []
+
+
+async def test_list_prs_unsupported_capability_stops():
+    fake = make_host(capabilities=frozenset(Capability) - {Capability.CHANGE_REQUESTS})
+    with pytest.raises(UnsupportedCapabilityError):
+        await address_comments._list_prs(fake.code_host(), REPO, "reviewer", "author")
+
+
+async def test_list_all_open_pr_numbers_none_on_failure_and_set_on_success():
+    fake = make_host()
+    fake.add_change_request(REPO, head_reference="a", number=7)
+    fake.add_change_request(REPO, head_reference="b", number=8, state=ChangeRequestState.CLOSED)
+    fake.fail_next("ChangeRequests.list", CodeHostError("boom"))
+    assert await address_comments._list_all_open_pr_numbers(fake.code_host(), REPO) is None
+    assert await address_comments._list_all_open_pr_numbers(fake.code_host(), REPO) == {7}
+
+
+async def test_list_all_open_pr_numbers_unsupported_capability_stops():
+    fake = make_host(capabilities=frozenset(Capability) - {Capability.CHANGE_REQUESTS})
+    with pytest.raises(UnsupportedCapabilityError):
+        await address_comments._list_all_open_pr_numbers(fake.code_host(), REPO)
 
 
 async def test_restores_head_even_on_backend_failure(tmp_xdg, tmp_path):
@@ -409,7 +445,7 @@ async def test_restores_head_even_on_backend_failure(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
-            return_value=[{"number": 3, "headRefName": "b"}],
+            return_value=[make_change_request(3, head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
         patch("dotharness.pr_review.runners.address_comments.fetch_pr_comments", return_value=[_FAKE_COMMENT]),
@@ -440,7 +476,7 @@ async def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.address_comments.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
-            return_value=[{"number": 2, "headRefName": "b"}],
+            return_value=[make_change_request(2, head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
         patch("dotharness.pr_review.runners.address_comments.fetch_pr_comments", return_value=[_FAKE_COMMENT]),
@@ -470,7 +506,7 @@ async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, t
         patch("dotharness.pr_review.runners.address_comments.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
-            return_value=[{"number": 2, "headRefName": "b"}],
+            return_value=[make_change_request(2, head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
         patch("dotharness.pr_review.runners.address_comments.fetch_pr_comments", return_value=[_FAKE_COMMENT]),
@@ -502,7 +538,7 @@ async def test_re_requests_review_even_when_backend_raises(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.address_comments.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
-            return_value=[{"number": 2, "headRefName": "b"}],
+            return_value=[make_change_request(2, head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
         patch("dotharness.pr_review.runners.address_comments.fetch_pr_comments", return_value=[_FAKE_COMMENT]),
@@ -1118,7 +1154,7 @@ async def test_backend_failure_is_swallowed_and_loop_continues_and_pushes(failur
         patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
-            return_value=[{"number": 2, "headRefName": "my-branch"}],
+            return_value=[make_change_request(2, head_reference="my-branch")],
         ),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
         patch(
@@ -1193,17 +1229,6 @@ async def test_address_single_comment_records_when_reply_observed_without_commit
         _ISSUE_COMMENT, 7, "tmpl", backend, "/w", "acme/frontend", {}, *_hr(), "sha", None, "bot", "acme-frontend"
     )
     assert recorded == [("acme-frontend", 7, "issue:6161750034")]
-
-
-async def test_list_all_open_pr_numbers_returns_none_on_failure():
-    from types import SimpleNamespace
-
-    from dotharness.pr_review.runners import address_comments as ac
-
-    with patch.object(ac, "run_cmd", return_value=SimpleNamespace(returncode=1, stdout="")):
-        assert (await ac._list_all_open_pr_numbers("o/r", {})) is None
-    with patch.object(ac, "run_cmd", return_value=SimpleNamespace(returncode=0, stdout='[{"number": 7}]')):
-        assert (await ac._list_all_open_pr_numbers("o/r", {})) == {7}
 
 
 async def test_filter_comments_drops_marked_comment_in_resolved_thread():
@@ -1371,9 +1396,3 @@ def test_build_comment_instructions_fences_replies_and_original():
     begins = [ln for ln in instructions.splitlines() if ln.startswith("-- USER-SUPPLIED CONTENT BEGINS [")]
     ends = [ln for ln in instructions.splitlines() if ln.startswith("-- USER-SUPPLIED CONTENT ENDS [")]
     assert len(begins) == len(ends) == 3  # body, reply, original finding
-
-
-async def test_list_prs_malformed_payload_returns_empty():
-    result = MagicMock(returncode=0, stdout=b"{truncated")
-    with patch("dotharness.pr_review.runners.address_comments.run_cmd", return_value=result):
-        assert (await address_comments._list_prs("o/r", {}, "--author")) == []
