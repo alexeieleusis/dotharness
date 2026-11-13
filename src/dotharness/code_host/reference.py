@@ -1084,11 +1084,8 @@ def _review_thread(node: Mapping[str, Any]) -> ReviewThread:
     path = node.get("path")
     line = _opt_int(node, "line") or _opt_int(node, "originalLine")
     side = node.get("diffSide")
-    anchor = (
-        Anchor(path, line, side if isinstance(side, str) and side else "RIGHT")
-        if isinstance(path, str) and path and line
-        else None
-    )
+    diff_side = side if isinstance(side, str) and side else "RIGHT"
+    anchor = Anchor(path, line, diff_side) if isinstance(path, str) and path and line else None
     return ReviewThread(
         id=_str(node, "id"),
         is_resolved=bool(node.get("isResolved", False)),
