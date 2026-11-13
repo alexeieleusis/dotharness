@@ -4,7 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from dotharness.sisyphus.config import DEFAULT_CONFIG_FILE, ConfigError, SisyphusConfig, load_config
+from dotharness.sisyphus.config import (
+    DEFAULT_CONFIG_FILE,
+    ConfigError,
+    ProjectConfig,
+    RefactorConfig,
+    SisyphusConfig,
+    load_config,
+)
 
 MIN = "[project]\n"
 
@@ -151,6 +158,7 @@ def test_unknown_top_level(tmp_path: Path) -> None:
         "digest",
         "knowledge",
         "archive",
+        "refactor",
     ],
 )
 def test_unknown_key_in_each_section(tmp_path: Path, section: str) -> None:
@@ -253,6 +261,7 @@ def test_relative_paths_verbatim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         ("[project]\nsource = 1\n", "source"),
         ("project = 1\n", "project"),
         ("[project]\n[archive]\ndir = 1\n", "dir"),
+        ("[project]\n[refactor]\nenabled = 1\n", "enabled"),
     ],
 )
 def test_wrong_types(tmp_path: Path, text: str, key: str) -> None:
@@ -344,3 +353,35 @@ def test_remove_label_when_settled_must_be_boolean(tmp_path: Path) -> None:
     text = MIN + '[source.work_item]\nkind = "github"\nremove_label_when_settled = "yes"\n'
     with pytest.raises(ConfigError, match="remove_label_when_settled must be a boolean"):
         load_config(write(tmp_path, text))
+
+
+def test_refactor_table_empty(tmp_path: Path) -> None:
+    assert load_config(write(tmp_path, MIN + "[refactor]\n")).refactor == RefactorConfig()
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_refactor_enabled(tmp_path: Path, value: bool) -> None:
+    cfg = load_config(write(tmp_path, MIN + f"[refactor]\nenabled = {str(value).lower()}\n"))
+    assert cfg.refactor.enabled is value
+
+
+def test_refactor_enabled_not_bool(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=r"\[refactor\] enabled must be a boolean"):
+        load_config(write(tmp_path, MIN + '[refactor]\nenabled = "yes"\n'))
+
+
+def test_refactor_unknown_key(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="bogus"):
+        load_config(write(tmp_path, MIN + "[refactor]\nbogus = 1\n"))
+    with pytest.raises(ConfigError, match=r"unknown key 'bogus' in \[refactor\] \(allowed: enabled, pattern_set\)"):
+        load_config(write(tmp_path, MIN + "[refactor]\nbogus = 1\n"))
+
+
+def test_refactor_absent_defaults_enabled(tmp_path: Path) -> None:
+    cfg = load_config(write(tmp_path, MIN))
+    assert cfg.refactor.enabled is True
+    assert cfg == SisyphusConfig(project=ProjectConfig())
+
+
+def test_refactor_pattern_set_accepted(tmp_path: Path) -> None:
+    load_config(write(tmp_path, MIN + '[refactor]\npattern_set = "generic"\n'))

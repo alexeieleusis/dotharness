@@ -86,6 +86,12 @@ class ArchiveConfig:
 
 
 @dataclass(frozen=True)
+class RefactorConfig:
+    enabled: bool = True
+    pattern_set: str | None = None
+
+
+@dataclass(frozen=True)
 class SisyphusConfig:
     project: ProjectConfig
     source: SourceConfig = field(default_factory=SourceConfig)
@@ -94,6 +100,7 @@ class SisyphusConfig:
     digest: DigestConfig = field(default_factory=DigestConfig)
     knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
     archive: ArchiveConfig = field(default_factory=ArchiveConfig)
+    refactor: RefactorConfig = field(default_factory=RefactorConfig)
 
 
 def _table(raw: Any, name: str, allowed: tuple[str, ...], *, passthrough: bool = False) -> dict[str, Any]:
@@ -212,8 +219,26 @@ def _parse_source(raw: Any) -> SourceConfig:
     return SourceConfig(work_item=work_item, host=host)
 
 
+def _parse_refactor(data: dict[str, Any]) -> RefactorConfig:
+    if "refactor" not in data:
+        return RefactorConfig()
+    t = _table(data["refactor"], "refactor", ("enabled", "pattern_set"))
+    enabled = _bool(t, "refactor", "enabled")
+    return RefactorConfig(enabled=True if enabled is None else enabled)
+
+
 def _parse(data: dict[str, Any]) -> SisyphusConfig:
-    top = ("project", "source", "agent", "limits", "merge", "digest", "knowledge", "archive")
+    top = (
+        "project",
+        "source",
+        "agent",
+        "limits",
+        "merge",
+        "digest",
+        "knowledge",
+        "archive",
+        "refactor",
+    )
     for key in data:
         if key not in top:
             raise ConfigError(f"unknown top-level key '{key}' (allowed: {', '.join(top)})")
@@ -264,6 +289,7 @@ def _parse(data: dict[str, Any]) -> SisyphusConfig:
         archive_dir = _str(t, "archive", "dir")
         if archive_dir is not None:
             archive = ArchiveConfig(dir=archive_dir)
+    refactor = _parse_refactor(data)
 
     return SisyphusConfig(
         project=project,
@@ -273,6 +299,7 @@ def _parse(data: dict[str, Any]) -> SisyphusConfig:
         digest=digest,
         knowledge=knowledge,
         archive=archive,
+        refactor=refactor,
     )
 
 
