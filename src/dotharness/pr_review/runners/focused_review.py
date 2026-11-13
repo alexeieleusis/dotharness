@@ -7,9 +7,7 @@ from dotharness.code_host import (
     ChangeRequest,
     ChangeRequestState,
     CodeHost,
-    CodeHostError,
     RepositoryRef,
-    UnsupportedCapabilityError,
 )
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
@@ -117,7 +115,8 @@ async def _list_prs_for_user(host: CodeHost, repo: RepositoryRef, login: str) ->
     """Open PRs (drafts included) where the running user is the author, is assigned, or has a review
     requested from them (union of the three), deduplicated by PR number, sorted ascending.
 
-    A failed read is logged and contributes nothing; an unsupported capability follows the policy of
+    All three reads must succeed: a failed read (rate limit, timeout, 5xx) propagates so a partial
+    listing is never mistaken for a complete one. An unsupported capability follows the policy of
     ``(focused_review, ChangeRequests.list)`` (unlisted: stop).
     """
     if not login:
@@ -125,13 +124,7 @@ async def _list_prs_for_user(host: CodeHost, repo: RepositoryRef, login: str) ->
         return []
     by_number: dict[int, ChangeRequest] = {}
     for filter_name in ("author", "assignee", "requested_reviewer"):
-        try:
-            found = await host.change_requests.list(repo, state=ChangeRequestState.OPEN, **{filter_name: login})
-        except UnsupportedCapabilityError:
-            raise
-        except CodeHostError as e:
-            logger.warning("Could not list PRs by %s: %s", filter_name, e)
-            continue
+        found = await host.change_requests.list(repo, state=ChangeRequestState.OPEN, **{filter_name: login})
         for pr in found:
             by_number.setdefault(pr.number, pr)
     return sorted(by_number.values(), key=lambda p: p.number)

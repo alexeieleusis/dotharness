@@ -826,12 +826,12 @@ async def test_list_prs_for_user_unions_author_and_review_requested_sorted_and_d
     assert [(p.number, p.head_reference) for p in prs] == [(1, "a"), (2, "b"), (3, "c")]
 
 
-async def test_list_prs_for_user_failed_read_contributes_nothing():
+async def test_list_prs_for_user_failed_read_propagates():
     host = _host()
     host.add_change_request(REPO, head_reference="a", number=1, author="alice")
     host.fail_next("ChangeRequests.list", CodeHostError("boom"))
-    prs = await focused_review._list_prs_for_user(host.code_host(), REPO, "alice")
-    assert [p.number for p in prs] == []
+    with pytest.raises(CodeHostError):
+        await focused_review._list_prs_for_user(host.code_host(), REPO, "alice")
 
 
 async def test_list_prs_for_user_without_login_makes_no_call():
