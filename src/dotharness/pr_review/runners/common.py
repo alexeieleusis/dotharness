@@ -836,6 +836,25 @@ def _parse_linear_linkback_comment(body: str) -> LinkedTicket | None:
     )
 
 
+async def _resolve_ref_repo(
+    host: CodeHost, repo: RepositoryRef, identity: str | None, resolved: dict[str, RepositoryRef | None]
+) -> RepositoryRef | None:
+    """The repository a reference names, or None when it can't be resolved. Results are cached in ``resolved``
+    per identity. ``UnsupportedCapabilityError`` propagates (stop policy); other ``CodeHostError`` means None."""
+    if identity is None:
+        return repo
+    if identity in resolved:
+        return resolved[identity]
+    try:
+        found: RepositoryRef | None = await host.repository.resolve(identity)
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError:
+        found = None
+    resolved[identity] = found
+    return found
+
+
 async def _resolve_comment_issue_refs(
     host: CodeHost, repo: RepositoryRef, body: str, seen: set[tuple[RepositoryRef | str, int | str]]
 ) -> list[LinkedTicket]:
@@ -852,13 +871,13 @@ async def _resolve_comment_issue_refs(
     comment in the scan, so a ticket already found (by this or the Linear-linkback path)
     isn't re-fetched or duplicated."""
     tickets: list[LinkedTicket] = []
+    resolved: dict = {}  # per-call cache: one resolve per distinct identity in this body
     for match in _ISSUE_REF_RE.finditer(body):
         identity, number = _match_identity_and_number(match)
         if number is None:
             continue
-        try:
-            ticket_repo = repo if identity is None else await host.repository.resolve(identity)
-        except CodeHostError:
+        ticket_repo = await _resolve_ref_repo(host, repo, identity, resolved)
+        if ticket_repo is None:
             continue
         key = (ticket_repo, number)
         if key in seen:
