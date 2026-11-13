@@ -35,6 +35,8 @@ from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
+from dotharness import paths
+
 _SOURCE_SUFFIXES = frozenset({".py", ".ts", ".tsx", ".js", ".jsx"})
 _TEST_DIR_NAMES = frozenset({"tests", "test", "__tests__"})
 _TEST_NAME_PATTERNS = ("test_*.py", "*_test.py", "*.test.*", "*.spec.*")
@@ -362,3 +364,46 @@ def match_file(root: Path, rel_path: str, set_names: Collection[str]) -> FileMat
         if layout_evidence is not None:
             return FileMatch(row.set_name, (declaration.evidence, layout_evidence), False)
     return FileMatch("generic", tuple(dict.fromkeys(errors)), True)
+
+
+class StackError(ValueError):
+    """Configuration-like problem raised by this module (for example a missing ``generic`` set)."""
+
+
+def pattern_set_names() -> tuple[str, ...]:
+    """Return the sorted names of the pattern sets under ``knowledge/patterns/``.
+
+    A set is a directory holding ``QUICK_START_MIGRATION.md``. Raises ``StackError`` when ``generic`` is not a set.
+    """
+    patterns = paths.default_knowledge_dir() / "patterns"
+    names: list[str] = []
+    if patterns.is_dir():
+        names = [
+            child.name
+            for child in patterns.iterdir()
+            if child.is_dir() and (child / "QUICK_START_MIGRATION.md").is_file()
+        ]
+    if "generic" not in names:
+        raise StackError("knowledge/patterns/generic is missing")  # noqa: TRY003
+    return tuple(sorted(names))
+
+
+@dataclass(frozen=True)
+class StackGroup:
+    """One group of added files sharing a matched pattern set (no validation; the grouping code sorts)."""
+
+    set: str
+    files: tuple[str, ...]
+    tests: tuple[str, ...]
+    evidence: tuple[str, ...]
+    fallback: bool
+
+
+def merge_evidence(per_file: Sequence[Sequence[str]]) -> tuple[str, ...]:
+    """Concatenate per-file evidence in order, dropping exact duplicates (first occurrence kept)."""
+    merged: list[str] = []
+    for entries in per_file:
+        for entry in entries:
+            if entry not in merged:
+                merged.append(entry)
+    return tuple(merged)
