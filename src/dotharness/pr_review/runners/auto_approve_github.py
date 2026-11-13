@@ -76,6 +76,7 @@ logger = logging.getLogger(__name__)
 REASON_ZERO_FINDINGS = "zero-findings"
 REASON_AUTHOR_ACTIVITY = "author-activity-after-T"
 _SITE = "auto_approve"
+_REVIEWS_READ_FAILED = "reviews read failed"
 _VIEWED_SITE = "auto_approve_viewed"
 
 
@@ -220,7 +221,7 @@ async def _read_timing_inputs(
         return "review comments read failed"
     reviews = await _read_reviews(host, repo, pr_number)
     if reviews is None:
-        return "reviews read failed"
+        return _REVIEWS_READ_FAILED
     return list(comments), [c for thread in threads for c in thread.comments], reviews
 
 
@@ -334,7 +335,7 @@ async def _check_approval_safety(
 
     reviews = await _read_reviews(host, repo, pr_number)
     if reviews is None:
-        return SafetyResult(SafetyStatus.READ_FAILED, "reviews read failed", head)
+        return SafetyResult(SafetyStatus.READ_FAILED, _REVIEWS_READ_FAILED, head)
     if _already_approved(reviews, acting):
         return SafetyResult(SafetyStatus.SKIP, REASON_ALREADY_APPROVED, head)
 
@@ -525,7 +526,7 @@ async def _approve(
         return ApprovalResult(ApprovalStatus.READ_FAILED, "acting account unknown")
     approved = await _read_approval_state(host, repo, pr_number, acting)
     if approved is None:
-        return ApprovalResult(ApprovalStatus.READ_FAILED, "reviews read failed")
+        return ApprovalResult(ApprovalStatus.READ_FAILED, _REVIEWS_READ_FAILED)
     if approved:
         return ApprovalResult(ApprovalStatus.SKIPPED, REASON_ALREADY_APPROVED)
     change_request = await _read_head(host, repo, pr_number)
