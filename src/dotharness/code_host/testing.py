@@ -2291,8 +2291,7 @@ class CodeHostConformance:
                     target.seeder.fail_next(operation, error)
                     try:
                         result = await call()
-                    except Exception as exc:
-                        assert isinstance(exc, CodeHostError), (operation, type(error).__name__)
+                    except CodeHostError as exc:  # any other exception type propagates and fails the test
                         for item in _chain(exc):
                             seen.extend([str(item), repr(item), repr(item.args)])
                     else:
