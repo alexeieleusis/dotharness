@@ -298,7 +298,6 @@ async def _run_design_review(
 async def _build_traceability_prompt(
     traceability_instructions: str,
     extra_knowledge: str | None,
-    pr: ChangeRequest,
     number: int,
     config,
     ctx: dict,
@@ -383,7 +382,6 @@ async def _run_traceability_review(
         build_prompt=lambda: _build_traceability_prompt(
             traceability_instructions,
             extra_knowledge,
-            pr,
             number,
             config,
             ctx,
