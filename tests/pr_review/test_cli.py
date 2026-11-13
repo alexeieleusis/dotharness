@@ -224,11 +224,11 @@ def test_run_auto_approve_runner_error_exits_nonzero(minimal_toml, tmp_xdg):
 def test_run_auto_approve_disabled_is_noop(minimal_toml, tmp_xdg):
     with (
         patch("dotharness.pr_review.runners.auto_approve.acquire_lock"),
-        patch("dotharness.pr_review.runners.auto_approve.get_gh_token") as mock_token,
+        patch("dotharness.pr_review.runners.auto_approve.open_host") as mock_open_host,
     ):
         result = CliRunner().invoke(cli, ["run", "--config", str(minimal_toml), "auto-approve"])
     assert result.exit_code == 0, result.output
-    mock_token.assert_not_called()
+    mock_open_host.assert_not_called()
 
 
 async def test_auto_approve_run_takes_lock(minimal_toml, tmp_xdg):

@@ -38,7 +38,8 @@ import json
 import logging
 import subprocess
 
-from dotharness.gh import build_subprocess_env, gh_argv
+from dotharness.code_host import CodeHost, RepositoryRef
+from dotharness.gh import gh_argv
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.auto_approve_github import (
@@ -56,11 +57,11 @@ from dotharness.pr_review.runners.common import (
     TIMEOUT_GH,
     TIMEOUT_GIT,
     FatalGitError,
-    get_current_user,
-    get_gh_token,
     get_head_sha,
     git_detach_and_record,
     git_restore,
+    host_current_user,
+    open_host,
     run_cmd,
 )
 
@@ -80,9 +81,9 @@ async def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
     if not config.auto_approve.enabled:
         logger.info("auto-approve is disabled, nothing to do")
         return
-    gh_token = await get_gh_token(config.harness.gh_token_cmd)
-    env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
-    current_user = await get_current_user(env)
+    scaffold = await open_host(config)
+    host, repo, env = scaffold.host, scaffold.repo, scaffold.env
+    current_user = await host_current_user(host)
     prs = await _list_prs(config.repo.name, env)
     wdir = str(config.repo.working_dir)
     if not prs:
@@ -98,7 +99,7 @@ async def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
             continue
         pr_number = pr["number"]
         try:
-            await _process_pr(pr, config, wdir, env, current_user, dry_run)
+            await _process_pr(pr, config, wdir, env, host, repo, current_user, dry_run)
         except FatalGitError as e:
             logger.exception("PR #%d: fatal git error", pr_number)
             failures.append(f"#{pr_number}: {e}")
@@ -154,7 +155,16 @@ def _is_candidate(pr: dict) -> bool:
     return True
 
 
-async def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, current_user: str, dry_run: bool) -> None:
+async def _process_pr(
+    pr: dict,
+    config: HarnessConfig,
+    wdir: str,
+    env: dict,
+    host: CodeHost,
+    repo: RepositoryRef,
+    current_user: str,
+    dry_run: bool,
+) -> None:
     """Process one PR. gh read/write failures are logged, not returned; git errors raise."""
     pr_number = pr["number"]
     logger.info("PR #%d: starting%s", pr_number, " (dry-run)" if dry_run else "")
@@ -162,7 +172,7 @@ async def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, cur
     try:
         checked_out_sha = await _checkout_pr_head(pr_number, wdir, env)
         size = await evaluate_size(pr["baseRefName"], wdir, env, config.auto_approve)
-        await _decide_and_act(pr, size, checked_out_sha, config, env, current_user, dry_run)
+        await _decide_and_act(pr, size, checked_out_sha, config, host, repo, current_user, dry_run)
     finally:
         # Detached checkout: no local branch was created, so there is none to delete.
         await git_restore(original_sha, "", wdir, env)
@@ -205,19 +215,19 @@ async def _decide_and_act(
     size: SizeEvaluation,
     checked_out_sha: str,
     config: HarnessConfig,
-    env: dict,
+    host: CodeHost,
+    repo: RepositoryRef,
     current_user: str,
     dry_run: bool,
 ) -> None:
     pr_number = pr["number"]
-    repo = config.repo.name
     _log_size(pr_number, size, config)
 
     # All reads first (NFR-1): any read failure means no write on this PR this run.
     author = (pr.get("author") or {}).get("login", "")
-    gate = await check_timing_gate(repo, pr_number, author, current_user, env)
+    gate = await check_timing_gate(host, repo, pr_number, author, current_user)
     logger.info("PR #%d: timing gate %s (%s)", pr_number, gate.status.value, gate.reason)
-    safety = await check_approval_safety(repo, pr_number, current_user, env)
+    safety = await check_approval_safety(host, repo, pr_number, current_user)
     logger.info("PR #%d: safety %s (%s) head=%s", pr_number, safety.status.value, safety.reason, safety.head_sha)
     if gate.status is GateStatus.READ_FAILED or safety.status is SafetyStatus.READ_FAILED:
         logger.error("PR #%d: a read failed, no writes this run; retrying next run", pr_number)
@@ -233,7 +243,7 @@ async def _decide_and_act(
         return
 
     gate_passed = gate.status is GateStatus.PASSED
-    viewed = await _mark_viewed(pr_number, size, config, gate_passed, env, dry_run)
+    viewed = await _mark_viewed(host, repo, pr_number, size, config, gate_passed, dry_run)
     if viewed is None:
         logger.error("PR #%d: viewed-state read failed, no writes this run; retrying next run", pr_number)
         return
@@ -244,6 +254,7 @@ async def _decide_and_act(
     if all_viewed:
         logger.info("PR #%d: every file is viewed, size limit waived for approval", pr_number)
     approval = await approve_pr(
+        host,
         repo,
         pr_number,
         gate,
@@ -251,7 +262,6 @@ async def _decide_and_act(
         size,
         config.auto_approve.approve_max_lines,
         current_user,
-        env,
         dry_run,
         all_viewed=all_viewed,
     )
@@ -260,7 +270,13 @@ async def _decide_and_act(
 
 
 async def _mark_viewed(
-    pr_number: int, size: SizeEvaluation, config: HarnessConfig, gate_passed: bool, env: dict, dry_run: bool
+    host: CodeHost,
+    repo: RepositoryRef,
+    pr_number: int,
+    size: SizeEvaluation,
+    config: HarnessConfig,
+    gate_passed: bool,
+    dry_run: bool,
 ) -> bool | None:
     """Mark small files viewed. Returns whether all files are viewed, or None when the read failed.
 
@@ -268,9 +284,7 @@ async def _mark_viewed(
     hand is recognised.
     """
     max_lines = config.auto_approve.viewed_max_lines
-    viewed = await mark_files_viewed(
-        config.repo.name, pr_number, size.file_counts, max_lines, gate_passed, env, dry_run=dry_run
-    )
+    viewed = await mark_files_viewed(host, repo, pr_number, size.file_counts, max_lines, gate_passed, dry_run=dry_run)
     logger.info(
         "PR #%d: viewed %s marked=%s already-viewed=%s failed=%s",
         pr_number,
