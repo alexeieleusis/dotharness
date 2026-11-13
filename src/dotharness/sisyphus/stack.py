@@ -20,6 +20,8 @@ The manifest readers below (``nearest_manifest_dir``, ``python_declaration``,
 ``package_declaration``) read only manifest files and use the standard library
 only. A manifest is a regular file named ``pyproject.toml``, ``package.json`` or
 matching ``requirements*.txt``.
+
+The framework detection rules live in ``FRAMEWORK_RULES``; ``match_file`` applies them.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ from __future__ import annotations
 import json
 import re
 import tomllib
-from collections.abc import Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
@@ -301,3 +303,62 @@ def react_layout(rel_path: str, lines: Sequence[str]) -> str | None:
         if _REACT_IMPORT.search(line) or _REACT_REQUIRE.search(line):
             return f"{rel_path}: {line.strip()}"
     return None
+
+
+@dataclass(frozen=True)
+class FileMatch:
+    """The pattern set chosen for one file, with reviewer-readable evidence."""
+
+    set: str
+    evidence: tuple[str, ...]
+    fallback: bool
+
+
+@dataclass(frozen=True)
+class FrameworkRule:
+    """One framework: its set name, file extensions, manifest reader and layout predicate."""
+
+    set_name: str
+    extensions: tuple[str, ...]
+    read_manifest: Callable[[Path, str], Declaration]
+    layout: Callable[[str, Sequence[str]], str | None]
+
+
+FRAMEWORK_RULES: tuple[FrameworkRule, ...] = (
+    FrameworkRule("fastapi", (".py",), python_declaration, fastapi_layout),
+    FrameworkRule("react", (".tsx", ".jsx", ".ts", ".js"), package_declaration, react_layout),
+)
+
+
+def match_file(root: Path, rel_path: str, set_names: Collection[str]) -> FileMatch:
+    """Return the framework set that fits ``rel_path``, or ``generic`` with any read errors.
+
+    A set is chosen only if its name is in ``set_names``, the extension fits the row, the nearest
+    manifest directory declares the dependency and the layout matches. Rows come from
+    ``FRAMEWORK_RULES`` in order. Errors appear as evidence only on a ``generic`` result.
+    """
+    manifest_dir = nearest_manifest_dir(root, rel_path)
+    if manifest_dir is None:
+        return FileMatch("generic", (), True)
+    suffix = PurePosixPath(rel_path).suffix.lower()
+    errors: list[str] = []
+    source: tuple[tuple[str, ...], str | None] | None = None
+    for row in FRAMEWORK_RULES:
+        if row.set_name not in set_names or suffix not in row.extensions:
+            continue
+        declaration = row.read_manifest(root, manifest_dir)
+        errors.extend(declaration.errors)
+        if declaration.evidence is None:
+            continue
+        first_read = source is None
+        if source is None:
+            source = read_source_lines(root, rel_path)
+        lines, error = source
+        if error is not None:
+            if first_read:
+                errors.append(error)
+            continue
+        layout_evidence = row.layout(rel_path, lines)
+        if layout_evidence is not None:
+            return FileMatch(row.set_name, (declaration.evidence, layout_evidence), False)
+    return FileMatch("generic", tuple(dict.fromkeys(errors)), True)
