@@ -273,28 +273,6 @@ async def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:
         )
 
 
-def is_draft_pr(pr: dict) -> bool:
-    return bool(pr.get("isDraft"))
-
-
-async def is_pr_open(pr_number: int, repo: str, env: dict) -> bool:
-    """Return True if `pr_number` is still open on GitHub right now.
-
-    Fails closed (returns False) if the lookup fails — a long-running batch shouldn't
-    post a review to a PR that may have been closed or merged while it was processing.
-    """
-    result = await run_cmd(
-        gh_argv("pr", "view", str(pr_number), "--repo", repo, "--json", "state", "--jq", ".state"),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return False
-    return result.stdout.decode("utf-8").strip() == "OPEN"
-
-
 @dataclass(frozen=True)
 class HostScaffold:
     """What every ``_run_locked`` builds once: the host, the resolved repository and the child-process environment."""
@@ -1126,39 +1104,31 @@ def author_matches(login: str, authors_config: str | list) -> bool:
     return login in authors_config
 
 
-async def list_open_prs_matching_authors(
-    repo: str, authors_config: str | list, cwd: str, env: dict
-) -> list[dict] | None:
-    """List open, non-draft PRs whose author matches authors_config, sorted ascending by number.
+async def list_open_change_requests_matching_authors(
+    host: CodeHost, repo: RepositoryRef, authors_config: str | list
+) -> list[ChangeRequest] | None:
+    """List open, non-draft change requests whose author matches authors_config, sorted ascending by number.
 
-    Returns None (rather than []) on fetch failure, so callers can distinguish "gh pr list
-    failed" from "confirmed zero open PRs" instead of treating a transient API hiccup as an
-    authoritative empty set.
+    Returns None (rather than []) when the host read fails (logged), so callers can distinguish "the list failed"
+    from "confirmed zero open change requests" instead of treating a transient hiccup as an authoritative empty
+    set. An unsupported capability follows the ``review_prs`` policy for ``ChangeRequests.list`` (unlisted: stop)
+    and propagates.
     """
-    result = await run_cmd(
-        gh_argv(
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            "--state",
-            "open",
-            "--json",
-            "number,headRefName,author,isDraft,baseRefName,headRefOid",
-            "--limit",
-            "500",
-        ),
-        cwd=cwd,
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        logger.error("Failed to list PRs: %s", result.stderr.decode("utf-8", errors="replace"))
+
+    async def list_open() -> list[ChangeRequest]:
+        return list(await host.change_requests.list(repo, state=ChangeRequestState.OPEN))
+
+    try:
+        found = await call_with_policy("review_prs", "ChangeRequests.list", list_open, [])
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as e:
+        logger.error("Failed to list PRs: %s", e)  # noqa: TRY400
         return None
-    prs = json.loads(result.stdout)
-    eligible = [p for p in prs if not is_draft_pr(p) and author_matches(p["author"]["login"], authors_config)]
-    return sorted(eligible, key=lambda p: p["number"])
+    eligible = [
+        c for c in found if not c.is_draft and author_matches(c.author.login if c.author else "", authors_config)
+    ]
+    return sorted(eligible, key=lambda c: c.number)
 
 
 async def _list_prs_by_flag(repo: str, cwd: str, env: dict, filter_flag: str) -> list[dict]:

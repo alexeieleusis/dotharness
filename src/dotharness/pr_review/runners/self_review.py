@@ -444,7 +444,9 @@ async def _run_regret_review(
 
     async def short_circuit() -> bool | None:
         budget_start = time.monotonic()
-        introducing_hunks = await find_introducing_prs(ctx["host"], ctx["repo"], pr, config, wdir, env, budget_start)
+        introducing_hunks = await find_introducing_prs(
+            ctx["host"], ctx["repo"], _change_request(ctx, number), config, wdir, env, budget_start
+        )
         found = await find_regret_candidates(introducing_hunks, config, wdir, env, budget_start)
         if not found:
             logger.debug("PR #%d: no regret candidates — nothing to judge this run", number)
@@ -462,7 +464,7 @@ async def _run_regret_review(
             extra_knowledge,
             candidates,
             diff_sections,
-            pr,
+            _change_request(ctx, number),
             number,
             config.repo.name,
             ctx["commit_sha"],
@@ -483,7 +485,7 @@ async def _run_regret_review(
         if not findings:
             logger.info("PR #%d: regret review found no confirmed regret — nothing to post", number)
             return True
-        if not await post_regret_comment(number, config.repo.name, build_regret_comment_body(findings), env):
+        if not await post_regret_comment(ctx["host"], ctx["repo"], number, build_regret_comment_body(findings)):
             logger.error("PR #%d: failed to post the regret comment — will retry next run", number)
             return False
         return await check_regret_review_comment_status(ctx["host"], ctx["repo"], number, current_user)

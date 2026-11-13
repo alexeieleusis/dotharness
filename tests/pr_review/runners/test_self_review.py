@@ -1329,7 +1329,7 @@ async def test_regret_review_posts_comment_and_marks_done_on_findings(tmp_xdg, t
     assert mock_be.return_value.run.call_args.kwargs["context"] == "PR #53 regret review"
     assert 53 in state.get_regret_reviewed_prs("acme-frontend")
     assert mock_post.call_count == 1
-    body = mock_post.call_args.args[2]
+    body = mock_post.call_args.args[3]
     assert "# Previously flagged review comments" in body
     assert "src/foo.py:3" in body
     assert "#42" in body

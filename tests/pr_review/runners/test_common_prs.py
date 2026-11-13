@@ -21,11 +21,9 @@ from dotharness.pr_review.runners.common import (
     get_requested_reviewers,
     is_design_review_comment,
     is_inline_review_comment,
-    is_pr_open,
     is_review_summary_comment,
     is_traceability_review_comment,
     list_open_prs_for_current_user,
-    list_open_prs_matching_authors,
     pr_from_url,
     preserve_reviewer_request,
     was_review_requested,
@@ -43,53 +41,6 @@ def test_author_matches_list_rejects_unknown():
 
 def test_author_matches_list_allows_known():
     assert author_matches("alice", ["alice", "bob"]) is True
-
-
-@pytest.mark.parametrize(
-    ("returncode", "stdout", "expected"),
-    [
-        (0, b"OPEN\n", True),
-        (0, b"CLOSED\n", False),
-        (0, b"MERGED\n", False),
-        (1, b"", False),  # fails closed when gh lookup fails
-    ],
-)
-async def test_is_pr_open(returncode, stdout, expected):
-    with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=returncode, stdout=stdout, stderr=b"")
-        assert (await is_pr_open(8809, "acme/repo", {})) is expected
-
-
-async def test_list_open_prs_filters_drafts_and_authors(tmp_path):
-    payload = [
-        {"number": 3, "headRefName": "c", "author": {"login": "alice"}, "isDraft": False},
-        {"number": 1, "headRefName": "a", "author": {"login": "alice"}, "isDraft": True},
-        {"number": 2, "headRefName": "b", "author": {"login": "eve"}, "isDraft": False},
-    ]
-    with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(payload).encode())
-        result = await list_open_prs_matching_authors("acme/repo", ["alice"], str(tmp_path), {})
-    assert result is not None
-    assert [p["number"] for p in result] == [3]
-
-
-async def test_list_open_prs_sorted_ascending():
-    payload = [
-        {"number": 9, "headRefName": "b", "author": {"login": "alice"}, "isDraft": False},
-        {"number": 2, "headRefName": "a", "author": {"login": "alice"}, "isDraft": False},
-    ]
-    with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(payload).encode())
-        result = await list_open_prs_matching_authors("acme/repo", "*", "/", {})
-    assert result is not None
-    assert [p["number"] for p in result] == [2, 9]
-
-
-async def test_list_open_prs_returns_none_on_gh_failure():
-    with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-        result = await list_open_prs_matching_authors("acme/repo", "*", "/", {})
-    assert result is None
 
 
 def _run_cmd_router(responses):

@@ -3,20 +3,41 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from dotharness.code_host import (
+    Capability,
+    ChangeRequestState,
+    CodeHostError,
+    CodeHostTimeoutError,
+    UnsupportedCapabilityError,
+    User,
+)
+from dotharness.code_host.testing import InMemoryCodeHost
 from dotharness.pr_review import state
 from dotharness.pr_review.config import PreCommand, SubDir
 from dotharness.pr_review.runners import review_prs
 from tests.pr_review.runners.runner_support import REPO, make_change_request, make_scaffold
 
 
-@pytest.fixture(autouse=True)
-def _pr_open_by_default():
-    """Most tests don't care about PR-closed handling, so default it to open.
+def _seed(prs=()) -> InMemoryCodeHost:
+    """An in-memory host holding ``prs`` (ChangeRequests) as open change requests authored by alice."""
+    host = InMemoryCodeHost(repository="acme/frontend", user="alice")
+    for pr in prs:
+        host.add_change_request(
+            REPO,
+            number=pr.number,
+            head_reference=pr.head_reference,
+            head_revision=pr.head_revision,
+            base_reference=pr.base_reference,
+            author=pr.author.login if pr.author else "alice",
+            state=pr.state,
+            is_draft=pr.is_draft,
+            requested_reviewers=[u.login for u in pr.requested_reviewers],
+        )
+    return host
 
-    Tests exercising the skip-when-closed behavior override this within their own `with` block.
-    """
-    with patch("dotharness.pr_review.runners.review_prs.is_pr_open", return_value=True):
-        yield
+
+def _pr(number, ref="feat", sha=None, **fields):
+    return make_change_request(number, head_reference=ref, head_revision=sha or f"sha{number}", **fields)
 
 
 def _make_config(tmp_path, authors="*", subdirs=None):
@@ -49,12 +70,11 @@ async def test_skips_prs_with_unchanged_head_sha(tmp_xdg, tmp_path):
     state.record_reviewed_sha("acme-frontend", 10, "sha10", 1000.0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     prs = [
-        {"number": 8, "headRefName": "b", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha8"},
-        {"number": 10, "headRefName": "b", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha10"},
+        _pr(8, "b", "sha8"),
+        _pr(10, "b", "sha10"),
     ]
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record") as mock_detach,
@@ -70,27 +90,27 @@ async def test_skips_prs_with_unchanged_head_sha(tmp_xdg, tmp_path):
 
 
 def test_already_reviewed_false_for_never_reviewed_pr():
-    pr = {"number": 1, "headRefOid": "sha1"}
+    pr = _pr(1)
     assert review_prs._already_reviewed({}, pr, min_interval_seconds=86400, now=2_000_000.0) is False
 
 
 def test_already_reviewed_true_when_sha_unchanged_regardless_of_interval():
     reviewed_shas = {"8": {"sha": "sha8", "reviewed_at": 1000.0}}
-    pr = {"number": 8, "headRefOid": "sha8"}
+    pr = _pr(8)
     # Interval is 0 (already elapsed) but the SHA still matches, so it's skipped anyway.
     assert review_prs._already_reviewed(reviewed_shas, pr, min_interval_seconds=0, now=2_000_000.0) is True
 
 
 def test_already_reviewed_true_when_sha_changed_but_within_interval():
     reviewed_shas = {"7": {"sha": "old-sha", "reviewed_at": 1000.0}}
-    pr = {"number": 7, "headRefOid": "new-sha"}
+    pr = _pr(7, sha="new-sha")
     # Only 100s have passed since the last review; the 24h (86400s) interval hasn't elapsed.
     assert review_prs._already_reviewed(reviewed_shas, pr, min_interval_seconds=86400, now=1100.0) is True
 
 
 def test_already_reviewed_false_when_sha_changed_and_interval_elapsed():
     reviewed_shas = {"7": {"sha": "old-sha", "reviewed_at": 1000.0}}
-    pr = {"number": 7, "headRefOid": "new-sha"}
+    pr = _pr(7, sha="new-sha")
     # 25 hours have passed, past the 24h (86400s) interval.
     assert review_prs._already_reviewed(reviewed_shas, pr, min_interval_seconds=86400, now=1000.0 + 25 * 3600) is False
 
@@ -100,12 +120,9 @@ async def test_run_locked_skips_pr_with_new_sha_within_min_reanalysis_interval(t
 
     state.record_reviewed_sha("acme-frontend", 7, "old-sha", 1_000_000.0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
-    prs = [
-        {"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "new-sha"}
-    ]
+    prs = [_pr(7, "feat", "new-sha")]
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record") as mock_detach,
@@ -127,14 +144,9 @@ async def test_run_locked_reprocesses_pr_with_new_sha_after_min_reanalysis_inter
 
     state.record_reviewed_sha("acme-frontend", 7, "old-sha", 1_000_000.0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
-    prs = [
-        {"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "new-sha"}
-    ]
+    prs = [_pr(7, "feat", "new-sha")]
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -157,14 +169,9 @@ async def test_run_locked_respects_configured_min_reanalysis_interval_hours(tmp_
     state.record_reviewed_sha("acme-frontend", 7, "old-sha", 1_000_000.0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     cfg.vibe_heal.min_reanalysis_interval_hours = 1
-    prs = [
-        {"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "new-sha"}
-    ]
+    prs = [_pr(7, "feat", "new-sha")]
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -184,14 +191,9 @@ async def test_reprocesses_pr_when_head_sha_changes(tmp_xdg, tmp_path):
 
     state.record_reviewed_sha("acme-frontend", 7, "old-sha", 1000.0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
-    prs = [
-        {"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "new-sha"}
-    ]
+    prs = [_pr(7, "feat", "new-sha")]
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -209,12 +211,9 @@ async def test_processes_new_prs(tmp_xdg, tmp_path):
     from dotharness.pr_review.config import SubDir
 
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
-    prs = [{"number": 5, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha5"}]
+    prs = [_pr(5, "feat", "sha5")]
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.review_prs.git_restore"),
@@ -232,9 +231,10 @@ async def test_failed_pr_fetch_does_not_prune_reviewed_shas(tmp_xdg, tmp_path):
     state.record_reviewed_sha("acme-frontend", 5, "sha5", 1000.0)
     state.record_reviewed_sha("acme-frontend", 6, "sha6", 1000.0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
+    host = _seed()
+    host.fail_next("ChangeRequests.list", CodeHostError("boom"))
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=None),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(host)),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record") as mock_detach,
@@ -252,12 +252,9 @@ async def test_updates_state_after_success(tmp_xdg, tmp_path):
     from dotharness.pr_review.config import SubDir
 
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
-    prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha7"}]
+    prs = [_pr(7, "feat", "sha7")]
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.review_prs.git_restore"),
@@ -272,12 +269,9 @@ async def test_coverage_flag_passed_when_true(tmp_xdg, tmp_path):
     from dotharness.pr_review.config import SubDir
 
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], coverage=True, timeout=30)])
-    prs = [{"number": 3, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha3"}]
+    prs = [_pr(3, "feat", "sha3")]
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.review_prs.git_restore"),
@@ -329,8 +323,6 @@ async def test_pr_url_bypasses_reviewed_sha_filtering(tmp_xdg, tmp_path):
     pr = make_change_request(3, head_reference="feat", head_revision="sha3")
     with (
         patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.pr_from_url", return_value=pr),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -348,8 +340,6 @@ async def test_pr_url_does_not_update_reviewed_shas(tmp_xdg, tmp_path):
     pr = make_change_request(3, head_reference="feat", head_revision="sha3")
     with (
         patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.pr_from_url", return_value=pr),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -436,22 +426,9 @@ async def test_run_locked_re_requests_review_once_per_pr_across_subdirs(tmp_xdg,
         tmp_path,
         subdirs=[SubDir(path="a", pre_commands=[], coverage=False, timeout=30), SubDir(path="b")],
     )
-    prs = [
-        {
-            "number": 9,
-            "headRefName": "feat",
-            "author": {"login": "alice"},
-            "isDraft": False,
-            "baseRefName": "main",
-            "headRefOid": "sha9",
-        }
-    ]
+    host = _seed([_pr(9, "feat", "sha9", requested_reviewers=(User("alice"),))])
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=True) as mock_was_requested,
-        patch("dotharness.pr_review.runners.common.add_reviewer") as mock_add_reviewer,
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(host)),
         patch("dotharness.pr_review.runners.review_prs.get_changed_files", return_value=["a/foo.py", "b/bar.py"]),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -460,21 +437,16 @@ async def test_run_locked_re_requests_review_once_per_pr_across_subdirs(tmp_xdg,
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
         await review_prs._run_locked(cfg)
-    assert mock_was_requested.call_count == 1
-    assert mock_was_requested.call_args.args[1:3] == (REPO, 9)
-    assert mock_add_reviewer.call_count == 1
-    assert mock_add_reviewer.call_args.args[1:] == (REPO, 9, "alice")
+    requests = [c for c in host.calls if c.operation == "ChangeRequests.request_reviewer"]
+    assert [c.args for c in requests] == [(REPO, 9, "alice")]
+    assert [c.operation for c in host.calls].count("ChangeRequests.get") == 1
 
 
 async def test_run_locked_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
-    prs = [{"number": 9, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha9"}]
+    host = _seed([_pr(9, "feat", "sha9")])
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
-        patch("dotharness.pr_review.runners.common.add_reviewer") as mock_add_reviewer,
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(host)),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.review_prs.git_restore"),
@@ -482,7 +454,7 @@ async def test_run_locked_does_not_re_request_review_if_not_previously_requested
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
         await review_prs._run_locked(cfg)
-    mock_add_reviewer.assert_not_called()
+    assert not [c for c in host.calls if c.operation == "ChangeRequests.request_reviewer"]
 
 
 async def test_process_subdir_skips_vibe_heal_after_critical_pre_command_failure(tmp_path):
@@ -494,9 +466,10 @@ async def test_process_subdir_skips_vibe_heal_after_critical_pre_command_failure
         vibe_heal=VibehealConfig(enabled=True, python="/venv/bin/python3"),
     )
     subdir = SubDir(path=".", pre_commands=[PreCommand(cmd="poetry install", critical=True)])
+    host = _seed([_pr(1)]).code_host()
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run:
         mock_run.side_effect = subprocess.CalledProcessError(1, "poetry install")
-        result = await review_prs._process_subdir(1, subdir, cfg, {})
+        result = await review_prs._process_subdir(host, REPO, 1, subdir, cfg, {})
     assert result is False
     vibe_calls = [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert vibe_calls == []
@@ -504,12 +477,10 @@ async def test_process_subdir_skips_vibe_heal_after_critical_pre_command_failure
 
 async def test_process_pr_skips_when_closed_since_discovery(tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
-    pr = {"number": 42, "headRefName": "feat", "baseRefName": "main", "headRefOid": "sha42"}
-    with (
-        patch("dotharness.pr_review.runners.review_prs.is_pr_open", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout") as mock_fetch,
-    ):
-        result = await review_prs._process_pr(pr, cfg, make_scaffold().host, REPO, {}, "alice", str(tmp_path))
+    pr = _pr(42, "feat", "sha42", state=ChangeRequestState.MERGED)
+    host = _seed([pr]).code_host()
+    with patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout") as mock_fetch:
+        result = await review_prs._process_pr(pr, cfg, host, REPO, {}, "alice", str(tmp_path))
     assert result is False
     mock_fetch.assert_not_called()
 
@@ -523,13 +494,11 @@ async def test_process_subdir_skips_post_when_pr_closed_during_review(tmp_path):
         vibe_heal=VibehealConfig(enabled=True, python="/venv/bin/python3"),
     )
     subdir = SubDir(path=".", pre_commands=[])
-    with (
-        patch(
-            "dotharness.pr_review.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")
-        ) as mock_run,
-        patch("dotharness.pr_review.runners.review_prs.is_pr_open", return_value=False),
-    ):
-        result = await review_prs._process_subdir(1, subdir, cfg, {})
+    host = _seed([_pr(1, state=ChangeRequestState.MERGED)]).code_host()
+    with patch(
+        "dotharness.pr_review.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")
+    ) as mock_run:
+        result = await review_prs._process_subdir(host, REPO, 1, subdir, cfg, {})
     assert result is False
     post_calls = [c for c in mock_run.call_args_list if "--post" in str(c)]
     assert post_calls == []
@@ -565,21 +534,9 @@ async def test_run_locked_skips_subdir_with_no_changes(tmp_xdg, tmp_path):
         tmp_path,
         subdirs=[SubDir(path="a", pre_commands=[], coverage=False, timeout=30), SubDir(path="b")],
     )
-    prs = [
-        {
-            "number": 11,
-            "headRefName": "feat",
-            "author": {"login": "alice"},
-            "isDraft": False,
-            "baseRefName": "main",
-            "headRefOid": "sha11",
-        }
-    ]
+    prs = [_pr(11, "feat", "sha11")]
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs.get_changed_files", return_value=["a/src/foo.py"]),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
@@ -758,24 +715,23 @@ async def test_run_locked_propagates_base_analysis_timeout_without_processing_pr
     def fake_run_cmd(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd, 60)
 
+    host = _seed([_pr(1)])
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(host)),
         patch("dotharness.pr_review.runners.review_prs.prune_projects.run"),
         patch("dotharness.pr_review.runners.review_prs.run_cmd", side_effect=fake_run_cmd),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors") as mock_list,
-        patch("dotharness.pr_review.runners.review_prs.pr_from_url") as mock_from_url,
         pytest.raises(review_prs.BaseAnalysisError),
     ):
         await review_prs._run_locked(cfg)
-    mock_list.assert_not_called()
-    mock_from_url.assert_not_called()
+    assert host.calls == []
 
 
 async def test_run_locked_calls_prune_projects_before_base_analysis(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     calls = []
+    host = _seed([_pr(1)])
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(host)),
         patch(
             "dotharness.pr_review.runners.review_prs.prune_projects.run", side_effect=lambda *a: calls.append("prune")
         ),
@@ -783,11 +739,10 @@ async def test_run_locked_calls_prune_projects_before_base_analysis(tmp_xdg, tmp
             "dotharness.pr_review.runners.review_prs._run_base_analysis",
             side_effect=lambda *a: calls.append("base_analysis") or False,
         ),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors") as mock_list,
     ):
         await review_prs._run_locked(cfg)
     assert calls == ["prune", "base_analysis"]
-    mock_list.assert_not_called()
+    assert host.calls == []
 
 
 async def test_run_locked_does_not_prune_when_disabled(tmp_xdg, tmp_path):
@@ -796,7 +751,6 @@ async def test_run_locked_does_not_prune_when_disabled(tmp_xdg, tmp_path):
     with (
         patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=[]),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
     ):
         await review_prs._run_locked(cfg)
@@ -806,28 +760,26 @@ async def test_run_locked_does_not_prune_when_disabled(tmp_xdg, tmp_path):
 
 async def test_run_locked_skips_when_subdirs_empty(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path)
-    with (
-        patch("dotharness.pr_review.runners.review_prs.open_host") as mock_token,
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors") as mock_list,
-    ):
+    with patch("dotharness.pr_review.runners.review_prs.open_host") as mock_token:
         await review_prs._run_locked(cfg)
     mock_token.assert_not_called()
-    mock_list.assert_not_called()
 
 
 async def test_run_locked_skips_pr_processing_when_base_analysis_fails(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    host = _seed([_pr(1)])
     with (
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(host)),
+        patch("dotharness.pr_review.runners.review_prs.prune_projects.run"),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors") as mock_list,
     ):
         await review_prs._run_locked(cfg)
-    mock_list.assert_not_called()
+    assert host.calls == []
 
 
 async def test_run_locked_does_not_record_reviewed_sha_on_subdir_failure(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
-    prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha7"}]
+    prs = [_pr(7, "feat", "sha7")]
 
     def fake_run_cmd(cmd, **kwargs):
         if "vibe_heal" in str(cmd) and "--pr" in cmd:
@@ -835,10 +787,7 @@ async def test_run_locked_does_not_record_reviewed_sha_on_subdir_failure(tmp_xdg
         return MagicMock(returncode=0, stdout=b"[]", stderr=b"")
 
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd", side_effect=fake_run_cmd),
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -851,13 +800,10 @@ async def test_run_locked_does_not_record_reviewed_sha_on_subdir_failure(tmp_xdg
 
 async def test_run_locked_does_not_record_reviewed_sha_on_generic_exception(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
-    prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha7"}]
+    prs = [_pr(7, "feat", "sha7")]
 
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs._process_pr", side_effect=ValueError("boom")),
         patch(
@@ -890,14 +836,11 @@ async def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path):
 
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     prs = [
-        {"number": 3, "headRefName": "pr3", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha3"},
-        {"number": 4, "headRefName": "pr4", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha4"},
+        _pr(3, "pr3", "sha3"),
+        _pr(4, "pr4", "sha4"),
     ]
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")),
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -918,14 +861,11 @@ async def test_fatal_git_error_from_process_pr_stops_remaining_prs(tmp_xdg, tmp_
 
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     prs = [
-        {"number": 5, "headRefName": "pr5", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha5"},
-        {"number": 6, "headRefName": "pr6", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha6"},
+        _pr(5, "pr5", "sha5"),
+        _pr(6, "pr6", "sha6"),
     ]
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch(
             "dotharness.pr_review.runners.review_prs._process_pr",
@@ -943,14 +883,11 @@ async def test_fatal_git_error_from_process_pr_stops_remaining_prs(tmp_xdg, tmp_
 async def test_generic_exception_does_not_block_credit_for_other_prs(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     prs = [
-        {"number": 2, "headRefName": "pr2", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha2"},
-        {"number": 4, "headRefName": "pr4", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha4"},
+        _pr(2, "pr2", "sha2"),
+        _pr(4, "pr4", "sha4"),
     ]
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")),
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -970,13 +907,10 @@ async def test_generic_exception_does_not_block_credit_for_other_prs(tmp_xdg, tm
 
 async def test_run_locked_calls_git_restore_when_process_pr_raises(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
-    prs = [{"number": 5, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha5"}]
+    prs = [_pr(5, "feat", "sha5")]
 
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs._process_pr", side_effect=RuntimeError("boom")),
         patch("dotharness.pr_review.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")),
@@ -1079,10 +1013,11 @@ async def test_process_subdir_argv_with_and_without_env_file(tmp_path, coverage)
     cfg = _make_config(tmp_path)
     (tmp_path / ".env").write_text("X=1\n")
     p = str(tmp_path / ".env")
+    host = _seed([_pr(7)]).code_host()
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=b"")
-        await review_prs._process_subdir(7, SubDir(path="a", coverage=coverage, env_file=p), cfg, {})
-        await review_prs._process_subdir(7, SubDir(path="b", coverage=coverage), cfg, {})
+        await review_prs._process_subdir(host, REPO, 7, SubDir(path="a", coverage=coverage, env_file=p), cfg, {})
+        await review_prs._process_subdir(host, REPO, 7, SubDir(path="b", coverage=coverage), cfg, {})
     review_a, post_a, review_b, post_b = _vibe_cmds(mock_run)
     py = ["/venv/bin/python3", "-m", "dotharness.vibe_heal"]
     cov = ["--coverage"] if coverage else []
@@ -1121,8 +1056,9 @@ async def test_process_subdir_fails_fast_on_bad_env_file(tmp_path, caplog, kind)
     cfg = _make_config(tmp_path)
     bad = _bad_env_file(tmp_path, kind)
     subdir = SubDir(path="a", env_file=bad, pre_commands=[PreCommand(cmd="echo hi")])
+    host = _seed([_pr(7)]).code_host()
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run, caplog.at_level("DEBUG"):
-        assert (await review_prs._process_subdir(7, subdir, cfg, {})) is False
+        assert (await review_prs._process_subdir(host, REPO, 7, subdir, cfg, {})) is False
     mock_run.assert_not_called()
     errors = [r for r in caplog.records if r.levelname == "ERROR"]
     assert len(errors) == 1
@@ -1149,12 +1085,9 @@ async def test_run_base_analysis_does_not_persist_sha_on_bad_env_file(tmp_xdg, t
 async def test_process_pr_does_not_record_reviewed_sha_on_bad_env_file(tmp_xdg, tmp_path, kind):
     bad = _bad_env_file(tmp_path, kind)
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30, env_file=bad)])
-    prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha7"}]
+    prs = [_pr(7, "feat", "sha7")]
     with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
-        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
-        patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
-        patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -1173,3 +1106,61 @@ async def test_unset_env_file_logs_no_env_file_message(tmp_path, caplog):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"")
         assert (await review_prs._run_base_subdir(SubDir(path="a"), cfg, {})) is True
     assert not [r for r in caplog.records if "regular file" in r.getMessage()]
+
+
+async def test_discover_prs_lists_open_non_draft_matching_authors_sorted(tmp_path):
+    cfg = _make_config(tmp_path, authors=["alice"])
+    host = _seed([
+        _pr(9, "b", author=User("alice")),
+        _pr(2, "a", author=User("alice")),
+        _pr(4, "d", author=User("alice"), is_draft=True),
+        _pr(5, "e", author=User("eve")),
+        _pr(6, "f", author=User("alice"), state=ChangeRequestState.CLOSED),
+    ])
+    found = await review_prs._discover_prs(cfg, None, host.code_host(), REPO)
+    assert found is not None
+    assert [pr.number for pr in found] == [2, 9]
+    assert [c.operation for c in host.calls] == ["ChangeRequests.list"]
+
+
+async def test_discover_prs_returns_none_when_the_list_fails_and_empty_when_there_are_none(tmp_path):
+    cfg = _make_config(tmp_path)
+    host = _seed()
+    assert await review_prs._discover_prs(cfg, None, host.code_host(), REPO) == []
+    host.fail_next("ChangeRequests.list", CodeHostError("boom"))
+    assert await review_prs._discover_prs(cfg, None, host.code_host(), REPO) is None
+
+
+async def test_discover_prs_timeout_on_list_is_a_failed_read(tmp_path):
+    host = _seed([_pr(1)])
+    host.fail_next("ChangeRequests.list", CodeHostTimeoutError("slow", write=False))
+    assert await review_prs._discover_prs(_make_config(tmp_path), None, host.code_host(), REPO) is None
+
+
+async def test_discover_prs_with_url_reads_only_that_change_request(tmp_path):
+    host = _seed([_pr(3, "feat", "sha3"), _pr(4)])
+    found = await review_prs._discover_prs(
+        _make_config(tmp_path), "https://example.test/acme/frontend/pull/3", host.code_host(), REPO
+    )
+    assert found is not None
+    assert [(pr.number, pr.head_revision, pr.base_reference) for pr in found] == [(3, "sha3", "main")]
+    assert "ChangeRequests.list" not in [c.operation for c in host.calls]
+
+
+async def test_discover_prs_stops_when_the_host_cannot_list_change_requests(tmp_path):
+    host = InMemoryCodeHost(
+        repository="acme/frontend", user="alice", capabilities=frozenset(Capability) - {Capability.CHANGE_REQUESTS}
+    )
+    with pytest.raises(UnsupportedCapabilityError):
+        await review_prs._discover_prs(_make_config(tmp_path), None, host.code_host(), REPO)
+
+
+async def test_process_pr_skips_when_the_state_read_fails(tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
+    pr = _pr(42)
+    host = _seed([pr])
+    host.fail_next("ChangeRequests.state", CodeHostError("boom"))
+    with patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout") as mock_fetch:
+        result = await review_prs._process_pr(pr, cfg, host.code_host(), REPO, {}, "alice", str(tmp_path))
+    assert result is False
+    mock_fetch.assert_not_called()
