@@ -2206,7 +2206,7 @@ class CodeHostConformance:
             cr = target.seeder.add_change_request(target.repository, head_reference="feature/many")
             for i in range(count):
                 seed(target, cr.number, i)
-            _, call = (await self._calls_for(target, cr.number))[operation]
+            _, call = self._calls_for(target, cr.number)[operation]
             assert len(await call()) == count, operation
         # Viewed files are seeded through the host itself.
         target = await self.make_target()
@@ -2220,7 +2220,7 @@ class CodeHostConformance:
                 await crs.mark_viewed(repo, cr.number, f"src/file{i}.py")
             assert len(await crs.viewed_files(repo, cr.number)) == count
 
-    async def _calls_for(
+    def _calls_for(
         self, target: ConformanceTarget, number: int
     ) -> dict[str, tuple[bool, Callable[[], Awaitable[Any]]]]:
         repo, host = target.repository, target.host
