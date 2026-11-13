@@ -973,6 +973,30 @@ class _Run:
                 return True
         return False
 
+    async def build_gate_plan(self) -> tuple[list[tuple[Path, str]], str | None]:
+        """Return the gate plan for this branch, or the reason there is none; needs no PR.
+
+        ``(plan, None)`` when there is something to run; ``([], reason)`` when the gate is not run, where
+        ``reason`` has no PR wording. The method does not note, gate or raise for those cases; a malformed
+        config or a failing ``git diff`` still raises :class:`OrchestratorError`.
+        """
+        self.write_item_config()
+        commands = read_build_commands(self.spf)
+        entries = read_gate_entries(self.spf)
+        if commands is None and entries is None:
+            return [], f"no build.commands in {self.spf}"
+        changed = (await self.git("diff", "--name-only", f"origin/{self.opt.base_branch}...HEAD")).stdout.split("\n")
+        dirs = package_dirs(self.repo, [c for c in changed if c.strip()])
+        if not dirs:
+            return [], "no changed files to gate"
+        plan: list[tuple[Path, str]] = []
+        for directory in dirs:
+            plan.extend((directory, c) for c in commands or [])
+            plan.extend((directory, e.run) for e in entries or [] if _gate_applies(e, self.repo, directory))
+        if not plan:
+            return [], "no [[build.gate]] entry applies to the touched package directories"
+        return plan, None
+
     async def gate(self) -> None:
         """Run the gate commands in each touched package dir at HEAD; record the first failure.
 
