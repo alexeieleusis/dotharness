@@ -1036,7 +1036,8 @@ class _FakeChangeRequests(_Facet):
             change_request = self._find(repo, number)
             if login not in {u.login for u in change_request.requested_reviewers}:
                 reviewers = (*change_request.requested_reviewers, User(login))
-                self._replace(repo, replace(change_request, requested_reviewers=reviewers))
+                updated = replace(change_request, requested_reviewers=reviewers)
+                self._replace(repo, updated)  # NOSONAR python:S5655 - dataclasses.replace returns a ChangeRequest
 
         self._do("ChangeRequests.request_reviewer", action, repo, number, login)
 
