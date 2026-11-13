@@ -1004,29 +1004,13 @@ class _Run:
         to it, in file order. An entry with ``packages`` applies only to a touched directory equal to one of
         them; an entry without ``packages`` applies to every touched directory. When neither source exists,
         when there are no changed files, or when only entries exist and none applies, note that the gate was
-        not run and return. A failing command is recorded in ``gate_failure`` and noted; the remaining commands
+        not run and return. The plan, and the reason there is none, come from :meth:`build_gate_plan`. A failing command is recorded in ``gate_failure`` and noted; the remaining commands
         are skipped and nothing is raised, so the run still completes.
         """
         number = await self.pr_number()
-        self.write_item_config()
-        commands = read_build_commands(self.spf)
-        entries = read_gate_entries(self.spf)
-        if commands is None and entries is None:
-            self.note(f"gate not run for PR #{number}: no build.commands in {self.spf}")
-            return
-        changed = (await self.git("diff", "--name-only", f"origin/{self.opt.base_branch}...HEAD")).stdout.split("\n")
-        dirs = package_dirs(self.repo, [c for c in changed if c.strip()])
-        if not dirs:
-            self.note(f"gate not run for PR #{number}: no changed files to gate")
-            return
-        plan: list[tuple[Path, str]] = []
-        for directory in dirs:
-            plan.extend((directory, c) for c in commands or [])
-            plan.extend((directory, e.run) for e in entries or [] if _gate_applies(e, self.repo, directory))
-        if not plan:
-            self.note(
-                f"gate not run for PR #{number}: no [[build.gate]] entry applies to the touched package directories"
-            )
+        plan, reason = await self.build_gate_plan()
+        if reason is not None:
+            self.note(f"gate not run for PR #{number}: {reason}")
             return
         if await self.run_gate_plan(plan):
             return

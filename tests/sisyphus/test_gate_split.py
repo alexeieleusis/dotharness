@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from dotharness.sisyphus import orchestrator
-from dotharness.sisyphus.orchestrator import GATE_FAILED_KEY
+from dotharness.sisyphus.orchestrator import GATE_FAILED_KEY, OrchestratorError, PullRequest
 from tests.sisyphus.test_orchestrator import ITEM, World
 
 
@@ -118,3 +118,65 @@ async def test_diff_base(world: World) -> None:
     await run.build_gate_plan()
     assert _diffs(world) == [("git", "diff", "--name-only", f"origin/{run.opt.base_branch}...HEAD")]
     assert run.opt.base_branch == "base-branch"
+
+
+# ------------------------------------------------------------------ gate() delegates to build_gate_plan
+
+
+def _gate_run(world: World) -> orchestrator._Run:
+    world.existing_pr = PullRequest(42, "https://example.test/pr/42")
+    return _run(world)
+
+
+async def test_gate_no_config_note(world: World) -> None:
+    _spf(world, None)
+    run = _gate_run(world)
+    await run.gate()
+    assert run.notes == [f"gate not run for PR #42: no build.commands in {run.spf}"]
+    assert run.gated is False
+    assert _diffs(world) == []
+
+
+async def test_gate_no_changed_files_note(world: World) -> None:
+    world.changed = ""
+    run = _gate_run(world)
+    await run.gate()
+    assert run.notes == ["gate not run for PR #42: no changed files to gate"]
+    assert run.gated is False
+
+
+async def test_gate_no_entry_applies_note(world: World) -> None:
+    _spf(world, '[[build.gate]]\nrun = "make a"\npackages = ["elsewhere"]\n')
+    run = _gate_run(world)
+    await run.gate()
+    assert run.notes == ["gate not run for PR #42: no [[build.gate]] entry applies to the touched package directories"]
+    assert run.gated is False
+
+
+async def test_gate_passing_clears_failure_flag(world: World) -> None:
+    run = _gate_run(world)
+    run.rec.retries[GATE_FAILED_KEY] = 1
+    await run.gate()
+    assert run.gated is True
+    assert run.rec.retries[GATE_FAILED_KEY] == 0
+    assert run.notes == []
+
+
+async def test_gate_failing_records_failure(world: World) -> None:
+    world.gate_rc = 2
+    run = _gate_run(world)
+    await run.gate()
+    assert run.gated is False
+    assert run.rec.retries[GATE_FAILED_KEY] == 1
+    assert len(run.notes) == 1
+    assert run.notes[0].startswith("gate command 'make check' failed in ")
+    assert run.notes[0].endswith("(exit 2): gate failed")
+
+
+async def test_gate_without_pr_raises_before_any_config_or_git(world: World) -> None:
+    run = _run(world)
+    with pytest.raises(OrchestratorError, match="no open PR found"):
+        await run.gate()
+    assert _diffs(world) == []
+    assert not run.spf.exists()
+    assert world.find_calls == 1
