@@ -407,3 +407,56 @@ def merge_evidence(per_file: Sequence[Sequence[str]]) -> tuple[str, ...]:
             if entry not in merged:
                 merged.append(entry)
     return tuple(merged)
+
+
+def group_added_files(
+    root: Path,
+    added: Sequence[str],
+    set_names: Collection[str] | None = None,
+    pattern_set: str | None = None,
+) -> tuple[StackGroup, ...]:
+    """Group the added source files by pattern set.
+
+    With ``pattern_set`` given, all sources form one group and no manifest is read.
+    Otherwise each source file lands in exactly one group: framework groups in
+    ascending set-name order, then ``generic`` last. ``tests`` is filled only in the
+    override case.
+    """
+    if set_names is None:
+        set_names = pattern_set_names()
+    classified = classify_paths(added)
+    sources = tuple(sorted(set(classified.sources)))
+    if not sources:
+        return ()
+    if pattern_set is not None:
+        if pattern_set not in set_names:
+            valid = ", ".join(sorted(set_names))
+            raise StackError(f"unknown pattern set {pattern_set!r}; valid sets: {valid}")  # noqa: TRY003
+        return (
+            StackGroup(
+                set=pattern_set,
+                files=sources,
+                tests=classified.tests,
+                evidence=(),
+                fallback=False,
+            ),
+        )
+    files: dict[str, list[str]] = {}
+    evidence: dict[str, list[tuple[str, ...]]] = {}
+    for path in sources:
+        match = match_file(root, path, set_names)
+        files.setdefault(match.set, []).append(path)
+        evidence.setdefault(match.set, []).append(tuple(match.evidence))
+    names = sorted(name for name in files if name != "generic")
+    if "generic" in files:
+        names.append("generic")
+    return tuple(
+        StackGroup(
+            set=name,
+            files=tuple(files[name]),
+            tests=(),
+            evidence=merge_evidence(evidence[name]),
+            fallback=name == "generic",
+        )
+        for name in names
+    )
