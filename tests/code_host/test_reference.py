@@ -1513,7 +1513,7 @@ class TestPagingRetries:
         assert "attempt 1/3" in caplog.text
 
     async def test_a_later_page_failure_raises(self, mocker) -> None:
-        _pages(mocker, _ok([{"id": i} for i in range(100)]), (1, "", "x"), (1, "", "x"), (1, "", "x"))
+        _pages(mocker, _ok([{"id": i, "created_at": "2026-01-01T00:00:00Z"} for i in range(100)]), (1, "", "x"), (1, "", "x"), (1, "", "x"))
         with pytest.raises(CodeHostError):
             await _host().change_requests.reviews(REPO, 5)
 
@@ -1713,7 +1713,7 @@ def _thread(tid="T1", **extra):
                     "diffHunk": "@@",
                     "author": {"login": "bot[bot]", "__typename": "Bot"},
                 },
-                {"id": "NODE2", "body": "b", "author": None, "diffHunk": ""},
+                {"id": "NODE2", "body": "b", "createdAt": "2026-01-01T00:00:00Z", "author": None, "diffHunk": ""},
             ],
         },
     }
@@ -1731,7 +1731,7 @@ class TestDiscussionOperations:
                 "created_at": "2026-01-01T00:00:00Z",
                 "html_url": "u",
             },
-            {"id": 6, "user": {"login": "x[bot]", "type": "Bot"}, "body": "c"},
+            {"id": 6, "user": {"login": "x[bot]", "type": "Bot"}, "body": "c", "created_at": "2026-01-01T00:00:00Z"},
         ]
         mock_run = _pages(mocker, _ok(rows))
         comments = await _host().discussion.comments(REPO, 3)
@@ -1743,7 +1743,7 @@ class TestDiscussionOperations:
         assert (comments[0].url, comments[1].url, comments[0].is_hidden) == ("u", None, False)
 
     async def test_comments_are_never_truncated(self, mocker) -> None:
-        _pages(mocker, _ok([{"id": i} for i in range(100)]), _ok([{"id": 100}]))
+        _pages(mocker, _ok([{"id": i, "created_at": "2026-01-01T00:00:00Z"} for i in range(100)]), _ok([{"id": 100, "created_at": "2026-01-01T00:00:00Z"}]))
         assert len(await _host().discussion.comments(REPO, 3)) == 101
 
     async def test_review_threads_paged(self, mocker) -> None:
@@ -1785,6 +1785,16 @@ class TestDiscussionOperations:
         with pytest.raises(CodeHostError, match="boom"):
             await d.review_threads(REPO, 3)
 
+    async def test_comments_reject_unparseable_timestamp(self, mocker) -> None:
+        _pages(mocker, _ok([{"id": 1, "created_at": "garbage"}]))
+        with pytest.raises(CodeHostError, match="unparseable timestamp"):
+            await _host().discussion.comments(REPO, 3)
+
+    async def test_comments_normalize_naive_timestamp_to_utc(self, mocker) -> None:
+        _pages(mocker, _ok([{"id": 1, "created_at": "2026-01-01T00:00:00"}]))
+        (comment,) = await _host().discussion.comments(REPO, 3)
+        assert comment.created_at.utcoffset().total_seconds() == 0
+
     async def test_post_comment(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, "https://examplehost.test/myorg/myrepo/pull/3#issuecomment-123\n", ""))
         comment = await _host().discussion.post_comment(REPO, 3, "hello")
@@ -1806,7 +1816,7 @@ class TestDiscussionOperations:
             await _host().discussion.post_comment(REPO, 3, "hello")
 
     async def test_reply(self, mocker) -> None:
-        reply = {"id": "N", "databaseId": 55, "body": "hi", "author": {"login": "me", "__typename": "User"}}
+        reply = {"id": "N", "databaseId": 55, "body": "hi", "createdAt": "2026-01-01T00:00:00Z", "author": {"login": "me", "__typename": "User"}}
         mock_run = _recorder(mocker, _ok({"data": {"addPullRequestReviewThreadReply": {"comment": reply}}}))
         comment = await _host().discussion.reply(REPO, 3, "T1", "hi")
         assert _argv(mock_run) == [

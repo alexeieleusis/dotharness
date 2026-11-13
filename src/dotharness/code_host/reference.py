@@ -467,13 +467,31 @@ class _Repository:
         return repo.value
 
 
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 def _parse_time(value: object) -> datetime:
     if isinstance(value, str):
         try:
-            return datetime.fromisoformat(value)
+            return _aware(datetime.fromisoformat(value))
         except ValueError:
             pass
     return datetime.fromtimestamp(0, tz=UTC)
+
+
+def _parse_time_strict(value: object, what: str) -> datetime:
+    """Like ``_parse_time`` but raises ``CodeHostError`` instead of substituting the epoch sentinel.
+
+    Used where a wrong timestamp would silently mislead a time-ordered decision (comments, commits).
+    """
+    if isinstance(value, str):
+        try:
+            return _aware(datetime.fromisoformat(value))
+        except ValueError:
+            pass
+    msg = f"{what} has a missing or unparseable timestamp"
+    raise CodeHostError(msg)
 
 
 def _str(data: Mapping[str, Any], key: str) -> str:
@@ -656,7 +674,7 @@ def _commit_info(row: Mapping[str, Any]) -> CommitInfo:
         revision=_str(row, "sha"),
         message=message if isinstance(message, str) else None,
         authors=authors,
-        committed_at=_parse_time(stamp) if isinstance(stamp, str) else None,
+        committed_at=_parse_time_strict(stamp, "commit") if stamp is not None else None,
     )
 
 
@@ -1058,7 +1076,7 @@ def _rest_comment(row: Mapping[str, Any]) -> Comment:
         id=str(row.get("id", "")),
         author=_rest_user(row.get("user")),
         body=_str(row, "body"),
-        created_at=_parse_time(row.get("created_at")),
+        created_at=_parse_time_strict(row.get("created_at"), "comment"),
         url=url if isinstance(url, str) else None,
     )
 
@@ -1075,7 +1093,7 @@ def _graphql_comment(node: Mapping[str, Any]) -> Comment:
         id=str(database_id) if database_id is not None else _str(node, "id"),
         author=User(login=login, is_bot=bot) if isinstance(login, str) else None,
         body=_str(node, "body"),
-        created_at=_parse_time(node.get("createdAt")),
+        created_at=_parse_time_strict(node.get("createdAt"), "comment"),
         url=url if isinstance(url, str) else None,
         is_hidden=bool(node.get("isMinimized", False)),
         diff_hunk=hunk if isinstance(hunk, str) and hunk else None,
