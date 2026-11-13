@@ -1862,7 +1862,7 @@ REQUIREMENTS = (
 
 
 def _header(item: str = ITEM) -> str:
-    return f"Work item: {item}"
+    return orchestrator.prbody.work_item_header(item)
 
 
 async def test_open_pr_body_is_assembled(world: World) -> None:

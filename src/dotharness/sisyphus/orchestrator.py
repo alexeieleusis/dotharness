@@ -916,7 +916,7 @@ class _Run:
 
         Any failure removes only the affected section; if assembly itself fails the plain header is used.
         """
-        header = f"Work item: {self.item}"
+        header = prbody.work_item_header(self.item)
         try:
             return await self._assemble_pr_body()
         except Exception:  # assembly must never stop the run: fall back to the header alone

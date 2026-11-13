@@ -350,6 +350,11 @@ def _truncate(text: str, limit: int) -> str:
     return cut
 
 
+def work_item_header(item: str) -> str:
+    """Return the PR-body header for a work item; the single owner of the ``Closes`` closing-keyword line."""
+    return f"Closes {item}"
+
+
 def compose_body(
     item: str,
     *,
@@ -367,7 +372,7 @@ def compose_body(
     Never raises for missing content: empty sections are omitted, ``requirements=None`` becomes a one-line note.
     ``len(result) <= MAX_BODY_CHARS`` always holds; the header is never truncated.
     """
-    header = f"Work item: {item}"
+    header = work_item_header(item)
 
     def emb(text: str) -> str:
         return embed(text, workspace, plan_dir, home).strip()

@@ -6,7 +6,7 @@ import pytest
 
 from dotharness.pr_review import state
 from dotharness.pr_review.runners import self_review
-from dotharness.pr_review.runners.common import REGRET_REVIEW_MARKER
+from dotharness.pr_review.runners.common import PR_LIST_JSON_FIELDS, REGRET_REVIEW_MARKER
 from dotharness.pr_review.runners.regret_review import IntroducingHunk, RegretCandidate
 
 
@@ -548,8 +548,7 @@ async def test_list_my_prs_requests_author_field_in_both_queries():
     assert mock_run.call_count == 2
     for call in mock_run.call_args_list:
         args = call[0][0]
-        fields = args[args.index("--json") + 1].split(",")
-        assert "author" in fields
+        assert args[args.index("--json") + 1] == PR_LIST_JSON_FIELDS
 
 
 async def test_list_my_prs_includes_assigned_prs_not_authored(tmp_xdg, tmp_path):

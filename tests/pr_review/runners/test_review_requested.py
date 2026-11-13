@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from dotharness.pr_review.runners import review_requested
-from dotharness.pr_review.runners.common import REGRET_REVIEW_MARKER
+from dotharness.pr_review.runners.common import PR_LIST_JSON_FIELDS, REGRET_REVIEW_MARKER
 from dotharness.pr_review.runners.regret_review import IntroducingHunk, RegretCandidate
 
 
@@ -208,6 +208,35 @@ async def test_get_prs_searches_user_review_requested_not_reviewer(tmp_xdg, tmp_
     args = mock_run.call_args[0][0]
     assert "--search" in args
     assert args[args.index("--search") + 1] == "user-review-requested:@me"
+
+
+async def test_get_prs_requests_pr_list_json_fields(tmp_xdg, tmp_path):
+    # The traceability pass scans pr["body"] for issue references, so it must be fetched.
+    with patch("dotharness.pr_review.runners.review_requested.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
+        await review_requested._get_prs("acme/frontend", {})
+
+    args = mock_run.call_args[0][0]
+    assert args[args.index("--json") + 1] == PR_LIST_JSON_FIELDS
+
+
+async def test_run_locked_pr_url_requests_pr_list_json_fields(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        patch("dotharness.pr_review.runners.review_requested.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.review_requested.get_current_user", return_value="me"),
+        patch(
+            "dotharness.pr_review.runners.review_requested.pr_from_url",
+            return_value={"number": 1, "url": "u", "headRefName": "b"},
+        ) as mock_from_url,
+        patch("dotharness.pr_review.runners.review_requested._should_skip_pr", return_value=True),
+        patch("dotharness.pr_review.runners.review_requested.has_design_review_comment", return_value=True),
+        patch("dotharness.pr_review.runners.review_requested.has_traceability_review_comment", return_value=True),
+    ):
+        await review_requested._run_locked(cfg, pr_url="https://github.com/acme/frontend/pull/1")
+
+    assert mock_from_url.call_args[0][3] == PR_LIST_JSON_FIELDS
 
 
 async def test_has_user_approved_returns_false_on_non_list_response(tmp_xdg, tmp_path):
