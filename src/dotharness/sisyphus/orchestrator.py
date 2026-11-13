@@ -947,9 +947,94 @@ class _Run:
         self.rec.increment_retry(BRANCH_CREATED_KEY)
 
     async def stage_refactor(self) -> None:
-        """Placeholder: the refactor stage body is added by a later phase."""
+        """Run one refactor agent per stack group; stop at C5 on an incomplete, out-of-scope or gate-breaking group."""
         with self.rec.stage_scope(REFACTOR_STAGE):
-            pass
+            bound = RetryBound(DEFAULT_MAX_RETRY_CYCLES, self.rec.retries.get(REFACTOR_RETRY_KEY, 0)).result()
+            if bound.escalate:
+                raise _Stop(
+                    Checkpoint.C5, f"refactor already failed {bound.attempts} retry cycles; not launching again"
+                )
+            await self.prepare_branch()
+            groups = [g for g in await self.refactor_groups() if g.files]
+            if not groups:
+                self.note("refactor: no added source files")
+                return
+            for index, group in enumerate(groups):
+                if index > 0:
+                    self.check_time()
+                entry = next((e for e in self.read_refactor_input() if e["set"] == group.set), None)
+                resume_skip = (
+                    entry is not None
+                    and self.refactor_handoff_path(group.set).exists()
+                    and not (await self.git("status", "--porcelain", "--untracked-files=all")).stdout.strip()
+                )
+                if not resume_skip:
+                    self.handoff_dir.mkdir(parents=True, exist_ok=True)
+                    await self.record_group_entry(group)
+                    await self.run_agent_stage(
+                        REFACTOR_STAGE,
+                        prompt_file=REFACTOR_PROMPT_FILE,
+                        extra_values={
+                            "refactor_set": group.set,
+                            "group_files": "\n".join(group.files),
+                            "input_file": str(self.refactor_input_path),
+                        },
+                    )
+                recorded = next(e for e in self.read_refactor_input() if e["set"] == group.set)
+                head_before = str(recorded["head_before"])
+                await self.check_refactor_group(group, head_before)
+                await self.gate_refactor_group(group, head_before)
+
+    def refactor_handoff_path(self, set_name: str) -> Path:
+        return self.handoff_dir / f"refactor-{set_name}.md"
+
+    async def check_refactor_group(self, group: StackGroup, head_before: str) -> None:
+        """Stop at C5 (one retry increment) if the group's checkout, handoff or edits are not as required."""
+        problems: list[str] = []
+        current = (await self.git("rev-parse", "--abbrev-ref", "HEAD")).stdout.strip()
+        on_branch = current == self.branch
+        if not on_branch:
+            problems.append(f"checkout is on {current!r}, expected {self.branch!r}")
+        dirty = (await self.git("status", "--porcelain", "--untracked-files=all")).stdout.strip()
+        if dirty:
+            problems.append(f"uncommitted changes: {_tail(dirty, 200)}")
+        handoff = self.refactor_handoff_path(group.set)
+        listed: set[str] = set()
+        if handoff.is_file():
+            listed = parse_listed_edits(handoff.read_text(encoding="utf-8", errors="replace"))
+        else:
+            problems.append(f"no handoff for set {group.set}")
+        if on_branch:
+            diff = (await self.git("diff", "--no-renames", "--name-status", f"{head_before}..HEAD")).stdout
+            violations = scope_violations(diff, group.files, group.tests, listed)
+            if violations:
+                problems.append("out-of-scope edits: " + ", ".join(violations))
+        if problems:
+            self.rec.increment_retry(REFACTOR_RETRY_KEY)
+            raise _Stop(
+                Checkpoint.C5,
+                f"the refactor agent ended before group {group.set} was complete; " + "; ".join(problems),
+            )
+
+    async def gate_refactor_group(self, group: StackGroup, head_before: str) -> None:
+        """Run the existing gate when the group made commits; a failure stops at C5 and leaves the commits."""
+        count = (await self.git("rev-list", "--count", f"{head_before}..HEAD")).stdout.strip()
+        if not count.isdigit() or int(count) == 0:
+            return
+        plan, reason = await self.build_gate_plan()
+        if reason is not None:
+            self.note(f"refactor gate not run: {reason}")
+            return
+        if not await self.run_gate_plan(plan):
+            return
+        self.rec.increment_retry(REFACTOR_RETRY_KEY)
+        g = self.gate_failure
+        if g is None:
+            raise _Stop(Checkpoint.C5, "refactor gate failed")
+        raise _Stop(
+            Checkpoint.C5,
+            f"refactor gate failed: '{g.command}' in {g.directory} (exit {g.returncode}): {g.tail}",
+        )
 
     async def stage_build(self) -> None:
         with self.rec.stage_scope(BUILD_STAGE):

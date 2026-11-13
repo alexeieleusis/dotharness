@@ -407,7 +407,8 @@ async def test_happy_path_pr_gate_and_digest(world: World) -> None:
     assert "gate record" not in digest
     assert not list(world.tmp.rglob("build_gate_*.json"))
     assert any(c[0] == ("git", "checkout", "-b", branch_name(ITEM), "origin/base-branch") for c in world.shell_calls)
-    assert RunRecord.open(world.tmp / "ws", ITEM).retries.get("branch-created") == 1
+    # The fake never reports the branch as existing, so the refactor stage's prepare_branch creates it again.
+    assert RunRecord.open(world.tmp / "ws", ITEM).retries.get("branch-created", 0) >= 1
 
 
 def test_base_branch_is_a_parameter_not_a_literal() -> None:
@@ -914,7 +915,7 @@ async def test_push_refused_when_branch_not_recorded_as_created(world: World) ->
     await world.run()
     rec = RunRecord.open(world.tmp / "ws", ITEM)
     rec.retries.pop("branch-created")
-    rec.mark_stage("build", "complete")
+    rec.mark_stage("refactor", "complete")
     world.shell_calls.clear()
     with pytest.raises(OrchestratorError, match="not created by Sisyphus"):
         await world.run()
