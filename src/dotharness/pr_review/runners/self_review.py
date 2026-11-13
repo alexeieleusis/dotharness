@@ -402,7 +402,6 @@ async def _run_traceability_review(
 async def _run_regret_review(
     regret_instructions: str,
     extra_knowledge: str | None,
-    pr: ChangeRequest,
     number: int,
     config,
     ctx: dict,
@@ -677,7 +676,6 @@ async def _process_single_pr(
                 await _run_regret_review(
                     cycle.regret_instructions,
                     extra_knowledge,
-                    pr,
                     number,
                     config,
                     ctx,
