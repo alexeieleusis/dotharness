@@ -3,6 +3,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from dotharness.code_host import (
+    Capability,
+    ChangeRequest,
+    CodeHostError,
+    CodeHostTimeoutError,
+    UnsupportedCapabilityError,
+    User,
+)
 from dotharness.pr_review.runners.common import (
     DESIGN_REVIEW_MARKER,
     INLINE_REVIEW_MARKER,
@@ -30,7 +38,10 @@ from dotharness.pr_review.runners.common import (
     list_open_prs_for_current_user,
     list_open_prs_matching_authors,
     pr_from_url,
+    preserve_reviewer_request,
+    was_review_requested,
 )
+from tests.pr_review.runners.approve_support import REPO, make_host, seed_pr, update_pr
 
 
 def test_author_matches_star_allows_all():
@@ -177,53 +188,143 @@ async def test_get_current_user_returns_login():
 
 
 @pytest.mark.parametrize(
-    ("review_requests", "expected"),
+    ("logins", "expected"),
     [
-        ([{"login": "alice"}, {"login": "bob"}], ["alice", "bob"]),
-        ([{"login": "alice"}, {"slug": "some-team"}], ["alice"]),
+        (["alice", "bob"], ["alice", "bob"]),
+        (["alice"], ["alice"]),
+        ([], []),
     ],
 )
-async def test_get_requested_reviewers_returns_logins(review_requests, expected):
-    payload = {"reviewRequests": review_requests}
-    with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(payload).encode())
-        assert (await get_requested_reviewers(1, "acme/repo", {})) == expected
+async def test_get_requested_reviewers_returns_logins(logins, expected):
+    host = make_host()
+    seed_pr(host, 1, requested_reviewers=tuple(User(login) for login in logins))
+    assert (await get_requested_reviewers(host.code_host(), REPO, 1)) == expected
 
 
-async def test_get_requested_reviewers_returns_empty_on_gh_failure():
-    with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-        assert (await get_requested_reviewers(1, "acme/repo", {})) == []
+async def test_get_requested_reviewers_returns_empty_on_host_failure():
+    host = make_host()
+    seed_pr(host, 1, requested_reviewers=(User("alice"),))
+    host.fail_next("ChangeRequests.get", CodeHostError("boom"))
+    assert (await get_requested_reviewers(host.code_host(), REPO, 1)) == []
 
 
-async def test_pr_from_url_parses_number_and_fetches_pr():
-    with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout=b'{"number": 8484, "headRefName": "feat", "baseRefName": "main"}',
-        )
-        pr = await pr_from_url(
-            "https://github.com/acme/frontend/pull/8484/", "acme/frontend", {}, "number,headRefName,baseRefName"
-        )
-    assert pr == {"number": 8484, "headRefName": "feat", "baseRefName": "main"}
-    args = mock_run.call_args.args[0]
-    assert args[:3] == ["gh", "pr", "view"]
-    assert "8484" in args
+async def test_get_requested_reviewers_unsupported_capability_warns_and_returns_empty(caplog):
+    """Policy row (reviewer_request, ChangeRequests.get): warn and continue without the capability."""
+    host = make_host(capabilities=frozenset(Capability) - {Capability.CHANGE_REQUESTS})
+    with caplog.at_level("WARNING"):
+        assert (await get_requested_reviewers(host.code_host(), REPO, 1)) == []
+    assert "ChangeRequests" in caplog.text
 
 
-async def test_pr_from_url_returns_empty_on_gh_failure():
-    with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"auth failed")
-        result = await pr_from_url("https://github.com/acme/repo/pull/999", "acme/repo", {}, "number")
-    assert result == {}
+async def test_was_review_requested_true_only_for_a_requested_login():
+    host = make_host()
+    seed_pr(host, 1, requested_reviewers=(User("alice"),))
+    assert await was_review_requested(host.code_host(), REPO, 1, "alice") is True
+    assert await was_review_requested(host.code_host(), REPO, 1, "bob") is False
 
 
-async def test_add_reviewer_invokes_gh_pr_edit():
-    with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0)
-        await add_reviewer(1, "acme/repo", "alice", {})
-    cmd = mock_run.call_args.args[0]
-    assert cmd == ["gh", "pr", "edit", "1", "--repo", "acme/repo", "--add-reviewer", "alice"]
+async def test_pr_from_url_parses_number_and_fetches_the_change_request():
+    host = make_host()
+    seed_pr(host, 8484, title="T")
+    pr = await pr_from_url(host.code_host(), REPO, "https://github.com/acme/frontend/pull/8484/")
+    assert isinstance(pr, ChangeRequest)
+    assert (pr.number, pr.title, pr.head_reference, pr.base_reference, pr.head_revision) == (
+        8484,
+        "T",
+        "feat-8484",
+        "main",
+        "abc123",
+    )
+    assert [(c.operation, c.args) for c in host.calls] == [("ChangeRequests.get", (REPO, 8484))]
+
+
+async def test_pr_from_url_returns_none_on_host_failure(caplog):
+    host = make_host()
+    seed_pr(host, 999)
+    host.fail_next("ChangeRequests.get", CodeHostError("auth failed"))
+    assert await pr_from_url(host.code_host(), REPO, "https://github.com/acme/repo/pull/999") is None
+    assert "Failed to fetch PR #999: auth failed" in caplog.text
+
+
+async def test_pr_from_url_returns_none_for_unknown_change_request():
+    assert await pr_from_url(make_host().code_host(), REPO, "https://github.com/acme/repo/pull/1") is None
+
+
+async def test_pr_from_url_unsupported_capability_stops():
+    host = make_host(capabilities=frozenset(Capability) - {Capability.CHANGE_REQUESTS})
+    with pytest.raises(UnsupportedCapabilityError):
+        await pr_from_url(host.code_host(), REPO, "https://github.com/acme/repo/pull/1")
+
+
+async def test_add_reviewer_requests_the_login():
+    host = make_host()
+    seed_pr(host, 1)
+    await add_reviewer(host.code_host(), REPO, 1, "alice")
+    assert [(c.operation, c.args) for c in host.writes] == [("ChangeRequests.request_reviewer", (REPO, 1, "alice"))]
+
+
+async def test_add_reviewer_logs_and_swallows_a_failure(caplog):
+    host = make_host()
+    seed_pr(host, 1)
+    host.fail_next("ChangeRequests.request_reviewer", CodeHostError("not found"))
+    await add_reviewer(host.code_host(), REPO, 1, "alice")
+    assert "failed to re-add alice as a reviewer on PR #1 (acme/frontend): not found" in caplog.text
+
+
+async def test_add_reviewer_timeout_is_logged_and_never_retried(caplog):
+    host = make_host()
+    seed_pr(host, 1)
+    host.fail_next("ChangeRequests.request_reviewer", CodeHostTimeoutError("slow", write=True))
+    await add_reviewer(host.code_host(), REPO, 1, "alice")
+    assert [c.operation for c in host.calls].count("ChangeRequests.request_reviewer") == 1
+    assert "failed to re-add alice" in caplog.text
+
+
+async def test_add_reviewer_unsupported_capability_warns_and_continues(caplog):
+    """Policy row (reviewer_request, ChangeRequests.request_reviewer): warn."""
+    host = make_host(capabilities=frozenset(Capability) - {Capability.CHANGE_REQUESTS})
+    with caplog.at_level("WARNING"):
+        await add_reviewer(host.code_host(), REPO, 1, "alice")
+    assert "not supported" in caplog.text
+
+
+def _requested(host) -> list[str]:
+    return [u.login for u in host.change_requests[REPO][0].requested_reviewers]
+
+
+async def test_preserve_reviewer_request_re_adds_a_previously_requested_login():
+    host = make_host()
+    seed_pr(host, 1, requested_reviewers=(User("alice"),))
+    async with preserve_reviewer_request(host.code_host(), REPO, 1, "alice"):
+        update_pr(host, 1, requested_reviewers=())  # submitting a review clears the request
+        assert _requested(host) == []
+    assert _requested(host) == ["alice"]
+
+
+async def test_preserve_reviewer_request_re_adds_even_when_the_block_raises():
+    host = make_host()
+    seed_pr(host, 1, requested_reviewers=(User("alice"),))
+    with pytest.raises(RuntimeError):
+        async with preserve_reviewer_request(host.code_host(), REPO, 1, "alice"):
+            update_pr(host, 1, requested_reviewers=())
+            raise RuntimeError("boom")
+    assert _requested(host) == ["alice"]
+
+
+async def test_preserve_reviewer_request_does_nothing_when_not_previously_requested():
+    host = make_host()
+    seed_pr(host, 1)
+    async with preserve_reviewer_request(host.code_host(), REPO, 1, "alice"):
+        pass
+    assert "ChangeRequests.request_reviewer" not in [c.operation for c in host.calls]
+
+
+async def test_preserve_reviewer_request_skips_the_check_for_a_blank_login():
+    host = make_host()
+    seed_pr(host, 1)
+    async with preserve_reviewer_request(host.code_host(), REPO, 1, ""):
+        pass
+    assert host.calls == []
 
 
 @pytest.mark.parametrize(

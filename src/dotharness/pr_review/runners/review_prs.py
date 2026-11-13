@@ -3,7 +3,7 @@ import shlex
 import subprocess
 import time
 
-from dotharness.gh import build_subprocess_env
+from dotharness.code_host import CodeHost, RepositoryRef
 from dotharness.pr_review import state
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
@@ -14,14 +14,14 @@ from dotharness.pr_review.runners.common import (
     env_file_args,
     env_file_error,
     get_changed_files,
-    get_current_user,
-    get_gh_token,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
+    host_current_user,
     is_pr_open,
     list_open_prs_matching_authors,
     log_called_process_output,
+    open_host,
     pr_from_url,
     preserve_reviewer_request,
     run_cmd,
@@ -44,10 +44,21 @@ async def run(config: HarnessConfig, pr_url: str | None = None) -> None:
         await _run_locked(config, pr_url)
 
 
-async def _discover_prs(config: HarnessConfig, pr_url: str | None, env: dict) -> list[dict] | None:
+async def _discover_prs(
+    config: HarnessConfig, pr_url: str | None, host: CodeHost, repo: RepositoryRef, env: dict
+) -> list[dict] | None:
     if pr_url:
-        pr = await pr_from_url(pr_url, config.repo.name, env, "number,headRefName,baseRefName,headRefOid")
-        return [pr] if pr else []
+        change_request = await pr_from_url(host, repo, pr_url)
+        if change_request is None:
+            return []
+        return [
+            {
+                "number": change_request.number,
+                "headRefName": change_request.head_reference,
+                "baseRefName": change_request.base_reference,
+                "headRefOid": change_request.head_revision,
+            }
+        ]
 
     return await list_open_prs_matching_authors(
         config.repo.name, config.vibe_heal.authors, str(config.repo.working_dir), env
@@ -82,8 +93,8 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
         logger.error("vibe_heal enabled but repo.subdirs is empty; add a [[repo.subdir]] entry to .harness.toml")
         return
 
-    gh_token = await get_gh_token(config.harness.gh_token_cmd)
-    env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
+    scaffold = await open_host(config)
+    host, repo, env = scaffold.host, scaffold.repo, scaffold.env
 
     await prune_projects.run(config, env)
 
@@ -91,9 +102,9 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
         logger.warning("Base analysis failed; skipping PR review for this run")
         return
 
-    current_user = await get_current_user(env)
+    current_user = await host_current_user(host)
 
-    candidates = await _discover_prs(config, pr_url, env)
+    candidates = await _discover_prs(config, pr_url, host, repo, env)
 
     if pr_url is not None:
         to_process = candidates
@@ -123,7 +134,7 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
     # A FatalGitError still breaks the loop immediately; PRs processed before it keep their
     # credit regardless.
     for pr in to_process:
-        success, fatal = await _process_pr_safely(pr, config, env, current_user, wdir, original_sha)
+        success, fatal = await _process_pr_safely(pr, config, host, repo, env, current_user, wdir, original_sha)
         if fatal:
             break
 
@@ -132,14 +143,21 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
 
 
 async def _process_pr_safely(
-    pr: dict, config: HarnessConfig, env: dict, current_user: str, wdir: str, original_sha: str
+    pr: dict,
+    config: HarnessConfig,
+    host: CodeHost,
+    repo: RepositoryRef,
+    env: dict,
+    current_user: str,
+    wdir: str,
+    original_sha: str,
 ) -> tuple[bool, bool]:
     """Run _process_pr for one PR, always restoring HEAD afterward. Returns (success, fatal)."""
     logger.info("PR #%d: starting", pr["number"])
     success = False
     fatal = False
     try:
-        success = await _process_pr(pr, config, env, current_user, wdir)
+        success = await _process_pr(pr, config, host, repo, env, current_user, wdir)
     except FatalGitError:
         logger.exception("PR #%d: fatal git error", pr["number"])
         fatal = True
@@ -150,7 +168,9 @@ async def _process_pr_safely(
     return success, fatal
 
 
-async def _process_pr(pr: dict, config: HarnessConfig, env: dict, current_user: str, wdir: str) -> bool:
+async def _process_pr(
+    pr: dict, config: HarnessConfig, host: CodeHost, repo: RepositoryRef, env: dict, current_user: str, wdir: str
+) -> bool:
     if not await is_pr_open(pr["number"], config.repo.name, env):
         logger.info("PR #%d: closed or merged since discovery, skipping", pr["number"])
         return False
@@ -171,7 +191,7 @@ async def _process_pr(pr: dict, config: HarnessConfig, env: dict, current_user: 
     # "user-review-requested:@me" search for the rest of this run_all cycle. We
     # re-add regardless of outcome, since we cannot observe from here whether the
     # subprocess actually posted any comments.
-    async with preserve_reviewer_request(pr["number"], config.repo.name, current_user, env):
+    async with preserve_reviewer_request(host, repo, pr["number"], current_user):
         results = [await _process_subdir(pr["number"], subdir, config, env) for subdir in subdirs_to_process]
     return all(results)
 

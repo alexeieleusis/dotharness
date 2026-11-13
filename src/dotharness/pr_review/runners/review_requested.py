@@ -6,7 +6,8 @@ import time
 from pathlib import Path
 from typing import cast
 
-from dotharness.gh import build_subprocess_env, gh_argv
+from dotharness.code_host import ChangeRequest, CodeHost, RepositoryRef
+from dotharness.gh import gh_argv
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
@@ -17,11 +18,10 @@ from dotharness.pr_review.runners.common import (
     build_early_comment_context,
     build_file_review_section,
     build_traceability_review_prompt,
+    get_change_request,
     get_changed_files,
-    get_current_user,
     get_design_review_flagged_locations,
     get_file_diff,
-    get_gh_token,
     get_pr_base_branch,
     get_pr_description,
     get_pr_head_sha,
@@ -35,6 +35,8 @@ from dotharness.pr_review.runners.common import (
     has_regret_review_comment,
     has_review_summary_comment,
     has_traceability_review_comment,
+    host_current_user,
+    open_host,
     post_no_linked_ticket_comment,
     pr_from_url,
     preserve_reviewer_request,
@@ -62,16 +64,13 @@ async def run(config: HarnessConfig, pr_url: str | None = None) -> None:
 
 
 async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
-    gh_token = await get_gh_token(config.harness.gh_token_cmd)
-    env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
-    current_user = await get_current_user(env)
+    scaffold = await open_host(config)
+    host, repo, env = scaffold.host, scaffold.repo, scaffold.env
+    current_user = await host_current_user(host)
 
     if pr_url:
-        prs = [
-            await pr_from_url(
-                pr_url, config.repo.name, env, "number,url,headRefName,createdAt,closingIssuesReferences,author"
-            )
-        ]
+        change_request = await pr_from_url(host, repo, pr_url)
+        prs = [] if change_request is None else [_legacy_pr(change_request)]
     else:
         prs = [p for p in await _get_prs(config.repo.name, env) if p.get("headRefName")]
 
@@ -111,6 +110,8 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
             await _process_pr(
                 pr,
                 config,
+                host,
+                repo,
                 knowledge_dir,
                 extra_knowledge,
                 backend,
@@ -127,6 +128,16 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
             break
         except Exception:
             logger.exception("PR #%d: error", pr_number)
+
+
+def _legacy_pr(change_request: ChangeRequest) -> dict:
+    """The PR dict the rest of this runner reads (``number``, ``url``, ``headRefName``, ``author``)."""
+    return {
+        "number": change_request.number,
+        "url": change_request.url,
+        "headRefName": change_request.head_reference,
+        "author": {"login": change_request.author.login} if change_request.author else None,
+    }
 
 
 async def _get_prs(repo: str, env: dict) -> list[dict]:
@@ -208,6 +219,8 @@ async def _should_skip_pr(pr: dict, repo: str, current_user: str, env: dict) -> 
 async def _process_pr(
     pr: dict,
     config: HarnessConfig,
+    host: CodeHost,
+    repo: RepositoryRef,
     knowledge_dir: Path,
     extra_knowledge: str | None,
     backend: Backend,
@@ -230,13 +243,13 @@ async def _process_pr(
         # clear the current user from the PR's requested-reviewers list and hide it from
         # this and every other runner's "user-review-requested:@me" search — restore it
         # regardless of outcome, mirroring every other "non-concluding" runner.
-        async with preserve_reviewer_request(pr_number, config.repo.name, current_user, env):
+        async with preserve_reviewer_request(host, repo, pr_number, current_user):
             await git_fetch_and_checkout(pr["headRefName"], wdir, env)
             # Gathered once and shared by all four passes below (mirrors self_review.py's
             # _gather_pr_context/_cached_file_diff) so a PR needing both the correctness
             # pipeline and a PR-level pass in the same cycle doesn't refetch PR metadata or
             # re-diff every changed file for each pass.
-            ctx = await _gather_pr_context(pr, config, wdir, env)
+            ctx = await _gather_pr_context(pr, config, host, repo, wdir, env)
             if run_files_summary:
                 # Only post the summary when every file review succeeded: the summary comment
                 # is what _should_skip_pr treats as "done", so posting it after a partial
@@ -268,14 +281,19 @@ async def _process_pr(
         await git_restore(original_sha, pr["headRefName"], wdir, env)
 
 
-async def _gather_pr_context(pr: dict, config: HarnessConfig, wdir: str, env: dict) -> dict:
+async def _gather_pr_context(
+    pr: dict, config: HarnessConfig, host: CodeHost, repo: RepositoryRef, wdir: str, env: dict
+) -> dict:
     pr_number = pr["number"]
     vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr["headRefName"])
-    pr_description = await get_pr_description(pr_number, config.repo.name, env)
-    base_branch = await get_pr_base_branch(pr_number, config.repo.name, env)
-    commit_sha = await get_pr_head_sha(pr_number, config.repo.name, env)
+    pr_description = await get_pr_description(host, repo, pr_number)
+    base_branch = await get_pr_base_branch(host, repo, pr_number)
+    commit_sha = await get_pr_head_sha(host, repo, pr_number)
     files = await get_changed_files(base_branch, wdir, env, expected_sha=commit_sha)
     return {
+        "host": host,
+        "repo": repo,
+        "change_request": await get_change_request(host, repo, pr_number),
         "vibe_heal_context": vibe_heal_context,
         "pr_description": pr_description,
         "base_branch": base_branch,
@@ -292,6 +310,14 @@ async def _cached_file_diff(ctx: dict, file: str, wdir: str, env: dict) -> str:
     if file not in ctx["diff_cache"]:
         ctx["diff_cache"][file] = await get_file_diff(file, ctx["base_branch"], wdir, env)
     return ctx["diff_cache"][file]
+
+
+def _change_request(ctx: dict, pr_number: int) -> ChangeRequest:
+    """The change request read when the PR context was gathered; a prompt that names it cannot be built without."""
+    change_request = ctx["change_request"]
+    if change_request is None:
+        raise RuntimeError(f"PR #{pr_number}: the change request could not be read")  # noqa: TRY003
+    return change_request
 
 
 async def _run_file_reviews(
@@ -404,7 +430,7 @@ async def _run_design_review(
             design_instructions,
             extra_knowledge,
             diff_sections,
-            pr,
+            _change_request(ctx, pr_number),
             pr_number,
             repo_name,
             ctx["commit_sha"],
@@ -456,7 +482,7 @@ async def _run_traceability_review(
     resolved: dict = {}
 
     async def short_circuit() -> bool | None:
-        tickets = await resolve_linked_tickets(pr, repo_name, env, comment_cache)
+        tickets = await resolve_linked_tickets(ctx["host"], ctx["repo"], _change_request(ctx, pr_number), comment_cache)
         if tickets is None:
             logger.info("PR #%d: linked ticket lookup was inconclusive (API failure) — will retry next run", pr_number)
             return False
@@ -477,14 +503,15 @@ async def _run_traceability_review(
         prior_flagged_locations = await get_traceability_review_flagged_locations(
             pr_number, repo_name, current_user, env
         )
+        change_request = _change_request(ctx, pr_number)
         early_comment_context = await build_early_comment_context(
-            pr_number, repo_name, pr.get("createdAt", ""), env, comment_cache
+            ctx["host"], ctx["repo"], pr_number, change_request.created_at, comment_cache
         )
         return build_traceability_review_prompt(
             traceability_instructions,
             extra_knowledge,
             diff_sections,
-            pr,
+            change_request,
             pr_number,
             repo_name,
             ctx["commit_sha"],
@@ -558,7 +585,7 @@ async def _run_regret_review(
 
     async def short_circuit() -> bool | None:
         budget_start = time.monotonic()
-        introducing_hunks = await find_introducing_prs(pr, config, wdir, env, budget_start)
+        introducing_hunks = await find_introducing_prs(ctx["host"], ctx["repo"], pr, config, wdir, env, budget_start)
         found = await find_regret_candidates(introducing_hunks, config, wdir, env, budget_start)
         if not found:
             logger.debug("PR #%d: no regret candidates — nothing to judge this run", pr_number)

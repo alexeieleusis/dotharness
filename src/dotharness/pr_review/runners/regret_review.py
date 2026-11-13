@@ -5,6 +5,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 
+from dotharness.code_host import CodeHost, RepositoryRef
 from dotharness.gh import gh_argv
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
@@ -268,7 +269,9 @@ def _line_within_hunk_ranges(line: int, ranges: list[tuple[int, int, int, int]])
     return False
 
 
-async def _pr_gate_setup(pr: dict, config: HarnessConfig, wdir: str, env: dict) -> tuple[int, str, list[str]] | None:
+async def _pr_gate_setup(
+    host: CodeHost, repo: RepositoryRef, pr: dict, config: HarnessConfig, wdir: str, env: dict
+) -> tuple[int, str, list[str]] | None:
     """The G2 author gate plus the gate setup: (number, base_branch, changed files), or
     None when this PR is skipped entirely — no number, an author that does not match
     config.regret_review.authors (an empty login never matches: author_matches does a
@@ -283,7 +286,7 @@ async def _pr_gate_setup(pr: dict, config: HarnessConfig, wdir: str, env: dict) 
     if not login or not author_matches(login, config.regret_review.authors):
         logger.debug("PR #%d: author %r does not match regret_review.authors — skipping regret review", number, login)
         return None
-    base_branch = await get_pr_base_branch(number, config.repo.name, env)
+    base_branch = await get_pr_base_branch(host, repo, number)
     if not base_branch:
         logger.debug("PR #%d: could not determine the base branch — skipping regret review", number)
         return None
@@ -436,7 +439,13 @@ async def _resolve_commit_prs(
 
 
 async def find_introducing_prs(
-    pr: dict, config: HarnessConfig, wdir: str, env: dict, budget_start: float | None = None
+    host: CodeHost,
+    repo: RepositoryRef,
+    pr: dict,
+    config: HarnessConfig,
+    wdir: str,
+    env: dict,
+    budget_start: float | None = None,
 ) -> list[IntroducingHunk]:
     """The blame → introducing-commit → introducing-PR resolver
     (regret-review-requirements.md §7.1): given the current PR, the list of surviving
@@ -476,7 +485,7 @@ async def find_introducing_prs(
     two functions' calls are one bugfix-shaped sequence sharing a single
     regret_review_timeout cap, not two independent ones (regret-review-requirements.md
     §7.5/§8)."""
-    setup = await _pr_gate_setup(pr, config, wdir, env)
+    setup = await _pr_gate_setup(host, repo, pr, config, wdir, env)
     if setup is None:
         return []
     number, base_branch, files = setup
@@ -794,7 +803,9 @@ def build_regret_judgment_prompt(
         + (f"\n\n## Additional Review Guide\n{extra_knowledge}" if extra_knowledge else "")
         + diff_sections
         + candidates_section
-        + _build_pr_metadata_trailer(pr, pr_number, repo_name, commit_sha, pr_description, vibe_heal_context)
+        + _build_pr_metadata_trailer(
+            pr.get("url", ""), pr_number, repo_name, commit_sha, pr_description, vibe_heal_context
+        )
     )
 
 

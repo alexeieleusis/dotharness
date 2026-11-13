@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dotharness.gh import build_subprocess_env, gh_argv
+from dotharness.code_host import CodeHost, RepositoryRef
+from dotharness.gh import gh_argv
 from dotharness.pr_review import state
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
@@ -19,13 +20,13 @@ from dotharness.pr_review.runners.common import (
     fetch_pr_comments,
     fetch_review_threads,
     find_last_reply_if_marked,
-    get_current_user,
-    get_gh_token,
     get_head_sha,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
+    host_current_user,
     is_ancestor,
+    open_host,
     preserve_reviewer_request,
     run_cmd,
 )
@@ -93,8 +94,8 @@ async def _run_locked(config: HarnessConfig) -> None:
         logger.info("address_comments disabled, skipping")
         return
 
-    gh_token = await get_gh_token(config.harness.gh_token_cmd)
-    env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
+    scaffold = await open_host(config)
+    host, repo_ref, env = scaffold.host, scaffold.repo, scaffold.env
 
     prs = await _list_prs_to_check(config.repo.name, env)
     script_path = PR_COMMENTS_SCRIPT_PATH
@@ -104,7 +105,7 @@ async def _run_locked(config: HarnessConfig) -> None:
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
-        {**config.harness.env, "GITHUB_TOKEN": gh_token},
+        {**config.harness.env, "GITHUB_TOKEN": env.get("GITHUB_TOKEN", "")},
         expected_repo_name=config.repo.name,
     )
 
@@ -114,7 +115,7 @@ async def _run_locked(config: HarnessConfig) -> None:
         str(config.repo.opencode_dir.relative_to(config.repo.working_dir)) if config.repo.opencode_dir else None
     )
     original_sha = await git_detach_and_record(wdir, env)
-    our_login = await get_current_user(env)
+    our_login = await host_current_user(host)
 
     ctx = _ProcessPrContext(
         script_path=script_path,
@@ -125,6 +126,8 @@ async def _run_locked(config: HarnessConfig) -> None:
         original_sha=original_sha,
         repo=config.repo.name,
         env=env,
+        host=host,
+        repo_ref=repo_ref,
         trusted_commenters=config.address_comments.trusted_commenters,
         opencode_dir=opencode_dir,
         plugin_prefix=plugin_prefix,
@@ -167,6 +170,8 @@ class _ProcessPrContext:
     original_sha: str
     repo: str
     env: dict
+    host: CodeHost
+    repo_ref: RepositoryRef
     trusted_commenters: str | list[str]
     opencode_dir: str | None = None
     plugin_prefix: str | None = None
@@ -180,7 +185,7 @@ async def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -
         # GitHub API as a side effect, which would clear us from the requested-reviewers
         # list — restore it regardless of outcome, since we cannot observe from here
         # whether that happened.
-        async with preserve_reviewer_request(number, ctx.repo, ctx.our_login or "", ctx.env):
+        async with preserve_reviewer_request(ctx.host, ctx.repo_ref, number, ctx.our_login or ""):
             await _address_pending_comments(number, branch, ctx)
     except Exception:
         logger.exception("PR #%d: error", number)

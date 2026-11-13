@@ -13,6 +13,7 @@ from dotharness.pr_review.runners.focused_review import (
     _matching_comments,
     _resolve_knowledge_file,
 )
+from tests.pr_review.runners.runner_support import REPO, make_scaffold
 
 _USER = "bot"
 _MARK = "<!-- dotharness-review-inline -->"
@@ -274,7 +275,7 @@ _MATCHING_COMMENT = {
 
 async def test_disabled_skips_everything(tmp_path):
     cfg = _cfg(tmp_path, enabled=False)
-    with patch("dotharness.pr_review.runners.focused_review.get_gh_token") as mock_token:
+    with patch("dotharness.pr_review.runners.focused_review.open_host") as mock_token:
         await focused_review._run_locked(cfg)
     mock_token.assert_not_called()
 
@@ -283,8 +284,8 @@ async def test_matching_comment_invokes_backend(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -310,8 +311,8 @@ async def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -327,16 +328,16 @@ async def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
     ):
         await focused_review._run_locked(cfg)
     mock_be.return_value.run.assert_awaited_once()
-    mock_was_requested.assert_called_once_with(1, "acme/frontend", "bot", ANY)
-    mock_add_reviewer.assert_called_once_with(1, "acme/frontend", "bot", mock_add_reviewer.call_args.args[3])
+    mock_was_requested.assert_called_once_with(ANY, REPO, 1, "bot")
+    mock_add_reviewer.assert_called_once_with(ANY, REPO, 1, "bot")
 
 
 async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -362,8 +363,8 @@ async def test_already_marked_comment_skips_backend(tmp_xdg, tmp_path):
         "replies": [{"author": "bot", "body": f"done\n\n{focused_review.FOCUSED_REVIEW_MARKER}"}],
     }
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -384,8 +385,8 @@ async def test_non_matching_comment_skips_backend(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     plain = {**_MATCHING_COMMENT, "body": "just SonarQube noise, no knowledge url"}
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -405,8 +406,8 @@ async def test_non_matching_pr_skips_restore(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     plain = {**_MATCHING_COMMENT, "body": "just SonarQube noise, no knowledge url"}
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -426,8 +427,8 @@ async def test_unresolvable_knowledge_file_skips_comment_but_continues(tmp_xdg, 
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -449,8 +450,8 @@ async def test_restores_working_dir_even_on_backend_failure(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -475,8 +476,8 @@ async def test_fatal_git_error_continues_to_remaining_prs(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}, {"number": 2, "headRefName": "c"}],
@@ -502,8 +503,8 @@ async def test_non_fatal_error_continues_to_next_pr(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}, {"number": 2, "headRefName": "c"}],
@@ -636,8 +637,8 @@ async def _run_with_threads(tmp_path, comments, threads):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -667,8 +668,8 @@ async def test_thread_fetch_failure_does_not_stop_other_prs(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
             return_value=[{"number": 1, "headRefName": "b"}, {"number": 2, "headRefName": "c"}],

@@ -21,6 +21,9 @@ from dotharness.pr_review.runners.regret_review import (
     is_complete_judgment_response,
     parse_regret_judgment,
 )
+from tests.pr_review.runners.runner_support import REPO, make_scaffold
+
+HOST = make_scaffold().host
 
 
 def _finding(**overrides) -> RegretFinding:
@@ -195,7 +198,7 @@ async def test_find_introducing_prs_happy_path_blames_merge_base_and_resolves_pr
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})
     assert hunks == [
         IntroducingHunk(
             path="src/foo.py",
@@ -230,7 +233,7 @@ async def test_find_introducing_prs_skips_oversized_pr_with_no_blame_or_api(tmp_
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
     assert mock_run.call_count == 1
 
 
@@ -252,7 +255,7 @@ async def test_find_introducing_prs_exits_oversized_gate_mid_file_list(tmp_path)
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["a.py", "b.py", "c.py"]),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
     # 1 + 50 > 50 on the second file: the gate exits then, and c.py is never diffed.
     assert mock_run.call_count == 2
 
@@ -278,7 +281,7 @@ async def test_find_introducing_prs_at_exact_max_diff_lines_is_not_gated(tmp_pat
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
     # The gate must NOT have tripped: diff and merge-base both ran before the blame failure.
     # A regression from `>` to `>=` would short-circuit to [] before merge-base and fail here.
     assert _cmd_calls(mock_run, "git")[:2] == [
@@ -293,7 +296,9 @@ async def test_find_introducing_prs_author_gate_skips_before_any_git_or_gh(tmp_p
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch") as mock_base,
         patch("dotharness.pr_review.runners.regret_review.get_changed_files") as mock_files,
     ):
-        assert (await find_introducing_prs(_pr(login="bob"), _config(authors="alice"), str(tmp_path), {})) == []
+        assert (
+            await find_introducing_prs(HOST, REPO, _pr(login="bob"), _config(authors="alice"), str(tmp_path), {})
+        ) == []
     mock_run.assert_not_called()
     mock_base.assert_not_called()
     mock_files.assert_not_called()
@@ -320,7 +325,9 @@ async def test_find_introducing_prs_author_allowlist_match_proceeds(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(login="alice"), _config(authors=["alice", "bob"]), str(tmp_path), {})
+        hunks = await find_introducing_prs(
+            HOST, REPO, _pr(login="alice"), _config(authors=["alice", "bob"]), str(tmp_path), {}
+        )
     assert [h.introducing_pr_number for h in hunks] == [7]
 
 
@@ -331,7 +338,7 @@ async def test_find_introducing_prs_missing_author_fails_closed_for_explicit_all
         patch("dotharness.pr_review.runners.regret_review.get_changed_files") as mock_files,
     ):
         pr = {"number": 42}
-        assert (await find_introducing_prs(pr, _config(authors="alice"), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, pr, _config(authors="alice"), str(tmp_path), {})) == []
     mock_run.assert_not_called()
     mock_base.assert_not_called()
     mock_files.assert_not_called()
@@ -353,7 +360,7 @@ async def test_find_introducing_prs_pure_addition_diff_blames_nothing(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
     # diff + merge-base only: no blame, no gh.
     assert [c.args[0][1] for c in mock_run.call_args_list] == ["diff", "merge-base"]
 
@@ -379,7 +386,7 @@ async def test_find_introducing_prs_same_commit_blamed_from_two_ranges_is_resolv
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})
     assert [(h.old_start, h.old_end) for h in hunks] == [(5, 5), (9, 9)]
     assert all(h.introducing_sha == "abc123def456" and h.introducing_pr_number == 7 for h in hunks)
     # G4: one unique SHA → exactly one commit→PR lookup, not one per range.
@@ -408,7 +415,7 @@ async def test_find_introducing_prs_range_spanning_two_commits_yields_one_hunk_p
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})
     assert sorted((h.introducing_sha, h.introducing_pr_number) for h in hunks) == [
         ("aaa111aaa111", 7),
         ("bbb222bbb222", 8),
@@ -436,7 +443,7 @@ async def test_find_introducing_prs_commit_in_multiple_prs_yields_one_hunk_per_p
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})
     assert sorted(h.introducing_pr_number for h in hunks) == [7, 8]
 
 
@@ -462,7 +469,7 @@ async def test_find_introducing_prs_zero_pr_result_skips_lines_silently(tmp_path
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
         caplog.at_level(logging.DEBUG, logger="dotharness.pr_review.runners.regret_review"),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
@@ -488,7 +495,7 @@ async def test_find_introducing_prs_api_failure_skips_lines_silently(tmp_path, c
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
         caplog.at_level(logging.DEBUG, logger="dotharness.pr_review.runners.regret_review"),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
@@ -513,7 +520,7 @@ async def test_find_introducing_prs_malformed_pulls_json_skips_lines(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
 
 
 async def test_find_introducing_prs_blame_failure_skips_only_that_range(tmp_path):
@@ -538,7 +545,7 @@ async def test_find_introducing_prs_blame_failure_skips_only_that_range(tmp_path
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})
     assert [(h.old_start, h.old_end, h.introducing_sha) for h in hunks] == [(9, 9, "bbb222bbb222")]
 
 
@@ -563,7 +570,7 @@ async def test_find_introducing_prs_merge_base_failure_blames_origin_base(tmp_pa
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})
     assert len(hunks) == 1
     blame_cmd = _cmd_calls(mock_run, "git")[2]
     assert blame_cmd == ["git", "blame", "-L", "5,5", "origin/main", "--", "src/foo.py"]
@@ -575,7 +582,7 @@ async def test_find_introducing_prs_no_changed_files_does_nothing(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=[]),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
     mock_run.assert_not_called()
 
 
@@ -585,7 +592,7 @@ async def test_find_introducing_prs_no_base_branch_does_nothing(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value=""),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files") as mock_files,
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
     mock_run.assert_not_called()
     mock_files.assert_not_called()
 
@@ -596,7 +603,7 @@ async def test_find_introducing_prs_expired_budget_does_nothing(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        assert (await find_introducing_prs(_pr(), _config(timeout=0), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(timeout=0), str(tmp_path), {})) == []
     mock_run.assert_not_called()
 
 
@@ -617,7 +624,7 @@ async def test_find_introducing_prs_timed_out_call_stops_sequence_fail_open(tmp_
     ):
         # The diff succeeds, then the budget runs out during the next call: no partial
         # finding is produced.
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
 
 
 async def test_find_introducing_prs_passes_remaining_budget_as_call_timeout(tmp_path):
@@ -643,7 +650,7 @@ async def test_find_introducing_prs_passes_remaining_budget_as_call_timeout(tmp_
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        await find_introducing_prs(_pr(), _config(timeout=300), str(tmp_path), {})
+        await find_introducing_prs(HOST, REPO, _pr(), _config(timeout=300), str(tmp_path), {})
     # Every call's timeout is the remaining budget (≤ 300, strictly decreasing in
     # elapsed time), never a fresh per-call constant.
     assert seen_timeouts and all(0 < t <= 300 for t in seen_timeouts)
@@ -1378,5 +1385,5 @@ async def test_find_introducing_prs_non_utf8_diff_and_merge_base_do_not_raise(tm
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})
     assert [(h.old_start, h.introducing_pr_number) for h in hunks] == [(1, 7)]

@@ -8,7 +8,6 @@ import pytest
 from dotharness.gh import build_subprocess_env
 from dotharness.pr_review.runners.common import (
     FatalGitError,
-    add_reviewer,
     get_current_user,
     get_gh_token,
     git_detach_and_record,
@@ -213,29 +212,6 @@ async def test_get_gh_token_stderr_only_raises():
     # account `gh auth status` currently has active, not the one gh_token_cmd names.
     with pytest.raises(RuntimeError, match="token not configured"):
         await get_gh_token("printf 'token not configured' >&2")
-
-
-async def test_add_reviewer_logs_error_on_failure(caplog):
-    # preserve_reviewer_request calls add_reviewer from a `finally` with nothing else
-    # watching the outcome — a failed re-add must be logged, or it's invisible.
-    with (
-        patch(
-            "dotharness.pr_review.runners.common.run_cmd",
-            return_value=MagicMock(returncode=1, stderr=b"could not add reviewer: not found"),
-        ),
-        caplog.at_level("ERROR"),
-    ):
-        await add_reviewer(9, "acme/frontend", "alice", {})
-    assert any("could not add reviewer" in r.message for r in caplog.records)
-
-
-async def test_add_reviewer_silent_on_success(caplog):
-    with (
-        patch("dotharness.pr_review.runners.common.run_cmd", return_value=MagicMock(returncode=0, stderr=b"")),
-        caplog.at_level("ERROR"),
-    ):
-        await add_reviewer(9, "acme/frontend", "alice", {})
-    assert not caplog.records
 
 
 async def test_get_current_user_returns_login_on_success():

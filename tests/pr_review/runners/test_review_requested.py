@@ -4,8 +4,9 @@ from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from dotharness.pr_review.runners import review_requested
-from dotharness.pr_review.runners.common import REGRET_REVIEW_MARKER
+from dotharness.pr_review.runners.common import REGRET_REVIEW_MARKER, LinkedTicket
 from dotharness.pr_review.runners.regret_review import IntroducingHunk, RegretCandidate
+from tests.pr_review.runners.runner_support import REPO, make_change_request, make_scaffold
 
 
 def _cfg(tmp_path):
@@ -59,8 +60,8 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
     prs = prs if prs is not None else [{"number": 1, "url": "u", "headRefName": "feat"}]
     changed_files = changed_files if changed_files is not None else ["src/foo.py"]
     with (
-        patch("dotharness.pr_review.runners.review_requested.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_requested.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.review_requested.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_requested.host_current_user", return_value="bot"),
         patch("dotharness.pr_review.runners.review_requested._get_prs", return_value=prs) as get_prs,
         patch("dotharness.pr_review.runners.review_requested._should_skip_pr", return_value=skip_pr) as should_skip_pr,
         # Design/traceability passes are decoupled and out of scope for these
@@ -82,6 +83,10 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
         ) as run_cmd,
         patch("dotharness.pr_review.runners.review_requested.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.review_requested.get_pr_head_sha", return_value="abc123"),
+        patch(
+            "dotharness.pr_review.runners.review_requested.get_change_request",
+            return_value=make_change_request(1, url="u"),
+        ),
         patch("dotharness.pr_review.runners.review_requested.get_changed_files", return_value=changed_files),
         patch("dotharness.pr_review.runners.review_requested.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.review_requested.os") as os_mock,
@@ -109,8 +114,8 @@ async def test_skips_already_approved_pr(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.review_requested.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_requested.get_current_user", return_value="me"),
+        patch("dotharness.pr_review.runners.review_requested.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_requested.host_current_user", return_value="me"),
         patch(
             "dotharness.pr_review.runners.review_requested._get_prs",
             return_value=[{"number": 1, "url": "u", "headRefName": "b"}],
@@ -130,8 +135,8 @@ async def test_skips_pr_with_existing_dotharness_review(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.review_requested.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_requested.get_current_user", return_value="me"),
+        patch("dotharness.pr_review.runners.review_requested.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_requested.host_current_user", return_value="me"),
         patch(
             "dotharness.pr_review.runners.review_requested._get_prs",
             return_value=[{"number": 1, "url": "u", "headRefName": "b"}],
@@ -291,7 +296,7 @@ async def test_restores_head_on_backend_failure(tmp_xdg, tmp_path):
     mocks.restore.assert_called_once_with("sha", "feat", str(cfg.repo.working_dir), ANY)
 
 
-_TICKET = {"number": 3, "repo": "acme/frontend", "title": "Do the thing", "body": "body", "source": "closing_keyword"}
+_TICKET = LinkedTicket(3, "acme/frontend", "Do the thing", "body", "closing_keyword")
 
 
 async def test_traceability_review_invoked_when_no_marker_present(tmp_xdg, tmp_path):
@@ -550,7 +555,7 @@ async def test_re_requests_review_when_incomplete_and_previously_requested(tmp_x
             MagicMock(returncode=1),
         ]
         await review_requested._run_locked(cfg, pr_url=None)
-    mocks.add_reviewer.assert_called_once_with(1, "acme/frontend", "bot", ANY)
+    mocks.add_reviewer.assert_called_once_with(ANY, REPO, 1, "bot")
 
 
 async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
@@ -583,7 +588,7 @@ async def test_re_requests_review_even_when_fully_done(tmp_xdg, tmp_path):
     with _full_run_mocks() as mocks:
         mocks.get_requested.return_value = True
         await review_requested._run_locked(cfg, pr_url=None)
-    mocks.add_reviewer.assert_called_once_with(1, "acme/frontend", "bot", ANY)
+    mocks.add_reviewer.assert_called_once_with(ANY, REPO, 1, "bot")
 
 
 async def test_fatal_git_error_stops_loop_and_restores(tmp_xdg, tmp_path):
@@ -620,6 +625,19 @@ async def test_process_pr_skips_summary_when_file_reviews_fail(tmp_path):
         patch(f"{mod}._run_traceability_review"),
     ):
         await review_requested._process_pr(
-            pr, _cfg(tmp_path), tmp_path, None, MagicMock(), str(tmp_path), {}, "me", True, True, True, True
+            pr,
+            _cfg(tmp_path),
+            MagicMock(),
+            REPO,
+            tmp_path,
+            None,
+            MagicMock(),
+            str(tmp_path),
+            {},
+            "me",
+            True,
+            True,
+            True,
+            True,
         )
     summary.assert_not_called()

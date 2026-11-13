@@ -3,7 +3,6 @@ import logging
 import re
 from pathlib import Path
 
-from dotharness.gh import build_subprocess_env
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock, working_dir_lock_key
@@ -16,13 +15,13 @@ from dotharness.pr_review.runners.common import (
     fetch_pr_comments,
     fetch_review_threads,
     find_reply_with_marker,
-    get_current_user,
-    get_gh_token,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
+    host_current_user,
     list_open_prs_for_current_user,
     merge_thread_state,
+    open_host,
     preserve_reviewer_request,
     run_cmd,
 )
@@ -46,9 +45,9 @@ async def _run_locked(config: HarnessConfig) -> None:
         logger.info("focused_review disabled, skipping")
         return
 
-    gh_token = await get_gh_token(config.harness.gh_token_cmd)
-    env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
-    current_user = await get_current_user(env)
+    scaffold = await open_host(config)
+    host, repo, env = scaffold.host, scaffold.repo, scaffold.env
+    current_user = await host_current_user(host)
 
     script_path = PR_COMMENTS_SCRIPT_PATH
     instructions_template = (config.harness.knowledge_dir / "pr-review" / "focused-review.md").read_text(
@@ -58,7 +57,7 @@ async def _run_locked(config: HarnessConfig) -> None:
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
-        {**config.harness.env, "GITHUB_TOKEN": gh_token},
+        {**config.harness.env, "GITHUB_TOKEN": env.get("GITHUB_TOKEN", "")},
         expected_repo_name=config.repo.name,
     )
 
@@ -93,7 +92,7 @@ async def _run_locked(config: HarnessConfig) -> None:
             # Replying to these comments can submit a review via the GitHub API as a side
             # effect, which would clear us from the requested-reviewers list — restore it
             # regardless of outcome, since we cannot observe from here whether that happened.
-            async with preserve_reviewer_request(number, config.repo.name, current_user, env):
+            async with preserve_reviewer_request(host, repo, number, current_user):
                 await git_fetch_and_checkout(branch, wdir, env)
                 await _process_matches(matches, config, instructions_template, backend, number, wdir, env)
         except FatalGitError:

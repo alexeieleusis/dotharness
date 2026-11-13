@@ -6,6 +6,7 @@ import pytest
 from dotharness.pr_review import state
 from dotharness.pr_review.config import PreCommand, SubDir
 from dotharness.pr_review.runners import review_prs
+from tests.pr_review.runners.runner_support import REPO, make_change_request, make_scaffold
 
 
 @pytest.fixture(autouse=True)
@@ -52,7 +53,7 @@ async def test_skips_prs_with_unchanged_head_sha(tmp_xdg, tmp_path):
         {"number": 10, "headRefName": "b", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha10"},
     ]
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
@@ -103,7 +104,7 @@ async def test_run_locked_skips_pr_with_new_sha_within_min_reanalysis_interval(t
         {"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "new-sha"}
     ]
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
@@ -130,8 +131,8 @@ async def test_run_locked_reprocesses_pr_with_new_sha_after_min_reanalysis_inter
         {"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "new-sha"}
     ]
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
@@ -160,8 +161,8 @@ async def test_run_locked_respects_configured_min_reanalysis_interval_hours(tmp_
         {"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "new-sha"}
     ]
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
@@ -187,8 +188,8 @@ async def test_reprocesses_pr_when_head_sha_changes(tmp_xdg, tmp_path):
         {"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "new-sha"}
     ]
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
@@ -210,8 +211,8 @@ async def test_processes_new_prs(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     prs = [{"number": 5, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha5"}]
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
@@ -232,7 +233,7 @@ async def test_failed_pr_fetch_does_not_prune_reviewed_shas(tmp_xdg, tmp_path):
     state.record_reviewed_sha("acme-frontend", 6, "sha6", 1000.0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=None),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
@@ -253,8 +254,8 @@ async def test_updates_state_after_success(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha7"}]
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
@@ -273,8 +274,8 @@ async def test_coverage_flag_passed_when_true(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], coverage=True, timeout=30)])
     prs = [{"number": 3, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha3"}]
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
@@ -291,8 +292,8 @@ async def test_coverage_flag_passed_when_true(tmp_xdg, tmp_path):
 async def test_pr_url_graceful_on_pr_from_url_returns_empty(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.pr_from_url", return_value={}),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.pr_from_url", return_value=None),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
@@ -308,7 +309,7 @@ async def test_pr_url_graceful_on_pr_from_url_returns_empty(tmp_xdg, tmp_path):
 async def test_pr_url_graceful_on_pr_from_url_raises(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
         patch("dotharness.pr_review.runners.review_prs.pr_from_url", side_effect=RuntimeError("network error")),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
@@ -325,10 +326,10 @@ async def test_pr_url_bypasses_reviewed_sha_filtering(tmp_xdg, tmp_path):
     # it to run anyway — the whole point of the manual override.
     state.record_reviewed_sha("acme-frontend", 3, "sha3", 1000.0)
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
-    pr = {"number": 3, "headRefName": "feat", "baseRefName": "main", "headRefOid": "sha3"}
+    pr = make_change_request(3, head_reference="feat", head_revision="sha3")
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.pr_from_url", return_value=pr),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
@@ -344,10 +345,10 @@ async def test_pr_url_bypasses_reviewed_sha_filtering(tmp_xdg, tmp_path):
 
 async def test_pr_url_does_not_update_reviewed_shas(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
-    pr = {"number": 3, "headRefName": "feat", "baseRefName": "main", "headRefOid": "sha3"}
+    pr = make_change_request(3, head_reference="feat", head_revision="sha3")
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.pr_from_url", return_value=pr),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
@@ -446,8 +447,8 @@ async def test_run_locked_re_requests_review_once_per_pr_across_subdirs(tmp_xdg,
         }
     ]
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=True) as mock_was_requested,
         patch("dotharness.pr_review.runners.common.add_reviewer") as mock_add_reviewer,
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
@@ -460,17 +461,17 @@ async def test_run_locked_re_requests_review_once_per_pr_across_subdirs(tmp_xdg,
         mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
         await review_prs._run_locked(cfg)
     assert mock_was_requested.call_count == 1
-    assert mock_was_requested.call_args.args[:2] == (9, "acme/frontend")
+    assert mock_was_requested.call_args.args[1:3] == (REPO, 9)
     assert mock_add_reviewer.call_count == 1
-    assert mock_add_reviewer.call_args.args[:3] == (9, "acme/frontend", "alice")
+    assert mock_add_reviewer.call_args.args[1:] == (REPO, 9, "alice")
 
 
 async def test_run_locked_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(path=".", pre_commands=[], coverage=False, timeout=30)])
     prs = [{"number": 9, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha9"}]
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.common.add_reviewer") as mock_add_reviewer,
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
@@ -508,7 +509,7 @@ async def test_process_pr_skips_when_closed_since_discovery(tmp_path):
         patch("dotharness.pr_review.runners.review_prs.is_pr_open", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout") as mock_fetch,
     ):
-        result = await review_prs._process_pr(pr, cfg, {}, "alice", str(tmp_path))
+        result = await review_prs._process_pr(pr, cfg, make_scaffold().host, REPO, {}, "alice", str(tmp_path))
     assert result is False
     mock_fetch.assert_not_called()
 
@@ -575,8 +576,8 @@ async def test_run_locked_skips_subdir_with_no_changes(tmp_xdg, tmp_path):
         }
     ]
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs.get_changed_files", return_value=["a/src/foo.py"]),
@@ -758,7 +759,7 @@ async def test_run_locked_propagates_base_analysis_timeout_without_processing_pr
         raise subprocess.TimeoutExpired(cmd, 60)
 
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
         patch("dotharness.pr_review.runners.review_prs.prune_projects.run"),
         patch("dotharness.pr_review.runners.review_prs.run_cmd", side_effect=fake_run_cmd),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors") as mock_list,
@@ -774,7 +775,7 @@ async def test_run_locked_calls_prune_projects_before_base_analysis(tmp_xdg, tmp
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     calls = []
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
         patch(
             "dotharness.pr_review.runners.review_prs.prune_projects.run", side_effect=lambda *a: calls.append("prune")
         ),
@@ -793,7 +794,7 @@ async def test_run_locked_does_not_prune_when_disabled(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     assert cfg.vibe_heal.prune_projects_enabled is False
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=[]),
         patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run,
@@ -806,7 +807,7 @@ async def test_run_locked_does_not_prune_when_disabled(tmp_xdg, tmp_path):
 async def test_run_locked_skips_when_subdirs_empty(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token") as mock_token,
+        patch("dotharness.pr_review.runners.review_prs.open_host") as mock_token,
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors") as mock_list,
     ):
         await review_prs._run_locked(cfg)
@@ -834,8 +835,8 @@ async def test_run_locked_does_not_record_reviewed_sha_on_subdir_failure(tmp_xdg
         return MagicMock(returncode=0, stdout=b"[]", stderr=b"")
 
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
@@ -853,8 +854,8 @@ async def test_run_locked_does_not_record_reviewed_sha_on_generic_exception(tmp_
     prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha7"}]
 
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
@@ -893,8 +894,8 @@ async def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path):
         {"number": 4, "headRefName": "pr4", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha4"},
     ]
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
@@ -921,8 +922,8 @@ async def test_fatal_git_error_from_process_pr_stops_remaining_prs(tmp_xdg, tmp_
         {"number": 6, "headRefName": "pr6", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha6"},
     ]
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
@@ -946,8 +947,8 @@ async def test_generic_exception_does_not_block_credit_for_other_prs(tmp_xdg, tm
         {"number": 4, "headRefName": "pr4", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha4"},
     ]
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
@@ -972,8 +973,8 @@ async def test_run_locked_calls_git_restore_when_process_pr_raises(tmp_xdg, tmp_
     prs = [{"number": 5, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha5"}]
 
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
@@ -1150,8 +1151,8 @@ async def test_process_pr_does_not_record_reviewed_sha_on_bad_env_file(tmp_xdg, 
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30, env_file=bad)])
     prs = [{"number": 7, "headRefName": "feat", "author": {"login": "alice"}, "isDraft": False, "headRefOid": "sha7"}]
     with (
-        patch("dotharness.pr_review.runners.review_prs.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.review_prs.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_prs.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
         patch("dotharness.pr_review.runners.review_prs.list_open_prs_matching_authors", return_value=prs),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),

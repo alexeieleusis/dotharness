@@ -14,6 +14,7 @@ from dotharness.pr_review.runners.address_comments import (
 )
 from dotharness.pr_review.runners.common import FOCUSED_REVIEW_MARKER
 from dotharness.repo_guard import RepoIdentityError
+from tests.pr_review.runners.runner_support import REPO, make_scaffold
 
 
 def _state(*unresolved, minimized=()):
@@ -47,7 +48,7 @@ def _setup_knowledge(tmp_path, filename, content="instructions"):
 
 async def test_disabled_skips_everything(tmp_path):
     cfg = _cfg(tmp_path, enabled=False)
-    with patch("dotharness.pr_review.runners.address_comments.get_gh_token") as mock_token:
+    with patch("dotharness.pr_review.runners.address_comments.open_host") as mock_token:
         await address_comments._run_locked(cfg)
     mock_token.assert_not_called()
 
@@ -56,7 +57,7 @@ async def test_skips_pr_with_no_pending_feedback(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path, "address-comment.md")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.address_comments.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -87,7 +88,7 @@ async def test_runs_backend_when_unresolved_threads(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     with (
-        patch("dotharness.pr_review.runners.address_comments.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 1, "headRefName": "b"}],
@@ -113,7 +114,7 @@ async def test_processes_draft_pr_with_pending_feedback(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     with (
-        patch("dotharness.pr_review.runners.address_comments.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
         patch("dotharness.pr_review.runners.address_comments.fetch_pr_comments", return_value=[_FAKE_COMMENT]),
         patch("dotharness.pr_review.runners.address_comments.git_detach_and_record", return_value="sha"),
@@ -145,7 +146,7 @@ async def test_pushes_branch_after_backend(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     with (
-        patch("dotharness.pr_review.runners.address_comments.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 2, "headRefName": "my-branch"}],
@@ -173,7 +174,7 @@ async def test_pushes_after_each_comment_not_once_at_end(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     comment_2 = {**_FAKE_COMMENT, "id": 43}
     with (
-        patch("dotharness.pr_review.runners.address_comments.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 2, "headRefName": "my-branch"}],
@@ -216,7 +217,7 @@ async def test_skips_comment_whose_thread_resolves_mid_run(tmp_xdg, tmp_path):
         return _state(42, 43) if call_count["n"] == 1 else _state(42)
 
     with (
-        patch("dotharness.pr_review.runners.address_comments.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 2, "headRefName": "my-branch"}],
@@ -272,7 +273,7 @@ async def test_stops_processing_comments_after_push_failure(tmp_xdg, tmp_path):
         return MagicMock(returncode=0, stdout=b"", stderr=b"")
 
     with (
-        patch("dotharness.pr_review.runners.address_comments.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 2, "headRefName": "my-branch"}],
@@ -317,7 +318,7 @@ async def test_stops_processing_comments_after_history_rewrite(tmp_xdg, tmp_path
 
     mock_run = AsyncMock(side_effect=run_cmd_side_effect)
     with (
-        patch("dotharness.pr_review.runners.address_comments.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 2, "headRefName": "my-branch"}],
@@ -366,7 +367,7 @@ async def test_restores_head_even_on_backend_failure(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     with (
-        patch("dotharness.pr_review.runners.address_comments.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 3, "headRefName": "b"}],
@@ -396,8 +397,8 @@ async def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     with (
-        patch("dotharness.pr_review.runners.address_comments.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.address_comments.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 2, "headRefName": "b"}],
@@ -417,8 +418,8 @@ async def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
         mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
         await address_comments._run_locked(cfg)
-    mock_was_requested.assert_called_once_with(2, "acme/frontend", "bot", ANY)
-    mock_add_reviewer.assert_called_once_with(2, "acme/frontend", "bot", ANY)
+    mock_was_requested.assert_called_once_with(ANY, REPO, 2, "bot")
+    mock_add_reviewer.assert_called_once_with(ANY, REPO, 2, "bot")
 
 
 async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
@@ -426,8 +427,8 @@ async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, t
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     with (
-        patch("dotharness.pr_review.runners.address_comments.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.address_comments.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 2, "headRefName": "b"}],
@@ -458,8 +459,8 @@ async def test_re_requests_review_even_when_backend_raises(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     with (
-        patch("dotharness.pr_review.runners.address_comments.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.address_comments.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments.host_current_user", return_value="bot"),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 2, "headRefName": "b"}],
@@ -478,7 +479,7 @@ async def test_re_requests_review_even_when_backend_raises(tmp_xdg, tmp_path):
         mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.side_effect = Exception("backend exploded")
         await address_comments._run_locked(cfg)
-    mock_add_reviewer.assert_called_once_with(2, "acme/frontend", "bot", ANY)
+    mock_add_reviewer.assert_called_once_with(ANY, REPO, 2, "bot")
     mock_restore.assert_called()
 
 
@@ -1029,7 +1030,7 @@ async def test_backend_failure_is_swallowed_and_loop_continues_and_pushes(failur
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     comment_2 = {**_FAKE_COMMENT, "id": 43}
     with (
-        patch("dotharness.pr_review.runners.address_comments.get_gh_token", return_value="tok"),
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=make_scaffold()),
         patch(
             "dotharness.pr_review.runners.address_comments._list_prs_to_check",
             return_value=[{"number": 2, "headRefName": "my-branch"}],
@@ -1232,6 +1233,8 @@ async def _run_pending(comments, lookup_return):
         original_sha="sha",
         repo="acme/frontend",
         env={},
+        host=make_scaffold().host,
+        repo_ref=REPO,
         trusted_commenters=[],
     )
     with (
