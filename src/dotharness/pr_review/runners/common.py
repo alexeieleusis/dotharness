@@ -4,20 +4,37 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import tempfile
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
+from typing import Literal, TypeVar
 
-from dotharness.gh import gh_argv
+from dotharness.code_host import (
+    ChangeRequest,
+    ChangeRequestState,
+    CodeHost,
+    CodeHostError,
+    Comment,
+    ConfigurationError,
+    HostSelection,
+    RepositoryRef,
+    ReviewThread,
+    UnsupportedCapabilityError,
+    WorkItem,
+    create_code_host,
+)
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig, RepoConfig, SubDir
 from dotharness.subprocess_runner import run
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT_GH = 30
 TIMEOUT_GIT = 60
 TIMEOUT_FETCH_COMMENTS = 120
 
@@ -255,138 +272,283 @@ async def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:
         )
 
 
-async def get_gh_token(gh_token_cmd: str) -> str:
-    """Resolve the GitHub token `gh_token_cmd` (e.g. `gh auth token --user <login>`)
-    prints, so the caller can pin every subsequent `gh`/backend call to that specific
-    account via GITHUB_TOKEN (see build_subprocess_env) regardless of which account
-    `gh auth switch` last left active.
+@dataclass(frozen=True)
+class HostScaffold:
+    """What every ``_run_locked`` builds once: the host, the resolved repository and the child-process environment."""
 
-    Raises on a failed command or blank stdout rather than returning "" the way a
-    quieter helper might: build_subprocess_env only sets GITHUB_TOKEN when this
-    returns something truthy, so silently returning "" here would silently drop back
-    to whatever account `gh auth status` currently has active — precisely the
-    cross-loop account drift `gh_token_cmd` exists to avoid (see .harness.toml)."""
-    try:
-        result = await run_cmd(  # noqa: S604
-            gh_token_cmd, cwd="/", env=os.environ.copy(), timeout=TIMEOUT_GH, check=False, shell=True
-        )
-    except subprocess.TimeoutExpired:
-        # Re-raise without the command: TimeoutExpired stringifies it, and it may embed a credential.
-        raise RuntimeError(f"gh_token_cmd timed out after {TIMEOUT_GH}s") from None  # noqa: TRY003
-    token = result.stdout.decode("utf-8", errors="replace").strip()
-    if result.returncode != 0 or not token:
-        raise RuntimeError(  # noqa: TRY003
-            f"gh_token_cmd did not produce a token "
-            f"(exit {result.returncode}): {result.stderr.decode('utf-8', errors='replace').strip()}"
-        )
-    return token
+    host: CodeHost
+    repo: RepositoryRef
+    env: dict[str, str]
 
 
-def is_draft_pr(pr: dict) -> bool:
-    return bool(pr.get("isDraft"))
+def host_selection(config: HarnessConfig) -> HostSelection:
+    """The ``HostSelection`` for ``config``: host name, options and the effective token command (never empty)."""
+    return HostSelection(
+        setting="host",
+        name=config.harness.host,
+        options=config.harness.host_options,
+        token_cmd=config.harness.effective_token_cmd,
+        working_directory=config.repo.working_dir if config.repo.working_dir.is_dir() else None,
+    )
 
 
-async def is_pr_open(pr_number: int, repo: str, env: dict) -> bool:
-    """Return True if `pr_number` is still open on GitHub right now.
+def build_agent_base_env(path_prepend: list[str], env_vars: dict[str, str]) -> dict[str, str]:
+    """``os.environ`` with ``path_prepend`` ahead of ``PATH`` and ``[harness] env`` applied; no credential yet.
 
-    Fails closed (returns False) if the lookup fails — a long-running batch shouldn't
-    post a review to a PR that may have been closed or merged while it was processing.
+    Pass the result to ``Session.agent_environment``, which adds the credential variables (and lets them win).
     """
-    result = await run_cmd(
-        gh_argv("pr", "view", str(pr_number), "--repo", repo, "--json", "state", "--jq", ".state"),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
+    base = os.environ.copy()
+    if path_prepend:
+        base["PATH"] = ":".join(path_prepend) + ":" + base.get("PATH", "")
+    base.update(env_vars)
+    return base
+
+
+async def agent_env(host: CodeHost, config: HarnessConfig) -> dict[str, str]:
+    """Child-process environment for git and agents: base environment plus the host's credential variables.
+
+    Raises ``TokenCommandError``, ``AuthenticationError`` or ``CodeHostTimeoutError`` when the credential cannot be
+    resolved; a runner lets them stop the command (nonzero exit, as the old ``RuntimeError`` did).
+    """
+    base = build_agent_base_env(config.harness.path_prepend, config.harness.env)
+    return dict(await host.session.agent_environment(base))
+
+
+def backend_env(config: HarnessConfig, env: Mapping[str, str]) -> dict[str, str]:
+    """``[harness] env`` plus ``GITHUB_TOKEN`` from the scaffold env, only when the scaffold has a non-empty one.
+
+    An absent or empty scaffold token must not overwrite a ``GITHUB_TOKEN`` the user configured in ``[harness.env]``.
+    """
+    merged = dict(config.harness.env)
+    if token := env.get("GITHUB_TOKEN"):
+        merged["GITHUB_TOKEN"] = token
+    return merged
+
+
+async def open_host(config: HarnessConfig) -> HostScaffold:
+    """Steps (1) to (4) of the runner scaffold, once per command: selection, host, repository, environment.
+
+    A ``ConfigurationError`` from the factory or from ``Repository.resolve`` prints its message to stderr and exits
+    with code 1 (the startup message). Credential failures propagate (see ``agent_env``).
+    """
+    try:
+        host = create_code_host(host_selection(config))
+        repo = await host.repository.resolve(config.repo.name)
+    except ConfigurationError as e:
+        sys.stderr.write(f"{e}\n")
+        sys.exit(1)
+    return HostScaffold(host=host, repo=repo, env=await agent_env(host, config))
+
+
+async def host_token(host: CodeHost) -> str:
+    """The host credential's token. Raises ``TokenCommandError``, ``AuthenticationError``, ``CodeHostTimeoutError``.
+
+    The 30 s limit lives in the host's declaration. Callers must not log the result.
+    """
+    return (await host.session.credential()).token
+
+
+async def is_change_request_open(host: CodeHost, repo: RepositoryRef, number: int) -> bool:
+    """True when change request ``number`` is open right now. Fails closed: any ``CodeHostError`` gives False."""
+    try:
+        return await host.change_requests.state(repo, number) is ChangeRequestState.OPEN
+    except CodeHostError:
         return False
-    return result.stdout.decode("utf-8").strip() == "OPEN"
 
 
-async def get_current_user(env: dict) -> str:
-    """Unlike get_gh_token, deliberately fails *open* (returns "" rather than raising)
-    on a failed lookup: every caller either treats a blank current_user as "nothing
-    matches me" for its idempotency/comment checks (safe no-op, at worst a wasted or
-    duplicate pass this cycle that self-corrects once the lookup succeeds again) or, in
-    preserve_reviewer_request, skips its reviewer check entirely on a falsy login rather
-    than querying GitHub for one that could never match. Logged so a persistently blank
-    current_user (e.g. GITHUB_TOKEN pointing at a revoked token) is still visible."""
-    result = await run_cmd(gh_argv("api", "user", "--jq", ".login"), cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
-    login = result.stdout.decode("utf-8", errors="replace").strip()
-    if result.returncode != 0 or not login:
-        logger.error(
-            "get_current_user: 'gh api user' failed to resolve a login (exit %d): %s",
-            result.returncode,
-            result.stderr.decode("utf-8", errors="replace").strip(),
-        )
-    return login
+async def host_current_user(host: CodeHost) -> str:
+    """Login of the acting user. Fails open: any ``CodeHostError`` (including ``AuthenticationError``) is logged
+    and gives ``""``. The log line is where a revoked token shows; it carries the error's text, which never holds
+    the token or the token command."""
+    try:
+        return await host.session.current_user()
+    except CodeHostError as e:
+        logger.error("get_current_user: the host could not resolve a login: %s", e)  # noqa: TRY400
+        return ""
 
 
-async def pr_from_url(url: str, repo: str, env: dict, fields: str) -> dict:
+# -- Unsupported-capability policy (docs/pr_review/configuration.md, "Unsupported-capability policy") ---------------
+
+UnsupportedPolicy = Literal["degrade", "warn", "stop"]
+
+
+class Site(StrEnum):
+    """Where a host call is made: the first half of a policy key. A ``StrEnum``, so a mistyped member is an
+    ``AttributeError`` at import time instead of a silent fall back to ``stop``; the values are the names the
+    documentation table uses."""
+
+    MERGE = "merge"
+    AUTO_APPROVE = "auto_approve"
+    AUTO_APPROVE_VIEWED = "auto_approve_viewed"
+    CI_FIX = "ci_fix"
+    CI_CHECKS_WORKFLOWS = "ci_checks_workflows"
+    REQUIRED_CHECKS = "required_checks"
+    REVIEWER_REQUEST = "reviewer_request"
+    REGRET_REVIEW = "regret_review"
+    TRACEABILITY = "traceability"
+    CURRENT_USER = "current_user"
+    CHANGE_REQUEST_READ = "change_request_read"
+
+
+_CR_GET = "ChangeRequests.get"
+
+# One table: (site, operation) -> policy. ``Interface.*`` covers every operation of that capability at the site. The
+# same rows are documented in docs/pr_review/configuration.md; tests/pr_review/test_policy.py keeps them in sync.
+# degrade: skip silently. warn: log the capability name and continue. stop: re-raise (the top-level handler exits
+# non-zero). A pair not listed is "stop".
+UNSUPPORTED_CAPABILITY_POLICY: Mapping[tuple[Site, str], UnsupportedPolicy] = MappingProxyType({
+    (Site.MERGE, "ChangeRequests.squash_merge"): "stop",
+    (Site.MERGE, _CR_GET): "stop",
+    (Site.AUTO_APPROVE, "ChangeRequests.approve"): "stop",
+    (Site.AUTO_APPROVE, "ChangeRequests.reviews"): "stop",
+    (Site.AUTO_APPROVE, "ChangeRequests.commits"): "stop",
+    (Site.AUTO_APPROVE_VIEWED, "ChangeRequests.viewed_files"): "degrade",
+    (Site.AUTO_APPROVE_VIEWED, "ChangeRequests.mark_viewed"): "degrade",
+    (Site.CI_FIX, "Checks.*"): "stop",
+    (Site.CI_CHECKS_WORKFLOWS, "Checks.list_workflows"): "degrade",
+    (Site.REQUIRED_CHECKS, "Checks.list_checks"): "stop",
+    (Site.REVIEWER_REQUEST, "ChangeRequests.request_reviewer"): "warn",
+    (Site.REVIEWER_REQUEST, _CR_GET): "warn",
+    (Site.REGRET_REVIEW, "ChangeRequests.find_by_commit"): "stop",
+    (Site.TRACEABILITY, "WorkItems.get"): "stop",
+    (Site.TRACEABILITY, "WorkItems.linked_work_items"): "stop",
+    (Site.CURRENT_USER, "Session.current_user"): "warn",
+})
+
+_T = TypeVar("_T")
+
+
+def unsupported_policy(site: Site | str, operation: str) -> UnsupportedPolicy:
+    """The policy for ``operation`` (``Interface.method``) at ``site``: exact row, then ``Interface.*``, else stop."""
+    table = UNSUPPORTED_CAPABILITY_POLICY
+    exact = table.get((site, operation))
+    if exact is not None:
+        return exact
+    return table.get((site, f"{operation.split('.', 1)[0]}.*"), "stop")
+
+
+async def call_with_policy(site: Site | str, operation: str, call: Callable[[], Awaitable[_T]], fallback: _T) -> _T:
+    """Await ``call()`` under the unsupported-capability policy of ``(site, operation)``.
+
+    Only ``UnsupportedCapabilityError`` is handled; any other ``CodeHostError`` propagates. stop re-raises, degrade
+    returns ``fallback`` silently, warn logs the capability name and returns ``fallback``. The log line holds the
+    capability name only, never a token or token command.
+    """
+    try:
+        return await call()
+    except UnsupportedCapabilityError as e:
+        policy = unsupported_policy(site, operation)
+        if policy == "stop":
+            raise
+        if policy == "warn":
+            logger.warning("%s: host capability %s is not supported; continuing without it", site, e.capability)
+        return fallback
+
+
+async def call_or(
+    site: Site | str,
+    operation: str,
+    call: Callable[[], Awaitable[_T]],
+    fallback: _T,
+    *,
+    on_error: Callable[[CodeHostError], None] | None = None,
+) -> _T:
+    """``call_with_policy`` plus the fallback for every other ``CodeHostError``.
+
+    ``UnsupportedCapabilityError`` follows the policy of ``(site, operation)`` (stop re-raises it). Any other
+    ``CodeHostError`` is passed to ``on_error`` (when given, e.g. to log it) and gives ``fallback``. This replaces
+    the ``except UnsupportedCapabilityError: raise`` / ``except CodeHostError`` pair at a call site.
+    """
+    try:
+        return await call_with_policy(site, operation, call, fallback)
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as e:
+        if on_error is not None:
+            on_error(e)
+        return fallback
+
+
+# The plain change-request reads below use ``Site.CHANGE_REQUEST_READ``. It has no policy row, so an unsupported
+# capability stops.
+
+
+async def get_change_request(host: CodeHost, repo: RepositoryRef, number: int) -> ChangeRequest | None:
+    """Change request ``number``, or None (logged) when the host could not read it.
+
+    ``UnsupportedCapabilityError`` follows the policy of ``(change_request_read, ChangeRequests.get)`` and stops.
+    """
+    return await call_or(
+        Site.CHANGE_REQUEST_READ,
+        _CR_GET,
+        lambda: host.change_requests.get(repo, number),
+        None,
+        on_error=lambda e: logger.error("Failed to fetch PR #%d: %s", number, e),
+    )
+
+
+async def pr_from_url(host: CodeHost, repo: RepositoryRef, url: str) -> ChangeRequest | None:
+    """The change request a ``.../<number>`` URL names, or None (logged) when the read failed."""
     number = int(url.rstrip("/").split("/")[-1])
-    result = await run_cmd(
-        gh_argv("pr", "view", str(number), "--repo", repo, "--json", fields),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        logger.error("Failed to fetch PR #%d: %s", number, result.stderr.decode())
-        return {}
-    return json.loads(result.stdout)
+    return await get_change_request(host, repo, number)
 
 
-async def get_requested_reviewers(pr_number: int, repo: str, env: dict) -> list[str]:
-    result = await run_cmd(
-        gh_argv("pr", "view", str(pr_number), "--repo", repo, "--json", "reviewRequests"),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return []
-    data = json.loads(result.stdout)
-    return [r["login"] for r in data.get("reviewRequests", []) if "login" in r]
+async def get_requested_reviewers(host: CodeHost, repo: RepositoryRef, number: int) -> list[str]:
+    """Logins of the requested reviewers. A failed read gives ``[]``; an unsupported capability follows the
+    ``reviewer_request`` policy (warn)."""
+
+    async def read() -> list[str]:
+        return [u.login for u in (await host.change_requests.get(repo, number)).requested_reviewers]
+
+    return await call_or(Site.REVIEWER_REQUEST, _CR_GET, read, [])
 
 
-async def was_review_requested(pr_number: int, repo: str, login: str, env: dict) -> bool:
+async def was_review_requested(host: CodeHost, repo: RepositoryRef, number: int, login: str) -> bool:
     """Whether `login` was already a requested reviewer before processing started.
 
-    Submitting a review via the GitHub API clears the submitter from a PR's
-    requested-reviewers list, which would hide the PR from any runner's
-    "user-review-requested:@me" search. Callers check this up front and re-add
+    Submitting a review via the host's API clears the submitter from a change request's
+    requested-reviewers list, which would hide it from any runner's
+    "review requested of me" search. Callers check this up front and re-add
     the reviewer with add_reviewer() afterward so the PR stays visible — none of
     these runners ever remove the reviewer themselves; only the human's own
-    submitted review (or GitHub's own bookkeeping around it) does that."""
-    return login in await get_requested_reviewers(pr_number, repo, env)
+    submitted review (or the host's own bookkeeping around it) does that."""
+    return login in await get_requested_reviewers(host, repo, number)
 
 
-async def add_reviewer(pr_number: int, repo: str, login: str, env: dict) -> None:
-    result = await run_cmd(
-        gh_argv("pr", "edit", str(pr_number), "--repo", repo, "--add-reviewer", login),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
+async def add_reviewer(host: CodeHost, repo: RepositoryRef, number: int, login: str) -> None:
+    """Request ``login`` as a reviewer. A failure is logged and swallowed: ``preserve_reviewer_request`` calls this
+    from a ``finally``. A timeout (``write=True``) is never retried. An unsupported capability follows the
+    ``reviewer_request`` policy (warn)."""
+    try:
+        await call_with_policy(
+            Site.REVIEWER_REQUEST,
+            "ChangeRequests.request_reviewer",
+            lambda: host.change_requests.request_reviewer(repo, number, login),
+            None,
+        )
+    except CodeHostError as e:
+        # The display text is resolved defensively: a raise here would escape this handler and replace the
+        # in-flight exception of the caller's `finally` without being logged.
+        try:
+            repo_text = await host.repository.display_name(repo)
+        except CodeHostError:
+            repo_text = repr(repo)
         # preserve_reviewer_request calls this from a `finally`, so a failure here has
         # nowhere else to surface — without this log line, the reviewer silently stays
         # dropped from the PR with no trace it was ever supposed to be restored.
-        logger.error(
+        logger.error(  # noqa: TRY400
             "add_reviewer: failed to re-add %s as a reviewer on PR #%d (%s): %s",
             login,
-            pr_number,
-            repo,
-            result.stderr.decode("utf-8", errors="replace").strip(),
+            number,
+            repo_text,
+            e,
         )
 
 
 @asynccontextmanager
-async def preserve_reviewer_request(pr_number: int, repo: str, login: str, env: dict) -> AsyncGenerator[None]:
+async def preserve_reviewer_request(
+    host: CodeHost, repo: RepositoryRef, pr_number: int, login: str
+) -> AsyncGenerator[None]:
     """Wrap a PR-processing block that might submit a GitHub review as a side effect
     (e.g. replying to comments via the backend, or vibe_heal posting a static-analysis
     review), re-adding `login` as a requested reviewer afterward if it held that status
@@ -401,12 +563,12 @@ async def preserve_reviewer_request(pr_number: int, repo: str, login: str, env: 
     A falsy `login` (e.g. address_comments's get_current_user lookup failing) skips the
     check entirely rather than querying GitHub with an empty login, which could never match
     a real requested reviewer anyway."""
-    was_requested = bool(login) and await was_review_requested(pr_number, repo, login, env)
+    was_requested = bool(login) and await was_review_requested(host, repo, pr_number, login)
     try:
         yield
     finally:
         if was_requested:
-            await add_reviewer(pr_number, repo, login, env)
+            await add_reviewer(host, repo, pr_number, login)
 
 
 def is_review_summary_comment(body: str) -> bool:
@@ -416,181 +578,154 @@ def is_review_summary_comment(body: str) -> bool:
     return "review summary" in lower or "dotharness-review" in lower
 
 
-_PAGE_ATTEMPTS = 3
-_PAGE_RETRY_DELAY = 2.0
+def _is_author(comment: Comment, login: str) -> bool:
+    return comment.author is not None and comment.author.login == login
 
 
-async def _fetch_page(path: str, page: int, env: dict) -> list[dict] | None:
-    """One page of a REST list endpoint. Retries transient gh failures; None if all attempts fail."""
-    for attempt in range(1, _PAGE_ATTEMPTS + 1):
-        result = await run_cmd(
-            gh_argv("api", "--method", "GET", path, "-F", "per_page=100", "-F", f"page={page}"),
-            cwd="/",
-            env=env,
-            timeout=TIMEOUT_GH,
-            check=False,
-        )
-        if result.returncode == 0:
-            return json.loads(result.stdout)
-        stderr = result.stderr.decode("utf-8", errors="replace") if isinstance(result.stderr, bytes) else result.stderr
-        logger.warning(
-            "gh api %s page %d failed (exit %d, attempt %d/%d): %s",
-            path,
-            page,
-            result.returncode,
-            attempt,
-            _PAGE_ATTEMPTS,
-            (stderr or "").strip(),
-        )
-        if attempt < _PAGE_ATTEMPTS:
-            await asyncio.sleep(_PAGE_RETRY_DELAY * attempt)
-    return None
+async def _read_or_none(read: Callable[[], Awaitable[_T]], what: str, pr_number: int) -> _T | None:
+    """Result of a host read, or None (logged) when the host could not answer, so a failed read stays distinct
+    from an empty result. An unsupported capability stops (no policy row, default "stop")."""
+    try:
+        return await read()
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as e:
+        logger.warning("PR #%d: reading %s failed: %s", pr_number, what, e)
+        return None
 
 
-async def fetch_all_pages(path: str, env: dict) -> list[dict] | None:
-    """GET-paginate a GitHub REST list endpoint, returning every item. Unlike
-    fetch_pr_comments (which goes through scripts/pr-comments.py's cache), this returns
-    raw REST dicts that keep the snake_case `created_at` timestamp the cache drops.
-    Transient page failures are retried; returns None if a page still fails."""
-    items: list[dict] = []
-    page = 1
-    while True:
-        batch = await _fetch_page(path, page, env)
-        if batch is None:
-            return None
-        items.extend(batch)
-        if len(batch) < 100:
-            return items
-        page += 1
-
-
-async def _fetch_matching_comments(
-    comments_path: str, current_user: str, env: dict, predicate: Callable[[str], bool]
-) -> list[dict] | None:
-    """Returns the current_user's comments matching predicate (possibly empty), or None
-    if the GitHub API call itself failed (e.g. rate limit, transient 5xx) and the result
-    is inconclusive."""
-    comments = await fetch_all_pages(comments_path, env)
+async def _matching_comments(
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str, predicate: Callable[[str], bool]
+) -> list[Comment] | None:
+    """Returns the current_user's change-request-level comments matching predicate (possibly empty), or None
+    if the host call itself failed (e.g. rate limit, transient 5xx) and the result is inconclusive."""
+    comments = await _read_or_none(lambda: host.discussion.comments(repo, pr_number), "comments", pr_number)
     if comments is None:
         return None
-    return [c for c in comments if c.get("user", {}).get("login") == current_user and predicate(c.get("body", ""))]
+    return [c for c in comments if _is_author(c, current_user) and predicate(c.body or "")]
 
 
-async def _has_matching_comment(
-    comments_path: str, current_user: str, env: dict, predicate: Callable[[str], bool]
+async def _matching_inline_comments(
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str, predicate: Callable[[str], bool]
+) -> list[tuple[Comment, ReviewThread]] | None:
+    """The current_user's inline review comments matching predicate, each with its thread (possibly empty),
+    or None if the host call itself failed."""
+    threads = await _read_or_none(lambda: host.discussion.review_threads(repo, pr_number), "review threads", pr_number)
+    if threads is None:
+        return None
+    return [(c, t) for t in threads for c in t.comments if _is_author(c, current_user) and predicate(c.body or "")]
+
+
+async def has_review_summary_comment(host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str) -> bool:
+    return bool(await check_review_summary_comment_status(host, repo, pr_number, current_user))
+
+
+async def check_review_summary_comment_status(
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str
 ) -> bool | None:
-    """Returns True/False for a confirmed match/no-match, or None if the GitHub API
-    call itself failed (e.g. rate limit, transient 5xx) and the result is inconclusive."""
-    matches = await _fetch_matching_comments(comments_path, current_user, env, predicate)
-    return None if matches is None else bool(matches)
-
-
-async def has_review_summary_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
-    return bool(await check_review_summary_comment_status(pr_number, repo, current_user, env))
-
-
-async def check_review_summary_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
     """Tri-state version of has_review_summary_comment: None means the check itself was
     inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return await _has_matching_comment(
-        f"repos/{repo}/issues/{pr_number}/comments", current_user, env, is_review_summary_comment
-    )
+    matches = await _matching_comments(host, repo, pr_number, current_user, is_review_summary_comment)
+    return None if matches is None else bool(matches)
 
 
 def is_inline_review_comment(body: str) -> bool:
     return INLINE_REVIEW_MARKER in body
 
 
-async def has_inline_review_comments(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
-    return bool(
-        await _has_matching_comment(
-            f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, is_inline_review_comment
-        )
-    )
+async def has_inline_review_comments(host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str) -> bool:
+    return bool(await _matching_inline_comments(host, repo, pr_number, current_user, is_inline_review_comment))
 
 
-async def has_pr_level_pass_comment(marker: str, pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+async def has_pr_level_pass_comment(
+    host: CodeHost, repo: RepositoryRef, marker: str, pr_number: int, current_user: str
+) -> bool:
     """Shared by every PR-level pass (design review, requirement-traceability review,
     ...) whose completion signal is "did I already post an issue-level PR comment
     containing this marker" — extracted per requirement-traceability-requirements.md §7.6,
     closing the reuse pointer design-review-requirements.md §11.5 left here. A PR-level
     pass always posts exactly one PR-level comment per successful run (findings, or a
     "nothing to report" quiet path), so checking issue-level comments alone is enough —
-    no need to also check the inline pulls/comments endpoint the way
+    no need to also check the inline review comments the way
     has_inline_review_comments does."""
-    return bool(await check_pr_level_pass_comment_status(marker, pr_number, repo, current_user, env))
+    return bool(await check_pr_level_pass_comment_status(host, repo, marker, pr_number, current_user))
 
 
 async def check_pr_level_pass_comment_status(
-    marker: str, pr_number: int, repo: str, current_user: str, env: dict
+    host: CodeHost, repo: RepositoryRef, marker: str, pr_number: int, current_user: str
 ) -> bool | None:
     """Tri-state version of has_pr_level_pass_comment: None means the check itself was
     inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return await _has_matching_comment(
-        f"repos/{repo}/issues/{pr_number}/comments", current_user, env, lambda body: marker in body
-    )
+    matches = await _matching_comments(host, repo, pr_number, current_user, lambda body: marker in body)
+    return None if matches is None else bool(matches)
 
 
 def is_design_review_comment(body: str) -> bool:
     return DESIGN_REVIEW_MARKER in body
 
 
-async def has_design_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+async def has_design_review_comment(host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str) -> bool:
     """This is the design pass's *only* idempotency signal in review-requested (no
     persisted state there); self-review uses it only as defense-in-depth alongside its
     own persisted design_reviewed_prs state."""
-    return await has_pr_level_pass_comment(DESIGN_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await has_pr_level_pass_comment(host, repo, DESIGN_REVIEW_MARKER, pr_number, current_user)
 
 
-async def check_design_review_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
+async def check_design_review_comment_status(
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str
+) -> bool | None:
     """Tri-state version of has_design_review_comment: None means the check itself was
     inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return await check_pr_level_pass_comment_status(DESIGN_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await check_pr_level_pass_comment_status(host, repo, DESIGN_REVIEW_MARKER, pr_number, current_user)
 
 
 def is_traceability_review_comment(body: str) -> bool:
     return TRACEABILITY_REVIEW_MARKER in body
 
 
-async def has_traceability_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+async def has_traceability_review_comment(
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str
+) -> bool:
     """Mirrors has_design_review_comment exactly (see requirement-traceability-requirements.md
     §7.4/§7.5): review-requested's only idempotency signal for this pass; self-review's
     defense-in-depth check alongside its own persisted traceability_reviewed_prs state.
     Also covers the "no linked ticket found" outcome, which is terminal (§7.3/§11.1) —
     any comment carrying this marker, including that one, counts as done."""
-    return await has_pr_level_pass_comment(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await has_pr_level_pass_comment(host, repo, TRACEABILITY_REVIEW_MARKER, pr_number, current_user)
 
 
 async def check_traceability_review_comment_status(
-    pr_number: int, repo: str, current_user: str, env: dict
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str
 ) -> bool | None:
     """Tri-state version of has_traceability_review_comment: None means the check itself
     was inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return await check_pr_level_pass_comment_status(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await check_pr_level_pass_comment_status(host, repo, TRACEABILITY_REVIEW_MARKER, pr_number, current_user)
 
 
-async def has_regret_review_comment(pr_number: int, repo: str, current_user: str, env: dict) -> bool:
+async def has_regret_review_comment(host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str) -> bool:
     """Mirrors has_design_review_comment / has_traceability_review_comment exactly
     (regret-review-requirements.md §7.4/§7.6): review-requested's only idempotency signal
     for this pass (no persisted state there); self-review's defense-in-depth check
     alongside its own persisted regret_reviewed_prs state (§7.3)."""
-    return await has_pr_level_pass_comment(REGRET_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await has_pr_level_pass_comment(host, repo, REGRET_REVIEW_MARKER, pr_number, current_user)
 
 
-async def check_regret_review_comment_status(pr_number: int, repo: str, current_user: str, env: dict) -> bool | None:
+async def check_regret_review_comment_status(
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str
+) -> bool | None:
     """Tri-state version of has_regret_review_comment: None means the check itself was
     inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return await check_pr_level_pass_comment_status(REGRET_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await check_pr_level_pass_comment_status(host, repo, REGRET_REVIEW_MARKER, pr_number, current_user)
 
 
 async def get_pr_level_flagged_locations(
-    marker: str, pr_number: int, repo: str, current_user: str, env: dict
+    host: CodeHost, repo: RepositoryRef, marker: str, pr_number: int, current_user: str
 ) -> list[tuple[str, int]]:
     """Shared by every PR-level pass's flagged-locations fetch (design review,
     requirement-traceability review, ...), mirroring has_pr_level_pass_comment's
     extraction (requirement-traceability-requirements.md §7.6). (path, line) pairs
-    already flagged by a prior inline comment containing marker on this PR. Checks the
-    pulls/comments endpoint directly and is meant to be called on every invocation, not
+    already flagged by a prior inline comment containing marker on this PR. Reads the
+    inline review threads directly and is meant to be called on every invocation, not
     just when deciding whether to skip the pass: a pass posts inline findings and the
     closing PR-level comment as separate calls, so a crash in between leaves the
     PR-level marker comment absent while inline comments already exist. Feeding those
@@ -598,73 +733,61 @@ async def get_pr_level_flagged_locations(
     list on an inconclusive API failure, rather than blocking the run — worst case a
     retry re-flags an already-posted location instead of the whole pass silently never
     running."""
-    matches = await _fetch_matching_comments(
-        f"repos/{repo}/pulls/{pr_number}/comments", current_user, env, lambda body: marker in body
-    )
+    matches = await _matching_inline_comments(host, repo, pr_number, current_user, lambda body: marker in body)
     if not matches:
         return []
-    locations = []
-    for comment in matches:
-        path, line = comment.get("path"), comment.get("line")
-        if path and line is not None:
-            locations.append((path, line))
-    return locations
+    return [(t.anchor.path, t.anchor.line) for _c, t in matches if t.anchor is not None and t.anchor.path]
 
 
 async def get_design_review_flagged_locations(
-    pr_number: int, repo: str, current_user: str, env: dict
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str
 ) -> list[tuple[str, int]]:
-    return await get_pr_level_flagged_locations(DESIGN_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await get_pr_level_flagged_locations(host, repo, DESIGN_REVIEW_MARKER, pr_number, current_user)
 
 
 async def get_traceability_review_flagged_locations(
-    pr_number: int, repo: str, current_user: str, env: dict
+    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str
 ) -> list[tuple[str, int]]:
-    return await get_pr_level_flagged_locations(TRACEABILITY_REVIEW_MARKER, pr_number, repo, current_user, env)
+    return await get_pr_level_flagged_locations(host, repo, TRACEABILITY_REVIEW_MARKER, pr_number, current_user)
 
 
-def _window_end_iso(pr_created_at: str) -> str | None:
-    """pr_created_at + TRACEABILITY_COMMENT_WINDOW_SECONDS, formatted so it string-compares
-    correctly against GitHub REST comments' `created_at` (safe the same way
-    address_comments.py:441 already relies on for ISO-8601 timestamps). Returns None if
-    pr_created_at is missing or unparseable."""
-    if not pr_created_at:
-        return None
-    try:
-        created = datetime.fromisoformat(pr_created_at.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    end = created + timedelta(seconds=TRACEABILITY_COMMENT_WINDOW_SECONDS)
-    return end.strftime("%Y-%m-%dT%H:%M:%SZ")
+def _window_end(created_at: datetime) -> datetime:
+    """``created_at`` + TRACEABILITY_COMMENT_WINDOW_SECONDS, truncated to whole seconds (the host's comment
+    timestamps carry no finer resolution), so a comment at exactly the end of the window still counts."""
+    return (created_at + timedelta(seconds=TRACEABILITY_COMMENT_WINDOW_SECONDS)).replace(microsecond=0)
 
 
 async def _fetch_early_window_comments(
-    pr_number: int, repo: str, pr_created_at: str, env: dict, cache: dict | None = None
-) -> list[dict] | None:
-    """All issue-timeline comments on pr_number posted at or before the end of the
+    host: CodeHost, repo: RepositoryRef, pr_number: int, pr_created_at: datetime, cache: dict | None = None
+) -> list[Comment] | None:
+    """All change-request-level comments on pr_number posted at or before the end of the
     early-comment window, regardless of author. Shared by build_early_comment_context and
     resolve_linked_tickets' comment-scan fallback (§7.2). When both are needed for the
     same PR in the same pass invocation, callers pass the same `cache` dict to each call
-    so there's exactly one paginated fetch, not two. Returns None on a fetch failure (as
+    so there's exactly one fetch, not two. Returns None on a fetch failure (as
     opposed to a confirmed-empty window), so callers can fail open without confusing "API
-    call failed" with "no comments in the window"."""
+    call failed" with "no comments in the window". An unsupported capability stops."""
     if cache is not None and "early_window_comments" in cache:
         return cache["early_window_comments"]
-    comments = await fetch_all_pages(f"repos/{repo}/issues/{pr_number}/comments", env)
-    if comments is None:
+    try:
+        comments = list(await host.discussion.comments(repo, pr_number))
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError:
+        logger.exception("PR #%d: reading the early comments failed", pr_number)
         result = None
     else:
-        window_end = _window_end_iso(pr_created_at)
-        result = [] if window_end is None else [c for c in comments if c.get("created_at", "") <= window_end]
+        window_end = _window_end(pr_created_at)
+        result = [c for c in comments if c.created_at <= window_end]
     if cache is not None:
         cache["early_window_comments"] = result
     return result
 
 
 async def build_early_comment_context(
-    pr_number: int, repo: str, pr_created_at: str, env: dict, cache: dict | None = None
+    host: CodeHost, repo: RepositoryRef, pr_number: int, pr_created_at: datetime, cache: dict | None = None
 ) -> str:
-    """Concatenated bodies of every issue-timeline comment (any author, including bots)
+    """Concatenated bodies of every change-request-level comment (any author, including bots)
     posted within TRACEABILITY_COMMENT_WINDOW_SECONDS of pr_created_at
     (requirement-traceability-requirements.md §7.2). Included in the traceability prompt
     regardless of how the linked ticket was resolved — a clarifying comment posted right
@@ -673,102 +796,79 @@ async def build_early_comment_context(
     degrades the pass's context, not its correctness). Pass the same `cache` dict given to
     resolve_linked_tickets to reuse its comment-scan fallback's fetch instead of repeating
     it."""
-    comments = await _fetch_early_window_comments(pr_number, repo, pr_created_at, env, cache)
+    comments = await _fetch_early_window_comments(host, repo, pr_number, pr_created_at, cache)
     if not comments:
         return ""
-    return "\n\n".join(body for c in comments if (body := c.get("body", "")))
+    return "\n\n".join(c.body for c in comments if c.body)
 
 
-class _IssueFetchError(Exception):
-    """Raised by _fetch_issue when a lookup fails inconclusively (rate limit, transient
-    5xx, network blip, malformed response) — as opposed to a confirmed absence (see
-    _ISSUE_NOT_FOUND_RE) — so callers can distinguish "this number isn't an issue" from
-    "we don't know yet" rather than conflating both into None."""
+@dataclass(frozen=True)
+class LinkedTicket:
+    """A ticket a change request answers, as the traceability prompt renders it.
+
+    ``repo`` is display text only (``Repository.display_name`` of a work item's repository, or ``"Linear"``).
+    ``source`` is ``"closing_keyword"``, ``"comment"`` or ``"linear_linkback"``.
+    """
+
+    number: int | str
+    repo: str
+    title: str
+    body: str
+    source: str
 
 
-_ISSUE_NOT_FOUND_RE = re.compile(r"could not resolve to an issue", re.IGNORECASE)
-
-
-async def _fetch_issue(number: int, repo: str, env: dict) -> dict | None:
-    """title/body for a single GitHub issue, or None for a *confirmed* absence — either
-    `number` doesn't exist, or it names a pull request rather than an issue, since `gh
-    issue view` itself fails to resolve a PR number (GitHub's GraphQL schema treats
-    Issue/PullRequest as distinct types even though they share one number sequence per
-    repo). Raises _IssueFetchError for any other failure, since that's inconclusive rather
-    than a confirmed absence."""
-    result = await run_cmd(
-        gh_argv("issue", "view", str(number), "--repo", repo, "--json", "number,title,body"),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
+async def _ticket_from_work_item(host: CodeHost, item: WorkItem, source: str) -> LinkedTicket:
+    return LinkedTicket(
+        number=item.number,
+        repo=await host.repository.display_name(item.repository),
+        title=item.title,
+        body=item.body,
+        source=source,
     )
-    if result.returncode != 0:
-        stderr = result.stderr.decode("utf-8", errors="replace")
-        if _ISSUE_NOT_FOUND_RE.search(stderr):
-            return None
-        raise _IssueFetchError(stderr)
+
+
+async def _resolve_native_linked_tickets(
+    host: CodeHost, repo: RepositoryRef, pr: ChangeRequest
+) -> list[LinkedTicket] | None:
+    """Primary mechanism (§7.2 step 1): the work items the host records as closed by the change request
+    (``WorkItems.linked_work_items``; each may live in a different repository from the change request's own).
+    Items the host confirms absent are not returned. Returns None — rather than the confirmed-empty `[]` — if the
+    read failed inconclusively (rate limit, transient 5xx), so resolve_linked_tickets can tell "no ticket" apart
+    from "don't know yet" instead of treating a transient API hiccup as proof there's no linked ticket. An
+    unsupported capability stops (policy ``traceability``)."""
     try:
-        return json.loads(result.stdout)
-    except ValueError as e:
-        raise _IssueFetchError(str(e)) from e
-
-
-async def _resolve_native_linked_tickets(pr: dict, env: dict) -> list[dict] | None:
-    """Primary mechanism (§7.2 step 1): resolve every entry in pr["closingIssuesReferences"]
-    via `gh issue view`, using each entry's own repository (a closing reference can point at
-    a different repo than the PR's own). Entries that are confirmed absent (see
-    _fetch_issue) are dropped. Returns None — rather than the confirmed-empty `[]` — if no
-    ticket resolved AND at least one ref failed inconclusively (rate limit, transient 5xx),
-    so resolve_linked_tickets can tell "no ticket" apart from "don't know yet" instead of
-    treating a transient API hiccup as proof there's no linked ticket."""
-    tickets: list[dict] = []
-    seen: set[tuple[str, int]] = set()
-    inconclusive = False
-    for ref in pr.get("closingIssuesReferences") or []:
-        number = ref.get("number")
-        repository = ref.get("repository") or {}
-        owner = (repository.get("owner") or {}).get("login")
-        name = repository.get("name")
-        if number is None or not owner or not name:
-            continue
-        ticket_repo = f"{owner}/{name}"
-        key = (ticket_repo, number)
+        items = await host.work_items.linked_work_items(repo, pr.number)
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError:
+        logger.exception("PR #%d: reading the linked work items failed", pr.number)
+        return None
+    tickets: list[LinkedTicket] = []
+    seen: set[tuple[RepositoryRef, int]] = set()
+    for item in items:
+        key = (item.repository, item.number)
         if key in seen:
             continue
-        try:
-            issue = await _fetch_issue(number, ticket_repo, env)
-        except _IssueFetchError:
-            inconclusive = True
-            continue
-        if issue is None:
-            continue
         seen.add(key)
-        tickets.append({
-            "number": issue.get("number", number),
-            "repo": ticket_repo,
-            "title": issue.get("title", ""),
-            "body": issue.get("body", ""),
-            "source": "closing_keyword",
-        })
-    if tickets:
-        return tickets
-    return None if inconclusive else []
+        tickets.append(await _ticket_from_work_item(host, item, "closing_keyword"))
+    return tickets
 
 
-def _resolve_match_repo_and_number(match: re.Match, default_repo: str) -> tuple[str, int | None]:
+def _match_identity_and_number(match: re.Match) -> tuple[str | None, int | None]:
+    """The repository identity text and issue number a reference names. Identity None means the change request's
+    own repository (a bare ``#N``)."""
     if match.group("num1"):
         return f"{match.group('owner1')}/{match.group('repo1')}", int(match.group("num1"))
     if match.group("num2"):
         return f"{match.group('owner2')}/{match.group('repo2')}", int(match.group("num2"))
     if match.group("num3"):
-        return default_repo, int(match.group("num3"))
-    return default_repo, None
+        return None, int(match.group("num3"))
+    return None, None
 
 
-def _parse_linear_linkback_comment(body: str) -> dict | None:
+def _parse_linear_linkback_comment(body: str) -> LinkedTicket | None:
     """Parses a `linear[bot]` linkback comment (identified by LINEAR_LINKBACK_MARKER) into
-    a ticket dict shaped like the GitHub-issue tickets _resolve_native_linked_tickets/the
+    a LinkedTicket shaped like the work-item tickets _resolve_native_linked_tickets/the
     rest of _resolve_comment_linked_tickets produce. No Linear API call is made — the bot
     already embeds the ticket's title and full description directly in the comment body it
     posts to GitHub, which is enough to synthesize the "formal requirement"
@@ -783,128 +883,146 @@ def _parse_linear_linkback_comment(body: str) -> dict | None:
         return None
     detail_body = body[match.end() :].split("<!-- linear-review-link -->", 1)[0]
     detail_body = re.sub(r"</?(?:details|p)>", "", detail_body).strip()
-    return {
-        "number": match.group("ticket_id"),
-        "repo": "Linear",
-        "title": match.group("title").strip(),
-        "body": detail_body,
-        "source": "linear_linkback",
-    }
+    return LinkedTicket(
+        number=match.group("ticket_id"),
+        repo="Linear",
+        title=match.group("title").strip(),
+        body=detail_body,
+        source="linear_linkback",
+    )
 
 
-async def _resolve_comment_issue_refs(body: str, repo: str, env: dict, seen: set[tuple[str, int | str]]) -> list[dict]:
-    """Scans a single comment body for GitHub issue references and resolves each via `gh
-    issue view`, split out of _resolve_comment_linked_tickets purely to keep that
-    function's branching complexity down. A match that 404s, names a pull request rather
+async def _resolve_ref_repo(
+    host: CodeHost, repo: RepositoryRef, identity: str | None, resolved: dict[str, RepositoryRef | None]
+) -> RepositoryRef | None:
+    """The repository a reference names, or None when it can't be resolved. Results are cached in ``resolved``
+    per identity. ``UnsupportedCapabilityError`` propagates (stop policy); other ``CodeHostError`` means None."""
+    if identity is None:
+        return repo
+    if identity in resolved:
+        return resolved[identity]
+    try:
+        found: RepositoryRef | None = await host.repository.resolve(identity)
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError:
+        found = None
+    resolved[identity] = found
+    return found
+
+
+async def _resolve_comment_issue_refs(
+    host: CodeHost, repo: RepositoryRef, body: str, seen: set[tuple[RepositoryRef | str, int | str]]
+) -> list[LinkedTicket]:
+    """Scans a single comment body for issue references and resolves each via
+    ``WorkItems.get``, split out of _resolve_comment_linked_tickets purely to keep that
+    function's branching complexity down. A match that is absent, names a pull request rather
     than an issue, or fails to resolve for any other reason (rate limit, transient 5xx) is
-    dropped rather than treated as a ticket (see _fetch_issue) — unlike the native
+    dropped rather than treated as a ticket — unlike the native
     mechanism, a regex match in free-text comments is already a guess, so an API failure
     here doesn't warrant the same inconclusive-vs-absent distinction resolve_linked_tickets
-    makes for closing-keyword references. `seen` is shared and mutated across every
+    makes for closing-keyword references. An unsupported capability stops. A reference
+    that names another repository is resolved with ``Repository.resolve`` on the text
+    of the reference. `seen` is shared and mutated across every
     comment in the scan, so a ticket already found (by this or the Linear-linkback path)
     isn't re-fetched or duplicated."""
-    tickets: list[dict] = []
+    tickets: list[LinkedTicket] = []
+    resolved: dict = {}  # per-call cache: one resolve per distinct identity in this body
     for match in _ISSUE_REF_RE.finditer(body):
-        ticket_repo, number = _resolve_match_repo_and_number(match, repo)
+        identity, number = _match_identity_and_number(match)
         if number is None:
+            continue
+        ticket_repo = await _resolve_ref_repo(host, repo, identity, resolved)
+        if ticket_repo is None:
             continue
         key = (ticket_repo, number)
         if key in seen:
             continue
         try:
-            issue = await _fetch_issue(number, ticket_repo, env)
-        except _IssueFetchError:
+            item = await host.work_items.get(ticket_repo, number)
+        except UnsupportedCapabilityError:
+            raise
+        except CodeHostError:
             continue
-        if issue is None:
+        if item is None:
             continue
         seen.add(key)
-        tickets.append({
-            "number": issue.get("number", number),
-            "repo": ticket_repo,
-            "title": issue.get("title", ""),
-            "body": issue.get("body", ""),
-            "source": "comment",
-        })
+        tickets.append(await _ticket_from_work_item(host, item, "comment"))
     return tickets
 
 
-async def _resolve_comment_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | None = None) -> list[dict]:
+async def _resolve_comment_linked_tickets(
+    host: CodeHost, repo: RepositoryRef, pr: ChangeRequest, cache: dict | None = None
+) -> list[LinkedTicket]:
     """Fallback mechanism (§7.2 step 2), only ever called when native linking finds
     nothing: scan every early-window comment (any author, including bots — §1 decision 4)
-    for a Linear linkback (_parse_linear_linkback_comment) or a GitHub issue reference
+    for a Linear linkback (_parse_linear_linkback_comment) or an issue reference
     (_resolve_comment_issue_refs). A comment recognized as a Linear linkback is not also
-    scanned for GitHub issue references, since it's bot-authored structured output, not
+    scanned for issue references, since it's bot-authored structured output, not
     free text a manual `#N` mention could appear in."""
-    pr_number = pr.get("number")
-    if pr_number is None:
-        return []
-    comments = await _fetch_early_window_comments(pr_number, repo, pr.get("createdAt", ""), env, cache)
+    comments = await _fetch_early_window_comments(host, repo, pr.number, pr.created_at, cache)
     if not comments:
         return []
-    tickets: list[dict] = []
-    seen: set[tuple[str, int | str]] = set()
+    tickets: list[LinkedTicket] = []
+    seen: set[tuple[RepositoryRef | str, int | str]] = set()
     for comment in comments:
-        body = comment.get("body") or ""
+        body = comment.body or ""
         linear_ticket = _parse_linear_linkback_comment(body)
         if linear_ticket is not None:
-            key = (linear_ticket["repo"], linear_ticket["number"])
+            key = (linear_ticket.repo, linear_ticket.number)
             if key not in seen:
                 seen.add(key)
                 tickets.append(linear_ticket)
             continue
-        tickets.extend(await _resolve_comment_issue_refs(body, repo, env, seen))
+        tickets.extend(await _resolve_comment_issue_refs(host, repo, body, seen))
     return tickets
 
 
-async def resolve_linked_tickets(pr: dict, repo: str, env: dict, cache: dict | None = None) -> list[dict] | None:
+async def resolve_linked_tickets(
+    host: CodeHost, repo: RepositoryRef, pr: ChangeRequest, cache: dict | None = None
+) -> list[LinkedTicket] | None:
     """Resolve the ticket(s) this PR answers (requirement-traceability-requirements.md
-    §7.2, §4/G5 update): GitHub's own closing-keyword linking is tried first and, only if
+    §7.2, §4/G5 update): the host's own closing-keyword linking is tried first and, only if
     it finds nothing, an early-comment scan is tried as a fallback — a `linear[bot]`
-    linkback comment first, then a GitHub issue reference (see
-    _resolve_comment_linked_tickets). `pr` must carry `closingIssuesReferences` and
-    `createdAt` (both runners' PR-listing --json field lists are extended to include
-    them). Returns a possibly-empty list of {number, repo, title, body, source} dicts,
+    linkback comment first, then an issue reference (see
+    _resolve_comment_linked_tickets). Returns a possibly-empty list of LinkedTicket,
     `source` being "closing_keyword", "comment", or "linear_linkback" — or None if the
-    native mechanism found a closing-keyword reference it couldn't resolve due to an API
+    native mechanism could not read the linked work items due to an API
     failure rather than a confirmed absence (see
     _resolve_native_linked_tickets). Callers must treat None as "inconclusive, retry next
     run" and never as "no linked ticket" — the comment-scan fallback is skipped in that
     case rather than risked as a second source of false negatives. Pass the same `cache`
     dict to a later build_early_comment_context call for this PR so its comment-scan
-    fallback's paginated fetch (if it ran) is reused instead of repeated."""
-    tickets = await _resolve_native_linked_tickets(pr, env)
+    fallback's fetch (if it ran) is reused instead of repeated."""
+    tickets = await _resolve_native_linked_tickets(host, repo, pr)
     if tickets is None:
         return None
     if tickets:
         return tickets
-    return await _resolve_comment_linked_tickets(pr, repo, env, cache)
+    return await _resolve_comment_linked_tickets(host, repo, pr, cache)
 
 
-async def post_no_linked_ticket_comment(pr_number: int, repo: str, env: dict) -> bool:
+async def post_no_linked_ticket_comment(host: CodeHost, repo: RepositoryRef, pr_number: int) -> bool:
     """Posts the §7.3 "no linked ticket found" PR-level comment directly — no backend
     invocation, since there's nothing for a model to judge when resolve_linked_tickets
     found nothing via either mechanism. This outcome is terminal (§7.3/§11.1): once
     posted, has_traceability_review_comment treats this PR as done forever. Returns True
-    if the comment was posted successfully."""
+    if the comment was posted successfully. A failed post (including a timeout) is logged
+    and gives False: a write is never retried and has no fallback post. An unsupported
+    capability follows the ``traceability`` policy for ``Discussion.post_comment``
+    (unlisted: stop) and propagates."""
     body = (
         "# Requirement Traceability\n"
         "No linked ticket found (no closing-keyword link and no issue reference in the "
         "first 5 minutes of comments) — skipping scope/gap comparison.\n"
         f"{TRACEABILITY_REVIEW_MARKER}"
     )
-    result = await run_cmd(
-        gh_argv("pr", "comment", str(pr_number), "--repo", repo, "--body", body),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        logger.error(
-            "PR #%d: failed to post 'no linked ticket found' comment: %s",
-            pr_number,
-            result.stderr.decode("utf-8", errors="replace"),
-        )
+    try:
+        await host.discussion.post_comment(repo, pr_number, body)
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as exc:
+        logger.error("PR #%d: failed to post 'no linked ticket found' comment: %s", pr_number, exc)  # noqa: TRY400
         return False
     return True
 
@@ -994,7 +1112,7 @@ def _build_prior_findings_section(
 
 
 def _build_pr_metadata_trailer(
-    pr: dict,
+    pr_url: str,
     pr_number: int,
     repo_name: str,
     commit_sha: str,
@@ -1004,7 +1122,7 @@ def _build_pr_metadata_trailer(
     """Shared by every PR-level pass's prompt builder: the PR URL/number/repo/commit
     line, plus the optional description and static-analysis sections that follow it."""
     return (
-        f"\n\nPR URL: {pr.get('url', '')}\nPR number: {pr_number}\n"
+        f"\n\nPR URL: {pr_url}\nPR number: {pr_number}\n"
         f"Repo: {repo_name}\nCommit: {commit_sha}"
         + (f"\n\n{pr_description}" if pr_description else "")
         + (f"\n\n## Static Analysis\n{vibe_heal_context}" if vibe_heal_context else "")
@@ -1015,14 +1133,14 @@ def build_traceability_review_prompt(
     traceability_instructions: str,
     extra_knowledge: str | None,
     diff_sections: str,
-    pr: dict,
+    pr: ChangeRequest,
     pr_number: int,
     repo_name: str,
     commit_sha: str,
     pr_description: str | None,
     vibe_heal_context: str | None,
     prior_flagged_locations: list[tuple[str, int]],
-    tickets: list[dict],
+    tickets: list[LinkedTicket],
     early_comment_context: str,
 ) -> str:
     """Shared by self_review.py and review_requested.py, mirroring
@@ -1034,8 +1152,7 @@ def build_traceability_review_prompt(
     as input; prior_flagged_locations becomes `## Already-flagged scope-creep findings`,
     same shape as build_design_review_prompt's equivalent section."""
     tickets_section = "\n\n## Linked Ticket(s)\n" + "\n\n".join(
-        f"### #{t['number']} ({t['repo']}) — source: {t['source']}\n**Title:** {t['title']}\n\n{t['body']}"
-        for t in tickets
+        f"### #{t.number} ({t.repo}) — source: {t.source}\n**Title:** {t.title}\n\n{t.body}" for t in tickets
     )
     early_comments_section = f"\n\n## Early PR Comments\n{early_comment_context}" if early_comment_context else ""
     prior_findings_section = _build_prior_findings_section(
@@ -1048,7 +1165,7 @@ def build_traceability_review_prompt(
         + early_comments_section
         + diff_sections
         + prior_findings_section
-        + _build_pr_metadata_trailer(pr, pr_number, repo_name, commit_sha, pr_description, vibe_heal_context)
+        + _build_pr_metadata_trailer(pr.url, pr_number, repo_name, commit_sha, pr_description, vibe_heal_context)
     )
 
 
@@ -1058,166 +1175,51 @@ def author_matches(login: str, authors_config: str | list) -> bool:
     return login in authors_config
 
 
-async def list_open_prs_matching_authors(
-    repo: str, authors_config: str | list, cwd: str, env: dict
-) -> list[dict] | None:
-    """List open, non-draft PRs whose author matches authors_config, sorted ascending by number.
+async def list_open_change_requests_matching_authors(
+    host: CodeHost, repo: RepositoryRef, authors_config: str | list
+) -> list[ChangeRequest] | None:
+    """List open, non-draft change requests whose author matches authors_config, sorted ascending by number.
 
-    Returns None (rather than []) on fetch failure, so callers can distinguish "gh pr list
-    failed" from "confirmed zero open PRs" instead of treating a transient API hiccup as an
-    authoritative empty set.
+    Returns None (rather than []) when the host read fails (logged), so callers can distinguish "the list failed"
+    from "confirmed zero open change requests" instead of treating a transient hiccup as an authoritative empty
+    set. An unsupported capability follows the ``review_prs`` policy for ``ChangeRequests.list`` (unlisted: stop)
+    and propagates.
     """
-    result = await run_cmd(
-        gh_argv(
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            "--state",
-            "open",
-            "--json",
-            "number,headRefName,author,isDraft,baseRefName,headRefOid",
-            "--limit",
-            "500",
-        ),
-        cwd=cwd,
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        logger.error("Failed to list PRs: %s", result.stderr.decode("utf-8", errors="replace"))
+
+    async def list_open() -> list[ChangeRequest]:
+        return list(await host.change_requests.list(repo, state=ChangeRequestState.OPEN))
+
+    try:
+        found = await call_with_policy("review_prs", "ChangeRequests.list", list_open, [])
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as e:
+        logger.error("Failed to list PRs: %s", e)  # noqa: TRY400
         return None
-    prs = json.loads(result.stdout)
-    eligible = [p for p in prs if not is_draft_pr(p) and author_matches(p["author"]["login"], authors_config)]
-    return sorted(eligible, key=lambda p: p["number"])
+    eligible = [
+        c for c in found if not c.is_draft and author_matches(c.author.login if c.author else "", authors_config)
+    ]
+    return sorted(eligible, key=lambda c: c.number)
 
 
-async def _list_prs_by_flag(repo: str, cwd: str, env: dict, filter_flag: str) -> list[dict]:
-    result = await run_cmd(
-        gh_argv(
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            filter_flag,
-            "@me",
-            "--state",
-            "open",
-            "--json",
-            "number,headRefName,isDraft",
-            "--limit",
-            "500",
-        ),
-        cwd=cwd,
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return []
-    return json.loads(result.stdout)
+async def get_pr_base_branch(host: CodeHost, repo: RepositoryRef, pr_number: int) -> str:
+    """Base branch name, or "" when the read failed (logged)."""
+    pr = await get_change_request(host, repo, pr_number)
+    return "" if pr is None else pr.base_reference
 
 
-async def _list_review_requested_prs(repo: str, cwd: str, env: dict) -> list[dict]:
-    # gh search prs does not support headRefName/isDraft in --json; fetch numbers first,
-    # then hydrate each with the fields we need via gh pr view.
-    result = await run_cmd(
-        gh_argv(
-            "search",
-            "prs",
-            "user-review-requested:@me",
-            "--repo",
-            repo,
-            "--state",
-            "open",
-            "--json",
-            "number",
-            "--limit",
-            "500",
-        ),
-        cwd=cwd,
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return []
-    stubs = json.loads(result.stdout)
-    prs = []
-    for stub in stubs:
-        detail = await run_cmd(
-            gh_argv("pr", "view", str(stub["number"]), "--repo", repo, "--json", "number,headRefName,isDraft"),
-            cwd=cwd,
-            env=env,
-            timeout=TIMEOUT_GH,
-            check=False,
-        )
-        if detail.returncode == 0:
-            prs.append(json.loads(detail.stdout))
-    return prs
+async def get_pr_head_sha(host: CodeHost, repo: RepositoryRef, pr_number: int) -> str:
+    """Head revision, or "" when the read failed (logged)."""
+    pr = await get_change_request(host, repo, pr_number)
+    return "" if pr is None else pr.head_revision
 
 
-async def list_open_prs_for_current_user(repo: str, cwd: str, env: dict) -> list[dict]:
-    """List open PRs (drafts included) where the running user is the author, is assigned, or has a review
-    requested from them (union of the three), deduplicated by PR number, sorted ascending."""
-    by_number: dict[int, dict] = {}
-    for pr in (
-        (await _list_prs_by_flag(repo, cwd, env, "--author"))
-        + (await _list_prs_by_flag(repo, cwd, env, "--assignee"))
-        + (await _list_review_requested_prs(repo, cwd, env))
-    ):
-        by_number.setdefault(pr["number"], pr)
-    return sorted(by_number.values(), key=lambda p: p["number"])
-
-
-async def get_pr_base_branch(pr_number: int, repo: str, env: dict) -> str:
-    result = await run_cmd(
-        gh_argv("pr", "view", str(pr_number), "--repo", repo, "--json", "baseRefName", "--jq", ".baseRefName"),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
+async def get_pr_description(host: CodeHost, repo: RepositoryRef, pr_number: int) -> str:
+    """The prompt's "## PR Description" block (title and body), or "" when the read failed (logged)."""
+    pr = await get_change_request(host, repo, pr_number)
+    if pr is None:
         return ""
-    return result.stdout.decode("utf-8").strip()
-
-
-async def get_pr_head_sha(pr_number: int, repo: str, env: dict) -> str:
-    result = await run_cmd(
-        gh_argv("pr", "view", str(pr_number), "--repo", repo, "--json", "headRefOid", "--jq", ".headRefOid"),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return ""
-    return result.stdout.decode("utf-8").strip()
-
-
-async def get_pr_description(pr_number: int, repo: str, env: dict) -> str:
-    result = await run_cmd(
-        gh_argv(
-            "pr",
-            "view",
-            str(pr_number),
-            "--repo",
-            repo,
-            "--json",
-            "title,body",
-            "--jq",
-            '"## PR Description\n**Title:** " + .title + "\n\n" + (.body // "")',
-        ),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return ""
-    return result.stdout.decode("utf-8").strip()
+    return f"## PR Description\n**Title:** {pr.title}\n\n{pr.body or ''}".strip()
 
 
 async def is_ancestor(candidate_sha: str, descendant_sha: str, wdir: str, env: dict) -> bool:
@@ -1320,7 +1322,7 @@ def build_design_review_prompt(
     design_instructions: str,
     extra_knowledge: str | None,
     diff_sections: str,
-    pr: dict,
+    pr: ChangeRequest,
     pr_number: int,
     repo_name: str,
     commit_sha: str,
@@ -1341,7 +1343,7 @@ def build_design_review_prompt(
         + (f"\n\n## Additional Review Guide\n{extra_knowledge}" if extra_knowledge else "")
         + diff_sections
         + prior_findings_section
-        + _build_pr_metadata_trailer(pr, pr_number, repo_name, commit_sha, pr_description, vibe_heal_context)
+        + _build_pr_metadata_trailer(pr.url, pr_number, repo_name, commit_sha, pr_description, vibe_heal_context)
     )
 
 
@@ -1453,98 +1455,32 @@ async def fetch_pr_comments(pr_number: int, script_path: Path, wdir: str, env: d
     return comments
 
 
-GRAPHQL_QUERY_REVIEW_THREAD_STATE = """
-query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
-  repository(owner:$owner,name:$repo){
-    pullRequest(number:$number){
-      reviewThreads(first:100,after:$cursor){
-        pageInfo{endCursor hasNextPage}
-        nodes{
-          id
-          isResolved
-          comments(first:100){nodes{id databaseId isMinimized}}
-        }
-      }
-    }
-  }
-}
-""".strip()
-
-
-async def _fetch_review_threads_page(pr_number: int, repo: str, cursor: str | None, env: dict) -> dict | None:
-    """Fetch one page of review threads. Returns the `reviewThreads` object, or None on
-    any failure (non-zero exit, unparsable JSON, missing data)."""
-    owner, repo_name = repo.split("/")
-    cmd = gh_argv(
-        "api",
-        "graphql",
-        "-f",
-        f"query={GRAPHQL_QUERY_REVIEW_THREAD_STATE}",
-        "-F",
-        f"owner={owner}",
-        "-F",
-        f"repo={repo_name}",
-        "-F",
-        f"number={pr_number}",
+async def fetch_review_threads(host: CodeHost, repo: RepositoryRef, pr_number: int) -> list[ReviewThread] | None:
+    """Every review thread of a PR (all pages, with ids, resolved state and comments), or None if the host
+    could not answer. An unsupported capability stops."""
+    threads = await _read_or_none(
+        lambda: host.discussion.review_threads(repo, pr_number), "review thread state", pr_number
     )
-    if cursor:
-        cmd += ["-f", f"cursor={cursor}"]
-    result = await run_cmd(cmd, cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
-    if result.returncode != 0:
-        logger.warning("PR #%d: could not fetch review thread state (rc=%d)", pr_number, result.returncode)
-        return None
-    try:
-        data = json.loads(result.stdout)
-        threads = data["data"]["repository"]["pullRequest"]["reviewThreads"]
-    except (ValueError, KeyError, TypeError):
-        logger.warning("PR #%d: could not parse GraphQL review thread state response", pr_number)
-        return None
-    if not isinstance(threads, dict) or not isinstance(threads.get("nodes"), list):
-        logger.warning("PR #%d: GraphQL review thread state response had no thread nodes", pr_number)
-        return None
-    return threads
+    return None if threads is None else list(threads)
 
 
-async def fetch_review_threads(pr_number: int, repo: str, env: dict) -> list[dict] | None:
-    """Return the review thread nodes (all pages) of a PR with ids and resolved/minimised
-    state, or None if any page fails to fetch or parse."""
-    nodes: list[dict] = []
-    cursor: str | None = None
-    while True:
-        page = await _fetch_review_threads_page(pr_number, repo, cursor, env)
-        if page is None:
-            return None
-        nodes.extend(page["nodes"])
-        page_info = page.get("pageInfo") or {}
-        cursor = page_info.get("endCursor")
-        if not page_info.get("hasNextPage") or not cursor:
-            return nodes
-
-
-def merge_thread_state(comments: list[dict], threads: list[dict]) -> None:
-    """Add thread_id, thread_resolved, node_id and is_minimized to each inline comment
-    that is the root comment of one of `threads`. Mutates the comment dicts in place.
-    Other comments, and threads whose root is not in `comments`, are left alone."""
-    by_root: dict[int, tuple[dict, dict]] = {}
-    for thread in threads:
-        root_nodes = (thread.get("comments") or {}).get("nodes") or []
-        if not root_nodes:
-            continue
-        root = root_nodes[0]
-        db_id = root.get("databaseId")
-        if db_id is not None:
-            by_root[db_id] = (thread, root)
+def merge_thread_state(comments: list[dict], threads: Sequence[ReviewThread]) -> None:
+    """Add thread_id, thread_resolved and is_minimized to each inline comment that is the
+    root comment of one of `threads` (matched on the host comment id, which is the id the
+    comments cache carries). Mutates the comment dicts in place. Other comments, and
+    threads whose root is not in `comments`, are left alone. No node_id is set: the host
+    comment id is not a GraphQL node id, so the prompt shows "?" and skips that mutation."""
+    by_root = {t.comments[0].id: (t, t.comments[0]) for t in threads if t.comments}
     for comment in comments:
         if comment.get("type") != "inline":
             continue
-        found = by_root.get(comment.get("id"))
+        found = by_root.get(str(comment.get("id")))
         if found is None:
             continue
         thread, root = found
-        comment["thread_id"] = thread.get("id")
-        comment["thread_resolved"] = bool(thread.get("isResolved"))
-        comment["node_id"] = root.get("id")
-        comment["is_minimized"] = bool(root.get("isMinimized"))
+        comment["thread_id"] = thread.id
+        comment["thread_resolved"] = thread.is_resolved
+        comment["is_minimized"] = root.is_hidden
 
 
 def find_reply_with_marker(comment: dict, marker: str = FOCUSED_REVIEW_MARKER) -> dict | None:

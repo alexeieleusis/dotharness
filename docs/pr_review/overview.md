@@ -9,6 +9,8 @@ old prefix so existing setups keep working.
 - [Commands](commands/index.md) — `review-prs`, `focused-review`, `review-requested`, `self-review`, `address-comments`, and `local-review` (offline, with an optional `--address` phase).
 - [Modules](modules.md) — generated API reference.
 
+The commands reach the code host (pull requests, comments, reviews, work items, checks) only through the `dotharness.code_host` interfaces. The host token comes from `harness.host_token_cmd`, else `harness.gh_token_cmd`, else `gh auth token`. Git operations still run as local `git` commands. See [Code host design](../design/code-host.md).
+
 ## Quick start
 
 ```sh

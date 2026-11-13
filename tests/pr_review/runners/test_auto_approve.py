@@ -1,11 +1,17 @@
 import contextlib
-import json
 import logging
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
+from dotharness.code_host import (
+    Capability,
+    ChangeRequestState,
+    CodeHostError,
+    CodeHostTimeoutError,
+    UnsupportedCapabilityError,
+)
 from dotharness.pr_review.config import AutoApproveConfig, HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
 from dotharness.pr_review.runners import auto_approve
 from dotharness.pr_review.runners.auto_approve_github import (
@@ -20,15 +26,10 @@ from dotharness.pr_review.runners.auto_approve_github import (
 )
 from dotharness.pr_review.runners.auto_approve_size import SizeEvaluation
 from dotharness.pr_review.runners.common import FatalGitError
+from tests.pr_review.runners.approve_support import ME, make_host, update_pr
+from tests.pr_review.runners.runner_support import REPO
 
-PR = {
-    "number": 1,
-    "headRefName": "feat",
-    "baseRefName": "main",
-    "isDraft": False,
-    "state": "OPEN",
-    "author": {"login": "alice"},
-}
+PR: dict = {"number": 1}  # overrides of the seeded change request fields; every PR has ME as requested reviewer
 
 
 def _cfg(tmp_path, enabled=True, viewed=75, approve=500):
@@ -52,16 +53,24 @@ def _size(counts=None, approve=500, viewed=75):
     )
 
 
+def _seed(host, prs):
+    for spec in prs:
+        number = spec["number"]
+        host.add_change_request(REPO, head_reference="feat", number=number, author="alice", requested_reviewers=[ME])
+        fields = {k: v for k, v in spec.items() if k != "number"}
+        if fields:
+            update_pr(host, number, **fields)
+
+
 @contextlib.contextmanager
-def _mocks(prs=None, size=None):
+def _mocks(prs=None, size=None, host=None):
     prs = [PR] if prs is None else prs
-    list_result = SimpleNamespace(returncode=0, stdout=json.dumps(prs).encode())
+    host = host or make_host()
+    _seed(host, prs)
+    scaffold = SimpleNamespace(host=host.code_host(), repo=REPO, env={})
     p = "dotharness.pr_review.runners.auto_approve."
     with (
-        patch(p + "get_gh_token", return_value="tok") as gh_token,
-        patch(p + "build_subprocess_env", return_value={}),
-        patch(p + "get_current_user", return_value="me") as cur,
-        patch(p + "run_cmd", return_value=list_result) as run_cmd,
+        patch(p + "open_host", return_value=scaffold) as open_host,
         patch(p + "git_detach_and_record", return_value="orig"),
         patch(p + "_checkout_pr_head", return_value="sha1") as checkout,
         patch(p + "git_restore") as restore,
@@ -72,9 +81,9 @@ def _mocks(prs=None, size=None):
         patch(p + "approve_pr", return_value=ApprovalResult(ApprovalStatus.APPROVED, "approved")) as approve,
     ):
         yield SimpleNamespace(
-            gh_token=gh_token,
-            cur=cur,
-            run_cmd=run_cmd,
+            open_host=open_host,
+            host=host,
+            scaffold=scaffold,
             checkout=checkout,
             restore=restore,
             ev=ev,
@@ -85,12 +94,11 @@ def _mocks(prs=None, size=None):
         )
 
 
-async def test_disabled_is_noop_with_zero_gh_calls(tmp_path):
+async def test_disabled_is_noop_with_zero_host_calls(tmp_path):
     with _mocks() as m:
         await auto_approve.run(_cfg(tmp_path, enabled=False))
-    m.gh_token.assert_not_called()
-    m.cur.assert_not_called()
-    m.run_cmd.assert_not_called()
+    m.open_host.assert_not_called()
+    assert m.host.calls == []
     m.checkout.assert_not_called()
     m.mark.assert_not_called()
     m.approve.assert_not_called()
@@ -105,9 +113,9 @@ async def test_no_requested_prs_logs_a_summary(tmp_path, caplog):
 
 async def test_draft_closed_merged_skipped(tmp_path):
     prs = [
-        {**PR, "number": 1, "isDraft": True},
-        {**PR, "number": 2, "state": "CLOSED"},
-        {**PR, "number": 3, "state": "MERGED"},
+        {**PR, "number": 1, "is_draft": True},
+        {**PR, "number": 2, "state": ChangeRequestState.CLOSED},
+        {**PR, "number": 3, "state": ChangeRequestState.MERGED},
     ]
     with _mocks(prs=prs) as m:
         await auto_approve.run(_cfg(tmp_path))
@@ -122,29 +130,29 @@ async def test_gate_closed_means_no_writes(tmp_path):
         m.mark.return_value = ViewedResult(ViewedStatus.GATE_NOT_PASSED)
         m.approve.return_value = ApprovalResult(ApprovalStatus.SKIPPED, "gate-not-passed")
         await auto_approve.run(_cfg(tmp_path))
-    assert m.mark.call_args.args[4] is False  # gate_passed
-    assert m.approve.call_args.args[2].status is GateStatus.NOT_PASSED  # gate to approve_pr
+    assert m.mark.call_args.args[5] is False  # gate_passed
+    assert m.approve.call_args.args[3].status is GateStatus.NOT_PASSED  # gate to approve_pr
 
 
 async def test_gate_open_marks_only_small_files_via_size_counts(tmp_path):
     with _mocks() as m:
         await auto_approve.run(_cfg(tmp_path))
     args = m.mark.call_args.args
-    assert args[0] == "acme/frontend"
-    assert args[2] == {"a.py": 10, "b.py": 100}
-    assert args[3] == 75
-    assert args[4] is True
+    assert args[:3] == (m.scaffold.host, REPO, 1)
+    assert args[3] == {"a.py": 10, "b.py": 100}
+    assert args[4] == 75
+    assert args[5] is True
 
 
 async def test_approval_bound_to_head_sha_and_inputs(tmp_path):
     with _mocks() as m:
         await auto_approve.run(_cfg(tmp_path))
     args = m.approve.call_args.args
-    assert args[:2] == ("acme/frontend", 1)
-    assert args[2].status is GateStatus.PASSED
-    assert args[3] == SafetyResult(SafetyStatus.SAFE, "ok", "sha1")
-    assert args[4].total_lines == 110
-    assert args[5:] == (500, "me", {}, False)
+    assert args[:3] == (m.scaffold.host, REPO, 1)
+    assert args[3].status is GateStatus.PASSED
+    assert args[4] == SafetyResult(SafetyStatus.SAFE, "ok", "sha1")
+    assert args[5].total_lines == 110
+    assert args[6:] == (500, ME, False)
 
 
 async def test_safety_skip_still_marks_but_does_not_pass_safety(tmp_path):
@@ -152,14 +160,14 @@ async def test_safety_skip_still_marks_but_does_not_pass_safety(tmp_path):
         m.safety.return_value = SafetyResult(SafetyStatus.SKIP, "ci-blocked", "sha1")
         await auto_approve.run(_cfg(tmp_path))
     m.mark.assert_called_once()
-    assert m.approve.call_args.args[3].status is SafetyStatus.SKIP
+    assert m.approve.call_args.args[4].status is SafetyStatus.SKIP
 
 
 async def test_threshold_zero_never_matches(tmp_path):
     with _mocks(size=_size(viewed=0, approve=0)) as m:
         await auto_approve.run(_cfg(tmp_path, viewed=0, approve=0))
-    assert m.mark.call_args.args[3] == 0  # nothing is below 0, so mark_files_viewed marks nothing
-    assert m.approve.call_args.args[5] == 0
+    assert m.mark.call_args.args[4] == 0  # nothing is below 0, so mark_files_viewed marks nothing
+    assert m.approve.call_args.args[6] == 0
     assert m.approve.call_args.kwargs["all_viewed"] is False
 
 
@@ -184,8 +192,8 @@ async def test_all_viewed_large_pr_still_goes_through_gate_and_safety(tmp_path):
         m.mark.return_value = ViewedResult(ViewedStatus.DONE, all_viewed=True)
         await auto_approve.run(_cfg(tmp_path))
     args = m.approve.call_args.args
-    assert args[2].status is GateStatus.PASSED and args[3].status is SafetyStatus.SAFE
-    assert args[4].total_lines == 900
+    assert args[3].status is GateStatus.PASSED and args[4].status is SafetyStatus.SAFE
+    assert args[5].total_lines == 900
 
 
 async def test_all_viewed_empty_pr_is_approved(tmp_path):
@@ -240,7 +248,7 @@ async def test_one_pr_failing_does_not_stop_others_and_raises(tmp_path):
             await auto_approve.run(_cfg(tmp_path))
     assert "#1" in str(exc.value)
     assert "git exploded" in str(exc.value)
-    assert [c.args[1] for c in m.approve.call_args_list] == [2, 3]
+    assert [c.args[2] for c in m.approve.call_args_list] == [2, 3]
     assert m.restore.call_count == 3
 
 
@@ -264,28 +272,87 @@ async def test_fatal_restore_failure_keeps_approval_logged_and_stops_loop(tmp_pa
         m.restore.side_effect = FatalGitError("restore failed")
         with pytest.raises(auto_approve.AutoApproveError, match="#1: restore failed"):
             await auto_approve.run(_cfg(tmp_path))
-    assert [c.args[1] for c in m.approve.call_args_list] == [1]
+    assert [c.args[2] for c in m.approve.call_args_list] == [1]
     assert "PR #1: approval approved" in caplog.text
     assert m.checkout.call_count == 1  # PR 2 never checked out onto an unknown tree
 
 
-@pytest.mark.parametrize("author", [None, {}, {"login": ""}])
+@pytest.mark.parametrize("author", [None])
 async def test_missing_author_reaches_gate_as_empty_and_blocks_writes(tmp_path, author):
-    # Deleted accounts come back from gh as null; the real gate treats an empty author as READ_FAILED.
+    # Deleted accounts come back from the host as no author; the real gate treats an empty author as READ_FAILED.
     with _mocks(prs=[{**PR, "author": author}]) as m:
         m.gate.return_value = GateResult(GateStatus.READ_FAILED, "acting account or PR author unknown")
         await auto_approve.run(_cfg(tmp_path))
-    assert m.gate.call_args.args[2] == ""
+    assert m.gate.call_args.args[3] == ""
     m.mark.assert_not_called()
     m.approve.assert_not_called()
 
 
-async def test_pr_list_failure_raises_with_stderr(tmp_path):
-    with _mocks() as m:
-        m.run_cmd.return_value = SimpleNamespace(returncode=1, stdout=b"", stderr=b"bad credentials")
-        with pytest.raises(auto_approve.AutoApproveError, match="bad credentials"):
-            await auto_approve.run(_cfg(tmp_path))
+async def test_pr_list_failure_raises_with_host_message_and_cause(tmp_path):
+    host = make_host()
+    host.fail_next("ChangeRequests.list", CodeHostError("bad credentials"))
+    with _mocks(host=host) as m, pytest.raises(auto_approve.AutoApproveError, match="bad credentials") as exc:
+        await auto_approve.run(_cfg(tmp_path))
+    assert isinstance(exc.value.__cause__, CodeHostError)
     m.approve.assert_not_called()
+    m.checkout.assert_not_called()
+
+
+async def test_pr_list_timeout_raises_auto_approve_error(tmp_path):
+    host = make_host()
+    host.fail_next("ChangeRequests.list", CodeHostTimeoutError("timed out", write=False))
+    with _mocks(host=host) as m, pytest.raises(auto_approve.AutoApproveError, match="timed out"):
+        await auto_approve.run(_cfg(tmp_path))
+    m.approve.assert_not_called()
+
+
+async def test_pr_list_unsupported_capability_stops_unwrapped(tmp_path):
+    host = make_host(capabilities=frozenset(Capability) - {Capability.CHANGE_REQUESTS})
+    with _mocks(host=host) as m, pytest.raises(UnsupportedCapabilityError):
+        await auto_approve.run(_cfg(tmp_path))
+    m.approve.assert_not_called()
+
+
+async def test_pr_list_empty_is_not_a_failure(tmp_path, caplog):
+    with _mocks(prs=[]) as m, caplog.at_level(logging.INFO):
+        await auto_approve.run(_cfg(tmp_path))
+    assert "no open PRs with a pending review request" in caplog.text
+    listing = [c for c in m.host.calls if c.operation == "ChangeRequests.list"]
+    assert len(listing) == 1 and listing[0].kwargs["requested_reviewer"] == ME
+
+
+async def test_unknown_current_user_fails_the_run(tmp_path):
+    host = make_host()
+    host.fail_next("Session.current_user", CodeHostError("no user"))
+    with _mocks(host=host) as m, pytest.raises(auto_approve.AutoApproveError, match="acting user is unknown"):
+        await auto_approve.run(_cfg(tmp_path))
+    m.approve.assert_not_called()
+
+
+async def test_only_prs_requesting_the_acting_user_are_listed_in_number_order(tmp_path):
+    host = make_host()
+    _seed(host, [{"number": 7}, {"number": 3}])
+    host.add_change_request(REPO, head_reference="other", number=5, author="alice", requested_reviewers=["someone"])
+    with _mocks(prs=[], host=host) as m:
+        await auto_approve.run(_cfg(tmp_path))
+    assert [c.args[2] for c in m.approve.call_args_list] == [3, 7]
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({}, True),
+        ({"is_draft": True}, False),
+        ({"state": ChangeRequestState.CLOSED}, False),
+        ({"is_cross_repository": True}, False),
+        ({"head_reference": ""}, False),
+        ({"base_reference": ""}, False),
+    ],
+)
+def test_is_candidate(fields, expected):
+    host = make_host()
+    _seed(host, [{"number": 1, **fields}])
+    assert auto_approve._is_candidate(host.change_requests[REPO][0]) is expected
 
 
 async def test_dry_run_passes_flag_to_writers_and_logs(tmp_path, caplog):
@@ -328,7 +395,7 @@ async def test_head_moved_since_size_measured_means_no_writes(tmp_path, caplog):
 
 
 async def test_fork_pr_skipped(tmp_path):
-    with _mocks(prs=[{**PR, "isCrossRepository": True}]) as m:
+    with _mocks(prs=[{**PR, "is_cross_repository": True}]) as m:
         await auto_approve.run(_cfg(tmp_path))
     m.checkout.assert_not_called()
     m.approve.assert_not_called()

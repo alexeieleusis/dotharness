@@ -1,18 +1,29 @@
-import json
 from importlib.resources import files
 from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from dotharness.code_host import (
+    Anchor,
+    Capability,
+    CodeHostError,
+    Comment,
+    ReviewThread,
+    UnsupportedCapabilityError,
+    User,
+)
+from dotharness.code_host.testing import InMemoryCodeHost
 from dotharness.pr_review.config import FocusedReviewConfig, HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
-from dotharness.pr_review.runners import common, focused_review
+from dotharness.pr_review.runners import focused_review
 from dotharness.pr_review.runners.focused_review import (
     FOCUSED_REVIEW_MARKER,
     _build_prompt,
     _matching_comments,
     _resolve_knowledge_file,
 )
+from tests.pr_review.runners.approve_support import T
+from tests.pr_review.runners.runner_support import REPO, make_change_request, make_scaffold
 
 _USER = "bot"
 _MARK = "<!-- dotharness-review-inline -->"
@@ -274,7 +285,7 @@ _MATCHING_COMMENT = {
 
 async def test_disabled_skips_everything(tmp_path):
     cfg = _cfg(tmp_path, enabled=False)
-    with patch("dotharness.pr_review.runners.focused_review.get_gh_token") as mock_token:
+    with patch("dotharness.pr_review.runners.focused_review.open_host") as mock_token:
         await focused_review._run_locked(cfg)
     mock_token.assert_not_called()
 
@@ -283,11 +294,11 @@ async def test_matching_comment_invokes_backend(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
-            "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
-            return_value=[{"number": 1, "headRefName": "b"}],
+            "dotharness.pr_review.runners.focused_review._list_prs_for_user",
+            return_value=[make_change_request(1, head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.focused_review.fetch_pr_comments", return_value=[_MATCHING_COMMENT]),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
@@ -310,11 +321,11 @@ async def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
-            "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
-            return_value=[{"number": 1, "headRefName": "b"}],
+            "dotharness.pr_review.runners.focused_review._list_prs_for_user",
+            return_value=[make_change_request(1, head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.focused_review.fetch_pr_comments", return_value=[_MATCHING_COMMENT]),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=True) as mock_was_requested,
@@ -327,19 +338,19 @@ async def test_re_requests_review_when_previously_requested(tmp_xdg, tmp_path):
     ):
         await focused_review._run_locked(cfg)
     mock_be.return_value.run.assert_awaited_once()
-    mock_was_requested.assert_called_once_with(1, "acme/frontend", "bot", ANY)
-    mock_add_reviewer.assert_called_once_with(1, "acme/frontend", "bot", mock_add_reviewer.call_args.args[3])
+    mock_was_requested.assert_called_once_with(ANY, REPO, 1, "bot")
+    mock_add_reviewer.assert_called_once_with(ANY, REPO, 1, "bot")
 
 
 async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
-            "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
-            return_value=[{"number": 1, "headRefName": "b"}],
+            "dotharness.pr_review.runners.focused_review._list_prs_for_user",
+            return_value=[make_change_request(1, head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.focused_review.fetch_pr_comments", return_value=[_MATCHING_COMMENT]),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
@@ -362,11 +373,11 @@ async def test_already_marked_comment_skips_backend(tmp_xdg, tmp_path):
         "replies": [{"author": "bot", "body": f"done\n\n{focused_review.FOCUSED_REVIEW_MARKER}"}],
     }
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
-            "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
-            return_value=[{"number": 1, "headRefName": "b"}],
+            "dotharness.pr_review.runners.focused_review._list_prs_for_user",
+            return_value=[make_change_request(1, head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.focused_review.fetch_pr_comments", return_value=[marked]),
         patch("dotharness.pr_review.runners.focused_review.git_detach_and_record", return_value="sha"),
@@ -384,11 +395,11 @@ async def test_non_matching_comment_skips_backend(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     plain = {**_MATCHING_COMMENT, "body": "just SonarQube noise, no knowledge url"}
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
-            "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
-            return_value=[{"number": 1, "headRefName": "b"}],
+            "dotharness.pr_review.runners.focused_review._list_prs_for_user",
+            return_value=[make_change_request(1, head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.focused_review.fetch_pr_comments", return_value=[plain]),
         patch("dotharness.pr_review.runners.focused_review.git_detach_and_record", return_value="sha"),
@@ -405,11 +416,11 @@ async def test_non_matching_pr_skips_restore(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     plain = {**_MATCHING_COMMENT, "body": "just SonarQube noise, no knowledge url"}
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
-            "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
-            return_value=[{"number": 1, "headRefName": "b"}],
+            "dotharness.pr_review.runners.focused_review._list_prs_for_user",
+            return_value=[make_change_request(1, head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.focused_review.fetch_pr_comments", return_value=[plain]),
         patch("dotharness.pr_review.runners.focused_review.git_detach_and_record", return_value="sha"),
@@ -426,11 +437,11 @@ async def test_unresolvable_knowledge_file_skips_comment_but_continues(tmp_xdg, 
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
-            "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
-            return_value=[{"number": 1, "headRefName": "b"}],
+            "dotharness.pr_review.runners.focused_review._list_prs_for_user",
+            return_value=[make_change_request(1, head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.focused_review.fetch_pr_comments", return_value=[_MATCHING_COMMENT]),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
@@ -449,11 +460,11 @@ async def test_restores_working_dir_even_on_backend_failure(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
-            "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
-            return_value=[{"number": 1, "headRefName": "b"}],
+            "dotharness.pr_review.runners.focused_review._list_prs_for_user",
+            return_value=[make_change_request(1, head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.focused_review.fetch_pr_comments", return_value=[_MATCHING_COMMENT]),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
@@ -475,11 +486,11 @@ async def test_fatal_git_error_continues_to_remaining_prs(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
-            "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
-            return_value=[{"number": 1, "headRefName": "b"}, {"number": 2, "headRefName": "c"}],
+            "dotharness.pr_review.runners.focused_review._list_prs_for_user",
+            return_value=[make_change_request(1, head_reference="b"), make_change_request(2, head_reference="c")],
         ),
         patch("dotharness.pr_review.runners.focused_review.fetch_pr_comments", return_value=[_MATCHING_COMMENT]),
         patch("dotharness.pr_review.runners.common.was_review_requested", return_value=False),
@@ -502,11 +513,11 @@ async def test_non_fatal_error_continues_to_next_pr(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
-            "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
-            return_value=[{"number": 1, "headRefName": "b"}, {"number": 2, "headRefName": "c"}],
+            "dotharness.pr_review.runners.focused_review._list_prs_for_user",
+            return_value=[make_change_request(1, head_reference="b"), make_change_request(2, head_reference="c")],
         ),
         patch(
             "dotharness.pr_review.runners.focused_review.fetch_pr_comments",
@@ -531,116 +542,30 @@ def _no_real_thread_fetch():
 
 
 def _thread(thread_id, resolved, comments):
-    return {
-        "id": thread_id,
-        "isResolved": resolved,
-        "comments": {"nodes": [{"id": n, "databaseId": d, "isMinimized": m} for n, d, m in comments]},
-    }
+    """A review thread; ``comments`` are (id, database id, hidden) tuples, the host comment id being the database id."""
+    return ReviewThread(
+        id=thread_id,
+        is_resolved=resolved,
+        anchor=Anchor("a.py", 1, "RIGHT"),
+        comments=tuple(
+            Comment(id=str(d), author=User("bob"), body="x", created_at=T, url=None, is_hidden=m)
+            for _n, d, m in comments
+        ),
+    )
 
 
-def _page(nodes, has_next=False, cursor=None):
-    payload = {
-        "data": {
-            "repository": {
-                "pullRequest": {
-                    "reviewThreads": {"pageInfo": {"hasNextPage": has_next, "endCursor": cursor}, "nodes": nodes}
-                }
-            }
-        }
-    }
-    return MagicMock(returncode=0, stdout=json.dumps(payload).encode())
-
-
-def test_merge_single_page():
-    comments = [{"type": "inline", "id": 10}]
-    common.merge_thread_state(comments, [_thread("T1", True, [("C10", 10, True), ("C11", 11, False)])])
-    assert comments[0] == {
-        "type": "inline",
-        "id": 10,
-        "thread_id": "T1",
-        "thread_resolved": True,
-        "node_id": "C10",
-        "is_minimized": True,
-    }
-
-
-def test_merge_unresolved_thread_sets_false_values():
-    comments = [{"type": "inline", "id": 10}]
-    common.merge_thread_state(comments, [_thread("T1", False, [("C10", 10, False)])])
-    assert comments[0]["thread_resolved"] is False
-    assert comments[0]["is_minimized"] is False
-
-
-def test_merge_matches_only_root_comment():
-    comments = [{"type": "inline", "id": 11}]
-    common.merge_thread_state(comments, [_thread("T1", False, [("C10", 10, False), ("C11", 11, False)])])
-    assert "thread_id" not in comments[0]
-
-
-def test_merge_thread_root_not_in_comments_is_ignored():
-    comments = [{"type": "inline", "id": 10}]
-    common.merge_thread_state(comments, [_thread("T9", False, [("C99", 99, False)])])
-    assert comments == [{"type": "inline", "id": 10}]
-
-
-def test_merge_comment_not_in_any_thread_gets_no_keys():
-    comments = [{"type": "inline", "id": 10}]
-    common.merge_thread_state(comments, [])
-    assert comments == [{"type": "inline", "id": 10}]
-
-
-def test_merge_non_inline_untouched():
-    comments = [{"type": "review", "id": 10}, {"type": "issue", "id": 10}]
-    common.merge_thread_state(comments, [_thread("T1", True, [("C10", 10, False)])])
-    assert comments == [{"type": "review", "id": 10}, {"type": "issue", "id": 10}]
-
-
-async def test_fetch_review_threads_follows_pagination():
-    pages = [
-        _page([_thread("T1", False, [("C1", 1, False)])], has_next=True, cursor="CUR1"),
-        _page([_thread("T2", True, [("C2", 2, False)])]),
-    ]
-    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=pages) as mock_run:
-        nodes = await common.fetch_review_threads(7, "acme/frontend", {})
-    assert nodes is not None
-    assert [n["id"] for n in nodes] == ["T1", "T2"]
-    first, second = (c.args[0] for c in mock_run.call_args_list)
-    assert "cursor=CUR1" not in " ".join(first)
-    assert second[-2:] == ["-f", "cursor=CUR1"]
-    assert "owner=acme" in first
-    assert "repo=frontend" in first
-    assert "number=7" in first
-
-
-@pytest.mark.parametrize(
-    "result",
-    [
-        MagicMock(returncode=1, stdout=b""),
-        MagicMock(returncode=0, stdout=b"not json"),
-        MagicMock(returncode=0, stdout=b"{}"),
-        MagicMock(returncode=0, stdout=b'{"data": {"repository": {"pullRequest": null}}}'),
-    ],
-)
-async def test_fetch_review_threads_failure_returns_none(result):
-    with patch("dotharness.pr_review.runners.common.run_cmd", return_value=result):
-        assert (await common.fetch_review_threads(7, "acme/frontend", {})) is None
-
-
-async def test_fetch_review_threads_failure_on_later_page_returns_none():
-    pages = [_page([], has_next=True, cursor="C"), MagicMock(returncode=1, stdout=b"")]
-    with patch("dotharness.pr_review.runners.common.run_cmd", side_effect=pages):
-        assert (await common.fetch_review_threads(7, "acme/frontend", {})) is None
+# fetch_review_threads and merge_thread_state are covered in test_common_comments.py (InMemoryCodeHost).
 
 
 async def _run_with_threads(tmp_path, comments, threads):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
-            "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
-            return_value=[{"number": 1, "headRefName": "b"}],
+            "dotharness.pr_review.runners.focused_review._list_prs_for_user",
+            return_value=[make_change_request(1, head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.focused_review.fetch_pr_comments", return_value=comments),
         patch("dotharness.pr_review.runners.focused_review.fetch_review_threads", return_value=threads) as mock_threads,
@@ -667,11 +592,11 @@ async def test_thread_fetch_failure_does_not_stop_other_prs(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.focused_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.focused_review.get_current_user", return_value="bot"),
+        patch("dotharness.pr_review.runners.focused_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.focused_review.host_current_user", return_value="bot"),
         patch(
-            "dotharness.pr_review.runners.focused_review.list_open_prs_for_current_user",
-            return_value=[{"number": 1, "headRefName": "b"}, {"number": 2, "headRefName": "c"}],
+            "dotharness.pr_review.runners.focused_review._list_prs_for_user",
+            return_value=[make_change_request(1, head_reference="b"), make_change_request(2, head_reference="c")],
         ),
         patch("dotharness.pr_review.runners.focused_review.fetch_pr_comments", return_value=[dict(_MATCHING_COMMENT)]),
         patch("dotharness.pr_review.runners.focused_review.fetch_review_threads", side_effect=[None, []]),
@@ -697,7 +622,7 @@ async def test_run_merges_thread_state_into_target_comment(tmp_xdg, tmp_path):
     threads = [_thread("T1", False, [("C1", 1, False)])]
     _t, _c, mock_be = await _run_with_threads(tmp_path, [comment], threads)
     assert comment["thread_id"] == "T1"
-    assert comment["node_id"] == "C1"
+    assert "node_id" not in comment
     mock_be.return_value.run.assert_awaited_once()
 
 
@@ -734,7 +659,8 @@ async def test_runner_passes_node_ids_to_backend_prompt(tmp_xdg, tmp_path):
     mock_be.return_value.run.assert_awaited_once()
     prompt = mock_be.return_value.run.call_args.args[0]
     assert "Thread node ID: PRRT_T1" in prompt
-    assert "Comment node ID: PRRC_C1" in prompt
+    # The host exposes no GraphQL node id for a comment, so the prompt renders "?" and the agent skips that mutation.
+    assert "Comment node ID: ?\n" in prompt
 
 
 # --- Template string assertions (read the template shipped in the package) ---
@@ -884,3 +810,39 @@ def test_build_prompt_emits_end_marker_after_each_block():
     prompt = _build_prompt("T", _id_comment(diff_hunk="d"), "K", 1, "r")
     assert prompt.count("<!-- EXTERNAL DATA BEGIN") == 3
     assert prompt.count("<!-- EXTERNAL DATA END -->") == 3
+
+
+def _host() -> InMemoryCodeHost:
+    return InMemoryCodeHost(repository="acme/frontend", user="alice")
+
+
+async def test_list_prs_for_user_unions_author_and_review_requested_sorted_and_deduped():
+    host = _host()
+    host.add_change_request(REPO, head_reference="c", number=3, author="bob", requested_reviewers=["alice"])
+    host.add_change_request(REPO, head_reference="b", number=2, author="alice", requested_reviewers=["alice"])
+    host.add_change_request(REPO, head_reference="a", number=1, author="alice", is_draft=True)
+    host.add_change_request(REPO, head_reference="d", number=4, author="bob")
+    prs = await focused_review._list_prs_for_user(host.code_host(), REPO, "alice")
+    assert [(p.number, p.head_reference) for p in prs] == [(1, "a"), (2, "b"), (3, "c")]
+
+
+async def test_list_prs_for_user_failed_read_propagates():
+    host = _host()
+    host.add_change_request(REPO, head_reference="a", number=1, author="alice")
+    host.fail_next("ChangeRequests.list", CodeHostError("boom"))
+    with pytest.raises(CodeHostError):
+        await focused_review._list_prs_for_user(host.code_host(), REPO, "alice")
+
+
+async def test_list_prs_for_user_without_login_makes_no_call():
+    host = _host()
+    assert await focused_review._list_prs_for_user(host.code_host(), REPO, "") == []
+    assert not [c for c in host.calls if c.operation == "ChangeRequests.list"]
+
+
+async def test_list_prs_for_user_stops_on_unsupported_capability():
+    host = InMemoryCodeHost(
+        repository="acme/frontend", user="alice", capabilities=frozenset(Capability) - {Capability.CHANGE_REQUESTS}
+    )
+    with pytest.raises(UnsupportedCapabilityError):
+        await focused_review._list_prs_for_user(host.code_host(), REPO, "alice")

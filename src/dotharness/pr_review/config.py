@@ -4,6 +4,7 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from dotharness.ai_backend import BACKEND_NAMES
 from dotharness.fileio import TOMLDecodeError, load_toml
@@ -123,11 +124,19 @@ class RepoConfig:
 class HarnessSection:
     backend: str = "opencode"
     gh_token_cmd: str = "gh auth token"  # noqa: S105
+    host: str | None = None  # None means the built-in ``reference`` host
+    host_options: dict[str, Any] = field(default_factory=dict)
+    host_token_cmd: str | None = None
     backend_timeout_seconds: int = 900
     knowledge_dir: Path = field(default_factory=default_knowledge_dir)
     path_prepend: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     review_knowledge_file: Path | None = None
+
+    @property
+    def effective_token_cmd(self) -> str:
+        """``host_token_cmd`` if set, else ``gh_token_cmd``, else ``gh auth token``. Never empty."""
+        return self.host_token_cmd or self.gh_token_cmd or "gh auth token"
 
 
 @dataclass
@@ -292,6 +301,20 @@ def _parse_merge(section: dict) -> MergeConfig:
     )
 
 
+def _parse_host_keys(h: dict) -> tuple[str | None, dict[str, Any], str | None]:
+    """Validate ``[harness] host``, ``[harness.host_options]`` and ``host_token_cmd`` types. Reads no environment."""
+    host = h.get("host")
+    if host is not None and not isinstance(host, str):
+        raise ConfigError(f"harness.host must be a string, got {host!r}")  # noqa: TRY003
+    options = h.get("host_options", {})
+    if not isinstance(options, dict):
+        raise ConfigError(f"harness.host_options must be a table, got {options!r}")  # noqa: TRY003
+    token_cmd = h.get("host_token_cmd")
+    if token_cmd is not None and not isinstance(token_cmd, str):
+        raise ConfigError(f"harness.host_token_cmd must be a string, got a {type(token_cmd).__name__}")  # noqa: TRY003
+    return host, dict(options), token_cmd
+
+
 def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
     try:
         data = load_toml(path)
@@ -305,8 +328,12 @@ def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
 
     path_prepend = list(h.get("path_prepend", {}).values())
     rkf = h.get("review_knowledge_file")
+    host, host_options, host_token_cmd = _parse_host_keys(h)
     harness_section = HarnessSection(
         backend=backend,
+        host=host,
+        host_options=host_options,
+        host_token_cmd=host_token_cmd,
         gh_token_cmd=h.get("gh_token_cmd", "gh auth token"),
         backend_timeout_seconds=h.get("backend_timeout_seconds", 900),
         knowledge_dir=Path(h["knowledge_dir"]).expanduser() if "knowledge_dir" in h else default_knowledge_dir(),

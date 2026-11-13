@@ -1,6 +1,6 @@
 # Code host: capability interfaces and direct gh user inventory
 
-Status: Phase 0 design for #192. The package `src/dotharness/code_host/` exists and the vibe-heal review flow is implemented (Phase 1, #193). The sisyphus flow is implemented (Phase 2, #194). The interface version is 2. The pr-review and leftover users are not migrated yet.
+Status: Phase 0 design for #192. The package `src/dotharness/code_host/` exists and the vibe-heal review flow is implemented (Phase 1, #193). The sisyphus flow is implemented (Phase 2, #194). The reference host and the in-memory fake implement every method of the six interfaces (A-1). The pr-review flow is implemented (Phase 3, #195): every `INV-PR-*` row is migrated and the interface version stays 2. The remaining direct users of `gh` or `dotharness.gh` in `src/` are the reference implementation (`code_host/reference.py`), `gh.py`, `repo_guard.py`, the `scripts/pr-comments.py` copies and the knowledge prompt files. The leftover users (Phase 4, #196) are not migrated yet.
 
 This page is the contract for Phases 1 to 4 (#193 to #196). Sections: Inventory, Phase split, Rename plan, Interfaces,
 Models, Error model, Declarations, Factory and selection, Conformance suite and in-memory fake, and the Decision log
@@ -143,59 +143,67 @@ Consumers: `vibe_heal/review/orchestrator.py`, `vibe_heal/cli.py`.
 | INV-VH-06 | resolve owner/repo fallback | `git remote get-url origin` through `_run_gh`, parsed by `_parse_remote_url` | `_get_owner_repo` | Repo (the git primitive stays in git code, and the identity it yields becomes a RepositoryRef) | migrated (Phase 1) |
 | INV-VH-07 | `_run_gh` runner adapter and error types | `GitHubReviewError`, `NoOpenPrError`, `GitHubTimeoutError` | `_run_gh` | Ses (transport, folded into the interface error taxonomy) | migrated (Phase 1) |
 
-### Group `pr-review` (Phase 3), `pr_review/runners/` unless stated
+### Group `pr-review` (Phase 3, migrated), `pr_review/runners/` unless stated
 
-| Row id | Operation | Today's gh call | File and function | Owner |
-| --- | --- | --- | --- | --- |
-| INV-PR-01 | resolve token via command | `gh_token_cmd` (default `gh auth token`), `shell=True`, `TIMEOUT_GH = 30`; `RuntimeError` on timeout or empty | `common.py` `get_gh_token` | Ses |
-| INV-PR-02 | read CR state | `pr view N --repo R --json state --jq .state` | `common.py` `is_pr_open` | CR |
-| INV-PR-03 | resolve acting user | `api user --jq .login` (fails open, returns "") | `common.py` `get_current_user` | Ses |
-| INV-PR-04 | read CR by number, caller-chosen fields | `pr view N --repo R --json <fields>` | `common.py` `pr_from_url` | CR |
-| INV-PR-05 | read requested reviewers | `pr view --json reviewRequests` | `common.py` `get_requested_reviewers` | CR |
-| INV-PR-06 | request a reviewer | `pr edit N --add-reviewer L` | `common.py` `add_reviewer` | CR |
-| INV-PR-07 | page a list endpoint (transport) | `api --method GET PATH -F per_page=100 -F page=P` | `common.py` `_fetch_page` (used by `fetch_all_pages`) | CR (shared transport; each caller's row owns its semantics) |
-| INV-PR-08 | read work item (title, body) | `issue view N --repo R --json number,title,body` (`_IssueFetchError`) | `common.py` `_fetch_issue` | WI |
-| INV-PR-09 | resolve CR's linked work items | per-reference `issue view` over `closingIssuesReferences` | `common.py` `_resolve_native_linked_tickets` (calls `_fetch_issue`) | WI |
-| INV-PR-10 | post CR-level comment ("no linked ticket") | `pr comment N --repo R --body B` | `common.py` `post_no_linked_ticket_comment` | Disc |
-| INV-PR-11 | list open CRs (author filter applied after) | `pr list --repo R --state open --json ... --limit 500` | `common.py` `list_open_prs_matching_authors` | CR |
-| INV-PR-12 | list CRs by flag (author, assignee, reviewer) `@me` | `pr list --repo R <flag> @me --state open --json ...` | `common.py` `_list_prs_by_flag` | CR |
-| INV-PR-13 | list review-requested CRs | `search prs user-review-requested:@me`, then per stub `pr view --json number,headRefName,isDraft` | `common.py` `_list_review_requested_prs` | CR |
-| INV-PR-14 | read CR base branch | `pr view --json baseRefName --jq` | `common.py` `get_pr_base_branch` | CR |
-| INV-PR-15 | read CR head revision | `pr view --json headRefOid --jq` | `common.py` `get_pr_head_sha` | CR |
-| INV-PR-16 | read CR description | `pr view --json title,body --jq` | `common.py` `get_pr_description` | CR |
-| INV-PR-17 | read review-thread state | `api graphql` (`GRAPHQL_QUERY_REVIEW_THREAD_STATE`, cursor paging) | `common.py` `_fetch_review_threads_page` | Disc |
-| INV-PR-18 | fetch CR comments via child process | runs `scripts/pr-comments.py fetch` (`PR_COMMENTS_SCRIPT_PATH`); the script's gh calls are INV-LO-02..03 | `common.py` `fetch_pr_comments`; callers `focused_review.py`, `address_comments.py`, `regret_review.py` | Disc |
-| INV-PR-19 | run a gh command with timeout mapping (transport) | `gh_argv(*args)` via `run_cmd`; timeout becomes exit 124 | `ci_checks.py` `gh` (aliased `_gh` in `ci_fix.py`, `merge.py`; imported as `gh` in `auto_approve_github.py`) | Chk (shared transport; rows below own semantics) |
-| INV-PR-20 | read check buckets of a CR | `pr checks N --repo R --json ... [--required]` | `ci_checks.py` `_read_buckets` | Chk |
-| INV-PR-21 | list open CRs by head branch | `pr list --head B` | `ci_checks.py` `_open_prs_with_head` | CR |
-| INV-PR-22 | read required check names of stack root | `pr checks ROOT --repo R --required --json name` | `ci_checks.py` `_read_root_required_names` | Chk |
-| INV-PR-23 | read default branch | `repo view REPO --json defaultBranchRef` | `ci_checks.py` `_read_default_branch` | Repo |
-| INV-PR-24 | list workflows | `api repos/R/actions/workflows?per_page=100` | `ci_checks.py` `repo_has_workflows` | Chk |
-| INV-PR-25 | read failing-run log | `run view --job ID` or `run view RUN --repo R --log-failed` | `ci_fix.py` `_read_failed_log` (`CiFixError`) | Chk |
-| INV-PR-26 | read failing job (step name) | `api repos/R/actions/jobs/ID` | `ci_fix.py` `_failed_step_from_api` | Chk |
-| INV-PR-27 | list own open CRs (`run_gh` seam) | `pr list` / `pr view` via the `run_gh` parameter; plus `pr list --search user-review-requested:@me --limit 500` | `auto_approve_github.py` `list_own_open_prs`; `auto_approve.py` `_list_prs` (`AutoApproveError`) | CR |
-| INV-PR-28 | read CR commits (commit clock) | `pr view N --repo R --json commits` via `gh_argv` + `run_cmd` | `auto_approve_github.py` `_fetch_pr_commits` | CR |
-| INV-PR-29 | read per-file viewed state | `api graphql` (`_FILES_QUERY`, paged) | `auto_approve_github.py` `read_viewed_states` / `_read_files_page` | CR (see Owner justifications 2) |
-| INV-PR-30 | mark file viewed (write) | `api graphql` `markFileAsViewed` mutation | `auto_approve_github.py` `_mark_one` | CR (see Owner justifications 2) |
-| INV-PR-31 | approve a CR at a head revision | `api --method POST repos/R/pulls/N/reviews -f event=APPROVE -f commit_id=SHA` | `auto_approve_github.py` `_post_approval` | CR (see Owner justifications 1) |
-| INV-PR-32 | read CR merge state; read acting user's approval state | `pr view --json mergeable,autoMergeRequest,isDraft,state,headRefOid,baseRefName`; approvals via `fetch_all_pages` reviews (INV-PR-07) | `auto_approve_github.py` `_read_pr_state`; `_read_approval_state`; `_check_approval_safety` | CR (see Owner justifications 3) |
-| INV-PR-33 | read changed-line counts | `pr view --json additions,deletions` via `ci_checks.gh` | `merge.py` `_read_changed_lines` | CR |
-| INV-PR-34 | merge a CR (squash, head-pinned) | `pr merge N --repo R --squash --match-head-commit SHA` (`MergeError`) | `merge.py` `_process_pr` | CR |
-| INV-PR-35 | commit to CRs lookup | `api repos/R/commits/SHA/pulls` | `regret_review.py` `_resolve_commit_prs` | CR (see Owner justifications 4) |
-| INV-PR-36 | post regret comment | `pr comment N --repo R --body B` | `regret_review.py` `post_regret_comment` | Disc |
-| INV-PR-37 | list all open CR numbers | `pr list --state open --json number --limit 1000` | `address_comments.py` `_list_all_open_pr_numbers` | CR |
-| INV-PR-38 | list CRs by `@me` filter | `pr list <flag> @me --state open --json` | `address_comments.py` `_list_prs` | CR |
-| INV-PR-39 | count unresolved review threads | `api graphql` (`GRAPHQL_QUERY`, cursor) | `address_comments.py` `_check_gql_unresolved_threads` | Disc |
-| INV-PR-40 | read human issue comments | `api repos/R/issues/N/comments --paginate` | `address_comments.py` `_check_human_issue_comments` | Disc |
-| INV-PR-41 | list review-requested CRs (author loop) | `pr list --search user-review-requested:@me --json ... --limit` | `review_requested.py` `_get_prs` | CR |
-| INV-PR-42 | list reviews, has user approved | `api --method GET repos/R/pulls/N/reviews -F per_page=100 -F page=P` loop | `review_requested.py` `_has_user_approved` | CR (see Owner justifications 3) |
-| INV-PR-43 | list own CRs by flag | `pr list <flag> @me --json` (returns None on failure) | `self_review.py` `_list_prs_by_flag` | CR |
-| INV-PR-44 | build subprocess env with `GITHUB_TOKEN` | `build_subprocess_env(..., gh_token)` | `focused_review.py`, `review_prs.py`, `auto_approve.py`, `merge.py`, `ci_fix.py`, `self_review.py`, `review_requested.py`, `address_comments.py` (all `_run_locked`); `local_review/review.py`, `local_review/address.py`, `local_review/git.py` (no token passed) | Ses |
-| INV-PR-45 | hand-built `{**env, "GITHUB_TOKEN": ...}` dict | env literal | `focused_review.py`, `review_requested.py`, `self_review.py` `_build_backend` (reads `env.get("GITHUB_TOKEN")`, `RuntimeError` if empty), `ci_fix.py` `_agent_fix_and_push`, `address_comments.py` | Ses |
-| INV-PR-46 | check gh installed | `shutil.which("gh")` | `pr_review/cli.py` `cmd_validate` | Ses |
-| INV-PR-47 | config default / template | `gh_token_cmd = "gh auth token"` | `pr_review/cli.py` `TEMPLATE`; `pr_review/config.py` `gh_token_cmd` field and TOML default | Ses |
+Host side: the reference host and the fake implement every method these rows need (A-1), and the shared conformance suite
+covers them. All 47 rows are migrated (Phase 3). The pr-review runners no longer run `gh` themselves. The reference host runs it
+behind the capability interfaces. The "Today's gh call" and "File and function" cells describe the code before Phase 3.
+Notes on rows that keep a name or a script: INV-PR-18 still spawns `scripts/pr-comments.py` by path (its own `gh` calls are
+INV-LO-02..05, Phase 4). INV-PR-46 (`shutil.which("gh")` in `cmd_validate`) and INV-PR-47 (the `gh_token_cmd` key, kept as an
+alias of `host_token_cmd`, NG3) keep their names until Phase 4.
 
-Error types (error surface of the rows): `_IssueFetchError` (INV-PR-08, `common.py`), `MergeError` (INV-PR-34),
+| Row id | Operation | Today's gh call | File and function | Owner | Status |
+| --- | --- | --- | --- | --- | --- |
+| INV-PR-01 | resolve token via command | `gh_token_cmd` (default `gh auth token`), `shell=True`, `TIMEOUT_GH = 30`; `RuntimeError` on timeout or empty | `common.py` `get_gh_token` | Ses | migrated (Phase 3) |
+| INV-PR-02 | read CR state | `pr view N --repo R --json state --jq .state` | `common.py` `is_pr_open` | CR | migrated (Phase 3) |
+| INV-PR-03 | resolve acting user | `api user --jq .login` (fails open, returns "") | `common.py` `get_current_user` | Ses | migrated (Phase 3) |
+| INV-PR-04 | read CR by number, caller-chosen fields | `pr view N --repo R --json <fields>` | `common.py` `pr_from_url` | CR | migrated (Phase 3) |
+| INV-PR-05 | read requested reviewers | `pr view --json reviewRequests` | `common.py` `get_requested_reviewers` | CR | migrated (Phase 3) |
+| INV-PR-06 | request a reviewer | `pr edit N --add-reviewer L` | `common.py` `add_reviewer` | CR | migrated (Phase 3) |
+| INV-PR-07 | page a list endpoint (transport) | `api --method GET PATH -F per_page=100 -F page=P` | `common.py` `_fetch_page` (used by `fetch_all_pages`) | CR (shared transport; each caller's row owns its semantics) | migrated (Phase 3) |
+| INV-PR-08 | read work item (title, body) | `issue view N --repo R --json number,title,body` (`_IssueFetchError`) | `common.py` `_fetch_issue` | WI | migrated (Phase 3) |
+| INV-PR-09 | resolve CR's linked work items | per-reference `issue view` over `closingIssuesReferences` | `common.py` `_resolve_native_linked_tickets` (calls `_fetch_issue`) | WI | migrated (Phase 3) |
+| INV-PR-10 | post CR-level comment ("no linked ticket") | `pr comment N --repo R --body B` | `common.py` `post_no_linked_ticket_comment` | Disc | migrated (Phase 3) |
+| INV-PR-11 | list open CRs (author filter applied after) | `pr list --repo R --state open --json ... --limit 500` | `common.py` `list_open_prs_matching_authors` | CR | migrated (Phase 3) |
+| INV-PR-12 | list CRs by flag (author, assignee, reviewer) `@me` | `pr list --repo R <flag> @me --state open --json ...` | `common.py` `_list_prs_by_flag` | CR | migrated (Phase 3) |
+| INV-PR-13 | list review-requested CRs | `search prs user-review-requested:@me`, then per stub `pr view --json number,headRefName,isDraft` | `common.py` `_list_review_requested_prs` | CR | migrated (Phase 3) |
+| INV-PR-14 | read CR base branch | `pr view --json baseRefName --jq` | `common.py` `get_pr_base_branch` | CR | migrated (Phase 3) |
+| INV-PR-15 | read CR head revision | `pr view --json headRefOid --jq` | `common.py` `get_pr_head_sha` | CR | migrated (Phase 3) |
+| INV-PR-16 | read CR description | `pr view --json title,body --jq` | `common.py` `get_pr_description` | CR | migrated (Phase 3) |
+| INV-PR-17 | read review-thread state | `api graphql` (`GRAPHQL_QUERY_REVIEW_THREAD_STATE`, cursor paging) | `common.py` `_fetch_review_threads_page` | Disc | migrated (Phase 3) |
+| INV-PR-18 | fetch CR comments via child process | runs `scripts/pr-comments.py fetch` (`PR_COMMENTS_SCRIPT_PATH`); the script's gh calls are INV-LO-02..03 | `common.py` `fetch_pr_comments`; callers `focused_review.py`, `address_comments.py`, `regret_review.py` | Disc | migrated (Phase 3) |
+| INV-PR-19 | run a gh command with timeout mapping (transport) | `gh_argv(*args)` via `run_cmd`; timeout becomes exit 124 | `ci_checks.py` `gh` (aliased `_gh` in `ci_fix.py`, `merge.py`; imported as `gh` in `auto_approve_github.py`) | Chk (shared transport; rows below own semantics) | migrated (Phase 3) |
+| INV-PR-20 | read check buckets of a CR | `pr checks N --repo R --json ... [--required]` | `ci_checks.py` `_read_buckets` | Chk | migrated (Phase 3) |
+| INV-PR-21 | list open CRs by head branch | `pr list --head B` | `ci_checks.py` `_open_prs_with_head` | CR | migrated (Phase 3) |
+| INV-PR-22 | read required check names of stack root | `pr checks ROOT --repo R --required --json name` | `ci_checks.py` `_read_root_required_names` | Chk | migrated (Phase 3) |
+| INV-PR-23 | read default branch | `repo view REPO --json defaultBranchRef` | `ci_checks.py` `_read_default_branch` | Repo | migrated (Phase 3) |
+| INV-PR-24 | list workflows | `api repos/R/actions/workflows?per_page=100` | `ci_checks.py` `repo_has_workflows` | Chk | migrated (Phase 3) |
+| INV-PR-25 | read failing-run log | `run view --job ID` or `run view RUN --repo R --log-failed` | `ci_fix.py` `_read_failed_log` (`CiFixError`) | Chk | migrated (Phase 3) |
+| INV-PR-26 | read failing job (step name) | `api repos/R/actions/jobs/ID` | `ci_fix.py` `_failed_step_from_api` | Chk | migrated (Phase 3) |
+| INV-PR-27 | list own open CRs (`run_gh` seam) | `pr list` / `pr view` via the `run_gh` parameter; plus `pr list --search user-review-requested:@me --limit 500` | `auto_approve_github.py` `list_own_open_prs`; `auto_approve.py` `_list_prs` (`AutoApproveError`) | CR | migrated (Phase 3) |
+| INV-PR-28 | read CR commits (commit clock) | `pr view N --repo R --json commits` via `gh_argv` + `run_cmd` | `auto_approve_github.py` `_fetch_pr_commits` | CR | migrated (Phase 3) |
+| INV-PR-29 | read per-file viewed state | `api graphql` (`_FILES_QUERY`, paged) | `auto_approve_github.py` `read_viewed_states` / `_read_files_page` | CR (see Owner justifications 2) | migrated (Phase 3) |
+| INV-PR-30 | mark file viewed (write) | `api graphql` `markFileAsViewed` mutation | `auto_approve_github.py` `_mark_one` | CR (see Owner justifications 2) | migrated (Phase 3) |
+| INV-PR-31 | approve a CR at a head revision | `api --method POST repos/R/pulls/N/reviews -f event=APPROVE -f commit_id=SHA` | `auto_approve_github.py` `_post_approval` | CR (see Owner justifications 1) | migrated (Phase 3) |
+| INV-PR-32 | read CR merge state; read acting user's approval state | `pr view --json mergeable,autoMergeRequest,isDraft,state,headRefOid,baseRefName`; approvals via `fetch_all_pages` reviews (INV-PR-07) | `auto_approve_github.py` `_read_pr_state`; `_read_approval_state`; `_check_approval_safety` | CR (see Owner justifications 3) | migrated (Phase 3) |
+| INV-PR-33 | read changed-line counts | `pr view --json additions,deletions` via `ci_checks.gh` | `merge.py` `_read_changed_lines` | CR | migrated (Phase 3) |
+| INV-PR-34 | merge a CR (squash, head-pinned) | `pr merge N --repo R --squash --match-head-commit SHA` (`MergeError`) | `merge.py` `_process_pr` | CR | migrated (Phase 3) |
+| INV-PR-35 | commit to CRs lookup | `api repos/R/commits/SHA/pulls` | `regret_review.py` `_resolve_commit_prs` | CR (see Owner justifications 4) | migrated (Phase 3) |
+| INV-PR-36 | post regret comment | `pr comment N --repo R --body B` | `regret_review.py` `post_regret_comment` | Disc | migrated (Phase 3) |
+| INV-PR-37 | list all open CR numbers | `pr list --state open --json number --limit 1000` | `address_comments.py` `_list_all_open_pr_numbers` | CR | migrated (Phase 3) |
+| INV-PR-38 | list CRs by `@me` filter | `pr list <flag> @me --state open --json` | `address_comments.py` `_list_prs` | CR | migrated (Phase 3) |
+| INV-PR-39 | count unresolved review threads | `api graphql` (`GRAPHQL_QUERY`, cursor) | `address_comments.py` `_check_gql_unresolved_threads` | Disc | migrated (Phase 3) |
+| INV-PR-40 | read human issue comments | `api repos/R/issues/N/comments --paginate` | `address_comments.py` `_check_human_issue_comments` | Disc | migrated (Phase 3) |
+| INV-PR-41 | list review-requested CRs (author loop) | `pr list --search user-review-requested:@me --json ... --limit` | `review_requested.py` `_get_prs` | CR | migrated (Phase 3) |
+| INV-PR-42 | list reviews, has user approved | `api --method GET repos/R/pulls/N/reviews -F per_page=100 -F page=P` loop | `review_requested.py` `_has_user_approved` | CR (see Owner justifications 3) | migrated (Phase 3) |
+| INV-PR-43 | list own CRs by flag | `pr list <flag> @me --json` (returns None on failure) | `self_review.py` `_list_prs_by_flag` | CR | migrated (Phase 3) |
+| INV-PR-44 | build subprocess env with `GITHUB_TOKEN` | `build_subprocess_env(..., gh_token)` | `focused_review.py`, `review_prs.py`, `auto_approve.py`, `merge.py`, `ci_fix.py`, `self_review.py`, `review_requested.py`, `address_comments.py` (all `_run_locked`); `local_review/review.py`, `local_review/address.py`, `local_review/git.py` (no token passed) | Ses | migrated (Phase 3) |
+| INV-PR-45 | hand-built `{**env, "GITHUB_TOKEN": ...}` dict | env literal | `focused_review.py`, `review_requested.py`, `self_review.py` `_build_backend` (reads `env.get("GITHUB_TOKEN")`, `RuntimeError` if empty), `ci_fix.py` `_agent_fix_and_push`, `address_comments.py` | Ses | migrated (Phase 3) |
+| INV-PR-46 | check gh installed | `shutil.which("gh")` | `pr_review/cli.py` `cmd_validate` | Ses | migrated (Phase 3) |
+| INV-PR-47 | config default / template | `gh_token_cmd = "gh auth token"` | `pr_review/cli.py` `TEMPLATE`; `pr_review/config.py` `gh_token_cmd` field and TOML default | Ses | migrated (Phase 3) |
+
+Error types (error surface of the rows): `_IssueFetchError` (INV-PR-08, `common.py`, deleted in Phase 3; work-item read failures
+are `CodeHostError`), `MergeError` (INV-PR-34),
 `AutoApproveError` (INV-PR-27, raised when the `pr list` fails or a PR fails), `CiFixError` (INV-PR-25, INV-PR-26). Each class
 exists at the audited commit. Consumers of INV-PR-07 that are not direct gh callers: `_check_timing_gate` and
 `_check_approval_safety` in `auto_approve_github.py` (via `fetch_all_pages`).
@@ -281,7 +289,7 @@ Examined and not call sites (docstrings, comments, log or error text, prose). By
 - `pr_review/runners/`: `self_review.py`, `auto_approve.py` (error text, docstring), `ci_fix.py` (`UNKNOWN_STEP`, docstrings),
   `auto_approve_github.py` (module docstring, failure strings, comments), `review_requested.py` (comments, docstring),
   `ci_checks.py` (log text, docstrings, `_ZERO_YEAR` comment), `merge.py` (docstring, error text), `regret_review.py`
-  (docstrings, the `gh api commits/...` log label), `common.py` (docstrings, log text, `get_gh_token` docstring).
+  (docstrings, the `gh api commits/...` log label), `common.py` (docstrings, log text). The `get_gh_token` docstring and the `headRefName` and `git/gh` prose that Phase 3 left behind were reworded in the final audit (A-4c).
 - `vibe_heal/`: `review/github.py` (docstrings), `review/orchestrator.py` (docstrings).
 - `sisyphus/`: `cleanup.py` (docstrings, failure text), `orchestrator.py` (`PR_NUMBER_KEY` comment, protocol docstring),
   `cli.py` (docstrings, error text, `--check-prs` help), `pick.py` (docstrings, error text), `config.py` (docstring).
@@ -333,10 +341,12 @@ from the four lists. Confirmed decisions:
 - INV-PR-46 and INV-PR-47 are Phase 3.
 - INV-LO-06 is grouped with Phase 4 although it is never migrated.
 
-Remaining direct gh users after Phase 2: the 7 vibe-heal rows (`INV-VH-01` .. `INV-VH-07`) and the 12 sisyphus rows
-(`INV-SY-01` .. `INV-SY-12`) are migrated (marked in their tables). A search of `src/` finds `gh` users only in `gh.py`,
-`pr_review/` and `scripts/pr-comments.py`. 53 of the 72 inventory rows are still direct users: 47 pr-review rows
-(`INV-PR-*`, Phase 3) and 6 leftover rows (`INV-LO-*`, Phase 4; `INV-LO-06` is never migrated). `vibe_heal/review/github.py`
+Remaining direct gh users after Phase 3: the 7 vibe-heal rows (`INV-VH-01` .. `INV-VH-07`), the 12 sisyphus rows
+(`INV-SY-01` .. `INV-SY-12`) and the 47 pr-review rows (`INV-PR-01` .. `INV-PR-47`) are migrated (marked in their tables).
+A search of `src/` finds `gh` or `dotharness.gh` users only in `code_host/reference.py` (the reference host), `gh.py`,
+`repo_guard.py`, the `scripts/pr-comments.py` copies and the knowledge prompt files under `src/dotharness/knowledge/`.
+`pr_review/runners/local_review/*` imports `build_subprocess_env` from `gh.py` and passes no token. 6 of the 72 inventory
+rows are still direct users: the leftover rows (`INV-LO-*`, Phase 4; `INV-LO-06` is never migrated). `vibe_heal/review/github.py`
 keeps the old names as aliases of the `code_host` errors until Phase 4 (R3).
 
 Git code (`repo_guard.py` origin check, `git fetch origin refs/pull/{n}/head` in `auto_approve.py`) is in no list.
@@ -346,11 +356,11 @@ and `vibe_heal/cli.py` (consume `GitHubReviewClient`, updated in Phase 1 with th
 
 ### Shared users
 
-- `gh.py` (INV-LO-01): Phase 4. Every group above calls it. It can be deleted only after the last caller has moved, so
-  earlier phases keep calling it and it is the last thing to go.
+- `gh.py` (INV-LO-01): Phase 4. The reference host, `repo_guard.py`, `local_review/*` (`build_subprocess_env` only) and the
+  scripts still use it. It can be deleted only after the last caller has moved, so it is the last thing to go.
 - `pr_review/runners/ci_checks.py` `gh` (INV-PR-07 transport): Phase 3, together with both of its other callers, `merge.py`
-  (squash merge write path) and `ci_fix.py` (as `_gh`). All three sit in `pr_review/runners/`. Moving the helper alone would
-  leave two callers on a deleted function.
+  (squash merge write path) and `ci_fix.py` (as `_gh`). All three moved to the Checks and ChangeRequests interfaces in Phase 3.
+  The `gh` callable, the `_gh` alias and the `run_gh` seam are gone from `pr_review/`.
 - INV-PR-18 (runner side of the pr-comments child process, `common.py` `fetch_pr_comments`) is Phase 3. The script's own gh
   calls (INV-LO-02..05) are Phase 4. The script keeps working unchanged in between because the runners spawn it by path.
 
@@ -1193,7 +1203,7 @@ Change request (`--json` on `pr view`, `pr list`, `search prs`):
 | `commits[].committedDate` | same | `CommitInfo` | `committed_at` | ISO text to aware `datetime`. Unparsable is `None` |
 | `commits[].oid` | same (implied by the list shape) | `CommitInfo` | `revision` | |
 | `createdAt` | `runners/self_review.py`, `runners/review_requested.py`, `runners/common.py` | `ChangeRequest` | `created_at` | ISO text to aware `datetime` |
-| `closingIssuesReferences` | `runners/self_review.py`, `runners/review_requested.py`, `runners/common.py` | `ChangeRequest` | (none) | not a `ChangeRequest` field. Each reference becomes a `WorkItemRef` returned by `WorkItems.linked_work_items()` |
+| `closingIssuesReferences` | `runners/self_review.py`, `runners/review_requested.py`, `runners/common.py` | `ChangeRequest` | (none) | not a `ChangeRequest` field. Each reference becomes a `WorkItem` in the `Sequence[WorkItem]` that `WorkItems.linked_work_items()` returns. The Protocol wins over this table (D-11, DEC-36), so the earlier `WorkItemRef` wording is wrong |
 
 Work item (`issue view`, `issue list`):
 
@@ -1475,6 +1485,12 @@ unchanged. Initial policies [inferred; DEC-22]:
 | `pr_review` runners | merge, auto-approve, ci-fix | ChangeRequests / Checks | stop |
 | `pr_review` runners | current-user lookup | Session | warn (keeps the blank-user fail-open result) |
 | `sisyphus` | issue picking and label removal | WorkItems | stop for picking, warn for label removal |
+| `pr_review` `auto_approve` | approve (`approve`, `reviews`, `commits`) | ChangeRequests | stop |
+| `pr_review` `auto_approve` | viewed state (`viewed_files`, `mark_viewed`) | ChangeRequests | degrade [inferred, DS-8] |
+| `pr_review` regret review | commit lookup (`find_by_commit`) | ChangeRequests | stop |
+| `pr_review` traceability reads | `WorkItems.get`, `linked_work_items` | WorkItems | stop |
+| `pr_review` reviewer requests | `request_reviewer` and reviewer reads | ChangeRequests | warn |
+| `pr_review` any other site not listed | every unlisted host call, for example `ChangeRequests.list` in `auto_approve` and `Discussion.post_comment` | any | stop [inferred, OD-1] |
 
 ### Message and secret rules
 
@@ -1561,6 +1577,8 @@ class HostLimits:
     max_change_request_body_chars: int
     timeouts: OperationTimeouts
     list_bounds: ListBounds
+    page_attempts: int = 3  # tries for each page of a paged read
+    page_retry_delay_seconds: float = 2.0  # pause before a retry, times the attempt number
 ```
 
 - The keys of both `per_operation` maps are written `Interface.method`, using the Protocol and method names of the Interfaces
@@ -1573,6 +1591,10 @@ class HostLimits:
   - `timeouts`: the host implementation, which applies them to its own calls. A consumer never passes a timeout.
   - `list_bounds`: the host implementation of every list-returning operation, which returns at most that many items. A bound of `None` means the host returns every item. A host never
     truncates silently: if it cannot return the whole result under the bound that applies, it raises `CodeHostError` instead.
+- `page_attempts` and `page_retry_delay_seconds` (added in A-1, with defaults, so the interface version stays 2): a host that
+  reads a list page by page tries each page `page_attempts` times and pauses `page_retry_delay_seconds` times the attempt
+  number between tries. A timeout or an authentication error is not retried. The page loops of `common.py` and
+  `review_requested.py` retry the same way today.
 - A list size bound is a declared limit, never a paging parameter. No operation takes a page, cursor or `--limit` argument and
   no caller passes one. Each declared bound replaces `--limit 1000` (`address_comments.py`), `--limit 500` (the four
   `@me` listings), the single-call `per_page=100` (`ci_checks.py`. The paged loops in `common.py` and `review_requested.py`
@@ -1604,6 +1626,45 @@ means the default applies).
 | list bound, open CR bodies (INV-SY-05) | 200 | `WorkItems.open_change_request_bodies` | `GhPullRequestLookup.__init__(limit=200)` in `sisyphus/pick.py` |
 | list bound, exhaustive reads (INV-PR-07, INV-PR-17, INV-PR-29, INV-PR-39, INV-PR-40, INV-PR-42) | `None` | `Discussion.comments`, `Discussion.review_threads`, `ChangeRequests.reviews`, `ChangeRequests.commits`, `ChangeRequests.viewed_files` | `fetch_all_pages`, `--paginate` and cursor loops page to exhaustion today (safety gates read them in full) |
 | list bound, workflows | 100 | `Checks.list_workflows` | `per_page=100` in `ci_checks.py` |
+| `page_attempts` | 3 | | the page loops of `common.py` (A-1, DS-2: a declaration field, not an operation key) |
+| `page_retry_delay_seconds` | 2.0 | | the same loops |
+
+DS-2: no new operation key was added for A-1. `Session.credential` and every new method run under the 30 s default. If a
+consumer reads `is_pr_open` with `ChangeRequests.state`, that read keeps the declared 10.0 s key (DEV-7). If it reads it with
+`ChangeRequests.get`, the 30 s default applies.
+
+Deviations of the reference implementation from today's `gh` calls (A-1). Each is a behavior change a consumer sees:
+
+| ID | Deviation |
+| --- | --- |
+| DEV-1 | `--author @me` becomes `--author <login>`, with one `Session.current_user` call to get the login. |
+| DEV-2 | `user-review-requested:@me` becomes `user-review-requested:<login>`, the same login. |
+| DEV-3 | Single-field `pr view` reads (INV-PR-14, INV-PR-15, INV-PR-16 and similar) become `ChangeRequests.get`, which reads the full field set in one call. |
+| DEV-4 | `--limit 500` becomes the declared bound 1000 for `ChangeRequests.list`. |
+| DEV-5 | `Session.agent_environment` sets `GITHUB_TOKEN` and `GH_TOKEN` for an agent child process. The `gh` children of the host get `GH_TOKEN` only. Whether the extra `GH_TOKEN` in an agent child is acceptable under the parity goal is open decision OD-3: DEC-6 does not say. This page records the behavior as built. The conformance case B-SES-4 asserts both names. |
+| DEV-6 | The token command runs through `shlex.split`, with no shell, under a 30 s timeout. A command that needs a shell no longer works. A timeout is `CodeHostTimeoutError(write=False)`. |
+| DEV-7 | Conditional (DS-2). If `is_pr_open` reads the state with `ChangeRequests.state`, its timeout is 10 s, as today. If it reads with `ChangeRequests.get`, the 30 s default applies and the timeout changes from 10 s to 30 s. Resolved in Phase 3: `is_pr_open` became `is_change_request_open` and reads with `ChangeRequests.state`, so the 10 s key applies. |
+| DEV-8 | pr-review runners guard an empty login: with no current user they log a warning and make no listing call (an empty filter would list every change request). `auto_approve` is stricter: an unknown current user raises `AutoApproveError` (before, `@me` made `gh` fail). |
+| DEV-9 | `focused_review` reads review-requested change requests with one `requested_reviewer` listing (DEV-2). `review_requested` logs a failed listing as a warning. |
+| DEV-10 | The focused-review thread merge no longer sets a comment node id: `Comment.id` is the REST id, not a GraphQL node id. The prompt reads `Comment node ID: ?` and the agent skips the comment-minimize step. The human-issue-comment check treats an author as a bot when `Comment.author.is_bot` is true or the login is one of the two known bot logins (before, only the two logins). |
+| DEV-11 | Linked tickets are the pr-review type `LinkedTicket` (number, repository text, title, body, source), not `WorkItem`, because ticket-system linkbacks are not host work items. Native linking is all-or-nothing: a partial failure yields no tickets. |
+| DEV-12 | Regret review raises `RuntimeError` when the PR context carries no change request (before it failed open). A `CodeHostTimeoutError` on a commit lookup stops the sequence. The comment post is not retried and has no fallback. |
+
+Phase 3 test disposition (DS-11). The files under `tests/pr_review` that matched the grep `get_gh_token|run_cmd|\bgh\b|gh_argv|_gh\b`, as classified at the end of Phase 3 from the repository state. "Converted" means the host reads and writes are served by `InMemoryCodeHost` (through `runner_support.py` or `approve_support.py`) and no test patches a `gh` command. "Kept" means the remaining hits are `run_cmd` git calls or agent runs. No file moved to `tests/code_host`: the host-level cases already live there (`test_reference.py`, `test_reference_conformance.py`, `test_in_memory.py`).
+
+| File (under `tests/pr_review/`) | Disposition |
+| --- | --- |
+| `runners/test_address_comments.py` | converted to the fake (listing, pruning); git and agent parts kept |
+| `runners/test_auto_approve.py`, `test_auto_approve_approval.py`, `test_auto_approve_gate.py`, `test_auto_approve_safety.py`, `test_auto_approve_viewed.py` | converted to the fake |
+| `runners/test_auto_approve_size.py` | kept (git only) |
+| `runners/test_ci_checks.py`, `test_ci_fix.py`, `test_merge.py` | converted to the fake (`ci_fix` keeps its git and agent parts) |
+| `runners/test_common_comments.py`, `test_common_prs.py`, `test_common_traceability.py` | converted to the fake (`test_common_comments.py` keeps its git patches) |
+| `runners/test_common_pr_diff.py` | converted for the host reads (`get_pr_*`), kept for the git diff helpers |
+| `runners/test_common.py` | kept (git helpers, `run_cmd`, prompt and state helpers) |
+| `runners/test_focused_review.py`, `test_regret_review.py`, `test_review_prs.py`, `test_review_requested.py`, `test_self_review.py` | converted to the fake for every host call; git and agent parts kept |
+| `runners/test_local_review.py`, `test_local_review_address.py`, `test_local_review_findings.py`, `test_local_review_git.py`, `test_local_review_store.py`, `runners/test_prune_projects.py` | kept (git or agent only, no host) |
+| `test_cli.py`, `test_common.py` | converted to the fake for host and token paths (`open_host` patched, fake host) |
+| `test_config.py`, `test_state.py` | kept (the hits are the `gh_token_cmd` / `gh auth token` config strings and state helpers, no host call) |
 
 Phase 2 deviation from G1: the reference host applies these declared limits. The other sisyphus `gh` calls ran with a
 3600 s limit before. They now run under the 30 s default. The two sisyphus listings use the host's own list bounds. The
@@ -1901,7 +1962,7 @@ class TestExampleHost(CodeHostConformance):
 - **Opting out of a capability.** An implementation that lacks a capability leaves it out of `declaration.capabilities`
   (Declarations, "Capabilities"). The suite reads the declaration, skips nothing silently, and for each undeclared capability
   runs the B-ERR-4 test instead of that capability's group. A group is never skipped because a test fails.
-- **Suite validated by the fake.** `InMemoryCodeHost` must pass every test the suite runs against it: the groups of the capabilities it declares (Session, Repository, ChangeRequests, Discussion; see the review-flow subset below) and B-ERR-4 for the two it does not (Checks, WorkItems). A declared capability's group exercises only the methods that group names, so a declared-but-partial capability is not asked to implement methods outside it. That is a requirement, and a Phase 1 test
+- **Suite validated by the fake.** `InMemoryCodeHost` must pass every test the suite runs against it: the groups of the capabilities it declares (all six by default) and B-ERR-4 for any it does not declare. A declared capability's group exercises only the methods that group names, so a declared-but-partial capability is not asked to implement methods outside it. That is a requirement, and a Phase 1 test
   (`TestInMemoryCodeHost(CodeHostConformance)` in `tests/code_host/test_in_memory.py`) enforces it. The reference host passes the same suite in `tests/code_host/test_reference_conformance.py` with a stubbed runner. It is how the fake stays honest.
 - **Packaging check (NF-9).** A test in the style of `tests/test_wheel_install.py` (build the wheel, install it into a clean
   venv outside the repo, then exercise it) or `tests/test_package_data.py` confirms the module ships. The assertion: in the clean
@@ -1931,6 +1992,10 @@ Types and error names come from the sections cited above. Each behavior has a st
 | B-ERR-4 | For each capability absent from `declaration.capabilities`, every method of that interface (taken from `CodeHost`, Factory) raises `UnsupportedCapabilityError` whose `capability` equals the interface name. Not `AttributeError`, not a stub result. |
 | B-ERR-5 | No error raised by the host carries a token value: with a credential `<token>` and a token command string, `str(exc)`, `repr(exc)` and `str(exc.__cause__)` of every error type from B-ERR-1..4 contain neither (Error model, "Message and secret rules"). |
 | B-ERR-6 | Each of the six error types is a subclass of `CodeHostError` (Error model R5). |
+| B-ERR-7 | A request that failed raises `CodeHostError`. A result that is empty (an empty sequence, an empty mapping, or `None` for `WorkItems.get`) is returned, never raised. The suite runs one table of every method added in A-1: it seeds the data, then makes the host fail with `fail_next` and expects the error. |
+| B-ERR-8 | For every method in that table, a read that times out raises `CodeHostTimeoutError` with `write=False`, and a write raises it with `write=True`. |
+| B-ERR-9 | For every method in that table and for six error types (plain, timeout, authentication, unsupported capability, configuration, no change request), `str(exc)`, `repr(exc)`, `exc.args`, the `__cause__` chain, the host `repr` and the log records hold no token. The suite asserts the sentinel `<token>`. A host's stub keeps the token out of its own failure text, because the reference redacts the token to the same `<token>` placeholder. |
+| B-LIM-4 | A read that the declaration bounds with `None` returns every item over a page boundary: the suite seeds 201 items for `ChangeRequests.commits`, `ChangeRequests.reviews`, `ChangeRequests.viewed_files`, `Discussion.comments` and `Discussion.review_threads` and expects all of them. A bounded read over its bound (`ChangeRequests.find_by_commit`, `Checks.list_workflows`) raises `CodeHostError` or returns every item. It never cuts the result short (DEC-31). |
 
 B-ERR-2 asserts the error type and the `write` flag only. It does not assert that the write is retry-safe, because the Error
 model says consumers must not retry after `write=True` and defines no idempotency promise (DEC-41).
@@ -1942,13 +2007,13 @@ model says consumers must not retry after `write=True` and defines no idempotenc
 | B-SES-1 | `available()` returns a `bool` and does not raise, with and without credentials. |
 | B-SES-2 | `current_user()` returns the login the seeder configured. Without credentials it raises `AuthenticationError`. |
 | B-SES-3 | `credential()` returns a `Credential`. Its `repr` does not contain the token (Models: `token` is `repr=False`). |
-| B-SES-4 | `agent_environment_names()` returns the names as data. `agent_environment(base)` contains every base entry and each credential variable, and a credential variable wins over a base entry of the same name. |
+| B-SES-4 | `agent_environment_names()` returns the names as data: `GITHUB_TOKEN`, `GH_TOKEN`, in that order (DEV-5). `agent_environment(base)` lists the base entries first and in their own order, then the credential variables not in `base`. Each credential variable holds the credential, so it wins over a base entry of the same name. `base` is not changed. |
 | B-REP-1 | `resolve(identity)` for a seeded identity returns a `RepositoryRef`. For an unknown identity it raises `ConfigurationError`. |
 | B-REP-2 | A `RepositoryRef` is opaque: passing the ref from `resolve()` to another method works without the test parsing it, and two `resolve()` calls for one identity return equal refs. |
 | B-REP-3 | `current()` returns a ref for the repository the target was created for (`ConfigurationError` when the target has none). `default_branch(ref)` returns the seeded name. `display_name(ref)` returns a non-empty `str`. |
 | B-CR-1 | `get(repo, n)` returns the seeded `ChangeRequest`. For a missing number it raises `CodeHostError`. |
 | B-CR-2 | `find_by_branch` returns the change requests whose `head_reference` equals the branch, honoring `state` (default open). |
-| B-CR-3 | `list` returns seeded change requests in insertion order, filtered by `state`, `author`, `assignee` and `requested_reviewer` when given. |
+| B-CR-3 | `list` returns seeded change requests, filtered by `state`, `author` and `requested_reviewer` when given. The order is the host's (the fake: insertion order), so the suite compares sets. A host that has no assignee data matches nothing for a non-empty `assignee`. |
 | B-CR-4 | `find_by_commit`, `commits` (oldest first) and `reviews` return what was seeded. A change request with none returns an empty sequence. A fake seeded with more items than the default list bound returns all of `reviews` and `commits` (their declared bound is `None`). |
 | B-CR-5 | `create_draft` returns a `ChangeRequest` with `is_draft` true and visible to a following `get` and `find_by_branch`. Creating a second one for the same head and base raises `CodeHostError`. |
 | B-CR-6 | `squash_merge(expected_head=...)` with the current head revision makes the state merged. With a different revision it raises `CodeHostError` and changes nothing. |
@@ -1969,7 +2034,15 @@ model says consumers must not retry after `write=True` and defines no idempotenc
 | B-WI-5 | `open_change_request_bodies` returns open change requests with their descriptions, separate from B-WI-4 (Interfaces: the two lookups are not merged). |
 
 Conformance groups built in Phase 2: B-SES-3, B-REP-3, B-CR-1, B-CR-2, B-CR-5 and B-WI-1 to B-WI-5, run against the reference
-host (with a stubbed `gh`) and the fake. B-CR-3/4/6/7/8, B-DIS-1..3 and the Checks groups stay for Phase 3.
+host (with a stubbed `gh`) and the fake. A-1 adds B-SES-2, B-SES-4, B-REP-1, B-CR-3, B-CR-4, B-CR-6 to B-CR-8, B-DIS-1 to
+B-DIS-3, B-CHK-1 to B-CHK-3, B-ERR-7 to B-ERR-9 and B-LIM-4, and extends B-CR-1 to the full field set. The reference run uses
+`GhStub` in `tests/code_host/test_reference_conformance.py`, which plays `gh` for the REST, GraphQL and command-line calls
+of the new methods. The fake run is `TestInMemoryCodeHost`. `ConformanceTarget.unsupported` lists a declared operation a host
+does not implement. The suite asserts that each one raises.
+
+`HostSeeder` gains `set_user`, `add_commit`, `add_review`, `add_comment`, `add_thread`, `add_check`, `add_workflow`,
+`add_job` and `fail_next(operation, error)`. A host's seeder maps `fail_next` onto its transport: a timeout, a rejected
+call, or the runner itself failing. The host maps it back to the error type.
 
 **Review flow (Phase 1 extension).** These ids extend the table above for the vibe-heal review flow. They are implemented by
 `CodeHostConformance` in `dotharness.code_host.testing`. The seeder handle is `HostSeeder` (`set_available`,
@@ -2006,6 +2079,8 @@ injection methods of the table in "In-memory fake" below are the full design tar
 what exists. A test can set the current repository, the current-branch change request (or none), availability, a rejection
 (which forces the fallback and its reason) and a post failure (a timeout, for example), and reads the recorded posts.
 
+That paragraph describes Phase 1 only. Phases 2 and 3 replaced it: the fake now implements and declares all six capabilities and every method, and the per-method groups above run against it.
+
 **Factory and version (B-FAC).** Run once per module by `CodeHostConformance` against `create_code_host` with the implementation
 registered, using only standard-library patching of entry-point discovery.
 
@@ -2021,7 +2096,7 @@ registered, using only standard-library patching of entry-point discovery.
 One class, `InMemoryCodeHost`, in `code_host/testing.py`. It implements all six capability Protocols and serves as its own
 `HostSeeder`. Constructor (all keyword-only):
 `InMemoryCodeHost(*, repository: str = "example/repo", user: str = "fake-user", token: str = "<token>", capabilities: frozenset[Capability] | None = None, declaration: HostDeclaration | None = None)`.
-The default `capabilities` is every capability except Checks (Phase 2 does not build Checks). Passing Checks raises `ConfigurationError`.
+The default `capabilities` is every capability. Passing a subset leaves the other capabilities undeclared.
 `capabilities` selects the declared subset (this is how B-ERR-4 is exercised). An undeclared interface raises
 `UnsupportedCapabilityError(capability=<name>)` from each method, as the factory substitutes (Factory, "Factory"). The fake
 registers itself as `FAKE_REGISTRATION` (a `HostRegistration` with `interface_version=CODE_HOST_INTERFACE_VERSION`), selectable by
@@ -2049,12 +2124,12 @@ Models types. Each returns the created model so a test can use it as an expected
 | `link_closing` | `repo, *, work_item: int, change_request: int` | `None` |
 | `set_user` | `login: str` | `None` |
 
-Built so far (Phases 1 to 2): `capabilities=`, `add_work_item`, `add_change_request`, `link_closing`, `set_default_branch`,
-`set_user`, `fail_next`, `fail_always`, `clear_failures`, `calls`, `writes`, read-only `work_items` and `change_requests`, and
-`FAKE_REGISTRATION` (with `FakeOptions(repository, user)`). The fake implements Session `credential`, Repository
-`default_branch`, ChangeRequests `get`, `state`, `find_by_branch` and `create_draft`, and all six WorkItems methods. The other
-seeders (`add_repository`, `add_commit`, `add_review`, `add_comment`, `add_thread`, `add_check`, `add_workflow`, `add_job`) and the
-`comments`, `threads`, `reviews` and `checks` views stay for Phase 3. `set_default_branch` is global, not per repository.
+Built so far (Phases 1 to 3): every seeder in the table (`add_repository`, `add_work_item`, `add_change_request`,
+`add_commit`, `add_review`, `add_comment`, `add_thread`, `add_check`, `add_workflow`, `add_job`, `link_closing`,
+`set_default_branch`, `set_user`), the failure methods (`fail_next`, `fail_always`, `clear_failures`), `calls`, `writes`, the
+read-only views `work_items`, `change_requests`, `comments`, `threads`, `reviews` and `checks`, `capabilities=`, and
+`FAKE_REGISTRATION` (with `FakeOptions(repository, user)`). The fake implements every method of the six Protocols.
+`set_default_branch` is global, not per repository.
 
 `number=None` assigns the next number for that repository. `add_repository(..., is_current=True)` makes it the answer of
 `Repository.current()`. None marked makes `current()` raise `ConfigurationError`.
@@ -2095,10 +2170,10 @@ f293b99. "Members" are interface methods (Interfaces) served by the fake.
 | `LabelRemover` | `src/dotharness/sisyphus/pick.py` (`Protocol`) | label removal | WorkItems: `remove_label`. Inspect via `calls` / `work_items` |
 | `TrackerClient` | `src/dotharness/sisyphus/pick.py` (`Protocol`, `list_candidates(source)`) | candidate listing in tracker order | WorkItems: `list_open`. Seed with `add_work_item` |
 | `PullRequestLookup` | `src/dotharness/sisyphus/pick.py` (`Protocol`, `linked_prs`, `open_pr_bodies`) | linked and open PR reads | WorkItems: `closing_change_requests` (`linked_prs`), `open_change_request_bodies` (`open_pr_bodies`). Seed with `link_closing`, `add_change_request` |
-| `GhCli` | `src/dotharness/sisyphus/pick.py` (class, removed in Phase 2) | wrapped the `gh` subprocess | The whole fake (all capabilities except Checks) |
+| `GhCli` | `src/dotharness/sisyphus/pick.py` (class, removed in Phase 2) | wrapped the `gh` subprocess | The whole fake (all six capabilities) |
 | `PullRequestClient` | `src/dotharness/sisyphus/orchestrator.py` (`Protocol`) | orchestrator PR operations | ChangeRequests: `get`, `find_by_branch`, `create_draft`. Confirmed in Phase 2: `find_pr` is `find_by_branch` (open), `open_pr` is `create_draft`, `pr_state` is `get` (a number) or `find_by_branch(state=None)` (a branch) |
-| injected `_gh` param | pr-review `list_own_open_prs(..., _gh)` | tests pass a fake callable | ChangeRequests: `list(author=...)` with Session `current_user`. Seed with `add_change_request(author=...)`, `set_user` |
-| `gh` callable | `src/dotharness/pr_review/runners/ci_checks.py` (`async def gh(args, env)`) | runs `gh`, returns `CompletedProcess` | Checks: `list_checks`, `list_workflows`, `failed_log`, `get_job`. Seed with `add_check`, `add_workflow`, `add_job` |
+| injected `_gh` param | pr-review `list_own_open_prs(..., _gh)` | tests pass a fake callable | ChangeRequests: `list(author=...)` with Session `current_user`. Seed with `add_change_request(author=...)`, `set_user`. Replaced in Phase 3: the `_gh` / `run_gh` seam is gone and the tests use the fake |
+| `gh` callable | `src/dotharness/pr_review/runners/ci_checks.py` (`async def gh(args, env)`) | runs `gh`, returns `CompletedProcess` | Checks: `list_checks`, `list_workflows`, `failed_log`, `get_job`. Seed with `add_check`, `add_workflow`, `add_job`. Replaced in Phase 3: the `gh` callable and its `_gh` import alias are gone |
 
 Gap rule: a seam the fake cannot replace without a new interface method is reported here, not worked around. No gap is found. The two
 "to be confirmed" notes were checked in Phase 2 against the code.

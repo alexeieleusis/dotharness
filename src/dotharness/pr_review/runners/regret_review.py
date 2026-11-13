@@ -1,19 +1,26 @@
-import json
+import asyncio
 import logging
 import re
 import subprocess
 import time
 from dataclasses import dataclass
 
-from dotharness.gh import gh_argv
+from dotharness.code_host import (
+    ChangeRequest,
+    CodeHost,
+    CodeHostError,
+    RepositoryRef,
+    UnsupportedCapabilityError,
+)
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.runners.common import (
     PR_COMMENTS_SCRIPT_PATH,
     REGRET_REVIEW_MARKER,
-    TIMEOUT_GH,
+    Site,
     _build_pr_metadata_trailer,
     author_matches,
+    call_with_policy,
     count_diff_lines,
     fetch_pr_comments,
     get_changed_files,
@@ -157,7 +164,7 @@ def _budget_clock(budget_start: float | None) -> float:
 def _remaining_budget(budget_start: float, budget_seconds: int) -> int | None:
     """Whole seconds left in the pass's shared wall-clock budget, or None once it is
     exhausted. The budget is config.regret_review.regret_review_timeout: one overall cap
-    on this pass's per-PR git/gh calls (regret-review-requirements.md §7.5/§8), checked
+    on this pass's per-PR git/host calls (regret-review-requirements.md §7.5/§8), checked
     and decremented before every call rather than spent as fresh per-call constants —
     the remaining seconds are what the next call's run_cmd timeout gets, so every call
     in the sequence shares one budget instead of each getting a full one."""
@@ -268,22 +275,22 @@ def _line_within_hunk_ranges(line: int, ranges: list[tuple[int, int, int, int]])
     return False
 
 
-async def _pr_gate_setup(pr: dict, config: HarnessConfig, wdir: str, env: dict) -> tuple[int, str, list[str]] | None:
+async def _pr_gate_setup(
+    host: CodeHost, repo: RepositoryRef, pr: ChangeRequest, config: HarnessConfig, wdir: str, env: dict
+) -> tuple[int, str, list[str]] | None:
     """The G2 author gate plus the gate setup: (number, base_branch, changed files), or
-    None when this PR is skipped entirely — no number, an author that does not match
+    None when this PR is skipped entirely — an author that does not match
     config.regret_review.authors (an empty login never matches: author_matches does a
     substring check against string-form allowlists, where the empty string would
     vacuously match, so an authorless PR is treated as non-matching, fail-closed), or an
-    undeterminable base branch. Checked before any git/gh work, so a non-matching PR
+    undeterminable base branch. Checked before any git/host work, so a non-matching PR
     does zero subprocess calls."""
-    number = pr.get("number")
-    if number is None:
-        return None
-    login = (pr.get("author") or {}).get("login", "")
+    number = pr.number
+    login = pr.author.login if pr.author else ""
     if not login or not author_matches(login, config.regret_review.authors):
         logger.debug("PR #%d: author %r does not match regret_review.authors — skipping regret review", number, login)
         return None
-    base_branch = await get_pr_base_branch(number, config.repo.name, env)
+    base_branch = await get_pr_base_branch(host, repo, number)
     if not base_branch:
         logger.debug("PR #%d: could not determine the base branch — skipping regret review", number)
         return None
@@ -392,51 +399,68 @@ async def _blame_removed_ranges(
 
 
 async def _resolve_commit_prs(
+    host: CodeHost,
+    repo: RepositoryRef,
     shas: list[str],
-    repo: str,
-    env: dict,
     number: int,
     budget_start: float,
     budget_seconds: int,
 ) -> dict[str, list[int]] | None:
     """G5: resolve each unique introducing SHA (already deduplicated per G4) to its PR
-    via `gh api repos/{repo}/commits/{sha}/pulls`. A zero-PR result — an API failure or
-    a confirmed no-PR answer (direct push, deleted PR) — omits that SHA from the result:
+    via ``ChangeRequests.find_by_commit``. A zero-PR result — a failed read or a
+    confirmed no-PR answer (direct push, deleted PR) — omits that SHA from the result:
     its lines are skipped silently (debug only, no retry, fail open, §7.1 step 4).
     Multiple PR results (e.g. a cherry-pick) are all kept, so every one is evaluated
-    independently downstream. None means the budget was exhausted mid-sequence."""
+    independently downstream. None means the budget was exhausted mid-sequence (before
+    a lookup, or the lookup itself ran out the remaining seconds). An unsupported
+    capability follows the ``regret_review`` policy (stop) and propagates."""
     prs_by_sha: dict[str, list[int]] = {}
     for sha in shas:
-        result = await _run_within_budget(
-            gh_argv("api", f"repos/{repo}/commits/{sha}/pulls"),
-            "/",
-            env,
-            number,
-            f"gh api commits/{sha}/pulls",
-            budget_start,
-            budget_seconds,
-        )
-        if result is None:
-            return None
-        if result.returncode != 0:
+        remaining = _remaining_budget(budget_start, budget_seconds)
+        if remaining is None:
             logger.debug(
-                "PR #%d: commit %s PR lookup failed (exit %d) — skipping its lines",
+                "PR #%d: regret-review budget (%ds) exhausted before commit %s PR lookup — stopping the sequence",
                 number,
+                budget_seconds,
                 sha,
-                result.returncode,
             )
-            continue
+            return None
+
+        async def lookup(sha: str = sha) -> list[int]:
+            found = await host.change_requests.find_by_commit(repo, sha)
+            return [c.number for c in found]
+
         try:
-            pulls = json.loads(result.stdout)
-        except ValueError:
-            logger.debug("PR #%d: commit %s PR lookup returned malformed JSON — skipping its lines", number, sha)
+            async with asyncio.timeout(remaining):
+                numbers = await call_with_policy(Site.REGRET_REVIEW, "ChangeRequests.find_by_commit", lookup, [])
+        except UnsupportedCapabilityError:
+            raise
+        except TimeoutError:
+            # Only the asyncio.timeout expiry means the regret-review budget ran out. A
+            # CodeHostTimeoutError is the host's own per-call limit and can fire with most
+            # of the budget left, so it falls through to the CodeHostError branch (skip SHA).
+            logger.debug(
+                "PR #%d: regret-review budget (%ds) exhausted during commit %s PR lookup — stopping the sequence",
+                number,
+                budget_seconds,
+                sha,
+            )
+            return None
+        except CodeHostError as exc:
+            logger.debug("PR #%d: commit %s PR lookup failed (%s) — skipping its lines", number, sha, exc)
             continue
-        prs_by_sha[sha] = [p["number"] for p in pulls if isinstance(p, dict) and "number" in p]
+        prs_by_sha[sha] = numbers
     return prs_by_sha
 
 
 async def find_introducing_prs(
-    pr: dict, config: HarnessConfig, wdir: str, env: dict, budget_start: float | None = None
+    host: CodeHost,
+    repo: RepositoryRef,
+    pr: ChangeRequest,
+    config: HarnessConfig,
+    wdir: str,
+    env: dict,
+    budget_start: float | None = None,
 ) -> list[IntroducingHunk]:
     """The blame → introducing-commit → introducing-PR resolver
     (regret-review-requirements.md §7.1): given the current PR, the list of surviving
@@ -460,10 +484,10 @@ async def find_introducing_prs(
     own commit. If the merge-base cannot be resolved, origin/{base} is blamed instead.
 
     The blamed SHAs are deduplicated within the run (G4) and each unique one is
-    resolved to its PR(s) via the GitHub commit→PR API (G5); multiple PR results are
+    resolved to its PR(s) via ``ChangeRequests.find_by_commit`` (G5); multiple PR results are
     all kept.
 
-    The whole per-PR sequence of git/gh calls (diffs, merge-base, blames, commit→PR
+    The whole per-PR sequence of git/host calls (diffs, merge-base, blames, commit→PR
     lookups) shares one wall-clock budget — config.regret_review.regret_review_timeout,
     checked and decremented via _run_within_budget before every call, each call's
     timeout being the remaining seconds. An exhausted budget stops the sequence and
@@ -476,7 +500,7 @@ async def find_introducing_prs(
     two functions' calls are one bugfix-shaped sequence sharing a single
     regret_review_timeout cap, not two independent ones (regret-review-requirements.md
     §7.5/§8)."""
-    setup = await _pr_gate_setup(pr, config, wdir, env)
+    setup = await _pr_gate_setup(host, repo, pr, config, wdir, env)
     if setup is None:
         return []
     number, base_branch, files = setup
@@ -523,7 +547,7 @@ async def find_introducing_prs(
     # G4: deduplicate the SHAs within the run — a commit blamed from several ranges or
     # files gets exactly one commit→PR lookup.
     prs_by_sha = await _resolve_commit_prs(
-        sorted({sha for *_, sha in blamed}), config.repo.name, env, number, budget_start, budget_seconds
+        host, repo, sorted({sha for *_, sha in blamed}), number, budget_start, budget_seconds
     )
     if prs_by_sha is None:
         return []
@@ -594,7 +618,7 @@ async def find_regret_candidates(
     distinct blamed ranges yields one candidate per range, the full pair set the
     next leaf batches into one prompt.
 
-    The whole per-PR sequence of git/gh calls (the comment fetches and the hunk-diff
+    The whole per-PR sequence of git/host calls (the comment fetches and the hunk-diff
     calls) shares one wall-clock budget — config.regret_review.regret_review_timeout,
     checked and decremented via _run_within_budget / _remaining_budget the same way
     find_introducing_prs does; an exhausted budget stops the sequence and fails open
@@ -765,7 +789,7 @@ def build_regret_judgment_prompt(
     extra_knowledge: str | None,
     candidates: list[RegretCandidate],
     diff_sections: str,
-    pr: dict,
+    pr: ChangeRequest,
     pr_number: int,
     repo_name: str,
     commit_sha: str,
@@ -794,7 +818,7 @@ def build_regret_judgment_prompt(
         + (f"\n\n## Additional Review Guide\n{extra_knowledge}" if extra_knowledge else "")
         + diff_sections
         + candidates_section
-        + _build_pr_metadata_trailer(pr, pr_number, repo_name, commit_sha, pr_description, vibe_heal_context)
+        + _build_pr_metadata_trailer(pr.url, pr_number, repo_name, commit_sha, pr_description, vibe_heal_context)
     )
 
 
@@ -924,25 +948,20 @@ def is_complete_judgment_response(response: str, candidates: list[RegretCandidat
 # with a single owner).
 
 
-async def post_regret_comment(number: int, repo: str, body: str, env: dict) -> bool:
+async def post_regret_comment(host: CodeHost, repo: RepositoryRef, number: int, body: str) -> bool:
     """Posts the regret-review PR-level comment — the harness posts it, not the backend:
     review-regret.md's output contract is verdict lines only, and the body is built by
     the caller from parse_regret_judgment's findings (regret-review-requirements.md
-    §7.6). True if gh accepted it, mirroring common.post_no_linked_ticket_comment's
-    shape."""
-    result = await run_cmd(
-        gh_argv("pr", "comment", str(number), "--repo", repo, "--body", body),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        logger.error(
-            "PR #%d: failed to post regret comment: %s",
-            number,
-            result.stderr.decode("utf-8", errors="replace"),
-        )
+    §7.6). True if the host accepted it. A failed post (including a timeout) is logged
+    and gives False: a write is never retried and has no fallback post. An unsupported
+    capability follows the ``regret_review`` policy for ``Discussion.post_comment``
+    (unlisted: stop) and propagates."""
+    try:
+        await host.discussion.post_comment(repo, number, body)
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as exc:
+        logger.error("PR #%d: failed to post regret comment: %s", number, exc)  # noqa: TRY400
         return False
     return True
 

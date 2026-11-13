@@ -3,7 +3,12 @@ import logging
 import re
 from pathlib import Path
 
-from dotharness.gh import build_subprocess_env
+from dotharness.code_host import (
+    ChangeRequest,
+    ChangeRequestState,
+    CodeHost,
+    RepositoryRef,
+)
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock, working_dir_lock_key
@@ -13,16 +18,16 @@ from dotharness.pr_review.runners.common import (
     PR_COMMENTS_SCRIPT_PATH,
     TIMEOUT_GIT,
     FatalGitError,
+    backend_env,
     fetch_pr_comments,
     fetch_review_threads,
     find_reply_with_marker,
-    get_current_user,
-    get_gh_token,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
-    list_open_prs_for_current_user,
+    host_current_user,
     merge_thread_state,
+    open_host,
     preserve_reviewer_request,
     run_cmd,
 )
@@ -46,9 +51,9 @@ async def _run_locked(config: HarnessConfig) -> None:
         logger.info("focused_review disabled, skipping")
         return
 
-    gh_token = await get_gh_token(config.harness.gh_token_cmd)
-    env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
-    current_user = await get_current_user(env)
+    scaffold = await open_host(config)
+    host, repo, env = scaffold.host, scaffold.repo, scaffold.env
+    current_user = await host_current_user(host)
 
     script_path = PR_COMMENTS_SCRIPT_PATH
     instructions_template = (config.harness.knowledge_dir / "pr-review" / "focused-review.md").read_text(
@@ -58,27 +63,27 @@ async def _run_locked(config: HarnessConfig) -> None:
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
-        {**config.harness.env, "GITHUB_TOKEN": gh_token},
+        backend_env(config, env),
         expected_repo_name=config.repo.name,
     )
 
     wdir = str(config.repo.working_dir)
-    prs = await list_open_prs_for_current_user(config.repo.name, wdir, env)
+    prs = await _list_prs_for_user(host, repo, current_user)
     if not prs:
         return
 
     original_sha = await git_detach_and_record(wdir, env)
 
     for pr in prs:
-        number = pr["number"]
-        branch = pr["headRefName"]
+        number = pr.number
+        branch = pr.head_reference
         checkout_attempted = False
         try:
             comments = await fetch_pr_comments(number, script_path, wdir, env)
             matches = _matching_comments(comments, current_user)
             if not matches:
                 continue
-            threads = await fetch_review_threads(number, config.repo.name, env)
+            threads = await fetch_review_threads(host, repo, number)
             if threads is None:
                 logger.warning("PR #%d: could not fetch review thread state, skipping focused review", number)
                 continue
@@ -93,7 +98,7 @@ async def _run_locked(config: HarnessConfig) -> None:
             # Replying to these comments can submit a review via the GitHub API as a side
             # effect, which would clear us from the requested-reviewers list — restore it
             # regardless of outcome, since we cannot observe from here whether that happened.
-            async with preserve_reviewer_request(number, config.repo.name, current_user, env):
+            async with preserve_reviewer_request(host, repo, number, current_user):
                 await git_fetch_and_checkout(branch, wdir, env)
                 await _process_matches(matches, config, instructions_template, backend, number, wdir, env)
         except FatalGitError:
@@ -104,6 +109,25 @@ async def _run_locked(config: HarnessConfig) -> None:
         finally:
             if checkout_attempted:
                 await git_restore(original_sha, branch, wdir, env)
+
+
+async def _list_prs_for_user(host: CodeHost, repo: RepositoryRef, login: str) -> list[ChangeRequest]:
+    """Open PRs (drafts included) where the running user is the author, is assigned, or has a review
+    requested from them (union of the three), deduplicated by PR number, sorted ascending.
+
+    All three reads must succeed: a failed read (rate limit, timeout, 5xx) propagates so a partial
+    listing is never mistaken for a complete one. An unsupported capability follows the policy of
+    ``(focused_review, ChangeRequests.list)`` (unlisted: stop).
+    """
+    if not login:
+        logger.warning("No login for the acting user; no PRs to check")
+        return []
+    by_number: dict[int, ChangeRequest] = {}
+    for filter_name in ("author", "assignee", "requested_reviewer"):
+        found = await host.change_requests.list(repo, state=ChangeRequestState.OPEN, **{filter_name: login})
+        for pr in found:
+            by_number.setdefault(pr.number, pr)
+    return sorted(by_number.values(), key=lambda p: p.number)
 
 
 async def _process_matches(

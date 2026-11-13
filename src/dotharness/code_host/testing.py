@@ -12,7 +12,7 @@ Examples use the placeholder token ``<token>``.
 
 import inspect
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -34,11 +34,20 @@ from dotharness.code_host.interfaces import CodeHost
 from dotharness.code_host.models import (
     ChangeRequest,
     ChangeRequestState,
+    Check,
+    CheckStatus,
+    Comment,
+    CommitInfo,
     Credential,
     InlineComment,
+    Job,
     RepositoryRef,
+    Review,
     ReviewPostResult,
+    ReviewState,
+    ReviewThread,
     User,
+    Workflow,
     WorkItem,
     WorkItemState,
 )
@@ -138,6 +147,80 @@ class HostSeeder(Protocol):
         """Record that the change request closes the work item."""
         ...
 
+    def set_user(self, login: str) -> None:
+        """The login of the acting user."""
+        ...
+
+    def add_commit(
+        self,
+        repo: RepositoryRef,
+        number: int,
+        *,
+        revision: str,
+        message: str | None = None,
+        authors: Sequence[str] = (),
+    ) -> CommitInfo:
+        """Append a commit to the change request. Commits are listed oldest first."""
+        ...
+
+    def add_review(
+        self,
+        repo: RepositoryRef,
+        number: int,
+        *,
+        author: str,
+        state: ReviewState,
+        revision: str | None = None,
+        body: str = "",
+    ) -> Review:
+        """Append a review (without inline comments) to the change request."""
+        ...
+
+    def add_comment(self, repo: RepositoryRef, number: int, *, author: str, body: str) -> Comment:
+        """Append a change-request-level comment."""
+        ...
+
+    def add_thread(
+        self,
+        repo: RepositoryRef,
+        number: int,
+        *,
+        anchor: Anchor | None,
+        comments: Sequence[Comment],
+        is_resolved: bool = False,
+    ) -> ReviewThread:
+        """Append a review thread built from the given comments."""
+        ...
+
+    def add_check(
+        self,
+        repo: RepositoryRef,
+        number: int,
+        *,
+        name: str,
+        status: CheckStatus,
+        required: bool = False,
+        job_id: str | None = None,
+    ) -> Check:
+        """Append a check run. ``job_id`` is the job the check's link names. A pending check has no completion time."""
+        ...
+
+    def add_workflow(self, repo: RepositoryRef, *, name: str) -> Workflow:
+        """Add an active workflow."""
+        ...
+
+    def add_job(self, repo: RepositoryRef, *, job_id: str, failed_step: str | None = None, log: str = "") -> Job:
+        """Add a job with its first failed step and its failed log."""
+        ...
+
+    def fail_next(self, operation: str, error: CodeHostError) -> None:
+        """The next call to ``operation`` (``Interface.method``) raises ``error``, or the failure a host would report.
+
+        A real host's seeder makes its transport fail: a timeout, an authentication failure or any other failure. The
+        host maps it to the error type. The outcome is the same for the suite: the call raises a ``CodeHostError``.
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class ConformanceTarget:
@@ -201,13 +284,9 @@ def _public_methods(protocol: type) -> list[str]:
     return [n for n, _ in inspect.getmembers(protocol, inspect.isfunction) if not n.startswith("_")]
 
 
-def _unsupported(capability: Capability, operation: str) -> UnsupportedCapabilityError:
-    msg = f"{capability.value}.{operation} is not supported by the in-memory code host"
-    return UnsupportedCapabilityError(msg, capability=capability.value)
-
-
-# Capabilities the fake implements. Checks is not implemented yet: the fake never declares it.
-_IMPLEMENTED = frozenset(Capability) - {Capability.CHECKS}
+# Every capability is implemented by the fake. Selecting a subset is still possible.
+_IMPLEMENTED = frozenset(Capability)
+_AGENT_ENVIRONMENT_NAMES = ("GITHUB_TOKEN", "GH_TOKEN")
 _OPERATIONS = frozenset(
     f"{capability.value}.{method}"
     for capability in Capability
@@ -226,20 +305,25 @@ _WRITES = frozenset({
     "WorkItems.remove_label",
 })
 _EPOCH = datetime.fromisoformat(_BASE_DATE)
+# Per repository, per change request number, in insertion order.
+_PerChangeRequest = dict[RepositoryRef, dict[int, list[_T]]]
 
 
 class InMemoryCodeHost:
     """A host that keeps everything in memory. It is its own seeder.
 
     ``capabilities`` selects the declared subset (default: ``declaration.capabilities`` when a declaration is given,
-    else every capability the fake implements, which is all but Checks; giving both with different sets raises
+    else all six capabilities; giving both with different sets raises
     ``ConfigurationError``). An undeclared capability raises ``UnsupportedCapabilityError`` from each method. Limits and anchors are
     the reference host values unless ``declaration`` is given. No network, no subprocess, no clock: timestamps come
     from a counter that adds one second per created object.
 
-    Seeding: ``add_work_item``, ``add_change_request``, ``link_closing``, ``set_default_branch``, ``set_repository``,
-    ``set_user``, and the review-flow methods. Failure injection: ``fail_next``, ``fail_always``, ``clear_failures``.
-    Inspection: ``calls``, ``writes``, ``work_items``, ``change_requests``, ``posts``.
+    Seeding: ``add_repository``, ``add_work_item``, ``add_change_request``, ``add_commit``, ``add_review``,
+    ``add_comment``, ``add_thread``, ``add_check``, ``add_workflow``, ``add_job``, ``link_closing``,
+    ``set_default_branch`` (global, not per repository), ``set_repository``, ``set_user``, and the review-flow
+    methods. Failure injection: ``fail_next``, ``fail_always``, ``clear_failures``.
+    Inspection: ``calls``, ``writes``, ``work_items``, ``change_requests``, ``comments``, ``threads``, ``reviews``,
+    ``checks`` (the last four map a repository to a mapping of change request number to a tuple), ``posts``.
     """
 
     def __init__(
@@ -260,11 +344,6 @@ class InMemoryCodeHost:
             declared = declaration.capabilities
         else:
             declared = _IMPLEMENTED
-        if declared - _IMPLEMENTED:
-            msg = "the in-memory code host does not implement: " + ", ".join(
-                sorted(c.value for c in declared - _IMPLEMENTED)
-            )
-            raise ConfigurationError(msg)
         self._repository = RepositoryRef(repository)
         self._user = user
         self._token = token
@@ -278,6 +357,16 @@ class InMemoryCodeHost:
         self._change_requests: dict[RepositoryRef, list[ChangeRequest]] = {}
         self._links: dict[RepositoryRef, list[tuple[int, int]]] = {}
         self._labels: dict[RepositoryRef, set[str]] = {}
+        self._commits: _PerChangeRequest[CommitInfo] = {}
+        self._reviews: _PerChangeRequest[Review] = {}
+        self._comments: _PerChangeRequest[Comment] = {}
+        self._threads: _PerChangeRequest[ReviewThread] = {}
+        self._checks: _PerChangeRequest[Check] = {}
+        self._required: set[tuple[RepositoryRef, int, str]] = set()
+        self._workflows: dict[RepositoryRef, list[Workflow]] = {}
+        self._jobs: dict[RepositoryRef, dict[str, tuple[Job, str]]] = {}
+        self._viewed: dict[tuple[RepositoryRef, int], dict[str, bool]] = {}
+        self._ids = 0
         self._clock = 0
         self._version = 0  # grows with every state change: a call that moves it is a write
         self._next: dict[str, list[_Injected]] = {}
@@ -303,6 +392,22 @@ class InMemoryCodeHost:
     @property
     def change_requests(self) -> Mapping[RepositoryRef, tuple[ChangeRequest, ...]]:
         return MappingProxyType({repo: tuple(items) for repo, items in self._change_requests.items()})
+
+    @property
+    def comments(self) -> Mapping[RepositoryRef, Mapping[int, tuple[Comment, ...]]]:
+        return _view(self._comments)
+
+    @property
+    def threads(self) -> Mapping[RepositoryRef, Mapping[int, tuple[ReviewThread, ...]]]:
+        return _view(self._threads)
+
+    @property
+    def reviews(self) -> Mapping[RepositoryRef, Mapping[int, tuple[Review, ...]]]:
+        return _view(self._reviews)
+
+    @property
+    def checks(self) -> Mapping[RepositoryRef, Mapping[int, tuple[Check, ...]]]:
+        return _view(self._checks)
 
     # -- seeder: review flow -------------------------------------------------------------------------------------
 
@@ -438,6 +543,150 @@ class InMemoryCodeHost:
         self._version += 1
         return change_request
 
+    def _next_id(self) -> str:
+        self._ids += 1
+        return str(self._ids)
+
+    def _require_change_request(self, repo: RepositoryRef, number: int) -> ChangeRequest:
+        for change_request in self._change_requests.get(repo, []):
+            if change_request.number == number:
+                return change_request
+        msg = f"change request {number} does not exist"
+        raise ValueError(msg)
+
+    def add_repository(self, identity: str, *, default_branch: str = "main", is_current: bool = False) -> RepositoryRef:
+        """Add a repository. ``is_current=True`` makes it the answer of ``Repository.current()``.
+
+        The default branch is global (``set_default_branch``), not per repository: ``default_branch`` is applied
+        only together with ``is_current=True``.
+        """
+        repo = RepositoryRef(identity)
+        if is_current:
+            self._repository = repo
+            self._default_branch = default_branch
+            self._version += 1
+        return repo
+
+    def add_commit(
+        self,
+        repo: RepositoryRef,
+        number: int,
+        *,
+        revision: str,
+        message: str | None = None,
+        authors: Sequence[str] = (),
+    ) -> CommitInfo:
+        """Append a commit to the change request. Commits are listed oldest first."""
+        self._require_change_request(repo, number)
+        commit = CommitInfo(
+            revision=revision, message=message, authors=tuple(User(a) for a in authors), committed_at=self._tick()
+        )
+        self._commits.setdefault(repo, {}).setdefault(number, []).append(commit)
+        self._version += 1
+        return commit
+
+    def add_review(
+        self,
+        repo: RepositoryRef,
+        number: int,
+        *,
+        author: str,
+        state: ReviewState,
+        revision: str | None = None,
+        body: str = "",
+    ) -> Review:
+        """Append a review (without inline comments) to the change request."""
+        self._require_change_request(repo, number)
+        review = Review(
+            id=self._next_id(),
+            author=User(author),
+            state=state,
+            body=body,
+            submitted_at=self._tick(),
+            revision=revision,
+            comments=(),
+        )
+        self._reviews.setdefault(repo, {}).setdefault(number, []).append(review)
+        self._version += 1
+        return review
+
+    def add_comment(self, repo: RepositoryRef, number: int, *, author: str, body: str) -> Comment:
+        """Append a change-request-level comment."""
+        self._require_change_request(repo, number)
+        comment = self._new_comment(repo, number, User(author), body)
+        self._comments.setdefault(repo, {}).setdefault(number, []).append(comment)
+        self._version += 1
+        return comment
+
+    def _new_comment(self, repo: RepositoryRef, number: int, author: User, body: str) -> Comment:
+        comment_id = self._next_id()
+        return Comment(
+            id=comment_id,
+            author=author,
+            body=body,
+            created_at=self._tick(),
+            url=f"https://example.test/{repo.value}/pull/{number}#comment-{comment_id}",
+        )
+
+    def add_thread(
+        self,
+        repo: RepositoryRef,
+        number: int,
+        *,
+        anchor: Anchor | None,
+        comments: Sequence[Comment],
+        is_resolved: bool = False,
+    ) -> ReviewThread:
+        """Append a review thread built from the given comments."""
+        self._require_change_request(repo, number)
+        thread = ReviewThread(
+            id=f"thread-{self._next_id()}", is_resolved=is_resolved, anchor=anchor, comments=tuple(comments)
+        )
+        self._threads.setdefault(repo, {}).setdefault(number, []).append(thread)
+        self._version += 1
+        return thread
+
+    def add_check(
+        self,
+        repo: RepositoryRef,
+        number: int,
+        *,
+        name: str,
+        status: CheckStatus,
+        required: bool = False,
+        job_id: str | None = None,
+    ) -> Check:
+        """Append a check run. A pending check has no completion time."""
+        self._require_change_request(repo, number)
+        started = self._tick()
+        url = f"https://example.test/{repo.value}/runs/{self._next_id()}"
+        check = Check(
+            name=name,
+            status=status,
+            details_url=url if job_id is None else f"{url}/job/{job_id}",
+            workflow_name=None,
+            started_at=started,
+            completed_at=None if status is CheckStatus.PENDING else started + timedelta(seconds=1),
+            job_id=job_id,
+        )
+        self._checks.setdefault(repo, {}).setdefault(number, []).append(check)
+        if required:
+            self._required.add((repo, number, name))
+        self._version += 1
+        return check
+
+    def add_workflow(self, repo: RepositoryRef, *, name: str) -> Workflow:
+        workflow = Workflow(id=self._next_id(), name=name)
+        self._workflows.setdefault(repo, []).append(workflow)
+        self._version += 1
+        return workflow
+
+    def add_job(self, repo: RepositoryRef, *, job_id: str, failed_step: str | None = None, log: str = "") -> Job:
+        job = Job(id=job_id, failed_step=failed_step)
+        self._jobs.setdefault(repo, {})[job_id] = (job, log)
+        self._version += 1
+        return job
+
     def link_closing(self, repo: RepositoryRef, *, work_item: int, change_request: int) -> None:
         """Record that the change request closes the work item. Both must exist."""
         if not any(w.number == work_item for w in self._work_items.get(repo, [])):
@@ -541,7 +790,7 @@ class InMemoryCodeHost:
             repository=facet(Capability.REPOSITORY, _FakeRepository(self)),
             change_requests=facet(Capability.CHANGE_REQUESTS, _FakeChangeRequests(self)),
             discussion=facet(Capability.DISCUSSION, _FakeDiscussion(self)),
-            checks=facet(Capability.CHECKS, None),
+            checks=facet(Capability.CHECKS, _FakeChecks(self)),
             work_items=facet(Capability.WORK_ITEMS, _FakeWorkItems(self)),
             declaration=self.declaration,
         )
@@ -552,6 +801,13 @@ class InMemoryCodeHost:
     def _bound(self, operation: str) -> int | None:
         bounds = self.declaration.limits.list_bounds
         return bounds.per_operation.get(operation, bounds.default)
+
+
+def _view(store: _PerChangeRequest[_T]) -> Mapping[RepositoryRef, Mapping[int, tuple[_T, ...]]]:
+    return MappingProxyType({
+        repo: MappingProxyType({number: tuple(items) for number, items in by_number.items()})
+        for repo, by_number in store.items()
+    })
 
 
 class _Facet:
@@ -581,17 +837,27 @@ class _FakeSession(_Facet):
         return self._do("Session.current_user", lambda: self._host._user)
 
     async def agent_environment_names(self) -> Sequence[str]:  # NOSONAR python:S7503 - implements an async protocol
-        raise _unsupported(Capability.SESSION, "agent_environment_names")
+        return self._do("Session.agent_environment_names", lambda: _AGENT_ENVIRONMENT_NAMES)
 
     async def agent_environment(  # NOSONAR python:S7503 - implements an async protocol
         self, base: Mapping[str, str] | None = None
     ) -> Mapping[str, str]:
-        raise _unsupported(Capability.SESSION, "agent_environment")
+        def action() -> Mapping[str, str]:
+            # Base first, so a credential variable wins over a base entry of the same name.
+            return {**(base or {}), **dict.fromkeys(_AGENT_ENVIRONMENT_NAMES, self._host._token)}
+
+        return self._do("Session.agent_environment", action, base)
 
 
 class _FakeRepository(_Facet):
     async def current(self) -> RepositoryRef:  # NOSONAR python:S7503 - implements an async protocol
-        return self._do("Repository.current", lambda: self._host._repository)
+        def action() -> RepositoryRef:
+            if not self._host._repository.value:
+                msg = "No repository is marked as the current one"
+                raise ConfigurationError(msg)
+            return self._host._repository
+
+        return self._do("Repository.current", action)
 
     async def resolve(self, identity: str) -> RepositoryRef:  # NOSONAR python:S7503 - implements an async protocol
         def action() -> RepositoryRef:
@@ -677,14 +943,135 @@ class _FakeChangeRequests(_Facet):
 
         return self._do("ChangeRequests.create_draft", action, repo, head=head, base=base, title=title, body=body)
 
-    def __getattr__(self, name: str) -> Callable[..., Any]:
-        if name.startswith("_"):
-            raise AttributeError(name)
+    async def list(  # NOSONAR python:S7503 - implements an async protocol
+        self,
+        repo: RepositoryRef,
+        *,
+        state: ChangeRequestState = ChangeRequestState.OPEN,
+        author: str | None = None,
+        assignee: str | None = None,
+        requested_reviewer: str | None = None,
+    ) -> Sequence[ChangeRequest]:
+        def action() -> list[ChangeRequest]:
+            # Filters are logins. An empty string means "no filter". Change requests carry no assignees: a login
+            # filter on assignee matches nothing.
+            found = [
+                c
+                for c in self._host._change_requests.get(repo, [])
+                if c.state is state
+                and (not author or (c.author is not None and c.author.login == author))
+                and (not requested_reviewer or requested_reviewer in {u.login for u in c.requested_reviewers})
+            ]
+            if assignee:
+                found = []
+            bound = self._host._bound("ChangeRequests.list")
+            return found if bound is None else found[:bound]
 
-        async def _unsupported_op(*_args: object, **_kwargs: object) -> Any:  # NOSONAR python:S7503 - callers await it
-            raise _unsupported(Capability.CHANGE_REQUESTS, name)
+        return self._do(
+            "ChangeRequests.list",
+            action,
+            repo,
+            state=state,
+            author=author,
+            assignee=assignee,
+            requested_reviewer=requested_reviewer,
+        )
 
-        return _unsupported_op
+    async def find_by_commit(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, revision: str
+    ) -> Sequence[ChangeRequest]:
+        def action() -> list[ChangeRequest]:
+            commits = self._host._commits.get(repo, {})
+            return [
+                c
+                for c in self._host._change_requests.get(repo, [])
+                if c.head_revision == revision or any(k.revision == revision for k in commits.get(c.number, []))
+            ]
+
+        return self._do("ChangeRequests.find_by_commit", action, repo, revision)
+
+    async def commits(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int
+    ) -> Sequence[CommitInfo]:
+        def action() -> list[CommitInfo]:
+            self._find(repo, number)
+            return list(self._host._commits.get(repo, {}).get(number, []))
+
+        return self._do("ChangeRequests.commits", action, repo, number)
+
+    async def reviews(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int
+    ) -> Sequence[Review]:
+        def action() -> list[Review]:
+            self._find(repo, number)
+            return list(self._host._reviews.get(repo, {}).get(number, []))
+
+        return self._do("ChangeRequests.reviews", action, repo, number)
+
+    def _replace(self, repo: RepositoryRef, updated: ChangeRequest) -> None:
+        items = self._host._change_requests[repo]
+        index = next(i for i, c in enumerate(items) if c.number == updated.number)
+        items[index] = updated
+        self._host._version += 1
+
+    async def squash_merge(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int, *, expected_head: str
+    ) -> None:
+        def action() -> None:
+            change_request = self._find(repo, number)
+            if change_request.head_revision != expected_head:
+                msg = f"head revision of change request {number} is not {expected_head}"
+                raise CodeHostError(msg)
+            if change_request.state is not ChangeRequestState.OPEN:
+                msg = f"change request {number} is not open"
+                raise CodeHostError(msg)
+            self._replace(repo, replace(change_request, state=ChangeRequestState.MERGED))
+
+        self._do("ChangeRequests.squash_merge", action, repo, number, expected_head=expected_head)
+
+    async def request_reviewer(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int, login: str
+    ) -> None:
+        def action() -> None:
+            change_request = self._find(repo, number)
+            if login not in {u.login for u in change_request.requested_reviewers}:
+                reviewers = (*change_request.requested_reviewers, User(login))
+                updated = replace(change_request, requested_reviewers=reviewers)
+                self._replace(repo, updated)  # NOSONAR python:S5655 - dataclasses.replace returns a ChangeRequest
+
+        self._do("ChangeRequests.request_reviewer", action, repo, number, login)
+
+    async def approve(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int, *, head_revision: str
+    ) -> None:
+        def action() -> None:
+            self._find(repo, number)
+            self._host.add_review(
+                repo, number, author=self._host._user, state=ReviewState.APPROVED, revision=head_revision
+            )
+
+        self._do("ChangeRequests.approve", action, repo, number, head_revision=head_revision)
+
+    async def viewed_files(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int
+    ) -> Mapping[str, bool]:
+        def action() -> Mapping[str, bool]:
+            self._find(repo, number)
+            return dict(self._host._viewed.get((repo, number), {}))
+
+        return self._do("ChangeRequests.viewed_files", action, repo, number)
+
+    async def mark_viewed(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int, path: str
+    ) -> None:
+        def action() -> None:
+            self._find(repo, number)
+            viewed = self._host._viewed.setdefault((repo, number), {})
+            if not viewed.get(path, False):  # marking a viewed file again is a no-op
+                viewed[path] = True
+                self._host._version += 1
+
+        self._do("ChangeRequests.mark_viewed", action, repo, number, path)
 
 
 class _FakeWorkItems(_Facet):
@@ -819,14 +1206,91 @@ class _FakeDiscussion(_Facet):
             fallback_body=fallback_body,
         )
 
-    def __getattr__(self, name: str) -> Callable[..., Any]:
-        if name.startswith("_"):
-            raise AttributeError(name)
+    async def comments(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int
+    ) -> Sequence[Comment]:
+        def action() -> list[Comment]:
+            return list(self._host._comments.get(repo, {}).get(number, []))
 
-        async def _unsupported_op(*_args: object, **_kwargs: object) -> Any:  # NOSONAR python:S7503 - callers await it
-            raise _unsupported(Capability.DISCUSSION, name)
+        return self._do("Discussion.comments", action, repo, number)
 
-        return _unsupported_op
+    async def review_threads(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int
+    ) -> Sequence[ReviewThread]:
+        def action() -> list[ReviewThread]:
+            return list(self._host._threads.get(repo, {}).get(number, []))
+
+        return self._do("Discussion.review_threads", action, repo, number)
+
+    async def post_comment(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int, body: str
+    ) -> Comment:
+        def action() -> Comment:
+            self._host.require_client()
+            comment = self._host._new_comment(repo, number, User(self._host._user), body)
+            self._host._comments.setdefault(repo, {}).setdefault(number, []).append(comment)
+            self._host._version += 1
+            return comment
+
+        return self._do("Discussion.post_comment", action, repo, number, body)
+
+    async def reply(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int, thread_id: str, body: str
+    ) -> Comment:
+        def action() -> Comment:
+            threads = self._host._threads.get(repo, {}).get(number, [])
+            index = next((i for i, t in enumerate(threads) if t.id == thread_id), None)
+            if index is None:
+                msg = f"review thread {thread_id!r} not found"
+                raise CodeHostError(msg)
+            comment = self._host._new_comment(repo, number, User(self._host._user), body)
+            thread = threads[index]
+            threads[index] = replace(thread, comments=(*thread.comments, comment))
+            self._host._version += 1
+            return comment
+
+        return self._do("Discussion.reply", action, repo, number, thread_id, body)
+
+
+class _FakeChecks(_Facet):
+    async def list_checks(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, number: int, *, required_only: bool = False
+    ) -> Sequence[Check]:
+        def action() -> list[Check]:
+            found = list(self._host._checks.get(repo, {}).get(number, []))
+            if required_only:
+                found = [c for c in found if (repo, number, c.name) in self._host._required]
+            return found
+
+        return self._do("Checks.list_checks", action, repo, number, required_only=required_only)
+
+    async def list_workflows(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef
+    ) -> Sequence[Workflow]:
+        return self._do("Checks.list_workflows", lambda: list(self._host._workflows.get(repo, [])), repo)
+
+    async def failed_log(self, repo: RepositoryRef, check: Check) -> str:  # NOSONAR python:S7503 - async protocol
+        def action() -> str:
+            if check.job_id is None:
+                msg = f"check {check.name!r} has no job to read a log from"
+                raise CodeHostError(msg)
+            found = self._host._jobs.get(repo, {}).get(check.job_id)
+            if found is None:
+                msg = f"job {check.job_id!r} not found"
+                raise CodeHostError(msg)
+            return found[1]
+
+        return self._do("Checks.failed_log", action, repo, check)
+
+    async def get_job(self, repo: RepositoryRef, job_id: str) -> Job:  # NOSONAR python:S7503 - async protocol
+        def action() -> Job:
+            found = self._host._jobs.get(repo, {}).get(job_id)
+            if found is None:
+                msg = f"job {job_id!r} not found"
+                raise CodeHostError(msg)
+            return found[0]
+
+        return self._do("Checks.get_job", action, repo, job_id)
 
 
 @dataclass(frozen=True)
@@ -871,6 +1335,11 @@ def _chain(exc: BaseException | None) -> list[BaseException]:
         seen.append(exc)
         exc = exc.__cause__ or exc.__context__
     return seen
+
+
+def _comment(comment_id: str, author: str, body: str) -> Comment:
+    """A comment for ``HostSeeder.add_thread``."""
+    return Comment(id=comment_id, author=User(author), body=body, created_at=_EPOCH, url=None)
 
 
 def _dummy_args(method: Callable[..., Any]) -> tuple[list[Any], dict[str, Any]]:
@@ -1302,6 +1771,540 @@ class CodeHostConformance:
         seeder.add_change_request(repo, head_reference="feature/c", body="second")
         found = await target.host.work_items.open_change_request_bodies(repo)
         assert sorted(c.body for c in found) == ["Closes #1", "second"]  # the order is the host's
+
+    # -- Session, Repository and ChangeRequests: the methods added after the review flow ---------------------------
+
+    async def test_current_user_and_agent_environment(self) -> None:
+        """B-SES-2, B-SES-4: the login is the configured one. The agent environment is base first, credential wins."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.SESSION):
+            return
+        session = target.host.session
+        target.seeder.set_user("octo")
+        assert await session.current_user() == "octo"
+        names = list(await session.agent_environment_names())
+        assert names == ["GITHUB_TOKEN", "GH_TOKEN"]
+        token = (await session.credential()).token
+        base = {"PATH": "/bin", "GH_TOKEN": "stale", "ZED": "z"}
+        env = await session.agent_environment(base)
+        assert list(env)[: len(base)] == list(base)  # base entries come first and keep their place
+        assert list(env)[len(base) :] == ["GITHUB_TOKEN"]
+        assert env["GITHUB_TOKEN"] == env["GH_TOKEN"] == token  # the credential wins over a base entry
+        assert (env["PATH"], env["ZED"]) == ("/bin", "z")
+        assert base == {"PATH": "/bin", "GH_TOKEN": "stale", "ZED": "z"}
+        bare = await session.agent_environment(None)
+        assert list(bare) == names
+        assert set(bare.values()) == {token}
+
+    async def test_resolve_identity(self) -> None:
+        """B-REP-1: ``resolve`` returns an equal ref for one identity. An empty identity raises ConfigurationError."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.REPOSITORY):
+            return
+        repository = target.host.repository
+        first = await repository.resolve("example/other")
+        assert first == await repository.resolve("example/other")
+        assert isinstance(first, RepositoryRef)
+        try:
+            await repository.resolve("")
+        except ConfigurationError:
+            pass
+        else:
+            raise AssertionError("ConfigurationError not raised")
+
+    async def test_get_returns_the_full_field_set(self) -> None:
+        """B-CR-1: ``get`` returns title, body, draft flag, author, branches and requested reviewers."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.CHANGE_REQUESTS):
+            return
+        repo = target.repository
+        seeded = target.seeder.add_change_request(
+            repo,
+            head_reference="feature/full",
+            base_reference="dev",
+            title="A title",
+            body="A body",
+            is_draft=True,
+            author="ann",
+            head_revision="abc",
+            requested_reviewers=["bob"],
+        )
+        got = await target.host.change_requests.get(repo, seeded.number)
+        assert (got.title, got.body, got.is_draft) == ("A title", "A body", True)
+        assert (got.head_reference, got.base_reference, got.head_revision) == ("feature/full", "dev", "abc")
+        assert got.author is not None
+        assert got.author.login == "ann"
+        assert [u.login for u in got.requested_reviewers] == ["bob"]
+        assert got.state is ChangeRequestState.OPEN
+
+    async def test_list_filters(self) -> None:
+        """B-CR-3: ``list`` filters by state, author and requested reviewer. No match is an empty sequence."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.CHANGE_REQUESTS):
+            return
+        repo, seeder, crs = target.repository, target.seeder, target.host.change_requests
+        assert list(await crs.list(repo)) == []
+        first = seeder.add_change_request(repo, head_reference="feature/a", author="ann", requested_reviewers=["bob"])
+        second = seeder.add_change_request(repo, head_reference="feature/b", author="cat")
+        closed = seeder.add_change_request(
+            repo, head_reference="feature/c", author="ann", state=ChangeRequestState.CLOSED
+        )
+
+        async def numbers(**kwargs: Any) -> set[int]:
+            return {c.number for c in await crs.list(repo, **kwargs)}
+
+        assert await numbers() == {first.number, second.number}  # the order is the host's
+        assert await numbers(author="ann") == {first.number}
+        assert await numbers(requested_reviewer="bob") == {first.number}
+        assert await numbers(state=ChangeRequestState.CLOSED) == {closed.number}
+        assert await numbers(author="nobody") == set()
+        assert await numbers(requested_reviewer="nobody") == set()
+        listed = {c.number: c for c in await crs.list(repo)}
+        assert listed[first.number].head_reference == "feature/a"
+        assert listed[first.number].state is ChangeRequestState.OPEN
+
+    async def test_find_by_commit_commits_and_reviews(self) -> None:
+        """B-CR-4: ``find_by_commit``, ``commits`` (oldest first) and ``reviews`` return what was seeded."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.CHANGE_REQUESTS):
+            return
+        repo, seeder, crs = target.repository, target.seeder, target.host.change_requests
+        one = seeder.add_change_request(repo, head_reference="feature/a", head_revision="r1")
+        other = seeder.add_change_request(repo, head_reference="feature/b", head_revision="x1")
+        seeder.add_commit(repo, one.number, revision="r0", message="first", authors=["ann"])
+        seeder.add_commit(repo, one.number, revision="r1", message="second", authors=["bob"])
+        assert [c.number for c in await crs.find_by_commit(repo, "r0")] == [one.number]
+        assert [c.number for c in await crs.find_by_commit(repo, "r1")] == [one.number]
+        assert list(await crs.find_by_commit(repo, "unknown")) == []
+        commits = await crs.commits(repo, one.number)
+        assert [(c.revision, c.message, [u.login for u in c.authors]) for c in commits] == [
+            ("r0", "first", ["ann"]),
+            ("r1", "second", ["bob"]),
+        ]
+        assert list(await crs.commits(repo, other.number)) == []
+        assert list(await crs.reviews(repo, other.number)) == []
+        seeder.add_review(repo, one.number, author="bob", state=ReviewState.APPROVED, revision="r1", body="ok")
+        seeder.add_review(repo, one.number, author="cat", state=ReviewState.CHANGES_REQUESTED, body="no")
+        reviews = await crs.reviews(repo, one.number)
+        assert [(r.author.login if r.author else None, r.state, r.body) for r in reviews] == [
+            ("bob", ReviewState.APPROVED, "ok"),
+            ("cat", ReviewState.CHANGES_REQUESTED, "no"),
+        ]
+        assert reviews[0].revision == "r1"
+
+    async def test_squash_merge_pins_the_head_revision(self) -> None:
+        """B-CR-6: a merge at the current head makes the state merged. A head mismatch raises and changes nothing."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.CHANGE_REQUESTS):
+            return
+        repo, crs = target.repository, target.host.change_requests
+        stale = target.seeder.add_change_request(repo, head_reference="feature/a", head_revision="new-head")
+        fresh = target.seeder.add_change_request(repo, head_reference="feature/b", head_revision="head-b")
+        try:
+            await crs.squash_merge(repo, stale.number, expected_head="old-head")
+        except UnsupportedCapabilityError:
+            raise AssertionError("a head mismatch must raise a plain CodeHostError") from None
+        except CodeHostError:
+            pass
+        else:
+            raise AssertionError("CodeHostError not raised")
+        assert (await crs.get(repo, stale.number)).state is ChangeRequestState.OPEN
+        await crs.squash_merge(repo, fresh.number, expected_head="head-b")
+        assert (await crs.get(repo, fresh.number)).state is ChangeRequestState.MERGED
+        assert (await crs.get(repo, stale.number)).state is ChangeRequestState.OPEN
+
+    async def test_request_reviewer_and_approve(self) -> None:
+        """B-CR-7: the reviewer is requested. An approval at ``head_revision`` is an approved review at it."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.CHANGE_REQUESTS):
+            return
+        repo, crs = target.repository, target.host.change_requests
+        cr = target.seeder.add_change_request(repo, head_reference="feature/a", head_revision="head-a")
+        await crs.request_reviewer(repo, cr.number, "bob")
+        assert [u.login for u in (await crs.get(repo, cr.number)).requested_reviewers] == ["bob"]
+        assert list(await crs.reviews(repo, cr.number)) == []
+        await crs.approve(repo, cr.number, head_revision="head-a")
+        (review,) = await crs.reviews(repo, cr.number)
+        assert review.state is ReviewState.APPROVED
+        assert review.revision == "head-a"
+
+    async def test_viewed_files(self) -> None:
+        """B-CR-8: a viewed file is reflected in ``viewed_files``. Marking twice leaves it viewed."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.CHANGE_REQUESTS):
+            return
+        repo, crs = target.repository, target.host.change_requests
+        cr = target.seeder.add_change_request(repo, head_reference="feature/a")
+        assert dict(await crs.viewed_files(repo, cr.number)) == {}
+        await crs.mark_viewed(repo, cr.number, "src/a.py")
+        await crs.mark_viewed(repo, cr.number, "src/b.py")
+        await crs.mark_viewed(repo, cr.number, "src/a.py")
+        assert dict(await crs.viewed_files(repo, cr.number)) == {"src/a.py": True, "src/b.py": True}
+
+    # -- discussion ----------------------------------------------------------------------------------------------
+
+    async def test_comments_and_post_comment(self) -> None:
+        """B-DIS-1: ``post_comment`` returns the comment and ``comments`` lists it, in posting order."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.DISCUSSION):
+            return
+        repo, seeder, discussion = target.repository, target.seeder, target.host.discussion
+        cr = seeder.add_change_request(repo, head_reference="feature/a")
+        other = seeder.add_change_request(repo, head_reference="feature/b")
+        assert list(await discussion.comments(repo, cr.number)) == []
+        seeder.add_comment(repo, cr.number, author="bob", body="first")
+        seeder.add_comment(repo, cr.number, author="cat", body="second")
+        before = await discussion.comments(repo, cr.number)
+        assert [(c.author.login if c.author else None, c.body) for c in before] == [("bob", "first"), ("cat", "second")]
+        posted = await discussion.post_comment(repo, cr.number, "third")
+        assert posted.body == "third"
+        assert [c.body for c in await discussion.comments(repo, cr.number)] == ["first", "second", "third"]
+        assert list(await discussion.comments(repo, other.number)) == []
+
+    async def test_review_threads_and_reply(self) -> None:
+        """B-DIS-2, B-DIS-3: threads keep ``is_resolved``, anchor and comments. A reply joins its thread."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.DISCUSSION):
+            return
+        repo, seeder, discussion = target.repository, target.seeder, target.host.discussion
+        cr = seeder.add_change_request(repo, head_reference="feature/a")
+        assert list(await discussion.review_threads(repo, cr.number)) == []
+        anchor = Anchor("src/a.py", 3, "RIGHT")
+        open_thread = seeder.add_thread(repo, cr.number, anchor=anchor, comments=[_comment("1001", "bob", "why?")])
+        seeder.add_thread(
+            repo,
+            cr.number,
+            anchor=Anchor("src/b.py", 9, "RIGHT"),
+            comments=[_comment("1002", "cat", "ok")],
+            is_resolved=True,
+        )
+        threads = await discussion.review_threads(repo, cr.number)
+        assert [(t.is_resolved, t.anchor) for t in threads] == [(False, anchor), (True, Anchor("src/b.py", 9, "RIGHT"))]
+        assert [[c.body for c in t.comments] for t in threads] == [["why?"], ["ok"]]
+        reply = await discussion.reply(repo, cr.number, open_thread.id, "because")
+        assert reply.body == "because"
+        after = await discussion.review_threads(repo, cr.number)
+        assert [c.body for c in after[0].comments] == ["why?", "because"]
+        assert [c.body for c in after[1].comments] == ["ok"]
+        try:
+            await discussion.reply(repo, cr.number, "no-such-thread", "x")
+        except UnsupportedCapabilityError:
+            raise AssertionError("an unknown thread must raise a plain CodeHostError") from None
+        except CodeHostError:
+            pass
+        else:
+            raise AssertionError("CodeHostError not raised")
+
+    # -- checks --------------------------------------------------------------------------------------------------
+
+    async def test_list_checks_and_required_only(self) -> None:
+        """B-CHK-1: ``list_checks`` returns the seeded checks. ``required_only`` keeps the required ones. None is empty."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.CHECKS):
+            return
+        repo, seeder, checks = target.repository, target.seeder, target.host.checks
+        cr = seeder.add_change_request(repo, head_reference="feature/a")
+        assert list(await checks.list_checks(repo, cr.number)) == []
+        assert list(await checks.list_checks(repo, cr.number, required_only=True)) == []
+        seeder.add_check(repo, cr.number, name="build", status=CheckStatus.FAIL, required=True, job_id="900")
+        seeder.add_check(repo, cr.number, name="lint", status=CheckStatus.PASS)
+        seeder.add_check(repo, cr.number, name="deploy", status=CheckStatus.PENDING)
+        found = await checks.list_checks(repo, cr.number)
+        assert [(c.name, c.status) for c in found] == [
+            ("build", CheckStatus.FAIL),
+            ("lint", CheckStatus.PASS),
+            ("deploy", CheckStatus.PENDING),
+        ]
+        assert [c.job_id for c in found] == ["900", None, None]
+        assert all(c.details_url for c in found)
+        assert found[0].completed_at is not None
+        assert found[2].completed_at is None
+        required = await checks.list_checks(repo, cr.number, required_only=True)
+        assert [c.name for c in required] == ["build"]
+
+    async def test_list_workflows(self) -> None:
+        """B-CHK-2: ``list_workflows`` returns the seeded workflows, and an empty sequence when there are none."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.CHECKS):
+            return
+        repo, checks = target.repository, target.host.checks
+        assert list(await checks.list_workflows(repo)) == []
+        target.seeder.add_workflow(repo, name="ci")
+        target.seeder.add_workflow(repo, name="release")
+        assert [w.name for w in await checks.list_workflows(repo)] == ["ci", "release"]
+
+    async def test_failed_log_and_get_job(self) -> None:
+        """B-CHK-3: ``failed_log`` returns the log, ``get_job`` the failed step. An unknown job raises CodeHostError."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.CHECKS):
+            return
+        repo, seeder, checks = target.repository, target.seeder, target.host.checks
+        cr = seeder.add_change_request(repo, head_reference="feature/a")
+        seeder.add_job(repo, job_id="900", failed_step="Run tests", log="boom in step")
+        seeder.add_job(repo, job_id="901")
+        seeder.add_check(repo, cr.number, name="build", status=CheckStatus.FAIL, job_id="900")
+        (check,) = await checks.list_checks(repo, cr.number)
+        assert "boom in step" in await checks.failed_log(repo, check)
+        job = await checks.get_job(repo, "900")
+        assert (job.id, job.failed_step) == ("900", "Run tests")
+        assert (await checks.get_job(repo, "901")).failed_step is None
+        for call in (
+            lambda: checks.get_job(repo, "404"),
+            lambda: checks.failed_log(repo, Check("none", CheckStatus.FAIL, None, None, None, None, None)),
+        ):
+            try:
+                await call()
+            except UnsupportedCapabilityError:
+                raise AssertionError("an unknown job must raise a plain CodeHostError") from None
+            except CodeHostError:
+                pass
+            else:
+                raise AssertionError("CodeHostError not raised")
+
+    # -- empty, failed, timed out: one table for every method added after the review flow -------------------------
+
+    def _calls(self, target: ConformanceTarget) -> dict[str, tuple[bool, Callable[[], Awaitable[Any]]]]:
+        """Seed one change request with everything on it. Return ``operation -> (is a write, call)``.
+
+        Only operations of declared capabilities that the target does not list as unsupported are returned.
+        """
+        repo, seeder, host = target.repository, target.seeder, target.host
+        cr = seeder.add_change_request(repo, head_reference="feature/ops", head_revision="rev-ops", author="ann")
+        n = cr.number
+        seeder.add_commit(repo, n, revision="rev-ops", message="a commit", authors=["ann"])
+        seeder.add_review(repo, n, author="bob", state=ReviewState.COMMENTED, revision="rev-ops")
+        seeder.add_comment(repo, n, author="bob", body="a comment")
+        thread = seeder.add_thread(
+            repo, n, anchor=Anchor("src/a.py", 1, "RIGHT"), comments=[_comment("2001", "bob", "t")]
+        )
+        seeder.add_job(repo, job_id="900", failed_step="Run tests", log="log text")
+        seeder.add_check(repo, n, name="build", status=CheckStatus.FAIL, job_id="900")
+        seeder.add_workflow(repo, name="ci")
+        item = seeder.add_work_item(repo, title="an item")
+        seeder.link_closing(repo, work_item=item.number, change_request=n)
+        check = Check("build", CheckStatus.FAIL, "https://example.test/runs/1/job/900", None, None, None, "900")
+        crs, discussion, checks, items = host.change_requests, host.discussion, host.checks, host.work_items
+        table: dict[str, tuple[bool, Callable[[], Awaitable[Any]]]] = {
+            "Session.current_user": (False, lambda: host.session.current_user()),
+            "ChangeRequests.list": (False, lambda: crs.list(repo)),
+            "ChangeRequests.find_by_commit": (False, lambda: crs.find_by_commit(repo, "rev-ops")),
+            "ChangeRequests.commits": (False, lambda: crs.commits(repo, n)),
+            "ChangeRequests.reviews": (False, lambda: crs.reviews(repo, n)),
+            "ChangeRequests.viewed_files": (False, lambda: crs.viewed_files(repo, n)),
+            "ChangeRequests.squash_merge": (True, lambda: crs.squash_merge(repo, n, expected_head="rev-ops")),
+            "ChangeRequests.request_reviewer": (True, lambda: crs.request_reviewer(repo, n, "bob")),
+            "ChangeRequests.approve": (True, lambda: crs.approve(repo, n, head_revision="rev-ops")),
+            "ChangeRequests.mark_viewed": (True, lambda: crs.mark_viewed(repo, n, "src/a.py")),
+            "Discussion.comments": (False, lambda: discussion.comments(repo, n)),
+            "Discussion.review_threads": (False, lambda: discussion.review_threads(repo, n)),
+            "Discussion.post_comment": (True, lambda: discussion.post_comment(repo, n, "new")),
+            "Discussion.reply": (True, lambda: discussion.reply(repo, n, thread.id, "new")),
+            "Checks.list_checks": (False, lambda: checks.list_checks(repo, n)),
+            "Checks.list_workflows": (False, lambda: checks.list_workflows(repo)),
+            "Checks.failed_log": (False, lambda: checks.failed_log(repo, check)),
+            "Checks.get_job": (False, lambda: checks.get_job(repo, "900")),
+            "WorkItems.get": (False, lambda: items.get(repo, item.number)),
+            "WorkItems.linked_work_items": (False, lambda: items.linked_work_items(repo, n)),
+        }
+        return {
+            operation: entry
+            for operation, entry in table.items()
+            if self._declares(target, Capability(operation.split(".")[0])) and operation not in target.unsupported
+        }
+
+    async def test_empty_result_is_not_a_failure(self) -> None:
+        """Nothing found is an empty sequence (``None`` for ``WorkItems.get``, an empty mapping for viewed files)."""
+        target = await self.make_target()
+        repo, seeder, host = target.repository, target.seeder, target.host
+        cr = seeder.add_change_request(repo, head_reference="feature/empty")
+        n = cr.number
+        if self._declares(target, Capability.CHANGE_REQUESTS):
+            crs = host.change_requests
+            assert list(await crs.find_by_commit(repo, "unknown")) == []
+            assert list(await crs.commits(repo, n)) == []
+            assert list(await crs.reviews(repo, n)) == []
+            assert dict(await crs.viewed_files(repo, n)) == {}
+            assert list(await crs.list(repo, author="nobody")) == []
+        if self._declares(target, Capability.DISCUSSION):
+            assert list(await host.discussion.comments(repo, n)) == []
+            assert list(await host.discussion.review_threads(repo, n)) == []
+        if self._declares(target, Capability.CHECKS):
+            assert list(await host.checks.list_checks(repo, n)) == []
+            assert list(await host.checks.list_workflows(repo)) == []
+        if self._declares(target, Capability.WORK_ITEMS):
+            assert await host.work_items.get(repo, 12345) is None
+            assert list(await host.work_items.linked_work_items(repo, n)) == []
+
+    async def test_failed_result_raises_code_host_error(self) -> None:
+        """A request that failed raises CodeHostError. It is never returned as an empty result."""
+        probe = await self.make_target()
+        for operation in self._calls(probe):
+            target = await self.make_target()
+            _, call = self._calls(target)[operation]
+            target.seeder.fail_next(operation, CodeHostError("the request failed"))
+            try:
+                await call()
+            except UnsupportedCapabilityError:
+                raise AssertionError(f"{operation}: a failure must not read as unsupported") from None
+            except CodeHostTimeoutError:
+                raise AssertionError(f"{operation}: a failure must not read as a timeout") from None
+            except CodeHostError:
+                pass
+            else:
+                raise AssertionError(f"{operation} returned a result although the request failed")
+
+    async def test_timeout_flag_follows_read_or_write(self) -> None:
+        """B-ERR-2: a read raises CodeHostTimeoutError with ``write=False``, a write with ``write=True``."""
+        probe = await self.make_target()
+        for operation, (is_write, _) in self._calls(probe).items():
+            target = await self.make_target()
+            _, call = self._calls(target)[operation]
+            target.seeder.fail_next(operation, CodeHostTimeoutError("timed out", write=is_write))
+            try:
+                await call()
+            except CodeHostTimeoutError as exc:
+                assert exc.write is is_write, operation
+            else:
+                raise AssertionError(f"{operation} did not time out")
+
+    async def test_unsupported_operations_raise(self) -> None:
+        """B-ERR-4: an operation the target lists as unsupported raises UnsupportedCapabilityError."""
+        target = await self.make_target()
+        if not target.unsupported:
+            return
+        everything = self._calls(replace(target, unsupported=frozenset()))
+        for operation in target.unsupported & everything.keys():
+            _, call = everything[operation]
+            assert await self._unsupported_op(target, operation, call)
+
+    # -- list bounds -----------------------------------------------------------------------------------------------
+
+    @staticmethod
+    def _bound(target: ConformanceTarget, operation: str) -> int | None:
+        bounds = target.host.declaration.limits.list_bounds
+        return bounds.per_operation.get(operation, bounds.default)
+
+    async def test_unbounded_reads_return_every_item(self) -> None:
+        """B-CR-4, B-DIS-2, DEC-31: a read declared unbounded returns every item over a page boundary."""
+        count = 201  # three pages of 100
+        seeders: dict[str, Callable[[ConformanceTarget, int, int], Any]] = {
+            "ChangeRequests.commits": lambda t, n, i: t.seeder.add_commit(t.repository, n, revision=f"r{i}"),
+            "ChangeRequests.reviews": lambda t, n, i: t.seeder.add_review(
+                t.repository, n, author="bob", state=ReviewState.COMMENTED, body=f"review {i}"
+            ),
+            "Discussion.comments": lambda t, n, i: t.seeder.add_comment(t.repository, n, author="bob", body=f"c {i}"),
+            "Discussion.review_threads": lambda t, n, i: t.seeder.add_thread(
+                t.repository,
+                n,
+                anchor=Anchor("src/a.py", i + 1, "RIGHT"),
+                comments=[_comment(str(5000 + i), "bob", "c")],
+            ),
+        }
+        for operation, seed in seeders.items():
+            target = await self.make_target()
+            if not self._declares(target, Capability(operation.split(".")[0])) or self._bound(target, operation):
+                continue
+            cr = target.seeder.add_change_request(target.repository, head_reference="feature/many")
+            for i in range(count):
+                seed(target, cr.number, i)
+            _, call = self._calls_for(target, cr.number)[operation]
+            assert len(await call()) == count, operation
+        # Viewed files are seeded through the host itself.
+        target = await self.make_target()
+        if (
+            self._declares(target, Capability.CHANGE_REQUESTS)
+            and self._bound(target, "ChangeRequests.viewed_files") is None
+        ):
+            repo, crs = target.repository, target.host.change_requests
+            cr = target.seeder.add_change_request(repo, head_reference="feature/many")
+            for i in range(count):
+                await crs.mark_viewed(repo, cr.number, f"src/file{i}.py")
+            assert len(await crs.viewed_files(repo, cr.number)) == count
+
+    def _calls_for(
+        self, target: ConformanceTarget, number: int
+    ) -> dict[str, tuple[bool, Callable[[], Awaitable[Any]]]]:
+        repo, host = target.repository, target.host
+        return {
+            "ChangeRequests.commits": (False, lambda: host.change_requests.commits(repo, number)),
+            "ChangeRequests.reviews": (False, lambda: host.change_requests.reviews(repo, number)),
+            "Discussion.comments": (False, lambda: host.discussion.comments(repo, number)),
+            "Discussion.review_threads": (False, lambda: host.discussion.review_threads(repo, number)),
+        }
+
+    async def test_bounded_reads_never_truncate(self) -> None:
+        """DEC-31: a read over its declared bound raises CodeHostError or returns every item. It never cuts short."""
+        target = await self.make_target()
+        repo = target.repository
+        bound = self._bound(target, "ChangeRequests.find_by_commit")
+        if self._declares(target, Capability.CHANGE_REQUESTS):
+            count = (bound or 100) + 1
+            for i in range(count):
+                cr = target.seeder.add_change_request(repo, head_reference=f"feature/{i}", head_revision=f"head-{i}")
+                target.seeder.add_commit(repo, cr.number, revision="shared")
+            try:
+                found = await target.host.change_requests.find_by_commit(repo, "shared")
+            except CodeHostError:
+                pass
+            else:
+                assert len(found) == count
+        target = await self.make_target()
+        bound = self._bound(target, "Checks.list_workflows")
+        if self._declares(target, Capability.CHECKS):
+            count = (bound or 100) + 1
+            for i in range(count):
+                target.seeder.add_workflow(target.repository, name=f"workflow {i}")
+            try:
+                workflows = await target.host.checks.list_workflows(target.repository)
+            except CodeHostError:
+                pass
+            else:
+                assert len(workflows) == count
+
+    # -- secrets -----------------------------------------------------------------------------------------------
+
+    async def test_secret_never_leaks_from_any_error_type(self) -> None:
+        """B-ERR-5: a credential `<token>` is in no message, repr or cause of any error type of any method."""
+        assert (await self.make_target()).secret == SECRET, (
+            "make_target must build the host with SECRET as its credential"
+        )
+        handler = _LogCapture()
+        root = logging.getLogger()
+        previous = root.level
+        root.addHandler(handler)
+        root.setLevel(logging.DEBUG)
+        seen: list[str] = []
+        try:
+            probe = await self.make_target()
+            for operation, (is_write, _) in self._calls(probe).items():
+                capability = operation.split(".")[0]
+                errors: list[CodeHostError] = [
+                    CodeHostError("request failed"),
+                    CodeHostTimeoutError("timed out", write=is_write),
+                    AuthenticationError("not authenticated"),
+                    UnsupportedCapabilityError("not supported", capability=capability),
+                    ConfigurationError("bad configuration"),
+                    NoChangeRequestError("no change request"),
+                ]
+                for error in errors:
+                    target = await self.make_target()
+                    _, call = self._calls(target)[operation]
+                    target.seeder.fail_next(operation, error)
+                    try:
+                        result = await call()
+                    except CodeHostError as exc:  # any other exception type propagates and fails the test
+                        for item in _chain(exc):
+                            seen.extend([str(item), repr(item), repr(item.args)])
+                    else:
+                        seen.append(repr(result))
+                    seen.extend([repr(target.host), repr(target.host.declaration)])
+        finally:
+            root.removeHandler(handler)
+            root.setLevel(previous)
+        seen.extend(handler.text)
+        assert seen
+        leaks = [s for s in seen if SECRET in s]
+        assert not leaks, leaks
 
     # -- errors --------------------------------------------------------------------------------------------------
 

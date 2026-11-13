@@ -1,13 +1,15 @@
-import json
 import subprocess
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from dotharness.code_host import Capability, CodeHostError, CodeHostTimeoutError, UnsupportedCapabilityError, User
+from dotharness.code_host.testing import InMemoryCodeHost
 from dotharness.pr_review import state
 from dotharness.pr_review.runners import self_review
-from dotharness.pr_review.runners.common import REGRET_REVIEW_MARKER
+from dotharness.pr_review.runners.common import REGRET_REVIEW_MARKER, LinkedTicket
 from dotharness.pr_review.runners.regret_review import IntroducingHunk, RegretCandidate
+from tests.pr_review.runners.runner_support import REPO, make_change_request, make_scaffold
 
 
 @pytest.fixture(autouse=True)
@@ -50,8 +52,8 @@ async def test_skips_already_reviewed_pr(tmp_xdg, tmp_path):
     state.write_self_review_state("acme-frontend", [5])
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         # design_reviewed_prs is empty, so the design pass still runs even though
         # files/summary are already reviewed — has_design_review_comment must actually
         # be reached (and the context-gathering mocks below let it get there) for this
@@ -60,13 +62,14 @@ async def test_skips_already_reviewed_pr(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 5, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(5, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.self_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
@@ -80,8 +83,8 @@ async def test_backup_check_marks_reviewed_without_running(tmp_xdg, tmp_path):
     state.write_self_review_state("acme-frontend", [])
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         # design_reviewed_prs is empty, so the design pass still runs even though
         # files/summary are already reviewed — has_design_review_comment must actually
         # be reached (and the context-gathering mocks below let it get there) for this
@@ -90,7 +93,7 @@ async def test_backup_check_marks_reviewed_without_running(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 3, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(3, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.check_review_summary_comment_status", return_value=True),
         patch("dotharness.pr_review.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -98,6 +101,7 @@ async def test_backup_check_marks_reviewed_without_running(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
@@ -114,15 +118,15 @@ async def test_updates_state_on_success(tmp_xdg, tmp_path):
     (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         # Design pass is decoupled and out of scope for these correctness/state tests —
         # treat it as already-done so it never invokes the backend or hits `gh` for real.
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 7, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(7, url="u", head_reference="b")],
         ),
         patch(
             "dotharness.pr_review.runners.self_review.check_review_summary_comment_status", side_effect=[False, True]
@@ -132,6 +136,7 @@ async def test_updates_state_on_success(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -151,15 +156,15 @@ async def test_does_not_update_state_when_summary_comment_missing(tmp_xdg, tmp_p
     (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         # Design pass is decoupled and out of scope for these correctness/state tests —
         # treat it as already-done so it never invokes the backend or hits `gh` for real.
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 15, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(15, url="u", head_reference="b")],
         ),
         # first call: _should_skip_pr's up-front check (not already reviewed);
         # second call: _run_summary's post-backend verification (comment missing)
@@ -171,6 +176,7 @@ async def test_does_not_update_state_when_summary_comment_missing(tmp_xdg, tmp_p
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -189,15 +195,15 @@ async def test_does_not_update_state_on_failure(tmp_xdg, tmp_path):
     (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         # Design pass is decoupled and out of scope for these correctness/state tests —
         # treat it as already-done so it never invokes the backend or hits `gh` for real.
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 9, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(9, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.check_review_summary_comment_status", return_value=False),
         patch("dotharness.pr_review.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -205,6 +211,7 @@ async def test_does_not_update_state_on_failure(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -223,15 +230,15 @@ async def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
     (tmp_path / "src" / "b.py").write_text("b = 2\n")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         # Design pass is decoupled and out of scope for these correctness/state tests —
         # treat it as already-done so it never invokes the backend or hits `gh` for real.
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 11, "url": "u", "headRefName": "feat"}],
+            return_value=[make_change_request(11, url="u", head_reference="feat")],
         ),
         patch(
             "dotharness.pr_review.runners.self_review.check_review_summary_comment_status", side_effect=[False, True]
@@ -241,6 +248,7 @@ async def test_backend_called_once_per_file_plus_summary(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/a.py", "src/b.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -260,15 +268,15 @@ async def test_does_not_update_state_when_file_call_fails(tmp_xdg, tmp_path):
     (tmp_path / "src" / "a.py").write_text("a = 1\n")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         # Design pass is decoupled and out of scope for these correctness/state tests —
         # treat it as already-done so it never invokes the backend or hits `gh` for real.
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 13, "url": "u", "headRefName": "feat"}],
+            return_value=[make_change_request(13, url="u", head_reference="feat")],
         ),
         patch("dotharness.pr_review.runners.self_review.check_review_summary_comment_status", return_value=False),
         patch("dotharness.pr_review.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -276,6 +284,7 @@ async def test_does_not_update_state_when_file_call_fails(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/a.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -293,15 +302,15 @@ async def test_vibe_heal_context_included_in_prompts(tmp_xdg, tmp_path):
     (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         # Design pass is decoupled and out of scope for these correctness/state tests —
         # treat it as already-done so it never invokes the backend or hits `gh` for real.
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 7, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(7, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.check_review_summary_comment_status", return_value=False),
         patch("dotharness.pr_review.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -309,6 +318,7 @@ async def test_vibe_heal_context_included_in_prompts(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.get_vibe_heal_context", return_value="sonar findings"),
@@ -330,15 +340,15 @@ async def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
     (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         # Design pass is decoupled and out of scope for these correctness/state tests —
         # treat it as already-done so it never invokes the backend or hits `gh` for real.
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 7, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(7, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.check_review_summary_comment_status", return_value=False),
         patch("dotharness.pr_review.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -346,6 +356,7 @@ async def test_vibe_heal_context_absent_when_empty(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.get_vibe_heal_context", return_value=""),
@@ -364,14 +375,14 @@ async def test_git_restore_called_on_context_gathering_exception(tmp_xdg, tmp_pa
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         # Design pass is decoupled and out of scope for these correctness/state tests —
         # treat it as already-done so it never invokes the backend or hits `gh` for real.
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 20, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(20, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.check_review_summary_comment_status", return_value=False),
         patch("dotharness.pr_review.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -395,15 +406,15 @@ async def test_timeout_expired_does_not_mark_reviewed(tmp_xdg, tmp_path):
     (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         # Design pass is decoupled and out of scope for these correctness/state tests —
         # treat it as already-done so it never invokes the backend or hits `gh` for real.
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 21, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(21, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.check_review_summary_comment_status", return_value=False),
         patch("dotharness.pr_review.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -411,6 +422,7 @@ async def test_timeout_expired_does_not_mark_reviewed(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -429,8 +441,8 @@ async def test_inconclusive_comment_check_skips_cycle_without_marking_reviewed(t
     state.write_self_review_state("acme-frontend", [])
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         # design_reviewed_prs is empty, so the design pass still runs even though
         # files/summary status is inconclusive — has_design_review_comment must
         # actually be reached (and the context-gathering mocks below let it get there)
@@ -439,7 +451,7 @@ async def test_inconclusive_comment_check_skips_cycle_without_marking_reviewed(t
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 30, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(30, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.check_review_summary_comment_status", return_value=None),
         patch("dotharness.pr_review.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -447,6 +459,7 @@ async def test_inconclusive_comment_check_skips_cycle_without_marking_reviewed(t
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
@@ -464,8 +477,8 @@ async def test_prunes_stale_entries_for_closed_prs(tmp_xdg, tmp_path):
     state.set_partial_reviewed_files("acme-frontend", 40, ["stale.py"])
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         # design_reviewed_prs is empty, so the design pass still runs for the
         # surviving PR even though files/summary are already reviewed —
         # has_design_review_comment must actually be reached (and the
@@ -475,13 +488,14 @@ async def test_prunes_stale_entries_for_closed_prs(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 5, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(5, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.self_review.git_fetch_and_checkout"),
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
@@ -500,8 +514,8 @@ async def test_failed_pr_fetch_skips_cycle_without_touching_state(tmp_xdg, tmp_p
     state.write_self_review_state("acme-frontend", [5])
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         # Design pass is decoupled and out of scope for these correctness/state tests —
         # treat it as already-done so it never invokes the backend or hits `gh` for real.
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
@@ -513,89 +527,90 @@ async def test_failed_pr_fetch_skips_cycle_without_touching_state(tmp_xdg, tmp_p
     assert state.read_self_review_state("acme-frontend")["reviewed_prs"] == [5]
 
 
-async def test_list_my_prs_returns_none_on_gh_failure():
-    with patch("dotharness.pr_review.runners.self_review.run_cmd", return_value=MagicMock(returncode=1, stdout=b"")):
-        assert (await self_review._list_my_prs("acme/frontend", {})) is None
+async def test_list_my_prs_returns_none_on_request_failure():
+    host = InMemoryCodeHost(repository="acme/frontend", user="alice")
+    host.fail_next("ChangeRequests.list", CodeHostError("boom"))
+    assert (await self_review._list_my_prs(host.code_host(), REPO, "alice")) is None
 
 
-async def test_list_my_prs_returns_none_on_malformed_json():
-    with patch(
-        "dotharness.pr_review.runners.self_review.run_cmd", return_value=MagicMock(returncode=0, stdout=b"not json")
-    ):
-        assert (await self_review._list_my_prs("acme/frontend", {})) is None
+async def test_list_my_prs_returns_none_on_timeout():
+    host = InMemoryCodeHost(repository="acme/frontend", user="alice")
+    host.fail_next("ChangeRequests.list", CodeHostTimeoutError("slow", write=False))
+    assert (await self_review._list_my_prs(host.code_host(), REPO, "alice")) is None
 
 
-async def test_list_my_prs_requests_author_field_in_both_queries():
-    """gh pr list --json must request the "author" field on both the --author and
-    --assignee queries, because the regret pass's author gate
-    (regret_review.find_introducing_prs -> _pr_gate_setup) reads
-    pr["author"]["login"] from the PR dict and fails closed on an authorless PR —
-    without the field no PR could ever pass the gate in this runner (the same fix
-    review_requested._get_prs received). The returned PR dicts must carry it through."""
-    pr = {
-        "number": 42,
-        "url": "https://github.com/acme/frontend/pull/42",
-        "headRefName": "feat/my-branch",
-        "author": {"login": "alice"},
-    }
-    with patch(
-        "dotharness.pr_review.runners.self_review.run_cmd",
-        return_value=MagicMock(returncode=0, stdout=json.dumps([pr]).encode()),
-    ) as mock_run:
-        prs = await self_review._list_my_prs("acme/frontend", {})
-
-    assert prs == [pr]
-    assert mock_run.call_count == 2
-    for call in mock_run.call_args_list:
-        args = call[0][0]
-        fields = args[args.index("--json") + 1].split(",")
-        assert "author" in fields
+async def test_list_my_prs_reads_authored_open_prs_from_the_host():
+    host = InMemoryCodeHost(repository="acme/frontend", user="alice")
+    host.add_change_request(REPO, head_reference="a", number=2, author="alice")
+    host.add_change_request(REPO, head_reference="b", number=1, author="alice")
+    host.add_change_request(REPO, head_reference="c", number=3, author="bob")
+    prs = await self_review._list_my_prs(host.code_host(), REPO, "alice")
+    assert prs is not None
+    assert [(p.number, p.head_reference) for p in prs] == [(1, "b"), (2, "a")]
 
 
-async def test_list_my_prs_includes_assigned_prs_not_authored(tmp_xdg, tmp_path):
+async def test_list_my_prs_returns_empty_list_when_no_open_prs():
+    host = InMemoryCodeHost(repository="acme/frontend", user="alice")
+    assert (await self_review._list_my_prs(host.code_host(), REPO, "alice")) == []
+
+
+async def test_list_my_prs_returns_none_without_login():
+    host = InMemoryCodeHost(repository="acme/frontend", user="alice")
+    assert (await self_review._list_my_prs(host.code_host(), REPO, "")) is None
+    assert not [c for c in host.calls if c.operation == "ChangeRequests.list"]
+
+
+async def test_list_my_prs_stops_on_unsupported_capability():
+    host = InMemoryCodeHost(
+        repository="acme/frontend", user="alice", capabilities=frozenset(Capability) - {Capability.CHANGE_REQUESTS}
+    )
+    with pytest.raises(UnsupportedCapabilityError):
+        await self_review._list_my_prs(host.code_host(), REPO, "alice")
+
+
+async def test_list_my_prs_includes_assigned_prs_not_authored():
     """A PR opened by a bot on the user's behalf (not authored by them) but assigned to
     them must still show up — self_review is about PRs the user is responsible for, not
     strictly ones they authored."""
-    authored = [{"number": 1, "url": "u1", "headRefName": "b1"}]
-    assigned = [{"number": 2, "url": "u2", "headRefName": "b2"}]
+    authored = make_change_request(1)
+    assigned = make_change_request(2, author=User("bot"))
 
-    def side_effect(cmd, **_kwargs):
-        if "--author" in cmd:
-            return MagicMock(returncode=0, stdout=json.dumps(authored).encode())
-        if "--assignee" in cmd:
-            return MagicMock(returncode=0, stdout=json.dumps(assigned).encode())
-        raise AssertionError(f"unexpected command: {cmd}")  # noqa: TRY003
+    async def fake_list(repo, **filters):
+        if filters.get("author") == "alice":
+            return [authored]
+        if filters.get("assignee") == "alice":
+            return [assigned]
+        raise AssertionError(filters)
 
-    with patch("dotharness.pr_review.runners.self_review.run_cmd", side_effect=side_effect):
-        prs = await self_review._list_my_prs("acme/frontend", {})
+    host = MagicMock()
+    host.change_requests.list = fake_list
+    prs = await self_review._list_my_prs(host, REPO, "alice")
     assert prs is not None
-    assert [p["number"] for p in prs] == [1, 2]
+    assert [p.number for p in prs] == [1, 2]
+    assert prs[1].author == User("bot")
 
 
-async def test_list_my_prs_deduplicates_pr_authored_and_assigned(tmp_xdg, tmp_path):
-    both = [{"number": 1, "url": "u1", "headRefName": "b1"}]
-
-    with patch(
-        "dotharness.pr_review.runners.self_review.run_cmd",
-        return_value=MagicMock(returncode=0, stdout=json.dumps(both).encode()),
-    ):
-        prs = await self_review._list_my_prs("acme/frontend", {})
-    assert prs is not None
-    assert [p["number"] for p in prs] == [1]
+async def test_list_my_prs_deduplicates_pr_authored_and_assigned():
+    both = make_change_request(1)
+    host = MagicMock()
+    host.change_requests.list = AsyncMock(return_value=[both])
+    prs = await self_review._list_my_prs(host, REPO, "alice")
+    assert prs == [both]
+    assert host.change_requests.list.await_count == 2
 
 
-async def test_list_my_prs_returns_none_when_assignee_query_fails(tmp_xdg, tmp_path):
+async def test_list_my_prs_returns_none_when_assignee_query_fails():
     """The author query can succeed while the assignee query fails (or vice versa) — that
     partial result must not be treated as the authoritative open-PR set."""
-    authored = [{"number": 1, "url": "u1", "headRefName": "b1"}]
 
-    def side_effect(cmd, **_kwargs):
-        if "--author" in cmd:
-            return MagicMock(returncode=0, stdout=json.dumps(authored).encode())
-        return MagicMock(returncode=1, stdout=b"")
+    async def fake_list(repo, **filters):
+        if "author" in filters:
+            return [make_change_request(1)]
+        raise CodeHostError("boom")
 
-    with patch("dotharness.pr_review.runners.self_review.run_cmd", side_effect=side_effect):
-        assert (await self_review._list_my_prs("acme/frontend", {})) is None
+    host = MagicMock()
+    host.change_requests.list = fake_list
+    assert (await self_review._list_my_prs(host, REPO, "alice")) is None
 
 
 async def test_design_review_runs_independently_of_already_reviewed_files(tmp_xdg, tmp_path):
@@ -607,11 +622,11 @@ async def test_design_review_runs_independently_of_already_reviewed_files(tmp_xd
     (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 7, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(7, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=False),
         patch("dotharness.pr_review.runners.self_review.check_design_review_comment_status", return_value=True),
@@ -621,6 +636,7 @@ async def test_design_review_runs_independently_of_already_reviewed_files(tmp_xd
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -643,11 +659,11 @@ async def test_design_review_failure_does_not_block_files_summary_state(tmp_xdg,
     (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 8, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(8, url="u", head_reference="b")],
         ),
         patch(
             "dotharness.pr_review.runners.self_review.check_review_summary_comment_status", side_effect=[False, True]
@@ -659,6 +675,7 @@ async def test_design_review_failure_does_not_block_files_summary_state(tmp_xdg,
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -685,11 +702,11 @@ async def test_design_review_already_done_is_skipped_without_any_backend_call(tm
     state.add_traceability_reviewed_pr("acme-frontend", 9)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 9, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(9, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.self_review.git_fetch_and_checkout") as mock_checkout,
@@ -707,11 +724,11 @@ async def test_design_review_marker_found_marks_done_without_invoking_backend(tm
     state.write_self_review_state("acme-frontend", [10])
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 10, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(10, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
@@ -720,6 +737,7 @@ async def test_design_review_marker_found_marks_done_without_invoking_backend(tm
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
@@ -738,11 +756,11 @@ async def test_design_review_not_marked_done_when_comment_confirmed_missing(tmp_
     (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 11, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(11, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=False),
         patch("dotharness.pr_review.runners.self_review.check_design_review_comment_status", return_value=False),
@@ -752,6 +770,7 @@ async def test_design_review_not_marked_done_when_comment_confirmed_missing(tmp_
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -771,11 +790,11 @@ async def test_design_review_not_marked_done_when_comment_check_inconclusive(tmp
     (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 12, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(12, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=False),
         patch("dotharness.pr_review.runners.self_review.check_design_review_comment_status", return_value=None),
@@ -785,6 +804,7 @@ async def test_design_review_not_marked_done_when_comment_check_inconclusive(tmp
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -804,15 +824,15 @@ async def test_does_not_update_state_when_summary_check_inconclusive(tmp_xdg, tm
     (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         # Design pass is decoupled and out of scope for these correctness/state tests —
         # treat it as already-done so it never invokes the backend or hits `gh` for real.
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 31, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(31, url="u", head_reference="b")],
         ),
         # first call: up-front check (not already reviewed); second call: post-backend
         # verification, which is inconclusive rather than a confirmed absence
@@ -824,6 +844,7 @@ async def test_does_not_update_state_when_summary_check_inconclusive(tmp_xdg, tm
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -843,19 +864,13 @@ async def test_traceability_review_runs_independently_of_already_reviewed_files(
     (tmp_path / "src").mkdir(parents=True, exist_ok=True)
     (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
-    ticket = {
-        "number": 3,
-        "repo": "acme/frontend",
-        "title": "Do the thing",
-        "body": "body",
-        "source": "closing_keyword",
-    }
+    ticket = LinkedTicket(3, "acme/frontend", "Do the thing", "body", "closing_keyword")
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 7, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(7, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=False),
         patch("dotharness.pr_review.runners.self_review.resolve_linked_tickets", return_value=[ticket]),
@@ -866,6 +881,7 @@ async def test_traceability_review_runs_independently_of_already_reviewed_files(
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -891,11 +907,11 @@ async def test_traceability_review_no_linked_ticket_posts_comment_without_backen
     state.add_design_reviewed_pr("acme-frontend", 7)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 7, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(7, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=False),
         patch("dotharness.pr_review.runners.self_review.resolve_linked_tickets", return_value=[]),
@@ -905,13 +921,14 @@ async def test_traceability_review_no_linked_ticket_posts_comment_without_backen
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
         await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     mock_post.assert_called_once()
-    assert mock_post.call_args.args[:2] == (7, "acme/frontend")
+    assert mock_post.call_args.args[2] == 7
     assert 7 in state.get_traceability_reviewed_prs("acme-frontend")
 
 
@@ -925,11 +942,11 @@ async def test_traceability_review_inconclusive_ticket_lookup_skips_without_post
     state.add_design_reviewed_pr("acme-frontend", 7)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 7, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(7, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=False),
         patch("dotharness.pr_review.runners.self_review.resolve_linked_tickets", return_value=None),
@@ -939,6 +956,7 @@ async def test_traceability_review_inconclusive_ticket_lookup_skips_without_post
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
@@ -957,11 +975,11 @@ async def test_traceability_review_no_linked_ticket_comment_post_failure_leaves_
     state.add_design_reviewed_pr("acme-frontend", 7)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 7, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(7, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=False),
         patch("dotharness.pr_review.runners.self_review.resolve_linked_tickets", return_value=[]),
@@ -971,6 +989,7 @@ async def test_traceability_review_no_linked_ticket_comment_post_failure_leaves_
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
@@ -990,11 +1009,11 @@ async def test_traceability_review_failure_does_not_block_files_summary_state(tm
     cfg = _cfg(tmp_path)
     ticket = {"number": 3, "repo": "acme/frontend", "title": "t", "body": "b", "source": "closing_keyword"}
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 8, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(8, url="u", head_reference="b")],
         ),
         patch(
             "dotharness.pr_review.runners.self_review.check_review_summary_comment_status", side_effect=[False, True]
@@ -1007,6 +1026,7 @@ async def test_traceability_review_failure_does_not_block_files_summary_state(tm
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -1032,11 +1052,11 @@ async def test_traceability_review_marker_found_marks_done_without_invoking_back
     state.add_design_reviewed_pr("acme-frontend", 10)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 10, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(10, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -1044,6 +1064,7 @@ async def test_traceability_review_marker_found_marks_done_without_invoking_back
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
@@ -1064,11 +1085,11 @@ async def test_traceability_review_not_marked_done_when_comment_confirmed_missin
     cfg = _cfg(tmp_path)
     ticket = {"number": 3, "repo": "acme/frontend", "title": "t", "body": "b", "source": "closing_keyword"}
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 11, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(11, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=False),
         patch("dotharness.pr_review.runners.self_review.resolve_linked_tickets", return_value=[ticket]),
@@ -1079,6 +1100,7 @@ async def test_traceability_review_not_marked_done_when_comment_confirmed_missin
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -1100,11 +1122,11 @@ async def test_traceability_review_not_marked_done_when_comment_check_inconclusi
     cfg = _cfg(tmp_path)
     ticket = {"number": 3, "repo": "acme/frontend", "title": "t", "body": "b", "source": "closing_keyword"}
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 12, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(12, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=False),
         patch("dotharness.pr_review.runners.self_review.resolve_linked_tickets", return_value=[ticket]),
@@ -1115,6 +1137,7 @@ async def test_traceability_review_not_marked_done_when_comment_check_inconclusi
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -1134,11 +1157,11 @@ async def test_traceability_review_already_done_is_skipped_without_any_backend_c
     state.add_traceability_reviewed_pr("acme-frontend", 9)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 9, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(9, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.self_review.git_fetch_and_checkout") as mock_checkout,
@@ -1182,11 +1205,11 @@ async def test_regret_review_not_run_when_disabled(tmp_xdg, tmp_path):
     state.add_traceability_reviewed_pr("acme-frontend", 50)
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 50, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+            return_value=[make_change_request(50, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.check_review_summary_comment_status", return_value=True),
         patch("dotharness.pr_review.runners.self_review.git_detach_and_record", return_value="sha"),
@@ -1210,11 +1233,11 @@ async def test_regret_review_not_run_when_already_regret_reviewed(tmp_xdg, tmp_p
     cfg = _cfg(tmp_path)
     cfg.regret_review.enabled = True
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 51, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+            return_value=[make_change_request(51, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.self_review.git_fetch_and_checkout") as mock_checkout,
@@ -1234,11 +1257,11 @@ async def test_regret_review_marker_found_marks_done_without_invoking_backend(tm
     cfg = _cfg(tmp_path)
     cfg.regret_review.enabled = True
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 52, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+            return_value=[make_change_request(52, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
@@ -1252,6 +1275,7 @@ async def test_regret_review_marker_found_marks_done_without_invoking_backend(tm
         patch("dotharness.pr_review.runners.self_review.get_pr_description", return_value=None),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
     ):
@@ -1271,11 +1295,11 @@ async def test_regret_review_posts_comment_and_marks_done_on_findings(tmp_xdg, t
     cfg = _cfg(tmp_path)
     cfg.regret_review.enabled = True
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 53, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+            return_value=[make_change_request(53, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
@@ -1293,6 +1317,7 @@ async def test_regret_review_posts_comment_and_marks_done_on_findings(tmp_xdg, t
         patch("dotharness.pr_review.runners.self_review.get_pr_description", return_value=None),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
         patch("dotharness.pr_review.runners.self_review.post_regret_comment", return_value=True) as mock_post,
@@ -1306,7 +1331,7 @@ async def test_regret_review_posts_comment_and_marks_done_on_findings(tmp_xdg, t
     assert mock_be.return_value.run.call_args.kwargs["context"] == "PR #53 regret review"
     assert 53 in state.get_regret_reviewed_prs("acme-frontend")
     assert mock_post.call_count == 1
-    body = mock_post.call_args.args[2]
+    body = mock_post.call_args.args[3]
     assert "# Previously flagged review comments" in body
     assert "src/foo.py:3" in body
     assert "#42" in body
@@ -1324,11 +1349,11 @@ async def test_regret_review_no_candidates_no_backend_call_and_unmarked(tmp_xdg,
     cfg = _cfg(tmp_path)
     cfg.regret_review.enabled = True
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 54, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+            return_value=[make_change_request(54, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
@@ -1342,6 +1367,7 @@ async def test_regret_review_no_candidates_no_backend_call_and_unmarked(tmp_xdg,
         patch("dotharness.pr_review.runners.self_review.get_pr_description", return_value=None),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
         patch("dotharness.pr_review.runners.self_review.post_regret_comment") as mock_post,
@@ -1361,11 +1387,11 @@ async def test_regret_review_no_findings_marks_done_without_posting(tmp_xdg, tmp
     cfg = _cfg(tmp_path)
     cfg.regret_review.enabled = True
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 55, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+            return_value=[make_change_request(55, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
@@ -1382,6 +1408,7 @@ async def test_regret_review_no_findings_marks_done_without_posting(tmp_xdg, tmp
         patch("dotharness.pr_review.runners.self_review.get_pr_description", return_value=None),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
         patch("dotharness.pr_review.runners.self_review.post_regret_comment") as mock_post,
@@ -1404,11 +1431,11 @@ async def test_regret_review_post_failure_leaves_unmarked(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     cfg.regret_review.enabled = True
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 56, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+            return_value=[make_change_request(56, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
@@ -1426,6 +1453,7 @@ async def test_regret_review_post_failure_leaves_unmarked(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.self_review.get_pr_description", return_value=None),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
         patch("dotharness.pr_review.runners.self_review.post_regret_comment", return_value=False),
@@ -1451,11 +1479,11 @@ async def test_regret_review_incomplete_reply_leaves_unmarked(tmp_xdg, tmp_path)
     cfg = _cfg(tmp_path)
     cfg.regret_review.enabled = True
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 57, "url": "u", "headRefName": "b", "author": {"login": "alice"}}],
+            return_value=[make_change_request(57, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
@@ -1472,6 +1500,7 @@ async def test_regret_review_incomplete_reply_leaves_unmarked(tmp_xdg, tmp_path)
         patch("dotharness.pr_review.runners.self_review.get_pr_description", return_value=None),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=[]),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
         patch("dotharness.pr_review.runners.self_review.post_regret_comment") as mock_post,
@@ -1499,13 +1528,13 @@ async def test_re_requests_review_when_previously_requested_on_assigned_pr(tmp_x
     (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 7, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(7, url="u", head_reference="b")],
         ),
         patch(
             "dotharness.pr_review.runners.self_review.check_review_summary_comment_status", side_effect=[False, True]
@@ -1515,6 +1544,7 @@ async def test_re_requests_review_when_previously_requested_on_assigned_pr(tmp_x
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,
@@ -1524,7 +1554,7 @@ async def test_re_requests_review_when_previously_requested_on_assigned_pr(tmp_x
         mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
         await self_review._run_locked(cfg)
-    mock_add_reviewer.assert_called_once_with(7, "acme/frontend", "alice", ANY)
+    mock_add_reviewer.assert_called_once_with(ANY, REPO, 7, "alice")
 
 
 async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, tmp_path):
@@ -1537,13 +1567,13 @@ async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, t
     (tmp_path / "src" / "foo.py").write_text("def foo():\n    pass\n")
     cfg = _cfg(tmp_path)
     with (
-        patch("dotharness.pr_review.runners.self_review.get_gh_token", return_value="tok"),
-        patch("dotharness.pr_review.runners.self_review.get_current_user", return_value="alice"),
+        patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
         patch("dotharness.pr_review.runners.self_review.has_design_review_comment", return_value=True),
         patch("dotharness.pr_review.runners.self_review.has_traceability_review_comment", return_value=True),
         patch(
             "dotharness.pr_review.runners.self_review._list_my_prs",
-            return_value=[{"number": 7, "url": "u", "headRefName": "b"}],
+            return_value=[make_change_request(7, url="u", head_reference="b")],
         ),
         patch(
             "dotharness.pr_review.runners.self_review.check_review_summary_comment_status", side_effect=[False, True]
@@ -1553,6 +1583,7 @@ async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, t
         patch("dotharness.pr_review.runners.self_review.git_restore"),
         patch("dotharness.pr_review.runners.self_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.self_review.get_pr_head_sha", return_value="abc123"),
+        patch("dotharness.pr_review.runners.self_review.get_change_request", return_value=make_change_request()),
         patch("dotharness.pr_review.runners.self_review.get_changed_files", return_value=["src/foo.py"]),
         patch("dotharness.pr_review.runners.self_review.get_file_diff", return_value="@@diff"),
         patch("dotharness.pr_review.runners.self_review.Backend") as mock_be,

@@ -1,9 +1,23 @@
-import json
+import asyncio
 import logging
 import subprocess
+import time
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from dotharness.code_host import (
+    ChangeRequest,
+    CodeHost,
+    CodeHostError,
+    CodeHostTimeoutError,
+    UnsupportedCapabilityError,
+    User,
+)
+from dotharness.code_host.testing import InMemoryCodeHost
 from dotharness.pr_review.config import HarnessConfig, HarnessSection, RegretReviewConfig, RepoConfig
 from dotharness.pr_review.runners.common import REGRET_REVIEW_MARKER, count_diff_lines
 from dotharness.pr_review.runners.regret_review import (
@@ -14,13 +28,18 @@ from dotharness.pr_review.runners.regret_review import (
     _hunk_line_ranges,
     _line_within_hunk_ranges,
     _removed_modified_ranges,
+    _resolve_commit_prs,
     build_regret_comment_body,
     build_regret_judgment_prompt,
     find_introducing_prs,
     find_regret_candidates,
     is_complete_judgment_response,
     parse_regret_judgment,
+    post_regret_comment,
 )
+from tests.pr_review.runners.runner_support import REPO, make_change_request, make_scaffold
+
+HOST = make_scaffold().host
 
 
 def _finding(**overrides) -> RegretFinding:
@@ -106,13 +125,30 @@ def _config(max_diff_lines=50, authors="*", timeout=300) -> HarnessConfig:
     )
 
 
-def _pr(number=42, login="alice") -> dict:
-    return {
-        "number": number,
-        "url": "https://github.com/acme/repo/pull/42",
-        "headRefName": "fix/typo",
-        "author": {"login": login},
-    }
+def _pr(number=42, login: str | None = "alice") -> ChangeRequest:
+    return make_change_request(
+        number,
+        url="https://github.com/acme/repo/pull/42",
+        head_reference="fix/typo",
+        author=User(login) if login else None,
+    )
+
+
+def _commit_host(by_sha: dict[str, list[int]]) -> InMemoryCodeHost:
+    """A host where each ``sha`` is a commit of the listed change requests (the introducing PRs)."""
+    host = InMemoryCodeHost(repository="acme/frontend", user="alice")
+    seeded: set[int] = set()
+    for sha, numbers in by_sha.items():
+        for number in numbers:
+            if number not in seeded:
+                host.add_change_request(REPO, number=number, head_reference=f"intro-{number}")
+                seeded.add(number)
+            host.add_commit(REPO, number, revision=sha)
+    return host
+
+
+def _lookups(host: InMemoryCodeHost) -> list[str]:
+    return [str(c.args[1]) for c in host.calls if c.operation == "ChangeRequests.find_by_commit"]
 
 
 def _run(returncode=0, stdout=b"", stderr=b"") -> MagicMock:
@@ -185,17 +221,16 @@ async def test_find_introducing_prs_happy_path_blames_merge_base_and_resolves_pr
             return _run(0, diff.encode())
         if cmd[0] == "git" and cmd[1] == "blame":
             return _run(0, blame.encode())
-        if cmd[0] == "gh":
-            return _run(0, json.dumps([{"number": 7}]).encode())
         msg = f"unexpected command: {cmd}"
         raise AssertionError(msg)
 
+    host = _commit_host({"abc123def456": [7]})
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect) as mock_run,
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(host.code_host(), REPO, _pr(), _config(), str(tmp_path), {})
     assert hunks == [
         IntroducingHunk(
             path="src/foo.py",
@@ -213,7 +248,7 @@ async def test_find_introducing_prs_happy_path_blames_merge_base_and_resolves_pr
         ["git", "merge-base", "origin/main", "HEAD"],
         ["git", "blame", "-L", "5,6", "mb123mb123mb123mb123mb123", "--", "src/foo.py"],
     ]
-    assert _cmd_calls(mock_run, "gh") == [["gh", "api", "repos/acme/repo/commits/abc123def456/pulls"]]
+    assert _lookups(host) == ["abc123def456"]
 
 
 async def test_find_introducing_prs_skips_oversized_pr_with_no_blame_or_api(tmp_path):
@@ -230,7 +265,7 @@ async def test_find_introducing_prs_skips_oversized_pr_with_no_blame_or_api(tmp_
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
     assert mock_run.call_count == 1
 
 
@@ -252,7 +287,7 @@ async def test_find_introducing_prs_exits_oversized_gate_mid_file_list(tmp_path)
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["a.py", "b.py", "c.py"]),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
     # 1 + 50 > 50 on the second file: the gate exits then, and c.py is never diffed.
     assert mock_run.call_count == 2
 
@@ -278,7 +313,7 @@ async def test_find_introducing_prs_at_exact_max_diff_lines_is_not_gated(tmp_pat
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
     # The gate must NOT have tripped: diff and merge-base both ran before the blame failure.
     # A regression from `>` to `>=` would short-circuit to [] before merge-base and fail here.
     assert _cmd_calls(mock_run, "git")[:2] == [
@@ -293,7 +328,9 @@ async def test_find_introducing_prs_author_gate_skips_before_any_git_or_gh(tmp_p
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch") as mock_base,
         patch("dotharness.pr_review.runners.regret_review.get_changed_files") as mock_files,
     ):
-        assert (await find_introducing_prs(_pr(login="bob"), _config(authors="alice"), str(tmp_path), {})) == []
+        assert (
+            await find_introducing_prs(HOST, REPO, _pr(login="bob"), _config(authors="alice"), str(tmp_path), {})
+        ) == []
     mock_run.assert_not_called()
     mock_base.assert_not_called()
     mock_files.assert_not_called()
@@ -310,17 +347,18 @@ async def test_find_introducing_prs_author_allowlist_match_proceeds(tmp_path):
             return _run(0, b"mb123mb123mb123mb123mb123\n")
         if cmd[0] == "git" and cmd[1] == "blame":
             return _run(0, blame.encode())
-        if cmd[0] == "gh":
-            return _run(0, json.dumps([{"number": 7}]).encode())
         msg = f"unexpected command: {cmd}"
         raise AssertionError(msg)
 
+    host = _commit_host({"abc123def456": [7]})
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(login="alice"), _config(authors=["alice", "bob"]), str(tmp_path), {})
+        hunks = await find_introducing_prs(
+            host.code_host(), REPO, _pr(login="alice"), _config(authors=["alice", "bob"]), str(tmp_path), {}
+        )
     assert [h.introducing_pr_number for h in hunks] == [7]
 
 
@@ -330,8 +368,8 @@ async def test_find_introducing_prs_missing_author_fails_closed_for_explicit_all
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch") as mock_base,
         patch("dotharness.pr_review.runners.regret_review.get_changed_files") as mock_files,
     ):
-        pr = {"number": 42}
-        assert (await find_introducing_prs(pr, _config(authors="alice"), str(tmp_path), {})) == []
+        pr = _pr(login=None)
+        assert (await find_introducing_prs(HOST, REPO, pr, _config(authors="alice"), str(tmp_path), {})) == []
     mock_run.assert_not_called()
     mock_base.assert_not_called()
     mock_files.assert_not_called()
@@ -353,7 +391,7 @@ async def test_find_introducing_prs_pure_addition_diff_blames_nothing(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
     # diff + merge-base only: no blame, no gh.
     assert [c.args[0][1] for c in mock_run.call_args_list] == ["diff", "merge-base"]
 
@@ -369,21 +407,20 @@ async def test_find_introducing_prs_same_commit_blamed_from_two_ranges_is_resolv
         if cmd[0] == "git" and cmd[1] == "blame":
             line = "old a" if cmd[3] == "5,5" else "old b"
             return _run(0, f"abc123def456 (alice 2026-01-01 10:00:00 +0000) {line}\n".encode())
-        if cmd[0] == "gh":
-            return _run(0, json.dumps([{"number": 7}]).encode())
         msg = f"unexpected command: {cmd}"
         raise AssertionError(msg)
 
+    host = _commit_host({"abc123def456": [7]})
     with (
-        patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect) as mock_run,
+        patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(host.code_host(), REPO, _pr(), _config(), str(tmp_path), {})
     assert [(h.old_start, h.old_end) for h in hunks] == [(5, 5), (9, 9)]
     assert all(h.introducing_sha == "abc123def456" and h.introducing_pr_number == 7 for h in hunks)
     # G4: one unique SHA → exactly one commit→PR lookup, not one per range.
-    assert len(_cmd_calls(mock_run, "gh")) == 1
+    assert _lookups(host) == ["abc123def456"]
 
 
 async def test_find_introducing_prs_range_spanning_two_commits_yields_one_hunk_per_commit(tmp_path):
@@ -397,18 +434,16 @@ async def test_find_introducing_prs_range_spanning_two_commits_yields_one_hunk_p
             return _run(0, b"mb123mb123mb123mb123mb123\n")
         if cmd[0] == "git" and cmd[1] == "blame":
             return _run(0, blame.encode())
-        if cmd[0] == "gh":
-            number = 7 if "aaa111aaa111" in cmd[2] else 8
-            return _run(0, json.dumps([{"number": number}]).encode())
         msg = f"unexpected command: {cmd}"
         raise AssertionError(msg)
 
+    host = _commit_host({"aaa111aaa111": [7], "bbb222bbb222": [8]})
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(host.code_host(), REPO, _pr(), _config(), str(tmp_path), {})
     assert sorted((h.introducing_sha, h.introducing_pr_number) for h in hunks) == [
         ("aaa111aaa111", 7),
         ("bbb222bbb222", 8),
@@ -426,17 +461,16 @@ async def test_find_introducing_prs_commit_in_multiple_prs_yields_one_hunk_per_p
             return _run(0, b"mb123mb123mb123mb123mb123\n")
         if cmd[0] == "git" and cmd[1] == "blame":
             return _run(0, blame.encode())
-        if cmd[0] == "gh":
-            return _run(0, json.dumps([{"number": 8}, {"number": 7}]).encode())
         msg = f"unexpected command: {cmd}"
         raise AssertionError(msg)
 
+    host = _commit_host({"abc123def456": [8, 7]})
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(host.code_host(), REPO, _pr(), _config(), str(tmp_path), {})
     assert sorted(h.introducing_pr_number for h in hunks) == [7, 8]
 
 
@@ -451,18 +485,17 @@ async def test_find_introducing_prs_zero_pr_result_skips_lines_silently(tmp_path
             return _run(0, b"mb123mb123mb123mb123mb123\n")
         if cmd[0] == "git" and cmd[1] == "blame":
             return _run(0, blame.encode())
-        if cmd[0] == "gh":
-            return _run(0, b"[]")
         msg = f"unexpected command: {cmd}"
         raise AssertionError(msg)
 
+    host = _commit_host({})
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
         caplog.at_level(logging.DEBUG, logger="dotharness.pr_review.runners.regret_review"),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(host.code_host(), REPO, _pr(), _config(), str(tmp_path), {})) == []
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
@@ -477,43 +510,122 @@ async def test_find_introducing_prs_api_failure_skips_lines_silently(tmp_path, c
             return _run(0, b"mb123mb123mb123mb123mb123\n")
         if cmd[0] == "git" and cmd[1] == "blame":
             return _run(0, blame.encode())
-        if cmd[0] == "gh":
-            return _run(1, stderr=b"HTTP 403: rate limited")
         msg = f"unexpected command: {cmd}"
         raise AssertionError(msg)
 
+    host = _commit_host({"abc123def456": [7]})
+    host.fail_next("ChangeRequests.find_by_commit", CodeHostError("HTTP 403: rate limited"))
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
         caplog.at_level(logging.DEBUG, logger="dotharness.pr_review.runners.regret_review"),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(host.code_host(), REPO, _pr(), _config(), str(tmp_path), {})) == []
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
-async def test_find_introducing_prs_malformed_pulls_json_skips_lines(tmp_path):
-    diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -5,1 +5,1 @@\n-old\n+new\n"
-    blame = "abc123def456 (alice 2026-01-01 10:00:00 +0000   5) old\n"
+async def test_find_introducing_prs_host_lookup_timeout_skips_only_that_sha(tmp_path):
+    diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -5,1 +5,1 @@\n-old a\n+new a\n@@ -9,1 +9,1 @@\n-old b\n+new b\n"
 
     def side_effect(cmd, cwd, env, timeout, check=False):
-        if cmd[0] == "git" and cmd[1] == "diff":
+        if cmd[1] == "diff":
             return _run(0, diff.encode())
-        if cmd[0] == "git" and cmd[1] == "merge-base":
-            return _run(0, b"mb123mb123mb123mb123mb123\n")
-        if cmd[0] == "git" and cmd[1] == "blame":
-            return _run(0, blame.encode())
-        if cmd[0] == "gh":
-            return _run(0, b"this is not json")
-        msg = f"unexpected command: {cmd}"
-        raise AssertionError(msg)
+        if cmd[1] == "merge-base":
+            return _run(0, b"mb123\n")
+        line = "old a" if cmd[3] == "5,5" else "old b"
+        sha = "aaa111aaa111" if cmd[3] == "5,5" else "bbb222bbb222"
+        return _run(0, f"{sha} (alice 2026-01-01 10:00:00 +0000) {line}\n".encode())
 
+    host = _commit_host({"aaa111aaa111": [7], "bbb222bbb222": [8]})
+    host.fail_next("ChangeRequests.find_by_commit", CodeHostTimeoutError("slow", write=False))
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        # The host's own per-call timeout on the first lookup is not budget exhaustion: that SHA is
+        # skipped and the second is still resolved.
+        hunks = await find_introducing_prs(host.code_host(), REPO, _pr(), _config(), str(tmp_path), {})
+    assert [h.introducing_pr_number for h in hunks] == [8]
+    assert _lookups(host) == ["aaa111aaa111", "bbb222bbb222"]
+
+
+async def test_find_introducing_prs_stops_when_the_host_cannot_find_changes_by_commit(tmp_path):
+    from dotharness.code_host import Capability
+
+    diff = "--- a/src/foo.py\n+++ b/src/foo.py\n@@ -5,1 +5,1 @@\n-old\n+new\n"
+
+    def side_effect(cmd, cwd, env, timeout, check=False):
+        if cmd[1] == "diff":
+            return _run(0, diff.encode())
+        if cmd[1] == "merge-base":
+            return _run(0, b"mb123\n")
+        return _run(0, b"abc123def456 (alice 2026-01-01 10:00:00 +0000   5) old\n")
+
+    host = InMemoryCodeHost(
+        repository="acme/frontend", user="alice", capabilities=frozenset(Capability) - {Capability.CHANGE_REQUESTS}
+    )
+    with (
+        patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
+        patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
+        patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
+        pytest.raises(UnsupportedCapabilityError),
+    ):
+        await find_introducing_prs(host.code_host(), REPO, _pr(), _config(), str(tmp_path), {})
+
+
+async def test_resolve_commit_prs_slow_lookup_exhausts_the_budget():
+    class _Slow:
+        async def find_by_commit(self, repo, sha):
+            await asyncio.sleep(5)
+
+    host = cast("CodeHost", SimpleNamespace(change_requests=_Slow()))
+    with patch("dotharness.pr_review.runners.regret_review._remaining_budget", return_value=0.01):
+        assert await _resolve_commit_prs(host, REPO, ["abc"], 42, 0.0, 300) is None
+
+
+async def test_resolve_commit_prs_expired_budget_makes_no_lookup():
+    host = _commit_host({"abc": [7]})
+    assert await _resolve_commit_prs(host.code_host(), REPO, ["abc"], 42, time.monotonic() - 1000, 300) is None
+    assert host.calls == []
+
+
+async def test_post_regret_comment_posts_the_body_on_the_change_request():
+    host = _commit_host({"abc": [42]})
+    assert await post_regret_comment(host.code_host(), REPO, 42, "BODY " + REGRET_REVIEW_MARKER) is True
+    assert [(c.operation, c.args) for c in host.writes] == [
+        ("Discussion.post_comment", (REPO, 42, "BODY " + REGRET_REVIEW_MARKER))
+    ]
+
+
+async def test_post_regret_comment_failure_is_logged_and_returns_false(caplog):
+    host = _commit_host({"abc": [42]})
+    host.fail_next("Discussion.post_comment", CodeHostError("denied"))
+    with caplog.at_level(logging.ERROR, logger="dotharness.pr_review.runners.regret_review"):
+        assert await post_regret_comment(host.code_host(), REPO, 42, "BODY") is False
+    assert "PR #42: failed to post regret comment: denied" in caplog.text
+    assert host.writes == []
+
+
+@pytest.mark.parametrize("apply", [True, False])
+async def test_post_regret_comment_timeout_is_not_retried_and_has_no_fallback(apply):
+    host = _commit_host({"abc": [42]})
+    host.fail_next("Discussion.post_comment", CodeHostTimeoutError("slow", write=True), apply=apply)
+    assert await post_regret_comment(host.code_host(), REPO, 42, "BODY") is False
+    attempts = [c for c in host.calls if c.operation.startswith("Discussion.")]
+    assert [c.operation for c in attempts] == ["Discussion.post_comment"]
+    assert len(host.writes) == (1 if apply else 0)
+
+
+async def test_post_regret_comment_stops_when_the_host_cannot_post_comments():
+    from dotharness.code_host import Capability
+
+    host = InMemoryCodeHost(
+        repository="acme/frontend", user="alice", capabilities=frozenset(Capability) - {Capability.DISCUSSION}
+    )
+    with pytest.raises(UnsupportedCapabilityError):
+        await post_regret_comment(host.code_host(), REPO, 42, "BODY")
 
 
 async def test_find_introducing_prs_blame_failure_skips_only_that_range(tmp_path):
@@ -528,17 +640,16 @@ async def test_find_introducing_prs_blame_failure_skips_only_that_range(tmp_path
             if cmd[3] == "5,5":
                 return _run(1, stderr=b"fatal: cannot blame")
             return _run(0, b"bbb222bbb222 (bob 2026-01-02 11:00:00 +0000   9) old b\n")
-        if cmd[0] == "gh":
-            return _run(0, json.dumps([{"number": 8}]).encode())
         msg = f"unexpected command: {cmd}"
         raise AssertionError(msg)
 
+    host = _commit_host({"bbb222bbb222": [8]})
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(host.code_host(), REPO, _pr(), _config(), str(tmp_path), {})
     assert [(h.old_start, h.old_end, h.introducing_sha) for h in hunks] == [(9, 9, "bbb222bbb222")]
 
 
@@ -553,17 +664,16 @@ async def test_find_introducing_prs_merge_base_failure_blames_origin_base(tmp_pa
             return _run(0, diff.encode())
         if cmd[0] == "git" and cmd[1] == "blame":
             return _run(0, blame.encode())
-        if cmd[0] == "gh":
-            return _run(0, json.dumps([{"number": 7}]).encode())
         msg = f"unexpected command: {cmd}"
         raise AssertionError(msg)
 
+    host = _commit_host({"abc123def456": [7]})
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect) as mock_run,
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(host.code_host(), REPO, _pr(), _config(), str(tmp_path), {})
     assert len(hunks) == 1
     blame_cmd = _cmd_calls(mock_run, "git")[2]
     assert blame_cmd == ["git", "blame", "-L", "5,5", "origin/main", "--", "src/foo.py"]
@@ -575,7 +685,7 @@ async def test_find_introducing_prs_no_changed_files_does_nothing(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=[]),
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
     mock_run.assert_not_called()
 
 
@@ -585,7 +695,7 @@ async def test_find_introducing_prs_no_base_branch_does_nothing(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value=""),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files") as mock_files,
     ):
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
     mock_run.assert_not_called()
     mock_files.assert_not_called()
 
@@ -596,7 +706,7 @@ async def test_find_introducing_prs_expired_budget_does_nothing(tmp_path):
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        assert (await find_introducing_prs(_pr(), _config(timeout=0), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(timeout=0), str(tmp_path), {})) == []
     mock_run.assert_not_called()
 
 
@@ -617,7 +727,7 @@ async def test_find_introducing_prs_timed_out_call_stops_sequence_fail_open(tmp_
     ):
         # The diff succeeds, then the budget runs out during the next call: no partial
         # finding is produced.
-        assert (await find_introducing_prs(_pr(), _config(), str(tmp_path), {})) == []
+        assert (await find_introducing_prs(HOST, REPO, _pr(), _config(), str(tmp_path), {})) == []
 
 
 async def test_find_introducing_prs_passes_remaining_budget_as_call_timeout(tmp_path):
@@ -633,17 +743,16 @@ async def test_find_introducing_prs_passes_remaining_budget_as_call_timeout(tmp_
             return _run(0, b"mb123mb123mb123mb123mb123\n")
         if cmd[0] == "git" and cmd[1] == "blame":
             return _run(0, blame.encode())
-        if cmd[0] == "gh":
-            return _run(0, json.dumps([{"number": 7}]).encode())
         msg = f"unexpected command: {cmd}"
         raise AssertionError(msg)
 
+    host = _commit_host({"abc123def456": [7]})
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        await find_introducing_prs(_pr(), _config(timeout=300), str(tmp_path), {})
+        await find_introducing_prs(host.code_host(), REPO, _pr(), _config(timeout=300), str(tmp_path), {})
     # Every call's timeout is the remaining budget (≤ 300, strictly decreasing in
     # elapsed time), never a fresh per-call constant.
     assert seen_timeouts and all(0 < t <= 300 for t in seen_timeouts)
@@ -651,8 +760,6 @@ async def test_find_introducing_prs_passes_remaining_budget_as_call_timeout(tmp_
 
 
 # --- phase 04: comment fetch + diff-hunk matching ---
-
-
 def _hunk(**overrides) -> IntroducingHunk:
     base = {
         "path": "src/foo.py",
@@ -1371,12 +1478,13 @@ async def test_find_introducing_prs_non_utf8_diff_and_merge_base_do_not_raise(tm
             return _run(0, diff)
         if cmd[1] == "blame":
             return _run(0, blame)
-        return _run(0, json.dumps([{"number": 7}]).encode())
+        raise AssertionError(cmd)
 
+    host = _commit_host({"abc123def456": [7]})
     with (
         patch("dotharness.pr_review.runners.regret_review.run_cmd", side_effect=side_effect),
         patch("dotharness.pr_review.runners.regret_review.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.regret_review.get_changed_files", return_value=["src/foo.py"]),
     ):
-        hunks = await find_introducing_prs(_pr(), _config(), str(tmp_path), {})
+        hunks = await find_introducing_prs(host.code_host(), REPO, _pr(), _config(), str(tmp_path), {})
     assert [(h.old_start, h.introducing_pr_number) for h in hunks] == [(1, 7)]
