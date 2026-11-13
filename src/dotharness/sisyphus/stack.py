@@ -22,6 +22,22 @@ only. A manifest is a regular file named ``pyproject.toml``, ``package.json`` or
 matching ``requirements*.txt``.
 
 The framework detection rules live in ``FRAMEWORK_RULES``; ``match_file`` applies them.
+
+``group_added_files`` assigns each added test to one group or to none (steps a to d,
+non-override case only). ``M(P)`` is ``nearest_manifest_dir(root, P)``:
+
+a. For a test T, take ``M(T)``; each added source S has ``M(S)``.
+b. Candidate groups hold at least one source S with ``M(S) == M(T)``, and only when
+   ``M(T)`` is not ``None`` (``''``, the repo root, is valid). With exactly one
+   candidate, T goes to it.
+c. With several candidates, T goes to the group of the source S (among those with
+   ``M(S) == M(T)``) whose directory shares the longest common directory prefix with
+   T's directory, measured in whole path components. On a tie the alphabetically
+   earlier set wins, ``generic`` last.
+d. With no candidate, T goes to the ``generic`` group if one exists, else to no group;
+   no source-less ``generic`` group is created.
+
+Only added sources count: existing code that was not added is invisible to this rule.
 """
 
 from __future__ import annotations
@@ -419,8 +435,8 @@ def group_added_files(
 
     With ``pattern_set`` given, all sources form one group and no manifest is read.
     Otherwise each source file lands in exactly one group: framework groups in
-    ascending set-name order, then ``generic`` last. ``tests`` is filled only in the
-    override case.
+    ascending set-name order, then ``generic`` last. ``tests`` follows steps a to d of
+    the module docstring (with an override, all added tests go to the single group).
     """
     if set_names is None:
         set_names = pattern_set_names()
@@ -450,13 +466,55 @@ def group_added_files(
     names = sorted(name for name in files if name != "generic")
     if "generic" in files:
         names.append("generic")
+    assigned = _assign_tests(root, names, files, sorted(set(classified.tests)))
     return tuple(
         StackGroup(
             set=name,
             files=tuple(files[name]),
-            tests=(),
+            tests=tuple(sorted(assigned[name])),
             evidence=merge_evidence(evidence[name]),
             fallback=name == "generic",
         )
         for name in names
     )
+
+
+def _dir_parts(path: str) -> tuple[str, ...]:
+    return PurePosixPath(path).parent.parts
+
+
+def _shared_prefix(left: tuple[str, ...], right: tuple[str, ...]) -> int:
+    count = 0
+    for a, b in zip(left, right, strict=False):
+        if a != b:
+            break
+        count += 1
+    return count
+
+
+def _assign_tests(
+    root: Path,
+    names: Sequence[str],
+    files: dict[str, list[str]],
+    tests: Sequence[str],
+) -> dict[str, list[str]]:
+    """Assign each test to one group (``names`` is in output order) or to none; see the module docstring."""
+    assigned: dict[str, list[str]] = {name: [] for name in names}
+    source_dirs = {
+        name: [(nearest_manifest_dir(root, path), _dir_parts(path)) for path in files[name]] for name in names
+    }
+    for test in tests:
+        manifest = nearest_manifest_dir(root, test)
+        best: str | None = None
+        if manifest is not None:
+            test_dir = _dir_parts(test)
+            best_score = -1
+            for name in names:
+                scores = [_shared_prefix(parts, test_dir) for found, parts in source_dirs[name] if found == manifest]
+                if scores and max(scores) > best_score:
+                    best, best_score = name, max(scores)
+        if best is None and "generic" in assigned:
+            best = "generic"
+        if best is not None:
+            assigned[best].append(test)
+    return assigned

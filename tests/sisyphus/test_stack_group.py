@@ -70,10 +70,11 @@ def test_override_unknown(calls: list[str]) -> None:
     assert calls == []
 
 
-def test_tests_and_docs_excluded(calls: list[str]) -> None:
+def test_tests_and_docs_excluded(calls: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(stack, "nearest_manifest_dir", lambda root, rel: None)
     groups = run(["foo.test.ts", "tests/x.py", "README.md", "pyproject.toml", "a.py"])
     assert [g.files for g in groups] == [("a.py",)]
-    assert all(g.tests == () for g in groups)
+    assert groups[0].tests == ("foo.test.ts", "tests/x.py")
 
 
 def test_docs_only_and_tests_only(calls: list[str]) -> None:
