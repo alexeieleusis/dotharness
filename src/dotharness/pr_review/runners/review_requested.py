@@ -2,6 +2,7 @@ import logging
 import os
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -123,9 +124,7 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
                 env,
                 current_user,
                 not files_summary_done,
-                design_done,
-                traceability_done,
-                regret_done,
+                PrLevelPassesDone(design=design_done, traceability=traceability_done, regret=regret_done),
             )
         except FatalGitError:
             logger.exception("PR #%d: fatal git error", pr_number)
@@ -183,6 +182,15 @@ async def _should_skip_pr(pr: ChangeRequest, host: CodeHost, repo: RepositoryRef
     return False
 
 
+@dataclass(frozen=True)
+class PrLevelPassesDone:
+    """Whether each independently tracked PR-level pass already posted its marker for this revision."""
+
+    design: bool
+    traceability: bool
+    regret: bool
+
+
 async def _process_pr(
     pr: ChangeRequest,
     config: HarnessConfig,
@@ -195,9 +203,7 @@ async def _process_pr(
     env: dict,
     current_user: str,
     run_files_summary: bool,
-    design_done: bool,
-    traceability_done: bool,
-    regret_done: bool,
+    pr_level_done: PrLevelPassesDone,
 ) -> None:
     pr_number = pr.number
     logger.info("PR #%d: starting", pr_number)
@@ -231,14 +237,14 @@ async def _process_pr(
             # traceability and regret (when enabled) extend the same decoupling, each
             # with its own noop-if-already-posted check.
             await _run_design_review(
-                pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, design_done, ctx
+                pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, pr_level_done.design, ctx
             )
             await _run_traceability_review(
-                pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, traceability_done, ctx
+                pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, pr_level_done.traceability, ctx
             )
             if config.regret_review.enabled:
                 await _run_regret_review(
-                    pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, regret_done, ctx
+                    pr, config, knowledge_dir, extra_knowledge, backend, wdir, env, current_user, pr_level_done.regret, ctx
                 )
     except FatalGitError:
         raise

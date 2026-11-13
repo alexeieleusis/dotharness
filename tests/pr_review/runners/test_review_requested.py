@@ -748,8 +748,6 @@ async def test_process_pr_skips_summary_when_file_reviews_fail(tmp_path):
             {},
             "me",
             True,
-            True,
-            True,
-            True,
+            review_requested.PrLevelPassesDone(design=True, traceability=True, regret=True),
         )
     summary.assert_not_called()
