@@ -694,6 +694,8 @@ class _WorkItems:
         """Remove ``label`` (``gh issue edit N --remove-label L``). A non-zero exit raises, a timeout is a write timeout.
 
         A label the issue does not carry exits 0 (no-op). A label that does not exist in the repository exits non-zero.
+
+        ``repo`` is unused: the ``WorkItems`` protocol requires it, and ``gh`` resolves the repository from the clone.
         """
         await self._gh.ok(("issue", "edit", str(number), "--remove-label", label), "WorkItems.remove_label", write=True)
 
