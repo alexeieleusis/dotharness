@@ -229,7 +229,6 @@ async def _review_files(
 async def _build_design_prompt(
     design_instructions: str,
     extra_knowledge: str | None,
-    pr: ChangeRequest,
     number: int,
     config,
     ctx: dict,
@@ -287,7 +286,7 @@ async def _run_design_review(
         wdir,
         is_done=is_done,
         build_prompt=lambda: _build_design_prompt(
-            design_instructions, extra_knowledge, pr, number, config, ctx, wdir, current_user, env
+            design_instructions, extra_knowledge, number, config, ctx, wdir, current_user, env
         ),
         has_comment_fn=lambda: check_design_review_comment_status(ctx["host"], ctx["repo"], number, current_user),
         label="design review",
