@@ -518,6 +518,7 @@ def _object(value: Any, what: str) -> dict[str, Any]:
 
 
 _LIST_OP = "ChangeRequests.list"
+_UNBOUNDED_LIMIT = 1_000_000
 
 _FILES_QUERY = """
 query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
@@ -782,8 +783,15 @@ class _ChangeRequests:
             args += ["--assignee", assignee]
         if requested_reviewer is not None:
             args += ["--search", f"user-review-requested:{requested_reviewer}"]
-        args += ["--limit", str(_bound(_LIST_OP)), "--json", _PR_FIELDS]
+        bound = _bound(_LIST_OP)
+        # One past the bound, so a result that exceeds it is detectable instead of silently cut short by gh.
+        # With no declared bound, request effectively everything.
+        limit = _UNBOUNDED_LIMIT if bound is None else bound + 1
+        args += ["--limit", str(limit), "--json", _PR_FIELDS]
         rows = await self._gh.json(args, _LIST_OP)
+        if bound is not None and isinstance(rows, list) and len(rows) > bound:
+            msg = f"{_LIST_OP} found more than the declared bound of {bound}"
+            raise CodeHostError(msg)
         return [_change_request(repo, row) for row in rows or [] if isinstance(row, dict)]
 
     async def find_by_commit(self, repo: RepositoryRef, revision: str) -> Sequence[ChangeRequest]:

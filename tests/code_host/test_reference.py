@@ -1382,7 +1382,7 @@ class TestChangeRequestReads:
         found = await _host().change_requests.list(REPO)
         assert _argv(mock_run) == [
             *("gh", "pr", "list", "--repo", R, "--state", "open"),
-            *("--limit", "1000", "--json", _PR_FIELDS),
+            *("--limit", "1001", "--json", _PR_FIELDS),
         ]
         assert [(c.number, c.head_reference, c.is_draft) for c in found] == [(1, "a", True)]
 
@@ -1393,7 +1393,7 @@ class TestChangeRequestReads:
         assert _argv(mock_run) == [
             *("gh", "pr", "list", "--repo", R, "--state", "merged"),
             *("--author", "ann", "--assignee", "bob", "--search", "user-review-requested:cy"),
-            *("--limit", "1000", "--json", _PR_FIELDS),
+            *("--limit", "1001", "--json", _PR_FIELDS),
         ]
         await cr.list(REPO, state=ChangeRequestState.CLOSED)
         assert "@me" not in " ".join(_argv(mock_run, 1))
@@ -1402,6 +1402,12 @@ class TestChangeRequestReads:
     async def test_list_failure(self, mocker) -> None:
         _recorder(mocker, (1, "", "boom"))
         with pytest.raises(CodeHostError, match="boom"):
+            await _host().change_requests.list(REPO)
+
+    async def test_list_over_bound_raises_instead_of_truncating(self, mocker) -> None:
+        rows = [{"number": n, "headRefName": "a"} for n in range(1, 1002)]
+        _recorder(mocker, _ok(rows))
+        with pytest.raises(CodeHostError, match="more than the declared bound of 1000"):
             await _host().change_requests.list(REPO)
 
     async def test_find_by_commit(self, mocker) -> None:
