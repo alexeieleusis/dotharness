@@ -825,6 +825,14 @@ def test_create_host_token_cmd_cannot_run_hides_argv(tmp_path: Path) -> None:
     assert "s3cret" not in str(ei.value)
 
 
+def test_create_host_token_cmd_timeout_is_config_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("dotharness.code_host.reference._seconds", lambda _operation: 0.2)
+    cfg = _host_config(tmp_path, f"token_cmd = \"{sys.executable} -c 'import time; time.sleep(30)'\"\n")
+    with pytest.raises(ConfigError) as ei:
+        cli.create_host(cfg, tmp_path)
+    assert str(ei.value) == "[source.host] token_cmd timed out"
+
+
 def test_create_host_unknown_name(tmp_path: Path) -> None:
     cfg = _host_config(tmp_path, 'name = "nope"\n')
     with pytest.raises(ConfigError) as ei:

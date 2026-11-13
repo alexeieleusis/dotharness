@@ -56,6 +56,8 @@ class HostLimits:
     max_change_request_body_chars: int
     timeouts: OperationTimeouts
     list_bounds: ListBounds
+    page_attempts: int = 3  # tries per page of a paged read, first try included
+    page_retry_delay_seconds: float = 2.0  # wait after try N is this value times N
 
 
 @dataclass(frozen=True)

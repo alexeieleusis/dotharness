@@ -687,3 +687,50 @@ async def test_fetch_pr_comments_uses_per_call_output_file_not_shared_cache(tmp_
     assert [c["id"] for c in comments] == ["MINE"]
     assert seen["out"] != shared
     assert not seen["out"].exists()  # temp dir cleaned up
+
+
+def _write(tmp_path, harness_body):
+    p = tmp_path / ".harness.toml"
+    p.write_text(f'[harness]\n{harness_body}\n[repo]\nname = "a/b"\nworking_dir = "/tmp"\n')
+    return p
+
+
+def test_host_keys_default_to_absent(tmp_path):
+    h = load_config(_write(tmp_path, "")).harness
+    assert (h.host, h.host_options, h.host_token_cmd) == (None, {}, None)
+    assert h.effective_token_cmd == "gh auth token"  # noqa: S105
+
+
+def test_host_keys_loaded(tmp_path):
+    h = load_config(_write(tmp_path, 'host = "examplehost"\n[harness.host_options]\nregion = "x"')).harness
+    assert h.host == "examplehost"
+    assert h.host_options == {"region": "x"}
+
+
+def test_effective_token_cmd_precedence(tmp_path):
+    both = load_config(_write(tmp_path, 'gh_token_cmd = "old"\nhost_token_cmd = "new"')).harness
+    assert both.effective_token_cmd == "new"  # noqa: S105
+    assert both.gh_token_cmd == "old"  # noqa: S105
+    only_old = load_config(_write(tmp_path, 'gh_token_cmd = "old"')).harness
+    assert only_old.effective_token_cmd == "old"  # noqa: S105
+    only_new = load_config(_write(tmp_path, 'host_token_cmd = "new"')).harness
+    assert only_new.effective_token_cmd == "new"  # noqa: S105
+    assert HarnessSection(gh_token_cmd="", host_token_cmd="").effective_token_cmd == "gh auth token"  # noqa: S105
+
+
+def test_both_token_cmds_set_emits_no_warning(tmp_path, caplog):
+    load_config(_write(tmp_path, 'gh_token_cmd = "old"\nhost_token_cmd = "new"'))
+    assert caplog.records == []
+
+
+@pytest.mark.parametrize(
+    ("body", "key"),
+    [
+        ("host = 3", "harness.host"),
+        ("host_options = 3", "harness.host_options"),
+        ("host_token_cmd = 3", "harness.host_token_cmd"),
+    ],
+)
+def test_host_keys_type_validated(tmp_path, body, key):
+    with pytest.raises(ConfigError, match=key):
+        load_config(_write(tmp_path, body))

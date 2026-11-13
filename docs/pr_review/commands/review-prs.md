@@ -39,7 +39,7 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
    the other four commands. If another run — `review-prs` or any of the other four — already holds the lock
    for the same working directory, the new invocation exits immediately with an error instead of waiting.
 2. If `vibe_heal.enabled` is `false` in config, logs and exits — the whole command is a no-op.
-3. Builds a subprocess environment: resolves a GitHub token via `harness.gh_token_cmd`, applies
+3. Builds a subprocess environment: resolves the host token via `harness.host_token_cmd` (else `harness.gh_token_cmd`, else `gh auth token`), applies
    `harness.path_prepend` / `harness.env`.
 3a. **Prune stale projects** (`prune_projects.run`): if `vibe_heal.prune_projects_enabled` is `true`, runs
    `vibe_heal prune-projects --yes --older-than <vibe_heal.prune_older_than_minutes>` once in each
@@ -67,11 +67,11 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
    comments are posted when the step fails. The `vibe_heal.vibe_heal_timeout` config value is reused as the
    timeout for each `--baseline` invocation. After the step completes (success or failure), the working directory is
    restored to its original state.
-4. Looks up the current `gh` user's login.
+4. Looks up the current host user's login.
 5. Builds the list of PRs to process:
-   - If `--pr` was given, resolves just that PR via `gh pr view` (`number`, `headRefName`, `baseRefName`,
-     `headRefOid`).
-   - Otherwise, lists open PRs via `gh pr list --repo <repo.name> --state open --limit 500`. Filters to PRs
+   - If `--pr` was given, resolves just that PR through the code host's change-request read (number, head and base branch,
+     head revision).
+   - Otherwise, lists open PRs through the code host (at most 1000). Filters to PRs
      that are **not a draft** and whose author matches `vibe_heal.authors` (`"*"` or an explicit login
      list). Then drops any PR that is ineligible per its `reviewed_shas` entry (see [State and
      idempotency](#state-and-idempotency)). A PR is ineligible if either its current head commit
@@ -117,10 +117,10 @@ Only the fields below affect this command. See [`../configuration.md`](../config
 
 | Field | Effect |
 |---|---|
-| `harness.gh_token_cmd` | Command used to obtain the GitHub token passed to `gh`/git subprocesses. |
+| `harness.host_token_cmd` / `harness.gh_token_cmd` | Command used to obtain the host token passed to host and git subprocesses. `host_token_cmd` wins when both are set. |
 | `harness.path_prepend` | Directories prepended to `PATH` for all subprocesses this runner spawns. |
 | `harness.env` | Extra environment variables merged into the subprocess environment. |
-| `repo.name` | GitHub repo (`org/repo`) queried via `gh pr list`/`gh pr view` and used for posting comments. |
+| `repo.name` | GitHub repo (`org/repo`) queried through the code host and used for posting comments. |
 | `repo.working_dir` | Local git working copy that gets checked out/fetched for each PR. |
 | `repo.subdir[].path` | Directory (relative to `working_dir`) each `vibe_heal` invocation runs in. Also used to filter which subdirs run for a given PR's changed files. |
 | `repo.subdir[].pre_commands` | Commands run before `vibe_heal` in that subdir. A failing `critical` command aborts that subdir. |
@@ -185,6 +185,6 @@ baseline analysis step. See the `--pr` description under [Usage](#usage) and ste
 - The actual review content is produced and posted by the external `vibe_heal` CLI (`vibe_heal review --pr`
   then `vibe_heal review --post --pr`), not by pr_review itself. This command only orchestrates the
   checkouts, invocation, and bookkeeping around it.
-- `gh pr list` is capped at 500 open PRs per run.
+- The open-PR listing is capped at 1000 PRs per run (it was 500 before the code-host migration).
 - Errors while restoring the working directory to its pre-PR SHA are logged but not raised, so a failed
   restore won't crash the run.

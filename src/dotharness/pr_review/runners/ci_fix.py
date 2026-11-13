@@ -4,7 +4,7 @@ Public entry point (takes the shared working-directory lock itself, like the sib
 
     run(config: HarnessConfig, *, dry_run: bool = False, pr: int | None = None) -> None
 
-* ``config.ci_fix.enabled`` false: returns immediately, no lock, no gh/git call.
+* ``config.ci_fix.enabled`` false: returns immediately, no lock, no host/git call.
 * Otherwise processes every open, non-draft PR authored by the acting user (or only ``pr``).
 * A green PR is skipped without a checkout. For a failing required check the runner reads the
   failing job log, finds the step command in ``.github/workflows/``, reproduces it locally,
@@ -29,30 +29,40 @@ from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path, PurePosixPath
 
-from dotharness.gh import build_subprocess_env
+from dotharness.code_host import (
+    ChangeRequest,
+    ChangeRequestState,
+    Check,
+    CheckStatus,
+    CodeHost,
+    CodeHostError,
+    RepositoryRef,
+    UnsupportedCapabilityError,
+)
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
-from dotharness.pr_review.runners.auto_approve_github import (
+from dotharness.pr_review.runners.ci_checks import (
     REASON_CONFLICTING,
     REASON_DRAFT,
     REASON_NOT_OPEN,
-    _check_ci,
-    _read_pr_state,
-    _state_skip_reason,
-    list_own_open_prs,
+    change_request_skip_reason,
+    ci_blocker,
+    list_own_open_change_requests,
+    read_change_request,
+    read_host_checks,
 )
-from dotharness.pr_review.runners.ci_checks import gh as _gh
-from dotharness.pr_review.runners.ci_checks import read_checks
 from dotharness.pr_review.runners.ci_checks import text as _text
 from dotharness.pr_review.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
-    get_current_user,
-    get_gh_token,
+    Site,
+    call_with_policy,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
+    host_current_user,
+    open_host,
     run_cmd,
 )
 from dotharness.pr_review.state import _state_path, _update_state
@@ -62,7 +72,7 @@ logger = logging.getLogger(__name__)
 DIGEST_PREFIX = "ci-fix digest:"
 CI_FIX_STATE_FILE = "ci_fix_state.json"
 PROMPT_FILE = "ci-fix-prompt.md"
-UNKNOWN_STEP = "UNKNOWN STEP"  # step column gh prints when it cannot map a log line to a step
+UNKNOWN_STEP = "UNKNOWN STEP"  # step column a failed-job log shows when it cannot map a line to a step
 
 OUTCOME_NOT_REPRODUCED = "did-not-reproduce"
 OUTCOME_NOOP_REPEAT = "noop-repeat"
@@ -76,21 +86,12 @@ OUTCOME_UNSAFE_CHANGE = "unsafe-change"
 TIMEOUT_REPRO = 1200  # seconds, per workflow step command
 LOG_EXCERPT_MAX = 20_000  # characters of the failing log given to the agent
 
-_PR_FIELDS = "number,headRefName,baseRefName,isDraft,isCrossRepository,state,author"
-_RUN_ID_RE = re.compile(r"/actions/runs/(\d+)")
-_JOB_ID_RE = re.compile(r"/job/(\d+)")
+_SITE = Site.CI_FIX
 _PUSH_REJECTED_RE = re.compile(r"non-fast-forward|fetch first|\[rejected\]|failed to push some refs", re.IGNORECASE)
 
 
 class CiFixError(RuntimeError):
     """Raised by run() after the loop when one or more PRs failed."""
-
-
-@dataclass(frozen=True)
-class _Check:
-    name: str
-    link: str
-    workflow: str = ""  # workflow name as reported by gh; "" when unknown
 
 
 @dataclass(frozen=True)
@@ -111,7 +112,7 @@ async def run(config: HarnessConfig, *, dry_run: bool = False, pr: int | None = 
 _GATE_RE = re.compile(r"(?<![a-z0-9])gate(?![a-z0-9])|merge-reports")
 
 
-def _is_gate(check: _Check) -> bool:
+def _is_gate(check: Check) -> bool:
     """A gate only aggregates other jobs; its failure is a symptom, never fixable on its own."""
     return _GATE_RE.search(check.name.lower()) is not None
 
@@ -121,17 +122,26 @@ def _digest(outcome: str, pr_number: int, check: str | None = None, detail: str 
 
 
 async def _process_prs(
-    prs: list[dict], config: HarnessConfig, env: dict, current_user: str, prompt: str, dry_run: bool
+    prs: list[ChangeRequest],
+    config: HarnessConfig,
+    host: CodeHost,
+    repo: RepositoryRef,
+    env: dict,
+    current_user: str,
+    prompt: str,
+    dry_run: bool,
 ) -> list[str]:
     """Process each in-scope PR; returns one failure message per PR that errored (stops at a fatal git error)."""
     failures: list[str] = []
     wdir = str(config.repo.working_dir)
     for pr in prs:
-        number = pr["number"]
+        number = pr.number
         if not _is_in_scope(pr, current_user):
             continue
         try:
-            await _process_pr(pr, config, wdir, env, prompt, dry_run)
+            await _process_pr(pr, config, host, repo, wdir, env, prompt, dry_run)
+        except UnsupportedCapabilityError:
+            raise
         except FatalGitError as e:
             logger.exception("PR #%d: fatal git error", number)
             failures.append(f"#{number}: {e}")
@@ -143,20 +153,19 @@ async def _process_prs(
 
 
 async def _run_locked(config: HarnessConfig, dry_run: bool, only_pr: int | None) -> None:
-    gh_token = await get_gh_token(config.harness.gh_token_cmd)
-    env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
-    current_user = await get_current_user(env)
-    repo = config.repo.name
+    scaffold = await open_host(config)
+    host, repo, env = scaffold.host, scaffold.repo, scaffold.env
+    current_user = await host_current_user(host)
     failures: list[str] = []
 
-    prs = await list_own_open_prs(repo, only_pr, env, failures, _PR_FIELDS, _gh)
+    prs = await list_own_open_change_requests(host, repo, current_user, only_pr, failures, _SITE)
     if only_pr is None and not dry_run and not failures:
-        _prune_counters(config.repo_slug, {p["number"] for p in prs})
+        _prune_counters(config.repo_slug, {p.number for p in prs})
     if not prs and not failures:
-        logger.info("ci-fix: no open PRs to check on %s, nothing to do", repo)
+        logger.info("ci-fix: no open PRs to check on %s, nothing to do", config.repo.name)
 
     prompt = (config.harness.knowledge_dir / "pr-review" / PROMPT_FILE).read_text(encoding="utf-8") if prs else ""
-    failures.extend(await _process_prs(prs, config, env, current_user, prompt, dry_run))
+    failures.extend(await _process_prs(prs, config, host, repo, env, current_user, prompt, dry_run))
     if failures:
         raise CiFixError("ci-fix failed for: " + "; ".join(failures))
 
@@ -166,19 +175,19 @@ async def _run_locked(config: HarnessConfig, dry_run: bool, only_pr: int | None)
 # ---------------------------------------------------------------------------
 
 
-def _is_in_scope(pr: dict, current_user: str) -> bool:
+def _is_in_scope(pr: ChangeRequest, current_user: str) -> bool:
     """Open, not a draft, same repo, authored by the acting user, with a head branch that is not the base."""
-    number = pr["number"]
-    author = (pr.get("author") or {}).get("login", "")
-    if pr.get("state", "OPEN") != "OPEN":
-        logger.info("PR #%d: not open (%s), skipping", number, pr.get("state"))
-    elif pr.get("isDraft"):
+    number = pr.number
+    author = pr.author.login if pr.author else ""
+    if pr.state is not ChangeRequestState.OPEN:
+        logger.info("PR #%d: not open (%s), skipping", number, pr.state.value)
+    elif pr.is_draft:
         logger.info("PR #%d: draft, skipping", number)
-    elif pr.get("isCrossRepository"):
+    elif pr.is_cross_repository:
         logger.info("PR #%d: from a fork, skipping", number)
     elif not current_user or author != current_user:
         logger.info("PR #%d: authored by %r, not by the acting user, skipping", number, author)
-    elif not pr.get("headRefName") or pr.get("headRefName") == pr.get("baseRefName"):
+    elif not pr.head_reference or pr.head_reference == pr.base_reference:
         logger.info("PR #%d: no usable head branch, skipping", number)
     else:
         return True
@@ -281,49 +290,45 @@ def _reset_attempts(repo_slug: str, pr_number: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _read_failing_checks(repo: str, pr_number: int, env: dict) -> list[_Check] | None:
-    """Failing required checks (all checks when the PR has none required). None = unreadable output.
+async def _read_failing_checks(host: CodeHost, repo: RepositoryRef, pr_number: int) -> list[Check] | None:
+    """Failing required checks (all checks when the PR has none required). None = unreadable.
 
-    Only the latest run of each check counts (``read_checks``, the same reader as ``_check_ci``), so a failed
-    run followed by a passing rerun is not returned.
+    Only the latest run of each check counts (``read_host_checks``, the same reader as ``ci_blocker``), so a failed
+    run followed by a passing rerun is not returned. A failing check that names neither a job nor a link cannot be
+    followed up and makes the read unusable.
 
-    OD-B: deliberately NOT aligned with the stack-root rule of ``_check_ci`` (``stack_root=False``). For a stacked
+    OD-B: deliberately NOT aligned with the stack-root rule of ``ci_blocker`` (``stack_root=False``). For a stacked
     PR whose base has no required checks this still falls back to all checks, so it may try to fix a non-required
-    failure. That is harmless: ci-fix only runs after ``_check_ci`` blocked, and fixing a real failing check
+    failure. That is harmless: ci-fix only runs after ``ci_blocker`` blocked, and fixing a real failing check
     on the PR is still a valid fix. Aligning would add a stack walk and a default-branch lookup here.
     """
-    read = await read_checks(repo, pr_number, "", env, stack_root=False)
+    read = await read_host_checks(host, repo, pr_number, "", stack_root=False)
     if read is None:
         return None
     failing = []
     for c in read.checks:
-        if c.bucket == "fail":
-            if c.link is None:
+        if c.status is CheckStatus.FAIL:
+            if c.details_url is None and c.job_id is None:
                 return None
-            failing.append(_Check(c.name, c.link, c.workflow))
+            failing.append(c)
     return failing
 
 
-async def _read_failed_log(repo: str, link: str, env: dict) -> str | None:
-    """The failing job's log (``gh run view --log-failed``), or None when it cannot be read."""
-    job = _JOB_ID_RE.search(link)
-    run_match = _RUN_ID_RE.search(link)
-    if job:
-        args = ["run", "view", "--job", job.group(1), "--repo", repo, "--log-failed"]
-    elif run_match:
-        args = ["run", "view", run_match.group(1), "--repo", repo, "--log-failed"]
-    else:
-        return None
-    result = await _gh(args, env)
-    if result.returncode != 0:
-        return None
-    return _text(result.stdout)
+async def _read_failed_log(host: CodeHost, repo: RepositoryRef, check: Check) -> str:
+    """The failing part of the check's log. A host failure is a ``CiFixError`` (``UnsupportedCapabilityError`` stops)."""
+    try:
+        return await call_with_policy(_SITE, "Checks.failed_log", lambda: host.checks.failed_log(repo, check), "")
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as e:
+        msg = f"could not read the failing log of {check.name!r}: {e}"
+        raise CiFixError(msg) from e
 
 
 def _failed_step_name(log: str) -> str | None:
     """Step name from the first ``job<TAB>step<TAB>text`` line of a ``--log-failed`` output.
 
-    gh can print the placeholder ``UNKNOWN STEP`` instead of the real name; that is treated as no name
+    The host can print the placeholder ``UNKNOWN STEP`` instead of the real name; that is treated as no name
     (see ``_failed_step_from_api``).
     """
     for line in log.splitlines():
@@ -333,22 +338,22 @@ def _failed_step_name(log: str) -> str | None:
     return None
 
 
-async def _failed_step_from_api(repo: str, link: str, env: dict) -> str | None:
-    """Name of the first failed step of the job in ``link``, from the job API; None when unavailable."""
-    job = _JOB_ID_RE.search(link)
-    if not job:
-        return None
-    result = await _gh(["api", f"repos/{repo}/actions/jobs/{job.group(1)}"], env)
-    if result.returncode != 0:
+async def _failed_step_from_api(host: CodeHost, repo: RepositoryRef, check: Check) -> str | None:
+    """Name of the first failed step of the check's job; None when the check has no job or no step failed.
+
+    A host failure is a ``CiFixError`` (``UnsupportedCapabilityError`` stops).
+    """
+    job_id = check.job_id
+    if not job_id:
         return None
     try:
-        steps = json.loads(_text(result.stdout)).get("steps") or []
-    except (json.JSONDecodeError, AttributeError):
-        return None
-    for step in steps:
-        if isinstance(step, dict) and step.get("conclusion") == "failure" and step.get("name"):
-            return str(step["name"])
-    return None
+        job = await call_with_policy(_SITE, "Checks.get_job", lambda: host.checks.get_job(repo, job_id), None)
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as e:
+        msg = f"could not read the job of {check.name!r}: {e}"
+        raise CiFixError(msg) from e
+    return job.failed_step if job is not None and job.failed_step else None
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +420,7 @@ def _split_steps(lines: list[str]) -> list[tuple[list[str], int]]:
 
 
 def _workflow_matches(path: Path, lines: list[str], workflow: str) -> bool:
-    """Whether a workflow file is the one gh calls ``workflow`` (its ``name:``, else its repo-relative path)."""
+    """Whether a workflow file is the one the host names ``workflow`` (its ``name:``, else its repo-relative path)."""
     top = next((line for line in lines if line.startswith("name:")), None)
     declared = _unquote(top[len("name:") :]) if top else f".github/workflows/{path.name}"
     return declared == workflow
@@ -485,41 +490,57 @@ def _output_tail(result: subprocess.CompletedProcess) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def _process_pr(pr: dict, config: HarnessConfig, wdir: str, env: dict, prompt: str, dry_run: bool) -> None:
-    number = pr["number"]
-    repo = config.repo.name
+async def _process_pr(
+    pr: ChangeRequest,
+    config: HarnessConfig,
+    host: CodeHost,
+    repo: RepositoryRef,
+    wdir: str,
+    env: dict,
+    prompt: str,
+    dry_run: bool,
+) -> None:
+    number = pr.number
     logger.info("PR #%d: starting%s", number, " (dry-run)" if dry_run else "")
 
-    blocked = await _check_ci(repo, number, pr.get("baseRefName", ""), env)
+    blocked = await ci_blocker(host, repo, number, pr.base_reference)
     if blocked is None:
         logger.info("PR #%d: CI is green, nothing to fix", number)
         if not dry_run:
             _reset_attempts(config.repo_slug, number)
         return
-    state = await _read_pr_state(repo, number, env)
-    skip = _state_skip_reason(state) if state else None
+    fresh = await read_change_request(host, repo, number, _SITE)
+    skip = change_request_skip_reason(fresh) if fresh else None
     if skip in (REASON_NOT_OPEN, REASON_DRAFT):
         logger.info("PR #%d: %s, skipping", number, skip)
         return
     if skip == REASON_CONFLICTING:
         _digest(OUTCOME_REBASE_NEEDED, number, detail="PR has merge conflicts with its base")
         return
-    failing = await _read_failing_checks(repo, number, env)
+    failing = await _read_failing_checks(host, repo, number)
     if failing is None:
-        _digest(OUTCOME_PARSE_FAILURE, number, detail="could not read the check status as JSON")
+        _digest(OUTCOME_PARSE_FAILURE, number, detail="could not read the check status")
         return
     if not failing:
         logger.info("PR #%d: no failed checks (blocked by: %s), nothing to fix", number, blocked.reason)
         return
 
-    await _fix_first_candidate(pr, failing, config, wdir, env, prompt, dry_run)
+    await _fix_first_candidate(pr, failing, config, host, repo, wdir, env, prompt, dry_run)
 
 
 async def _fix_first_candidate(
-    pr: dict, failing: list[_Check], config: HarnessConfig, wdir: str, env: dict, prompt: str, dry_run: bool
+    pr: ChangeRequest,
+    failing: list[Check],
+    config: HarnessConfig,
+    host: CodeHost,
+    repo: RepositoryRef,
+    wdir: str,
+    env: dict,
+    prompt: str,
+    dry_run: bool,
 ) -> None:
     """Try the non-gate failing checks in order, stopping after the first push. Gates are never tried."""
-    number = pr["number"]
+    number = pr.number
     candidates = [c for c in failing if not _is_gate(c)]
     if not candidates:
         names = ", ".join(c.name for c in failing)
@@ -532,21 +553,34 @@ async def _fix_first_candidate(
         if attempts >= max_attempts:
             _digest(OUTCOME_CAP_REACHED, number, check.name, f"attempts={attempts} max={max_attempts}")
             return
-        if await _fix_check(pr, check, config, wdir, env, prompt, dry_run):
+        if await _fix_check(pr, check, config, host, repo, wdir, env, prompt, dry_run):
             return  # one push per PR per run: let CI re-run before trying the next check
 
 
 async def _fix_check(
-    pr: dict, check: _Check, config: HarnessConfig, wdir: str, env: dict, prompt: str, dry_run: bool
+    pr: ChangeRequest,
+    check: Check,
+    config: HarnessConfig,
+    host: CodeHost,
+    repo: RepositoryRef,
+    wdir: str,
+    env: dict,
+    prompt: str,
+    dry_run: bool,
 ) -> bool:
     """Try to fix one failing check. Returns True when a push was made."""
-    number = pr["number"]
-    repo = config.repo.name
-    branch = pr["headRefName"]
+    number = pr.number
+    branch = pr.head_reference
 
-    log = await _read_failed_log(repo, check.link, env)
-    step_name = (_failed_step_name(log) or await _failed_step_from_api(repo, check.link, env)) if log else None
-    if log is None or step_name is None:
+    # A host failure while reading the log or job (expired logs, 404, rate limit) is a per-check parse failure:
+    # record the digest and let the caller try the next candidate instead of failing the whole PR.
+    try:
+        log = await _read_failed_log(host, repo, check)
+        step_name = (_failed_step_name(log) or await _failed_step_from_api(host, repo, check)) if log else None
+    except CiFixError as e:
+        _digest(OUTCOME_PARSE_FAILURE, number, check.name, str(e))
+        return False
+    if step_name is None:
         _digest(OUTCOME_PARSE_FAILURE, number, check.name, "could not read the failing job log or its step")
         return False
 
@@ -554,7 +588,7 @@ async def _fix_check(
     try:
         await git_fetch_and_checkout(branch, wdir, env)
         # Look the step up only now: the failing run's step name comes from the PR head's workflows.
-        step = find_step_command(wdir, step_name, check.workflow)
+        step = find_step_command(wdir, step_name, check.workflow_name or "")
         if step is None:
             _digest(
                 OUTCOME_PARSE_FAILURE, number, check.name, f"no runnable command for step {step_name!r} in workflows"
@@ -573,12 +607,12 @@ async def _fix_check(
                 branch,
             )
             return False
-        return await _agent_fix_and_push(pr, check, step, before, config, wdir, env, prompt, log)
+        return await _agent_fix_and_push(pr, check, step, before, config, host, wdir, env, prompt, log)
     finally:
         await git_restore(original_sha, branch, wdir, env)
 
 
-def _build_instructions(prompt: str, check: _Check, step: _Step, before: subprocess.CompletedProcess, log: str) -> str:
+def _build_instructions(prompt: str, check: Check, step: _Step, before: subprocess.CompletedProcess, log: str) -> str:
     return (
         f"{prompt.rstrip()}\n\n---\n\n**Failure to fix**\n\n"
         f"Check name: {check.name}\n"
@@ -593,23 +627,24 @@ def _build_instructions(prompt: str, check: _Check, step: _Step, before: subproc
 
 
 async def _agent_fix_and_push(
-    pr: dict,
-    check: _Check,
+    pr: ChangeRequest,
+    check: Check,
     step: _Step,
     before: subprocess.CompletedProcess,
     config: HarnessConfig,
+    host: CodeHost,
     wdir: str,
     env: dict,
     prompt: str,
     log: str,
 ) -> bool:
-    number = pr["number"]
-    branch = pr["headRefName"]
+    number = pr.number
+    branch = pr.head_reference
     backend = Backend(
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
-        {**config.harness.env, "GITHUB_TOKEN": env.get("GITHUB_TOKEN", "")},
+        dict(await host.session.agent_environment(config.harness.env)),
         expected_repo_name=config.repo.name,
     )
     opencode_dir = str(config.repo.opencode_dir) if config.repo.opencode_dir else None
@@ -685,7 +720,7 @@ async def _unsafe_change(wdir: str, env: dict, pre_sha: str) -> str | None:
     return None
 
 
-async def _commit_if_dirty(check: _Check, wdir: str, env: dict) -> None:
+async def _commit_if_dirty(check: Check, wdir: str, env: dict) -> None:
     """Commit tracked changes the agent left uncommitted (never untracked files); a no-op when clean."""
     if not (await _status(wdir, env)).strip():
         return
@@ -693,7 +728,7 @@ async def _commit_if_dirty(check: _Check, wdir: str, env: dict) -> None:
     await run_cmd(["git", "commit", "-m", f"ci-fix: {check.name}"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
 
 
-async def _push(number: int, check: _Check, branch: str, wdir: str, env: dict) -> bool:
+async def _push(number: int, check: Check, branch: str, wdir: str, env: dict) -> bool:
     """Plain ``git push origin <branch>`` (never force, never another ref)."""
     result = await run_cmd(["git", "push", "origin", branch], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
     if result.returncode != 0:

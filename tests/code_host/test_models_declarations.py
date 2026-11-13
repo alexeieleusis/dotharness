@@ -165,3 +165,27 @@ def test_import_loads_no_vibe_heal() -> None:
     code = "import sys, dotharness.code_host; bad=[m for m in sys.modules if m.startswith('dotharness.vibe_heal')]; print(bad); sys.exit(1 if bad else 0)"
     proc = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_host_limits_paging_defaults() -> None:
+    limits = HostLimits(1, 2, 3, OperationTimeouts(30, {}), ListBounds(100, {}))
+    assert (limits.page_attempts, limits.page_retry_delay_seconds) == (3, 2.0)
+
+
+def test_reference_declaration_limits() -> None:
+    from dotharness.code_host.reference import DECLARATION
+
+    limits = DECLARATION.limits
+    assert limits.timeouts.default_seconds == 30
+    for operation in ("ChangeRequests.get", "Session.current_user", "Session.credential"):
+        assert operation not in limits.timeouts.per_operation  # these keep the 30 s default
+    assert limits.list_bounds.per_operation["ChangeRequests.list"] == 1000
+    for operation in (
+        "Discussion.comments",
+        "Discussion.review_threads",
+        "ChangeRequests.reviews",
+        "ChangeRequests.commits",
+        "ChangeRequests.viewed_files",
+    ):
+        assert limits.list_bounds.per_operation[operation] is None
+    assert (limits.page_attempts, limits.page_retry_delay_seconds) == (3, 2.0)

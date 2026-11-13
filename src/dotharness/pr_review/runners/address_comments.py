@@ -1,11 +1,18 @@
-import json
 import logging
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dotharness.gh import build_subprocess_env, gh_argv
+from dotharness.code_host import (
+    ChangeRequest,
+    ChangeRequestState,
+    CodeHost,
+    CodeHostError,
+    Comment,
+    RepositoryRef,
+    UnsupportedCapabilityError,
+)
 from dotharness.pr_review import state
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
@@ -13,19 +20,18 @@ from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
     FOCUSED_REVIEW_MARKER,
     PR_COMMENTS_SCRIPT_PATH,
-    TIMEOUT_GH,
     TIMEOUT_GIT,
-    fetch_all_pages,
+    backend_env,
     fetch_pr_comments,
     fetch_review_threads,
     find_last_reply_if_marked,
-    get_current_user,
-    get_gh_token,
     get_head_sha,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
+    host_current_user,
     is_ancestor,
+    open_host,
     preserve_reviewer_request,
     run_cmd,
 )
@@ -93,10 +99,11 @@ async def _run_locked(config: HarnessConfig) -> None:
         logger.info("address_comments disabled, skipping")
         return
 
-    gh_token = await get_gh_token(config.harness.gh_token_cmd)
-    env = build_subprocess_env(config.harness.path_prepend, config.harness.env, gh_token)
+    scaffold = await open_host(config)
+    host, repo_ref, env = scaffold.host, scaffold.repo, scaffold.env
 
-    prs = await _list_prs_to_check(config.repo.name, env)
+    our_login = await host_current_user(host)
+    prs = await _list_prs_to_check(host, repo_ref, our_login)
     script_path = PR_COMMENTS_SCRIPT_PATH
     knowledge_file = config.harness.knowledge_dir / "pr-review" / "address-comment.md"
     instructions_template = knowledge_file.read_text(encoding="utf-8")
@@ -104,7 +111,7 @@ async def _run_locked(config: HarnessConfig) -> None:
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
-        {**config.harness.env, "GITHUB_TOKEN": gh_token},
+        backend_env(config, env),
         expected_repo_name=config.repo.name,
     )
 
@@ -114,7 +121,6 @@ async def _run_locked(config: HarnessConfig) -> None:
         str(config.repo.opencode_dir.relative_to(config.repo.working_dir)) if config.repo.opencode_dir else None
     )
     original_sha = await git_detach_and_record(wdir, env)
-    our_login = await get_current_user(env)
 
     ctx = _ProcessPrContext(
         script_path=script_path,
@@ -125,6 +131,8 @@ async def _run_locked(config: HarnessConfig) -> None:
         original_sha=original_sha,
         repo=config.repo.name,
         env=env,
+        host=host,
+        repo_ref=repo_ref,
         trusted_commenters=config.address_comments.trusted_commenters,
         opencode_dir=opencode_dir,
         plugin_prefix=plugin_prefix,
@@ -132,18 +140,18 @@ async def _run_locked(config: HarnessConfig) -> None:
     )
     # Prune against *all* open PRs (not the author/assignee-filtered list), and skip on fetch failure,
     # so a PR that temporarily drops out of `prs` doesn't lose its replied keys.
-    open_numbers = await _list_all_open_pr_numbers(config.repo.name, env)
+    open_numbers = await _list_all_open_pr_numbers(host, repo_ref)
     if open_numbers is not None:
         state.prune_address_comments_state(config.repo_slug, open_numbers)
 
     logger.info("Found %d open PR(s) to check", len(prs))
     try:
         for pr in prs:
-            number = pr["number"]
-            branch = pr["headRefName"]
+            number = pr.number
+            branch = pr.head_reference
             logger.debug("PR #%d (branch=%s): checking for pending feedback", number, branch)
             try:
-                has_feedback = await _has_pending_feedback(number, config.repo.name, env)
+                has_feedback = await _has_pending_feedback(host, repo_ref, number)
             except Exception:
                 logger.exception("PR #%d: pending-feedback check failed, skipping", number)
                 continue
@@ -167,6 +175,8 @@ class _ProcessPrContext:
     original_sha: str
     repo: str
     env: dict
+    host: CodeHost
+    repo_ref: RepositoryRef
     trusted_commenters: str | list[str]
     opencode_dir: str | None = None
     plugin_prefix: str | None = None
@@ -180,7 +190,7 @@ async def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -
         # GitHub API as a side effect, which would clear us from the requested-reviewers
         # list — restore it regardless of outcome, since we cannot observe from here
         # whether that happened.
-        async with preserve_reviewer_request(number, ctx.repo, ctx.our_login or "", ctx.env):
+        async with preserve_reviewer_request(ctx.host, ctx.repo_ref, number, ctx.our_login or ""):
             await _address_pending_comments(number, branch, ctx)
     except Exception:
         logger.exception("PR #%d: error", number)
@@ -197,9 +207,9 @@ async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrCon
     comments = await _filter_comments(
         comments,
         number,
-        ctx.repo,
+        ctx.host,
+        ctx.repo_ref,
         ctx.our_login,
-        ctx.env,
         ctx.trusted_commenters,
         ctx.plugin_prefix,
         state.get_replied_comment_keys(ctx.repo_slug, number) if ctx.repo_slug else None,
@@ -211,7 +221,9 @@ async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrCon
     head_sha = await get_head_sha(ctx.wdir, ctx.env)
     for comment in comments:
         thread_state = (
-            await _comment_thread_state(comment, number, ctx.repo, ctx.env) if comment.get("type") == "inline" else True
+            await _comment_thread_state(comment, ctx.host, ctx.repo_ref, number)
+            if comment.get("type") == "inline"
+            else True
         )
         if thread_state is None and comment.get("focused_review_original") is not None:
             logger.warning(
@@ -235,6 +247,8 @@ async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrCon
             ctx.wdir,
             ctx.repo,
             ctx.env,
+            ctx.host,
+            ctx.repo_ref,
             head_sha,
             ctx.opencode_dir,
             ctx.our_login,
@@ -401,7 +415,7 @@ def _filter_by_unresolved(comments: list[dict], pr_number: int, thread_state: Th
     return comments
 
 
-async def _comment_thread_state(comment: dict, pr_number: int, repo: str, env: dict) -> bool | None:
+async def _comment_thread_state(comment: dict, host: CodeHost, repo: RepositoryRef, pr_number: int) -> bool | None:
     """Tri-state thread check: True (unresolved), False (resolved), None (lookup failed).
 
     Makes exactly one `_get_unresolved_comment_ids` call; a non-int id returns True without
@@ -410,13 +424,13 @@ async def _comment_thread_state(comment: dict, pr_number: int, repo: str, env: d
     comment_id = comment.get("id")
     if not isinstance(comment_id, int):
         return True
-    thread_state = await _get_unresolved_comment_ids(pr_number, repo, env)
+    thread_state = await _get_unresolved_comment_ids(host, repo, pr_number)
     if thread_state is None:
         return None
     return comment_id in thread_state.unresolved_ids
 
 
-async def _comment_still_unresolved(comment: dict, pr_number: int, repo: str, env: dict) -> bool:
+async def _comment_still_unresolved(comment: dict, host: CodeHost, repo: RepositoryRef, pr_number: int) -> bool:
     """Re-check one comment's thread resolution status right before addressing it.
 
     `_filter_by_unresolved` only queries resolution state once, up front, for the whole
@@ -426,7 +440,7 @@ async def _comment_still_unresolved(comment: dict, pr_number: int, repo: str, en
     own turn comes up later in the loop. Fails open (True) if the GraphQL check itself
     fails, matching `_filter_by_unresolved`'s policy of not blocking on a flaky API.
     """
-    return await _comment_thread_state(comment, pr_number, repo, env) is not False
+    return await _comment_thread_state(comment, host, repo, pr_number) is not False
 
 
 def _filter_already_replied(
@@ -464,15 +478,15 @@ def _filter_by_plugin_prefix(comments: list[dict], pr_number: int, plugin_prefix
 async def _filter_comments(
     comments: list[dict],
     pr_number: int,
-    repo: str,
+    host: CodeHost,
+    repo: RepositoryRef,
     our_login: str | None,
-    env: dict,
     trusted_commenters: str | list[str] = "*",
     plugin_prefix: str | None = None,
     replied_keys: set[str] | None = None,
 ) -> list[dict]:
     comments = _filter_by_trusted_commenters(comments, pr_number, trusted_commenters)
-    thread_state = await _get_unresolved_comment_ids(pr_number, repo, env)
+    thread_state = await _get_unresolved_comment_ids(host, repo, pr_number)
     comments = _filter_by_unresolved(comments, pr_number, thread_state)
     selected, comments = _select_focused_review_comments(
         comments,
@@ -487,36 +501,45 @@ async def _filter_comments(
     return comments
 
 
-async def _reply_observed(comment: dict, pr_number: int, repo: str, our_login: str, since_iso: str, env: dict) -> bool:
+async def _reply_observed(
+    comment: dict, host: CodeHost, repo: RepositoryRef, pr_number: int, our_login: str, since_iso: str
+) -> bool:
     """Best-effort check that *some* reply attributable to this comment was posted by
     our_login. Returns True on an inconclusive API failure — this only exists to surface
-    silent skips, not to police a flaky GitHub API, so it must not cry wolf."""
+    silent skips, not to police a flaky API, so it must not cry wolf."""
     ctype = comment.get("type")
-    endpoint = (
-        f"repos/{repo}/pulls/{pr_number}/comments" if ctype == "inline" else f"repos/{repo}/issues/{pr_number}/comments"
-    )
-    items = await fetch_all_pages(endpoint, env)
-    if items is None:
+    try:
+        if ctype == "inline":
+            threads = await host.discussion.review_threads(repo, pr_number)
+            cid = str(comment.get("id"))
+            return any(
+                t.comments[0].id == cid
+                and any(r.author is not None and r.author.login == our_login for r in t.comments[1:])
+                for t in threads
+                if t.comments
+            )
+        items = await host.discussion.comments(repo, pr_number)
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError:
         return True
-    if ctype == "inline":
-        cid = comment.get("id")
-        return any(c.get("in_reply_to_id") == cid and c.get("user", {}).get("login") == our_login for c in items)
-    # "issue" and "review" comments have no reply linkage in the GitHub API — a reply just
-    # lands as a plain issue comment with no `in_reply_to_id` tying it back to the parent.
+    # "issue" and "review" comments have no reply linkage on the host — a reply just
+    # lands as a plain issue comment tying nothing back to the parent.
     # Fall back to "our_login posted anything since we started this comment", which is
     # exact as long as comments are processed sequentially (they are — see the loop in
-    # _process_single_pr). GitHub timestamps are second-precision, so use >= to avoid
+    # _process_single_pr). Host timestamps are second-precision, so use >= to avoid
     # missing a reply posted in the same second as since_iso.
-    return any(c.get("user", {}).get("login") == our_login and c.get("created_at", "") >= since_iso for c in items)
+    since = datetime.fromisoformat(since_iso)
+    return any(c.author is not None and c.author.login == our_login and c.created_at >= since for c in items)
 
 
 async def _check_reply_observed(
-    comment: dict, pr_number: int, repo: str, our_login: str, since_iso: str, env: dict
+    comment: dict, host: CodeHost, repo: RepositoryRef, pr_number: int, our_login: str, since_iso: str
 ) -> bool:
     """`_reply_observed` plus a warning on a confirmed silent skip; an erroring check counts as observed."""
     cid = comment.get("id", "?")
     try:
-        observed = await _reply_observed(comment, pr_number, repo, our_login, since_iso, env)
+        observed = await _reply_observed(comment, host, repo, pr_number, our_login, since_iso)
     except Exception:
         logger.debug("PR #%d comment %s: reply-observed check itself failed", pr_number, cid, exc_info=True)
         return True  # inconclusive — don't warn on a flaky check, not a confirmed skip
@@ -538,6 +561,8 @@ async def _address_single_comment(
     wdir: str,
     repo: str,
     env: dict,
+    host: CodeHost,
+    repo_ref: RepositoryRef,
     pre_sha: str,
     opencode_dir: str | None = None,
     our_login: str | None = None,
@@ -590,7 +615,7 @@ async def _address_single_comment(
     made_commit = post_sha != pre_sha
     observed = True  # no check possible/needed — don't treat as a confirmed silent skip
     if our_login and not made_commit:
-        observed = await _check_reply_observed(comment, pr_number, repo, our_login, since_iso, env)
+        observed = await _check_reply_observed(comment, host, repo_ref, pr_number, our_login, since_iso)
     # Recorded only when the run was clean AND a commit or reply was seen, so a crashed
     # attempt or a silent skip is retried next pass instead of being suppressed forever.
     if clean_run and (made_commit or observed) and repo_slug and ctype in _NON_THREADED_TYPES:
@@ -705,171 +730,107 @@ def _build_comment_instructions(template: str, comment: dict, pr_number: int, re
     return f"{template}\n\n---\n\n## Comment to address\n\n{detail}\n\nPR number: {pr_number}\nRepo: {repo}\n"
 
 
-async def _list_prs_to_check(repo: str, env: dict) -> list[dict]:
+async def _list_prs_to_check(host: CodeHost, repo: RepositoryRef, login: str) -> list[ChangeRequest]:
     """PRs to process: ones authored by us, plus ones assigned to us (e.g. as a fix-it assignee
     on someone else's PR) — deduplicated by PR number."""
     by_number = {
-        pr["number"]: pr for pr in (await _list_prs(repo, env, "--author")) + (await _list_prs(repo, env, "--assignee"))
+        pr.number: pr
+        for pr in (await _list_prs(host, repo, login, "author")) + (await _list_prs(host, repo, login, "assignee"))
     }
-    return sorted(by_number.values(), key=lambda p: p["number"])
+    return sorted(by_number.values(), key=lambda p: p.number)
 
 
-async def _list_all_open_pr_numbers(repo: str, env: dict) -> set[int] | None:
-    """Numbers of every open PR in the repo, or None if the fetch failed (caller must not prune)."""
-    result = await run_cmd(
-        gh_argv("pr", "list", "--repo", repo, "--state", "open", "--json", "number", "--limit", "1000"),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        return None
+async def _list_all_open_pr_numbers(host: CodeHost, repo: RepositoryRef) -> set[int] | None:
+    """Numbers of every open PR in the repo, or None if the fetch failed (caller must not prune).
+
+    An unsupported capability follows the policy of ``(address_comments, ChangeRequests.list)`` (unlisted: stop).
+    """
     try:
-        return {pr["number"] for pr in json.loads(result.stdout)}
-    except (ValueError, KeyError, TypeError):
+        return {cr.number for cr in await host.change_requests.list(repo, state=ChangeRequestState.OPEN)}
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as e:
+        logger.warning("Could not list open PRs for %s: %s", await host.repository.display_name(repo), e)
         return None
 
 
-async def _list_prs(repo: str, env: dict, filter_flag: str) -> list[dict]:
-    result = await run_cmd(
-        gh_argv(
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            filter_flag,
-            "@me",
-            "--state",
-            "open",
-            "--json",
-            "number,headRefName,isDraft",
-            "--limit",
-            "500",
-        ),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
+async def _list_prs(host: CodeHost, repo: RepositoryRef, login: str, filter_name: str) -> list[ChangeRequest]:
+    """Open PRs filtered by ``filter_name`` ("author" or "assignee") = ``login``; [] when the read failed.
+
+    An unsupported capability follows the policy of ``(address_comments, ChangeRequests.list)`` (unlisted: stop).
+    """
+    if not login:
+        logger.warning("No login for the acting user; treating as no PRs for %s", filter_name)
         return []
     try:
-        prs = json.loads(result.stdout)
-        return [pr for pr in prs if isinstance(pr, dict) and "number" in pr and "headRefName" in pr]
-    except (ValueError, AttributeError, KeyError, TypeError):
-        logger.warning("Could not parse `gh pr list %s` output; treating as no PRs", filter_flag)
+        return list(await host.change_requests.list(repo, state=ChangeRequestState.OPEN, **{filter_name: login}))
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as e:
+        logger.warning("Could not list PRs by %s for %s: %s", filter_name, await host.repository.display_name(repo), e)
         return []
 
 
-async def _get_unresolved_comment_ids(pr_number: int, repo: str, env: dict) -> ThreadState | None:
+async def _get_unresolved_comment_ids(host: CodeHost, repo: RepositoryRef, pr_number: int) -> ThreadState | None:
     """Return the `ThreadState` of the PR's review threads.
-    Returns None if the GraphQL query fails (caller should skip filtering)."""
-    threads = await fetch_review_threads(pr_number, repo, env)
+    Returns None if the thread read fails (caller should skip filtering)."""
+    threads = await fetch_review_threads(host, repo, pr_number)
     if threads is None:
         return None
     ids: set[int] = set()
     minimized_ids: set[int] = set()
     for thread in threads:
-        if thread.get("isResolved"):
+        if thread.is_resolved:
             continue
-        nodes = (thread.get("comments") or {}).get("nodes") or []
-        if nodes and nodes[0].get("isMinimized") and nodes[0].get("databaseId"):
-            minimized_ids.add(nodes[0]["databaseId"])
-        for c in nodes:
-            db_id = c.get("databaseId")
-            if db_id:
-                ids.add(db_id)
+        comments = [(_comment_database_id(c), c) for c in thread.comments]
+        if comments and comments[0][1].is_hidden and comments[0][0]:
+            minimized_ids.add(comments[0][0])
+        ids.update(db_id for db_id, _c in comments if db_id)
     logger.debug("PR #%d: %d unresolved inline comment id(s)", pr_number, len(ids))
     return ThreadState(frozenset(ids), frozenset(minimized_ids))
 
 
-def _parse_threads_page(stdout: str, pr_number: int) -> tuple[int, int, str | None] | None:
-    """Parse one reviewThreads page into (count, unresolved, next_cursor); None if malformed."""
-    try:
-        data = json.loads(stdout) or {}
-        repository = (data.get("data") or {}).get("repository") or {}
-        threads_page = (repository.get("pullRequest") or {}).get("reviewThreads")
-        nodes = (threads_page or {}).get("nodes") or []
-        unresolved = sum(1 for t in nodes if not t.get("isResolved", False))
-        page_info = (threads_page or {}).get("pageInfo") or {}
-    except (ValueError, AttributeError, KeyError, TypeError):
-        logger.warning("PR #%d: malformed GraphQL review threads response", pr_number, exc_info=True)
-        return None
-    if threads_page is None:
-        logger.warning("PR #%d: missing reviewThreads in GraphQL response", pr_number)
-        return None
-    next_cursor = page_info.get("endCursor") if page_info.get("hasNextPage") else None
-    return len(nodes), unresolved, next_cursor
+def _comment_database_id(comment: Comment) -> int:
+    """The integer id the comments cache uses for an inline comment; 0 when the host id is not numeric."""
+    return int(comment.id) if comment.id.isdigit() else 0
 
 
-async def _check_gql_unresolved_threads(pr_number: int, repo: str, env: dict) -> tuple[int, int, bool]:
-    """Query review threads via GraphQL and return (total_threads, unresolved, success)."""
-    owner, repo_name = repo.split("/")
-    cursor: str | None = None
-    total_threads = 0
-    total_unresolved = 0
-
-    while True:
-        cmd = gh_argv(
-            "api",
-            "graphql",
-            "-f",
-            f"query={GRAPHQL_QUERY}",
-            "-F",
-            f"owner={owner}",
-            "-F",
-            f"repo={repo_name}",
-            "-F",
-            f"number={pr_number}",
-        )
-        if cursor:
-            cmd += ["-f", f"cursor={cursor}"]
-        gql_result = await run_cmd(cmd, cwd="/", env=env, timeout=TIMEOUT_GH, check=False)
-        if gql_result.returncode != 0:
-            logger.debug("PR #%d: GraphQL review threads query failed (rc=%d)", pr_number, gql_result.returncode)
-            return total_threads, total_unresolved, False
-        page = _parse_threads_page(gql_result.stdout, pr_number)
-        if page is None:
-            return total_threads, total_unresolved, False
-        page_total, page_unresolved, cursor = page
-        total_threads += page_total
-        total_unresolved += page_unresolved
-        if cursor is None:
-            break
-
-    return total_threads, total_unresolved, True
+async def _count_threads(host: CodeHost, repo: RepositoryRef, pr_number: int) -> tuple[int, int, bool]:
+    """Read the review threads and return (total_threads, unresolved, success)."""
+    threads = await fetch_review_threads(host, repo, pr_number)
+    if threads is None:
+        logger.debug("PR #%d: reading the review threads failed", pr_number)
+        return 0, 0, False
+    return len(threads), sum(1 for t in threads if not t.is_resolved), True
 
 
-async def _check_human_issue_comments(pr_number: int, repo: str, env: dict) -> bool:
+_KNOWN_BOT_LOGINS = frozenset({"github-actions[bot]", "dependabot[bot]"})
+
+
+def _is_bot_comment(comment: Comment) -> bool:
+    return comment.author is not None and (comment.author.is_bot or comment.author.login in _KNOWN_BOT_LOGINS)
+
+
+async def _check_human_issue_comments(host: CodeHost, repo: RepositoryRef, pr_number: int) -> bool:
     """Return True if the PR has any non-bot issue comments."""
-    comments_result = await run_cmd(
-        gh_argv("api", f"repos/{repo}/issues/{pr_number}/comments", "--paginate"),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if comments_result.returncode != 0:
-        logger.debug("PR #%d: issue comments query failed (rc=%d)", pr_number, comments_result.returncode)
-        return False
-    bot_logins = {"github-actions[bot]", "dependabot[bot]"}
     try:
-        comments = json.loads(comments_result.stdout)
-        human_comments = [c for c in comments if ((c.get("user") or {}).get("login")) not in bot_logins]
-    except (ValueError, AttributeError, KeyError, TypeError):
-        logger.warning("PR #%d: malformed issue comments response", pr_number, exc_info=True)
+        comments = await host.discussion.comments(repo, pr_number)
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as e:
+        logger.debug("PR #%d: reading the issue comments failed: %s", pr_number, e)
         return False
+    human_comments = [c for c in comments if not _is_bot_comment(c)]
     logger.debug("PR #%d: %d issue comment(s), %d from humans", pr_number, len(comments), len(human_comments))
     return len(human_comments) > 0
 
 
-async def _has_pending_feedback(pr_number: int, repo: str, env: dict) -> bool:
-    total_threads, total_unresolved, gql_ok = await _check_gql_unresolved_threads(pr_number, repo, env)
+async def _has_pending_feedback(host: CodeHost, repo: RepositoryRef, pr_number: int) -> bool:
+    total_threads, total_unresolved, gql_ok = await _count_threads(host, repo, pr_number)
 
     if gql_ok:
         logger.debug("PR #%d: %d review thread(s), %d unresolved", pr_number, total_threads, total_unresolved)
         if total_unresolved:
             return True
 
-    return await _check_human_issue_comments(pr_number, repo, env)
+    return await _check_human_issue_comments(host, repo, pr_number)
