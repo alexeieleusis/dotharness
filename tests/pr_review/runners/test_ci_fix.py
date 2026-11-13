@@ -779,14 +779,13 @@ async def test_fix_check_uses_api_step_when_log_says_unknown_step(tmp_path):
     assert m.pushes
 
 
-async def test_log_read_failure_collects_a_failure_and_continues_with_the_next_pr(tmp_path):
+async def test_log_read_failure_is_a_parse_failure_digest_and_continues(tmp_path, caplog):
     with _mocks(tmp_path, prs=[_pr(1, "a"), _pr(2, "b")]) as m:
         m.run_step.side_effect = [_proc(1), _proc(0)]
         m.host.fail_next("Checks.failed_log", CodeHostError("no log"))
-        with pytest.raises(CiFixError, match="#1") as exc:
-            await ci_fix.run(_cfg(tmp_path))
-    assert "no log" in str(exc.value)
-    assert "#2" not in str(exc.value)
+        await ci_fix.run(_cfg(tmp_path))  # no CiFixError: the failure is a per-check digest
+    assert "parse-failure" in caplog.text
+    assert "no log" in caplog.text
     assert [p[3] for p in m.pushes] == ["b"]
     m.checkout.assert_called_once()  # PR 1 never reached the checkout
 

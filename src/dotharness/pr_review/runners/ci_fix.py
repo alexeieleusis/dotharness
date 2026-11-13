@@ -571,9 +571,15 @@ async def _fix_check(
     number = pr.number
     branch = pr.head_reference
 
-    log = await _read_failed_log(host, repo, check)
-    step_name = (_failed_step_name(log) or await _failed_step_from_api(host, repo, check)) if log else None
-    if log is None or step_name is None:
+    # A host failure while reading the log or job (expired logs, 404, rate limit) is a per-check parse failure:
+    # record the digest and let the caller try the next candidate instead of failing the whole PR.
+    try:
+        log = await _read_failed_log(host, repo, check)
+        step_name = (_failed_step_name(log) or await _failed_step_from_api(host, repo, check)) if log else None
+    except CiFixError as e:
+        _digest(OUTCOME_PARSE_FAILURE, number, check.name, str(e))
+        return False
+    if step_name is None:
         _digest(OUTCOME_PARSE_FAILURE, number, check.name, "could not read the failing job log or its step")
         return False
 
