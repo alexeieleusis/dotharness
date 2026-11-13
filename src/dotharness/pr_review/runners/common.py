@@ -359,13 +359,15 @@ async def host_current_user(host: CodeHost) -> str:
 
 UnsupportedPolicy = Literal["degrade", "warn", "stop"]
 
+_CR_GET = "ChangeRequests.get"
+
 # One table: (site, operation) -> policy. ``Interface.*`` covers every operation of that capability at the site. The
 # same rows are documented in docs/pr_review/configuration.md; tests/pr_review/test_policy.py keeps them in sync.
 # degrade: skip silently. warn: log the capability name and continue. stop: re-raise (the top-level handler exits
 # non-zero). A pair not listed is "stop".
 UNSUPPORTED_CAPABILITY_POLICY: Mapping[tuple[str, str], UnsupportedPolicy] = MappingProxyType({
     ("merge", "ChangeRequests.squash_merge"): "stop",
-    ("merge", "ChangeRequests.get"): "stop",
+    ("merge", _CR_GET): "stop",
     ("auto_approve", "ChangeRequests.approve"): "stop",
     ("auto_approve", "ChangeRequests.reviews"): "stop",
     ("auto_approve", "ChangeRequests.commits"): "stop",
@@ -375,7 +377,7 @@ UNSUPPORTED_CAPABILITY_POLICY: Mapping[tuple[str, str], UnsupportedPolicy] = Map
     ("ci_checks_workflows", "Checks.list_workflows"): "degrade",
     ("required_checks", "Checks.list_checks"): "stop",
     ("reviewer_request", "ChangeRequests.request_reviewer"): "warn",
-    ("reviewer_request", "ChangeRequests.get"): "warn",
+    ("reviewer_request", _CR_GET): "warn",
     ("regret_review", "ChangeRequests.find_by_commit"): "stop",
     ("traceability", "WorkItems.get"): "stop",
     ("traceability", "WorkItems.linked_work_items"): "stop",
@@ -444,7 +446,7 @@ async def get_requested_reviewers(host: CodeHost, repo: RepositoryRef, number: i
         return [u.login for u in (await host.change_requests.get(repo, number)).requested_reviewers]
 
     try:
-        return await call_with_policy("reviewer_request", "ChangeRequests.get", read, [])
+        return await call_with_policy("reviewer_request", _CR_GET, read, [])
     except UnsupportedCapabilityError:
         raise
     except CodeHostError:
