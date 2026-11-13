@@ -31,7 +31,7 @@ import typer
 
 from dotharness.cli_common import fail
 from dotharness.code_host import Capability, CodeHost, ConfigurationError
-from dotharness.code_host.errors import AuthenticationError, CodeHostError, TokenCommandError
+from dotharness.code_host.errors import AuthenticationError, CodeHostError, CodeHostTimeoutError, TokenCommandError
 from dotharness.code_host.factory import HostSelection, create_code_host
 from dotharness.sisyphus.agent import make_agent_runner
 from dotharness.sisyphus.archive import archive_item, check_archive_dir, resolve_archive_dir
@@ -132,6 +132,8 @@ def create_host(config: SisyphusConfig, repo_dir: Path) -> tuple[CodeHost, str |
         credential = asyncio.run(host.session.credential())
     except TokenCommandError as exc:
         raise _token_config_error(exc) from None
+    except CodeHostTimeoutError:
+        raise ConfigError("[source.host] token_cmd timed out") from None
     except AuthenticationError:
         raise ConfigError("[source.host] token_cmd failed or printed no token") from None
     return host, credential.token
