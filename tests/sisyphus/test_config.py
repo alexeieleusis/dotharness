@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from dotharness.sisyphus import config as config_mod
 from dotharness.sisyphus.config import (
     DEFAULT_CONFIG_FILE,
     ConfigError,
@@ -383,5 +384,66 @@ def test_refactor_absent_defaults_enabled(tmp_path: Path) -> None:
     assert cfg == SisyphusConfig(project=ProjectConfig())
 
 
-def test_refactor_pattern_set_accepted(tmp_path: Path) -> None:
-    load_config(write(tmp_path, MIN + '[refactor]\npattern_set = "generic"\n'))
+@pytest.mark.parametrize("name", ["fastapi", "generic", "react"])
+def test_refactor_pattern_set_accepted(tmp_path: Path, name: str) -> None:
+    cfg = load_config(write(tmp_path, MIN + f'[refactor]\npattern_set = "{name}"\n'))
+    assert cfg.refactor.pattern_set == name
+
+
+def test_refactor_pattern_set_unknown(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError) as exc:
+        load_config(write(tmp_path, MIN + '[refactor]\npattern_set = "django"\n'))
+    assert "[refactor] pattern_set must be one of fastapi, generic, react, got 'django'" in str(exc.value)
+
+
+@pytest.mark.parametrize("bad", ["", "FastAPI", " fastapi"])
+def test_refactor_pattern_set_exact_match(tmp_path: Path, bad: str) -> None:
+    with pytest.raises(ConfigError, match=r"\[refactor\] pattern_set must be one of"):
+        load_config(write(tmp_path, MIN + f'[refactor]\npattern_set = "{bad}"\n'))
+
+
+def test_refactor_pattern_set_not_string(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=r"\[refactor\] pattern_set must be a string, got int"):
+        load_config(write(tmp_path, MIN + "[refactor]\npattern_set = 3\n"))
+
+
+@pytest.mark.parametrize("body", ["", "[refactor]\n", "[refactor]\nenabled = false\n"])
+def test_refactor_pattern_set_absent_reads_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:
+    def boom() -> tuple[str, ...]:
+        pytest.fail("helper must not be called")
+
+    monkeypatch.setattr(config_mod, "_packaged_pattern_sets", boom)
+    cfg = load_config(write(tmp_path, MIN + body))
+    assert cfg.refactor.pattern_set is None
+
+
+def test_refactor_pattern_set_list_from_directories(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "pats"
+    (root / "beta").mkdir(parents=True)
+    (root / "alpha").mkdir()
+    (root / "notes.md").write_text("x")
+
+    def fake() -> tuple[str, ...]:
+        return tuple(sorted(p.name for p in root.iterdir() if p.is_dir()))
+
+    monkeypatch.setattr(config_mod, "_packaged_pattern_sets", fake)
+    cfg = load_config(write(tmp_path, MIN + '[refactor]\npattern_set = "alpha"\n'))
+    assert cfg.refactor.pattern_set == "alpha"
+    with pytest.raises(ConfigError, match="alpha, beta"):
+        load_config(write(tmp_path, MIN + '[refactor]\npattern_set = "fastapi"\n'))
+
+
+@pytest.mark.parametrize("make_dir", [False, True])
+def test_refactor_pattern_set_missing_or_empty_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, make_dir: bool
+) -> None:
+    root = tmp_path / "pkg"
+    root.mkdir()
+    if make_dir:
+        (root / "knowledge" / "patterns").mkdir(parents=True)
+        (root / "knowledge" / "patterns" / "stray.md").write_text("x")
+    monkeypatch.setattr(config_mod.importlib.resources, "files", lambda _name: root)
+    expected = root / "knowledge" / "patterns"
+    with pytest.raises(ConfigError, match="is missing or empty") as exc:
+        load_config(write(tmp_path, MIN + '[refactor]\npattern_set = "fastapi"\n'))
+    assert str(expected) in str(exc.value)
