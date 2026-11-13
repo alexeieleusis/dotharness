@@ -53,6 +53,10 @@ KNOWLEDGE_SHA256 = {
 }
 
 
+# Files added after the byte-identical port; covered by their own tests, so no digest is pinned.
+NEW_KNOWLEDGE_FILES = {"sisyphus/refactor-prompt.md"}
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -69,7 +73,7 @@ def test_knowledge_file_is_byte_identical(rel: str, digest: str) -> None:
 def test_knowledge_has_no_extra_files() -> None:
     root = PACKAGE_DIR / "knowledge"
     found = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
-    assert found == set(KNOWLEDGE_SHA256)
+    assert found == set(KNOWLEDGE_SHA256) | NEW_KNOWLEDGE_FILES
 
 
 def test_root_skills_symlink_resolves_to_skill() -> None:
