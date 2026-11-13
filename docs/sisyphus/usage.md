@@ -227,6 +227,26 @@ Every reset is recorded durably in the run record (additive `resets` list: time,
 previous value) and is shown by `sisyphus status` and under Deviations in the digest, for example
 `Retry reset: PROJ-7 at stage build on 2026-03-04T05:06:00+00:00: build:retry-cycles 3->0, auto-retry 1->0`.
 
+## Refactor stage: gate failures and handoffs
+
+A refactor gate failure that stops at C5 leaves `GATE_FAILED_KEY = 1` set in the run record's retries. The gate
+itself only sets the flag; the refactor stage turns the failed gate into the C5 stop.
+
+`finished_cleanly` treats that flag as a failed run, so the item is not reported as a clean finish while the flag
+is set. The later `open-pr` gate clears the flag only on a pass: a failing `open-pr` gate leaves it set, and a
+gate that is not run does not clear it.
+
+To force a fresh agent pass for a group, the human deletes that group's `refactor-<set>.md` handoff file from
+`<handoff dir>` (the per-item handoff directory under `workspace_dir`; `<set>` is the pattern set name, such as
+`generic`, `fastapi` or `react`) and then runs `sisyphus resume REF --config F`. Without the deletion, a resume
+does not re-run the agent for a group whose `refactor-<set>.md` already exists and whose clone is clean. It
+re-runs only that group's gate, so a human fix committed on the item branch is verified and nothing is redone.
+Retries stay bounded by `DEFAULT_MAX_RETRY_CYCLES` = 3; `--reset-retries` gives a new budget (see "Fresh retry
+budget: `resume --reset-retries`" above).
+
+`refactor-<set>.md` never matches the leaf handoff pattern `NN-<stem>.md`, so the build completion check ignores
+it. A refactor that makes no commits skips the gate and is not an error.
+
 ## Dead ends: `sisyphus abandon`
 
 Some stops have no clean way forward (C7 above all: Sisyphus never rebases or force-pushes, and the dedicated
