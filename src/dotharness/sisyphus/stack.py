@@ -255,3 +255,49 @@ def package_declaration(root: Path, manifest_dir: str, name: str = "react") -> D
             if _normalize(key) == _normalize(name):
                 return Declaration(f"{manifest}: dependencies: {key}", ())
     return Declaration(None, ())
+
+
+_FASTAPI_IMPORT = re.compile(r"^\s*(from|import)\s+fastapi")
+_REACT_IMPORT = re.compile(r"^\s*import\b.*['\"]react['\"]")
+_REACT_REQUIRE = re.compile(r"require\(['\"]react['\"]\)")
+_REACT_SUFFIXES = frozenset({".tsx", ".jsx"})
+_REACT_HINT_SUFFIXES = frozenset({".ts", ".js"})
+_REACT_HINT_DIRS = frozenset({"components", "hooks"})
+
+
+def read_source_lines(root: Path, rel_path: str) -> tuple[tuple[str, ...], str | None]:
+    """Return the lines of ``root / rel_path`` and ``None``, or ``()`` and an error entry.
+
+    The error entry is ``<rel_path>: <ExceptionClass>: <error text>``. Only ``OSError`` is caught;
+    invalid UTF-8 bytes become U+FFFD. Never raises.
+    """
+    try:
+        text = (root / rel_path).read_bytes().decode("utf-8", errors="replace")
+    except OSError as exc:
+        return (), f"{rel_path}: {type(exc).__name__}: {exc}"
+    return tuple(text.splitlines()), None
+
+
+def fastapi_layout(rel_path: str, lines: Sequence[str]) -> str | None:
+    """Return ``<rel_path>: <stripped line>`` for the first FastAPI-looking line, else ``None``."""
+    for line in lines:
+        if _FASTAPI_IMPORT.match(line) or "APIRouter" in line or "FastAPI(" in line:
+            return f"{rel_path}: {line.strip()}"
+    return None
+
+
+def react_layout(rel_path: str, lines: Sequence[str]) -> str | None:
+    """Return ``<rel_path>: <stripped line>`` for the first React import or require, else ``None``.
+
+    The path must first qualify: ``.tsx``/``.jsx``, or ``.ts``/``.js`` under a ``components`` or
+    ``hooks`` directory.
+    """
+    path = PurePosixPath(rel_path)
+    suffix = path.suffix.lower()
+    in_hint_dir = any(part in _REACT_HINT_DIRS for part in path.parts[:-1])
+    if suffix not in _REACT_SUFFIXES and not (suffix in _REACT_HINT_SUFFIXES and in_hint_dir):
+        return None
+    for line in lines:
+        if _REACT_IMPORT.search(line) or _REACT_REQUIRE.search(line):
+            return f"{rel_path}: {line.strip()}"
+    return None
