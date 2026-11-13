@@ -80,6 +80,7 @@ from dotharness.sisyphus.stoprecord import (
 from dotharness.sisyphus.subproc import CommandResult, run_command
 
 PROMPT_FILE = "sisyphus/orchestration-prompt.md"
+REFACTOR_PROMPT_FILE = "sisyphus/refactor-prompt.md"
 CHEAT_SHEET = "spec-prism-flow/lifecycle-cheat-sheet.md"
 PLAN_PROMPT_FILE = "spec-prism-flow/plan-generation-prompt.md"
 BUILD_PROMPT_FILE = "spec-prism-flow/build-execution-prompt.md"
@@ -738,12 +739,22 @@ class _Run:
         self.plan_dir.mkdir(parents=True, exist_ok=True)
         self.spf.write_text(dump_spf_config(data), encoding="utf-8")
 
-    async def run_agent_stage(self, stage: str) -> None:
+    async def run_agent_stage(
+        self,
+        stage: str,
+        *,
+        prompt_file: str = PROMPT_FILE,
+        extra_values: dict[str, str] | None = None,
+    ) -> None:
         self.write_item_config()
-        if stage == BUILD_STAGE:
+        if stage in (BUILD_STAGE, REFACTOR_STAGE):
             self.handoff_dir.mkdir(parents=True, exist_ok=True)
-        template = knowledge_file(PROMPT_FILE).read_text(encoding="utf-8")
-        prompt = build_orchestration_prompt(template, self.prompt_values(stage))
+        template = knowledge_file(prompt_file).read_text(encoding="utf-8")
+        values = self.prompt_values(stage)
+        if stage == REFACTOR_STAGE:
+            values["patterns dir"] = str(knowledge_file("patterns"))
+        values.update(extra_values or {})
+        prompt = build_orchestration_prompt(template, values)
         stop_file = stop_report_path(self.rec)
         stop_file.unlink(missing_ok=True)
         answer = read_answer(self.rec.path)
