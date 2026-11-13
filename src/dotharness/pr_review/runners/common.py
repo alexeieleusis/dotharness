@@ -477,6 +477,12 @@ async def add_reviewer(host: CodeHost, repo: RepositoryRef, number: int, login: 
             None,
         )
     except CodeHostError as e:
+        # The display text is resolved defensively: a raise here would escape this handler and replace the
+        # in-flight exception of the caller's `finally` without being logged.
+        try:
+            repo_text = await host.repository.display_name(repo)
+        except CodeHostError:
+            repo_text = repr(repo)
         # preserve_reviewer_request calls this from a `finally`, so a failure here has
         # nowhere else to surface — without this log line, the reviewer silently stays
         # dropped from the PR with no trace it was ever supposed to be restored.
@@ -484,7 +490,7 @@ async def add_reviewer(host: CodeHost, repo: RepositoryRef, number: int, login: 
             "add_reviewer: failed to re-add %s as a reviewer on PR #%d (%s): %s",
             login,
             number,
-            await host.repository.display_name(repo),
+            repo_text,
             e,
         )
 
