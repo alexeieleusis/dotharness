@@ -395,6 +395,63 @@ def _tail(text: str, n: int = 400) -> str:
     return text[-n:]
 
 
+_EDITS_BULLET = re.compile(r"^- Edits to existing files:[ \t]*(.*)$")
+_EDIT_ITEM = re.compile(r"^\s*[-*]\s*(.*)$")
+
+
+def _edit_path(item: str) -> str:
+    words = item.split(None, 1)
+    if not words:
+        return ""
+    token = words[0].rstrip(":,;").strip("`")
+    if token.lower().rstrip(".") == "none":
+        return ""
+    return token
+
+
+def parse_listed_edits(text: str) -> set[str]:
+    """Paths named under the first ``- Edits to existing files:`` bullet of a refactor handoff."""
+    paths: set[str] = set()
+    in_bullet = False
+    for line in text.splitlines():
+        if not in_bullet:
+            match = _EDITS_BULLET.match(line)
+            if match is None:
+                continue
+            in_bullet = True
+            item = _EDIT_ITEM.match(match.group(1))
+            candidates = [item.group(1) if item else match.group(1)]
+        elif line.startswith("- "):
+            break
+        else:
+            item = _EDIT_ITEM.match(line)
+            candidates = [item.group(1)] if item else []
+        for candidate in candidates:
+            path = _edit_path(candidate)
+            if path:
+                paths.add(path)
+    return paths
+
+
+def scope_violations(
+    name_status_output: str, files: Sequence[str], tests: Sequence[str], listed_edits: set[str]
+) -> list[str]:
+    """One ``"<status> <path>"`` string per non-``A`` diff line outside files, tests and listed edits."""
+    allowed = set(files) | set(tests) | listed_edits
+    violations: list[str] = []
+    for line in name_status_output.splitlines():
+        status, sep, path = line.partition("\t")
+        if not sep or not status:
+            continue
+        letter = status[0]
+        if letter == "A" or path in allowed:
+            continue
+        entry = f"{letter} {path}"
+        if entry not in violations:
+            violations.append(entry)
+    return violations
+
+
 # --------------------------------------------------------------- the run
 
 
