@@ -496,6 +496,9 @@ class _Run:
                 if STAGE_ORDER.index(stage) < start:
                     self.skipped.append(stage)
                     continue
+                if stage == REFACTOR_STAGE and not self.config.refactor.enabled:
+                    self.skipped.append(stage)  # disabled in config: no handler, no clock check, no marks
+                    continue
                 self.check_time()
                 began = self.clock()
                 await handlers[stage]()

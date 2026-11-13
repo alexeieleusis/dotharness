@@ -25,6 +25,7 @@ from dotharness.sisyphus.config import (
     DigestConfig,
     LimitsConfig,
     ProjectConfig,
+    RefactorConfig,
     SisyphusConfig,
     SourceConfig,
     WorkItemSource,
@@ -148,6 +149,7 @@ class World:
         self.label_error: Exception | None = None
         # config
         self.limits = LimitsConfig()
+        self.refactor_enabled = True
         (self.repo / ".spec-prism-flow.toml").write_text('[build]\ncommands = ["make check", "make test"]\n')
 
     # ---- config / options
@@ -161,6 +163,7 @@ class World:
             source=SourceConfig(work_item=self.source),
             limits=self.limits,
             digest=DigestConfig(path_template=str(self.tmp / "digest-<date>.md")),
+            refactor=RefactorConfig(enabled=self.refactor_enabled),
         )
 
     def options(self, **kw: object) -> OrchestratorOptions:
@@ -2106,3 +2109,72 @@ async def test_stages_lists_refactor_in_order(world: World) -> None:
     run = _bare_run(world)
     assert run.stages() == list(orchestrator.STAGE_ORDER)
     assert run.stages().index("refactor") == 3
+
+
+# ------------------------------------------------------------- disabled refactor stage skip (#208)
+
+
+def _forbid_refactor(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    calls: list[str] = []
+
+    async def boom(self: orchestrator._Run) -> None:
+        calls.append("handler")
+
+    real = orchestrator._Run.check_time
+
+    def check(self: orchestrator._Run) -> None:
+        calls.append("check_time")
+        real(self)
+
+    monkeypatch.setattr(orchestrator._Run, "stage_refactor", boom)
+    monkeypatch.setattr(orchestrator._Run, "check_time", check)
+    return calls
+
+
+async def test_disabled_refactor_is_skipped_on_a_fresh_run(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    world.refactor_enabled = False
+    calls = _forbid_refactor(monkeypatch)
+    marks = world.mark_log(monkeypatch)
+    result = await world.run()
+    assert result.completed
+    assert result.stages_skipped == ("refactor",)
+    assert result.stages_run == ("intake", "plan", "build", "push", "open-pr")
+    assert calls == ["check_time"] * 5  # one per stage that ran; none for refactor, no handler call
+    assert "agent:refactor" not in world.events
+    assert "git push origin sisyphus/eng-1-cf2640ff" in world.events
+    assert "open_pr" in world.events
+    assert not [m for m in marks if m[0] == "refactor"]
+
+
+async def test_enabled_default_does_not_skip_refactor(world: World) -> None:
+    result = await world.run()
+    assert result.completed
+    assert "refactor" not in result.stages_skipped
+    assert "refactor" in result.stages_run
+
+
+async def test_disabled_refactor_resume_after_complete_build_skips_once(world: World) -> None:
+    world.push_rc = 1
+    assert (await world.run()).checkpoint is Checkpoint.C8
+    world.refactor_enabled = False
+    world.push_rc = 0
+    world.branch_exists = True
+    world.current_branch = "sisyphus/other-item-12345678"
+    world.ancestor_rc_after_pr = 1
+    RunRecord.open(world.tmp / "ws", ITEM).mark_stage("build", "complete")
+    result = await world.run()
+    assert result.completed
+    assert result.stages_skipped == ("intake", "plan", "build", "refactor")
+    assert result.stages_run == ("push", "open-pr")
+
+
+async def test_disabled_refactor_resume_past_it_has_no_duplicate(world: World) -> None:
+    world.push_rc = 1
+    assert (await world.run()).checkpoint is Checkpoint.C8
+    world.refactor_enabled = False
+    world.push_rc = 0
+    world.branch_exists = True
+    world.current_branch = "sisyphus/other-item-12345678"
+    world.ancestor_rc_after_pr = 1
+    result = await world.run()  # record is at push: refactor is before start
+    assert result.stages_skipped.count("refactor") == 1
