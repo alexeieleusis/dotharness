@@ -926,7 +926,7 @@ async def test_traceability_review_no_linked_ticket_posts_comment_without_backen
         await self_review._run_locked(cfg)
     mock_be.return_value.run.assert_not_called()
     mock_post.assert_called_once()
-    assert mock_post.call_args.args[:2] == (7, "acme/frontend")
+    assert mock_post.call_args.args[2] == 7
     assert 7 in state.get_traceability_reviewed_prs("acme-frontend")
 
 

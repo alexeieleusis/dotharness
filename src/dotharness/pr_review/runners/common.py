@@ -927,31 +927,27 @@ async def resolve_linked_tickets(
     return await _resolve_comment_linked_tickets(host, repo, pr, cache)
 
 
-async def post_no_linked_ticket_comment(pr_number: int, repo: str, env: dict) -> bool:
+async def post_no_linked_ticket_comment(host: CodeHost, repo: RepositoryRef, pr_number: int) -> bool:
     """Posts the §7.3 "no linked ticket found" PR-level comment directly — no backend
     invocation, since there's nothing for a model to judge when resolve_linked_tickets
     found nothing via either mechanism. This outcome is terminal (§7.3/§11.1): once
     posted, has_traceability_review_comment treats this PR as done forever. Returns True
-    if the comment was posted successfully."""
+    if the comment was posted successfully. A failed post (including a timeout) is logged
+    and gives False: a write is never retried and has no fallback post. An unsupported
+    capability follows the ``traceability`` policy for ``Discussion.post_comment``
+    (unlisted: stop) and propagates."""
     body = (
         "# Requirement Traceability\n"
         "No linked ticket found (no closing-keyword link and no issue reference in the "
         "first 5 minutes of comments) — skipping scope/gap comparison.\n"
         f"{TRACEABILITY_REVIEW_MARKER}"
     )
-    result = await run_cmd(
-        gh_argv("pr", "comment", str(pr_number), "--repo", repo, "--body", body),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
-        logger.error(
-            "PR #%d: failed to post 'no linked ticket found' comment: %s",
-            pr_number,
-            result.stderr.decode("utf-8", errors="replace"),
-        )
+    try:
+        await host.discussion.post_comment(repo, pr_number, body)
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as exc:
+        logger.error("PR #%d: failed to post 'no linked ticket found' comment: %s", pr_number, exc)  # noqa: TRY400
         return False
     return True
 

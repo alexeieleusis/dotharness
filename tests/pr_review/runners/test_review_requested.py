@@ -1,11 +1,18 @@
 import contextlib
-import json
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
-from dotharness.code_host import Capability, CodeHostError, ReviewState, UnsupportedCapabilityError
+from dotharness.code_host import (
+    Capability,
+    ChangeRequestState,
+    CodeHostError,
+    CodeHostTimeoutError,
+    ReviewState,
+    UnsupportedCapabilityError,
+    User,
+)
 from dotharness.pr_review.runners import review_requested
 from dotharness.pr_review.runners.common import (
     DESIGN_REVIEW_MARKER,
@@ -13,10 +20,23 @@ from dotharness.pr_review.runners.common import (
     REGRET_REVIEW_MARKER,
     TRACEABILITY_REVIEW_MARKER,
     LinkedTicket,
+    post_no_linked_ticket_comment,
 )
 from dotharness.pr_review.runners.regret_review import IntroducingHunk, RegretCandidate
-from tests.pr_review.runners.approve_support import T, make_host, put_comment, put_review, put_thread, seed_pr
+from tests.pr_review.runners.approve_support import (
+    T,
+    make_host,
+    put_comment,
+    put_review,
+    put_thread,
+    seed_pr,
+    update_pr,
+)
 from tests.pr_review.runners.runner_support import REPO, make_change_request, make_scaffold
+
+
+def _pr(number, **fields):
+    return make_change_request(number, **fields)
 
 
 def _cfg(tmp_path):
@@ -41,24 +61,6 @@ def _setup_knowledge(tmp_path, content="instructions"):
     (kdir / "review-regret.md").write_text(content)
 
 
-def _strict_run_cmd(mapping: dict[str, MagicMock]):
-    """Build a run_cmd side_effect that raises on any unmocked command.
-
-    `mapping` maps a substring of the command line to a pre-built MagicMock result.
-    This turns silent test failures into loud assertion errors when a command
-    in the source changes or a mapping key has a typo.
-    """
-
-    def side_effect(cmd, **_kwargs):
-        key = " ".join(str(a) for a in cmd)
-        for k, v in mapping.items():
-            if k in key:
-                return v
-        raise AssertionError(f"Unmocked command: {' '.join(str(a) for a in cmd)}")  # noqa: TRY003
-
-    return side_effect
-
-
 @contextlib.contextmanager
 def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
     """Patch every dependency `_run_locked` needs to drive a full PR review pass.
@@ -67,10 +69,13 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
     side effect for the piece it cares about, instead of repeating all ~15
     patch targets `_run_locked` touches on every call.
     """
-    prs = prs if prs is not None else [{"number": 1, "url": "u", "headRefName": "feat"}]
+    prs = prs if prs is not None else [_pr(1, url="u", head_reference="feat")]
+    host = make_host()
+    for pr in prs:
+        seed_pr(host, pr.number)
     changed_files = changed_files if changed_files is not None else ["src/foo.py"]
     with (
-        patch("dotharness.pr_review.runners.review_requested.open_host", return_value=make_scaffold()),
+        patch("dotharness.pr_review.runners.review_requested.open_host", return_value=make_scaffold(host)),
         patch("dotharness.pr_review.runners.review_requested.host_current_user", return_value="bot"),
         patch("dotharness.pr_review.runners.review_requested._get_prs", return_value=prs) as get_prs,
         patch("dotharness.pr_review.runners.review_requested._should_skip_pr", return_value=skip_pr) as should_skip_pr,
@@ -88,9 +93,6 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
         patch("dotharness.pr_review.runners.review_requested.git_detach_and_record", return_value="sha") as detach,
         patch("dotharness.pr_review.runners.review_requested.git_fetch_and_checkout") as fetch_checkout,
         patch("dotharness.pr_review.runners.review_requested.git_restore") as restore,
-        patch(
-            "dotharness.pr_review.runners.review_requested.run_cmd", return_value=MagicMock(returncode=0, stdout=b"")
-        ) as run_cmd,
         patch("dotharness.pr_review.runners.review_requested.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.review_requested.get_pr_head_sha", return_value="abc123"),
         patch(
@@ -112,7 +114,7 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
             detach=detach,
             fetch_checkout=fetch_checkout,
             restore=restore,
-            run_cmd=run_cmd,
+            host=host,
             os=os_mock,
             backend=backend,
             get_requested=get_requested,
@@ -134,7 +136,7 @@ async def _run_skip_scenario(tmp_path, scaffold, *, design_and_traceability_done
         patch("dotharness.pr_review.runners.review_requested.host_current_user", return_value="me"),
         patch(
             "dotharness.pr_review.runners.review_requested._get_prs",
-            return_value=[{"number": 1, "url": "u", "headRefName": "b"}],
+            return_value=[_pr(1, url="u", head_reference="b")],
         ),
         patch("dotharness.pr_review.runners.review_requested.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.review_requested.Backend") as mock_be,
@@ -194,44 +196,101 @@ async def test_vibe_heal_context_included_in_prompts(tmp_xdg, tmp_path):
     assert all("sonar findings" in p for p in prompts)
 
 
-async def test_get_prs_returns_head_ref_name_from_single_call(tmp_xdg, tmp_path):
-    # gh pr list --json can return headRefName directly, avoiding the N+1 pattern
-    # of gh search prs + individual gh pr view calls.
-    list_result = [{"number": 42, "url": "https://github.com/acme/frontend/pull/42", "headRefName": "feat/my-branch"}]
-
-    with patch(
-        "dotharness.pr_review.runners.review_requested.run_cmd",
-        side_effect=_strict_run_cmd({"gh pr list": MagicMock(returncode=0, stdout=json.dumps(list_result).encode())}),
-    ) as mock_run:
-        prs = await review_requested._get_prs("acme/frontend", {})
-
-    assert prs == list_result
-    mock_run.assert_called_once()
+def _review_requested_host(*requested: tuple[int, str]):
+    """A host with open PRs; each ``(number, reviewer)`` has that reviewer requested."""
+    host = make_host()
+    for number, reviewer in requested:
+        seed_pr(host, number, requested_reviewers=(User(reviewer),) if reviewer else ())
+    return host
 
 
-async def test_get_prs_returns_empty_on_search_failure(tmp_xdg, tmp_path):
-    with patch(
-        "dotharness.pr_review.runners.review_requested.run_cmd",
-        side_effect=_strict_run_cmd({"gh pr list": MagicMock(returncode=1, stdout=b"")}),
+async def test_get_prs_lists_open_prs_requesting_the_user_sorted_by_number():
+    host = _review_requested_host((9, "me"), (3, "me"), (5, "someone-else"))
+    prs = await review_requested._get_prs(host.code_host(), REPO, "me")
+    assert [p.number for p in prs] == [3, 9]
+    assert [p.head_reference for p in prs] == ["feat-3", "feat-9"]
+    assert [c.operation for c in host.calls] == ["ChangeRequests.list"]
+    call = host.calls[0]
+    assert call.kwargs["requested_reviewer"] == "me"
+    assert call.kwargs["state"] is ChangeRequestState.OPEN
+    assert host.writes == []
+
+
+async def test_get_prs_skips_closed_prs():
+    host = _review_requested_host((1, "me"), (2, "me"))
+    update_pr(host, 2, state=ChangeRequestState.MERGED)
+    prs = await review_requested._get_prs(host.code_host(), REPO, "me")
+    assert [p.number for p in prs] == [1]
+
+
+async def test_get_prs_empty_result_is_an_empty_list_without_warning(caplog):
+    host = _review_requested_host()
+    with caplog.at_level("WARNING"):
+        assert await review_requested._get_prs(host.code_host(), REPO, "me") == []
+    assert "Could not list" not in caplog.text
+
+
+async def test_get_prs_returns_empty_on_a_failed_read(caplog):
+    host = _review_requested_host((1, "me"))
+    host.fail_next("ChangeRequests.list", CodeHostError("boom"))
+    with caplog.at_level("WARNING"):
+        assert await review_requested._get_prs(host.code_host(), REPO, "me") == []
+    assert "Could not list review-requested PRs for acme/frontend" in caplog.text
+
+
+async def test_get_prs_with_no_login_makes_no_host_call():
+    # An empty login filter would list every open PR, not the user's.
+    host = _review_requested_host((1, "me"))
+    assert await review_requested._get_prs(host.code_host(), REPO, "") == []
+    assert host.calls == []
+
+
+async def test_get_prs_unsupported_capability_stops():
+    host = make_host(capabilities=frozenset(Capability) - {Capability.CHANGE_REQUESTS})
+    with pytest.raises(UnsupportedCapabilityError):
+        await review_requested._get_prs(host.code_host(), REPO, "me")
+
+
+async def test_run_locked_reviews_the_prs_that_request_the_user(tmp_xdg, tmp_path):
+    """End to end on the fake: the login from the session picks the PRs; a PR requesting someone else is left alone."""
+    _setup_knowledge(tmp_path)
+    host = _review_requested_host((1, "me"), (2, "someone-else"))
+    real_get_prs = review_requested._get_prs
+    with (
+        _full_run_mocks(prs=[]) as mocks,
+        patch("dotharness.pr_review.runners.review_requested.open_host", return_value=make_scaffold(host)),
+        patch("dotharness.pr_review.runners.review_requested.host_current_user", return_value="me"),
+        patch("dotharness.pr_review.runners.review_requested._get_prs", wraps=real_get_prs) as get_prs,
     ):
-        prs = await review_requested._get_prs("acme/frontend", {})
-    assert prs == []
+        await review_requested._run_locked(_cfg(tmp_path), pr_url=None)
+    assert get_prs.call_args.args[2] == "me"
+    assert [c.args[0] for c in mocks.fetch_checkout.call_args_list] == ["feat-1"]
 
 
-async def test_get_prs_searches_user_review_requested_not_reviewer(tmp_xdg, tmp_path):
-    # "reviewer:@me" does not reliably match pending review requests on GitHub's
-    # search API; only "user-review-requested:@me" does. Regression test for a bug
-    # where this qualifier was swapped during a refactor, silently making the runner
-    # find zero PRs. Must be "user-review-requested:@me" specifically (not the bare
-    # "review-requested:@me"), which also matches team-based requests Alexei doesn't
-    # want surfaced here.
-    with patch("dotharness.pr_review.runners.review_requested.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"[]")
-        await review_requested._get_prs("acme/frontend", {})
+async def test_run_locked_single_pr_path_reads_the_change_request(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path)
+    host = make_host()
+    seed_pr(host, 4)
+    url = host._change_requests[REPO][0].url
+    with (
+        _full_run_mocks(prs=[]) as mocks,
+        patch("dotharness.pr_review.runners.review_requested.open_host", return_value=make_scaffold(host)),
+        patch(
+            "dotharness.pr_review.runners.review_requested.pr_from_url", return_value=_pr(4, head_reference="feat-4")
+        ),
+    ):
+        await review_requested._run_locked(_cfg(tmp_path), pr_url=url)
+    assert [c.args[0] for c in mocks.fetch_checkout.call_args_list] == ["feat-4"]
 
-    args = mock_run.call_args[0][0]
-    assert "--search" in args
-    assert args[args.index("--search") + 1] == "user-review-requested:@me"
+
+async def test_run_locked_single_pr_path_skips_the_run_when_the_pr_cannot_be_read(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path)
+    with (
+        _full_run_mocks(prs=[]) as mocks,
+        patch("dotharness.pr_review.runners.review_requested.pr_from_url", return_value=None),
+    ):
+        await review_requested._run_locked(_cfg(tmp_path), pr_url="https://x/pull/4")
+    mocks.fetch_checkout.assert_not_called()
 
 
 async def test_has_user_approved_reads_every_review_for_an_approval_by_the_user():
@@ -304,10 +363,7 @@ async def test_design_review_noop_when_marker_already_present(tmp_xdg, tmp_path)
 async def test_continues_to_next_pr_on_backend_exception(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
-    prs = [
-        {"number": 1, "url": "u1", "headRefName": "feat1"},
-        {"number": 2, "url": "u2", "headRefName": "feat2"},
-    ]
+    prs = [_pr(1, url="u1", head_reference="feat1"), _pr(2, url="u2", head_reference="feat2")]
     with _full_run_mocks(prs=prs) as mocks:
         mocks.backend.return_value.run = AsyncMock()
         mocks.backend.return_value.run.side_effect = [RuntimeError("backend crash"), MagicMock(returncode=0)]
@@ -382,15 +438,38 @@ async def test_traceability_review_no_linked_ticket_posts_comment_without_backen
         _full_run_mocks() as mocks,
         patch("dotharness.pr_review.runners.review_requested.has_traceability_review_comment", return_value=False),
         patch("dotharness.pr_review.runners.review_requested.resolve_linked_tickets", return_value=[]),
-        patch(
-            "dotharness.pr_review.runners.review_requested.post_no_linked_ticket_comment", return_value=True
-        ) as mock_post,
     ):
         await review_requested._run_locked(cfg, pr_url=None)
     # 1 file + 1 summary = 2 backend calls; traceability never invokes the backend.
     assert mocks.backend.return_value.run.call_count == 2
-    mock_post.assert_called_once()
-    assert mock_post.call_args.args[:2] == (1, "acme/frontend")
+    posts = [c for c in mocks.host.writes if c.operation == "Discussion.post_comment"]
+    assert len(posts) == 1
+    assert posts[0].args[:2] == (REPO, 1)
+    assert posts[0].args[2].startswith("# Requirement Traceability\nNo linked ticket found")
+    assert posts[0].args[2].endswith(TRACEABILITY_REVIEW_MARKER)
+
+
+async def test_traceability_review_no_linked_ticket_post_failure_is_not_retried(tmp_xdg, tmp_path, caplog):
+    """A failed post is logged and the pass reports failure; the write is not retried."""
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        _full_run_mocks() as mocks,
+        patch("dotharness.pr_review.runners.review_requested.has_traceability_review_comment", return_value=False),
+        patch("dotharness.pr_review.runners.review_requested.resolve_linked_tickets", return_value=[]),
+        caplog.at_level("ERROR"),
+    ):
+        mocks.host.fail_next("Discussion.post_comment", CodeHostTimeoutError("slow", write=True), apply=True)
+        await review_requested._run_locked(cfg, pr_url=None)
+    attempts = [c for c in mocks.host.calls if c.operation == "Discussion.post_comment"]
+    assert len(attempts) == 1
+    assert "failed to post 'no linked ticket found' comment" in caplog.text
+
+
+async def test_post_no_linked_ticket_comment_unsupported_capability_stops():
+    host = make_host(capabilities=frozenset(Capability) - {Capability.DISCUSSION})
+    with pytest.raises(UnsupportedCapabilityError):
+        await post_no_linked_ticket_comment(host.code_host(), REPO, 1)
 
 
 def _regret_hunk():
@@ -633,9 +712,7 @@ async def test_fatal_git_error_stops_loop_and_restores(tmp_xdg, tmp_path):
 
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
-    prs = [
-        {"number": n, "url": f"u{n}", "headRefName": f"b{n}", "createdAt": "2024-01-01T00:00:00Z"} for n in (1, 2, 3)
-    ]
+    prs = [_pr(n, url=f"u{n}", head_reference=f"b{n}") for n in (1, 2, 3)]
     with _full_run_mocks(prs=prs) as mocks:
         mocks.fetch_checkout.side_effect = FatalGitError("boom")
         await review_requested._run_locked(cfg, pr_url=None)
@@ -647,7 +724,7 @@ async def test_process_pr_skips_summary_when_file_reviews_fail(tmp_path):
     """A failed file review must not be followed by the summary: the summary comment marks
     the PR "done" in _should_skip_pr, which would permanently suppress the retry."""
     mod = "dotharness.pr_review.runners.review_requested"
-    pr = {"number": 7, "headRefName": "feat"}
+    pr = _pr(7, head_reference="feat")
     with (
         patch(f"{mod}.git_detach_and_record", return_value="sha"),
         patch(f"{mod}.git_restore"),

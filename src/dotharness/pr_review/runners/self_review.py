@@ -366,7 +366,7 @@ async def _run_traceability_review(
             logger.info("PR #%d: linked ticket lookup was inconclusive (API failure) — will retry next run", number)
             return False
         if not tickets:
-            if await post_no_linked_ticket_comment(number, config.repo.name, env):
+            if await post_no_linked_ticket_comment(ctx["host"], ctx["repo"], number):
                 return True
             logger.error("PR #%d: failed to post 'no linked ticket found' comment — will retry next run", number)
             return False

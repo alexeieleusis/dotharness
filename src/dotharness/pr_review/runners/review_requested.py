@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import subprocess
@@ -8,18 +7,17 @@ from typing import cast
 
 from dotharness.code_host import (
     ChangeRequest,
+    ChangeRequestState,
     CodeHost,
     CodeHostError,
     RepositoryRef,
     ReviewState,
     UnsupportedCapabilityError,
 )
-from dotharness.gh import gh_argv
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
-    TIMEOUT_GH,
     FatalGitError,
     build_design_review_prompt,
     build_early_comment_context,
@@ -48,7 +46,6 @@ from dotharness.pr_review.runners.common import (
     pr_from_url,
     preserve_reviewer_request,
     resolve_linked_tickets,
-    run_cmd,
     run_pr_level_pass,
 )
 from dotharness.pr_review.runners.regret_review import (
@@ -77,9 +74,9 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
 
     if pr_url:
         change_request = await pr_from_url(host, repo, pr_url)
-        prs = [] if change_request is None else [_legacy_pr(change_request)]
+        prs = [] if change_request is None else [change_request]
     else:
-        prs = [p for p in await _get_prs(config.repo.name, env) if p.get("headRefName")]
+        prs = [p for p in await _get_prs(host, repo, current_user) if p.head_reference]
 
     knowledge_dir = Path(config.harness.knowledge_dir) / "pr-review"
     extra_knowledge = (
@@ -97,13 +94,13 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
     wdir = str(config.repo.working_dir)
 
     for pr in prs:
-        pr_number = pr["number"]
+        pr_number = pr.number
         files_summary_done = await _should_skip_pr(pr, host, repo, current_user)
         design_done = await has_design_review_comment(host, repo, pr_number, current_user)
         traceability_done = await has_traceability_review_comment(host, repo, pr_number, current_user)
         # The regret pass is the only config-gated PR-level pass here (off by default);
         # when disabled, regret_done is True so the gate below and the call in
-        # _process_pr are both unchanged, and no extra gh marker check runs.
+        # _process_pr are both unchanged, and no extra marker check runs.
         regret_done = (
             await has_regret_review_comment(host, repo, pr_number, current_user)
             if config.regret_review.enabled
@@ -137,45 +134,25 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
             logger.exception("PR #%d: error", pr_number)
 
 
-def _legacy_pr(change_request: ChangeRequest) -> dict:
-    """The PR dict the rest of this runner reads (``number``, ``url``, ``headRefName``, ``author``)."""
-    return {
-        "number": change_request.number,
-        "url": change_request.url,
-        "headRefName": change_request.head_reference,
-        "author": {"login": change_request.author.login} if change_request.author else None,
-    }
+async def _get_prs(host: CodeHost, repo: RepositoryRef, login: str) -> list[ChangeRequest]:
+    """Open PRs with a review requested from ``login``, sorted by number; [] when the read failed.
 
-
-async def _get_prs(repo: str, env: dict) -> list[dict]:
-    # Use gh pr list with search predicates to get all fields in a single call,
-    # avoiding the N+1 pattern of gh search prs + individual gh pr view calls.
-    # author is unused by the other passes; the regret pass's config.regret_review
-    # .authors gate (regret_review.find_introducing_prs) reads it from the PR dict and
-    # treats an authorless PR as non-matching (fail-closed), so the field must be here.
-    result = await run_cmd(
-        gh_argv(
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            "--state",
-            "open",
-            "--search",
-            "user-review-requested:@me",
-            "--json",
-            "number,url,headRefName,createdAt,closingIssuesReferences,author",
-            "--limit",
-            "500",
-        ),
-        cwd="/",
-        env=env,
-        timeout=TIMEOUT_GH,
-        check=False,
-    )
-    if result.returncode != 0:
+    One list call returns every field this runner reads (including the author the regret pass's
+    ``config.regret_review.authors`` gate matches on; an authorless PR is non-matching, fail-closed).
+    An unsupported capability follows the policy of ``(review_requested, ChangeRequests.list)``
+    (unlisted: stop).
+    """
+    if not login:
+        logger.warning("No login for the acting user; treating as no review-requested PRs")
         return []
-    return sorted(json.loads(result.stdout), key=lambda p: p["number"])
+    try:
+        prs = await host.change_requests.list(repo, state=ChangeRequestState.OPEN, requested_reviewer=login)
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError as exc:
+        logger.warning("Could not list review-requested PRs for %s: %s", await host.repository.display_name(repo), exc)
+        return []
+    return sorted(prs, key=lambda p: p.number)
 
 
 async def _has_user_approved(host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str) -> bool:
@@ -192,8 +169,8 @@ async def _has_user_approved(host: CodeHost, repo: RepositoryRef, pr_number: int
     )
 
 
-async def _should_skip_pr(pr: dict, host: CodeHost, repo: RepositoryRef, current_user: str) -> bool:
-    pr_number = pr["number"]
+async def _should_skip_pr(pr: ChangeRequest, host: CodeHost, repo: RepositoryRef, current_user: str) -> bool:
+    pr_number = pr.number
     if await _has_user_approved(host, repo, pr_number, current_user):
         logger.info("PR #%d already approved by self, skipping", pr_number)
         return True
@@ -207,7 +184,7 @@ async def _should_skip_pr(pr: dict, host: CodeHost, repo: RepositoryRef, current
 
 
 async def _process_pr(
-    pr: dict,
+    pr: ChangeRequest,
     config: HarnessConfig,
     host: CodeHost,
     repo: RepositoryRef,
@@ -222,7 +199,7 @@ async def _process_pr(
     traceability_done: bool,
     regret_done: bool,
 ) -> None:
-    pr_number = pr["number"]
+    pr_number = pr.number
     logger.info("PR #%d: starting", pr_number)
     original_sha = await git_detach_and_record(wdir, env)
     try:
@@ -231,10 +208,10 @@ async def _process_pr(
         # A pass here can still submit a formal review as a side effect (or race a
         # concurrent runner, e.g. review_prs's vibe_heal post, that does), which would
         # clear the current user from the PR's requested-reviewers list and hide it from
-        # this and every other runner's "user-review-requested:@me" search — restore it
+        # this and every other runner's review-requested search — restore it
         # regardless of outcome, mirroring every other "non-concluding" runner.
         async with preserve_reviewer_request(host, repo, pr_number, current_user):
-            await git_fetch_and_checkout(pr["headRefName"], wdir, env)
+            await git_fetch_and_checkout(pr.head_reference, wdir, env)
             # Gathered once and shared by all four passes below (mirrors self_review.py's
             # _gather_pr_context/_cached_file_diff) so a PR needing both the correctness
             # pipeline and a PR-level pass in the same cycle doesn't refetch PR metadata or
@@ -268,14 +245,14 @@ async def _process_pr(
     except Exception:
         logger.exception("PR #%d: error", pr_number)
     finally:
-        await git_restore(original_sha, pr["headRefName"], wdir, env)
+        await git_restore(original_sha, pr.head_reference, wdir, env)
 
 
 async def _gather_pr_context(
-    pr: dict, config: HarnessConfig, host: CodeHost, repo: RepositoryRef, wdir: str, env: dict
+    pr: ChangeRequest, config: HarnessConfig, host: CodeHost, repo: RepositoryRef, wdir: str, env: dict
 ) -> dict:
-    pr_number = pr["number"]
-    vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr["headRefName"])
+    pr_number = pr.number
+    vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr.head_reference)
     pr_description = await get_pr_description(host, repo, pr_number)
     base_branch = await get_pr_base_branch(host, repo, pr_number)
     commit_sha = await get_pr_head_sha(host, repo, pr_number)
@@ -311,7 +288,7 @@ def _change_request(ctx: dict, pr_number: int) -> ChangeRequest:
 
 
 async def _run_file_reviews(
-    pr: dict,
+    pr: ChangeRequest,
     config: HarnessConfig,
     knowledge_dir: Path,
     extra_knowledge: str | None,
@@ -320,7 +297,7 @@ async def _run_file_reviews(
     env: dict,
     ctx: dict,
 ) -> bool:
-    pr_number = pr["number"]
+    pr_number = pr.number
     file_instructions = (knowledge_dir / "review-file.md").read_text(encoding="utf-8")
     files = ctx["files"]
     commit_sha = ctx["commit_sha"]
@@ -357,7 +334,7 @@ def _build_file_prompt(
     file_instructions: str,
     extra_knowledge: str | None,
     file_section: str,
-    pr: dict,
+    pr: ChangeRequest,
     repo_name: str,
     commit_sha: str,
     pr_description: str | None,
@@ -367,7 +344,7 @@ def _build_file_prompt(
         file_instructions
         + (f"\n\n## Additional Review Guide\n{extra_knowledge}" if extra_knowledge else "")
         + file_section
-        + f"\n\nPR URL: {pr.get('url', '')}\nPR number: {pr['number']}\n"
+        + f"\n\nPR URL: {pr.url}\nPR number: {pr.number}\n"
         + f"Repo: {repo_name}\nCommit: {commit_sha}"
         + (f"\n\n{pr_description}" if pr_description else "")
         + (f"\n\n## Static Analysis\n{vibe_heal_context}" if vibe_heal_context else "")
@@ -375,7 +352,7 @@ def _build_file_prompt(
 
 
 async def _run_design_review(
-    pr: dict,
+    pr: ChangeRequest,
     config: HarnessConfig,
     knowledge_dir: Path,
     extra_knowledge: str | None,
@@ -406,7 +383,7 @@ async def _run_design_review(
     shared with _run_traceability_review below, and with self_review.py's equivalent pair,
     via common.run_pr_level_pass; only the pieces below (instructions file, flagged-
     locations getter, prompt builder) are specific to the design pass."""
-    pr_number = pr["number"]
+    pr_number = pr.number
     repo_name = config.repo.name
 
     async def build_prompt() -> str:
@@ -445,7 +422,7 @@ async def _run_design_review(
 
 
 async def _run_traceability_review(
-    pr: dict,
+    pr: ChangeRequest,
     config: HarnessConfig,
     knowledge_dir: Path,
     extra_knowledge: str | None,
@@ -468,7 +445,7 @@ async def _run_traceability_review(
     ticket list is stashed in `resolved` for build_prompt to pick up once short_circuit
     itself declines to handle the pass (returns None, meaning "a ticket was found, proceed
     normally")."""
-    pr_number = pr["number"]
+    pr_number = pr.number
     repo_name = config.repo.name
     comment_cache: dict = {}
     resolved: dict = {}
@@ -479,7 +456,7 @@ async def _run_traceability_review(
             logger.info("PR #%d: linked ticket lookup was inconclusive (API failure) — will retry next run", pr_number)
             return False
         if not tickets:
-            if await post_no_linked_ticket_comment(pr_number, repo_name, env):
+            if await post_no_linked_ticket_comment(ctx["host"], ctx["repo"], pr_number):
                 return True
             logger.error("PR #%d: failed to post 'no linked ticket found' comment", pr_number)
             return False
@@ -529,7 +506,7 @@ async def _run_traceability_review(
 
 
 async def _run_regret_review(
-    pr: dict,
+    pr: ChangeRequest,
     config: HarnessConfig,
     knowledge_dir: Path,
     extra_knowledge: str | None,
@@ -568,9 +545,9 @@ async def _run_regret_review(
     update that changes the blamed lines still gets a fresh candidate search when the PR
     is next processed, while blocking the gate on the structurally empty case — the
     common one — would leave the PR on the review-requested queue, re-running this pass's
-    bounded git/gh sequence, every cycle. A backend or post failure, by contrast, still
+    bounded git/host sequence, every cycle. A backend or post failure, by contrast, still
     returns False, so the PR stays queued for a retry."""
-    pr_number = pr["number"]
+    pr_number = pr.number
     repo_name = config.repo.name
     candidates: list[RegretCandidate] = []
     reply: dict[str, str] = {}
@@ -631,7 +608,7 @@ async def _run_regret_review(
 
 
 async def _run_summary_review(
-    pr: dict,
+    pr: ChangeRequest,
     config: HarnessConfig,
     knowledge_dir: Path,
     extra_knowledge: str | None,
@@ -639,7 +616,7 @@ async def _run_summary_review(
     wdir: str,
     ctx: dict,
 ) -> bool:
-    pr_number = pr["number"]
+    pr_number = pr.number
     summary_instructions = (knowledge_dir / "review-summary.md").read_text(encoding="utf-8")
     files = ctx["files"]
     pr_description = ctx["pr_description"]
@@ -648,7 +625,7 @@ async def _run_summary_review(
     summary_prompt = (
         summary_instructions
         + (f"\n\n## Additional Review Guide\n{extra_knowledge}" if extra_knowledge else "")
-        + f"\n\nPR URL: {pr.get('url', '')}\nPR number: {pr['number']}\n"
+        + f"\n\nPR URL: {pr.url}\nPR number: {pr.number}\n"
         + f"Repo: {config.repo.name}\nFiles reviewed:\n"
         + "\n".join(files)
         + (f"\n\n{pr_description}" if pr_description else "")
