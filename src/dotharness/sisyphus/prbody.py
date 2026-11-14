@@ -317,6 +317,21 @@ def _refactor_record_lines(record: Mapping[str, Any]) -> list[str]:
     return lines
 
 
+def _refactor_handoff_lines(set_name: str, result: Mapping[str, object] | None) -> list[str]:
+    """Handoff-derived lines for one group; pure, no embedding (the caller's ``embed`` runs later)."""
+    if result is None:
+        return [f"Note: no handoff found for set {set_name}."]
+    lines: list[str] = []
+    for label, key in (("Deviations", "deviation"), ("Edits to existing files", "edits")):
+        text = result[key]
+        value = "none" if text is None else str(text)
+        bullet = f"- {label}: {value}" if value else f"- {label}:"
+        lines.extend(bullet.split("\n"))
+    notes: Any = result["notes"]
+    lines.extend(notes)
+    return lines
+
+
 # ---------------------------------------------------------------- FR-6 decisions
 
 

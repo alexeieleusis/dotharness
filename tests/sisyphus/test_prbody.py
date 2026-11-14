@@ -9,6 +9,7 @@ from dotharness.sisyphus.prbody import (
     MAX_BODY_CHARS,
     MAX_TITLE_CHARS,
     PLAN_NOT_MATCHED_NOTE,
+    _refactor_handoff_lines,
     _refactor_record_lines,
     clean_title,
     commit_log_args,
@@ -679,3 +680,69 @@ def test_refactor_record_lines_full_layout() -> None:
 def test_refactor_record_lines_deterministic() -> None:
     rec = _record()
     assert _refactor_record_lines(rec) == _refactor_record_lines(rec)
+
+
+def _handoff_result(deviation: str | None = "x", edits: str | None = "e", notes: list[str] | None = None) -> dict:
+    return {"set": "generic", "deviation": deviation, "edits": edits, "notes": notes if notes is not None else []}
+
+
+def test_refactor_handoff_lines_both_bullets() -> None:
+    result = _handoff_result("Kept the helper in place.", "- src/app/routes.py: import the new module")
+    assert _refactor_handoff_lines("generic", result) == [
+        "- Deviations: Kept the helper in place.",
+        "- Edits to existing files: - src/app/routes.py: import the new module",
+    ]
+
+
+def test_refactor_handoff_lines_edits_none_note_verbatim() -> None:
+    note = "Note: no edits bullet found in handoff refactor-generic.md."
+    lines = _refactor_handoff_lines("generic", _handoff_result("x", None, [note]))
+    assert len(lines) == 3
+    assert lines[1] == "- Edits to existing files: none"
+    assert lines[2] == note
+
+
+def test_refactor_handoff_lines_none_result() -> None:
+    lines = _refactor_handoff_lines("fastapi", None)
+    assert lines == ["Note: no handoff found for set fastapi."]
+    assert not any(x.startswith(("- Deviations:", "- Edits to existing files:")) for x in lines)
+
+
+def test_refactor_handoff_lines_deviation_none() -> None:
+    assert _refactor_handoff_lines("generic", _handoff_result(None, "e")) == [
+        "- Deviations: none",
+        "- Edits to existing files: e",
+    ]
+
+
+def test_refactor_handoff_lines_notes_order() -> None:
+    lines = _refactor_handoff_lines("generic", _handoff_result(notes=["Note: a", "Note: b"]))
+    assert lines[2:] == ["Note: a", "Note: b"]
+    assert lines[:2] == ["- Deviations: x", "- Edits to existing files: e"]
+
+
+def test_refactor_handoff_lines_multiline() -> None:
+    lines = _refactor_handoff_lines("generic", _handoff_result("line one\nline two"))
+    assert lines[:2] == ["- Deviations: line one", "line two"]
+    assert "- Deviations: line one\nline two" in "\n".join(lines)
+
+
+def test_refactor_handoff_lines_empty_text_and_empty_note() -> None:
+    lines = _refactor_handoff_lines("generic", _handoff_result("", "e", [""]))
+    assert lines == ["- Deviations:", "- Edits to existing files: e", ""]
+
+
+def test_refactor_handoff_lines_deterministic_and_non_mutating() -> None:
+    import copy
+
+    result = _handoff_result(notes=["Note: a"])
+    before = copy.deepcopy(result)
+    first = _refactor_handoff_lines("generic", result)
+    assert first == _refactor_handoff_lines("generic", result)
+    assert result == before
+    assert first is not result["notes"]
+
+
+def test_refactor_handoff_lines_does_not_embed() -> None:
+    lines = _refactor_handoff_lines("generic", _handoff_result("ping @someone see #12"))
+    assert lines[0] == "- Deviations: ping @someone see #12"
