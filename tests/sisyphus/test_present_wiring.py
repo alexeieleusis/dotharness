@@ -12,7 +12,7 @@ import pytest
 
 from dotharness.ai_backend import RunResult
 from dotharness.sisyphus import cli
-from dotharness.sisyphus.digest import DigestReport, NeedsYou, needs_from_stop
+from dotharness.sisyphus.digest import DigestReport, NeedsYou
 from dotharness.sisyphus.orchestrator import PullRequest
 from dotharness.sisyphus.orchestrator import RunResult as ItemResult
 from dotharness.sisyphus.rails import Checkpoint
@@ -78,8 +78,8 @@ def stops(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             )
             rec.set_checkpoint("C5")
             write_stop_record(rec.path, stop)
-            report = DigestReport(needs_you=(needs_from_stop(stop),))
-            return ItemResult(item, Checkpoint.C5, _detail(item), ("build",), (), "b", None, None, rec, report)
+            # The orchestrator reports error stops only; the CLI renders checkpoint stops.
+            return ItemResult(item, Checkpoint.C5, _detail(item), ("build",), (), "b", None, None, rec, DigestReport())
         return ItemResult(item, None, "", ("build",), (), "b", PullRequest(7, "http://pr/7"), None, rec, DigestReport())
 
     monkeypatch.setattr(cli, "run_item", fake)

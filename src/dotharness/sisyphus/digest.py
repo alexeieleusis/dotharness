@@ -140,14 +140,16 @@ def needs_from_stop(stop: StopRecord, text: str = "", record: str = "") -> Needs
     return NeedsYou(stop.item, stop.label, question, stop.action, stop.resume_command)
 
 
-def needs_from_record(rec: RunRecord) -> NeedsYou | None:
-    """Needs-you entry for a run record: its stop record when present, else the built-in question."""
+def needs_from_record(rec: RunRecord, text: str = "") -> NeedsYou | None:
+    """Needs-you entry for a run record: its stop record when present, else the built-in question.
+
+    ``text`` is the restructured stop text, read by the caller (this function reads no ``.stopped.md``).
+    """
     stop = read_stop_record(rec.path)
     if stop is not None and stop.abandoned:
         return None
     if stop is not None and (stop.checkpoint == rec.checkpoint or stop.checkpoint is None):
-        text = read_stop_text(rec.path) if stop.checkpoint is not None else None
-        return needs_from_stop(stop, text or "", str(stop_record_path(rec.path)))
+        return needs_from_stop(stop, text if stop.checkpoint is not None else "", str(stop_record_path(rec.path)))
     if rec.checkpoint is None:
         return None
     question = CHECKPOINT_QUESTIONS.get(rec.checkpoint, "The run stopped at this checkpoint. How should it proceed?")
@@ -177,7 +179,7 @@ def _needs_you(records: Sequence[RunRecord], report: DigestReport) -> list[str]:
     lines = [_needs_line(n) for n in report.needs_you]
     covered = {(n.item, n.checkpoint) for n in report.needs_you}
     for rec in records:
-        need = needs_from_record(rec)
+        need = needs_from_record(rec, read_stop_text(rec.path) or "")
         if need is None or (need.item, need.checkpoint) in covered:
             continue
         lines.append(_needs_line(need))
