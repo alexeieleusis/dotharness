@@ -433,12 +433,18 @@ async def test_build_body_refactor_unsafe_set_names(tmp_path: Path, monkeypatch:
     calls = _spy_refactor(monkeypatch)
     hd = tmp_path / "h"
     hd.mkdir()
-    (tmp_path / "refactor-..md").write_text("x")
-    (tmp_path / "refactor-x.md").write_text("x")
-    names = ["../x", "a/b", "a\\b", "..", ".", "", "a\0b"]
+    # Real files for every candidate path the guard must reject, plus a positive control.
+    for n in ("..", ".", "", "a\\b"):
+        (hd / f"refactor-{n}.md").write_text("x")
+    (hd / "refactor-..").mkdir()
+    (hd / "refactor-..").joinpath("x.md").write_text("x")  # candidate for "../x"
+    (hd / "refactor-a").mkdir()
+    (hd / "refactor-a" / "b.md").write_text("x")  # candidate for "a/b"
+    (hd / "refactor-ok.md").write_text("x")
+    names = ["../x", "a/b", "a\\b", "..", ".", "", "a\0b", "ok"]
     recs = [_rec(n) for n in names]
     await _build_refactor(tmp_path, refactor_records=recs, refactor_handoff_dir=hd)
-    assert calls["extract"] == [[]]
+    assert calls["extract"] == [[hd / "refactor-ok.md"]]
     assert calls["format"][0][0] == recs
 
 
