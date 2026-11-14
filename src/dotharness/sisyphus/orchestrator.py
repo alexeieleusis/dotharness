@@ -222,17 +222,40 @@ def plan_dir_name(item: str) -> str:
 _BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 
 
-def _read_refactor_records(path: Path) -> list[Any]:
-    """The parsed top-level list of the refactor input file, unchanged; ``[]`` for any unusable file.
+def _load_refactor_input(path: Path, *, strict: bool) -> list[Any]:
+    """The single reader of the refactor input file; ``strict`` picks the failure policy.
 
-    Never raises: ``OSError`` (missing, directory, permission), ``ValueError`` (``UnicodeDecodeError`` and
-    ``json.JSONDecodeError``) and ``RecursionError`` (deeply nested JSON) all give ``[]``, as does a non-list top level.
+    Strict: ``[]`` if the file is absent; a malformed top level, entry or missing ``_REFACTOR_INPUT_KEYS`` key raises
+    ``OrchestratorError``. Lenient (PR body): the parsed top-level list unchanged, entries unvalidated, and ``[]`` for
+    any unusable file (``OSError``, ``ValueError`` incl. ``UnicodeDecodeError``/``JSONDecodeError``, ``RecursionError``
+    from deeply nested JSON, or a non-list top level); never raises.
     """
+    if not strict:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, RecursionError):
+            return []
+        return data if isinstance(data, list) else []
+    if not path.exists():
+        return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, RecursionError):
-        return []
-    return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            raise TypeError("not a list")  # noqa: TRY301
+        for entry in data:
+            if not isinstance(entry, dict):
+                raise TypeError("entry is not an object")  # noqa: TRY301
+            missing = [k for k in _REFACTOR_INPUT_KEYS if k not in entry]
+            if missing:
+                raise KeyError(", ".join(missing))  # noqa: TRY301
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise OrchestratorError(f"unreadable refactor input {path}: {exc}") from exc
+    return data
+
+
+def _read_refactor_records(path: Path) -> list[Any]:
+    """Lenient view of the refactor input file for the PR body; see ``_load_refactor_input``."""
+    return _load_refactor_input(path, strict=False)
 
 
 def _toml_key(key: str) -> str:
@@ -505,22 +528,7 @@ class _Run:
 
     def read_refactor_input(self) -> list[dict[str, Any]]:
         """Entries of ``refactor-input.json`` (``[]`` if absent); malformed content raises."""
-        path = self.refactor_input_path
-        if not path.exists():
-            return []
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(data, list):
-                raise TypeError("not a list")  # noqa: TRY301
-            for entry in data:
-                if not isinstance(entry, dict):
-                    raise TypeError("entry is not an object")  # noqa: TRY301
-                missing = [k for k in _REFACTOR_INPUT_KEYS if k not in entry]
-                if missing:
-                    raise KeyError(", ".join(missing))  # noqa: TRY301
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            raise OrchestratorError(f"unreadable refactor input {path}: {exc}") from exc
-        return data
+        return _load_refactor_input(self.refactor_input_path, strict=True)
 
     async def record_group_entry(self, record: StackGroup) -> dict[str, Any]:
         """Return the group's entry, writing it (with ``head_before``) only if its ``set`` is not recorded yet."""
