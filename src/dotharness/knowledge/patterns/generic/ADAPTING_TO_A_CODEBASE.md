@@ -11,7 +11,7 @@ The generic roles ([Contracts, Domain, Adapters, State, Actions, Orchestrator, E
 When principles and local convention disagree, resolve in this order:
 
 1. **Repo instructions and lint/CI rules** (`CLAUDE.md`, `AGENTS.md`, contributing docs, architecture decision records)
-2. **Established local convention** (what the neighbouring, healthy code does)
+2. **Established local convention** (what the neighboring, healthy code does)
 3. **These generic principles**
 
 Never impose a structure the codebase doesn't use if a local equivalent exists. Never copy a local anti-pattern just because it is local. *Follow convention for structure. Follow the principles for logic placement.*
@@ -57,7 +57,7 @@ Find the **best** example of a feature in the repo (well-tested, recently touche
 
 ## Step 2: Map the Roles
 
-Write the mapping down (in your plan, PR description, or a comment to the user) before coding. Example:
+Write the mapping (in your plan, PR description, or a comment to the user) before coding. Example:
 
 ```
 Codebase: Django REST service
@@ -79,7 +79,7 @@ Serialization  → serializers.py (output)
 - **Merge roles when the framework fuses them.** Keep the *logic placement* rule: rules still go in pure functions.
 - **Active Record / ORM-heavy frameworks**: treat the model as Contracts + Adapter. Put rules in standalone domain functions that take plain data, not in model callbacks.
 - **Declarative/config-driven frameworks** (schemas, DSLs, workflow definitions): the config is Contracts/Domain. Keep logic you'd otherwise embed in config as testable functions invoked from it, if the framework permits.
-- **Functional vs. OO**: functions-and-data or classes-with-injected-collaborators are equally valid; pick the local style.
+- **Functional vs. OO**: functions-and-data or classes-with-injected-collaborators are equally valid. Pick the local style.
 
 ---
 
@@ -102,8 +102,8 @@ If the codebase makes a non-negotiable impossible (rare), say so explicitly. Not
 
 ## Step 4: Apply Incrementally
 
-- **Match the neighbours.** New code should look like the best nearby code, plus pure domain functions.
-- **Introduce at most one new idea per change.** Adding a `domain` module is one idea; also restructuring directories is another PR.
+- **Match the neighbors.** New code should look like the best nearby code, plus pure domain functions.
+- **Introduce at most one new idea per change.** Adding a `domain` module is one idea. Restructuring directories is a separate PR.
 - **Prove the seam with a test.** The first domain test is the evidence the extraction worked.
 - **Leave the code a little cleaner, not rebuilt.** Don't migrate unrelated code unless asked (see [QUICK_START_MIGRATION.md](./QUICK_START_MIGRATION.md)).
 
@@ -115,13 +115,13 @@ Some work isn't a "feature" in this sense. Adjust, don't force:
 
 | Kind of work                          | What to do                                                              |
 | ------------------------------------- | ----------------------------------------------------------------------- |
-| Throwaway script / one-off migration  | Skip the structure; still keep decisions separate from I/O if it's cheap |
+| Throwaway script / one-off migration  | Skip the structure. Still keep decisions separate from I/O if it's cheap |
 | Pure library / algorithm              | Contracts + Domain + tests only                                         |
-| Infrastructure-as-code / config       | Keep modules single-purpose; validate with plan/lint rather than unit tests |
-| Data pipeline / SQL transformations   | Treat each stage as Domain (pure transform) with I/O at the ends; test stages on fixtures |
-| Glue code between two systems         | It *is* an adapter; keep it thin and contract-test it                   |
-| Highly stateful UI/game loops         | Pure update/reducer functions are the Domain; the loop is the Entry point |
-| Codebase with strong, different architecture (hexagonal, clean, DDD, MVC, ECS) | Map roles onto that architecture's terms; don't rename things |
+| Infrastructure-as-code / config       | Keep modules single-purpose. Validate with plan/lint rather than unit tests |
+| Data pipeline / SQL transformations   | Treat each stage as Domain (pure transform) with I/O at the ends. Test stages on fixtures |
+| Glue code between two systems         | It *is* an adapter. Keep it thin and contract-test it                   |
+| Highly stateful UI/game loops         | Pure update/reducer functions are the Domain. The loop is the Entry point |
+| Codebase with strong, different architecture (hexagonal, clean, DDD, MVC, ECS) | Map roles onto that architecture's terms. Don't rename them |
 
 If you can't map a role at all, **ask the user** rather than inventing structure. Present the discovery findings and a proposed mapping.
 
@@ -156,13 +156,13 @@ patterns/<framework>/
 
 ### Authoring Checklist
 
-1. **Start from the generic files.** Copy the structure; replace pseudocode with real, idiomatic code from the framework.
+1. **Start from the generic files.** Copy the structure. Replace pseudocode with real, idiomatic code from the framework.
 2. **Fill the role mapping table** for this framework (Step 2 above) near the top of the convention doc.
 3. **Use the framework's real units** (its component/controller/handler/module names) and conventional file layout and naming.
 4. **Keep the principles identical** to the generic set. Framework sets may add *constraints and idioms*. They must not contradict principles. If a set must diverge, document why.
 5. **Add a "Framework Gotchas" section.** Cover lifecycle traps, DI quirks, testing-harness setup, and things the framework makes hard (e.g. where pure logic can hide from the framework magic).
 6. **Provide a minimal runnable example** that is a real, passing feature in that framework, with its domain test.
-7. **Document test tooling**: how to run domain tests without booting the framework; how to fake adapters.
+7. **Document test tooling**: how to run domain tests without booting the framework, and how to fake adapters.
 8. **Link back** to the generic set and state precedence ("framework conventions override generic when they conflict").
 9. **Keep quick references 4-6x shorter** than the full convention.
 10. **Validate with a dry run**: have someone (or an agent) build a small feature using only the new docs. Fix what confuses them.

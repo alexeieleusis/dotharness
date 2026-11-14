@@ -24,6 +24,8 @@ from dotharness.sisyphus.stages import (
     OPEN_PR_STAGE,
     PLAN_STAGE,
     PUSH_STAGE,
+    REFACTOR_RETRY_KEY,
+    REFACTOR_STAGE,
 )
 from dotharness.sisyphus.stoprecord import (
     AUTO_RETRY_DELAY_MINUTES,
@@ -48,6 +50,7 @@ RESET_KEYS: dict[str, tuple[str, ...]] = {
     INTAKE_STAGE: (AUTO_RETRY_KEY,),
     PLAN_STAGE: (AUTO_RETRY_KEY,),
     BUILD_STAGE: (BUILD_RETRY_KEY, AUTO_RETRY_KEY),
+    REFACTOR_STAGE: (REFACTOR_RETRY_KEY, AUTO_RETRY_KEY),
     PUSH_STAGE: (AUTO_RETRY_KEY,),
     OPEN_PR_STAGE: (AUTO_RETRY_KEY,),
 }

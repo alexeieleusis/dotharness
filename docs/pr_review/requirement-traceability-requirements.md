@@ -3,14 +3,18 @@
 # Requirements: Requirement-Traceability Review Pass (diff vs. linked ticket)
 
 > Drafted per `~/.harness/tools/requirements-doc-drafting-prompt.md`, from
-> [dotharness#4](https://github.com/alexeieleusis/dotharness/issues/4) (referenced as
-> "#future-2" in [dotharness#3](https://github.com/alexeieleusis/dotharness/issues/3),
-> which this document's sibling, `design-review-requirements.md`, explicitly deferred
-> generalizing anything for — see §4 there). This is the single source of truth a later,
-> smaller work order (a phase file / ticket) will quote from — not the work order itself.
-> Four architectural forks, plus the two items originally logged open in §11, were raised
-> directly to the user during drafting and answered (2026-09-17). All six answers are
-> folded into §7 below and are not re-litigated. §11 records the resolutions with
+> [dotharness#4](https://github.com/alexeieleusis/dotharness/issues/4). That issue is
+> referenced as "#future-2" in
+> [dotharness#3](https://github.com/alexeieleusis/dotharness/issues/3). Its sibling,
+> `design-review-requirements.md`, explicitly deferred generalizing anything for it — see
+> §4 there.
+>
+> This is the single source of truth a later, smaller work order (a phase file / ticket)
+> will quote from. It is not the work order itself.
+>
+> Four architectural forks, plus the two items originally logged open in §11, were
+> raised directly to the user during drafting and answered (2026-09-17). All six answers
+> are folded into §7 below and are not re-litigated. §11 records the resolutions with
 > pointers rather than leaving them to silently disappear.
 
 ## 1. Purpose / origin
@@ -19,26 +23,27 @@
 (per-file correctness), `review-summary.md` (one-shot PR summary), and `review-design.md`
 (PR-level design/architecture, added by dotharness#3 — see `design-review-requirements.md`).
 None of them check whether a PR's diff actually matches what was *asked for*. Issue #4
-proposes a fourth pass whose only job is that comparison — catching scope creep (diff
+proposes a fourth pass whose only job is that comparison. It catches scope creep (diff
 does more than the ticket asked) and gaps (ticket asks for X, diff doesn't cover it).
-Issue #3 explicitly required the two issues be designed jointly so neither multiplies
-`self-review`'s per-file retry-on-failure cost (currently ~2(N+1) invocations on a failed
-run, per PR #39's description).
+Issue #3 explicitly required the two issues be designed jointly, so that neither
+multiplies `self-review`'s per-file retry-on-failure cost. That cost is currently
+~2(N+1) invocations on a failed run, per PR #39's description.
 
 The originating issue's "Proposed shape" asked for a generic, configurable tracker
 convention ("Linear/Jira/GitHub Issues, whichever the team uses"). During this drafting
-session the user narrowed and concretized that into a specific mechanism: resolve the
-linked ticket from the PR itself (GitHub's own closing-keyword linking, with an
-early-comment scan as fallback), synthesize a "formal requirement" from it, and compare
-that against the PR's full diff — flagging scope creep and gaps. That refinement is what
-this document specifies. It is not derived from a reference implementation for the
-comparison logic itself, but it *is* derived directly from `review-design.md`'s existing,
-shipped shape (prompt template location/tone, dual inline+PR-level output contract, the
-`DESIGN_REVIEW_MARKER`/decoupled-fate pattern) — this pass reuses that shape almost
-exactly, differing mainly in what it reads (a resolved ticket, not just the diff) and
-what it flags (scope creep / gaps, not abstraction/placement).
+session the user narrowed and concretized that into a specific mechanism. It has three
+steps. First, resolve the linked ticket from the PR itself (GitHub's own
+closing-keyword linking, with an early-comment scan as fallback). Second, synthesize a
+"formal requirement" from it. Third, compare that against the PR's full diff, flagging
+scope creep and gaps. That refinement is what this document specifies. It is not derived
+from a reference implementation for the comparison logic itself. It *is* derived directly
+from `review-design.md`'s existing, shipped shape: prompt template location/tone, the
+dual inline+PR-level output contract, and the `DESIGN_REVIEW_MARKER`/decoupled-fate
+pattern. This pass reuses that shape almost exactly. It differs mainly in what it reads
+(a resolved ticket, not just the diff) and what it flags (scope creep / gaps, not
+abstraction/placement).
 
-Four design forks were resolved directly by the user (2026-09-17), and are stated here
+Four design forks were resolved directly by the user (2026-09-17). They are stated here
 so later sections don't need to re-justify them:
 
 1. **Ticket resolution:** GitHub's native closing-keyword linking
@@ -55,10 +60,10 @@ so later sections don't need to re-justify them:
    traceability pass has **no ordering dependency** on `review-summary.md` completing
    first. It is fully independent, like `review-design.md`.
 3. **No linked ticket found:** post a PR-level comment saying so, rather than silently
-   skipping — keeps the "exactly one PR-level comment marks a pass as done" idempotency
-   convention uniform across all PR-level passes.
+   skipping. This keeps the "exactly one PR-level comment marks a pass as done"
+   idempotency convention uniform across all PR-level passes.
 4. **Early-comment scan includes bot-authored comments** — the link itself is often
-   posted by an integration bot (a Jira/GitHub bridge, etc.), not a human, so excluding
+   posted by an integration bot (a Jira/GitHub bridge, etc.), not a human. Excluding
    bots would defeat the fallback's purpose.
 
 ## 2. Problem statement
@@ -68,66 +73,66 @@ reviewer either re-reads the ticket themselves (easy to skip under time pressure
 trusts the PR description's own framing of its scope. Two failure modes follow:
 
 - **Scope creep is invisible until a human notices it.** A PR can quietly do more than
-  its ticket authorized — an unrelated refactor bundled in, a second feature slipped into
-  a bugfix PR — and none of the three existing passes are positioned to catch it:
+  its ticket authorized — an unrelated refactor bundled in, or a second feature slipped
+  into a bugfix PR. None of the three existing passes is positioned to catch it:
   `review-file.md` reviews one file in isolation (no notion of "the ticket"),
   `review-design.md` looks at abstraction/placement across files but never at intent, and
   `review-summary.md` only describes what the diff does, never checks it against what was
   asked.
 - **Gaps are equally invisible.** A ticket can ask for three things and the PR can
-  deliver two, and nothing today flags the missing third — the PR still "looks done" from
-  a correctness/design standpoint.
+  deliver two. Nothing today flags the missing third — the PR still "looks done" from a
+  correctness/design standpoint.
 
 Without a dedicated pass, the only place either failure mode gets caught is a human
-re-reading the ticket during code review — after the PR is already built, the most
-expensive point to discover a mismatch.
+re-reading the ticket during code review. That is after the PR is already built — the
+most expensive point to discover a mismatch.
 
 ## 3. Goals
 
 - **G1.** Every PR run through `self-review` or `review-requested` gets exactly one
-  additional, PR-level (not per-file) automated pass whose sole focus is comparing the
-  PR's diff against its resolved linked ticket — never correctness, design, or
+  additional, PR-level (not per-file) automated pass. Its sole focus is comparing the
+  PR's diff against its resolved linked ticket. It never reports correctness, design, or
   performance findings already owned by the other three passes. It runs unconditionally,
   the same way `review-design.md` does — no opt-in config flag (§7.6, §9).
-- **G2.** The new pass's prompt template (`review-traceability.md`) is a standalone file,
-  structurally and conventionally identical to `review-design.md`/`review-summary.md`,
-  so it's authored/edited/versioned the same way (§7.1).
-- **G3.** The pass integrates into both `self-review` and `review-requested` without
-  changing either runner's existing idempotency guarantees for the other three passes —
-  re-running against an already-fully-reviewed PR must not re-post duplicate traceability
+- **G2.** The new pass's prompt template (`review-traceability.md`) is a standalone file.
+  It is structurally and conventionally identical to `review-design.md`/`review-summary.md`,
+  so it is authored, edited, and versioned the same way (§7.1).
+- **G3.** The pass integrates into both `self-review` and `review-requested`. It does not
+  change either runner's existing idempotency guarantees for the other three passes.
+  Re-running against an already-fully-reviewed PR must not re-post duplicate traceability
   comments (§7.4, §7.5).
 - **G4.** The pass's completion is tracked **independently** from every other pass's
-  retry state (`reviewed_prs`/`partial_reviews`/`design_reviewed_prs`), for the same
-  reason G4 in `design-review-requirements.md` gives: a traceability-pass failure never
-  forces re-running the other three passes, and vice versa (§7.4, §7.5).
+  retry state (`reviewed_prs`/`partial_reviews`/`design_reviewed_prs`). This is for the
+  same reason G4 in `design-review-requirements.md` gives: a traceability-pass failure
+  never forces re-running the other three passes, and vice versa (§7.4, §7.5).
 - **G5.** The linked ticket is resolved without requiring any new tracker integration
-  (Linear/Jira) in this iteration — GitHub's own PR-to-issue linking plus an
+  (Linear/Jira) in this iteration. GitHub's own PR-to-issue linking plus an
   issue-comment fallback is sufficient, since dotharness already operates entirely
   against GitHub via `gh` (§4, §7.2). **Update (2026-09-17, found against PR
   Oscilar/backend#14140):** a repo that tracks requirements in Linear exclusively — no
   GitHub Issues at all — has no `closingIssuesReferences` and no `#N`-shaped mentions for
-  either mechanism to find, so the pass could never resolve a ticket there and would
-  always fall through to the terminal "no linked ticket found" comment. The
-  comment-scan fallback now also recognizes the `linear[bot]` GitHub App's linkback
-  comment (`<!-- linear-linkback -->` marker) and reads the ticket id/title/description
-  directly out of its body (§7.2) — still no tracker-specific API client, since the bot
+  either mechanism to find. The pass could never resolve a ticket there and would always
+  fall through to the terminal "no linked ticket found" comment. The comment-scan
+  fallback now also recognizes the `linear[bot]` GitHub App's linkback comment
+  (`<!-- linear-linkback -->` marker) and reads the ticket id/title/description directly
+  out of its body (§7.2). This still uses no tracker-specific API client, since the bot
   already mirrors that content into the GitHub comment `gh` fetches anyway.
 - **G6.** Findings are traceable to the specific file(s) they concern when they can be
-  (scope-creep findings anchor to the file introducing unauthorized scope). Gap findings,
-  which by definition point at something *absent* from the diff, are PR-level only, since
+  (scope-creep findings anchor to the file introducing unauthorized scope). Gap findings
+  are PR-level only. By definition they point at something *absent* from the diff, and
   there is no line to anchor an absence to (§7.1, §7.3).
 
 ## 4. Non-goals
 
-- **Not adding Linear/Jira (or any other tracker) integration.** GitHub Issues only, this
-  iteration — resolved directly per the user's refined brief (§1). The originating
+- **Not adding Linear/Jira (or any other tracker) integration.** GitHub Issues only,
+  this iteration — resolved directly per the user's refined brief (§1). The originating
   issue's "configurable convention" language is satisfied entirely by GitHub's own
   closing-keyword linking plus the comment-scan fallback. No tracker-specific API client
-  is introduced. Still holds after the §4/G5 update: recognizing the `linear[bot]`
-  linkback comment's already-mirrored content is not a Linear API integration — no
-  Linear-specific request is ever made. A Linear ticket with no linkback comment on
-  the PR (or a Linear workspace not wired to GitHub via that App) remains unresolvable,
-  same as before.
+  is introduced. This still holds after the §4/G5 update: recognizing the `linear[bot]`
+  linkback comment's already-mirrored content is not a Linear API integration. No
+  Linear-specific request is ever made. A Linear ticket with no linkback comment on the
+  PR (or a Linear workspace not wired to GitHub via that App) remains unresolvable, same
+  as before.
 - **Not wiring into `review-prs`.** Same rationale as `design-review-requirements.md` §4:
   `review-prs` is a structurally different pipeline (`vibe_heal`) with no existing
   per-file/summary pass to sit alongside.
@@ -140,11 +145,11 @@ expensive point to discover a mismatch.
   narrow, already-flagged reuse point named there: the marker-comment-detection helper
   (§7.6). The independent-per-pass state-list pattern (`design_reviewed_prs`,
   `traceability_reviewed_prs` as two separate fields) and the runner-side `_ok`-gate
-  pattern stay duplicated exactly as `review-design.md` left them. Extending those
-  further is still out of scope here.
+  pattern stay duplicated exactly as `review-design.md` left them. Extending them further
+  is still out of scope here.
 - **Not re-triggering any pass on new commits pushed after it already completed.** This
   is a pre-existing property shared by all four passes (file/summary/design/traceability
-  alike) — not something this effort changes or is responsible for fixing.
+  alike). This effort does not change it and is not responsible for fixing it.
 - **Not adding a config flag or `[traceability_review]` section.** Runs unconditionally,
   same as `review-design.md` (§7.6, §9).
 
@@ -152,16 +157,16 @@ expensive point to discover a mismatch.
 
 - **PR-level pass**, **Backend**, **invocation**, **Knowledge dir**, **Marker** — defined
   identically to `design-review-requirements.md` §5. Not redefined here.
-- **Linked ticket** — a GitHub Issue resolved as "what this PR was asked to do," via
-  one of three mechanisms (§7.2): **native linking** (GitHub's own closing-keyword
-  parsing, exposed as `closingIssuesReferences`) or, only as **fallbacks** when native
-  linking finds nothing, an issue reference found by scanning comments posted in the
-  **early-comment window** (§7.2) after the PR opened, then by scanning the PR **body**.
+- **Linked ticket** — a GitHub Issue resolved as "what this PR was asked to do," via one
+  of three mechanisms (§7.2). The primary one is **native linking** (GitHub's own
+  closing-keyword parsing, exposed as `closingIssuesReferences`). Only as **fallbacks**,
+  when native linking finds nothing, the pass scans comments posted in the
+  **early-comment window** (§7.2) after the PR opened, then scans the PR **body**.
 - **Early-comment window** — the fixed period starting at the PR's `createdAt` timestamp
   and lasting `TRACEABILITY_COMMENT_WINDOW_SECONDS` (300, i.e. 5 minutes — §7.2, §11.2).
-  Because it's anchored to PR creation time rather than "now," it's the same fixed window
-  no matter when the pass actually runs. A fallback comment scan doesn't need to run
-  within 5 minutes of PR creation to work correctly.
+  It is anchored to PR creation time rather than "now," so it is the same fixed window no
+  matter when the pass actually runs. A fallback comment scan does not need to run within
+  5 minutes of PR creation to work correctly.
 - **Scope creep finding** — a P0/P1 judgment that some part of the diff does something
   the linked ticket did not ask for.
 - **Gap finding** — a P0/P1 judgment that the linked ticket asked for something the diff
@@ -271,14 +276,14 @@ New functions in `harness/runners/common.py`:
      ticket `source: "closing_keyword"`.
   2. **Comment-scan fallback:** only attempted if step 1 yields an empty list. Fetch
      early-window comments via the same fetch `build_early_comment_context` uses (§7.2
-     below shares one underlying fetch), and scan each comment body (regardless of
+     below shares one underlying fetch). Scan each comment body (regardless of
      author, including bots — §1 decision 4) for issue references matching: a full URL
      (`https://github.com/{owner}/{repo}/issues/{N}`), a same-repo shorthand (`#N`), or a
      cross-repo shorthand (`{owner}/{repo}#N`). For each match, resolve via `gh issue
      view {N} --repo {owner}/{repo}` (using the PR's own repo when the match didn't
-     specify one). A match that 404s, or that resolves to a pull request rather than an
-     issue (GitHub shares one number sequence between issues and PRs per repo), is
-     dropped rather than treated as a ticket. Successfully resolved tickets are tagged
+     specify one). Drop a match that 404s, or that resolves to a pull request rather
+     than an issue. GitHub shares one number sequence between issues and PRs per repo,
+     so a PR match is not a ticket. Successfully resolved tickets are tagged
      `source: "comment"`, deduplicated by `(repo, number)`.
   3. **PR body scan:** only attempted if native linking returned a list (not `None`)
      and both the native and comment-scan steps found nothing. A native result of `None`
@@ -291,7 +296,7 @@ New functions in `harness/runners/common.py`:
      computation, `createdAt`) — **both runners' PR-listing `--json` field lists must be
      extended** from `number,url,headRefName` to
      `number,url,headRefName,createdAt,closingIssuesReferences,author,body`
-     (the `body` addition belongs to a sibling work order; `harness/runners/review_requested.py:111`, `harness/runners/self_review.py:456`).
+     (the `body` addition belongs to a sibling work order. See `harness/runners/review_requested.py:111` and `harness/runners/self_review.py:456`).
      Both fields are supported by `gh pr list --json` (verified via `gh pr list --help`),
      so this adds zero extra API calls.
 
@@ -328,13 +333,13 @@ gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Requirement Traceability\nNo 
 ```
 
 posted directly by the runner (no backend invocation — see §7.1). **This outcome is
-terminal (resolved, §11.1)**: once posted, `has_traceability_review_comment` finds this
-comment on every later check and the pass is never retried for this PR, even if the PR
-body or a later comment goes on to add a proper ticket link. This pass is a courtesy
-check, not the PR author's or reviewer's obligation enforced by the harness — a PR that
-never gets a ticket linked simply carries a permanent "not applicable" outcome rather than
-being retried indefinitely, with no special-cased marker body or re-resolution logic
-needed: the existing "any `TRACEABILITY_REVIEW_MARKER` comment means done" check already
+terminal (resolved, §11.1)**. Once posted, `has_traceability_review_comment` finds this
+comment on every later check, and the pass is never retried for this PR. That holds even
+if the PR body or a later comment goes on to add a proper ticket link. This pass is a
+courtesy check, not an obligation the harness enforces on the PR author or reviewer. A PR
+that never gets a ticket linked simply carries a permanent "not applicable" outcome rather
+than being retried indefinitely. No special-cased marker body or re-resolution logic is
+needed. The existing "any `TRACEABILITY_REVIEW_MARKER` comment means done" check already
 does the right thing unmodified.
 
 ### 7.4 Wiring into `self-review`
@@ -354,9 +359,9 @@ design:
   Otherwise: resolve the ticket (§7.2). If none found, post the §7.3 comment directly and
   mark done — terminal, per §7.3/§11.1. If found, build and run the traceability prompt. On
   success (backend exit 0 **and** a confirmed `TRACEABILITY_REVIEW_MARKER` PR-level
-  comment — mirroring `_run_design_review`'s post-hoc GitHub check,
-  `harness/runners/self_review.py:213-260`, itself added to close the missing-summary bug
-  class this codebase has hit before), add the PR to `traceability_reviewed_prs`. On
+  comment), add the PR to `traceability_reviewed_prs`. This mirrors `_run_design_review`'s
+  post-hoc GitHub check (`harness/runners/self_review.py:213-260`), itself added to close
+  the missing-summary bug class this codebase has hit before. On
   failure/timeout, log and leave it off the list for retry next run.
 - Defense-in-depth: also check `has_traceability_review_comment` before invoking, mirror
   of `design-review-requirements.md` §7.2's equivalent check.
@@ -373,7 +378,7 @@ Mirrors `design-review-requirements.md` §7.3 exactly:
   for `TRACEABILITY_REVIEW_MARKER`), exactly mirroring `has_design_review_comment`'s role
   here.
 - **`remove_reviewer` now requires all four of:** `files_ok and summary_ok and design_ok
-  and traceability_ok` — this is the literal reuse point the existing code comment at
+  and traceability_ok`. This is the literal reuse point the existing code comment at
   `review_requested.py:200-204` names ("A future PR-level pass (issue #4) would extend
   this same AND-gate below with its own `_ok` boolean rather than invent a parallel
   gating mechanism"). If the traceability step fails or times out,
@@ -413,12 +418,12 @@ framework":
 
 - **Invocation cost.** At most one additional `Backend.run()` call per PR per runner run
   (zero when a ticket can't be resolved at all — §7.1/§7.3 short-circuit before any
-  backend call in that case), and zero once the pass has already succeeded for that PR,
-  regardless of ongoing file/summary/design retries — identical cost profile to
+  backend call in that case). It is also zero once the pass has already succeeded for
+  that PR, regardless of ongoing file/summary/design retries. This is the identical cost profile to
   `review-design.md` (`design-review-requirements.md` §8).
 - **Extra GitHub API cost.** One `gh issue view` call per resolved ticket (typically one),
-  plus one paginated comment fetch for the early-comment window (§7.2) — all cheap,
-  non-LLM `gh` calls, same class of cost as the other passes' existing marker-check calls.
+  plus one paginated comment fetch for the early-comment window (§7.2). These are all
+  cheap, non-LLM `gh` calls, the same class of cost as the other passes' existing marker-check calls.
   No extra cost for `closingIssuesReferences`/`createdAt` themselves, since both are
   folded into the existing PR-listing call (§7.2).
 - **Prompt size.** Same band as `review-design.md`
@@ -445,7 +450,7 @@ framework":
 - Treating a bare `#N` mention *inside the PR body* (as opposed to a recognized closing
   keyword) as a ticket link — GitHub's own `closingIssuesReferences` only reflects
   recognized closing keywords. A non-closing-keyword body mention (e.g. "Related: #42")
-  is not picked up by either mechanism in this design and is explicitly excluded, not
+  is not picked up by either mechanism in this design. It is explicitly excluded, not
   silently handled.
 - Fetching or considering the linked issue's *own* comments (as opposed to its
   title/body) as part of the requirement context — out of scope, keeps the ticket context
@@ -503,20 +508,25 @@ decision must never silently disappear back into ambiguity.
    body (source `body`) when native linking and the comment scan found nothing — see
    §7.2, §7.3. Decision 1 (terminal) and decision 2 (300 s window, hardcoded) are
    unchanged. PR #179 finding: the ticket's "late review drops early comments" cause did
-   not hold, because the window is anchored to `createdAt`, not "now"; its first comment
+   not hold, because the window is anchored to `createdAt`, not "now". Its first comment
    arrived 71 minutes after creation, outside the window by design. This is pinned by
    `test_resolve_linked_tickets_comment_window_is_anchored_to_created_at`.
 
 ## 12. Next step
 
-With §11 fully resolved, carve this document into a phase file / ticket scoped to, in
-this order: (a) the §7.6 marker-helper extraction and regression tests for the existing
-design-review wrappers (lowest risk, unblocks nothing else but should land first since
-(b)-(e) build on the generalized helper existing), (b)
-`resolve_linked_tickets`/`build_early_comment_context`/the new paginated comment fetch in
-`common.py` (§7.2), (c) writing `review-traceability.md`'s actual prompt content (§7.1),
-(d) the `self_review.py` + `state.py` wiring (§7.4), (e) the `review_requested.py` wiring
-(§7.5) — in that order, since (a)/(b) are what (c)-(e) build on.
+With §11 fully resolved, carve this document into a phase file / ticket. Work through
+these steps, in this order:
+
+1. **(a)** the §7.6 marker-helper extraction and regression tests for the existing
+   design-review wrappers (lowest risk, unblocks nothing else, but should land first
+   since (b)-(e) build on the generalized helper existing).
+2. **(b)** `resolve_linked_tickets`/`build_early_comment_context`/the new paginated
+   comment fetch in `common.py` (§7.2).
+3. **(c)** writing `review-traceability.md`'s actual prompt content (§7.1).
+4. **(d)** the `self_review.py` + `state.py` wiring (§7.4).
+5. **(e)** the `review_requested.py` wiring (§7.5).
+
+(a) and (b) are what (c)-(e) build on, so they come first.
 
 **Progress (branch `4_requirement-traceability`):**
 - [x] (a) done — commit `365d380` (`common.py`: `has_pr_level_pass_comment` /

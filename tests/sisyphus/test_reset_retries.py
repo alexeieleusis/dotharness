@@ -44,6 +44,8 @@ def resume(env: Any, *extra: str, ref: str = "OLD-1"):
 
 def test_mapping_matches_orchestrator_constants_and_never_lists_branch_created() -> None:
     assert RESET_KEYS["build"][0] == orchestrator.BUILD_RETRY_KEY
+    assert RESET_KEYS["refactor"] == (orchestrator.REFACTOR_RETRY_KEY, AUTO_RETRY_KEY)
+    assert tuple(RESET_KEYS) == orchestrator.STAGE_ORDER
     assert set(RESET_KEYS) == set(orchestrator.STAGE_ORDER)
     everything = {k for keys in RESET_KEYS.values() for k in keys}
     assert orchestrator.BRANCH_CREATED_KEY not in everything
@@ -122,6 +124,16 @@ def test_stages_without_a_counter_reset_only_auto_retry(tmp_path: Path, stage: s
     rec.save()
     assert reset_stage_retries(rec, AT) == {AUTO_RETRY_KEY: 1}
     assert RunRecord.open(tmp_path, "X-1").retries["build:retry-cycles"] == 3
+
+
+def test_refactor_stage_resets_its_counter_and_auto_retry(tmp_path: Path) -> None:
+    rec = RunRecord.open(tmp_path, "X-1")
+    rec.mark_stage("refactor")
+    rec.retries.update({"build:retry-cycles": 3, "refactor:retry-cycles": 2, "branch-created": 1, AUTO_RETRY_KEY: 1})
+    rec.save()
+    assert reset_stage_retries(rec, AT) == {"refactor:retry-cycles": 2, AUTO_RETRY_KEY: 1}
+    after = RunRecord.open(tmp_path, "X-1").retries
+    assert after == {"build:retry-cycles": 3, "refactor:retry-cycles": 0, "branch-created": 1, AUTO_RETRY_KEY: 0}
 
 
 # ----------------------------------------------------------------- the CLI

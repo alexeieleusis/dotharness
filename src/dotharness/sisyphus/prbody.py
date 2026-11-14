@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
+from typing import Any, NamedTuple
 
 from dotharness.sisyphus.intake import parse_resolved_decisions, split_resolved_decision
 from dotharness.sisyphus.plan import leaf_stems as _plan_leaf_stems
@@ -249,6 +251,62 @@ def extract_deviations(handoff_dir: Path, stems: Sequence[str]) -> str:
     return "\n".join(parts)
 
 
+class RefactorHandoff(NamedTuple):
+    set: str
+    deviation: str | None
+    notes: tuple[str, ...]
+
+
+def _refactor_set_name(path: Path) -> str:
+    return path.name.removeprefix("refactor-").removesuffix(".md")
+
+
+def extract_refactor_handoffs(paths: Sequence[Path]) -> list[RefactorHandoff]:
+    """One result per refactor handoff, in input order; missing bullets and unreadable files become notes."""
+    results: list[RefactorHandoff] = []
+    for path in paths:
+        name = _refactor_set_name(path)
+        entry, note = _handoff_deviation(name, path)
+        results.append(RefactorHandoff(name, entry, (note,) if note else ()))
+    return results
+
+
+def _refactor_record_lines(record: Mapping[str, Any]) -> list[str]:
+    """Heading plus the Evidence and Fallback bullets of one selection record."""
+    lines = [f"### {record['set']}", ""]
+    entries = [f"  - {item}" for item in record["evidence"]]
+    lines.extend(["- Evidence:", *entries] if entries else ["- Evidence: none"])
+    lines.append(f"- Fallback: {'yes' if record['fallback'] else 'no'}")
+    return lines
+
+
+def _refactor_handoff_lines(set_name: str, result: Mapping[str, object] | None) -> list[str]:
+    """Handoff-derived lines for one group; pure, no embedding (the caller's ``embed`` runs later)."""
+    if result is None:
+        return [f"Note: no handoff found for set {set_name}."]
+    notes: Any = result["notes"]
+    text = result["deviation"]
+    # None means either an explicit "none" or an unparsed field; a note marks the latter.
+    missing = "unknown (see note)" if notes else "none"
+    value = missing if text is None else str(text)
+    bullet = f"- Deviations: {value}" if value else "- Deviations:"
+    lines = bullet.split("\n")
+    lines.extend(notes)
+    return lines
+
+
+def format_refactor_section(records: Sequence[Mapping[str, Any]], results: Mapping[str, Any]) -> str:
+    """Return the PR body Refactor section text: one group per record, in input order."""
+    groups = [
+        "\n".join([
+            *_refactor_record_lines(record),
+            *_refactor_handoff_lines(record["set"], results.get(record["set"])),
+        ])
+        for record in records
+    ]
+    return "\n\n".join(groups)
+
+
 # ---------------------------------------------------------------- FR-6 decisions
 
 
@@ -362,6 +420,7 @@ def compose_body(
     phases: str = "",
     decisions: str = "",
     deviations: str = "",
+    refactor: str = "",
     requirements: str | None = None,
     workspace: Path,
     plan_dir: Path | None = None,
@@ -378,7 +437,13 @@ def compose_body(
         return embed(text, workspace, plan_dir, home).strip()
 
     parts: list[str] = []
-    for title, text in (("Summary", summary), ("Phases", phases), ("Decisions", decisions), ("Deviations", deviations)):
+    for title, text in (
+        ("Summary", summary),
+        ("Phases", phases),
+        ("Decisions", decisions),
+        ("Deviations", deviations),
+        ("Refactor", refactor),
+    ):
         if text.strip():
             parts.append(f"## {title}\n\n{emb(text)}")
 
@@ -408,6 +473,47 @@ def compose_body(
 # ------------------------------------------------------------------ assembly
 
 
+def _refactor_handoff_path(handoff_dir: Path | None, set_name: str) -> Path | None:
+    """``<dir>/refactor-<set>.md`` when it names a single file in ``handoff_dir`` and is a file, else ``None``."""
+    bad_seps = {"/", "\\", os.sep, *([os.altsep] if os.altsep else [])}
+    if handoff_dir is None or not set_name or set_name in {".", ".."} or "\0" in set_name:
+        return None
+    if any(sep in set_name for sep in bad_seps):
+        return None
+    path = handoff_dir / f"refactor-{set_name}.md"
+    try:
+        return path if path.is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
+def _refactor_text(records: Sequence[Mapping[str, object]], handoff_dir: Path | None) -> str:
+    """Refactor section text for the usable records; ``""`` when there are none."""
+    usable = [r for r in records if _is_well_formed_record(r)]
+    notes = [
+        f"Note: malformed selection record for {r['set']}."
+        for r in records
+        if isinstance(r, Mapping) and isinstance(r.get("set"), str) and not _is_well_formed_record(r)
+    ]
+    if not usable:
+        return "\n".join(notes)
+    found = (_refactor_handoff_path(handoff_dir, str(r["set"])) for r in usable)
+    results = extract_refactor_handoffs([p for p in found if p is not None])
+    section = format_refactor_section(usable, {h.set: h._asdict() for h in results})
+    return "\n\n".join([section, *notes])
+
+
+def _is_well_formed_record(record: object) -> bool:
+    """True when ``record`` has a str ``set``, list-of-str ``files`` and ``evidence``, and a bool ``fallback``."""
+    if not isinstance(record, Mapping) or not isinstance(record.get("set"), str):
+        return False
+    for key in ("files", "evidence"):
+        items = record.get(key)
+        if not isinstance(items, list) or not all(isinstance(i, str) for i in items):
+            return False
+    return isinstance(record.get("fallback"), bool)
+
+
 async def build_body(
     item: str,
     *,
@@ -417,6 +523,8 @@ async def build_body(
     base_branch: str,
     workspace: Path,
     run_git: Callable[[Sequence[str]], Awaitable[str | None]],
+    refactor_records: Sequence[Mapping[str, object]] = (),
+    refactor_handoff_dir: Path | None = None,
 ) -> str:
     """Locate the artifacts, check plan ownership, degrade per section and compose the body (FR-12, D-6).
 
@@ -443,12 +551,14 @@ async def build_body(
             deviations = extract_deviations(plan_dir / "handoffs", stems)
     else:
         summary = PLAN_NOT_MATCHED_NOTE
+    refactor = _refactor_text(refactor_records, refactor_handoff_dir)
     return compose_body(
         item,
         summary=summary,
         phases=phases,
         decisions=decisions,
         deviations=deviations,
+        refactor=refactor,
         requirements=requirements,
         workspace=workspace,
         plan_dir=plan_dir,

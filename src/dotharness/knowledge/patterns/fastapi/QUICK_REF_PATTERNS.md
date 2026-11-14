@@ -123,7 +123,7 @@ Does it need a DB/API lookup? -> domain (service fetches, passes in)
 | --- | ---- |
 | `if total > 10_000` in a route | `bulk_discount_cents()` in `domain.py` with a test |
 | `domain.py` imports `fastapi`/`sqlalchemy`/`HTTPException` | domain returns `Rejection`, service raises an application exception, handler maps it |
-| `datetime.now()` / `uuid4()` in domain or service | `now`/`new_id` providers via `Depends`. Values are passed to domain |
+| `datetime.now()` / `uuid4()` in domain or service | `now`/`new_id` providers via `Depends`. service passes values to domain |
 | Route returns an ORM instance | repository returns dataclass and route sets `response_model=OrderOut` |
 | One model for request, response and table | `OrderIn`, `OrderOut`, ORM model |
 | `service.py` imports `SqlOrderRepository` | `service.py` depends on `OrderRepository` Protocol |

@@ -1,6 +1,6 @@
 # Quick Reference: Code Organization Patterns (Generic)
 
-**Ultra-condensed reference. Framework- and tier-agnostic.**
+**Condensed reference. Framework- and tier-agnostic.**
 
 If the codebase uses a different vocabulary, map it first: [ADAPTING_TO_A_CODEBASE.md](./ADAPTING_TO_A_CODEBASE.md).
 
@@ -25,7 +25,7 @@ feature-name/
     └── e2e            # Few
 ```
 
-Use files, folders, classes, or modules as the codebase does: **follow the codebase**.
+**Follow the codebase:** use files, folders, classes, or modules as it does.
 
 ---
 
@@ -56,8 +56,8 @@ Never point a dependency backwards. You may skip a layer.
 ## Core Principles (The 10 Commandments)
 
 1. **Business logic → pure functions** (no I/O, no framework)
-2. **Actions orchestrate, they don't decide** (call domain; don't contain rules)
-3. **I/O behind adapters** (fakeable seams; external shapes don't leak inward)
+2. **Actions orchestrate, they don't decide** (call domain and don't contain rules)
+3. **I/O behind adapters** (fakeable seams. External shapes don't leak inward.)
 4. **Wiring is boring** (no logic in the orchestrator)
 5. **Entry points are boring** (translate in → delegate → translate out)
 6. **Presentation is pure** (output = f(result))

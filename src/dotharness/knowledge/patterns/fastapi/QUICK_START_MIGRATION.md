@@ -1,6 +1,6 @@
 # Quick Start: Migrating Existing FastAPI Code
 
-**Use this guide when you refactor a fat route handler, a `crud.py`/god-service, or ORM-model-as-everything code toward the pattern.** It is the FastAPI instantiation of [../generic/QUICK_START_MIGRATION.md](../generic/QUICK_START_MIGRATION.md). Rationale: [FASTAPI_ORGANIZATION_CONVENTION.md](./FASTAPI_ORGANIZATION_CONVENTION.md). Precedence: repo conventions > this set > generic.
+**Use this guide when you refactor a fat route handler, a `crud.py`/god-service, or ORM-model-as-everything code toward the pattern.** It is the FastAPI instantiation of [../generic/QUICK_START_MIGRATION.md](../generic/QUICK_START_MIGRATION.md). Rationale: [FASTAPI_ORGANIZATION_CONVENTION.md](./FASTAPI_ORGANIZATION_CONVENTION.md). Precedence: repo conventions > this document > generic.
 
 **Before you start:** map the roles to the repo's own units ([ADAPTING_TO_A_CODEBASE.md](../generic/ADAPTING_TO_A_CODEBASE.md)). If the repo uses `routers/ services/ crud/ models/ schemas/`, keep those directories. The migration is about *where logic lives*, not folder names.
 
@@ -20,7 +20,8 @@
 - **Behavior-preserving**: a migration PR changes structure, not behavior (status codes, bodies, side effects). Fix bugs separately.
 - **Incremental**: the app works after every step.
 - **Characterize before you change.**
-- **Extract before you rewrite**; domain first.
+- **Extract before you rewrite.**
+- **Do the domain first.**
 - **Keep the public API stable** (paths, schemas, OpenAPI output).
 - **Scope tightly**: only the endpoints you are touching.
 
@@ -74,7 +75,7 @@ Freeze unstable values (`id`, `placed_at`) by overriding providers if they exist
 
 - Give request and response their own Pydantic models (`OrderIn`/`OrderOut`) if one class does both, or if the ORM model is the response.
 - Match the **existing wire format exactly** (names, optional fields, status codes).
-- Add `response_model=OrderOut`. The pinned test shows whether it changes the output. A leaked column that disappears is a behavior change. Call it out, or keep the column in `OrderOut` for now and remove it separately.
+- Add `response_model=OrderOut`. The pinned test shows whether it changes the output. A leaked column that disappears is a behavior change. Either call the change out, or keep the column in `OrderOut` for now and remove it separately.
 - Create frozen dataclasses for the internal shapes you are about to extract.
 - Behavior stays unchanged. Check it with the characterization tests and the OpenAPI snapshot.
 
@@ -82,7 +83,15 @@ Freeze unstable values (`id`, `placed_at`) by overriding providers if they exist
 
 ### Step 2: Extract Business Logic into `domain.py`
 
-Look for: `HTTPException` branches that encode policy, totals/discounts, thresholds, state checks, string/format conversions, ownership checks, branching on `status`/`plan`/`type`.
+Look for these in the handler:
+
+- `HTTPException` branches that encode policy
+- totals/discounts
+- thresholds
+- state checks
+- string/format conversions
+- ownership checks
+- branching on `status`/`plan`/`type`
 
 **Before** (inline in the handler):
 
@@ -117,7 +126,7 @@ Commit after each extraction if that helps review.
 
 Find `db.query(...)`, `session.execute(...)`, `requests.get(...)`, `open(...)`, `os.environ`, `datetime.now()`, `uuid4()` inside rule-bearing code.
 
-1. Reuse or create a repository/gateway with simple methods (`get`, `add`, `prices_for`). **The repository translates ORM rows to domain dataclasses inside it.**
+1. Reuse or create a repository/gateway with simple methods (`get`, `add`, `prices_for`). **The repository translates ORM rows to domain dataclasses.**
 2. Define a `Protocol` in `ports.py` for each one. Make the service depend on it.
 3. Add providers in `deps.py` (`get_orders`, `get_now`, `get_new_id`). Each provider returns the Protocol type.
 4. Provide an in-memory fake for tests.
@@ -168,7 +177,7 @@ def place(body: PlaceOrderIn, orders: OrdersDep, catalog: CatalogDep, now: NowDe
     )
 ```
 
-- No `if` encoding policy; no direct DB calls.
+- No `if` that encodes policy. No direct DB calls.
 - Choose `def` or `async def` based on the I/O clients the endpoint uses. The common fix for a sync `Session` inside `async def` is to change it to `def`. That alters scheduling (threadpool) but not responses. Do it as its own step and note it in the PR.
 - Preserve the old status code and path.
 
@@ -177,9 +186,9 @@ def place(body: PlaceOrderIn, orders: OrdersDep, catalog: CatalogDep, now: NowDe
 ### Step 6: Add Layered Tests
 
 1. Domain tests for every extracted rule (from Step 2).
-2. Service tests with in-memory fakes (rejection persists nothing; success stores).
+2. Service tests with in-memory fakes. Rejection persists nothing. Success stores.
 3. Adapter tests against a real DB for translation and error mapping.
-4. API tests with `dependency_overrides`. Keep or trim characterization tests: retain those that express end-to-end behavior, delete redundant ones.
+4. API tests with `dependency_overrides`. Keep characterization tests that express end-to-end behavior. Delete redundant ones.
 
 ---
 
@@ -196,13 +205,13 @@ def place(body: PlaceOrderIn, orders: OrdersDep, catalog: CatalogDep, now: NowDe
 
 - [ ] Behavior pinned by `TestClient` tests **before** refactoring (and OpenAPI snapshot if clients exist)
 - [ ] Each step leaves the app working and shippable
-- [ ] Rules are pure, parametrized-tested functions; no `HTTPException` in them
-- [ ] I/O behind Protocols/adapters; ORM models do not leak into responses or services
-- [ ] One session per request, one commit point; no session reuse in background tasks
+- [ ] Rules are pure, parametrized-tested functions. No `HTTPException` in them
+- [ ] I/O behind Protocols/adapters. ORM models do not leak into responses or services
+- [ ] One session per request, one commit point. No session reuse in background tasks
 - [ ] Router and `deps.py` contain no rules
 - [ ] Status codes, paths and bodies unchanged (or the change is called out explicitly)
-- [ ] No new circular imports; layering follows the [dependency flow](./FASTAPI_ORGANIZATION_CONVENTION.md#dependency-flow)
-- [ ] No unrelated drive-by fixes in the same PR
+- [ ] No new circular imports. Layering follows the [dependency flow](./FASTAPI_ORGANIZATION_CONVENTION.md#dependency-flow)
+- [ ] No unrelated fixes in the same PR
 
 ---
 
@@ -210,16 +219,16 @@ def place(body: PlaceOrderIn, orders: OrdersDep, catalog: CatalogDep, now: NowDe
 
 | Pitfall | Fix |
 | ------- | --- |
-| Big-bang rewrite | Step through the list; one endpoint at a time |
+| Big-bang rewrite | Follow the steps, one endpoint at a time |
 | Refactoring without tests | Characterize with `TestClient` first |
 | "Fixing" odd status codes mid-extraction | Record, extract faithfully, fix separately |
-| Extracting a function that still takes a `Session` or `Request` | Pass plain values; push I/O to an adapter |
-| Adding `response_model` and silently dropping fields clients use | Pin the body first; change deliberately |
-| Moving `HTTPException` into the domain | Return reasons; map in a handler |
-| Changing `async def` to `def` and calling it "refactoring" | Separate, labelled change |
-| Introducing Protocols/layers for pure CRUD | Skip roles that earn nothing; keep schema != ORM model |
+| Extracting a function that still takes a `Session` or `Request` | Pass plain values and push I/O to an adapter |
+| Adding `response_model` and silently dropping fields clients use | Pin the body first, then change deliberately |
+| Moving `HTTPException` into the domain | Return reasons, then map them in a handler |
+| Changing `async def` to `def` and calling it "refactoring" | Separate, labeled change |
+| Introducing Protocols/layers for pure CRUD | Skip roles that earn nothing. Keep the schema separate from the ORM model |
 | Overriding the wrong callable in tests | Override the exact function object in `Depends(...)` |
-| Migrating neighbouring endpoints "while you're there" | Limit scope |
+| Migrating neighboring endpoints "while you're there" | Limit scope |
 
 ---
 

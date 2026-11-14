@@ -25,6 +25,7 @@ from dotharness.sisyphus.config import (
     DigestConfig,
     LimitsConfig,
     ProjectConfig,
+    RefactorConfig,
     SisyphusConfig,
     SourceConfig,
     WorkItemSource,
@@ -148,6 +149,7 @@ class World:
         self.label_error: Exception | None = None
         # config
         self.limits = LimitsConfig()
+        self.refactor_enabled = True
         (self.repo / ".spec-prism-flow.toml").write_text('[build]\ncommands = ["make check", "make test"]\n')
 
     # ---- config / options
@@ -161,6 +163,7 @@ class World:
             source=SourceConfig(work_item=self.source),
             limits=self.limits,
             digest=DigestConfig(path_template=str(self.tmp / "digest-<date>.md")),
+            refactor=RefactorConfig(enabled=self.refactor_enabled),
         )
 
     def options(self, **kw: object) -> OrchestratorOptions:
@@ -377,7 +380,7 @@ async def test_stage_order_and_record_writes(world: World, monkeypatch: pytest.M
     log = world.mark_log(monkeypatch)
     result = await world.run()
     assert result.completed
-    assert result.stages_run == ("intake", "plan", "build", "push", "open-pr")
+    assert result.stages_run == ("intake", "plan", "build", "refactor", "push", "open-pr")
     expected = []
     for stage in result.stages_run:
         expected += [(stage, "in_progress"), (stage, "complete")]
@@ -404,7 +407,8 @@ async def test_happy_path_pr_gate_and_digest(world: World) -> None:
     assert "gate record" not in digest
     assert not list(world.tmp.rglob("build_gate_*.json"))
     assert any(c[0] == ("git", "checkout", "-b", branch_name(ITEM), "origin/base-branch") for c in world.shell_calls)
-    assert RunRecord.open(world.tmp / "ws", ITEM).retries.get("branch-created") == 1
+    # The fake never reports the branch as existing, so the refactor stage's prepare_branch creates it again.
+    assert RunRecord.open(world.tmp / "ws", ITEM).retries.get("branch-created", 0) >= 1
 
 
 def test_base_branch_is_a_parameter_not_a_literal() -> None:
@@ -812,7 +816,7 @@ async def test_resume_after_c3_relaunches_build_without_replanning(world: World)
     world.branch_exists = True
     result = await world.run()
     assert result.completed
-    assert result.stages_run == ("build", "push", "open-pr")
+    assert result.stages_run == ("build", "refactor", "push", "open-pr")
     assert result.stages_skipped == ("intake", "plan")
     assert world.events.count("agent:plan") == 1
     assert world.events.count("agent:build") == 2
@@ -862,7 +866,7 @@ async def test_rerun_with_unchanged_inputs_repeats_nothing(world: World) -> None
     result = await world.run()
     assert result.completed
     assert result.stages_run == ()
-    assert result.stages_skipped == ("intake", "plan", "build", "push", "open-pr")
+    assert result.stages_skipped == ("intake", "plan", "build", "refactor", "push", "open-pr")
     agents, _shells, finds = world.counts()
     assert (agents, finds) == (before[0], before[2])
     # the only extra call is the read-only "is the local branch still there?" probe of the branch cleanup
@@ -911,7 +915,7 @@ async def test_push_refused_when_branch_not_recorded_as_created(world: World) ->
     await world.run()
     rec = RunRecord.open(world.tmp / "ws", ITEM)
     rec.retries.pop("branch-created")
-    rec.mark_stage("build", "complete")
+    rec.mark_stage("refactor", "complete")
     world.shell_calls.clear()
     with pytest.raises(OrchestratorError, match="not created by Sisyphus"):
         await world.run()
@@ -1686,7 +1690,7 @@ async def test_resume_checks_out_the_items_own_branch(world: World) -> None:
     result = await world.run()
     assert result.completed
     assert world.checkouts[-1] == branch_name(ITEM)
-    assert result.stages_skipped == ("intake", "plan", "build")
+    assert result.stages_skipped == ("intake", "plan", "build", "refactor")
     assert world.events.count("agent:build") == 1  # committed work not redone
 
 
@@ -2052,3 +2056,126 @@ async def test_build_with_uncommitted_changes_stops_at_c5(world: World) -> None:
     assert not result.completed
     assert "uncommitted changes" in world.digest_text()
     assert "agent:push" not in world.events
+
+
+# ------------------------------------------------------------- refactor stage plumbing (#208)
+
+
+async def test_legacy_build_complete_record_resumes_into_refactor(world: World) -> None:
+    world.push_rc = 1
+    assert (await world.run()).checkpoint is Checkpoint.C8
+    world.push_rc = 0
+    world.branch_exists = True
+    world.current_branch = "sisyphus/other-item-12345678"
+    world.ancestor_rc_after_pr = 1
+    rec = RunRecord.open(world.tmp / "ws", ITEM)
+    rec.mark_stage("build", "complete")  # a record written before the refactor stage existed
+    result = await world.run()
+    assert result.completed
+    assert result.stages_skipped == ("intake", "plan", "build")
+    assert result.stages_run == ("refactor", "push", "open-pr")
+    assert branch_name(ITEM) in world.checkouts  # a resume at refactor returns the clone to the item branch
+    assert world.events.count("agent:build") == 1
+
+
+def _bare_run(world: World) -> orchestrator._Run:
+    run = object.__new__(orchestrator._Run)
+    run.rec = RunRecord.open(world.tmp / "ws", ITEM)
+    return run
+
+
+def test_refactor_stop_checkpoints_and_c5_counter(world: World) -> None:
+    run = _bare_run(world)
+    path = world.tmp / "stop.json"
+    path.write_text(json.dumps({"checkpoint": "C5", "detail": "again"}))
+    with pytest.raises(orchestrator._Stop) as exc:
+        run.raise_stop_report("refactor", path)
+    assert exc.value.checkpoint is Checkpoint.C5
+    assert run.rec.retries == {orchestrator.REFACTOR_RETRY_KEY: 1}
+    for cp in ("C3", "C4"):
+        path.write_text(json.dumps({"checkpoint": cp, "detail": "x"}))
+        with pytest.raises(orchestrator._Stop):
+            run.raise_stop_report("refactor", path)
+    assert run.rec.retries == {orchestrator.REFACTOR_RETRY_KEY: 1}  # only C5 counts
+
+
+def test_c2_stop_in_the_refactor_stage_is_rejected(world: World) -> None:
+    path = world.tmp / "stop.json"
+    path.write_text(json.dumps({"checkpoint": "C2", "detail": "x"}))
+    with pytest.raises(OrchestratorError, match="not valid for stage refactor"):
+        _bare_run(world).raise_stop_report("refactor", path)
+
+
+async def test_stages_lists_refactor_in_order(world: World) -> None:
+    run = _bare_run(world)
+    assert run.stages() == list(orchestrator.STAGE_ORDER)
+    assert run.stages().index("refactor") == 3
+
+
+# ------------------------------------------------------------- disabled refactor stage skip (#208)
+
+
+def _forbid_refactor(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    calls: list[str] = []
+
+    async def boom(self: orchestrator._Run) -> None:
+        calls.append("handler")
+
+    real = orchestrator._Run.check_time
+
+    def check(self: orchestrator._Run) -> None:
+        calls.append("check_time")
+        real(self)
+
+    monkeypatch.setattr(orchestrator._Run, "stage_refactor", boom)
+    monkeypatch.setattr(orchestrator._Run, "check_time", check)
+    return calls
+
+
+async def test_disabled_refactor_is_skipped_on_a_fresh_run(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    world.refactor_enabled = False
+    calls = _forbid_refactor(monkeypatch)
+    marks = world.mark_log(monkeypatch)
+    result = await world.run()
+    assert result.completed
+    assert result.stages_skipped == ("refactor",)
+    assert result.stages_run == ("intake", "plan", "build", "push", "open-pr")
+    assert calls == ["check_time"] * 5  # one per stage that ran; none for refactor, no handler call
+    assert "agent:refactor" not in world.events
+    assert "git push origin sisyphus/eng-1-cf2640ff" in world.events
+    assert "open_pr" in world.events
+    assert not [m for m in marks if m[0] == "refactor"]
+
+
+async def test_enabled_default_does_not_skip_refactor(world: World) -> None:
+    result = await world.run()
+    assert result.completed
+    assert "refactor" not in result.stages_skipped
+    assert "refactor" in result.stages_run
+
+
+async def test_disabled_refactor_resume_after_complete_build_skips_once(world: World) -> None:
+    world.push_rc = 1
+    assert (await world.run()).checkpoint is Checkpoint.C8
+    world.refactor_enabled = False
+    world.push_rc = 0
+    world.branch_exists = True
+    world.current_branch = "sisyphus/other-item-12345678"
+    world.ancestor_rc_after_pr = 1
+    RunRecord.open(world.tmp / "ws", ITEM).mark_stage("build", "complete")
+    result = await world.run()
+    assert result.completed
+    assert result.stages_skipped == ("intake", "plan", "build", "refactor")
+    assert result.stages_run == ("push", "open-pr")
+
+
+async def test_disabled_refactor_resume_past_it_has_no_duplicate(world: World) -> None:
+    world.push_rc = 1
+    assert (await world.run()).checkpoint is Checkpoint.C8
+    world.refactor_enabled = False
+    world.push_rc = 0
+    world.branch_exists = True
+    world.current_branch = "sisyphus/other-item-12345678"
+    world.ancestor_rc_after_pr = 1
+    result = await world.run()  # record is at push: refactor is before start
+    assert result.stages_skipped.count("refactor") == 1

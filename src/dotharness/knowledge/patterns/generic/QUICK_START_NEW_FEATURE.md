@@ -2,7 +2,7 @@
 
 **Use this guide when building a new feature from scratch, in any stack.**
 
-**Before you start:** map the roles to the codebase's own units. See [ADAPTING_TO_A_CODEBASE.md](./ADAPTING_TO_A_CODEBASE.md). Everywhere below, "file" means "whatever the codebase uses for a unit": file, module, class, package.
+**Before you start:** map the roles to the codebase's own units. See [ADAPTING_TO_A_CODEBASE.md](./ADAPTING_TO_A_CODEBASE.md). Everywhere below, "file" means whatever unit the codebase uses: file, module, class, package.
 
 **Note on exploratory artifacts:** component catalogs, REPL notebooks and API explorers are manual aids. Automated coverage comes from the tests in [Step 8](#8-write-the-remaining-tests).
 
@@ -34,7 +34,7 @@ Skip any role the feature does not need ([When to Skip a Role](./CODE_ORGANIZATI
 
 ### 0. Clarify the Behavior
 
-Write down, in plain language:
+In plain language, write:
 
 - **Trigger**: what starts this? (request, click, command, message, schedule)
 - **Inputs & outputs**
@@ -85,10 +85,10 @@ function canDelete(entity, related) -> { allowed, reason? }
     return { allowed: true }
 ```
 
-Rules of thumb:
+Guidelines:
 
 - Return **outcome data** (with reasons), not booleans-and-side-effects.
-- Pass `now`, IDs, and randomness **in**.
+- Pass `now`, IDs, and randomness **into the function**.
 - One rule per function, named for the rule.
 
 **Write the domain tests now** (Step 3).
@@ -147,7 +147,7 @@ Stateless request/response features skip this step.
 
 ### 6. Build Actions
 
-Each action reads as **"call, call, call"**:
+Each action looks like **"call, call, call"**:
 
 ```
 function create(ctx):
@@ -187,7 +187,7 @@ function handle(externalRequest):
     return present(result)
 ```
 
-If the framework offers dependency injection, register the adapters and orchestrator there instead of hand-rolling `deps`.
+If the framework offers dependency injection, register the adapters and orchestrator there instead of assembling `deps` by hand.
 
 ---
 
@@ -214,7 +214,7 @@ If mocking inputs is easy, add a catalog/example/notebook so people can inspect 
 ## Checklist Before Opening a PR
 
 - [ ] Every business rule lives in a pure function with a test
-- [ ] Actions contain no rules; entry point and orchestrator contain no logic
+- [ ] Actions contain no rules. The entry point and orchestrator contain no logic
 - [ ] No adapter handles/external shapes leak past the adapter
 - [ ] No backwards or cyclic dependencies
 - [ ] Time/randomness/IDs injected into domain functions
@@ -231,7 +231,7 @@ If mocking inputs is easy, add a catalog/example/notebook so people can inspect 
 | Starting with the entry point                   | Start with contracts and domain. Build the entry point last |
 | Domain function reads the clock/env/DB          | Inject the value or move the read into an adapter          |
 | "Utility" module that mixes rules and I/O       | Split: rules → domain, I/O → adapter                       |
-| Over-layering a trivial feature                 | Skip roles; keep principles                                |
+| Over-layering a trivial feature                 | Skip roles. Keep principles                                |
 | Duplicating an existing adapter                 | Search for and reuse the existing one                      |
 | Mirroring DB/vendor shapes everywhere           | Translate at the adapter into your own contracts           |
 | Inventing structure the codebase doesn't use    | Re-read [ADAPTING_TO_A_CODEBASE.md](./ADAPTING_TO_A_CODEBASE.md) |

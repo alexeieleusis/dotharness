@@ -10,19 +10,21 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = REPO_ROOT / "src" / "dotharness"
 
 # SHA-256 of each tracked file under the old root knowledge/ at commit cb0efc1 (pre-move), except files edited since:
-# the I-5 prompt rewording (spec_prism_flow naming) and the lifecycle cheat sheet added for sisyphus.
+# the I-5 prompt rewording (spec_prism_flow naming), the lifecycle cheat sheet added for sisyphus, and the
+# generic/fastapi pattern sets added after the port (4817481) and later reworded by the plain-English editing
+# pass (b829cdc).
 KNOWLEDGE_SHA256 = {
-    "patterns/fastapi/FASTAPI_ORGANIZATION_CONVENTION.md": "3a6d2a7fea735597a7536837568a65b3815eef8076f433a8dbdf8801836ff732",
-    "patterns/fastapi/QUICK_REF_PATTERNS.md": "97cbd99721d2f907aeff185fe95b10cf9e2ee92a99591bbf45a5c85815629f7d",
-    "patterns/fastapi/QUICK_START_MIGRATION.md": "240b3893b9fffa62481df1576a728ea464e5e485663702f89e29084dd27bfcb5",
-    "patterns/fastapi/QUICK_START_NEW_ENDPOINT.md": "41e87dd1379d78acd6b03fe0e8b90d4164778e9db7af31d931ea37630be8f059",
-    "patterns/fastapi/README.md": "dea4fa9bbf3653f8edfdda5e2fb646a4bd69f9f34f5b9a455f25cea11dc42727",
-    "patterns/generic/ADAPTING_TO_A_CODEBASE.md": "d92a1744ad01d2f6717963426804ba9ba73d4b1719e3d1c58109857eac442503",
-    "patterns/generic/CODE_ORGANIZATION_CONVENTION.md": "4decffd2cc32907aceaabde3b526d718d1845a91575a81d145eacb432cdcd300",
-    "patterns/generic/QUICK_REF_PATTERNS.md": "f4bd85245cac42843340b0f1ccfccd8c31529de491302eb06898527d5b75679d",
-    "patterns/generic/QUICK_START_MIGRATION.md": "2447db786b1f9c808f386f514410bc8812e34b01edc48c06d656bad3894a99c3",
-    "patterns/generic/QUICK_START_NEW_FEATURE.md": "64a4e732233aa9f05b44f9545eb9e6db1fcc7422535c329f8d0138a10dbe0e29",
-    "patterns/generic/README.md": "8d68d02b150692dd96fea863ac80e12a364f3a49a52ba1022ca3c2a75d456839",
+    "patterns/fastapi/FASTAPI_ORGANIZATION_CONVENTION.md": "76a341eb86aa32d1021840be6069f51fcc47ddf9455b2c32d8f87ff89093974e",
+    "patterns/fastapi/QUICK_REF_PATTERNS.md": "b5f672fcf3ecff686c14bb3429766aa2cb0457301ebb2a946cacad5307ca3eed",
+    "patterns/fastapi/QUICK_START_MIGRATION.md": "a423488170aa9fe932125f5228531d197dbbfce3d34cfecc35e47ebf0b813ebc",
+    "patterns/fastapi/QUICK_START_NEW_ENDPOINT.md": "8aa6ad26bfd3dffc59404a45334f4fa203b9d7c5a8fe29e64aa719f5c2d0c3e1",
+    "patterns/fastapi/README.md": "08eabfc94377311ef9c9e58575cc1abd54eb326f7dcf73789f9268a758ff24fc",
+    "patterns/generic/ADAPTING_TO_A_CODEBASE.md": "147de9090d2a20645eeaffe541549988b8436494671f5159a1e5824f140d783f",
+    "patterns/generic/CODE_ORGANIZATION_CONVENTION.md": "0ca47ab13a33a829d8ea65ee8a374c2092bb9bb110c37483a0483e1f7ccac29f",
+    "patterns/generic/QUICK_REF_PATTERNS.md": "4f0d379abb51f1354589e023f1f51c50a2256dc06946183767fdc0eb28543e92",
+    "patterns/generic/QUICK_START_MIGRATION.md": "1f2a648e645a0176695c6faf775f6250a80734ee91477d67ea18248e8af679eb",
+    "patterns/generic/QUICK_START_NEW_FEATURE.md": "f9cc17a4e9d551fdb8c1037ec9940cb83ea8e1ebef694e42d06e23b663d6ac59",
+    "patterns/generic/README.md": "1144e3ef40c50a4a814e3d2cffa12ec0ee35fa3fef5ba1ba86e7d5d274c039c7",
     "patterns/react/COMPONENT_ORGANIZATION_CONVENTION.md": "2c6a3ffcb255055323370074f66511b0c828426cf2ff819a63fd820c9256497e",
     "patterns/react/QUICK_REF_PATTERNS.md": "a862de1be5bf6a93d75a9b08f8f077ad9d00a197185d361877ca1dc5f3376fb4",
     "patterns/react/QUICK_START_MIGRATION.md": "b5e52bbf85e255d767438dfcb041e7ea6aa9c938957409f7fd6aa1c459ee6ce5",
@@ -53,6 +55,10 @@ KNOWLEDGE_SHA256 = {
 }
 
 
+# Files added after the byte-identical port; covered by their own tests, so no digest is pinned.
+NEW_KNOWLEDGE_FILES = {"sisyphus/refactor-prompt.md"}
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -69,7 +75,7 @@ def test_knowledge_file_is_byte_identical(rel: str, digest: str) -> None:
 def test_knowledge_has_no_extra_files() -> None:
     root = PACKAGE_DIR / "knowledge"
     found = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
-    assert found == set(KNOWLEDGE_SHA256)
+    assert found == set(KNOWLEDGE_SHA256) | NEW_KNOWLEDGE_FILES
 
 
 def test_root_skills_symlink_resolves_to_skill() -> None:

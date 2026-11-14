@@ -1,9 +1,14 @@
 # Configuration
 
 Each target repository declares its Sisyphus settings in a `.sisyphus.toml` file.
-`sisyphus.config.load_config(path)` loads and validates the file. It fails with a `ConfigError` that names
-the section and key when the file has unknown keys, unsupported kinds, a missing `dir` for `file`, wrong value types, non-positive limits,
-or mixed trackers.
+`sisyphus.config.load_config(path)` loads and validates the file. It fails with a `ConfigError` that names the section and key when the file has any of these problems:
+
+- unknown keys
+- unsupported kinds
+- a missing `dir` for `file`
+- wrong value types
+- non-positive limits
+- mixed trackers
 
 ## Path rule
 
@@ -11,7 +16,8 @@ Path values (`repo_dir`, `workspace_dir`, `brief_path_template`, `[source.work_i
 `digest.path_template`, `[archive]` `dir` and the `[knowledge]` paths) are returned exactly as written.
 Relative paths resolve against the invoking working directory, not the directory that holds the config file.
 The loader never touches the filesystem for them. The one exception is `[archive] dir`, which commands resolve
-against `[project].workspace_dir` (see [`[archive]`](#archive)).
+against `[project].workspace_dir` (see [`[archive]`](#archive)). When validating `[refactor] pattern_set`, the loader lists the packaged `knowledge/patterns/`
+through `stack.pattern_set_names()` (see [`[refactor]`](#refactor)). That is packaged data, not a user-supplied path value.
 
 ## Secrets
 
@@ -60,16 +66,15 @@ also present). `pick_state` with `kind = "github"` and `pick_label` with `kind =
 mixed-tracker keys. `kind = "file"` accepts both, because the producer prompt reads them.
 
 For `kind = "file"`, `dir` is required and names the directory of ticket files (`<dir>/<ref>.md`). Sisyphus
-expands `~` in it. Sisyphus itself ignores `assignee`, `pick_state` and `pick_label` for `file`: they are the
-parameters of the producer prompt (`knowledge/sisyphus/linear-feed-prompt.md`), which reads them from this table
-to choose the Linear ticket to export (`assignee` and `pick_state` are required by the producer, `pick_label` is
-optional). `dir` is rejected for any other kind.
+expands `~` in it. Sisyphus itself ignores `assignee`, `pick_state` and `pick_label` for `file`. These are parameters of the producer prompt
+(`knowledge/sisyphus/linear-feed-prompt.md`). The prompt reads them from this table to choose the Linear ticket to export.
+`assignee` and `pick_state` are required by the producer. `pick_label` is optional. `dir` is rejected for any other kind.
 
 For `kind = "github"`, Sisyphus both reads and writes `pick_label`. With `remove_label_when_settled` on (the
-default), it removes the label from the issue when the item settles: when the finish trigger has opened the
-draft PR (even if its gate failed; the failure stays in the digest and the PR), or when you run `sisyphus abandon #<number>`. A removal failure is a digest note (finish) or one stderr
-line (abandon), never a stop and never a changed exit code. Re-queuing is a manual relabel; `resume --again` does
-not restore the label, and items settled earlier are not back-filled. Set `remove_label_when_settled = false` to
+default), it removes the label from the issue when the item settles. The item settles when the finish trigger has opened the
+draft PR, or when you run `sisyphus abandon #<number>`. The label is removed even if the draft PR gate failed.
+That gate failure stays in the digest and the PR. A removal failure is a digest note (finish) or one stderr
+line (abandon), never a stop and never a changed exit code. Re-queuing is a manual relabel. `resume --again` does not restore the label, and items settled earlier are not back-filled. Set `remove_label_when_settled = false` to
 keep the label. Merged or closed PRs still do not exclude an issue from the pick.
 
 ### `[source.host]`
@@ -112,6 +117,25 @@ in the file and have no effect.
 | `sizing_file` | string | none |
 | `conventions_path` | string | none |
 
+### `[refactor]`
+
+Optional.
+
+| Key | Type | Default |
+|---|---|---|
+| `enabled` | bool | `true` |
+| `pattern_set` | string | none |
+
+- `enabled = false` records the `refactor` stage as skipped. It shows as `stages_skipped` in the digest.
+- `pattern_set` names a directory under `knowledge/patterns/`. The packaged sets are `generic`, `fastapi` and
+  `react`.
+- An unknown `pattern_set` name is a `ConfigError` at load time, and the message lists the valid names (the
+  directories present under `knowledge/patterns/`, so the three packaged sets are the current ones, not a fixed
+  list).
+- With `pattern_set` set, all added files get that one set.
+- A `.sisyphus.toml` without `[refactor]` loads unchanged, with `enabled = true`.
+- There is no per-run CLI override: the `[refactor]` config table is the only switch.
+
 ### `[archive]`
 
 Optional.
@@ -121,12 +145,12 @@ Optional.
 | `dir` | string | `archive` |
 
 `sisyphus archive --config F` moves the files of settled items from `[project].workspace_dir` into the archive
-directory (see [`sisyphus archive`](usage.md#sisyphus-archive); a recorded gate failure does not keep an item from being moved). The layout is flat and keeps the original
+directory (see [`sisyphus archive`](usage.md#sisyphus-archive)). A recorded gate failure does not keep an item from being moved. The layout is flat and keeps the original
 names, for example `<archive>/_23147.json` and `<archive>/plan-147/`. The directory is created on first use.
 
 - A relative `dir` resolves against `[project].workspace_dir`, not the invoking working directory, so the
   default is `<workspace_dir>/archive`. This is an exception to the Path rule above. A relative `dir` needs
-  `[project].workspace_dir`; without it the command fails with a config error.
+  `[project].workspace_dir`. Without it the command fails with a config error.
 - An absolute `dir` is allowed and may be on another filesystem (the move is copy-then-delete).
 - The archive directory must not equal or contain the workspace root. That is a config error.
 - The loader checks only that `dir` is a string and returns it as written. It does not expand `~`, resolve it
