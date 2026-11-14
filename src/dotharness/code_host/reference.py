@@ -1031,7 +1031,11 @@ class _Discussion:
         )
 
     async def reply(self, repo: RepositoryRef, number: int, thread_id: str, body: str) -> Comment:
-        """Reply in a review thread (GraphQL mutation). ``thread_id`` is the id from ``ReviewThread``."""
+        """Reply in a review thread (GraphQL mutation). ``thread_id`` is the id from ``ReviewThread``.
+
+        ``repo`` and ``number`` are unused: the ``Discussion`` protocol requires them, and the thread id identifies the
+        thread globally.
+        """
         data = await self._gh.graphql(
             _REPLY_MUTATION, "Discussion.reply", {"threadId": thread_id, "body": body}, write=True
         )
