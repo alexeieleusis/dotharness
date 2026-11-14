@@ -277,14 +277,25 @@ def test_stop_record_identical_with_and_without_step(tmp_path: Path, stops: dict
     stops["mode"] = {"A-1": "stop"}
     (tmp_path / "on").mkdir()
     (tmp_path / "off").mkdir()
-    on = _env(tmp_path / "on", [], Launcher())
-    off = _env(tmp_path / "off", [], Launcher())
+    on_launcher, off_launcher = Launcher(), Launcher()
+    on = _env(tmp_path / "on", [], on_launcher)
+    off = _env(tmp_path / "off", [], off_launcher)
     _seed_waiting(tmp_path / "on" / "ws", "A-1")
     _seed_waiting(tmp_path / "off" / "ws", "A-1")
-    on.invoke("resume", "A-1", "--config", str(on.config), "--base", "b")
-    off.invoke("resume", "A-1", "--config", str(off.config), "--base", "b", "--raw")
-    a = stop_record_path(RunRecord.open(tmp_path / "on" / "ws", "A-1").path)
-    b = stop_record_path(RunRecord.open(tmp_path / "off" / "ws", "A-1").path)
+    on_rec = RunRecord.open(tmp_path / "on" / "ws", "A-1").path
+    off_rec = RunRecord.open(tmp_path / "off" / "ws", "A-1").path
+    seed = stop_record_path(on_rec).read_bytes()
+    on_result = on.invoke("resume", "A-1", "--config", str(on.config), "--base", "b")
+    off_result = off.invoke("resume", "A-1", "--config", str(off.config), "--base", "b", "--raw")
+    assert on_result.exit_code == 0
+    assert off_result.exit_code == 0
+    assert on_launcher.calls == 1
+    assert off_launcher.calls == 0
+    assert stop_text_path(on_rec).exists()
+    assert not stop_text_path(off_rec).exists()
+    a = stop_record_path(on_rec)
+    b = stop_record_path(off_rec)
+    assert a.read_bytes() != seed  # resume really ran and rewrote the stop record
     assert a.read_bytes().replace(str(tmp_path / "on").encode(), b"") == b.read_bytes().replace(
         str(tmp_path / "off").encode(), b""
     )
