@@ -443,7 +443,7 @@ class _Repository:
         msg = "Could not detect GitHub owner/repo"
         raise CodeHostError(msg)
 
-    async def resolve(self, identity: str) -> RepositoryRef:
+    async def resolve(self, identity: str) -> RepositoryRef:  # NOSONAR python:S7503 - implements an async protocol
         """Identity is ``owner/repo``. Raises ConfigurationError for any other shape. Runs no command."""
         value = identity.strip()
         if not _IDENTITY.fullmatch(value):
@@ -463,7 +463,7 @@ class _Repository:
             raise CodeHostError(msg)
         return name
 
-    async def display_name(self, repo: RepositoryRef) -> str:
+    async def display_name(self, repo: RepositoryRef) -> str:  # NOSONAR python:S7503 - implements an async protocol
         return repo.value
 
 
