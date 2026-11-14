@@ -124,7 +124,7 @@ def split_output(stdout: str, refs: Sequence[str]) -> dict[str, str]:
     if not text:
         raise ValueError("the backend returned no output")
     if text.startswith("```"):
-        text = re.sub(r"^```[A-Za-z]*\s*|\s*```$", "", text).strip()
+        text = re.sub(r"(?:^```[A-Za-z]*\s*)|(?:\s*```$)", "", text).strip()
     try:
         data: Any = json.loads(text)
     except json.JSONDecodeError as exc:
