@@ -221,6 +221,19 @@ def plan_dir_name(item: str) -> str:
 _BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 
 
+def _read_refactor_records(path: Path) -> list[Any]:
+    """The parsed top-level list of the refactor input file, unchanged; ``[]`` for any unusable file.
+
+    Never raises: ``OSError`` (missing, directory, permission), ``ValueError`` (``UnicodeDecodeError`` and
+    ``json.JSONDecodeError``) and ``RecursionError`` (deeply nested JSON) all give ``[]``, as does a non-list top level.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return []
+    return data if isinstance(data, list) else []
+
+
 def _toml_key(key: str) -> str:
     return key if _BARE_KEY.fullmatch(key) else _toml_string(key)
 
@@ -1173,6 +1186,8 @@ class _Run:
             base_branch=self.opt.base_branch,
             workspace=self.workspace,
             run_git=run_git,
+            refactor_records=_read_refactor_records(self.handoff_dir / REFACTOR_INPUT_FILE),
+            refactor_handoff_dir=self.handoff_dir,
         )
 
     def note(self, text: str) -> None:

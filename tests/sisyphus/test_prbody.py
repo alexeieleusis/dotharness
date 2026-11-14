@@ -987,3 +987,113 @@ def test_compose_refactor_is_keyword_only() -> None:
 
     with pytest.raises(TypeError):
         compose_body("o/r#109", "", "", "", "", "refactor", workspace=Path("."))  # ty: ignore[too-many-positional-arguments]
+
+
+# --- orchestrator call site: refactor-input.json -> build_body ---
+
+
+class _NoGit:
+    async def __call__(self, argv: Sequence[str], cwd: Path | None) -> Any:
+        from dotharness.sisyphus.subproc import CommandResult
+
+        return CommandResult(1, "", "no git")
+
+
+def _call_site_run(tmp_path: Path) -> Any:
+    from dotharness.sisyphus import orchestrator
+    from tests.sisyphus.test_orchestrator import ITEM, World
+
+    w = World(tmp_path)
+    return orchestrator._Run(ITEM, w.config(), w.options(), w.agent, _NoGit(), w, w.clock, w)
+
+
+def _input_path(run: Any) -> Path:
+    run.handoff_dir.mkdir(parents=True, exist_ok=True)
+    return run.handoff_dir / "refactor-input.json"
+
+
+_GENERIC_RECORD = {
+    "set": "generic",
+    "files": ["a.py"],
+    "tests": ["tests/test_a.py"],
+    "evidence": ["marker-evidence-xyz"],
+    "fallback": True,
+    "head_before": "a" * 40,
+}
+
+
+async def test_call_site_missing_file_passes_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = _call_site_run(tmp_path)
+    seen: dict[str, Any] = {}
+    real = prbody.build_body
+
+    async def spy(*args: Any, **kwargs: Any) -> str:
+        seen.update(kwargs)
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(prbody, "build_body", spy)
+    body = await run.build_pr_body()
+    assert seen["refactor_records"] == []
+    assert seen["refactor_handoff_dir"] == run.handoff_dir
+    assert body != prbody.work_item_header(run.item)
+    assert run.notes == []
+
+
+async def test_call_site_valid_record_passed_and_rendered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = _call_site_run(tmp_path)
+    _input_path(run).write_text(json.dumps([_GENERIC_RECORD]), encoding="utf-8")
+    seen: dict[str, Any] = {}
+    real = prbody.build_body
+
+    async def spy(*args: Any, **kwargs: Any) -> str:
+        seen.update(kwargs)
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(prbody, "build_body", spy)
+    body = await run.build_pr_body()
+    assert seen["refactor_records"] == [_GENERIC_RECORD]
+    assert seen["refactor_handoff_dir"] == run.handoff_dir
+    assert "marker-evidence-xyz" in body
+    assert "Refactor" in body
+
+
+@pytest.mark.parametrize(
+    "content",
+    [b"\xff\xfe", b"{not json", b"{}", b'"x"', b"3", b"null", b"true", b"[" * 100000, b"[]"],
+)
+async def test_call_site_unusable_file_leaves_body_unchanged(tmp_path: Path, content: bytes) -> None:
+    run = _call_site_run(tmp_path)
+    baseline = await run.build_pr_body()
+    _input_path(run).write_bytes(content)
+    assert await run.build_pr_body() == baseline
+    assert baseline != prbody.work_item_header(run.item)
+    assert run.notes == []
+
+
+async def test_call_site_directory_and_permission_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = _call_site_run(tmp_path)
+    baseline = await run.build_pr_body()
+    _input_path(run).mkdir()
+    assert await run.build_pr_body() == baseline
+    _input_path(run).rmdir()
+    _input_path(run).write_text("[]", encoding="utf-8")
+
+    real_read = Path.read_text
+
+    def deny(self: Path, *a: Any, **k: Any) -> str:
+        if self.name == "refactor-input.json":
+            raise PermissionError("denied")
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", deny)
+    assert await run.build_pr_body() == baseline
+    assert run.notes == []
+
+
+def test_read_refactor_records_returns_list_unchanged(tmp_path: Path) -> None:
+    from dotharness.sisyphus.orchestrator import _read_refactor_records
+
+    path = tmp_path / "refactor-input.json"
+    path.write_text(json.dumps([1, "x", {"a": None}, []]), encoding="utf-8")
+    assert _read_refactor_records(path) == [1, "x", {"a": None}, []]
+    assert _read_refactor_records(tmp_path / "missing.json") == []
