@@ -258,7 +258,6 @@ async def _build_design_prompt(
 async def _run_design_review(
     design_instructions: str,
     extra_knowledge: str | None,
-    pr: ChangeRequest,
     number: int,
     config,
     ctx: dict,
@@ -650,7 +649,6 @@ async def _process_single_pr(
                 await _run_design_review(
                     cycle.design_instructions,
                     extra_knowledge,
-                    pr,
                     number,
                     config,
                     ctx,
