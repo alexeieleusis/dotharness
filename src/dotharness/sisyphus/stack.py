@@ -384,13 +384,12 @@ def match_file(root: Path, rel_path: str, set_names: Collection[str]) -> FileMat
         errors.extend(declaration.errors)
         if declaration.evidence is None:
             continue
-        first_read = source is None
         if source is None:
             source = read_source_lines(root, rel_path)
+            if source[1] is not None:
+                errors.append(source[1])
         lines, error = source
         if error is not None:
-            if first_read:
-                errors.append(error)
             continue
         layout_evidence = row.layout(rel_path, lines)
         if layout_evidence is not None:
