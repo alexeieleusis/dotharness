@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from dotharness.sisyphus import prbody
 from dotharness.sisyphus.pick import mentions_issue
@@ -351,6 +354,122 @@ async def test_build_body_full_and_degraded(tmp_path: Path) -> None:
     assert "Phases unavailable: git log failed" in await _build(tmp_path, plan, None)
     (plan / "init_manifest.json").unlink()
     assert PLAN_NOT_MATCHED_NOTE in await _build(tmp_path, plan)
+
+
+async def _build_refactor(tmp_path: Path, **kw: Any) -> str:
+    plan = tmp_path / "plan"
+    plan.mkdir(exist_ok=True)
+    (tmp_path / "phases").mkdir(exist_ok=True)
+    (tmp_path / "b.md").write_text("x")
+    (plan / "requirements.md").write_text("## 1. Goal\n\nShip it.\n")
+    (plan / "init_manifest.json").write_text(json.dumps({"brief": str(tmp_path / "b.md")}))
+
+    async def run_git(_args: object) -> str | None:
+        return "abc\tPhase 01: alpha\n"
+
+    return await prbody.build_body(
+        "w",
+        brief_path=tmp_path / "b.md",
+        plan_dir=plan,
+        phase_dir=_phase_dir(tmp_path / "phases"),
+        base_branch="main",
+        workspace=tmp_path,
+        run_git=run_git,
+        **kw,
+    )
+
+
+def _spy_refactor(monkeypatch: Any) -> dict[str, list[Any]]:
+    calls: dict[str, list[Any]] = {"extract": [], "format": []}
+
+    def extract(paths: Sequence[Path]) -> list[Any]:
+        calls["extract"].append(list(paths))
+        return [prbody.RefactorHandoff(p.name[len("refactor-") : -3], None, None, ()) for p in paths]
+
+    def fmt(records: Sequence[Any], results: Any) -> str:
+        calls["format"].append((list(records), results))
+        return "X"
+
+    monkeypatch.setattr(prbody, "extract_refactor_handoffs", extract)
+    monkeypatch.setattr(prbody, "format_refactor_section", fmt)
+    return calls
+
+
+def _rec(name: Any) -> dict[str, Any]:
+    return {"set": name, "files": [], "evidence": [], "fallback": False}
+
+
+async def test_build_body_refactor_none_or_empty(tmp_path: Path, monkeypatch: Any) -> None:
+    base = await _build_refactor(tmp_path)
+    calls = _spy_refactor(monkeypatch)
+    assert "## Refactor" not in base
+    assert await _build_refactor(tmp_path, refactor_records=[], refactor_handoff_dir=tmp_path) == base
+    assert await _build_refactor(tmp_path, refactor_records=["s", None, {"x": 1}, {"set": 3}]) == base
+    assert calls == {"extract": [], "format": []}
+
+
+async def test_build_body_refactor_paths_and_formatter(tmp_path: Path, monkeypatch: Any) -> None:
+    calls = _spy_refactor(monkeypatch)
+    hd = tmp_path / "h"
+    hd.mkdir()
+    (hd / "refactor-a.md").write_text("x")
+    recs = [_rec("a"), _rec("b")]
+    body = await _build_refactor(tmp_path, refactor_records=recs, refactor_handoff_dir=hd)
+    assert calls["extract"] == [[hd / "refactor-a.md"]]
+    ((got_recs, got_results),) = calls["format"]
+    assert got_recs == recs
+    assert set(got_results) == {"a"}
+    assert body.index("## Deviations") < body.index("## Refactor\n\nX")
+
+
+async def test_build_body_refactor_defensive_records(tmp_path: Path, monkeypatch: Any) -> None:
+    calls = _spy_refactor(monkeypatch)
+    good = _rec("g")
+    await _build_refactor(tmp_path, refactor_records=["s", None, {"files": []}, {"set": 3}, good])
+    assert calls["format"][0][0] == [good]
+
+
+async def test_build_body_refactor_unsafe_set_names(tmp_path: Path, monkeypatch: Any) -> None:
+    calls = _spy_refactor(monkeypatch)
+    hd = tmp_path / "h"
+    hd.mkdir()
+    (tmp_path / "refactor-..md").write_text("x")
+    (tmp_path / "refactor-x.md").write_text("x")
+    names = ["../x", "a/b", "a\\b", "..", ".", "", "a\0b"]
+    recs = [_rec(n) for n in names]
+    await _build_refactor(tmp_path, refactor_records=recs, refactor_handoff_dir=hd)
+    assert calls["extract"] == [[]]
+    assert calls["format"][0][0] == recs
+
+
+async def test_build_body_refactor_no_dir_and_directory(tmp_path: Path, monkeypatch: Any) -> None:
+    calls = _spy_refactor(monkeypatch)
+    recs = [_rec("a")]
+    await _build_refactor(tmp_path, refactor_records=recs)
+    hd = tmp_path / "h"
+    (hd / "refactor-a.md").mkdir(parents=True)
+    await _build_refactor(tmp_path, refactor_records=recs, refactor_handoff_dir=hd)
+    assert calls["extract"] == [[], []]
+    assert [c[0] for c in calls["format"]] == [recs, recs]
+
+
+async def test_build_body_refactor_integration_fallback(tmp_path: Path) -> None:
+    hd = tmp_path / "h"
+    hd.mkdir()
+    (hd / "refactor-generic.md").write_text("- Deviations from the plan: None\n")
+    rec = {"set": "generic", "files": ["a.py"], "evidence": ["no manifest found"], "fallback": True}
+    body = await _build_refactor(tmp_path, refactor_records=[rec], refactor_handoff_dir=hd)
+    assert "## Refactor" in body and "### generic" in body
+    assert "- Fallback: yes" in body and "no manifest found" in body
+
+
+async def test_build_body_refactor_is_keyword_only(tmp_path: Path) -> None:
+    async def run_git(_args: object) -> str | None:
+        return None
+
+    build: Any = prbody.build_body
+    with pytest.raises(TypeError):
+        await build("w", tmp_path, tmp_path, tmp_path, "main", tmp_path, run_git, [], None)
 
 
 async def test_build_body_reads_handoffs_from_plan_dir(tmp_path: Path) -> None:

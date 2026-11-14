@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
@@ -510,6 +511,30 @@ def compose_body(
 # ------------------------------------------------------------------ assembly
 
 
+def _refactor_handoff_path(handoff_dir: Path | None, set_name: str) -> Path | None:
+    """``<dir>/refactor-<set>.md`` when it names a single file in ``handoff_dir`` and is a file, else ``None``."""
+    bad_seps = {"/", "\\", os.sep, *([os.altsep] if os.altsep else [])}
+    if handoff_dir is None or not set_name or set_name in {".", ".."} or "\0" in set_name:
+        return None
+    if any(sep in set_name for sep in bad_seps):
+        return None
+    path = handoff_dir / f"refactor-{set_name}.md"
+    try:
+        return path if path.is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
+def _refactor_text(records: Sequence[Mapping[str, object]], handoff_dir: Path | None) -> str:
+    """Refactor section text for the usable records; ``""`` when there are none."""
+    usable = [r for r in records if isinstance(r, Mapping) and isinstance(r.get("set"), str)]
+    if not usable:
+        return ""
+    found = (_refactor_handoff_path(handoff_dir, str(r["set"])) for r in usable)
+    results = extract_refactor_handoffs([p for p in found if p is not None])
+    return format_refactor_section(usable, {h.set: h._asdict() for h in results})
+
+
 async def build_body(
     item: str,
     *,
@@ -519,6 +544,8 @@ async def build_body(
     base_branch: str,
     workspace: Path,
     run_git: Callable[[Sequence[str]], Awaitable[str | None]],
+    refactor_records: Sequence[Mapping[str, object]] = (),
+    refactor_handoff_dir: Path | None = None,
 ) -> str:
     """Locate the artifacts, check plan ownership, degrade per section and compose the body (FR-12, D-6).
 
@@ -545,12 +572,14 @@ async def build_body(
             deviations = extract_deviations(plan_dir / "handoffs", stems)
     else:
         summary = PLAN_NOT_MATCHED_NOTE
+    refactor = _refactor_text(refactor_records, refactor_handoff_dir)
     return compose_body(
         item,
         summary=summary,
         phases=phases,
         decisions=decisions,
         deviations=deviations,
+        refactor=refactor,
         requirements=requirements,
         workspace=workspace,
         plan_dir=plan_dir,
