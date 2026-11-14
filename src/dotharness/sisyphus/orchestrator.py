@@ -545,9 +545,9 @@ class _Run:
 
     # -- refactor input
 
-    async def list_added_paths(self) -> list[str]:
-        """Paths with git status ``A`` in ``origin/<base>...HEAD`` (default rename detection), in git order."""
-        res = await self.git("diff", "--name-status", "-z", f"origin/{self.opt.base_branch}...HEAD")
+    async def list_added_paths(self, tip: str = "HEAD") -> list[str]:
+        """Paths with git status ``A`` in ``origin/<base>...<tip>`` (default rename detection), in git order."""
+        res = await self.git("diff", "--name-status", "-z", f"origin/{self.opt.base_branch}...{tip}")
         tokens = res.stdout.split("\0")
         added: list[str] = []
         i = 0
@@ -563,7 +563,10 @@ class _Run:
 
     async def refactor_groups(self, pattern_set: str | None = None) -> tuple[StackGroup, ...]:
         """Selection records for the added paths; empty when no added source file exists."""
-        return group_added_files(self.repo, await self.list_added_paths(), pattern_set=pattern_set)
+        # On resume, measure from the pre-refactor HEAD so files the agent itself added are not regrouped.
+        entries = self.read_refactor_input()
+        tip = str(entries[0]["head_before"]) if entries else "HEAD"
+        return group_added_files(self.repo, await self.list_added_paths(tip), pattern_set=pattern_set)
 
     @property
     def refactor_input_path(self) -> Path:
