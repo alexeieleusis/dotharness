@@ -440,9 +440,10 @@ def parse_listed_edits(text: str) -> set[str]:
             item = _EDIT_ITEM.match(line)
             candidates = [item.group(1)] if item else []
         for candidate in candidates:
-            path = _edit_path(candidate)
-            if path:
-                paths.add(path)
+            for piece in candidate.split("; "):
+                path = _edit_path(piece)
+                if path:
+                    paths.add(path)
     return paths
 
 

@@ -121,3 +121,12 @@ def test_crlf_same_as_lf() -> None:
 def test_only_first_bullet_read() -> None:
     text = "- Edits to existing files:\n  - a.py\n- Edits to existing files:\n  - b.py\n"
     assert parse_listed_edits(text) == {"a.py"}
+
+
+def test_several_items_on_one_line() -> None:
+    text = (
+        "- Deviations from the plan: none\n"
+        "- Edits to existing files: src/app/main.py (import of the extracted module); "
+        "src/app/routes.py (call site of the moved handler)\n"
+    )
+    assert parse_listed_edits(text) == {"src/app/main.py", "src/app/routes.py"}
