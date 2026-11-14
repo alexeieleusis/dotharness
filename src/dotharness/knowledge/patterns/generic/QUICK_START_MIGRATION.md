@@ -2,7 +2,7 @@
 
 **Use this guide when refactoring existing code toward the pattern, in any stack.**
 
-**Before you start:** map the roles to the codebase's own units ([ADAPTING_TO_A_CODEBASE.md](./ADAPTING_TO_A_CODEBASE.md)). Migration should make the code look *more like its best neighbours*, not like a foreign architecture.
+**Before you start:** map the roles to the codebase's own units ([ADAPTING_TO_A_CODEBASE.md](./ADAPTING_TO_A_CODEBASE.md)). Migration should make the code look *more like its best neighbors*, not like a foreign architecture.
 
 ---
 
@@ -24,10 +24,10 @@
 ## Principles
 
 - **Behavior-preserving.** A migration PR changes structure, not behavior. Fix bugs separately.
-- **Incremental.** The code works after every step; each step is independently shippable.
+- **Incremental.** The code works after every step. Each step is independently shippable.
 - **Characterize before you change.** Pin current behavior with tests first.
 - **Extract before you rewrite.** Move logic as-is, then improve.
-- **Domain first.** Pull rules out before re-arranging anything else.
+- **Domain first.** Pull rules out before rearranging anything else.
 - **Keep the public interface stable** while internals change.
 - **Scope tightly.** Migrate the code you're touching, not the whole module.
 
@@ -55,7 +55,7 @@ characterization test:
 
 ### Step 1: Centralize Contracts
 
-Gather scattered type definitions/shapes into one place, named for their role (input, output, entities, dependency interfaces).
+Gather scattered type definitions or shapes into one place, named for their role (input, output, entities, dependency interfaces).
 
 - Behavior does not change. Only locations and names move.
 - **Check:** the code compiles and lints. The characterization tests still pass.
@@ -109,14 +109,14 @@ Commit after each extraction if it helps review.
 
 ### Step 3: Isolate I/O Behind Adapters
 
-Find direct calls to the database, network, filesystem, clock, env, or framework globals inside rule-bearing code.
+Find direct calls inside code that contains business rules. They target the database, network, filesystem, clock, environment, or framework globals.
 
 1. Create (or reuse) an adapter exposing simple operations.
 2. Move the call behind it. Translate external shapes to your contracts.
 3. Inject the adapter into the code that used the raw call.
 4. Add an in-memory fake. Use it in unit tests.
 
-**Check:** domain functions no longer import I/O. The characterization tests still pass.
+**Check:** domain functions no longer use I/O directly. The characterization tests still pass.
 
 ---
 
@@ -126,21 +126,21 @@ Split large units *by responsibility*, in dependency order:
 
 1. **State**: extract lifetime state and derived values. Compute derived values through the domain.
 2. **Actions**: extract use-case steps ("validate → transform → save → notify").
-3. **Orchestrator**: leave one boring composing unit.
+3. **Orchestrator**: leave one boring unit that composes the others.
 
-Don't split for its own sake. If a unit has one reason to change, leave it.
+Don't split just to split. If a unit has one reason to change, leave it.
 
 ---
 
 ### Step 5: Thin the Entry Point
 
-Reduce the entry point (controller / handler / component / command / consumer) to: **parse → delegate → respond**.
+Reduce the entry point (controller / handler / component / command / consumer) to **parse → delegate → respond**.
 
 - Move any remaining rules to the domain.
 - Move direct adapter calls into actions.
 - Move formatting into presentation/serialization.
 
-**Check:** a reader can understand the entry point at a glance. No business `if`s remain.
+**Check:** a reader can understand the entry point quickly. No business `if`s remain.
 
 ---
 
@@ -151,14 +151,14 @@ Now that seams exist:
 1. Domain tests for every extracted rule (already added in Step 2).
 2. Action tests with fake adapters.
 3. Integration test for the orchestrator.
-4. Keep or trim characterization tests: retain those that still express meaningful end-to-end behavior; delete redundant ones.
+4. Keep or trim the characterization tests. Keep the ones that still express meaningful end-to-end behavior. Delete the redundant ones.
 
 ---
 
 ### Step 7: Clean Up
 
 - Remove dead code and now-unused helpers.
-- Update docs/comments that described the old structure.
+- Update documentation and comments that described the old structure.
 - Ensure naming matches codebase conventions.
 - Optionally add an exploratory artifact (catalog, example) if it's cheap now.
 
@@ -166,14 +166,14 @@ Now that seams exist:
 
 ## Migration Checklist
 
-- [ ] Behavior pinned by tests **before** refactoring
+- [ ] Pin behavior with tests **before** refactoring
 - [ ] Each step leaves the code working
-- [ ] Rules extracted into pure, tested functions
-- [ ] I/O behind adapters; external shapes don't leak
+- [ ] Extract rules into pure, tested functions
+- [ ] I/O is behind adapters. External shapes don't leak
 - [ ] Entry point and orchestrator contain no rules
 - [ ] No new cyclic or backwards dependencies
-- [ ] No unrelated behavior changes or drive-by fixes in the same PR
-- [ ] Public interface unchanged (or change is called out explicitly)
+- [ ] No unrelated behavior changes or incidental fixes in the same PR
+- [ ] Public interface unchanged (or the change is stated explicitly)
 
 ---
 
@@ -181,14 +181,14 @@ Now that seams exist:
 
 | Pitfall                                         | Fix                                                                 |
 | ----------------------------------------------- | ------------------------------------------------------------------- |
-| Big-bang rewrite                                | Step through the list above; ship each step                         |
+| Big-bang rewrite                                | Follow the list above. Ship each step                               |
 | Refactoring without tests                       | Characterize first                                                  |
 | "Fixing" odd behavior mid-extraction            | Record it, extract faithfully, fix in a separate change             |
-| Extracting a function that still does I/O       | Parameterize or push the I/O to an adapter                          |
+| Extracting a function that still does I/O       | Parameterize it or move the I/O to an adapter                       |
 | Creating anemic layers that just forward calls  | Merge layers that have no distinct reason to change                 |
 | Migrating unrelated code "while you're there"   | Limit scope to what the current task touches                        |
 | Imposing a new structure over local conventions | Map roles onto what exists ([ADAPTING_TO_A_CODEBASE.md](./ADAPTING_TO_A_CODEBASE.md)) |
-| Breaking callers via interface churn            | Keep the public surface stable; deprecate, then migrate callers     |
+| Breaking callers with repeated interface changes | Keep the public interface stable. Deprecate, then migrate callers   |
 
 ---
 
@@ -196,7 +196,7 @@ Now that seams exist:
 
 Stop when:
 
-- Rules are testable in isolation and tested.
+- Rules are tested in isolation.
 - The entry point and wiring are boring.
 - The next step would add structure without adding testability or clarity.
 

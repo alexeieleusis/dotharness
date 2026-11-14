@@ -2,7 +2,7 @@
 
 **Framework-agnostic, layer-agnostic guidance for organizing a feature.**
 
-These guides distill the ideas behind the framework-specific pattern sets (e.g. [`../react/`](../react/README.md)). They use vocabulary that applies to any language, framework, or tier: frontend, backend service, CLI, worker, data pipeline, library.
+These guides distill the ideas behind the framework-specific pattern sets (e.g. [`../react/`](../react/README.md)). They use vocabulary that applies to any language, framework, or layer: frontend, backend service, CLI, worker, data pipeline, library.
 
 Use them in two ways:
 
@@ -67,7 +67,7 @@ Use them in two ways:
 3. **I/O sits behind adapters** (database, network, filesystem, clock, UI toolkit)
 4. **Wiring is boring** (the orchestrator composes parts, contains no logic)
 5. **Entry points are boring** (controller / handler / component / command: translate in, call, translate out)
-6. **Dependencies flow one way** (entry point → orchestration → actions → domain; never back)
+6. **Dependencies flow one way** (entry point → orchestration → actions → domain, never back)
 7. **Test the domain first** (then actions, then integration, then end-to-end)
 
 If you know these 7 principles, you can derive the rest. You can also apply them in a codebase that none of these files mention.
@@ -102,7 +102,7 @@ Check QUICK_REF_PATTERNS.md - where should validation logic go?
 When several sources of guidance apply, resolve conflicts in this order:
 
 1. **Explicit instructions** from the user or the repo (`CLAUDE.md`, `AGENTS.md`, contributing docs, lint rules)
-2. **The codebase's established conventions** (match what neighbouring code does)
+2. **The codebase's established conventions** (match what neighboring code does)
 3. **A framework-specific pattern set** (e.g. `patterns/react/`)
 4. **These generic patterns**
 

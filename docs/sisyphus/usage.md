@@ -23,13 +23,13 @@ sisyphus archive --config <file>
    items share it) that the tracker offers and Sisyphus has not started (no run record):
    - Linear: assigned to `assignee`, in `pick_state`, in Linear's priority order (urgent first, no priority
      last).
-   - GitHub: open, assigned to `assignee`, labelled `pick_label` (default `sisyphus`), oldest first. An issue
+   - GitHub: open, assigned to `assignee`, labeled `pick_label` (default `sisyphus`), oldest first. An issue
      with an open linked PR, or one mentioned as `#N` in an open PR body, is skipped. Merged or closed PRs do
      not exclude an issue. Archived items (see "`sisyphus archive`") are excluded by the archive record check, not
      by PR state. Sisyphus removes `pick_label` from the issue when the item settles (the draft PR is
-     open, or you abandon it) unless `remove_label_when_settled = false`; see "Dead ends: `sisyphus abandon`" and
+     open, or you abandon it) unless `remove_label_when_settled = false`. See "Dead ends: `sisyphus abandon`" and
      the orchestrator doc. To queue the issue again, relabel it by hand: `resume --again` does not restore the
-     label, and items settled before this behaviour existed are not back-filled.
+     label, and items settled before this behavior existed are not back-filled.
    - File: the `*.md` ticket files in `[source.work_item].dir`, in Linear priority order (1 to 4 first, none
      last), then oldest modification time first, then `ref`. No `assignee` is needed and no PR lookup runs. A file
      whose front matter is invalid (see "Ticket files and the producer") is skipped with a one-line note on
@@ -39,19 +39,19 @@ sisyphus archive --config <file>
    stops at the first checkpoint (C1..C8). Before starting each further item it checks `max_run_minutes`. Once
    exceeded it starts nothing else and notes it under "Limits hit" (exit 0).
    An item is finished when its draft PR is open: "draft PR open, handed to the human". Nothing runs after
-   that. Sisyphus always creates the PR as a draft; the human validates it and marks it ready. `review-prs`,
-   `auto-approve` and `ci-fix` skip drafts, so pr-review does not take over until the draft is marked ready. If
+   that. Sisyphus always creates the PR as a draft. The human validates it and marks it ready. `review-prs`,
+   `auto-approve` and `ci-fix` skip drafts, so pr-review waits until the draft is marked ready. If
    pr-review is configured, self-review and vibe-heal analyze the draft in the meantime. If a non-draft open PR
    already exists for the branch, Sisyphus reuses it and neither converts nor edits it.
 6. Writes one merged digest to `[digest].path_template`. It never overwrites an existing file: a second run
    on the same day writes `digest-<date>-2.md`, then `-3`, and so on.
 
-Nothing to do prints nothing and exits 0. When something ran, one line per item and the digest path go to
+When there is nothing to do, the run prints nothing and exits 0. When something ran, one line per item and the digest path go to
 stdout.
 
 `--base <branch>` is the PR base branch. Precedence: `--base`, then `[project].base_branch` in the config,
 then `main`. `main` is the correct base for normal use. Only if you work on your own stacked branch (a branch
-whose PR targets another unmerged branch) do you need `--base` or the config key to point at that parent branch.
+whose PR targets another unmerged branch) do you need `--base` or the config key set to that parent branch.
 
 The CLI takes the clone lock once, at the start of `run` and `intake`, and releases it when the invocation ends
 (including on error). It calls the orchestrator with `lock_held=True`. The orchestrator does not lock again
@@ -122,7 +122,7 @@ priority: 2
 
 `ref` must equal the file-name stem and use only letters, digits, `.`, `_` and `-` (a name made only of dots is
 rejected). `title`, `url` and `priority` (integer 0 to 4, 0 meaning none) are optional. A bad `priority` counts as
-0 and a missing `title` falls back to `ref`. The body is untrusted ticket content and is not parsed. An invalid
+0 and a missing `title` becomes `ref`. The body is untrusted ticket content and is not parsed. An invalid
 file (missing `---` line, missing `ref`, bad `ref`) is skipped and one line naming the file and the reason goes
 to stderr. A missing or empty `dir` picks nothing. Finished ticket files stay in place.
 
@@ -130,8 +130,8 @@ to stderr. A missing or empty `dir` picks nothing. Finished ticket files stay in
 
 `knowledge/sisyphus/linear-feed-prompt.md` is a prompt that exports one Linear ticket into `dir`. Its only
 parameter is `<config path>`. It reads `dir`, `assignee`, `pick_state` and the optional `pick_label` from
-`[source.work_item]`, lists matching tickets through the Linear MCP in priority order, takes the first one with
-no file in `dir` yet, writes `<dir>/<ref>.md` and stops. It never overwrites a file and only reads Linear. There
+`[source.work_item]`. It lists matching tickets through the Linear MCP in priority order and takes the first one
+with no file in `dir` yet. It writes `<dir>/<ref>.md` and stops. It never overwrites a file and only reads Linear. There
 is no `sisyphus` subcommand for it. Run it with the agent CLI, with the parameter substituted:
 
 ```
@@ -139,7 +139,7 @@ claude -p "<prompt with <config path> replaced by /path/to/.sisyphus.toml>" --da
 ```
 
 As for the backends above, `--dangerously-skip-permissions` grants the invoking user's full access, and Linear text
-is untrusted input. Prerequisites: the Linear MCP connector is authorised for the user who runs it, and `dir`
+is untrusted input. Prerequisites: the Linear MCP connector is authorized for the user who runs it, and `dir`
 exists and is writable from where the producer runs.
 
 The producer is safe to repeat. A ticket Sisyphus finished stays in Linear status `pick_state`, but its file is
@@ -148,11 +148,11 @@ the producer writes it again and Sisyphus still skips it because of the run reco
 
 ## Stopped items and resume
 
-When a run stops (a checkpoint C1..C8, or an unexpected error) Sisyphus writes a stop record next to the run
-record, `<workspace_dir>/<item>.json.stopped.json`, with the stage, the checkpoint, the questions or blocker, the
-exact action you must take and the exact resume command. The digest's "Needs you" section shows it (question,
-`Action:`, `Resume:`), and `sisyphus status` prints it. The run record's retry counters are never reset by a stop
-or a resume.
+When a run stops (a checkpoint C1..C8, or an unexpected error), Sisyphus writes a stop record next to the run
+record, `<workspace_dir>/<item>.json.stopped.json`. It contains the stage, the checkpoint, the questions or
+blocker, the exact action you must take, and the exact resume command. The digest's "Needs you" section shows it (question,
+`Action:`, `Resume:`), and `sisyphus status` prints it. A stop or a resume never resets the run record's
+retry counters.
 
 **Single dedicated clone.** You never edit code in the clone and never move anything between repositories. You
 answer in files under `workspace_dir` (outside the repo): the brief, or an answer file. Each item has its own
@@ -194,7 +194,7 @@ run record or the item is not stopped, and exits 0 quietly if another invocation
 | C2 | OPEN_QUESTIONS.md unresolved after draft-overview | write the answer file | automatic (answer file) | re-runs the plan stage with your answer, then build |
 | C3 | a leaf has an open question | write the answer file | automatic (answer file) | re-runs build with your answer. The build prompt continues from the stopped leaf. A refactor stop at C3 or C4 uses the same answer-file flow |
 | C4 | a leaf deviation may change later leaves | write the answer file (accept or redirect) | automatic (answer file) | same as C3 |
-| C5 | retries exhausted or scope violation; also intake changing the target repository. In the refactor stage: retries exhausted, a refactor gate failure, or a scope violation (code edits outside the group's added files without a listed reason) | decide: change the leaf or config, or fix the cause. For an intake stop, revert or remove the paths listed in the detail by hand and run `sisyphus resume REF --config F`; no `--reset-retries` is needed. To give the stage that stopped another budget, run `sisyphus resume REF --config F --reset-retries` | explicit | re-runs the stage. Build and refactor each have their own retry budget, 3 each (`DEFAULT_MAX_RETRY_CYCLES`; build: `build:retry-cycles`, refactor: `refactor:retry-cycles`). The budget of the stage that stopped is kept, so an exhausted budget stops again at C5 without a new agent run, unless you pass `--reset-retries` (below), which gives that stage a fresh budget of 3 (it does not skip the stage) |
+| C5 | retries exhausted or scope violation, or intake changing the target repository. In the refactor stage: retries exhausted, a refactor gate failure, or a scope violation (code edits outside the group's added files without a listed reason) | decide: change the leaf or config, or fix the cause. For an intake stop, revert or remove the paths listed in the detail by hand and run `sisyphus resume REF --config F`. No `--reset-retries` is needed. To give the stage that stopped another budget, run `sisyphus resume REF --config F --reset-retries` | explicit | re-runs the stage. Build and refactor each have their own retry budget, 3 each (`DEFAULT_MAX_RETRY_CYCLES`). Build uses `build:retry-cycles` and refactor uses `refactor:retry-cycles`. The budget of the stage that stopped is kept, so an exhausted budget stops again at C5 without a new agent run, unless you pass `--reset-retries` (below), which gives that stage a fresh budget of 3 (it does not skip the stage) |
 | C6 | a limit was hit | raise the limit in `.sisyphus.toml` (`max_run_minutes` needs nothing: the clock is per invocation) | explicit | leaf limit: re-counts the leaves, no re-plan. Time limit: continues at the next stage |
 | C7 | branch cannot be updated without rebase | no automatic way out: run `sisyphus abandon REF --config F` (the branch and any PR stay as they are for you to handle) | explicit | after you fixed the branch outside Sisyphus: re-runs the push stage on the same branch and PR |
 | C8 | gh, Linear, git network call failed, or a dirty clone | fix access. For a dirty clone, clean it yourself | automatic retry after 30 minutes, 3 times, then explicit | retries the failed call in the same stage |
@@ -230,18 +230,18 @@ previous value) and is shown by `sisyphus status` and under Deviations in the di
 ## Refactor stage: gate failures and handoffs
 
 A refactor gate failure that stops at C5 leaves `GATE_FAILED_KEY = 1` set in the run record's retries. The gate
-itself only sets the flag; the refactor stage turns the failed gate into the C5 stop.
+itself only sets the flag. The refactor stage turns the failed gate into the C5 stop.
 
 `finished_cleanly` treats that flag as a failed run, so the item is not reported as a clean finish while the flag
 is set. The later `open-pr` gate clears the flag only on a pass: a failing `open-pr` gate leaves it set, and a
 gate that is not run does not clear it.
 
 To force a fresh agent pass for a group, the human deletes that group's `refactor-<set>.md` handoff file from
-`<handoff dir>` (the per-item handoff directory under `workspace_dir`; `<set>` is the pattern set name, such as
+`<handoff dir>` (the per-item handoff directory under `workspace_dir`. `<set>` is the pattern set name, such as
 `generic`, `fastapi` or `react`) and then runs `sisyphus resume REF --config F`. Without the deletion, a resume
 does not re-run the agent for a group whose `refactor-<set>.md` already exists and whose clone is clean. It
 re-runs only that group's gate, so a human fix committed on the item branch is verified and nothing is redone.
-Retries stay bounded by `DEFAULT_MAX_RETRY_CYCLES` = 3; `--reset-retries` gives a new budget (see "Fresh retry
+Retries stay bounded by `DEFAULT_MAX_RETRY_CYCLES` = 3. `--reset-retries` gives a new budget (see "Fresh retry
 budget: `resume --reset-retries`" above).
 
 `refactor-<set>.md` never matches the leaf handoff pattern `NN-<stem>.md`, so the build completion check ignores
@@ -258,29 +258,29 @@ message otherwise) and then:
   run record's checkpoint is cleared. The run record, the local branch, the digest and the answer/brief files stay.
 - removes the waiting state: the item is no longer "awaiting you", and is never auto-resumed. It is never re-picked either (any run record makes an item non-pickable).
 - for a GitHub item, removes the issue's pick label after the abandoned stop record is written. This runs only
-  when `pick_label` is set, `remove_label_when_settled` is on (default) and `REF` has the form `#<number>`; any
+  when `pick_label` is set, `remove_label_when_settled` is on (default) and `REF` has the form `#<number>`. Any
   other ref form, `kind = "linear"` or `"file"`, or the key off makes no call. If the removal fails, `abandon`
   prints one stderr line, `<ref>: pick label '<label>' not removed: <ExcType>: <message>`, and still exits 0: the
-  item stays abandoned. A label the issue does not carry is not an error; a label that does not exist in the
-  repository is a configuration error you must fix, and shows up as that stderr line.
+  item stays abandoned. A label the issue does not carry is not an error. A label that does not exist in the
+  repository is a configuration error you must fix, and it appears as that stderr line.
 - never touches the remote branch or any PR, never rewrites history or force-pushes. What happens to them is for
   you to decide by hand. The issue's pick label is the only thing on the remote that `abandon` changes.
 
 Abandoning an already abandoned item is a no-op (exit 0, `<ref>: already abandoned`, no label call, so a failed
-removal is not retried by running `abandon` again; remove the label by hand). `status` shows `state: abandoned`, `abandoned_at` and
+removal is not retried by running `abandon` again. Remove the label by hand). `status` shows `state: abandoned`, `abandoned_at` and
 the `re-enable` command. The digest lists a short "Abandoned" note under Deviations (not under "Needs you").
 
 **Re-enabling is deliberate:** `sisyphus resume REF --config F --again` clears the abandoned mark and resumes
 from the recorded stage (without `--again`, `resume` refuses an abandoned item and says so). `--again` on an item
 that is not abandoned is an error. Reusing `resume` keeps the surface small: one command continues work, one
-flag says "I know I abandoned this". `--again` does not restore the pick label; relabel the issue by hand to
+flag says "I know I abandoned this". `--again` does not restore the pick label. Relabel the issue by hand to
 queue it again.
 
 ## `sisyphus archive`
 
 `sisyphus archive --config F` moves every settled item's files out of `[project].workspace_dir` into the archive
 directory, so the workspace only holds items that still matter. Nothing is deleted. The directory comes from
-`[archive] dir` (default `archive`; a relative path is resolved against `[project].workspace_dir`, an absolute
+`[archive] dir` (default `archive`. A relative path is resolved against `[project].workspace_dir`, an absolute
 path is allowed and `~` is expanded).
 
 - **Files moved**, per item: the run record `<enc>.json`, the stop record `<enc>.json.stopped.json`,
@@ -324,9 +324,9 @@ cleared now) and every recorded `Retry reset:` line. Output order is unchanged (
 
 By default `sisyphus status` hides settled items: abandoned items, and finished items (stage `open-pr` with `stage_status` `complete`, i.e. a draft PR is open and the item is handed to the human) that have no checkpoint and no non-abandoned stop record. A recorded gate failure does not keep an item visible: a finished item whose gate failed is hidden too, and its failure stays visible in the digest and the PR. Records with the legacy stage `ci-fix` (no longer a stage since #129, but still loaded from old run records), `stage_status` `complete`, no checkpoint and no non-abandoned stop record are hidden too. These are never hidden by default: any item with a checkpoint set (`awaiting: you`) or a non-abandoned stop record (`awaiting: error`), and any item with `stage_status: in_progress`, no checkpoint and no stop record, because it may be running now or be a hard crash. `in_progress` is a per-stage status, not an item state: a stage stopped at a checkpoint or on a runner error stays `in_progress`.
 
-`--all` is a boolean flag that shows every item; the output is identical to the previous behavior. An explicit REF always prints that item, even if settled, without `--all`. An unknown REF exits 1 with `no run record for <ref>`.
+`--all` is a boolean flag that shows every item. The output is identical to the previous behavior. An explicit REF always prints that item, even if settled, without `--all`. An unknown REF exits 1 with `no run record for <ref>`.
 
-`--check-prs` is an opt-in flag (off by default; there is no config-file setting). It queries GitHub for each record that would otherwise be shown and has a recorded PR number (`retries["pr-number"]`), running `gh pr view <n> --json state` once per record with a fixed 10 second timeout, one after another. An item whose PR is `MERGED` or `CLOSED` is hidden, even with a checkpoint or stop record and whatever its stage, and counts in the hidden total N. Items that may need you keep showing: an open PR, a checkpoint with an open or unknown PR, and an `in_progress` item with no checkpoint and no stop record (never looked up). If a lookup fails (offline, `gh` missing, PR deleted, timeout), the item is shown, one `warning:` line goes to stderr and the exit code stays 0. `--all` and an explicit REF skip the lookup. `status` never writes run records or sidecars.
+`--check-prs` is an opt-in flag (off by default. There is no config-file setting). It queries GitHub for each record that would otherwise be shown and has a recorded PR number (`retries["pr-number"]`). It runs `gh pr view <n> --json state` once per record, one after another, with a fixed 10 second timeout. An item whose PR is `MERGED` or `CLOSED` is hidden, even with a checkpoint or stop record and whatever its stage, and counts in the hidden total N. Items that may need you keep showing: an open PR, a checkpoint with an open or unknown PR, and an `in_progress` item with no checkpoint and no stop record (never looked up). If a lookup fails (offline, `gh` missing, PR deleted, timeout), the item is shown, one `warning:` line goes to stderr and the exit code stays 0. `--all` and an explicit REF skip the lookup. `status` never writes run records or sidecars.
 
 Without `--check-prs`, an item stopped at a checkpoint (for example C5) stays visible even when its PR is already merged. Run `sisyphus abandon <ref>` to hide it, or use `sisyphus status --check-prs`.
 
