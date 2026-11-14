@@ -457,6 +457,7 @@ def compose_body(
     phases: str = "",
     decisions: str = "",
     deviations: str = "",
+    refactor: str = "",
     requirements: str | None = None,
     workspace: Path,
     plan_dir: Path | None = None,
@@ -473,7 +474,13 @@ def compose_body(
         return embed(text, workspace, plan_dir, home).strip()
 
     parts: list[str] = []
-    for title, text in (("Summary", summary), ("Phases", phases), ("Decisions", decisions), ("Deviations", deviations)):
+    for title, text in (
+        ("Summary", summary),
+        ("Phases", phases),
+        ("Decisions", decisions),
+        ("Deviations", deviations),
+        ("Refactor", refactor),
+    ):
         if text.strip():
             parts.append(f"## {title}\n\n{emb(text)}")
 

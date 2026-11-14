@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from dotharness.sisyphus import prbody
 from dotharness.sisyphus.pick import mentions_issue
@@ -801,3 +802,69 @@ def test_format_refactor_section_does_not_mutate() -> None:
     before = (copy.deepcopy(records), copy.deepcopy(results))
     format_refactor_section(records, results)
     assert (records, results) == before
+
+
+def _compose_refactor(tmp_path: Path, **kw: Any) -> str:
+    ws = tmp_path / "ws"
+    return compose_body("o/r#109", workspace=ws, plan_dir=ws / "plan", home=tmp_path, **kw)
+
+
+def test_compose_refactor_omitted_is_identical(tmp_path: Path) -> None:
+    base = {"summary": "S", "phases": "P", "decisions": "D", "deviations": "V", "requirements": "R"}
+    expected = _compose_refactor(tmp_path, **base)
+    assert _compose_refactor(tmp_path, refactor="", **base) == expected
+    assert _compose_refactor(tmp_path, refactor="  \n\t", **base) == expected
+    assert "## Refactor" not in expected
+    assert expected == (
+        "Closes o/r#109\n\n## Summary\n\nS\n\n## Phases\n\nP\n\n## Decisions\n\nD\n\n## Deviations\n\nV"
+        "\n\n" + prbody.requirements_block("R")
+    )
+
+
+def test_compose_refactor_renders_section(tmp_path: Path) -> None:
+    body = _compose_refactor(tmp_path, refactor="Set: generic", requirements="")
+    assert "\n\n## Refactor\n\nSet: generic" in body
+
+
+def test_compose_refactor_order(tmp_path: Path) -> None:
+    body = _compose_refactor(
+        tmp_path, summary="S", phases="P", decisions="D", deviations="V", refactor="F", requirements="R"
+    )
+    idx = [
+        body.index(m) for m in ("## Summary", "## Phases", "## Decisions", "## Deviations", "## Refactor", "<details>")
+    ]
+    assert idx == sorted(idx)
+
+
+def test_compose_refactor_embedded(tmp_path: Path) -> None:
+    text = f"{tmp_path}/ws/x @user #12 </details>"
+    body = _compose_refactor(tmp_path, refactor=text, deviations=text, requirements="")
+    refactor_part = body.split("## Refactor\n\n", 1)[1]
+    deviations_part = body.split("## Deviations\n\n", 1)[1].split("\n\n## Refactor")[0]
+    assert refactor_part == deviations_part
+    assert str(tmp_path) not in body and "</details>" not in body
+    assert not mentions_issue(body, 12)
+
+
+def test_compose_refactor_truncated_first(tmp_path: Path) -> None:
+    body = _compose_refactor(
+        tmp_path,
+        summary="SUMMARYSTART " + "s" * 100,
+        deviations="DEV",
+        refactor="r" * (MAX_BODY_CHARS * 2),
+        requirements="",
+    )
+    assert len(body) <= MAX_BODY_CHARS
+    assert body.endswith(prbody.TRUNCATED_NOTE)
+    assert "SUMMARYSTART" in body and "## Deviations\n\nDEV" in body
+    assert "## Refactor" in body and "r" * (MAX_BODY_CHARS * 2) not in body
+    body = _compose_refactor(tmp_path, summary="SUMMARYSTART " + "s" * (MAX_BODY_CHARS * 2), refactor="REFACTORTEXT")
+    assert len(body) <= MAX_BODY_CHARS and body.endswith(prbody.TRUNCATED_NOTE)
+    assert "SUMMARYSTART" in body and "REFACTORTEXT" not in body
+
+
+def test_compose_refactor_is_keyword_only() -> None:
+    import pytest
+
+    with pytest.raises(TypeError):
+        compose_body("o/r#109", "", "", "", "", "refactor", workspace=Path("."))  # ty: ignore[too-many-positional-arguments]
