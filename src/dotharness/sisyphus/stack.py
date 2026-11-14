@@ -109,8 +109,9 @@ def classify_paths(paths: Sequence[str]) -> Classified:
     return Classified(sources=tuple(sorted(sources)), tests=tuple(sorted(tests)))
 
 
+_PYPROJECT_TOML = "pyproject.toml"
 _PACKAGE_JSON = "package.json"
-_MANIFEST_NAMES = frozenset({"pyproject.toml", _PACKAGE_JSON})
+_MANIFEST_NAMES = frozenset({_PYPROJECT_TOML, _PACKAGE_JSON})
 _REQUIREMENTS_PATTERN = "requirements*.txt"
 _NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 
@@ -233,8 +234,8 @@ def python_declaration(root: Path, manifest_dir: str, name: str = "fastapi") -> 
     prefix = _prefix(manifest_dir)
     errors: list[str] = []
     candidates: list[str] = []
-    if (directory / "pyproject.toml").is_file():
-        candidates.append("pyproject.toml")
+    if (directory / _PYPROJECT_TOML).is_file():
+        candidates.append(_PYPROJECT_TOML)
     try:
         names = sorted(
             entry.name
@@ -248,7 +249,7 @@ def python_declaration(root: Path, manifest_dir: str, name: str = "fastapi") -> 
         manifest = prefix + file_name
         try:
             text = _read_text(directory / file_name)
-            if file_name == "pyproject.toml":
+            if file_name == _PYPROJECT_TOML:
                 evidence = _pyproject_evidence(tomllib.loads(text), name, manifest)
             else:
                 evidence = _requirements_evidence(text, name, manifest)
