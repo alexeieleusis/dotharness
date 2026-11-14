@@ -145,3 +145,22 @@ def test_forbidden_import_guard_flags_violations() -> None:
     assert _forbidden_imports("from dotharness import vibe_heal")
     assert _forbidden_imports("import dotharness.spec_prism_flow.config")
     assert not _forbidden_imports("from dotharness.sisyphus import config")
+
+
+def test_needs_entry_with_text_indents_continuation_under_number() -> None:
+    from dotharness.sisyphus.digest import NeedsYou, render_digest
+
+    entries = tuple(
+        NeedsYou(
+            f"I-{n}", "C3", "Q.", "Do it.", "cmd", "Line one.\n\n2. looks like a list\nkey: value", "/ws/x.json.stop"
+        )
+        for n in range(1, 11)
+    )
+    lines = render_digest([], DigestReport(needs_you=entries)).splitlines()
+    first = lines.index("1. [C3] I-1: Q.")
+    assert lines[first + 1 : first + 4] == ["   Line one.", "", "   2. looks like a list"]
+    assert lines[first + 4] == "   key: value"
+    assert "   Stop record: `/ws/x.json.stop`" in lines
+    ten = lines.index("10. [C3] I-10: Q.")
+    assert lines[ten + 1] == "    Line one."  # width of "10. "
+    assert "Detail:" not in "\n".join(lines)

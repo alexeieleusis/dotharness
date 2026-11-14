@@ -22,7 +22,7 @@ from pathlib import Path
 from dotharness.sisyphus.config import SisyphusConfig
 from dotharness.sisyphus.rails import Checkpoint
 from dotharness.sisyphus.runrecord import RunRecord
-from dotharness.sisyphus.stoprecord import StopRecord, read_stop_record
+from dotharness.sisyphus.stoprecord import StopRecord, read_stop_record, read_stop_text, stop_record_path
 
 SECTIONS = ("Needs you", "Done", "Declined", "Deviations", "Limits hit", "Cost and time")
 
@@ -51,6 +51,9 @@ class NeedsYou:
     question: str
     action: str = ""
     resume: str = ""
+    # Restructured stop text (multi-line) that replaces the raw detail, and the path of the stop record it came from.
+    text: str = ""
+    record: str = ""
 
 
 @dataclass(frozen=True)
@@ -91,8 +94,21 @@ class DigestReport:
     timings: tuple[StageTiming, ...] = ()
 
 
+def indent_block(text: str, width: int) -> list[str]:
+    """Lines of ``text`` indented by ``width`` spaces; blank lines stay empty (no trailing whitespace)."""
+    pad = " " * width
+    return [f"{pad}{line}" if line.strip() else "" for line in text.strip("\n").splitlines()]
+
+
 def _numbered(lines: Sequence[str]) -> list[str]:
-    return [f"{i}. {line}" for i, line in enumerate(lines, start=1)] or ["None"]
+    """One Markdown numbered entry per item; continuation lines are indented to the width of ``"<n>. "``."""
+    out: list[str] = []
+    for i, entry in enumerate(lines, start=1):
+        first, *rest = entry.split("\n")
+        marker = f"{i}. "
+        out.append(f"{marker}{first}")
+        out.extend(indent_block("\n".join(rest), len(marker)) if rest else [])
+    return out or ["None"]
 
 
 def _bullets(lines: Sequence[str]) -> list[str]:
@@ -108,8 +124,14 @@ def _stage_desc(rec: RunRecord) -> str:
 ERROR_QUESTION = "The run stopped on an unexpected error. Can you fix the cause shown below?"
 
 
-def needs_from_stop(stop: StopRecord) -> NeedsYou:
-    """Render a stop record as a Needs-you entry: question, the action to take and the resume command."""
+def needs_from_stop(stop: StopRecord, text: str = "", record: str = "") -> NeedsYou:
+    """Render a stop record as a Needs-you entry: question, the action to take and the resume command.
+
+    With ``text`` (the restructured stop text) the question carries no raw detail; the text is shown instead.
+    """
+    if text.strip() and stop.checkpoint is not None:
+        base = CHECKPOINT_QUESTIONS.get(stop.checkpoint, "The run stopped at this checkpoint. How should it proceed?")
+        return NeedsYou(stop.item, stop.label, base, stop.action, stop.resume_command, text, record)
     if stop.checkpoint is None:
         question = f"{ERROR_QUESTION} Detail: {stop.detail}"
     else:
@@ -124,7 +146,8 @@ def needs_from_record(rec: RunRecord) -> NeedsYou | None:
     if stop is not None and stop.abandoned:
         return None
     if stop is not None and (stop.checkpoint == rec.checkpoint or stop.checkpoint is None):
-        return needs_from_stop(stop)
+        text = read_stop_text(rec.path) if stop.checkpoint is not None else None
+        return needs_from_stop(stop, text or "", str(stop_record_path(rec.path)))
     if rec.checkpoint is None:
         return None
     question = CHECKPOINT_QUESTIONS.get(rec.checkpoint, "The run stopped at this checkpoint. How should it proceed?")
@@ -132,6 +155,16 @@ def needs_from_record(rec: RunRecord) -> NeedsYou | None:
 
 
 def _needs_line(n: NeedsYou) -> str:
+    """One entry; with a restructured text it spans several lines (joined by ``\\n``, indented by ``_numbered``)."""
+    if n.text.strip():
+        parts = [f"[{n.checkpoint}] {n.item}: {n.question}", *n.text.strip("\n").splitlines()]
+        if n.action:
+            parts.append(f"Action: {n.action}")
+        if n.resume:
+            parts.append(f"Resume: `{n.resume}`")
+        if n.record:
+            parts.append(f"Stop record: `{n.record}`")
+        return "\n".join(parts)
     line = f"[{n.checkpoint}] {n.item}: {n.question}"
     if n.action:
         line += f" Action: {n.action}"
