@@ -293,11 +293,14 @@ def read_source_lines(root: Path, rel_path: str) -> tuple[tuple[str, ...], str |
     The error entry is ``<rel_path>: <ExceptionClass>: <error text>``. Only ``OSError`` is caught;
     invalid UTF-8 bytes become U+FFFD. Never raises.
     """
+    lines: tuple[str, ...] = ()
+    error: str | None = None
     try:
         text = (root / rel_path).read_bytes().decode("utf-8", errors="replace")
+        lines = tuple(text.splitlines())
     except OSError as exc:
-        return (), f"{rel_path}: {type(exc).__name__}: {exc}"
-    return tuple(text.splitlines()), None
+        error = f"{rel_path}: {type(exc).__name__}: {exc}"
+    return lines, error
 
 
 def fastapi_layout(rel_path: str, lines: Sequence[str]) -> str | None:
