@@ -9,7 +9,7 @@
 - **Testability** - business rules verifiable without a database, server, browser, or framework.
 - **Changeability** - swapping a framework, transport, or datastore touches adapters, not rules.
 - **Readability** - a newcomer can predict where any piece of logic lives.
-- **Small blast radius** - a change to one concern does not ripple through unrelated files.
+- **Small blast radius** - a change to one concern does not spread to unrelated files.
 - **Portability of knowledge** - the same mental model works across tiers and stacks.
 
 ## Non-Goals
@@ -43,17 +43,17 @@
 
 ## The Roles
 
-A feature is decomposed by **responsibility**, not by technology. Eight roles cover almost everything:
+Decompose a feature by **responsibility**, not by technology. Eight roles cover almost everything:
 
 | Role                          | Responsibility                                              | Pure? | Does I/O? |
 | ----------------------------- | ----------------------------------------------------------- | ----- | --------- |
 | **Contracts**                 | Types/schemas for inputs, outputs, and internal data shapes | n/a   | No        |
 | **Domain**                    | Business rules: validation, transformation, decisions       | Yes   | No        |
 | **Adapters**                  | Talk to the outside world (DB, HTTP, FS, clock, UI toolkit) | No    | Yes       |
-| **State**                     | Mutable or derived state that lives for the feature's span  | No    | No        |
+| **State**                     | Mutable or derived state that lives while the feature runs  | No    | No        |
 | **Actions**                   | Use-cases: sequence domain calls and adapter calls          | No    | Via adapters |
 | **Orchestrator**              | Compose the above and expose one cohesive surface           | No    | No        |
-| **Entry point**               | Receive an external trigger; delegate to the orchestrator   | No    | Edge only |
+| **Entry point**               | Receive an external trigger. Delegate to the orchestrator   | No    | Edge only |
 | **Presentation/Serialization**| Turn results into the output format (view, response, report)| Yes   | No        |
 
 Not every feature needs every role. The roles are a **checklist of concerns**, not a mandatory file list.
@@ -99,9 +99,9 @@ Presentation/Serialization (renders what the orchestrator returns)
 
 - **Domain imports nothing** from adapters, state, actions, or the framework.
 - **No cycles.** If A needs B and B needs A, extract the shared piece downward.
-- **Adapters are injected**, not imported statically by domain or actions where it would block testing. Pass them in (constructor, parameter, context) or isolate behind an interface you can fake.
+- **Adapters are injected**, not statically imported by domain or actions. A static import blocks testing. Pass adapters in (constructor, parameter, context), or isolate them behind an interface you can fake.
 - **Entry points never contain rules.** If you find an `if` that encodes a business decision, it belongs in the domain.
-- **Skipping a layer is fine; reversing one is not.**
+- **Skipping a layer is fine. Reversing one is not.**
 
 ---
 
@@ -114,7 +114,7 @@ Define the shapes first. They are the cheapest, most reviewable artifact and dri
 - **Internal data shapes** - entities, value objects, intermediate results.
 - **Dependency contracts** - the interfaces adapters must satisfy.
 
-### Progressive Props
+### Progressive Inputs
 
 When composing, give each step the **original input plus the results of earlier steps**, never reaching "sideways" or "backwards":
 
@@ -128,7 +128,7 @@ This makes the linear dependency flow visible in the types.
 
 ### Public vs. Internal Surfaces
 
-Sometimes a part exposes mutators to collaborators, and outsiders must not call them. In that case, define two shapes: an **internal** one (with mutators) and a **public** one (read-only). Strip the internal surface before the orchestrator returns.
+Sometimes a part exposes mutators to its collaborators. Outsiders must not call them. In that case, define two shapes: an **internal** one (with mutators) and a **public** one (read-only). Strip the internal surface before the orchestrator returns.
 
 ### In Dynamically Typed Languages
 
@@ -138,7 +138,7 @@ Use schemas, documented dict shapes, dataclasses, or doc-comments. The disciplin
 
 ## Domain Logic
 
-The heart of the pattern. **Everything that encodes a business decision lives here.**
+The core of the pattern. **Everything that encodes a business decision lives here.**
 
 ### What Belongs
 
@@ -188,11 +188,11 @@ Adapters isolate the world outside your process.
 - Adapters **translate** between external representations and your contracts. External shapes must not leak inward.
 - Adapters **hide their handles**: expose simple operations (`create(data)`, `find(id)`), not raw connection, transaction, or mutation objects.
 - Error handling at the adapter boundary: map external failures into a small, domain-meaningful set of error kinds.
-- Retries, timeouts, caching and idempotency keys belong here, configured not hard-coded.
+- Retries, timeouts, caching, and idempotency keys belong here. Configure them, do not hard-code them.
 
 ### Consolidation
 
-Adapters for a shared resource (e.g. "all user queries") should live in one consolidated place, not be re-declared per feature. Features **consume** adapters; they rarely define new ones for a resource that already has one.
+Adapters for a shared resource (e.g. "all user queries") should live in one place, not be re-declared per feature. Features **consume** adapters. They rarely define new ones for a resource that already has one.
 
 ---
 
@@ -291,15 +291,15 @@ Turns the feature's result into its final form: a rendered view, an HTTP respons
 - **Test behavior, not wiring.** Don't assert that the orchestrator calls A then B. Assert on outcomes.
 - **Fake at the adapter boundary**, never inside the domain.
 - **Table-driven domain tests**: one table of `(input → expected)` per rule beats many bespoke tests.
-- **Write domain tests as you write domain functions** (new code) or **before extracting them** (migration), as a safety net.
-- **Determinism**: inject time/randomness/IDs; no sleeping, no network in unit tests.
+- **Write domain tests as you write domain functions** (new code). When migrating, write them **before extracting the functions** (migration), as a safety net.
+- **Determinism**: inject time/randomness/IDs. In unit tests, do not sleep or use the network.
 - Test pyramid shape: many domain, fewer integration, very few end-to-end.
 
 ---
 
 ## Optional Exploratory Artifacts
 
-Component catalogs, API explorers, REPL notebooks, example scripts, fixtures galleries: useful for **manual verification and communication**, not a substitute for automated tests.
+Component catalogs, API explorers, REPL notebooks, example scripts, fixture galleries: useful for **manual verification and communication**, not a substitute for automated tests.
 
 Create one when mocking the feature's inputs is easy. Skip it when the setup cost outweighs the insight.
 
@@ -310,10 +310,10 @@ Create one when mocking the feature's inputs is easy. Skip it when the setup cos
 - **Name by intent.** `canRetry`, `toInvoiceRequest`, not `helper1`.
 - **Prefer data over callbacks** between layers. Data is easier to test and log.
 - **Make illegal states unrepresentable** in contracts where the language allows.
-- **Split by responsibility, not by size.** A long file with one responsibility is fine; a short file mixing two is not.
+- **Split by responsibility, not by size.** A long file with one responsibility is fine. A short file mixing two is not.
 - **Split further when** a part has two reasons to change, or tests need unrelated fakes to exercise it.
 - **Memoize/cache deliberately** and only at adapters or derived-state boundaries, never to hide impurity.
-- **Co-locate** a feature's files; share only what's genuinely shared.
+- **Co-locate** a feature's files. Share only what's genuinely shared.
 - **Don't abstract early.** Wait for the second use before extracting a shared piece.
 
 ---
@@ -322,11 +322,11 @@ Create one when mocking the feature's inputs is easy. Skip it when the setup cos
 
 | Situation                                         | Skip / merge                                              |
 | ------------------------------------------------- | --------------------------------------------------------- |
-| Trivial CRUD with no business rules               | Domain can be empty; keep contracts + adapters + entry    |
+| Trivial CRUD with no business rules               | Domain can be empty. Keep contracts + adapters + entry    |
 | Stateless request/response                        | No State role                                             |
 | One action                                        | Fold Actions into the Orchestrator (still keep it logic-free of rules) |
 | Pure computation library                          | Only Contracts + Domain (+ tests)                         |
-| Script run once                                   | Likely none; don't ceremony a throwaway                   |
+| Script run once                                   | Likely none. Don't add structure to a throwaway                   |
 | Framework mandates a structure (controllers, modules, hooks) | Map roles onto the framework's units instead of adding files |
 
 **The principles are mandatory. The file count is not.**
@@ -381,7 +381,7 @@ reconcile/
 
 1. **Business logic in pure functions.**
 2. **Actions orchestrate, they don't decide.**
-3. **I/O behind adapters; hide the handles.**
+3. **I/O behind adapters. Hide the handles.**
 4. **Orchestrators and entry points are boring.**
 5. **Dependencies flow one way.**
 6. **Contracts first.**

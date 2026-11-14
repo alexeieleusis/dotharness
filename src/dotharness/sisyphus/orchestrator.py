@@ -26,7 +26,7 @@ from datetime import time as dtime
 from pathlib import Path
 from typing import Any, Protocol
 
-from dotharness.fileio import TOMLDecodeError
+from dotharness.fileio import TOMLDecodeError, atomic_write_json
 from dotharness.sisyphus import prbody
 from dotharness.sisyphus.cleanup import DELETED, KEPT, PrInfo, cleanup_branch
 from dotharness.sisyphus.config import SisyphusConfig
@@ -52,9 +52,11 @@ from dotharness.sisyphus.rails import (
     parse_push_argv,
     push_guard,
 )
+from dotharness.sisyphus.refactor_handoff import parse_listed_edits, scope_violations
 from dotharness.sisyphus.resume import answer_path, consume_answer, read_answer
 from dotharness.sisyphus.runrecord import STAGE_COMPLETE, RunRecord, fold_item
 from dotharness.sisyphus.settled import is_settled
+from dotharness.sisyphus.stack import StackGroup, group_added_files
 from dotharness.sisyphus.stages import (
     BUILD_RETRY_KEY,
     BUILD_STAGE,
@@ -64,6 +66,8 @@ from dotharness.sisyphus.stages import (
     OPEN_PR_STAGE,
     PLAN_STAGE,
     PUSH_STAGE,
+    REFACTOR_RETRY_KEY,
+    REFACTOR_STAGE,
     STAGE_ORDER,
 )
 from dotharness.sisyphus.stoprecord import (
@@ -78,18 +82,21 @@ from dotharness.sisyphus.stoprecord import (
 from dotharness.sisyphus.subproc import CommandResult, run_command
 
 PROMPT_FILE = "sisyphus/orchestration-prompt.md"
+REFACTOR_PROMPT_FILE = "sisyphus/refactor-prompt.md"
 CHEAT_SHEET = "spec-prism-flow/lifecycle-cheat-sheet.md"
 PLAN_PROMPT_FILE = "spec-prism-flow/plan-generation-prompt.md"
 BUILD_PROMPT_FILE = "spec-prism-flow/build-execution-prompt.md"
 SPF_CONFIG_NAME = ".spec-prism-flow.toml"
 STOP_SUFFIX = ".stop.json"
+REFACTOR_INPUT_FILE = "refactor-input.json"
+_REFACTOR_INPUT_KEYS = ("set", "files", "tests", "evidence", "fallback", "head_before")
 BRANCH_PREFIX = "sisyphus/"
 PACKAGE_MARKERS = ("Makefile", "pyproject.toml", "package.json", "Cargo.toml", "go.mod")
 
 BRANCH_CREATED_KEY = "branch-created"
 PR_NUMBER_KEY = "pr-number"  # additive: the PR number, so the branch cleanup can ask gh about it by number
 
-_STOP_CHECKPOINTS = {PLAN_STAGE: {"C2"}, BUILD_STAGE: {"C3", "C4", "C5"}}
+_STOP_CHECKPOINTS = {PLAN_STAGE: {"C2"}, BUILD_STAGE: {"C3", "C4", "C5"}, REFACTOR_STAGE: {"C3", "C4", "C5"}}
 
 
 class OrchestratorError(Exception):
@@ -213,6 +220,42 @@ def plan_dir_name(item: str) -> str:
 
 
 _BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _load_refactor_input(path: Path, *, strict: bool) -> list[Any]:
+    """The single reader of the refactor input file; ``strict`` picks the failure policy.
+
+    Strict: ``[]`` if the file is absent; a malformed top level, entry or missing ``_REFACTOR_INPUT_KEYS`` key raises
+    ``OrchestratorError``. Lenient (PR body): the parsed top-level list unchanged, entries unvalidated, and ``[]`` for
+    any unusable file (``OSError``, ``ValueError`` incl. ``UnicodeDecodeError``/``JSONDecodeError``, ``RecursionError``
+    from deeply nested JSON, or a non-list top level); never raises.
+    """
+    if not strict:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, RecursionError):
+            return []
+        return data if isinstance(data, list) else []
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, list):
+            raise TypeError("not a list")  # noqa: TRY301
+        for entry in data:
+            if not isinstance(entry, dict):
+                raise TypeError("entry is not an object")  # noqa: TRY301
+            missing = [k for k in _REFACTOR_INPUT_KEYS if k not in entry]
+            if missing:
+                raise KeyError(", ".join(missing))  # noqa: TRY301
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise OrchestratorError(f"unreadable refactor input {path}: {exc}") from exc
+    return data
+
+
+def _read_refactor_records(path: Path) -> list[Any]:
+    """Lenient view of the refactor input file for the PR body; see ``_load_refactor_input``."""
+    return _load_refactor_input(path, strict=False)
 
 
 def _toml_key(key: str) -> str:
@@ -454,13 +497,64 @@ class _Run:
     async def rev_parse_head(self) -> str:
         return (await self.git("rev-parse", "HEAD")).stdout.strip()
 
+    # -- refactor input
+
+    async def list_added_paths(self, tip: str = "HEAD") -> list[str]:
+        """Paths with git status ``A`` in ``origin/<base>...<tip>`` (default rename detection), in git order."""
+        res = await self.git("diff", "--name-status", "-z", f"origin/{self.opt.base_branch}...{tip}")
+        tokens = res.stdout.split("\0")
+        added: list[str] = []
+        i = 0
+        while i + 1 < len(tokens):
+            status = tokens[i]
+            if status[:1] in ("R", "C"):
+                i += 3
+                continue
+            if status == "A":
+                added.append(tokens[i + 1])
+            i += 2
+        return added
+
+    async def refactor_groups(self, pattern_set: str | None = None) -> tuple[StackGroup, ...]:
+        """Selection records for the added paths; empty when no added source file exists."""
+        # On resume, measure from the pre-refactor HEAD so files the agent itself added are not regrouped.
+        entries = self.read_refactor_input()
+        tip = str(entries[0]["head_before"]) if entries else "HEAD"
+        return group_added_files(self.repo, await self.list_added_paths(tip), pattern_set=pattern_set)
+
+    @property
+    def refactor_input_path(self) -> Path:
+        return self.handoff_dir / REFACTOR_INPUT_FILE
+
+    def read_refactor_input(self) -> list[dict[str, Any]]:
+        """Entries of ``refactor-input.json`` (``[]`` if absent); malformed content raises."""
+        return _load_refactor_input(self.refactor_input_path, strict=True)
+
+    async def record_group_entry(self, record: StackGroup) -> dict[str, Any]:
+        """Return the group's entry, writing it (with ``head_before``) only if its ``set`` is not recorded yet."""
+        entries = self.read_refactor_input()
+        for entry in entries:
+            if entry["set"] == record.set:
+                return entry
+        self.handoff_dir.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "set": record.set,
+            "files": list(record.files),
+            "tests": list(record.tests),
+            "evidence": list(record.evidence),
+            "fallback": record.fallback,
+            "head_before": await self.rev_parse_head(),
+        }
+        atomic_write_json(self.refactor_input_path, [*entries, entry])
+        return entry
+
     def created_branches(self) -> set[str]:
         return {self.branch} if self.rec.retries.get(BRANCH_CREATED_KEY) else set()
 
     # -- stage driver
 
     def stages(self) -> list[str]:
-        return [INTAKE_STAGE, PLAN_STAGE, BUILD_STAGE, PUSH_STAGE, OPEN_PR_STAGE]
+        return [INTAKE_STAGE, PLAN_STAGE, BUILD_STAGE, REFACTOR_STAGE, PUSH_STAGE, OPEN_PR_STAGE]
 
     def start_index(self) -> int:
         """Index into ``STAGE_ORDER`` of the first stage that must still run."""
@@ -484,6 +578,7 @@ class _Run:
             INTAKE_STAGE: self.stage_intake,
             PLAN_STAGE: self.stage_plan,
             BUILD_STAGE: self.stage_build,
+            REFACTOR_STAGE: self.stage_refactor,
             PUSH_STAGE: self.stage_push,
             OPEN_PR_STAGE: self.stage_open_pr,
         }
@@ -492,6 +587,9 @@ class _Run:
             for stage in self.stages():
                 if STAGE_ORDER.index(stage) < start:
                     self.skipped.append(stage)
+                    continue
+                if stage == REFACTOR_STAGE and not self.config.refactor.enabled:
+                    self.skipped.append(stage)  # disabled in config: no handler, no clock check, no marks
                     continue
                 self.check_time()
                 began = self.clock()
@@ -732,12 +830,22 @@ class _Run:
         self.plan_dir.mkdir(parents=True, exist_ok=True)
         self.spf.write_text(dump_spf_config(data), encoding="utf-8")
 
-    async def run_agent_stage(self, stage: str) -> None:
+    async def run_agent_stage(
+        self,
+        stage: str,
+        *,
+        prompt_file: str = PROMPT_FILE,
+        extra_values: dict[str, str] | None = None,
+    ) -> None:
         self.write_item_config()
-        if stage == BUILD_STAGE:
+        if stage in (BUILD_STAGE, REFACTOR_STAGE):
             self.handoff_dir.mkdir(parents=True, exist_ok=True)
-        template = knowledge_file(PROMPT_FILE).read_text(encoding="utf-8")
-        prompt = build_orchestration_prompt(template, self.prompt_values(stage))
+        template = knowledge_file(prompt_file).read_text(encoding="utf-8")
+        values = self.prompt_values(stage)
+        if stage == REFACTOR_STAGE:
+            values["patterns dir"] = str(knowledge_file("patterns"))
+        values.update(extra_values or {})
+        prompt = build_orchestration_prompt(template, values)
         stop_file = stop_report_path(self.rec)
         stop_file.unlink(missing_ok=True)
         answer = read_answer(self.rec.path)
@@ -762,6 +870,8 @@ class _Run:
         text = f"leaf {leaf}: {detail}" if leaf else detail
         if stage == BUILD_STAGE and cp == "C5":
             self.rec.increment_retry(BUILD_RETRY_KEY)
+        if stage == REFACTOR_STAGE and cp == "C5":
+            self.rec.increment_retry(REFACTOR_RETRY_KEY)
         raise _Stop(Checkpoint(cp), text)
 
     async def stage_plan(self) -> None:
@@ -803,6 +913,96 @@ class _Run:
             return
         await self.git("checkout", "-b", self.branch, f"origin/{base}")
         self.rec.increment_retry(BRANCH_CREATED_KEY)
+
+    async def stage_refactor(self) -> None:
+        """Run one refactor agent per stack group; stop at C5 on an incomplete, out-of-scope or gate-breaking group."""
+        with self.rec.stage_scope(REFACTOR_STAGE):
+            bound = RetryBound(DEFAULT_MAX_RETRY_CYCLES, self.rec.retries.get(REFACTOR_RETRY_KEY, 0)).result()
+            if bound.escalate:
+                raise _Stop(
+                    Checkpoint.C5, f"refactor already failed {bound.attempts} retry cycles; not launching again"
+                )
+            await self.prepare_branch()
+            groups = [g for g in await self.refactor_groups() if g.files]
+            if not groups:
+                self.note("refactor: no added source files")
+                return
+            for index, group in enumerate(groups):
+                if index > 0:
+                    self.check_time()
+                entry = next((e for e in self.read_refactor_input() if e["set"] == group.set), None)
+                resume_skip = (
+                    entry is not None
+                    and self.refactor_handoff_path(group.set).exists()
+                    and not (await self.git("status", "--porcelain", "--untracked-files=all")).stdout.strip()
+                )
+                if not resume_skip:
+                    self.handoff_dir.mkdir(parents=True, exist_ok=True)
+                    await self.record_group_entry(group)
+                    await self.run_agent_stage(
+                        REFACTOR_STAGE,
+                        prompt_file=REFACTOR_PROMPT_FILE,
+                        extra_values={
+                            "refactor_set": group.set,
+                            "group_files": "\n".join(group.files),
+                            "input_file": str(self.refactor_input_path),
+                        },
+                    )
+                recorded = next(e for e in self.read_refactor_input() if e["set"] == group.set)
+                head_before = str(recorded["head_before"])
+                await self.check_refactor_group(group, head_before)
+                await self.gate_refactor_group(group, head_before)
+
+    def refactor_handoff_path(self, set_name: str) -> Path:
+        return self.handoff_dir / f"refactor-{set_name}.md"
+
+    async def check_refactor_group(self, group: StackGroup, head_before: str) -> None:
+        """Stop at C5 (one retry increment) if the group's checkout, handoff or edits are not as required."""
+        problems: list[str] = []
+        current = (await self.git("rev-parse", "--abbrev-ref", "HEAD")).stdout.strip()
+        on_branch = current == self.branch
+        if not on_branch:
+            problems.append(f"checkout is on {current!r}, expected {self.branch!r}")
+        dirty = (await self.git("status", "--porcelain", "--untracked-files=all")).stdout.strip()
+        if dirty:
+            problems.append(f"uncommitted changes: {_tail(dirty, 200)}")
+        handoff = self.refactor_handoff_path(group.set)
+        listed: set[str] = set()
+        if handoff.is_file():
+            listed = parse_listed_edits(handoff.read_text(encoding="utf-8", errors="replace"))
+        else:
+            problems.append(f"no handoff for set {group.set}")
+        if on_branch:
+            diff = (await self.git("diff", "--no-renames", "--name-status", "-z", f"{head_before}..HEAD")).stdout
+            violations = scope_violations(diff, group.files, group.tests, listed)
+            if violations:
+                problems.append("out-of-scope edits: " + ", ".join(violations))
+        if problems:
+            self.rec.increment_retry(REFACTOR_RETRY_KEY)
+            raise _Stop(
+                Checkpoint.C5,
+                f"the refactor agent ended before group {group.set} was complete; " + "; ".join(problems),
+            )
+
+    async def gate_refactor_group(self, group: StackGroup, head_before: str) -> None:
+        """Run the existing gate when the group made commits; a failure stops at C5 and leaves the commits."""
+        count = (await self.git("rev-list", "--count", f"{head_before}..HEAD")).stdout.strip()
+        if not count.isdigit() or int(count) == 0:
+            return
+        plan, reason = await self.build_gate_plan()
+        if reason is not None:
+            self.note(f"refactor gate not run: {reason}")
+            return
+        if not await self.run_gate_plan(plan):
+            return
+        self.rec.increment_retry(REFACTOR_RETRY_KEY)
+        g = self.gate_failure
+        if g is None:
+            raise _Stop(Checkpoint.C5, "refactor gate failed")
+        raise _Stop(
+            Checkpoint.C5,
+            f"refactor gate failed: '{g.command}' in {g.directory} (exit {g.returncode}): {g.tail}",
+        )
 
     async def stage_build(self) -> None:
         with self.rec.stage_scope(BUILD_STAGE):
@@ -941,6 +1141,8 @@ class _Run:
             base_branch=self.opt.base_branch,
             workspace=self.workspace,
             run_git=run_git,
+            refactor_records=_read_refactor_records(self.handoff_dir / REFACTOR_INPUT_FILE),
+            refactor_handoff_dir=self.handoff_dir,
         )
 
     def note(self, text: str) -> None:
@@ -960,6 +1162,30 @@ class _Run:
                 return True
         return False
 
+    async def build_gate_plan(self) -> tuple[list[tuple[Path, str]], str | None]:
+        """Return the gate plan for this branch, or the reason there is none; needs no PR.
+
+        ``(plan, None)`` when there is something to run; ``([], reason)`` when the gate is not run, where
+        ``reason`` has no PR wording. The method does not note, gate or raise for those cases; a malformed
+        config or a failing ``git diff`` still raises :class:`OrchestratorError`.
+        """
+        self.write_item_config()
+        commands = read_build_commands(self.spf)
+        entries = read_gate_entries(self.spf)
+        if commands is None and entries is None:
+            return [], f"no build.commands in {self.spf}"
+        changed = (await self.git("diff", "--name-only", f"origin/{self.opt.base_branch}...HEAD")).stdout.split("\n")
+        dirs = package_dirs(self.repo, [c for c in changed if c.strip()])
+        if not dirs:
+            return [], "no changed files to gate"
+        plan: list[tuple[Path, str]] = []
+        for directory in dirs:
+            plan.extend((directory, c) for c in commands or [])
+            plan.extend((directory, e.run) for e in entries or [] if _gate_applies(e, self.repo, directory))
+        if not plan:
+            return [], "no [[build.gate]] entry applies to the touched package directories"
+        return plan, None
+
     async def gate(self) -> None:
         """Run the gate commands in each touched package dir at HEAD; record the first failure.
 
@@ -967,29 +1193,13 @@ class _Run:
         to it, in file order. An entry with ``packages`` applies only to a touched directory equal to one of
         them; an entry without ``packages`` applies to every touched directory. When neither source exists,
         when there are no changed files, or when only entries exist and none applies, note that the gate was
-        not run and return. A failing command is recorded in ``gate_failure`` and noted; the remaining commands
+        not run and return. The plan, and the reason there is none, come from :meth:`build_gate_plan`. A failing command is recorded in ``gate_failure`` and noted; the remaining commands
         are skipped and nothing is raised, so the run still completes.
         """
         number = await self.pr_number()
-        self.write_item_config()
-        commands = read_build_commands(self.spf)
-        entries = read_gate_entries(self.spf)
-        if commands is None and entries is None:
-            self.note(f"gate not run for PR #{number}: no build.commands in {self.spf}")
-            return
-        changed = (await self.git("diff", "--name-only", f"origin/{self.opt.base_branch}...HEAD")).stdout.split("\n")
-        dirs = package_dirs(self.repo, [c for c in changed if c.strip()])
-        if not dirs:
-            self.note(f"gate not run for PR #{number}: no changed files to gate")
-            return
-        plan: list[tuple[Path, str]] = []
-        for directory in dirs:
-            plan.extend((directory, c) for c in commands or [])
-            plan.extend((directory, e.run) for e in entries or [] if _gate_applies(e, self.repo, directory))
-        if not plan:
-            self.note(
-                f"gate not run for PR #{number}: no [[build.gate]] entry applies to the touched package directories"
-            )
+        plan, reason = await self.build_gate_plan()
+        if reason is not None:
+            self.note(f"gate not run for PR #{number}: {reason}")
             return
         if await self.run_gate_plan(plan):
             return

@@ -1,8 +1,8 @@
 # Quick Start: Creating a New FastAPI Endpoint/Feature
 
-**Use this guide to add a feature to a FastAPI service from scratch.** It is the FastAPI version of [../generic/QUICK_START_NEW_FEATURE.md](../generic/QUICK_START_NEW_FEATURE.md). For the rationale, see [FASTAPI_ORGANIZATION_CONVENTION.md](./FASTAPI_ORGANIZATION_CONVENTION.md). Precedence: repo conventions > this set > generic.
+**Use this guide to add a feature to a FastAPI service from scratch.** It is the FastAPI version of [../generic/QUICK_START_NEW_FEATURE.md](../generic/QUICK_START_NEW_FEATURE.md). For the rationale, see [FASTAPI_ORGANIZATION_CONVENTION.md](./FASTAPI_ORGANIZATION_CONVENTION.md). Precedence: repo conventions > this guide > the generic guide.
 
-**Before you start:** look at a neighbouring healthy feature in the repo. Match its layout, naming, and DI style. The file names below are the default. Map them onto local equivalents ([ADAPTING_TO_A_CODEBASE.md](../generic/ADAPTING_TO_A_CODEBASE.md)).
+**Before you start:** look at a neighboring healthy feature in the repo. Match its layout, naming, and dependency-injection style. The file names below are the defaults. Map them onto local equivalents ([ADAPTING_TO_A_CODEBASE.md](../generic/ADAPTING_TO_A_CODEBASE.md)).
 
 The example is a small `orders` feature. `POST /orders` prices and places an order (10% bulk discount at or above 10,000 cents). `GET /orders/{id}` fetches it. **All code below was run: 15 tests pass** on Python 3.12, FastAPI 0.162, Pydantic 2.14, pytest.
 
@@ -47,7 +47,7 @@ Skip each role the feature does not need ([When to skip a role](./FASTAPI_ORGANI
 
 ### 1. Define Contracts First
 
-Put domain dataclasses at the top of `domain.py` (shown in Step 2). Put API schemas in `schemas.py`. Schemas validate shape only. Use separate In and Out models, and set `from_attributes=True` on outputs.
+Put domain dataclasses at the top of `domain.py` (shown in Step 2). Put API schemas in `schemas.py`. Schemas validate shape only. Use separate In and Out models. Set `from_attributes=True` on outputs.
 
 ```python
 # app/orders/schemas.py
@@ -199,7 +199,7 @@ Note what is *not* here: `quantity > 0` (wire shape, in the schema) versus "at m
 
 ### 3. Test the Domain Immediately
 
-Parametrized tables, no fixtures, no app import.
+Use parametrized test tables. Do not use fixtures. Do not import the app.
 
 ```python
 # tests/orders/test_domain.py
@@ -333,13 +333,13 @@ class SqlOrderRepository:  # implements OrderRepository
 
 Map external failures (`IntegrityError` -> `Conflict`) here. `add` flushes so a duplicate key surfaces inside the request path, but the flush does not make the write durable.
 
-**Do not commit in the `yield` dependency's teardown.** Code after `yield` may run after the response has started, so a commit failure there (duplicate key, deadlock) cannot change the status code: the client could get a `201` for an order that was never persisted. Instead, the service calls an explicit unit-of-work `commit()` as its last step, which maps commit-time `IntegrityError` to `Conflict` before the response is built; the dependency only rolls back on error and closes. See [Session scoping](./FASTAPI_ORGANIZATION_CONVENTION.md#session-and-transaction-scoping) for the `SqlUnitOfWork` adapter. (The in-memory demo below has no transaction, so it omits the unit of work.)
+**Do not commit in the `yield` dependency's teardown.** Code after `yield` may run after the response has started. A commit failure there (duplicate key, deadlock) cannot change the status code: the client could get a `201` for an order that was never persisted. Instead, the service calls an explicit unit-of-work `commit()` as its last step. That call maps commit-time `IntegrityError` to `Conflict` before the response is built. The dependency only rolls back on error and closes. See [Session scoping](./FASTAPI_ORGANIZATION_CONVENTION.md#session-and-transaction-scoping) for the `SqlUnitOfWork` adapter. (The in-memory demo below has no transaction, so it omits the unit of work.)
 
 ---
 
 ### 5. State (If Needed)
 
-Usually none. Request-scoped session: a `yield` dependency. Process-wide clients: `lifespan` + `app.state`. See [State](./FASTAPI_ORGANIZATION_CONVENTION.md#state).
+Usually the feature needs no state. Keep the request-scoped session in a `yield` dependency. Create process-wide clients in `lifespan` and store them on `app.state`. See [State](./FASTAPI_ORGANIZATION_CONVENTION.md#state).
 
 ---
 
@@ -534,7 +534,7 @@ def create_app() -> FastAPI:
 app = create_app()
 ```
 
-`def` routes run in the threadpool, which is correct for blocking adapters. With async adapters, make the route and service `async def` and `await` the ports.
+`def` routes run in the threadpool, which is correct for blocking adapters. With async adapters, make the route and service `async def`. Await the port calls.
 
 ---
 
@@ -542,7 +542,7 @@ app = create_app()
 
 | Test | What | Fakes |
 | ---- | ---- | ----- |
-| Service | Rejection persists nothing; success stores the order | In-memory ports |
+| Service | Rejection persists nothing. Success stores the order | In-memory ports |
 | Adapter | ORM <-> domain translation, error mapping | Real DB (SQLite/testcontainers) |
 | API | Status codes, body shape, error mapping | `dependency_overrides` |
 
@@ -633,13 +633,19 @@ Async tests: `httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url
 
 - [ ] Every business rule is a pure function with a parametrized test
 - [ ] `grep -nE "^(from|import) (fastapi|pydantic|sqlalchemy)" app/<feature>/domain.py` is empty
-- [ ] Router and `deps.py` contain no rules; service reads "call, call, call"
-- [ ] Separate In/Out schemas; no ORM objects in responses, ports, or domain
-- [ ] `now`/ids injected via `Depends`; one session per request; one explicit commit point in the request path (not in dependency teardown)
-- [ ] `def` vs. `async def` matches the I/O clients used; no blocking in `async def`
-- [ ] Errors mapped by exception handlers; documented with `responses=`
+- [ ] Router and `deps.py` contain no rules. The service reads "call, call, call"
+- [ ] Separate In/Out schemas
+- [ ] No ORM objects in responses, ports, or domain
+- [ ] `now`/ids injected via `Depends`
+- [ ] One session per request
+- [ ] One explicit commit point in the request path (not in dependency teardown)
+- [ ] `def` vs. `async def` matches the I/O clients used
+- [ ] No blocking in `async def`
+- [ ] Errors mapped by exception handlers
+- [ ] Errors documented with `responses=`
 - [ ] Domain tests run without importing the app
-- [ ] Follows repo naming/lint; OpenAPI clients regenerated if applicable
+- [ ] Follows repo naming/lint
+- [ ] OpenAPI clients regenerated if applicable
 
 ---
 
@@ -647,14 +653,14 @@ Async tests: `httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url
 
 | Pitfall | Fix |
 | ------- | --- |
-| Starting with the router | Start with schemas and domain; the router is last |
-| Pydantic validator hitting the DB, or holding a business limit | Move to a domain function; service passes the data in |
-| `datetime.now()`/`uuid4()` in rules | Inject providers; pass values to the domain |
-| Returning an ORM instance | Repository returns dataclasses; set `response_model` |
-| `service.py` importing the concrete repository | Import the Protocol; wire in `deps.py` |
+| Starting with the router | Start with schemas and domain. The router is last |
+| Pydantic validator hitting the DB, or holding a business limit | Move to a domain function. The service passes the data in |
+| `datetime.now()`/`uuid4()` in rules | Inject providers. Pass values to the domain |
+| Returning an ORM instance | The repository returns dataclasses. Set `response_model` |
+| `service.py` importing the concrete repository | Import the Protocol. Wire in `deps.py` |
 | Sync DB calls in `async def` route | `def` route (threadpool) or an async driver |
 | Overriding the wrong callable in tests | Override the exact provider function used in `Depends` |
-| `HTTPException` from services/domain | Raise app exceptions; map in `errors.py` |
+| `HTTPException` from services/domain | Raise application exceptions. Map them in `errors.py` |
 | Duplicating an existing repository | Search and reuse |
 
 See [QUICK_REF_PATTERNS.md](./QUICK_REF_PATTERNS.md) for templates and [FASTAPI_ORGANIZATION_CONVENTION.md](./FASTAPI_ORGANIZATION_CONVENTION.md) for the rationale.

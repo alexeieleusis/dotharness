@@ -1,6 +1,6 @@
 # FastAPI Organization Patterns
 
-**Framework-specific guidance for organizing Python/FastAPI features (Pydantic v2, `Depends`, async or sync).**
+**Framework-specific guidance for organizing features in a FastAPI codebase (Pydantic v2, `Depends`, async or sync).**
 
 This set applies the [generic patterns](../generic/README.md) to FastAPI. It adds FastAPI idioms. It does not change the principles.
 
@@ -17,29 +17,32 @@ This set applies the [generic patterns](../generic/README.md) to FastAPI. It add
 
 ### 🔄 [QUICK_START_MIGRATION.md](./QUICK_START_MIGRATION.md)
 
-**Use when:** Refactoring a fat route handler, a `crud.py`/god-service, or ORM-model-as-everything code.
+**Use when:** Refactoring a route handler with too much logic, a `crud.py` module or god-service, or code that puts everything in the ORM model.
 
-- Characterize with `TestClient`, extract rules, isolate sessions, thin the router
+- Characterize behavior with `TestClient`
+- Extract the business rules
+- Isolate sessions
+- Keep the router thin
 
 ### ⚡ [QUICK_REF_PATTERNS.md](./QUICK_REF_PATTERNS.md)
 
-**Use when:** You need a reminder of the role map, templates, "what goes where", or good and bad examples.
+**Use when:** You need a reminder of the role map, the templates, where each piece goes, or the good and bad examples.
 
 ### 📖 [FASTAPI_ORGANIZATION_CONVENTION.md](./FASTAPI_ORGANIZATION_CONVENTION.md)
 
-**Use when:** You need the "why": role mapping, async/sync, session scoping, error mapping, gotchas, test tooling.
+**Use when:** You need the reasons behind the set: role mapping, async/sync, session scoping, error mapping, pitfalls, and test tooling.
 
 ---
 
 ## Key Principles (identical to generic)
 
-1. **Business logic lives in pure functions** (plain Python: no `fastapi`, no `pydantic` ORM-mode tricks, no `sqlalchemy`)
-2. **Actions orchestrate; they don't decide** (service functions call domain + adapters)
-3. **I/O sits behind adapters** (repositories, gateways, clock, id generator)
+1. **Business logic lives in pure functions** (plain Python: no `fastapi`, no `pydantic` ORM-mode features, no `sqlalchemy`)
+2. **Actions orchestrate. They don't decide** (service functions call domain + adapters)
+3. **Input and output sit behind adapters** (repositories, gateways, a clock, an identifier generator)
 4. **Wiring is boring** (`Depends` providers and `create_app()` only pick implementations)
-5. **Entry points are boring** (routers: parse, delegate, respond)
-6. **Dependencies flow one way** (router → service → domain; never back)
-7. **Test the domain first** (`pytest.mark.parametrize`, no app, no DB)
+5. **Entry points are boring** (routers parse, delegate, and respond)
+6. **Dependencies flow one way** (router → service → domain, and never back)
+7. **Test the domain first** (`pytest.mark.parametrize`, no app, no database)
 
 ## FastAPI Idioms in One Glance
 
@@ -48,7 +51,7 @@ This set applies the [generic patterns](../generic/README.md) to FastAPI. It add
 | Contracts | Pydantic v2 `BaseModel` schemas (API) + domain dataclasses |
 | Domain | `domain.py`: pure functions over frozen dataclasses |
 | Adapters | Repository/gateway classes behind `typing.Protocol` ports |
-| Actions | `service.py` functions, collaborators passed as keyword args |
+| Actions | `service.py` functions, collaborators passed as keyword arguments |
 | Orchestrator | `Depends` providers (`deps.py`) + `create_app()` + `lifespan` |
 | Entry point | `APIRouter` path operation functions |
 | Presentation | `response_model` + exception handlers |
@@ -76,12 +79,12 @@ the Pydantic schema or the domain?
 
 ## Precedence
 
-1. **Explicit instructions and repo conventions** (`CLAUDE.md`, `AGENTS.md`, lint/CI rules, ADRs, the neighbouring healthy code)
+1. **Explicit instructions and repo conventions** (`CLAUDE.md`, `AGENTS.md`, lint/CI rules, ADRs, the neighboring healthy code)
 2. **This FastAPI set**
 3. **The [generic patterns](../generic/README.md)**
 
-Repo conventions win over this set. Where this set and the generic patterns conflict on idiom, this set wins. If the repo already has a different layering (for example `routers/ services/ crud/ models/ schemas/`, or a hexagonal layout), map the roles onto it using [ADAPTING_TO_A_CODEBASE.md](../generic/ADAPTING_TO_A_CODEBASE.md). Do not rename things.
+Repo conventions win over this set. Where this set and the generic patterns conflict on idiom, this set wins. Some repos use a different layering, such as `routers/ services/ crud/ models/ schemas/` or a hexagonal layout. Map the roles onto that layering using [ADAPTING_TO_A_CODEBASE.md](../generic/ADAPTING_TO_A_CODEBASE.md). Do not rename things.
 
 ## Versions Assumed
 
-This set assumes Python 3.10+, FastAPI with Pydantic v2, the `Annotated[..., Depends(...)]` style, pytest, and httpx/`TestClient`. Where a DB is mentioned, it assumes SQLAlchemy 2.x. The patterns also hold for SQLModel, Tortoise, raw drivers, or no DB at all.
+This set assumes Python 3.10+, FastAPI with Pydantic v2, the `Annotated[..., Depends(...)]` style, pytest, and httpx/`TestClient`. Where a database is mentioned, it assumes SQLAlchemy 2.x. The patterns also hold for SQLModel, Tortoise, raw drivers, or no database at all.

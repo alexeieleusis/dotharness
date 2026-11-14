@@ -2,7 +2,7 @@
 
 **The comprehensive FastAPI reference. Read the quick guides first. Come here for the "why".**
 
-This is the FastAPI instantiation of the [generic convention](../generic/CODE_ORGANIZATION_CONVENTION.md). The principles are identical. This document adds idioms, a role mapping, and gotchas.
+This is the FastAPI version of the [generic convention](../generic/CODE_ORGANIZATION_CONVENTION.md). The principles are identical. This document adds idioms, a role mapping, and gotchas.
 
 **Precedence:** repo instructions and conventions > this set > generic. When the codebase already has a working layering, map onto it ([ADAPTING_TO_A_CODEBASE.md](../generic/ADAPTING_TO_A_CODEBASE.md)).
 
@@ -52,14 +52,14 @@ This is the FastAPI instantiation of the [generic convention](../generic/CODE_OR
 | Generic role | FastAPI unit | Typical file | Pure? | I/O? |
 | ------------ | ------------ | ------------ | ----- | ---- |
 | **Contracts** (API) | Pydantic v2 `BaseModel` request/response schemas | `schemas.py` | n/a | No |
-| **Contracts** (internal) | Frozen `@dataclass`es / `NamedTuple`s / enums; result types (`Order \| Rejection`) | `domain.py` (types at top) | n/a | No |
+| **Contracts** (internal) | Frozen `@dataclass`es / `NamedTuple`s / enums. Result types (`Order \| Rejection`) | `domain.py` (types at top) | n/a | No |
 | **Domain** | Pure functions over internal contracts | `domain.py` | Yes | No |
 | **Adapters** | Repositories, gateways, clock/id providers, behind `typing.Protocol` ports | `ports.py` (Protocols), `repository.py` / `adapters.py` / `gateways.py` | No | Yes |
-| **State** | Request-scoped context, unit of work/session (via `Depends` with `yield`); app-scoped clients via `lifespan` / `app.state` | `deps.py`, `lifespan` in `main.py` | No | Resource handles |
+| **State** | Request-scoped context, unit of work/session (via `Depends` with `yield`). App-scoped clients via `lifespan` / `app.state` | `deps.py`, `lifespan` in `main.py` | No | Resource handles |
 | **Actions** | Service / use-case functions (one per use-case) | `service.py` | No | Via adapters |
-| **Orchestrator** | `Depends` providers + `create_app()` + `lifespan`; `dependency_overrides` is its test seam | `deps.py`, `main.py` | No | No |
-| **Entry point** | `APIRouter` path operation functions; also CLI commands, background-task callables, queue consumers | `router.py` | No | Edge only |
-| **Presentation** | `response_model`, exception handlers, `status_code`s; pure mapper functions when non-trivial | `schemas.py`, `errors.py`, `presenters.py` | Yes | No |
+| **Orchestrator** | `Depends` providers + `create_app()` + `lifespan`. `dependency_overrides` is its test seam | `deps.py`, `main.py` | No | No |
+| **Entry point** | `APIRouter` path operation functions. Also CLI commands, background-task callables, queue consumers | `router.py` | No | Edge only |
+| **Presentation** | `response_model`, exception handlers, `status_code`s. Pure mapper functions when non-trivial | `schemas.py`, `errors.py`, `presenters.py` | Yes | No |
 
 Notes on the mapping:
 
@@ -101,15 +101,15 @@ Naming:
 
 | Thing | Convention |
 | ----- | ---------- |
-| Schemas | `PlaceOrderIn`, `OrderOut` (suffix `In`/`Out`, or `Create`/`Read`/`Update`; follow the repo) |
+| Schemas | `PlaceOrderIn`, `OrderOut` (suffix `In`/`Out`, or `Create`/`Read`/`Update`. Follow the repo.) |
 | Domain functions | verbs/rules: `check_requested`, `bulk_discount_cents`, `decide_order` |
 | Outcome types | `Order \| Rejection` (union of frozen dataclasses), or an `Enum` of reasons |
 | Ports | nouns for the capability: `OrderRepository`, `PriceCatalog`, `PaymentGateway` |
 | Services | verb per use-case: `place_order`, `cancel_order` (module of functions, or a class if the repo prefers) |
-| Providers | `get_<thing>` in `deps.py`; `Annotated` aliases `OrdersDep = Annotated[OrderRepository, Depends(get_orders)]` |
+| Providers | `get_<thing>` in `deps.py`. `Annotated` aliases `OrdersDep = Annotated[OrderRepository, Depends(get_orders)]` |
 | Routers | `router = APIRouter(prefix="/orders", tags=["orders"])` |
 
-Shared things (db session provider, auth principal, pagination params) live in `core/` or a `shared/` package. Features use them and rarely redefine them.
+Shared elements (db session provider, auth principal, pagination params) live in `core/` or a `shared/` package. Features use them and rarely redefine them.
 
 ---
 
@@ -137,9 +137,9 @@ class OrderOut(BaseModel):
 ```
 
 - **Separate request and response models.** Use `OrderIn` and `OrderOut`, never one class for both. Inputs have no `id` or server-set fields. Outputs never echo secrets.
-- **Separate from ORM models and from domain dataclasses.** Three shapes for three reasons to change (wire format, persistence, rules). Merge only when a feature is truly CRUD-only.
+- **Separate from ORM models and from domain dataclasses.** Three shapes for three reasons to change (wire format, persistence, rules). Merge only when a feature is CRUD-only.
 - Use `from_attributes=True` on output models so routers can return domain objects and let `response_model` serialize them.
-- Version breaking changes (`OrderOutV2`) rather than mutating in place.
+- Version breaking changes (`OrderOutV2`) rather than mutating the schema in place.
 - If the repo generates clients from the OpenAPI schema, treat the schema as the contract: change schemas, regenerate clients.
 
 ### Internal contracts: domain dataclasses and Protocols
@@ -196,14 +196,14 @@ def decide_order(*, order_id, customer_id, requested, prices, now) -> Order | Re
     ...
 ```
 
-- **Return outcome data** (`Order | Rejection`, `(value, reasons)`), not exceptions, for *expected* failures. Services turn rejections into exceptions/status codes.
+- **Return outcome data** (`Order | Rejection`, `(value, reasons)`), not exceptions, for *expected* failures. Services convert rejections into exceptions/status codes.
 - Raise only for programmer errors/invariant violations (`ValueError` on impossible input).
 - **Time, ids, randomness are arguments** (`now: datetime`, `order_id: str`).
 - Use `match`/`isinstance` on outcome unions in callers.
 
 ### Pydantic validation vs. domain validation
 
-The most common FastAPI placement mistake. Rule of thumb:
+The most common FastAPI placement mistake. Guideline:
 
 | Question | Where |
 | -------- | ----- |
@@ -214,7 +214,7 @@ The most common FastAPI placement mistake. Rule of thumb:
 
 Corollary: Pydantic `@field_validator`s stay *syntactic* (normalize case, strip whitespace, parse). If a validator contains a number a product manager would recognize, move it to the domain and keep a named constant there.
 
-Don't return two different bodies under one status. Pydantic's 422 has a `detail` array; give domain rejections their own status (e.g. 409) and model, or, if you reuse 422, document a union (`ErrorOut | HTTPValidationError`) or reshape `RequestValidationError` repo-wide.
+Don't return two different bodies under one status. Pydantic's 422 has a `detail` array. Give domain rejections their own status (e.g. 409) and model. If you reuse 422, document a union (`ErrorOut | HTTPValidationError`) or reshape `RequestValidationError` repo-wide.
 
 ---
 
@@ -230,23 +230,23 @@ class OrderRepository(Protocol):
     def get(self, order_id: str) -> Order | None: ...
 ```
 
-The service types its parameters against the Protocol; production passes the SQLAlchemy repository, tests pass an in-memory one. No inheritance, no mock library needed.
+The service types its parameters against the Protocol. Production passes the SQLAlchemy repository. Tests pass an in-memory one. No inheritance, no mock library needed.
 
 ### Repository rules
 
 - Expose **domain operations** (`add`, `get`, `list_for_customer`), not session handles, query builders or ORM objects.
 - **Translate** ORM rows to domain dataclasses (`_to_domain(row)`) and back (`_to_row(order)`) inside the adapter. ORM models never cross the boundary.
 - **Map external failures** to a few meaningful exceptions (`NotFound`, `Conflict`, `Unavailable`), e.g. `IntegrityError` -> `Conflict`.
-- **Who commits?** The unit of work owns the commit, called explicitly by the service inside the request path, and maps `IntegrityError` -> `Conflict` ([Session and transaction scoping](#session-and-transaction-scoping)); repositories `add`/`flush` only.
+- **Who commits?** The unit of work owns the commit. The service calls it explicitly inside the request path. It maps `IntegrityError` -> `Conflict` ([Session and transaction scoping](#session-and-transaction-scoping)). Repositories `add`/`flush` only.
 - Retries, timeouts, circuit breakers belong in gateways for remote APIs, configured via settings.
 
 ### Sync vs. async adapters
 
-Match the stack: sync SQLAlchemy `Session` with `def` routes, or `AsyncSession` with `async def` routes. Ports can be sync or async; a service awaiting async ports is itself `async def`. The **domain stays sync regardless**: it is pure CPU, so there is nothing to await. See [Blocking calls in async endpoints](#blocking-calls-in-async-endpoints).
+Match the stack: sync SQLAlchemy `Session` with `def` routes, or `AsyncSession` with `async def` routes. Ports can be sync or async. A service awaiting async ports is itself `async def`. The **domain stays sync regardless**: it is pure CPU, so there is nothing to await. See [Blocking calls in async endpoints](#blocking-calls-in-async-endpoints).
 
 ### Clock and ids
 
-Small providers (`Callable[[], datetime]`, `Callable[[], str]`) injected via `Depends`. Domain receives the *values*; the service calls the providers. See [Time and uuid injection](#time-and-uuid-injection).
+Small providers (`Callable[[], datetime]`, `Callable[[], str]`) are injected via `Depends`. Domain receives the *values*. The service calls the providers. See [Time and uuid injection](#time-and-uuid-injection).
 
 ---
 
@@ -261,9 +261,9 @@ Most FastAPI features are stateless request/response and **skip this role**. Sta
 | Current user/principal, request id, tenant | Request | `Depends` provider returning a plain value |
 | Job progress, cache | Process/external | Adapter (Redis, table), not module globals |
 
-- Keep it minimal; derive values with domain functions.
+- Keep it minimal. Derive values with domain functions.
 - **Never use mutable module globals for per-request data**: concurrent requests share the process. Process-wide caches are adapters with explicit invalidation.
-- Public vs. internal surface: handlers receive read-only values (principal, settings); only adapters hold mutators (sessions).
+- Public vs. internal surface: handlers receive read-only values (principal, settings). Only adapters hold mutators (sessions).
 
 ### Lifespan
 
@@ -303,7 +303,7 @@ Rules:
 
 - Read it as "call, call, call". The only branch is *did the domain accept?*
 - **Collaborators are keyword-only arguments** (or constructor fields). Never `from app.db import session` inside a service.
-- **Services take and return plain/domain values**, not `Request`, `Response`, `HTTPException`, or Pydantic input models. (Convert `PlaceOrderIn` to domain types in the router via `body.to_domain()`; see the note in [Entry Point](#entry-point).)
+- **Services take and return plain/domain values**, not `Request`, `Response`, `HTTPException`, or Pydantic input models. (Convert `PlaceOrderIn` to domain types in the router via `body.to_domain()`. See the note in [Entry Point](#entry-point).)
 - Actions own *when* an error surfaces and in what shape: they raise **application exceptions** (`OrderRejected`, `OrderNotFound`) that handlers map to HTTP. Do not raise `HTTPException` from services: it couples them to the transport and breaks CLI/worker reuse.
 - Services may call other services only downward or sideways, without cycles. Shared steps become domain functions or adapters.
 - Async: `async def` service awaiting async ports, domain calls inline.
@@ -312,7 +312,7 @@ Rules:
 
 `BackgroundTasks` (and Celery/ARQ/queue jobs) are **entry points for follow-up work**, not a place to hide rules.
 
-- The request-time service decides and persists; the background callable is a thin function that calls another service function with its own adapters.
+- The request-time service decides and persists. The background callable is a thin function that calls another service function with its own adapters.
 - Do **not** reuse the request's `Depends` session in a background task (it may already be closed). Open a fresh unit of work inside the task, or enqueue ids and let the worker build its own.
 - Pass plain data (ids), not ORM objects or request-bound objects.
 
@@ -341,9 +341,9 @@ UowDep = Annotated[UnitOfWork, Depends(get_uow)]
 ```
 
 - Providers construct adapters and return them typed as the **Protocol**, not the implementation.
-- No conditionals that encode behavior; at most environment-based selection (settings), which is wiring.
-- One provider per collaborator; compose with other `Depends` (the repository depends on the session dependency).
-- `create_app()` factory (not just a module-level `app`) so tests build fresh apps: includes routers, registers exception handlers, attaches `lifespan`.
+- No conditionals that encode behavior. Allow at most environment-based selection (settings), which is wiring.
+- One provider per collaborator. Compose with other `Depends` (the repository depends on the session dependency).
+- `create_app()` factory (not just a module-level `app`) so tests build fresh apps. It includes routers, registers exception handlers, and attaches `lifespan`.
 - `app.dependency_overrides[get_orders] = lambda: fake` is the **test seam**. Anything you want to fake must go through a provider.
 - Use `Annotated` aliases to keep router signatures short and to give each dependency one canonical name.
 
@@ -399,8 +399,8 @@ def place_order(
   | Service | *when* to raise (`OrderRejected`, `OrderNotFound`) |
   | Exception handler | status code + body shape |
 
-- Document error shapes in the route (`responses={409: {"model": ErrorOut}}`; declaring a model on 422 replaces FastAPI's `HTTPValidationError` entry) so OpenAPI and clients know them.
-- Keep non-trivial formatting (CSV export, report rendering, pagination envelopes) in pure functions; test with fixtures.
+- Document error shapes in the route (`responses={409: {"model": ErrorOut}}`) so OpenAPI and clients know them. Declaring a model on 422 replaces FastAPI's `HTTPValidationError` entry.
+- Keep non-trivial formatting (CSV export, report rendering, pagination envelopes) in pure functions. Test with fixtures.
 
 ---
 
@@ -481,7 +481,7 @@ Cover: happy path, each rule boundary, empty/None/edge input, **every reason** a
 
 ### Faking adapters
 
-- **Protocol + in-memory class** (preferred): `InMemoryOrderRepository` with the same methods; reuse across service and API tests.
+- **Protocol + in-memory class** (preferred): `InMemoryOrderRepository` with the same methods. Reuse across service and API tests.
 - Inject into services directly in service tests (`place_order(..., orders=repo, now=lambda: FIXED)`).
 - Inject into the app with `dependency_overrides`:
 
@@ -517,20 +517,23 @@ Run each test in a transaction rolled back at the end (session fixture with `beg
 ### Blocking calls in async endpoints
 
 - `async def` path operations run **on the event loop**. A blocking call inside them (sync SQLAlchemy `Session`, `requests`, `time.sleep`, `open().read()` on big files, CPU-heavy loops) **stalls every request** on that worker.
-- `def` path operations (and `def` dependencies) run in a **threadpool**; blocking is fine there (default ~40 threads).
+- `def` path operations (and `def` dependencies) run in a **threadpool**. Blocking is fine there (default ~40 threads).
 - Pick one coherent mode per feature:
-  - Sync stack (sync SQLAlchemy, `requests`): **`def` routes and `def` services**. Simplest; correct.
+  - Sync stack (sync SQLAlchemy, `requests`): **`def` routes and `def` services**. The simplest, correct choice.
   - Async stack (`AsyncSession`, `httpx.AsyncClient`): **`async def` all the way**, `await` every I/O.
-  - Mixed: call blocking code from `async def` via `await run_in_threadpool(fn, ...)` / `anyio.to_thread.run_sync`; call CPU-heavy work via a process pool/worker.
+  - Mixed: call blocking code from `async def` via `await run_in_threadpool(fn, ...)` / `anyio.to_thread.run_sync`. Call CPU-heavy work via a process pool/worker.
 - Don't declare `async def` "because it's FastAPI". Without an `await`, it only adds risk.
-- Domain functions are sync and fast; calling them inline from either mode is fine. If one becomes genuinely CPU-heavy, offload it at the action level, not inside the domain.
+- Domain functions are sync and fast. Calling them inline from either mode is fine. If one becomes genuinely CPU-heavy, offload it at the action level, not inside the domain.
 
 ### `Depends` caching per request
 
 - Within a single request, a dependency used in several places is **called once** and its result reused (cache key: the callable plus its scopes). This is what lets the router, the repository provider and an auth dependency share one DB session.
-- Consequences: (1) don't rely on a dependency being called twice; (2) a provider returning a **factory** (`get_now` returning a callable) is the way to get fresh values each call; (3) pass `Depends(get_x, use_cache=False)` only when you truly need a new instance per use.
+- Consequences:
+  - Don't rely on a dependency being called twice.
+  - A provider that returns a **factory** (`get_now` returning a callable) gives fresh values on each call.
+  - Pass `Depends(get_x, use_cache=False)` only when you need a new instance per use.
 - Dependencies are cached **per request, not across requests**. Process-wide singletons need `lru_cache`, `lifespan`/`app.state`, or a module-level instance built once.
-- Overrides replace the provider everywhere it is used, which is why every seam must go through one provider function.
+- Overrides replace the provider everywhere it is used, which is why every seam must route through one provider function.
 
 ### Session and transaction scoping
 
@@ -558,19 +561,19 @@ Run each test in a transaction rolled back at the end (session fixture with `beg
               raise Conflict(str(exc.orig)) from exc
   ```
 
-  The service calls `uow.commit()` as its last step (see [Actions](#actions)), so a duplicate key or other commit-time failure raises `Conflict` *before* the response is built and an exception handler maps it to 409. The dependency only rolls back (on error) and closes.
+  The service calls `uow.commit()` as its last step (see [Actions](#actions)). A duplicate key or other commit-time failure then raises `Conflict` *before* the response is built. An exception handler maps it to 409. The dependency only rolls back (on error) and closes.
 
-- Repositories use the injected session and `add`/`flush`; **they do not commit**. A use-case that spans two repositories is one transaction by construction.
+- Repositories use the injected session and `add`/`flush`. **They do not commit**. A use-case that spans two repositories is one transaction by construction.
 - Do not share a session across requests, threads or background tasks. Background work builds its own session.
-- **Do not commit in the dependency's teardown.** Code after `yield` may run after the response has started (behavior varies by FastAPI version), so a commit failure there cannot change the status code and bypasses the adapter's error mapping: the client could get a 2xx (or a bare 500) for data that was never persisted. If you make `add` flush so violations surface earlier, the final commit can still fail, so keep the explicit commit.
+- **Do not commit in the dependency's teardown.** Code after `yield` may run after the response has started (behavior varies by FastAPI version), so a commit failure there cannot change the status code and it bypasses the adapter's error mapping. The client could get a 2xx (or a bare 500) for data that was never persisted. Even if you make `add` flush so violations surface earlier, the final commit can still fail. Keep the explicit commit.
 - Mind lazy loading: with `AsyncSession`, touching an unloaded relationship outside the session raises. Load what you need inside the repository and translate to domain values before returning (this also fixes ORM leakage). Set `expire_on_commit=False` if returned objects are read after commit.
 
 ### ORM models leaking into responses
 
 - Returning an ORM instance works "by accident" through `from_attributes`, then leaks columns, lazy relationships (extra queries, `DetachedInstanceError`), and couples the wire format to the schema.
-- Fix structurally: the **repository returns domain dataclasses**; handlers return those; `response_model=OrderOut` filters the output.
+- Fix structurally: the **repository returns domain dataclasses**, handlers return those, and `response_model=OrderOut` filters the output.
 - Never accept an ORM model as a request body, and never put ORM models in `Protocol` signatures.
-- Mass-assignment: do not `Model(**body.model_dump())` blindly; map explicit fields.
+- Mass-assignment: do not `Model(**body.model_dump())` blindly. Map explicit fields.
 
 ### Pydantic validation vs. domain validation
 
@@ -581,8 +584,8 @@ Also, Pydantic v2 coerces by default (`"5"` -> `5`). Use `strict=True` where coe
 ### Time and uuid injection
 
 - `datetime.now()`/`uuid4()` inside domain or service code makes tests flaky or forces `freezegun`/`patch`.
-- Inject **providers** (`now: Callable[[], datetime]`, `new_id: Callable[[], str]`) via `Depends`; the service calls them and passes values to the domain.
-- Use timezone-aware UTC (`datetime.now(timezone.utc)`); never naive datetimes.
+- Inject **providers** (`now: Callable[[], datetime]`, `new_id: Callable[[], str]`) via `Depends`. The service calls them and passes values to the domain.
+- Use timezone-aware UTC (`datetime.now(timezone.utc)`). Never use naive datetimes.
 - DB-generated ids/timestamps (`server_default`) are fine at the adapter level, but if a rule depends on them, generate in the service instead.
 - Don't use `Field(default_factory=uuid4)` on *input* schemas for server-set values: the client could supply them.
 
@@ -592,20 +595,20 @@ Typical cause: `models` <-> `schemas` <-> `services` <-> `routers` importing eac
 
 - Follow the [dependency flow](#dependency-flow): lower layers never import higher ones.
 - `service.py` imports Protocols, not adapters, so adapters can import domain without a loop.
-- Put exceptions in a leaf module; `errors.py` imports them, routers don't import `errors.py`.
+- Put exceptions in a leaf module. `errors.py` imports them. Routers don't import `errors.py`.
 - Access the app via `request.app` inside providers, never `from app.main import app`.
-- Use `from __future__ import annotations` + `if TYPE_CHECKING:` for type-only imports; avoid function-level imports as a permanent fix (they hide a layering problem).
+- Use `from __future__ import annotations` + `if TYPE_CHECKING:` for type-only imports. Avoid function-level imports as a permanent fix. They hide a layering problem.
 - Pydantic models referring to each other: define in one module or use string forward refs and `model_rebuild()`.
 
 ### Other traps
 
-- **Router-level `Depends` run even if unused** by the handler; use them for auth/cross-cutting only.
+- **Router-level `Depends` run even if unused** by the handler. Use them for auth/cross-cutting only.
 - **`response_model` plus returning a Response** bypasses filtering.
-- **Sub-dependencies with `yield`**: exit order is reverse of setup; don't rely on it for business logic.
-- **Module-level `app = FastAPI(...)` with side effects at import** (DB connections) breaks tests; build in `lifespan`/providers.
-- **Settings**: use `pydantic-settings` in `core/config.py`, provided via a cached `get_settings` dependency (overridable); don't read `os.environ` in domain/service.
-- **BackgroundTasks** run after the response, in the same process; failures are not visible to the client. Use a real queue for anything that must not be lost.
-- **Naming a route function the same as a service function** shadows imports; import the module (`from app.orders import service`) rather than names.
+- **Sub-dependencies with `yield`**: exit order is reverse of setup. Don't rely on it for business logic.
+- **Module-level `app = FastAPI(...)` with side effects at import** (DB connections) breaks tests. Build in `lifespan`/providers.
+- **Settings**: use `pydantic-settings` in `core/config.py`, provided via a cached `get_settings` dependency (overridable). Don't read `os.environ` in domain/service.
+- **BackgroundTasks** run after the response, in the same process. Failures are not visible to the client. Use a real queue for anything that must not be lost.
+- **Naming a route function the same as a service function** shadows imports. Import the module (`from app.orders import service`) rather than names.
 
 ---
 
@@ -617,16 +620,16 @@ Typical cause: `models` <-> `schemas` <-> `services` <-> `routers` importing eac
 | Testing | Domain tests first | Pin behavior with `TestClient` tests first |
 | Guide | [QUICK_START_NEW_ENDPOINT.md](./QUICK_START_NEW_ENDPOINT.md) | [QUICK_START_MIGRATION.md](./QUICK_START_MIGRATION.md) |
 
-Migration is behavior-preserving and incremental; keep the public URL/response shape stable.
+Migration is behavior-preserving and incremental. Keep the public URL/response shape stable.
 
 ### When to skip a role (FastAPI flavor)
 
 | Feature kind | Skip |
 | ------------ | ---- |
-| Pure CRUD with no rules | Domain module; service may just call the repository. Still keep schemas separate from ORM models. |
+| Pure CRUD with no rules | Domain module. The service may just call the repository. Still keep schemas separate from ORM models. |
 | Health/metrics/static routes | Everything but the router |
-| Thin proxy to another API | It *is* a gateway adapter; keep the router thin, contract-test the gateway |
-| Single-adapter feature, one implementation forever | A Protocol is optional; inject the concrete class via `Depends` |
+| Thin proxy to another API | It *is* a gateway adapter. Keep the router thin. Contract-test the gateway |
+| Single-adapter feature, one implementation forever | A Protocol is optional. Inject the concrete class via `Depends` |
 
 The moment a rule appears (a threshold, a state check), add `domain.py` and its test.
 
@@ -698,9 +701,9 @@ def place(
 1. **Rules in pure Python** (`domain.py`): no fastapi/pydantic/sqlalchemy, injected time and ids, outcomes as data.
 2. **Schemas are boundary contracts**: Pydantic v2, separate in/out, separate from ORM and domain. Shape in schemas, policy in domain.
 3. **Services are actions**: keyword-injected ports, "call, call, call", raise application exceptions.
-4. **Adapters hide I/O** behind Protocols; ORM models never leave them; the unit of work owns the commit, called explicitly from the service.
-5. **`Depends` + `create_app()` + `lifespan` are the composition root**, boring on purpose; `dependency_overrides` is the test seam.
-6. **Routers are thin**: parse, delegate, `response_model`; exception handlers map errors.
+4. **Adapters hide I/O** behind Protocols. ORM models never leave them. The unit of work owns the commit, called explicitly from the service.
+5. **`Depends` + `create_app()` + `lifespan` are the composition root**, boring on purpose. `dependency_overrides` is the test seam.
+6. **Routers are thin**: parse, delegate, `response_model`. Exception handlers map errors.
 7. **Test the domain first** with parametrized tables, then services with fakes, then the API with `TestClient`.
 8. **Respect the event loop**: `def` for blocking stacks, `async def` only when every I/O is awaited.
 

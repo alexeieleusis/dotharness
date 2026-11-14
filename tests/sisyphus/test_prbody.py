@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from dotharness.sisyphus import prbody
 from dotharness.sisyphus.pick import mentions_issue
@@ -9,6 +13,8 @@ from dotharness.sisyphus.prbody import (
     MAX_BODY_CHARS,
     MAX_TITLE_CHARS,
     PLAN_NOT_MATCHED_NOTE,
+    _refactor_handoff_lines,
+    _refactor_record_lines,
     clean_title,
     commit_log_args,
     compose_body,
@@ -18,6 +24,7 @@ from dotharness.sisyphus.prbody import (
     extract_summary,
     fallback_title,
     format_decisions,
+    format_refactor_section,
     leaf_stems,
     list_phases,
     locate_phase_dir,
@@ -85,6 +92,24 @@ def test_select_handoffs(tmp_path: Path) -> None:
     got = select_handoffs(tmp_path, STEMS)
     assert [p.name for p in got["01-alpha-leaf"]] == ["01-alpha-leaf-followup.md", "01-alpha-leaf.md"]
     assert [p.name for p in got["02-beta-leaf"]] == ["02-02-beta-leaf.md"]
+
+
+def test_select_handoffs_ignores_refactor_handoffs(tmp_path: Path) -> None:
+    for n in (
+        "refactor-generic.md",
+        "refactor-fastapi.md",
+        "refactor-react.md",
+        "refactor-01-alpha-leaf.md",
+        "refactor-02-beta-leaf.md",
+        "refactor-alpha-leaf.md",
+        "refactor-beta-leaf.md",
+    ):
+        (tmp_path / n).write_text("")
+    assert select_handoffs(tmp_path, STEMS) == {"01-alpha-leaf": [], "02-beta-leaf": []}
+    (tmp_path / "01-alpha-leaf.md").write_text("")
+    got = select_handoffs(tmp_path, STEMS)
+    assert [p.name for p in got["01-alpha-leaf"]] == ["01-alpha-leaf.md"]
+    assert got["02-beta-leaf"] == []
 
 
 def test_summary(tmp_path: Path) -> None:
@@ -331,6 +356,128 @@ async def test_build_body_full_and_degraded(tmp_path: Path) -> None:
     assert PLAN_NOT_MATCHED_NOTE in await _build(tmp_path, plan)
 
 
+async def _build_refactor(tmp_path: Path, **kw: Any) -> str:
+    plan = tmp_path / "plan"
+    plan.mkdir(exist_ok=True)
+    (tmp_path / "phases").mkdir(exist_ok=True)
+    (tmp_path / "b.md").write_text("x")
+    (plan / "requirements.md").write_text("## 1. Goal\n\nShip it.\n")
+    (plan / "init_manifest.json").write_text(json.dumps({"brief": str(tmp_path / "b.md")}))
+
+    async def run_git(_args: object) -> str | None:
+        return "abc\tPhase 01: alpha\n"
+
+    return await prbody.build_body(
+        "w",
+        brief_path=tmp_path / "b.md",
+        plan_dir=plan,
+        phase_dir=_phase_dir(tmp_path / "phases"),
+        base_branch="main",
+        workspace=tmp_path,
+        run_git=run_git,
+        **kw,
+    )
+
+
+def _spy_refactor(monkeypatch: Any) -> dict[str, list[Any]]:
+    calls: dict[str, list[Any]] = {"extract": [], "format": []}
+
+    def extract(paths: Sequence[Path]) -> list[Any]:
+        calls["extract"].append(list(paths))
+        return [prbody.RefactorHandoff(p.name[len("refactor-") : -3], None, ()) for p in paths]
+
+    def fmt(records: Sequence[Any], results: Any) -> str:
+        calls["format"].append((list(records), results))
+        return "X"
+
+    monkeypatch.setattr(prbody, "extract_refactor_handoffs", extract)
+    monkeypatch.setattr(prbody, "format_refactor_section", fmt)
+    return calls
+
+
+def _rec(name: Any) -> dict[str, Any]:
+    return {"set": name, "files": [], "evidence": [], "fallback": False}
+
+
+async def test_build_body_refactor_none_or_empty(tmp_path: Path, monkeypatch: Any) -> None:
+    base = await _build_refactor(tmp_path)
+    calls = _spy_refactor(monkeypatch)
+    assert "## Refactor" not in base
+    assert await _build_refactor(tmp_path, refactor_records=[], refactor_handoff_dir=tmp_path) == base
+    assert await _build_refactor(tmp_path, refactor_records=["s", None, {"x": 1}, {"set": 3}]) == base
+    assert calls == {"extract": [], "format": []}
+
+
+async def test_build_body_refactor_paths_and_formatter(tmp_path: Path, monkeypatch: Any) -> None:
+    calls = _spy_refactor(monkeypatch)
+    hd = tmp_path / "h"
+    hd.mkdir()
+    (hd / "refactor-a.md").write_text("x")
+    recs = [_rec("a"), _rec("b")]
+    body = await _build_refactor(tmp_path, refactor_records=recs, refactor_handoff_dir=hd)
+    assert calls["extract"] == [[hd / "refactor-a.md"]]
+    ((got_recs, got_results),) = calls["format"]
+    assert got_recs == recs
+    assert set(got_results) == {"a"}
+    assert body.index("## Deviations") < body.index("## Refactor\n\nX")
+
+
+async def test_build_body_refactor_defensive_records(tmp_path: Path, monkeypatch: Any) -> None:
+    calls = _spy_refactor(monkeypatch)
+    good = _rec("g")
+    await _build_refactor(tmp_path, refactor_records=["s", None, {"files": []}, {"set": 3}, good])
+    assert calls["format"][0][0] == [good]
+
+
+async def test_build_body_refactor_unsafe_set_names(tmp_path: Path, monkeypatch: Any) -> None:
+    calls = _spy_refactor(monkeypatch)
+    hd = tmp_path / "h"
+    hd.mkdir()
+    # Real files for every candidate path the guard must reject, plus a positive control.
+    for n in ("..", ".", "", "a\\b"):
+        (hd / f"refactor-{n}.md").write_text("x")
+    (hd / "refactor-..").mkdir()
+    (hd / "refactor-..").joinpath("x.md").write_text("x")  # candidate for "../x"
+    (hd / "refactor-a").mkdir()
+    (hd / "refactor-a" / "b.md").write_text("x")  # candidate for "a/b"
+    (hd / "refactor-ok.md").write_text("x")
+    names = ["../x", "a/b", "a\\b", "..", ".", "", "a\0b", "ok"]
+    recs = [_rec(n) for n in names]
+    await _build_refactor(tmp_path, refactor_records=recs, refactor_handoff_dir=hd)
+    assert calls["extract"] == [[hd / "refactor-ok.md"]]
+    assert calls["format"][0][0] == recs
+
+
+async def test_build_body_refactor_no_dir_and_directory(tmp_path: Path, monkeypatch: Any) -> None:
+    calls = _spy_refactor(monkeypatch)
+    recs = [_rec("a")]
+    await _build_refactor(tmp_path, refactor_records=recs)
+    hd = tmp_path / "h"
+    (hd / "refactor-a.md").mkdir(parents=True)
+    await _build_refactor(tmp_path, refactor_records=recs, refactor_handoff_dir=hd)
+    assert calls["extract"] == [[], []]
+    assert [c[0] for c in calls["format"]] == [recs, recs]
+
+
+async def test_build_body_refactor_integration_fallback(tmp_path: Path) -> None:
+    hd = tmp_path / "h"
+    hd.mkdir()
+    (hd / "refactor-generic.md").write_text("- Deviations from the plan: None\n")
+    rec = {"set": "generic", "files": ["a.py"], "evidence": ["no manifest found"], "fallback": True}
+    body = await _build_refactor(tmp_path, refactor_records=[rec], refactor_handoff_dir=hd)
+    assert "## Refactor" in body and "### generic" in body
+    assert "- Fallback: yes" in body and "no manifest found" in body
+
+
+async def test_build_body_refactor_is_keyword_only(tmp_path: Path) -> None:
+    async def run_git(_args: object) -> str | None:
+        return None
+
+    build: Any = prbody.build_body
+    with pytest.raises(TypeError):
+        await build("w", tmp_path, tmp_path, tmp_path, "main", tmp_path, run_git, [], None)
+
+
 async def test_build_body_reads_handoffs_from_plan_dir(tmp_path: Path) -> None:
     (tmp_path / "phases").mkdir()
     (tmp_path / "b.md").write_text("x")
@@ -461,3 +608,424 @@ def test_fallback_title_and_cap() -> None:
 
 def test_work_item_header_is_closing_reference() -> None:
     assert work_item_header("o/r#109") == "Closes o/r#109"
+
+
+def _rh(tmp_path, name, text):
+    p = tmp_path / name
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def test_refactor_handoffs_deviation_bullet(tmp_path):
+    p = _rh(tmp_path, "refactor-fastapi.md", "- Deviations from the plan: split the router\n")
+    [r] = prbody.extract_refactor_handoffs([p])
+    assert r == prbody.RefactorHandoff("fastapi", "- fastapi: split the router", ())
+
+
+def test_refactor_handoffs_no_deviations_bullet(tmp_path):
+    p = _rh(tmp_path, "refactor-a.md", "- Edits to existing files: a.py: r\n")
+    [r] = prbody.extract_refactor_handoffs([p])
+    assert r.deviation is None
+    assert r.notes == ("Note: no deviations bullet found in handoff refactor-a.md.",)
+
+
+def test_refactor_handoffs_unreadable(tmp_path):
+    note = ("Note: cannot read handoff refactor-x.md.",)
+    [r] = prbody.extract_refactor_handoffs([tmp_path / "refactor-x.md"])
+    assert (r.deviation, r.notes) == (None, note)
+    p = tmp_path / "refactor-x.md"
+    p.write_bytes(b"\xff\xfe\x00bad")
+    [r] = prbody.extract_refactor_handoffs([p])
+    assert (r.deviation, r.notes) == (None, note)
+
+
+def test_refactor_handoffs_set_name(tmp_path):
+    names = ["refactor-react.md", "refactor-refactor-x.md", "notes.md", "refactor-x", "refactor-x.MD"]
+    sub = tmp_path / "refactor-dir"
+    sub.mkdir()
+    got = [r.set for r in prbody.extract_refactor_handoffs([sub / n for n in names])]
+    assert got == ["react", "refactor-x", "notes", "x", "x.MD"]
+
+
+def test_refactor_handoffs_order(tmp_path):
+    paths = [_rh(tmp_path, f"refactor-{n}.md", "") for n in "cab"]
+    assert [r.set for r in prbody.extract_refactor_handoffs(paths)] == ["c", "a", "b"]
+
+
+def test_refactor_handoffs_empty():
+    assert prbody.extract_refactor_handoffs([]) == []
+
+
+def test_refactor_handoffs_deviation_none(tmp_path):
+    p = _rh(tmp_path, "refactor-a.md", "- Deviations from the plan: None\n- Edits to existing files: a.py: r\n")
+    [r] = prbody.extract_refactor_handoffs([p])
+    assert r.deviation is None
+    assert r.notes == ()
+
+
+def test_refactor_handoffs_is_namedtuple(tmp_path):
+    p = _rh(tmp_path, "refactor-a.md", "")
+    [r] = prbody.extract_refactor_handoffs([p])
+    assert isinstance(r, tuple)
+    assert r._fields == ("set", "deviation", "notes")
+    assert isinstance(r.notes, tuple)
+
+
+def _record(**over: object) -> dict[str, object]:
+    base: dict[str, object] = {"set": "fastapi", "files": ["a.py"], "evidence": ["x: 1"], "fallback": False}
+    base.update(over)
+    return base
+
+
+def test_refactor_record_lines_fallback_yes() -> None:
+    ev = ["pyproject.toml: fastapi>=0.1", "app/main.py: from fastapi import FastAPI"]
+    lines = _refactor_record_lines(_record(set="generic", evidence=ev, fallback=True))
+    assert "- Fallback: yes" in lines
+    assert all(f"  - {e}" in lines for e in ev)
+
+
+def test_refactor_record_lines_fallback_no() -> None:
+    lines = _refactor_record_lines(_record())
+    assert "- Fallback: no" in lines
+    assert "- Fallback: yes" not in lines
+
+
+def test_refactor_record_lines_empty_evidence() -> None:
+    lines = _refactor_record_lines(_record(evidence=[]))
+    assert "- Evidence: none" in lines
+    assert not any(line.startswith("  - ") for line in lines[lines.index("- Evidence: none") :])
+
+
+def test_refactor_record_lines_ignores_extra_keys() -> None:
+    lines = _refactor_record_lines(_record(tests=["tests/test_a.py"], head_before="abc1234"))
+    assert not any("tests/test_a.py" in line or "abc1234" in line for line in lines)
+
+
+def test_refactor_record_lines_keeps_order_and_inputs() -> None:
+    files, ev = ["b.py", "a.py"], ["z: 1", "a: 2"]
+    lines = _refactor_record_lines(_record(files=files, evidence=ev))
+    assert lines[3:5] == ["  - z: 1", "  - a: 2"]
+    assert not any("b.py" in line or "a.py" in line for line in lines)
+    assert files == ["b.py", "a.py"]
+    assert ev == ["z: 1", "a: 2"]
+
+
+def test_refactor_record_lines_full_layout() -> None:
+    rec = _record(files=["a.py", "b.py"], evidence=["pyproject.toml: fastapi"])
+    assert _refactor_record_lines(rec) == [
+        "### fastapi",
+        "",
+        "- Evidence:",
+        "  - pyproject.toml: fastapi",
+        "- Fallback: no",
+    ]
+
+
+def test_refactor_record_lines_deterministic() -> None:
+    rec = _record()
+    assert _refactor_record_lines(rec) == _refactor_record_lines(rec)
+
+
+def _handoff_result(deviation: str | None = "x", notes: list[str] | None = None) -> dict:
+    return {"set": "generic", "deviation": deviation, "notes": notes if notes is not None else []}
+
+
+def test_refactor_handoff_lines_deviation() -> None:
+    result = _handoff_result("Kept the helper in place.")
+    assert _refactor_handoff_lines("generic", result) == ["- Deviations: Kept the helper in place."]
+
+
+def test_refactor_handoff_lines_none_result() -> None:
+    lines = _refactor_handoff_lines("fastapi", None)
+    assert lines == ["Note: no handoff found for set fastapi."]
+    assert not any(x.startswith("- Deviations:") for x in lines)
+
+
+def test_refactor_handoff_lines_deviation_none() -> None:
+    assert _refactor_handoff_lines("generic", _handoff_result(None)) == ["- Deviations: none"]
+
+
+def test_refactor_handoff_lines_deviation_unparsed_note() -> None:
+    note = "Note: no deviations bullet found in handoff refactor-generic.md."
+    assert _refactor_handoff_lines("generic", _handoff_result(None, [note])) == [
+        "- Deviations: unknown (see note)",
+        note,
+    ]
+
+
+def test_refactor_handoff_lines_notes_order() -> None:
+    lines = _refactor_handoff_lines("generic", _handoff_result(notes=["Note: a", "Note: b"]))
+    assert lines == ["- Deviations: x", "Note: a", "Note: b"]
+
+
+def test_refactor_handoff_lines_multiline() -> None:
+    lines = _refactor_handoff_lines("generic", _handoff_result("line one\nline two"))
+    assert lines[:2] == ["- Deviations: line one", "line two"]
+    assert "- Deviations: line one\nline two" in "\n".join(lines)
+
+
+def test_refactor_handoff_lines_empty_text_and_empty_note() -> None:
+    lines = _refactor_handoff_lines("generic", _handoff_result("", [""]))
+    assert lines == ["- Deviations:", ""]
+
+
+def test_refactor_handoff_lines_deterministic_and_non_mutating() -> None:
+    import copy
+
+    result = _handoff_result(notes=["Note: a"])
+    before = copy.deepcopy(result)
+    first = _refactor_handoff_lines("generic", result)
+    assert first == _refactor_handoff_lines("generic", result)
+    assert result == before
+    assert first is not result["notes"]
+
+
+def test_refactor_handoff_lines_does_not_embed() -> None:
+    lines = _refactor_handoff_lines("generic", _handoff_result("ping @someone see #12"))
+    assert lines[0] == "- Deviations: ping @someone see #12"
+
+
+def test_format_refactor_section_keeps_input_order() -> None:
+    records = [_record(set="react"), _record(set="generic"), _record(set="fastapi")]
+    results = {str(r["set"]): _handoff_result() for r in records}
+    text = format_refactor_section(records, results)
+    heads = [line for line in text.split("\n") if line.startswith("### ")]
+    assert heads == ["### react", "### generic", "### fastapi"]
+
+
+def test_format_refactor_section_empty() -> None:
+    assert format_refactor_section([], {}) == ""
+
+
+def test_format_refactor_section_deterministic() -> None:
+    records = [_record(set="react"), _record(set="generic")]
+    results = {"react": _handoff_result()}
+    assert format_refactor_section(records, results) == format_refactor_section(records, results)
+
+
+def test_format_refactor_section_missing_handoff() -> None:
+    text = format_refactor_section([_record(set="react")], {})
+    assert "Note: no handoff found for set react." in text
+    assert "### react" in text
+    for label in ("- Evidence:", "- Fallback:"):
+        assert label in text
+
+
+def test_format_refactor_section_layout() -> None:
+    records = [_record(set="react"), _record(set="fastapi")]
+    results = {str(r["set"]): _handoff_result() for r in records}
+    text = format_refactor_section(records, results)
+    assert text.count("\n\n### ") == 1
+    assert "\n\n\n" not in text
+    assert text.startswith("### react")
+    assert not text.startswith("## Refactor")
+    assert not text.endswith("\n")
+
+
+def test_format_refactor_section_ignores_extra_keys() -> None:
+    plain = _record(set="react")
+    extra = _record(set="react", tests=["t.py"], head_before="abc")
+    results = {"react": _handoff_result()}
+    assert format_refactor_section([extra], results) == format_refactor_section([plain], results)
+
+
+def test_format_refactor_section_does_not_mutate() -> None:
+    import copy
+
+    records = [_record(set="react"), _record(set="generic")]
+    results = {"react": _handoff_result(notes=["Note: a"])}
+    before = (copy.deepcopy(records), copy.deepcopy(results))
+    format_refactor_section(records, results)
+    assert (records, results) == before
+
+
+def _compose_refactor(tmp_path: Path, **kw: Any) -> str:
+    ws = tmp_path / "ws"
+    return compose_body("o/r#109", workspace=ws, plan_dir=ws / "plan", home=tmp_path, **kw)
+
+
+def test_compose_refactor_omitted_is_identical(tmp_path: Path) -> None:
+    base = {"summary": "S", "phases": "P", "decisions": "D", "deviations": "V", "requirements": "R"}
+    expected = _compose_refactor(tmp_path, **base)
+    assert _compose_refactor(tmp_path, refactor="", **base) == expected
+    assert _compose_refactor(tmp_path, refactor="  \n\t", **base) == expected
+    assert "## Refactor" not in expected
+    assert expected == (
+        "Closes o/r#109\n\n## Summary\n\nS\n\n## Phases\n\nP\n\n## Decisions\n\nD\n\n## Deviations\n\nV"
+        "\n\n" + prbody.requirements_block("R")
+    )
+
+
+def test_compose_refactor_renders_section(tmp_path: Path) -> None:
+    body = _compose_refactor(tmp_path, refactor="Set: generic", requirements="")
+    assert "\n\n## Refactor\n\nSet: generic" in body
+
+
+def test_compose_refactor_order(tmp_path: Path) -> None:
+    body = _compose_refactor(
+        tmp_path, summary="S", phases="P", decisions="D", deviations="V", refactor="F", requirements="R"
+    )
+    idx = [
+        body.index(m) for m in ("## Summary", "## Phases", "## Decisions", "## Deviations", "## Refactor", "<details>")
+    ]
+    assert idx == sorted(idx)
+
+
+def test_compose_refactor_embedded(tmp_path: Path) -> None:
+    text = f"{tmp_path}/ws/x @user #12 </details>"
+    body = _compose_refactor(tmp_path, refactor=text, deviations=text, requirements="")
+    refactor_part = body.split("## Refactor\n\n", 1)[1]
+    deviations_part = body.split("## Deviations\n\n", 1)[1].split("\n\n## Refactor")[0]
+    assert refactor_part == deviations_part
+    assert str(tmp_path) not in body and "</details>" not in body
+    assert not mentions_issue(body, 12)
+
+
+def test_compose_refactor_truncated_first(tmp_path: Path) -> None:
+    body = _compose_refactor(
+        tmp_path,
+        summary="SUMMARYSTART " + "s" * 100,
+        deviations="DEV",
+        refactor="r" * (MAX_BODY_CHARS * 2),
+        requirements="",
+    )
+    assert len(body) <= MAX_BODY_CHARS
+    assert body.endswith(prbody.TRUNCATED_NOTE)
+    assert "SUMMARYSTART" in body and "## Deviations\n\nDEV" in body
+    assert "## Refactor" in body and "r" * (MAX_BODY_CHARS * 2) not in body
+    body = _compose_refactor(tmp_path, summary="SUMMARYSTART " + "s" * (MAX_BODY_CHARS * 2), refactor="REFACTORTEXT")
+    assert len(body) <= MAX_BODY_CHARS and body.endswith(prbody.TRUNCATED_NOTE)
+    assert "SUMMARYSTART" in body and "REFACTORTEXT" not in body
+
+
+def test_compose_refactor_is_keyword_only() -> None:
+    import pytest
+
+    with pytest.raises(TypeError):
+        compose_body("o/r#109", "", "", "", "", "refactor", workspace=Path("."))  # ty: ignore[too-many-positional-arguments]
+
+
+# --- orchestrator call site: refactor-input.json -> build_body ---
+
+
+class _NoGit:
+    async def __call__(self, argv: Sequence[str], cwd: Path | None) -> Any:
+        from dotharness.sisyphus.subproc import CommandResult
+
+        return CommandResult(1, "", "no git")
+
+
+def _call_site_run(tmp_path: Path) -> Any:
+    from dotharness.sisyphus import orchestrator
+    from tests.sisyphus.test_orchestrator import ITEM, World
+
+    w = World(tmp_path)
+    return orchestrator._Run(ITEM, w.config(), w.options(), w.agent, _NoGit(), w, w.clock, w)
+
+
+def _input_path(run: Any) -> Path:
+    run.handoff_dir.mkdir(parents=True, exist_ok=True)
+    return run.handoff_dir / "refactor-input.json"
+
+
+_GENERIC_RECORD = {
+    "set": "generic",
+    "files": ["a.py"],
+    "tests": ["tests/test_a.py"],
+    "evidence": ["marker-evidence-xyz"],
+    "fallback": True,
+    "head_before": "a" * 40,
+}
+
+
+async def test_call_site_missing_file_passes_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = _call_site_run(tmp_path)
+    seen: dict[str, Any] = {}
+    real = prbody.build_body
+
+    async def spy(*args: Any, **kwargs: Any) -> str:
+        seen.update(kwargs)
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(prbody, "build_body", spy)
+    body = await run.build_pr_body()
+    assert seen["refactor_records"] == []
+    assert seen["refactor_handoff_dir"] == run.handoff_dir
+    assert body != prbody.work_item_header(run.item)
+    assert run.notes == []
+
+
+async def test_call_site_valid_record_passed_and_rendered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = _call_site_run(tmp_path)
+    _input_path(run).write_text(json.dumps([_GENERIC_RECORD]), encoding="utf-8")
+    seen: dict[str, Any] = {}
+    real = prbody.build_body
+
+    async def spy(*args: Any, **kwargs: Any) -> str:
+        seen.update(kwargs)
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(prbody, "build_body", spy)
+    body = await run.build_pr_body()
+    assert seen["refactor_records"] == [_GENERIC_RECORD]
+    assert seen["refactor_handoff_dir"] == run.handoff_dir
+    assert "marker-evidence-xyz" in body
+    assert "Refactor" in body
+
+
+@pytest.mark.parametrize(
+    "content",
+    [b"\xff\xfe", b"{not json", b"{}", b'"x"', b"3", b"null", b"true", b"[" * 100000, b"[]"],
+)
+async def test_call_site_unusable_file_leaves_body_unchanged(tmp_path: Path, content: bytes) -> None:
+    run = _call_site_run(tmp_path)
+    baseline = await run.build_pr_body()
+    _input_path(run).write_bytes(content)
+    assert await run.build_pr_body() == baseline
+    assert baseline != prbody.work_item_header(run.item)
+    assert run.notes == []
+
+
+async def test_call_site_directory_and_permission_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = _call_site_run(tmp_path)
+    baseline = await run.build_pr_body()
+    _input_path(run).mkdir()
+    assert await run.build_pr_body() == baseline
+    _input_path(run).rmdir()
+    _input_path(run).write_text("[]", encoding="utf-8")
+
+    real_read = Path.read_text
+
+    def deny(self: Path, *a: Any, **k: Any) -> str:
+        if self.name == "refactor-input.json":
+            raise PermissionError("denied")
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", deny)
+    assert await run.build_pr_body() == baseline
+    assert run.notes == []
+
+
+def test_read_refactor_records_returns_list_unchanged(tmp_path: Path) -> None:
+    from dotharness.sisyphus.orchestrator import _read_refactor_records
+
+    path = tmp_path / "refactor-input.json"
+    path.write_text(json.dumps([1, "x", {"a": None}, []]), encoding="utf-8")
+    assert _read_refactor_records(path) == [1, "x", {"a": None}, []]
+    assert _read_refactor_records(tmp_path / "missing.json") == []
+
+
+def test_refactor_text_degrades_on_malformed_records() -> None:
+    from dotharness.sisyphus.prbody import _refactor_text
+
+    bad = [
+        {"set": "generic"},
+        {"set": "str-files", "files": "a.py", "evidence": [], "fallback": False},
+    ]
+    text = _refactor_text(bad, None)
+    assert "Note: malformed selection record for generic." in text
+    assert "Note: malformed selection record for str-files." in text
+    good = {"set": "ok", "files": ["a.py"], "evidence": [], "fallback": False}
+    mixed = _refactor_text([bad[0], good], None)
+    assert "### ok" in mixed
+    assert "malformed selection record for generic" in mixed
