@@ -287,7 +287,10 @@ def _refactor_handoff_lines(set_name: str, result: Mapping[str, object] | None) 
     notes: Any = result["notes"]
     text = result["deviation"]
     # None means either an explicit "none" or an unparsed field; a note marks the latter.
-    value = ("unknown (see note)" if notes else "none") if text is None else str(text)
+    if text is None:
+        value = "unknown (see note)" if notes else "none"
+    else:
+        value = str(text)
     bullet = f"- Deviations: {value}" if value else "- Deviations:"
     lines = bullet.split("\n")
     lines.extend(notes)
