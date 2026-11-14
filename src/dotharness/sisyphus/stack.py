@@ -308,6 +308,14 @@ def fastapi_layout(rel_path: str, lines: Sequence[str]) -> str | None:
     return None
 
 
+def _react_path_qualifies(rel_path: str) -> bool:
+    path = PurePosixPath(rel_path)
+    suffix = path.suffix.lower()
+    if suffix in _REACT_SUFFIXES:
+        return True
+    return suffix in _REACT_HINT_SUFFIXES and any(part in _REACT_HINT_DIRS for part in path.parts[:-1])
+
+
 def react_layout(rel_path: str, lines: Sequence[str]) -> str | None:
     """Return ``<rel_path>: <stripped line>`` for the first React import or require, else ``None``.
 
@@ -317,10 +325,7 @@ def react_layout(rel_path: str, lines: Sequence[str]) -> str | None:
     The path must first qualify: ``.tsx``/``.jsx``, or ``.ts``/``.js`` under a ``components`` or
     ``hooks`` directory.
     """
-    path = PurePosixPath(rel_path)
-    suffix = path.suffix.lower()
-    in_hint_dir = any(part in _REACT_HINT_DIRS for part in path.parts[:-1])
-    if suffix not in _REACT_SUFFIXES and not (suffix in _REACT_HINT_SUFFIXES and in_hint_dir):
+    if not _react_path_qualifies(rel_path):
         return None
     text = "\n".join(lines)
     found = _REACT_IMPORT.search(text)
