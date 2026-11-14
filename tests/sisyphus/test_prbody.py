@@ -819,7 +819,7 @@ def test_refactor_handoff_lines_edits_none_note_verbatim() -> None:
     note = "Note: no edits bullet found in handoff refactor-generic.md."
     lines = _refactor_handoff_lines("generic", _handoff_result("x", None, [note]))
     assert len(lines) == 3
-    assert lines[1] == "- Edits to existing files: none"
+    assert lines[1] == "- Edits to existing files: unknown (see note)"
     assert lines[2] == note
 
 

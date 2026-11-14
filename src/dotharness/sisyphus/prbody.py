@@ -323,12 +323,17 @@ def _refactor_handoff_lines(set_name: str, result: Mapping[str, object] | None) 
     if result is None:
         return [f"Note: no handoff found for set {set_name}."]
     lines: list[str] = []
-    for label, key in (("Deviations", "deviation"), ("Edits to existing files", "edits")):
+    notes: Any = result["notes"]
+    for label, key, marker in (
+        ("Deviations", "deviation", "deviations bullet"),
+        ("Edits to existing files", "edits", "edits bullet"),
+    ):
         text = result[key]
-        value = "none" if text is None else str(text)
+        # None means either an explicit "none" or an unparsed field; a matching note marks the latter.
+        unparsed = any(marker in n or "cannot read" in n for n in notes)
+        value = ("unknown (see note)" if unparsed else "none") if text is None else str(text)
         bullet = f"- {label}: {value}" if value else f"- {label}:"
         lines.extend(bullet.split("\n"))
-    notes: Any = result["notes"]
     lines.extend(notes)
     return lines
 
