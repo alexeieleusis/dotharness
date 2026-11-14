@@ -109,7 +109,8 @@ def classify_paths(paths: Sequence[str]) -> Classified:
     return Classified(sources=tuple(sorted(sources)), tests=tuple(sorted(tests)))
 
 
-_MANIFEST_NAMES = frozenset({"pyproject.toml", "package.json"})
+_PACKAGE_JSON = "package.json"
+_MANIFEST_NAMES = frozenset({"pyproject.toml", _PACKAGE_JSON})
 _REQUIREMENTS_PATTERN = "requirements*.txt"
 _NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 
@@ -261,10 +262,10 @@ def python_declaration(root: Path, manifest_dir: str, name: str = "fastapi") -> 
 
 def package_declaration(root: Path, manifest_dir: str, name: str = "react") -> Declaration:
     """Report whether ``package.json`` in ``manifest_dir`` lists ``name`` under ``dependencies``."""
-    path = root / manifest_dir / "package.json"
+    path = root / manifest_dir / _PACKAGE_JSON
     if not path.is_file():
         return Declaration(None, ())
-    manifest = _prefix(manifest_dir) + "package.json"
+    manifest = _prefix(manifest_dir) + _PACKAGE_JSON
     try:
         data = json.loads(_read_text(path))
     except (tomllib.TOMLDecodeError, json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
