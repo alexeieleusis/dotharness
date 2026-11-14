@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import posixpath
 import re
 import shlex
 import time
@@ -419,7 +420,7 @@ def _edit_path(item: str) -> str:
     token = words[0].rstrip(":,;").strip("`")
     if token.lower().rstrip(".") == "none":
         return ""
-    return token
+    return posixpath.normpath(token)
 
 
 def parse_listed_edits(text: str) -> set[str]:

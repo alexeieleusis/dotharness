@@ -74,6 +74,10 @@ def test_rename_reports_both_paths() -> None:
     assert _check("R100\0src/a.py\0src/b.py\0") == ["R src/b.py"]
 
 
+def test_dot_slash_path_normalised() -> None:
+    assert parse_listed_edits("- Edits to existing files: ./a.py\n") == {"a.py"}
+
+
 def test_bullet_text_after_colon() -> None:
     assert parse_listed_edits("- Edits to existing files: a.py reason\n") == {"a.py"}
 
