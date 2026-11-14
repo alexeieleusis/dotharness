@@ -408,7 +408,7 @@ class _Session:
             raise AuthenticationError(msg)
         return login
 
-    async def agent_environment_names(self) -> Sequence[str]:
+    async def agent_environment_names(self) -> Sequence[str]:  # NOSONAR python:S7503 - implements an async protocol
         return _AGENT_ENV_NAMES
 
     async def agent_environment(self, base: Mapping[str, str] | None = None) -> Mapping[str, str]:
