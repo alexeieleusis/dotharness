@@ -147,3 +147,15 @@ def test_removal_without_file_does_not_raise(tmp_path: Path) -> None:
     clear_stop_record(rec)
     write_stop_record(rec, _stop())
     assert read_stop_text(rec) is None
+
+
+def test_unremovable_stop_text_does_not_lose_stop_record(tmp_path: Path) -> None:
+    rec = tmp_path / "_1.json"
+    blocker = stop_text_path(rec)
+    blocker.mkdir()
+    (blocker / "keep").write_text("x", encoding="utf-8")
+    remove_stop_text(rec)
+    write_stop_record(rec, _stop())
+    assert stop_record_path(rec).exists()
+    clear_stop_record(rec)
+    assert not stop_record_path(rec).exists()
