@@ -527,12 +527,29 @@ def _refactor_handoff_path(handoff_dir: Path | None, set_name: str) -> Path | No
 
 def _refactor_text(records: Sequence[Mapping[str, object]], handoff_dir: Path | None) -> str:
     """Refactor section text for the usable records; ``""`` when there are none."""
-    usable = [r for r in records if isinstance(r, Mapping) and isinstance(r.get("set"), str)]
+    usable = [r for r in records if _is_well_formed_record(r)]
+    notes = [
+        f"Note: malformed selection record for {r['set']}."
+        for r in records
+        if isinstance(r, Mapping) and isinstance(r.get("set"), str) and not _is_well_formed_record(r)
+    ]
     if not usable:
-        return ""
+        return "\n".join(notes)
     found = (_refactor_handoff_path(handoff_dir, str(r["set"])) for r in usable)
     results = extract_refactor_handoffs([p for p in found if p is not None])
-    return format_refactor_section(usable, {h.set: h._asdict() for h in results})
+    section = format_refactor_section(usable, {h.set: h._asdict() for h in results})
+    return "\n\n".join([section, *notes])
+
+
+def _is_well_formed_record(record: object) -> bool:
+    """True when ``record`` has a str ``set``, list-of-str ``files`` and ``evidence``, and a bool ``fallback``."""
+    if not isinstance(record, Mapping) or not isinstance(record.get("set"), str):
+        return False
+    for key in ("files", "evidence"):
+        items = record.get(key)
+        if not isinstance(items, list) or not all(isinstance(i, str) for i in items):
+            return False
+    return isinstance(record.get("fallback"), bool)
 
 
 async def build_body(

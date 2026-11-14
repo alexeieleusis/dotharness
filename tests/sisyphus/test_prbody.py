@@ -1097,3 +1097,19 @@ def test_read_refactor_records_returns_list_unchanged(tmp_path: Path) -> None:
     path.write_text(json.dumps([1, "x", {"a": None}, []]), encoding="utf-8")
     assert _read_refactor_records(path) == [1, "x", {"a": None}, []]
     assert _read_refactor_records(tmp_path / "missing.json") == []
+
+
+def test_refactor_text_degrades_on_malformed_records() -> None:
+    from dotharness.sisyphus.prbody import _refactor_text
+
+    bad = [
+        {"set": "generic"},
+        {"set": "str-files", "files": "a.py", "evidence": [], "fallback": False},
+    ]
+    text = _refactor_text(bad, None)
+    assert "Note: malformed selection record for generic." in text
+    assert "Note: malformed selection record for str-files." in text
+    good = {"set": "ok", "files": ["a.py"], "evidence": [], "fallback": False}
+    mixed = _refactor_text([bad[0], good], None)
+    assert "### ok" in mixed
+    assert "malformed selection record for generic" in mixed
