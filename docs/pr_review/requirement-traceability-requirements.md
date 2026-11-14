@@ -298,7 +298,10 @@ New functions in `harness/runners/common.py`:
      `number,url,headRefName,createdAt,closingIssuesReferences,author,body`
      (the `body` addition belongs to a sibling work order. See `harness/runners/review_requested.py:111` and `harness/runners/self_review.py:456`).
      Both fields are supported by `gh pr list --json` (verified via `gh pr list --help`),
-     so this adds zero extra API calls.
+     so this adds zero extra API calls. (Since the code-host abstraction, the runners no
+     longer pass `--json` field lists. The listing returns `ChangeRequest` objects that
+     carry `body` and `created_at`, and the linked work items come from
+     `WorkItems.linked_work_items()`. The body scan reads `ChangeRequest.body`.)
 
 - **`build_early_comment_context(pr_number: int, repo: str, pr_created_at: str, env:
   dict) -> str`**

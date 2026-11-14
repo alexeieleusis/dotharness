@@ -124,7 +124,9 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
       work-item read. If that finds nothing,
       it uses a second mechanism. It scans issue-timeline comments posted
       within 5 minutes of the PR's `createdAt` (any author, including bots)
-      for an issue reference. If neither mechanism resolves a ticket, the
+      for an issue reference. If both find nothing, it scans the PR body last
+      for issue references. This scan keeps only references to the PR's own
+      repository and reads at most 5 distinct references. If no mechanism resolves a ticket, the
       runner posts `# Requirement Traceability\nNo linked ticket
       found...` directly as a PR comment through the code host, with **no backend call**. This
       outcome is terminal: the runner never retries it for this PR, even if a ticket
@@ -278,7 +280,8 @@ GitHub state on every run.
 - The traceability pass's extra host cost: one work-item read per
   resolved ticket (typically one). It also makes one paginated fetch of the
   PR's issue-timeline comments for the early-comment-window fallback scan,
-  but only when the closing-keyword mechanism finds nothing. Both are cheap,
+  but only when the closing-keyword mechanism finds nothing. The PR-body scan adds at most
+  5 work-item reads, and only when both other mechanisms find nothing. All are cheap,
   non-LLM host calls in the same class as the other passes' marker checks.
 - The regret pass's cost is likewise independent, and gated. It runs only
   when `[regret_review].enabled` is `true` (off by default), and at most one
