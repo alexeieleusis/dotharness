@@ -10,9 +10,9 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from dotharness.sisyphus.intake import parse_resolved_decisions, split_resolved_decision
 from dotharness.sisyphus.plan import leaf_stems as _plan_leaf_stems
@@ -305,6 +305,16 @@ def extract_refactor_handoffs(paths: Sequence[Path]) -> list[RefactorHandoff]:
             notes = [dev_note]
         results.append(RefactorHandoff(name, entry, edits, tuple(notes)))
     return results
+
+
+def _refactor_record_lines(record: Mapping[str, Any]) -> list[str]:
+    """Heading plus the Files, Evidence and Fallback bullets of one selection record."""
+    lines = [f"### {record['set']}", ""]
+    for label, items in (("Files", record["files"]), ("Evidence", record["evidence"])):
+        entries = [f"  - {item}" for item in items]
+        lines.extend([f"- {label}:", *entries] if entries else [f"- {label}: none"])
+    lines.append(f"- Fallback: {'yes' if record['fallback'] else 'no'}")
+    return lines
 
 
 # ---------------------------------------------------------------- FR-6 decisions

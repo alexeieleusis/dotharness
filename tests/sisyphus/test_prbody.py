@@ -9,6 +9,7 @@ from dotharness.sisyphus.prbody import (
     MAX_BODY_CHARS,
     MAX_TITLE_CHARS,
     PLAN_NOT_MATCHED_NOTE,
+    _refactor_record_lines,
     clean_title,
     commit_log_args,
     compose_body,
@@ -616,3 +617,65 @@ def test_refactor_handoffs_is_namedtuple(tmp_path):
     assert isinstance(r, tuple)
     assert r._fields == ("set", "deviation", "edits", "notes")
     assert isinstance(r.notes, tuple)
+
+
+def _record(**over: object) -> dict[str, object]:
+    base: dict[str, object] = {"set": "fastapi", "files": ["a.py"], "evidence": ["x: 1"], "fallback": False}
+    base.update(over)
+    return base
+
+
+def test_refactor_record_lines_fallback_yes() -> None:
+    ev = ["pyproject.toml: fastapi>=0.1", "app/main.py: from fastapi import FastAPI"]
+    lines = _refactor_record_lines(_record(set="generic", evidence=ev, fallback=True))
+    assert "- Fallback: yes" in lines
+    assert all(f"  - {e}" in lines for e in ev)
+
+
+def test_refactor_record_lines_fallback_no() -> None:
+    lines = _refactor_record_lines(_record())
+    assert "- Fallback: no" in lines
+    assert "- Fallback: yes" not in lines
+
+
+def test_refactor_record_lines_empty_evidence() -> None:
+    lines = _refactor_record_lines(_record(evidence=[]))
+    assert "- Evidence: none" in lines
+    assert not any(line.startswith("  - ") for line in lines[lines.index("- Evidence: none") :])
+
+
+def test_refactor_record_lines_ignores_extra_keys() -> None:
+    lines = _refactor_record_lines(_record(tests=["tests/test_a.py"], head_before="abc1234"))
+    assert not any("tests/test_a.py" in line or "abc1234" in line for line in lines)
+
+
+def test_refactor_record_lines_empty_files() -> None:
+    assert "- Files: none" in _refactor_record_lines(_record(files=[]))
+
+
+def test_refactor_record_lines_keeps_order_and_inputs() -> None:
+    files, ev = ["b.py", "a.py"], ["z: 1", "a: 2"]
+    lines = _refactor_record_lines(_record(files=files, evidence=ev))
+    assert lines[3:5] == ["  - b.py", "  - a.py"]
+    assert lines[6:8] == ["  - z: 1", "  - a: 2"]
+    assert files == ["b.py", "a.py"]
+    assert ev == ["z: 1", "a: 2"]
+
+
+def test_refactor_record_lines_full_layout() -> None:
+    rec = _record(files=["a.py", "b.py"], evidence=["pyproject.toml: fastapi"])
+    assert _refactor_record_lines(rec) == [
+        "### fastapi",
+        "",
+        "- Files:",
+        "  - a.py",
+        "  - b.py",
+        "- Evidence:",
+        "  - pyproject.toml: fastapi",
+        "- Fallback: no",
+    ]
+
+
+def test_refactor_record_lines_deterministic() -> None:
+    rec = _record()
+    assert _refactor_record_lines(rec) == _refactor_record_lines(rec)
