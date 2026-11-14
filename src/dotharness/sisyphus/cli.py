@@ -24,7 +24,7 @@ import shlex
 import subprocess
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -377,7 +377,15 @@ def _waiting_need(rec: RunRecord) -> NeedsYou | None:
     need = needs_from_record(rec, read_stop_text(rec.path) or "")
     if need is None:
         return None
-    return replace(need, question=f"Awaiting you. {need.question}")
+    return NeedsYou(
+        need.item,
+        need.checkpoint,
+        f"Awaiting you. {need.question}",
+        need.action,
+        need.resume,
+        need.text,
+        need.record,
+    )
 
 
 def _resume_phase(config: SisyphusConfig, services: Services, state: _RunState, limit: int) -> list[Candidate]:
