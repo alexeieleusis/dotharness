@@ -8,6 +8,7 @@ completes. Retry counters live only in the run record. Standard library only.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import shlex
 from dataclasses import dataclass
@@ -137,8 +138,9 @@ def read_stop_text(record_path: Path) -> str | None:
 
 
 def remove_stop_text(record_path: Path) -> None:
-    """Remove the restructured stop text; a missing file is fine."""
-    stop_text_path(record_path).unlink(missing_ok=True)
+    """Remove the restructured stop text; best-effort, since a presentation side-file must never block the stop record."""
+    with contextlib.suppress(OSError):
+        stop_text_path(record_path).unlink(missing_ok=True)
 
 
 def fill_resume_template(template: str, item: str, *, again: bool = False) -> str:
