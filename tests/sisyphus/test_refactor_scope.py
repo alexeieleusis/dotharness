@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dotharness.sisyphus.orchestrator import parse_listed_edits, scope_violations
+from dotharness.sisyphus.refactor_handoff import parse_listed_edits, scope_violations
 
 FILES = ["src/a.py"]
 TESTS = ["tests/test_a.py"]

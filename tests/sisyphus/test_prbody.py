@@ -37,6 +37,7 @@ from dotharness.sisyphus.prbody import (
     select_handoffs,
     work_item_header,
 )
+from dotharness.sisyphus.refactor_handoff import edits_text
 from tests.sisyphus.conftest import forbidden_imports
 
 STEMS = ["01-alpha-leaf", "02-beta-leaf"]
@@ -611,9 +612,9 @@ def test_work_item_header_is_closing_reference() -> None:
 
 
 def test_edits_text_unit():
-    assert prbody._edits_text("- Done: x\n") is None
-    assert prbody._edits_text("- Edits to existing files: a.py: r") == "a.py: r"
-    assert prbody._edits_text("- Edits to existing files:\n  - a.py: r\n- Next: y\n") == "- a.py: r"
+    assert edits_text("- Done: x\n") is None
+    assert edits_text("- Edits to existing files: a.py: r") == "a.py: r"
+    assert edits_text("- Edits to existing files:\n  - a.py: r\n- Next: y\n") == "- a.py: r"
 
 
 def test_handoff_edits_no_bullet_note(tmp_path):

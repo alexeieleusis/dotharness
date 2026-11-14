@@ -18,6 +18,7 @@ from typing import Any, NamedTuple
 from dotharness.sisyphus.intake import parse_resolved_decisions, split_resolved_decision
 from dotharness.sisyphus.plan import leaf_stems as _plan_leaf_stems
 from dotharness.sisyphus.plan import plan_path, read_spf_config
+from dotharness.sisyphus.refactor_handoff import edits_text
 
 PLAN_NOT_MATCHED_NOTE = (
     "Note: the plan directory could not be matched to this work item; plan-derived sections omitted."
@@ -224,29 +225,10 @@ def _handoff_deviation(stem: str, path: Path) -> tuple[str | None, str | None]:
     return None, None
 
 
-_EDITS_BULLET = re.compile(r"^- Edits to existing files:[ \t]*(.*)$")
-
-
-def _edits_text(handoff: str) -> str | None:
-    """Text after the edits bullet up to the next top-level ``- `` bullet; ``None`` when the bullet is absent."""
-    lines = handoff.splitlines()
-    for i, line in enumerate(lines):
-        m = _EDITS_BULLET.match(line)
-        if m is None:
-            continue
-        body = [m.group(1)]
-        for nxt in lines[i + 1 :]:
-            if nxt.startswith("- "):
-                break
-            body.append(nxt)
-        return "\n".join(body).strip()
-    return None
-
-
 def _handoff_edits(path: Path) -> tuple[str | None, str | None]:
     """``(edits_text, note)`` for one handoff file; at most one of them is set."""
     try:
-        text = _edits_text(path.read_text(encoding="utf-8"))
+        text = edits_text(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None, f"Note: cannot read handoff {path.name}."
     if text is None:

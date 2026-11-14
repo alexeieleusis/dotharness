@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import posixpath
 import re
 import shlex
 import time
@@ -53,6 +52,7 @@ from dotharness.sisyphus.rails import (
     parse_push_argv,
     push_guard,
 )
+from dotharness.sisyphus.refactor_handoff import parse_listed_edits, scope_violations
 from dotharness.sisyphus.resume import answer_path, consume_answer, read_answer
 from dotharness.sisyphus.runrecord import STAGE_COMPLETE, RunRecord, fold_item
 from dotharness.sisyphus.settled import is_settled
@@ -407,76 +407,6 @@ class GateFailure:
 def _tail(text: str, n: int = 400) -> str:
     text = text.strip()
     return text[-n:]
-
-
-_EDITS_BULLET = re.compile(r"^- Edits to existing files:[ \t]*(.*)$")
-_EDIT_ITEM = re.compile(r"^\s*[-*]\s*(.*)$")
-
-
-def _edit_path(item: str) -> str:
-    words = item.split(None, 1)
-    if not words:
-        return ""
-    token = words[0].rstrip(":,;").strip("`")
-    if token.lower().rstrip(".") == "none":
-        return ""
-    return posixpath.normpath(token)
-
-
-def parse_listed_edits(text: str) -> set[str]:
-    """Paths named under the first ``- Edits to existing files:`` bullet of a refactor handoff."""
-    paths: set[str] = set()
-    in_bullet = False
-    for line in text.splitlines():
-        if not in_bullet:
-            match = _EDITS_BULLET.match(line)
-            if match is None:
-                continue
-            in_bullet = True
-            item = _EDIT_ITEM.match(match.group(1))
-            candidates = [item.group(1) if item else match.group(1)]
-        elif line.startswith("- "):
-            break
-        else:
-            item = _EDIT_ITEM.match(line)
-            candidates = [item.group(1)] if item else []
-        for candidate in candidates:
-            for piece in candidate.split("; "):
-                path = _edit_path(piece)
-                if path:
-                    paths.add(path)
-    return paths
-
-
-def scope_violations(
-    name_status_output: str, files: Sequence[str], tests: Sequence[str], listed_edits: set[str]
-) -> list[str]:
-    """One ``"<status> <path>"`` string per non-``A`` entry outside files, tests and listed edits.
-
-    ``name_status_output`` is ``git diff --name-status -z`` output (NUL-separated, paths unquoted).
-    """
-    allowed = set(files) | set(tests) | listed_edits
-    violations: list[str] = []
-    tokens = name_status_output.split("\0")
-    i = 0
-    while i + 1 < len(tokens):
-        status = tokens[i]
-        if not status:
-            i += 1
-            continue
-        letter = status[0]
-        n_paths = 2 if letter in ("R", "C") else 1
-        paths = tokens[i + 1 : i + 1 + n_paths]
-        i += 1 + n_paths
-        if letter == "A":
-            continue
-        for path in paths:
-            if path in allowed:
-                continue
-            entry = f"{letter} {path}"
-            if entry not in violations:
-                violations.append(entry)
-    return violations
 
 
 # --------------------------------------------------------------- the run
