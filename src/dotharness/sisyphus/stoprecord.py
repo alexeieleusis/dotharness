@@ -15,10 +15,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from dotharness.fileio import atomic_write_text
 from dotharness.sisyphus.runrecord import atomic_write_json
 from dotharness.sisyphus.stages import INTAKE_STAGE
 
 STOP_RECORD_SUFFIX = ".stopped.json"
+STOP_TEXT_SUFFIX = ".stopped.md"
 KIND_CHECKPOINT = "checkpoint"
 KIND_ERROR = "error"
 KIND_ABANDONED = "abandoned"
@@ -114,6 +116,31 @@ def stop_record_path(record_path: Path) -> Path:
     return record_path.with_name(record_path.name + STOP_RECORD_SUFFIX)
 
 
+def stop_text_path(record_path: Path) -> Path:
+    """``<enc>.stopped.md`` next to the run record ``<enc>.json`` (same stem as the answer file)."""
+    return record_path.with_suffix(STOP_TEXT_SUFFIX)
+
+
+def write_stop_text(record_path: Path, text: str) -> Path:
+    """Atomically write the restructured stop text: a temporary file in the same directory, then a rename."""
+    path = stop_text_path(record_path)
+    atomic_write_text(path, text, suffix=STOP_TEXT_SUFFIX)
+    return path
+
+
+def read_stop_text(record_path: Path) -> str | None:
+    """The restructured stop text, or ``None`` when absent or unreadable."""
+    try:
+        return stop_text_path(record_path).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return None
+
+
+def remove_stop_text(record_path: Path) -> None:
+    """Remove the restructured stop text; a missing file is fine."""
+    stop_text_path(record_path).unlink(missing_ok=True)
+
+
 def fill_resume_template(template: str, item: str, *, again: bool = False) -> str:
     """Substitute the shell-quoted ``item`` for ``{item}`` in a resume-command template (``--again`` optional)."""
     command = template.replace("{item}", shlex.quote(item))
@@ -194,8 +221,12 @@ def is_abandoned(source: Path | StopRecord | None) -> bool:
 
 
 def write_stop_record(record_path: Path, stop: StopRecord) -> Path:
-    """Atomically write the sidecar for the run record at ``record_path``."""
+    """Atomically write the sidecar for the run record at ``record_path``.
+
+    Removes ``<enc>.stopped.md`` first, so a replaced or failed rewrite never leaves text about an older stop.
+    """
     path = stop_record_path(record_path)
+    remove_stop_text(record_path)
     atomic_write_json(path, stop.to_dict(), suffix=STOP_RECORD_SUFFIX)
     return path
 
@@ -221,4 +252,5 @@ def read_stop_record(record_path: Path) -> StopRecord | None:
 
 
 def clear_stop_record(record_path: Path) -> None:
+    remove_stop_text(record_path)
     stop_record_path(record_path).unlink(missing_ok=True)
