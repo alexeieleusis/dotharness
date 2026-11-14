@@ -121,6 +121,7 @@ def _stage_desc(rec: RunRecord) -> str:
     return f"{rec.stage} ({rec.stage_status or 'unknown'})"
 
 
+DEFAULT_CHECKPOINT_QUESTION = "The run stopped at this checkpoint. How should it proceed?"
 ERROR_QUESTION = "The run stopped on an unexpected error. Can you fix the cause shown below?"
 
 
@@ -130,12 +131,12 @@ def needs_from_stop(stop: StopRecord, text: str = "", record: str = "") -> Needs
     With ``text`` (the restructured stop text) the question carries no raw detail; the text is shown instead.
     """
     if text.strip() and stop.checkpoint is not None:
-        base = CHECKPOINT_QUESTIONS.get(stop.checkpoint, "The run stopped at this checkpoint. How should it proceed?")
+        base = CHECKPOINT_QUESTIONS.get(stop.checkpoint, DEFAULT_CHECKPOINT_QUESTION)
         return NeedsYou(stop.item, stop.label, base, stop.action, stop.resume_command, text, record)
     if stop.checkpoint is None:
         question = f"{ERROR_QUESTION} Detail: {stop.detail}"
     else:
-        base = CHECKPOINT_QUESTIONS.get(stop.checkpoint, "The run stopped at this checkpoint. How should it proceed?")
+        base = CHECKPOINT_QUESTIONS.get(stop.checkpoint, DEFAULT_CHECKPOINT_QUESTION)
         question = f"{base} Detail: {stop.detail}"
     return NeedsYou(stop.item, stop.label, question, stop.action, stop.resume_command)
 
@@ -152,7 +153,7 @@ def needs_from_record(rec: RunRecord, text: str = "") -> NeedsYou | None:
         return needs_from_stop(stop, text if stop.checkpoint is not None else "", str(stop_record_path(rec.path)))
     if rec.checkpoint is None:
         return None
-    question = CHECKPOINT_QUESTIONS.get(rec.checkpoint, "The run stopped at this checkpoint. How should it proceed?")
+    question = CHECKPOINT_QUESTIONS.get(rec.checkpoint, DEFAULT_CHECKPOINT_QUESTION)
     return NeedsYou(rec.item, rec.checkpoint, f"{question} Stage reached: {_stage_desc(rec)}.")
 
 
