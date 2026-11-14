@@ -315,6 +315,40 @@ def test_write_failure_does_not_change_exit_or_hide_stop(
     assert result.exit_code == 0
     assert f"A-1: stopped at C5: {_detail('A-1')}" in result.output
     assert "Detail:" in env.digest
+    assert "warning: cannot write stop text for A-1: disk full" in result.stderr
+    assert not stop_text_path(RunRecord.open(_ws(tmp_path), "A-1").path).exists()
+    assert list(RunRecord.open(_ws(tmp_path), "A-1").path.parent.glob("*.stopped.md*")) == []
+    status = env.invoke("status", "--config", str(env.config)).output
+    assert "Detail:" in status
+    assert "Decision needed." not in status
+
+
+def test_one_item_rejected_by_guard_mixes_raw_and_rewritten(tmp_path: Path, stops: dict[str, Any]) -> None:
+    stops["mode"] = {"A-1": "stop", "A-2": "stop"}
+    launcher = Launcher(texts={"A-1": _rewrite("A-1"), "A-2": "Decision needed."})
+    env = _env(tmp_path, ["A-1", "A-2"], launcher, "\n[limits]\nmax_tickets_per_run = 2\n")
+    result = _run(env)
+    assert result.exit_code == 0
+    assert launcher.calls == 1
+    rejected = [line for line in result.stderr.splitlines() if line.startswith("presentation rejected (")]
+    assert len(rejected) == 1
+    assert "A-2:" in rejected[0]
+    assert "A-1:" not in rejected[0]
+    ok = RunRecord.open(_ws(tmp_path), "A-1").path
+    bad = RunRecord.open(_ws(tmp_path), "A-2").path
+    assert read_stop_text(ok) == _rewrite("A-1")
+    assert not stop_text_path(bad).exists()
+    assert "A-1: stopped at C5:\n  Decision needed." in result.output
+    assert f"A-2: stopped at C5: {_detail('A-2')}" in result.output
+    digest = env.digest
+    assert _detail("A-1") in digest
+    assert f"Detail: {_detail('A-2')}" in digest
+    assert "Decision needed." in digest
+    assert digest.count("Decision needed.") == 1
+    status = env.invoke("status", "--config", str(env.config)).output
+    assert "    Decision needed." in status
+    assert status.count("Decision needed.") == 1
+    assert f"Detail: {_detail('A-2')}" in status
 
 
 def test_needsyou_entry_dataclass_default_is_raw() -> None:
