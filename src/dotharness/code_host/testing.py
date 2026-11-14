@@ -1025,7 +1025,8 @@ class _FakeChangeRequests(_Facet):
             if change_request.state is not ChangeRequestState.OPEN:
                 msg = f"change request {number} is not open"
                 raise CodeHostError(msg)
-            self._replace(repo, replace(change_request, state=ChangeRequestState.MERGED))
+            merged = replace(change_request, state=ChangeRequestState.MERGED)
+            self._replace(repo, merged)  # NOSONAR python:S5655 - dataclasses.replace returns a ChangeRequest
 
         self._do("ChangeRequests.squash_merge", action, repo, number, expected_head=expected_head)
 
