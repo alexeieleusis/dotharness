@@ -31,8 +31,9 @@ from typing import Annotated, Any
 
 import typer
 
+from dotharness.ai_backend import launch
 from dotharness.cli_common import fail
-from dotharness.sisyphus.agent import make_agent_runner
+from dotharness.sisyphus.agent import Launcher, make_agent_runner
 from dotharness.sisyphus.archive import archive_item, check_archive_dir, resolve_archive_dir
 from dotharness.sisyphus.cleanup import PrInfo
 from dotharness.sisyphus.config import ConfigError, SisyphusConfig, load_config
@@ -211,6 +212,8 @@ class Services:
     pr_state: Callable[[int], Awaitable[str]] | None = None
     # Removes the pick label from a settled GitHub issue; `None` means no removal is available.
     label_remover: LabelRemover | None = None
+    # Launcher for the stop-text presentation call (returns the RunResult, unlike `agent_runner`); tests pass a fake.
+    present_launcher: Launcher = launch
 
 
 ServicesFactory = Callable[[SisyphusConfig], Services]
