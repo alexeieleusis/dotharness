@@ -67,6 +67,12 @@ class LimitsConfig:
     max_run_minutes: int = 180
     max_tickets_per_run: int = 1
     max_leaves_per_run: int = 32
+    presentation_timeout_minutes: int = 5
+
+
+@dataclass(frozen=True)
+class PresentationConfig:
+    present_stops: bool = True
 
 
 @dataclass(frozen=True)
@@ -91,6 +97,7 @@ class SisyphusConfig:
     source: SourceConfig = field(default_factory=SourceConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
+    presentation: PresentationConfig = field(default_factory=PresentationConfig)
     digest: DigestConfig = field(default_factory=DigestConfig)
     knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
     archive: ArchiveConfig = field(default_factory=ArchiveConfig)
@@ -212,8 +219,31 @@ def _parse_source(raw: Any) -> SourceConfig:
     return SourceConfig(work_item=work_item, host=host)
 
 
+def _parse_limits(raw: Any) -> LimitsConfig:
+    keys = (
+        "max_run_minutes",
+        "max_tickets_per_run",
+        "max_leaves_per_run",
+        "presentation_timeout_minutes",
+    )
+    t = _table(raw, "limits", keys)
+    d = LimitsConfig()
+    return LimitsConfig(
+        max_run_minutes=_limit(t, "max_run_minutes", d.max_run_minutes),
+        max_tickets_per_run=_limit(t, "max_tickets_per_run", d.max_tickets_per_run),
+        max_leaves_per_run=_limit(t, "max_leaves_per_run", d.max_leaves_per_run),
+        presentation_timeout_minutes=_limit(t, "presentation_timeout_minutes", d.presentation_timeout_minutes),
+    )
+
+
+def _parse_presentation(raw: Any) -> PresentationConfig:
+    t = _table(raw, "presentation", ("present_stops",))
+    present_stops = _bool(t, "presentation", "present_stops")
+    return PresentationConfig() if present_stops is None else PresentationConfig(present_stops=present_stops)
+
+
 def _parse(data: dict[str, Any]) -> SisyphusConfig:
-    top = ("project", "source", "agent", "limits", "merge", "digest", "knowledge", "archive")
+    top = ("project", "source", "agent", "limits", "merge", "presentation", "digest", "knowledge", "archive")
     for key in data:
         if key not in top:
             raise ConfigError(f"unknown top-level key '{key}' (allowed: {', '.join(top)})")
@@ -234,16 +264,8 @@ def _parse(data: dict[str, Any]) -> SisyphusConfig:
         t = _table(data["agent"], "agent", ("backend",))
         agent = AgentConfig(backend=_choice(_str(t, "agent", "backend"), "agent", "backend", AGENT_BACKENDS))
 
-    limits = LimitsConfig()
-    if "limits" in data:
-        keys = ("max_run_minutes", "max_tickets_per_run", "max_leaves_per_run")
-        t = _table(data["limits"], "limits", keys)
-        d = LimitsConfig()
-        limits = LimitsConfig(
-            max_run_minutes=_limit(t, "max_run_minutes", d.max_run_minutes),
-            max_tickets_per_run=_limit(t, "max_tickets_per_run", d.max_tickets_per_run),
-            max_leaves_per_run=_limit(t, "max_leaves_per_run", d.max_leaves_per_run),
-        )
+    limits = _parse_limits(data["limits"]) if "limits" in data else LimitsConfig()
+    presentation = _parse_presentation(data["presentation"]) if "presentation" in data else PresentationConfig()
 
     digest = DigestConfig()
     if "digest" in data:
@@ -270,6 +292,7 @@ def _parse(data: dict[str, Any]) -> SisyphusConfig:
         source=source,
         agent=agent,
         limits=limits,
+        presentation=presentation,
         digest=digest,
         knowledge=knowledge,
         archive=archive,

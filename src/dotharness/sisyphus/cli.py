@@ -358,6 +358,8 @@ class _RunState:
     needs: list[NeedsYou] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     limits_hit: list[str] = field(default_factory=list)
+    # Combined decision: rewrite checkpoint stop messages through the backend (off with `--raw` or the config switch).
+    present: bool = True
 
     @property
     def has_content(self) -> bool:
@@ -522,15 +524,29 @@ async def _run_locked(
         raise typer.Exit(1)
 
 
+RawOption = Annotated[
+    bool,
+    typer.Option(
+        "--raw",
+        help="Show stop messages as written; make no presentation call and write no .stopped.md for this invocation.",
+    ),
+]
+
+
+def present_enabled(config: SisyphusConfig, raw: bool) -> bool:
+    """The one decision later wiring reads: present stops unless ``--raw`` or ``[presentation] present_stops = false``."""
+    return config.presentation.present_stops and not raw
+
+
 @app.command("run")
-def run_command(ctx: typer.Context, config_path: ConfigOption, base: BaseOption = None) -> None:
+def run_command(ctx: typer.Context, config_path: ConfigOption, base: BaseOption = None, raw: RawOption = False) -> None:
     """Resume cleared stopped items, pick new ones (together at most max_tickets_per_run), run, write one digest."""
     factory: ServicesFactory | None = ctx.obj
     config = _load(config_path)
     _require(config, "repo_dir", "workspace_dir")
     assert config.project.repo_dir  # noqa: S101
     services = _services(factory, config)
-    state = _RunState()
+    state = _RunState(present=present_enabled(config, raw))
 
     async def phase() -> None:
         picked = await _pick_phase(config, services, state)
@@ -621,6 +637,7 @@ def resume_item_command(
     work_item_ref: RefArgument,
     config_path: ConfigOption,
     base: BaseOption = None,
+    raw: RawOption = False,
     again: Annotated[
         bool, typer.Option("--again", help="Re-enable an abandoned item: clear the abandoned mark, then resume.")
     ] = False,
@@ -641,7 +658,7 @@ def resume_item_command(
     _require(config, "repo_dir", "workspace_dir")
     assert config.project.repo_dir and config.project.workspace_dir  # noqa: S101
     services = _services(factory, config)
-    state = _RunState()
+    state = _RunState(present=present_enabled(config, raw))
 
     def prepare() -> None:
         _prepare_resume(config, services, work_item_ref, again=again, reset_retries=reset_retries)

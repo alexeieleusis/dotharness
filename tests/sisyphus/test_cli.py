@@ -1180,3 +1180,50 @@ async def test_resolve_options_intake_base(
     cfg = replace(cfg, project=replace(cfg.project, base_branch=config_base))
     options = await cli._resolve_options(cfg, replace(env.services, repo_info=repo_info), flag)
     assert (options.base_branch, options.intake_base) == (base, intake)
+
+
+def test_raw_flag_in_run_and_resume_help() -> None:
+    for command in ("run", "resume"):
+        result = CliRunner().invoke(app, [command, "--help"])
+        assert result.exit_code == 0
+        assert "--raw" in result.output
+
+
+@pytest.mark.parametrize(
+    ("switch", "raw", "expected"),
+    [(True, False, True), (True, True, False), (False, False, False), (False, True, False)],
+)
+def test_present_enabled_combines_switch_and_raw(switch: bool, raw: bool, expected: bool) -> None:
+    from dotharness.sisyphus.config import PresentationConfig, ProjectConfig, SisyphusConfig
+
+    config = SisyphusConfig(project=ProjectConfig(), presentation=PresentationConfig(present_stops=switch))
+    assert cli.present_enabled(config, raw) is expected
+
+
+@pytest.mark.parametrize(
+    ("extra", "args", "expected"),
+    [
+        ("", (), True),
+        ("", ("--raw",), False),
+        ("[presentation]\npresent_stops = false\n", (), False),
+        ("[presentation]\npresent_stops = false\n", ("--raw",), False),
+    ],
+)
+def test_run_and_resume_set_present_on_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: str, args: tuple[str, ...], expected: bool
+) -> None:
+    seen: list[bool] = []
+
+    async def fake_run_phase(picked: Any, config: Any, services: Any, base: Any, state: Any, config_path: Any) -> None:
+        seen.append(state.present)
+
+    async def fake_pick(config: Any, services: Any, state: Any) -> list[Any]:
+        return []
+
+    monkeypatch.setattr(cli, "_run_phase", fake_run_phase)
+    monkeypatch.setattr(cli, "_pick_phase", fake_pick)
+    monkeypatch.setattr(cli, "_prepare_resume", lambda *a, **k: None)
+    env = make_env(tmp_path, extra=extra)
+    assert env.invoke("run", "--config", str(env.config), *args).exit_code == 0
+    assert env.invoke("resume", "#1", "--config", str(env.config), *args).exit_code == 0
+    assert seen == [expected, expected]
