@@ -412,7 +412,7 @@ def test_refactor_pattern_set_absent_reads_nothing(tmp_path: Path, monkeypatch: 
     def boom() -> tuple[str, ...]:
         pytest.fail("helper must not be called")
 
-    monkeypatch.setattr(config_mod, "_packaged_pattern_sets", boom)
+    monkeypatch.setattr(config_mod.stack, "pattern_set_names", boom)
     cfg = load_config(write(tmp_path, MIN + body))
     assert cfg.refactor.pattern_set is None
 
@@ -426,24 +426,14 @@ def test_refactor_pattern_set_list_from_directories(tmp_path: Path, monkeypatch:
     def fake() -> tuple[str, ...]:
         return tuple(sorted(p.name for p in root.iterdir() if p.is_dir()))
 
-    monkeypatch.setattr(config_mod, "_packaged_pattern_sets", fake)
+    monkeypatch.setattr(config_mod.stack, "pattern_set_names", fake)
     cfg = load_config(write(tmp_path, MIN + '[refactor]\npattern_set = "alpha"\n'))
     assert cfg.refactor.pattern_set == "alpha"
     with pytest.raises(ConfigError, match="alpha, beta"):
         load_config(write(tmp_path, MIN + '[refactor]\npattern_set = "fastapi"\n'))
 
 
-@pytest.mark.parametrize("make_dir", [False, True])
-def test_refactor_pattern_set_missing_or_empty_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, make_dir: bool
-) -> None:
-    root = tmp_path / "pkg"
-    root.mkdir()
-    if make_dir:
-        (root / "knowledge" / "patterns").mkdir(parents=True)
-        (root / "knowledge" / "patterns" / "stray.md").write_text("x")
-    monkeypatch.setattr(config_mod.importlib.resources, "files", lambda _name: root)
-    expected = root / "knowledge" / "patterns"
-    with pytest.raises(ConfigError, match="is missing or empty") as exc:
+def test_refactor_pattern_set_missing_generic_is_config_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("dotharness.paths.default_knowledge_dir", lambda: tmp_path)
+    with pytest.raises(ConfigError, match=r"cannot validate \[refactor\] pattern_set: .*generic is missing"):
         load_config(write(tmp_path, MIN + '[refactor]\npattern_set = "fastapi"\n'))
-    assert str(expected) in str(exc.value)

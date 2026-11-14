@@ -11,13 +11,13 @@ validate ``[refactor] pattern_set``.
 # ruff: noqa: TRY003
 from __future__ import annotations
 
-import importlib.resources
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from dotharness.ai_backend import BACKEND_NAMES
 from dotharness.fileio import TOMLDecodeError, load_toml
+from dotharness.sisyphus import stack
 
 DEFAULT_CONFIG_FILE = ".sisyphus.toml"
 
@@ -222,23 +222,6 @@ def _parse_source(raw: Any) -> SourceConfig:
     return SourceConfig(work_item=work_item, host=host)
 
 
-def _packaged_pattern_sets() -> tuple[str, ...]:
-    """Return the sorted pattern-set names shipped in the package.
-
-    This is the single place a later chunk replaces with the matcher's list.
-    """
-    directory = Path(str(importlib.resources.files("dotharness") / "knowledge" / "patterns"))
-    try:
-        names = tuple(sorted(p.name for p in directory.iterdir() if p.is_dir()))
-    except (FileNotFoundError, NotADirectoryError):
-        names = ()
-    if not names:
-        raise ConfigError(
-            f"packaged pattern directory {directory} is missing or empty; cannot validate [refactor] pattern_set"
-        )
-    return names
-
-
 def _parse_refactor(data: dict[str, Any]) -> RefactorConfig:
     if "refactor" not in data:
         return RefactorConfig()
@@ -246,7 +229,11 @@ def _parse_refactor(data: dict[str, Any]) -> RefactorConfig:
     enabled = _bool(t, "refactor", "enabled")
     pattern_set = _str(t, "refactor", "pattern_set")
     if pattern_set is not None:
-        pattern_set = _choice(pattern_set, "refactor", "pattern_set", _packaged_pattern_sets())
+        try:
+            valid = stack.pattern_set_names()
+        except stack.StackError as exc:
+            raise ConfigError(f"cannot validate [refactor] pattern_set: {exc}") from exc
+        pattern_set = _choice(pattern_set, "refactor", "pattern_set", valid)
     return RefactorConfig(enabled=True if enabled is None else enabled, pattern_set=pattern_set)
 
 

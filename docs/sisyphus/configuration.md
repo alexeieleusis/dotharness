@@ -11,9 +11,8 @@ Path values (`repo_dir`, `workspace_dir`, `brief_path_template`, `[source.work_i
 `digest.path_template`, `[archive]` `dir` and the `[knowledge]` paths) are returned exactly as written.
 Relative paths resolve against the invoking working directory, not the directory that holds the config file.
 The loader never touches the filesystem for them. The one exception is `[archive] dir`, which commands resolve
-against `[project].workspace_dir` (see [`[archive]`](#archive)). The loader does read one location of its own: it lists the directory names under
-the packaged `knowledge/patterns/` to validate `[refactor] pattern_set` (see [`[refactor]`](#refactor)). That is
-packaged data, not a user-supplied path value, so it is not an exception to this rule.
+against `[project].workspace_dir` (see [`[archive]`](#archive)). Validating `[refactor] pattern_set` lists the packaged `knowledge/patterns/`
+through `stack.pattern_set_names()` (see [`[refactor]`](#refactor)). That is packaged data, not a user-supplied path value.
 
 ## Secrets
 
