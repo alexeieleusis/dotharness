@@ -336,7 +336,6 @@ async def _build_traceability_prompt(
 async def _run_traceability_review(
     traceability_instructions: str,
     extra_knowledge: str | None,
-    pr: ChangeRequest,
     number: int,
     config,
     ctx: dict,
@@ -661,7 +660,6 @@ async def _process_single_pr(
                 await _run_traceability_review(
                     cycle.traceability_instructions,
                     extra_knowledge,
-                    pr,
                     number,
                     config,
                     ctx,
