@@ -692,6 +692,19 @@ def _review(row: Mapping[str, Any]) -> Review:
     )
 
 
+def _collect_viewed(files: Mapping[str, Any], viewed: dict[str, bool]) -> Mapping[str, Any]:
+    """Add the viewed flag of every file node of one page to ``viewed``. Returns the page info."""
+    nodes = files.get("nodes")
+    info = files.get("pageInfo")
+    if not isinstance(nodes, list) or not isinstance(info, dict):
+        msg = "gh api graphql returned an unexpected files response"
+        raise CodeHostError(msg)
+    for node in nodes:
+        if isinstance(node, dict) and isinstance(node.get("path"), str):
+            viewed[node["path"]] = node.get("viewerViewedState") == "VIEWED"
+    return info
+
+
 class _ChangeRequests:
     def __init__(self, gh: _Gh) -> None:
         self._gh = gh
@@ -882,15 +895,7 @@ class _ChangeRequests:
             if cursor:
                 variables["cursor"] = cursor
             data = await self._gh.graphql(_FILES_QUERY, "ChangeRequests.viewed_files", variables)
-            files = _path(data, "repository", "pullRequest", "files")
-            nodes = files.get("nodes")
-            info = files.get("pageInfo")
-            if not isinstance(nodes, list) or not isinstance(info, dict):
-                msg = "gh api graphql returned an unexpected files response"
-                raise CodeHostError(msg)
-            for node in nodes:
-                if isinstance(node, dict) and isinstance(node.get("path"), str):
-                    viewed[node["path"]] = node.get("viewerViewedState") == "VIEWED"
+            info = _collect_viewed(_path(data, "repository", "pullRequest", "files"), viewed)
             if not info.get("hasNextPage"):
                 return viewed
             cursor = info.get("endCursor")
