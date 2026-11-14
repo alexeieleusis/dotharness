@@ -1,8 +1,7 @@
-"""Refactor handoff parsing shared by the scope check and the PR report.
+"""Refactor handoff parsing for the scope check.
 
 ``edits_bullet_lines`` is the single scanner for the ``- Edits to existing files:`` bullet;
-``parse_listed_edits`` (paths for the scope check) and ``edits_text`` (text for the PR report)
-both derive from it, so the two can never disagree about where the bullet ends.
+``parse_listed_edits`` derives the paths for the scope check from it.
 """
 
 from __future__ import annotations
@@ -32,12 +31,6 @@ def edits_bullet_lines(text: str) -> list[str] | None:
             body.append(nxt)
         return body
     return None
-
-
-def edits_text(handoff: str) -> str | None:
-    """Text of the edits bullet for the PR report; ``None`` when the bullet is absent."""
-    body = edits_bullet_lines(handoff)
-    return None if body is None else "\n".join(body).strip()
 
 
 def _edit_path(item: str) -> str:

@@ -37,7 +37,6 @@ from dotharness.sisyphus.prbody import (
     select_handoffs,
     work_item_header,
 )
-from dotharness.sisyphus.refactor_handoff import edits_text
 from tests.sisyphus.conftest import forbidden_imports
 
 STEMS = ["01-alpha-leaf", "02-beta-leaf"]
@@ -385,7 +384,7 @@ def _spy_refactor(monkeypatch: Any) -> dict[str, list[Any]]:
 
     def extract(paths: Sequence[Path]) -> list[Any]:
         calls["extract"].append(list(paths))
-        return [prbody.RefactorHandoff(p.name[len("refactor-") : -3], None, None, ()) for p in paths]
+        return [prbody.RefactorHandoff(p.name[len("refactor-") : -3], None, ()) for p in paths]
 
     def fmt(records: Sequence[Any], results: Any) -> str:
         calls["format"].append((list(records), results))
@@ -611,109 +610,33 @@ def test_work_item_header_is_closing_reference() -> None:
     assert work_item_header("o/r#109") == "Closes o/r#109"
 
 
-def test_edits_text_unit():
-    assert edits_text("- Done: x\n") is None
-    assert edits_text("- Edits to existing files: a.py: r") == "a.py: r"
-    assert edits_text("- Edits to existing files:\n  - a.py: r\n- Next: y\n") == "- a.py: r"
-
-
-def test_handoff_edits_no_bullet_note(tmp_path):
-    p = tmp_path / "refactor-x.md"
-    p.write_text("- Done: x\n", encoding="utf-8")
-    assert prbody._handoff_edits(p) == (None, "Note: no edits bullet found in handoff refactor-x.md.")
-
-
-def test_handoff_edits_indented_paths(tmp_path):
-    p = tmp_path / "refactor-x.md"
-    p.write_text(
-        "- Edits to existing files:\n  - a.py: reason\n  - b.py: reason\n- Deviations from the plan: x\n",
-        encoding="utf-8",
-    )
-    assert prbody._handoff_edits(p) == ("- a.py: reason\n  - b.py: reason", None)
-
-
-def test_handoff_edits_inline_text(tmp_path):
-    p = tmp_path / "refactor-x.md"
-    p.write_text("- Edits to existing files: a.py: r\n  - b.py: r2\n", encoding="utf-8")
-    assert prbody._handoff_edits(p) == ("a.py: r\n  - b.py: r2", None)
-
-
-def test_handoff_edits_none_bullet(tmp_path):
-    p = tmp_path / "refactor-x.md"
-    for body in ("None", "None.", "None (no edits)"):
-        p.write_text(f"- Edits to existing files: {body}\n", encoding="utf-8")
-        assert prbody._handoff_edits(p) == (None, None)
-
-
-def test_handoff_edits_empty_bullet(tmp_path):
-    p = tmp_path / "refactor-x.md"
-    p.write_text("- Edits to existing files:", encoding="utf-8")
-    assert prbody._handoff_edits(p) == (None, None)
-
-
-def test_handoff_edits_unreadable(tmp_path):
-    note = "Note: cannot read handoff refactor-x.md."
-    assert prbody._handoff_edits(tmp_path / "refactor-x.md") == (None, note)
-    p = tmp_path / "refactor-x.md"
-    p.write_bytes(b"\xff\xfe\x00bad")
-    assert prbody._handoff_edits(p) == (None, note)
-
-
 def _rh(tmp_path, name, text):
     p = tmp_path / name
     p.write_text(text, encoding="utf-8")
     return p
 
 
-def test_refactor_handoffs_both_bullets(tmp_path):
-    p = _rh(
-        tmp_path,
-        "refactor-fastapi.md",
-        "- Deviations from the plan: split the router\n- Edits to existing files:\n  - app/main.py: import the new router\n",
-    )
+def test_refactor_handoffs_deviation_bullet(tmp_path):
+    p = _rh(tmp_path, "refactor-fastapi.md", "- Deviations from the plan: split the router\n")
     [r] = prbody.extract_refactor_handoffs([p])
-    assert r == prbody.RefactorHandoff(
-        "fastapi", "- fastapi: split the router", "- app/main.py: import the new router", ()
-    )
-
-
-def test_refactor_handoffs_no_edits_bullet(tmp_path):
-    p = _rh(tmp_path, "refactor-a.md", "- Deviations from the plan: x\n")
-    [r] = prbody.extract_refactor_handoffs([p])
-    assert r.deviation == "- a: x"
-    assert r.edits is None
-    assert r.notes == ("Note: no edits bullet found in handoff refactor-a.md.",)
-
-
-def test_refactor_handoffs_none_edits(tmp_path):
-    p = _rh(tmp_path, "refactor-a.md", "- Deviations from the plan: x\n- Edits to existing files: None\n")
-    [r] = prbody.extract_refactor_handoffs([p])
-    assert r.edits is None
-    assert r.notes == ()
+    assert r == prbody.RefactorHandoff("fastapi", "- fastapi: split the router", ())
 
 
 def test_refactor_handoffs_no_deviations_bullet(tmp_path):
     p = _rh(tmp_path, "refactor-a.md", "- Edits to existing files: a.py: r\n")
     [r] = prbody.extract_refactor_handoffs([p])
     assert r.deviation is None
-    assert r.edits == "a.py: r"
     assert r.notes == ("Note: no deviations bullet found in handoff refactor-a.md.",)
-    q = _rh(tmp_path, "refactor-b.md", "nothing\n")
-    [r2] = prbody.extract_refactor_handoffs([q])
-    assert r2.notes == (
-        "Note: no deviations bullet found in handoff refactor-b.md.",
-        "Note: no edits bullet found in handoff refactor-b.md.",
-    )
 
 
 def test_refactor_handoffs_unreadable(tmp_path):
     note = ("Note: cannot read handoff refactor-x.md.",)
     [r] = prbody.extract_refactor_handoffs([tmp_path / "refactor-x.md"])
-    assert (r.deviation, r.edits, r.notes) == (None, None, note)
+    assert (r.deviation, r.notes) == (None, note)
     p = tmp_path / "refactor-x.md"
     p.write_bytes(b"\xff\xfe\x00bad")
     [r] = prbody.extract_refactor_handoffs([p])
-    assert (r.deviation, r.edits, r.notes) == (None, None, note)
+    assert (r.deviation, r.notes) == (None, note)
 
 
 def test_refactor_handoffs_set_name(tmp_path):
@@ -744,7 +667,7 @@ def test_refactor_handoffs_is_namedtuple(tmp_path):
     p = _rh(tmp_path, "refactor-a.md", "")
     [r] = prbody.extract_refactor_handoffs([p])
     assert isinstance(r, tuple)
-    assert r._fields == ("set", "deviation", "edits", "notes")
+    assert r._fields == ("set", "deviation", "notes")
     assert isinstance(r.notes, tuple)
 
 
@@ -778,15 +701,11 @@ def test_refactor_record_lines_ignores_extra_keys() -> None:
     assert not any("tests/test_a.py" in line or "abc1234" in line for line in lines)
 
 
-def test_refactor_record_lines_empty_files() -> None:
-    assert "- Files: none" in _refactor_record_lines(_record(files=[]))
-
-
 def test_refactor_record_lines_keeps_order_and_inputs() -> None:
     files, ev = ["b.py", "a.py"], ["z: 1", "a: 2"]
     lines = _refactor_record_lines(_record(files=files, evidence=ev))
-    assert lines[3:5] == ["  - b.py", "  - a.py"]
-    assert lines[6:8] == ["  - z: 1", "  - a: 2"]
+    assert lines[3:5] == ["  - z: 1", "  - a: 2"]
+    assert not any("b.py" in line or "a.py" in line for line in lines)
     assert files == ["b.py", "a.py"]
     assert ev == ["z: 1", "a: 2"]
 
@@ -796,9 +715,6 @@ def test_refactor_record_lines_full_layout() -> None:
     assert _refactor_record_lines(rec) == [
         "### fastapi",
         "",
-        "- Files:",
-        "  - a.py",
-        "  - b.py",
         "- Evidence:",
         "  - pyproject.toml: fastapi",
         "- Fallback: no",
@@ -810,43 +726,36 @@ def test_refactor_record_lines_deterministic() -> None:
     assert _refactor_record_lines(rec) == _refactor_record_lines(rec)
 
 
-def _handoff_result(deviation: str | None = "x", edits: str | None = "e", notes: list[str] | None = None) -> dict:
-    return {"set": "generic", "deviation": deviation, "edits": edits, "notes": notes if notes is not None else []}
+def _handoff_result(deviation: str | None = "x", notes: list[str] | None = None) -> dict:
+    return {"set": "generic", "deviation": deviation, "notes": notes if notes is not None else []}
 
 
-def test_refactor_handoff_lines_both_bullets() -> None:
-    result = _handoff_result("Kept the helper in place.", "- src/app/routes.py: import the new module")
-    assert _refactor_handoff_lines("generic", result) == [
-        "- Deviations: Kept the helper in place.",
-        "- Edits to existing files: - src/app/routes.py: import the new module",
-    ]
-
-
-def test_refactor_handoff_lines_edits_none_note_verbatim() -> None:
-    note = "Note: no edits bullet found in handoff refactor-generic.md."
-    lines = _refactor_handoff_lines("generic", _handoff_result("x", None, [note]))
-    assert len(lines) == 3
-    assert lines[1] == "- Edits to existing files: unknown (see note)"
-    assert lines[2] == note
+def test_refactor_handoff_lines_deviation() -> None:
+    result = _handoff_result("Kept the helper in place.")
+    assert _refactor_handoff_lines("generic", result) == ["- Deviations: Kept the helper in place."]
 
 
 def test_refactor_handoff_lines_none_result() -> None:
     lines = _refactor_handoff_lines("fastapi", None)
     assert lines == ["Note: no handoff found for set fastapi."]
-    assert not any(x.startswith(("- Deviations:", "- Edits to existing files:")) for x in lines)
+    assert not any(x.startswith("- Deviations:") for x in lines)
 
 
 def test_refactor_handoff_lines_deviation_none() -> None:
-    assert _refactor_handoff_lines("generic", _handoff_result(None, "e")) == [
-        "- Deviations: none",
-        "- Edits to existing files: e",
+    assert _refactor_handoff_lines("generic", _handoff_result(None)) == ["- Deviations: none"]
+
+
+def test_refactor_handoff_lines_deviation_unparsed_note() -> None:
+    note = "Note: no deviations bullet found in handoff refactor-generic.md."
+    assert _refactor_handoff_lines("generic", _handoff_result(None, [note])) == [
+        "- Deviations: unknown (see note)",
+        note,
     ]
 
 
 def test_refactor_handoff_lines_notes_order() -> None:
     lines = _refactor_handoff_lines("generic", _handoff_result(notes=["Note: a", "Note: b"]))
-    assert lines[2:] == ["Note: a", "Note: b"]
-    assert lines[:2] == ["- Deviations: x", "- Edits to existing files: e"]
+    assert lines == ["- Deviations: x", "Note: a", "Note: b"]
 
 
 def test_refactor_handoff_lines_multiline() -> None:
@@ -856,8 +765,8 @@ def test_refactor_handoff_lines_multiline() -> None:
 
 
 def test_refactor_handoff_lines_empty_text_and_empty_note() -> None:
-    lines = _refactor_handoff_lines("generic", _handoff_result("", "e", [""]))
-    assert lines == ["- Deviations:", "- Edits to existing files: e", ""]
+    lines = _refactor_handoff_lines("generic", _handoff_result("", [""]))
+    assert lines == ["- Deviations:", ""]
 
 
 def test_refactor_handoff_lines_deterministic_and_non_mutating() -> None:
@@ -898,7 +807,7 @@ def test_format_refactor_section_missing_handoff() -> None:
     text = format_refactor_section([_record(set="react")], {})
     assert "Note: no handoff found for set react." in text
     assert "### react" in text
-    for label in ("- Files:", "- Evidence:", "- Fallback:"):
+    for label in ("- Evidence:", "- Fallback:"):
         assert label in text
 
 

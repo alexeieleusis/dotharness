@@ -18,7 +18,6 @@ from typing import Any, NamedTuple
 from dotharness.sisyphus.intake import parse_resolved_decisions, split_resolved_decision
 from dotharness.sisyphus.plan import leaf_stems as _plan_leaf_stems
 from dotharness.sisyphus.plan import plan_path, read_spf_config
-from dotharness.sisyphus.refactor_handoff import edits_text
 
 PLAN_NOT_MATCHED_NOTE = (
     "Note: the plan directory could not be matched to this work item; plan-derived sections omitted."
@@ -225,19 +224,6 @@ def _handoff_deviation(stem: str, path: Path) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _handoff_edits(path: Path) -> tuple[str | None, str | None]:
-    """``(edits_text, note)`` for one handoff file; at most one of them is set."""
-    try:
-        text = edits_text(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None, f"Note: cannot read handoff {path.name}."
-    if text is None:
-        return None, f"Note: no edits bullet found in handoff {path.name}."
-    if text and not _is_none(text):
-        return text, None
-    return None, None
-
-
 def extract_deviations(handoff_dir: Path, stems: Sequence[str]) -> str:
     """Deviations from each leaf's handoff(s); notes for missing handoffs or bullets."""
     try:
@@ -268,7 +254,6 @@ def extract_deviations(handoff_dir: Path, stems: Sequence[str]) -> str:
 class RefactorHandoff(NamedTuple):
     set: str
     deviation: str | None
-    edits: str | None
     notes: tuple[str, ...]
 
 
@@ -281,21 +266,16 @@ def extract_refactor_handoffs(paths: Sequence[Path]) -> list[RefactorHandoff]:
     results: list[RefactorHandoff] = []
     for path in paths:
         name = _refactor_set_name(path)
-        entry, dev_note = _handoff_deviation(name, path)
-        edits, edits_note = _handoff_edits(path)
-        notes = [n for n in (dev_note, edits_note) if n]
-        if dev_note and dev_note == edits_note:
-            notes = [dev_note]
-        results.append(RefactorHandoff(name, entry, edits, tuple(notes)))
+        entry, note = _handoff_deviation(name, path)
+        results.append(RefactorHandoff(name, entry, (note,) if note else ()))
     return results
 
 
 def _refactor_record_lines(record: Mapping[str, Any]) -> list[str]:
-    """Heading plus the Files, Evidence and Fallback bullets of one selection record."""
+    """Heading plus the Evidence and Fallback bullets of one selection record."""
     lines = [f"### {record['set']}", ""]
-    for label, items in (("Files", record["files"]), ("Evidence", record["evidence"])):
-        entries = [f"  - {item}" for item in items]
-        lines.extend([f"- {label}:", *entries] if entries else [f"- {label}: none"])
+    entries = [f"  - {item}" for item in record["evidence"]]
+    lines.extend(["- Evidence:", *entries] if entries else ["- Evidence: none"])
     lines.append(f"- Fallback: {'yes' if record['fallback'] else 'no'}")
     return lines
 
@@ -304,18 +284,12 @@ def _refactor_handoff_lines(set_name: str, result: Mapping[str, object] | None) 
     """Handoff-derived lines for one group; pure, no embedding (the caller's ``embed`` runs later)."""
     if result is None:
         return [f"Note: no handoff found for set {set_name}."]
-    lines: list[str] = []
     notes: Any = result["notes"]
-    for label, key, marker in (
-        ("Deviations", "deviation", "deviations bullet"),
-        ("Edits to existing files", "edits", "edits bullet"),
-    ):
-        text = result[key]
-        # None means either an explicit "none" or an unparsed field; a matching note marks the latter.
-        unparsed = any(marker in n or "cannot read" in n for n in notes)
-        value = ("unknown (see note)" if unparsed else "none") if text is None else str(text)
-        bullet = f"- {label}: {value}" if value else f"- {label}:"
-        lines.extend(bullet.split("\n"))
+    text = result["deviation"]
+    # None means either an explicit "none" or an unparsed field; a note marks the latter.
+    value = ("unknown (see note)" if notes else "none") if text is None else str(text)
+    bullet = f"- Deviations: {value}" if value else "- Deviations:"
+    lines = bullet.split("\n")
     lines.extend(notes)
     return lines
 
