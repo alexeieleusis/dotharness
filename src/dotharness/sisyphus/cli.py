@@ -44,6 +44,7 @@ from dotharness.sisyphus.digest import (
     describe_reset,
     indent_block,
     needs_from_record,
+    needs_from_stop,
     write_digest,
 )
 from dotharness.sisyphus.intake import AgentRunner, run_intake
@@ -97,6 +98,7 @@ from dotharness.sisyphus.stoprecord import (
     is_abandoned,
     read_stop_record,
     read_stop_text,
+    stop_record_path,
     write_stop_record,
     write_stop_text,
 )
@@ -372,7 +374,7 @@ class _RunState:
 
 
 def _waiting_need(rec: RunRecord) -> NeedsYou | None:
-    need = needs_from_record(rec)
+    need = needs_from_record(rec, read_stop_text(rec.path) or "")
     if need is None:
         return None
     return replace(need, question=f"Awaiting you. {need.question}")
@@ -535,16 +537,17 @@ def _echo_stops(state: _RunState) -> None:
 
 
 def _write_digest(config: SisyphusConfig, services: Services, state: _RunState) -> DigestWriteError | None:
-    # A presented stop is rendered from its record (`needs_from_record` reads the .stopped.md), not from the raw report.
-    reports = [
-        replace(r.report, needs_you=tuple(n for n in r.report.needs_you if n.item != r.item))
-        if r.checkpoint is not None and read_stop_text(r.record.path) is not None
-        else r.report
-        for r in state.results
-    ]
+    # The orchestrator reports error stops only; each checkpoint stop gets exactly one entry here, with its text.
+    paths = {r.item: r.record.path for r in state.results}
+    stop_needs = tuple(
+        needs_from_stop(stop, read_stop_text(paths[stop.item]) or "", str(stop_record_path(paths[stop.item])))
+        for stop in _stopped_records(state)
+    )
     report = _merge(
-        reports,
-        DigestReport(needs_you=tuple(state.needs), deviations=tuple(state.notes), limits_hit=tuple(state.limits_hit)),
+        [r.report for r in state.results],
+        DigestReport(
+            needs_you=(*stop_needs, *state.needs), deviations=tuple(state.notes), limits_hit=tuple(state.limits_hit)
+        ),
     )
     try:
         path = write_digest(state.records, config, report, services.today)
@@ -886,7 +889,7 @@ def _need_lines(
 
 def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_path: str | Path) -> list[str]:
     stop = read_stop_record(rec.path)
-    need = needs_from_record(rec)
+    need = needs_from_record(rec, read_stop_text(rec.path) or "")
     lines = [
         rec.item,
         f"  stage: {rec.stage or 'none'}",
