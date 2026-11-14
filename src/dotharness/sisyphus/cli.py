@@ -24,7 +24,7 @@ import shlex
 import subprocess
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -42,6 +42,7 @@ from dotharness.sisyphus.digest import (
     DigestWriteError,
     NeedsYou,
     describe_reset,
+    indent_block,
     needs_from_record,
     write_digest,
 )
@@ -73,6 +74,7 @@ from dotharness.sisyphus.pick import (
     label_removal_number,
     pick_items,
 )
+from dotharness.sisyphus.present import PresentResult, present_stops
 from dotharness.sisyphus.rails import LimitTracker
 from dotharness.sisyphus.resume import (
     AUTO_RETRY_KEY,
@@ -87,13 +89,16 @@ from dotharness.sisyphus.settled import is_settled
 from dotharness.sisyphus.stages import INTAKE_STAGE
 from dotharness.sisyphus.stoprecord import (
     CLEARS_BY,
+    StopRecord,
     build_abandoned_record,
     build_stop_record,
     clear_stop_record,
     fill_resume_template,
     is_abandoned,
     read_stop_record,
+    read_stop_text,
     write_stop_record,
+    write_stop_text,
 )
 from dotharness.sisyphus.subproc import run_command as run_subprocess
 
@@ -370,7 +375,7 @@ def _waiting_need(rec: RunRecord) -> NeedsYou | None:
     need = needs_from_record(rec)
     if need is None:
         return None
-    return NeedsYou(need.item, need.checkpoint, f"Awaiting you. {need.question}", need.action, need.resume)
+    return replace(need, question=f"Awaiting you. {need.question}")
 
 
 def _resume_phase(config: SisyphusConfig, services: Services, state: _RunState, limit: int) -> list[Candidate]:
@@ -439,7 +444,8 @@ async def _run_one(
         raise
     state.results.append(result)
     state.records.append(result.record)
-    typer.echo(_summarise(result))
+    if result.checkpoint is None:
+        typer.echo(_summarise(result))  # stop lines print at the end of the invocation, after the presentation step
 
 
 async def _run_phase(
@@ -467,9 +473,77 @@ async def _run_phase(
         await _run_one(cand, config, services, options, state)
 
 
+def _stopped_records(state: _RunState) -> list[StopRecord]:
+    """Stop records of the items that stopped at a checkpoint in this invocation."""
+    records: list[StopRecord] = []
+    for result in state.results:
+        if result.checkpoint is None:
+            continue
+        stop = read_stop_record(result.record.path)
+        if stop is not None and not stop.abandoned and stop.checkpoint is not None:
+            records.append(stop)
+    return records
+
+
+def _present_failure(result: PresentResult) -> str | None:
+    if result.failure:
+        return f"presentation failed: {result.failure}; showing raw stop text"
+    if result.rejected:
+        why = "; ".join(f"{item}: {reason}" for item, reason in result.rejected.items())
+        return f"presentation rejected ({why}); showing raw stop text for those items"
+    return None
+
+
+async def _present_step(config: SisyphusConfig, services: Services, state: _RunState) -> None:
+    """Restructure the stop texts of this invocation (one backend call) and write ``<enc>.stopped.md`` for each.
+
+    Touches only workspace files and the backend. Never raises (except ``typer.Exit``) and never changes the stop.
+    """
+    if not state.present:
+        return
+    records = _stopped_records(state)
+    if not records:
+        return
+    result = await present_stops(
+        records,
+        backend=config.agent.backend,
+        launcher=services.present_launcher,
+        timeout_minutes=config.limits.presentation_timeout_minutes,
+    )
+    paths = {r.item: r.record.path for r in state.results}
+    for item, text in result.texts.items():
+        try:
+            write_stop_text(paths[item], text)
+        except OSError as exc:
+            typer.echo(f"warning: cannot write stop text for {item}: {exc}", err=True)
+    line = _present_failure(result)
+    if line:
+        typer.echo(line, err=True)
+
+
+def _echo_stops(state: _RunState) -> None:
+    """Print one line per checkpoint stop: the restructured text when it exists on disk, else the raw summary."""
+    for result in state.results:
+        if result.checkpoint is None:
+            continue
+        text = read_stop_text(result.record.path)
+        if text and text.strip():
+            head = f"{result.item}: stopped at {result.checkpoint.value}:"
+            typer.echo("\n".join([head, *indent_block(text, 2)]))
+        else:
+            typer.echo(_summarise(result))
+
+
 def _write_digest(config: SisyphusConfig, services: Services, state: _RunState) -> DigestWriteError | None:
+    # A presented stop is rendered from its record (`needs_from_record` reads the .stopped.md), not from the raw report.
+    reports = [
+        replace(r.report, needs_you=tuple(n for n in r.report.needs_you if n.item != r.item))
+        if r.checkpoint is not None and read_stop_text(r.record.path) is not None
+        else r.report
+        for r in state.results
+    ]
     report = _merge(
-        [r.report for r in state.results],
+        reports,
         DigestReport(needs_you=tuple(state.needs), deviations=tuple(state.notes), limits_hit=tuple(state.limits_hit)),
     )
     try:
@@ -493,6 +567,13 @@ async def _phase_and_digest(
         error = exc
         if not state.notes and not isinstance(exc, typer.Exit):  # a typer.Exit already printed its message
             state.notes.append(f"run failed: {exc}")
+    try:
+        await _present_step(config, services, state)
+    except typer.Exit:
+        raise
+    except Exception as exc:  # the stop is already written; a failed step only means raw text
+        typer.echo(f"presentation failed: {type(exc).__name__}; showing raw stop text", err=True)
+    _echo_stops(state)
     return error, _write_digest(config, services, state) if state.has_content else None
 
 
@@ -788,6 +869,7 @@ def _need_lines(
 ) -> list[str]:
     """Question, action, resume command and auto-resume mode for an item that is waiting on someone."""
     lines = [f"  question: {need.question}"]
+    lines.extend(indent_block(need.text, 4))
     if need.action:
         lines.append(f"  action: {need.action}")
     lines.append(f"  resume: {need.resume or _resume_command(config_path, rec.item)}")

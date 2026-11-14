@@ -154,6 +154,20 @@ exact action you must take and the exact resume command. The digest's "Needs you
 `Action:`, `Resume:`), and `sisyphus status` prints it. The run record's retry counters are never reset by a stop
 or a resume.
 
+**Restructured stop text.** The raw stop text of a checkpoint stop (C2..C8) is long. At the end of each `run` or
+`resume`, Sisyphus makes one backend call for all items that stopped in that invocation and gets a clearer
+rewrite of each. It writes the rewrite to `<workspace_dir>/<enc>.stopped.md` (`<enc>` is the encoded item ref, for
+example `_23204`), next to the run record. The rewrite replaces the raw text in the terminal, the digest "Needs you"
+entry (which names the stop record path), the `Awaiting you.` entries of items still waiting, and `sisyphus status`
+(which prints the file under `question:`, indented, and stays read-only: no lock, no agent). The stop record
+itself is never changed. A `.stopped.md` that exists is used as is and is never regenerated on a later run. Items that
+end clean, are abandoned or stop on an unexpected error get no rewrite and no backend call. Stop lines now print at
+the end of the invocation, after this step. If the call fails (timeout, non-zero exit, empty or unusable output), one
+line naming the cause goes to stderr, the raw text is shown everywhere, no `.stopped.md` is written, and the exit
+code does not change. `--raw` on `run` or `resume` (or `[presentation] present_stops = false`, see
+[configuration](configuration.md)) skips the call and shows the raw text. `[limits] presentation_timeout_minutes`
+sets the call timeout.
+
 **Single dedicated clone.** You never edit code in the clone and never move anything between repositories. You
 answer in files under `workspace_dir` (outside the repo): the brief, or an answer file. Each item has its own
 branch `sisyphus/<slug>-<8 hex>`, so partial work stays on its branch while another item runs. The clone must
@@ -263,7 +277,7 @@ directory, so the workspace only holds items that still matter. Nothing is delet
 path is allowed and `~` is expanded).
 
 - **Files moved**, per item: the run record `<enc>.json`, the stop record `<enc>.json.stopped.json`,
-  `<enc>.answer.md`, `<enc>.answer.md.used`, the brief with its `.intake.json` sidecar, and the whole `plan-<n>/`
+  the restructured stop text `<enc>.stopped.md`, `<enc>.answer.md`, `<enc>.answer.md.used`, the brief with its `.intake.json` sidecar, and the whole `plan-<n>/`
   tree. `<enc>` is the encoded work-item ref used in file names, for example `_23147`.
 - **Flat layout, original names**, for example `<archive>/_23147.json` and `<archive>/plan-147/`. A brief outside
   the workspace moves to `<archive>/<basename>`. A brief that is not found gives a warning (on stderr).
@@ -299,7 +313,7 @@ exists.
 
 `sisyphus status [REF] --config F` is read-only (no lock, no agent). For each item (all items without REF) it
 prints stage, stage_status, checkpoint (`state: abandoned` plus `abandoned_at` and `re-enable` for an abandoned item), `awaiting` (`you` for a checkpoint, `error`, `none` otherwise (including an abandoned item). `status` needs no network), and for a stopped item the question, action, resume command and auto-resume rule (with whether it is
-cleared now) and every recorded `Retry reset:` line. Output order is unchanged (file-name order), and `status` stays read-only: no lock, no agent. Without `--check-prs` it makes no network call and no PR lookup.
+cleared now) and every recorded `Retry reset:` line. When `<enc>.stopped.md` exists, `status` prints it (indented under `question:`) instead of the raw detail; without it the raw text shows as before. Output order is unchanged (file-name order), and `status` stays read-only: no lock, no agent. Without `--check-prs` it makes no network call and no PR lookup.
 
 By default `sisyphus status` hides settled items: abandoned items, and finished items (stage `open-pr` with `stage_status` `complete`, i.e. a draft PR is open and the item is handed to the human) that have no checkpoint and no non-abandoned stop record. A recorded gate failure does not keep an item visible: a finished item whose gate failed is hidden too, and its failure stays visible in the digest and the PR. Records with the legacy stage `ci-fix` (no longer a stage since #129, but still loaded from old run records), `stage_status` `complete`, no checkpoint and no non-abandoned stop record are hidden too. These are never hidden by default: any item with a checkpoint set (`awaiting: you`) or a non-abandoned stop record (`awaiting: error`), and any item with `stage_status: in_progress`, no checkpoint and no stop record, because it may be running now or be a hard crash. `in_progress` is a per-stage status, not an item state: a stage stopped at a checkpoint or on a runner error stays `in_progress`.
 
