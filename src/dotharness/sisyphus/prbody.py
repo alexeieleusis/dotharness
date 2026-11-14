@@ -332,6 +332,18 @@ def _refactor_handoff_lines(set_name: str, result: Mapping[str, object] | None) 
     return lines
 
 
+def format_refactor_section(records: Sequence[Mapping[str, Any]], results: Mapping[str, Any]) -> str:
+    """Return the PR body Refactor section text: one group per record, in input order."""
+    groups = [
+        "\n".join([
+            *_refactor_record_lines(record),
+            *_refactor_handoff_lines(record["set"], results.get(record["set"])),
+        ])
+        for record in records
+    ]
+    return "\n\n".join(groups)
+
+
 # ---------------------------------------------------------------- FR-6 decisions
 
 

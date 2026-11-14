@@ -20,6 +20,7 @@ from dotharness.sisyphus.prbody import (
     extract_summary,
     fallback_title,
     format_decisions,
+    format_refactor_section,
     leaf_stems,
     list_phases,
     locate_phase_dir,
@@ -746,3 +747,57 @@ def test_refactor_handoff_lines_deterministic_and_non_mutating() -> None:
 def test_refactor_handoff_lines_does_not_embed() -> None:
     lines = _refactor_handoff_lines("generic", _handoff_result("ping @someone see #12"))
     assert lines[0] == "- Deviations: ping @someone see #12"
+
+
+def test_format_refactor_section_keeps_input_order() -> None:
+    records = [_record(set="react"), _record(set="generic"), _record(set="fastapi")]
+    results = {str(r["set"]): _handoff_result() for r in records}
+    text = format_refactor_section(records, results)
+    heads = [line for line in text.split("\n") if line.startswith("### ")]
+    assert heads == ["### react", "### generic", "### fastapi"]
+
+
+def test_format_refactor_section_empty() -> None:
+    assert format_refactor_section([], {}) == ""
+
+
+def test_format_refactor_section_deterministic() -> None:
+    records = [_record(set="react"), _record(set="generic")]
+    results = {"react": _handoff_result()}
+    assert format_refactor_section(records, results) == format_refactor_section(records, results)
+
+
+def test_format_refactor_section_missing_handoff() -> None:
+    text = format_refactor_section([_record(set="react")], {})
+    assert "Note: no handoff found for set react." in text
+    assert "### react" in text
+    for label in ("- Files:", "- Evidence:", "- Fallback:"):
+        assert label in text
+
+
+def test_format_refactor_section_layout() -> None:
+    records = [_record(set="react"), _record(set="fastapi")]
+    results = {str(r["set"]): _handoff_result() for r in records}
+    text = format_refactor_section(records, results)
+    assert text.count("\n\n### ") == 1
+    assert "\n\n\n" not in text
+    assert text.startswith("### react")
+    assert not text.startswith("## Refactor")
+    assert not text.endswith("\n")
+
+
+def test_format_refactor_section_ignores_extra_keys() -> None:
+    plain = _record(set="react")
+    extra = _record(set="react", tests=["t.py"], head_before="abc")
+    results = {"react": _handoff_result()}
+    assert format_refactor_section([extra], results) == format_refactor_section([plain], results)
+
+
+def test_format_refactor_section_does_not_mutate() -> None:
+    import copy
+
+    records = [_record(set="react"), _record(set="generic")]
+    results = {"react": _handoff_result(notes=["Note: a"])}
+    before = (copy.deepcopy(records), copy.deepcopy(results))
+    format_refactor_section(records, results)
+    assert (records, results) == before
