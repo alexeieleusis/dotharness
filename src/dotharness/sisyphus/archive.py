@@ -17,7 +17,7 @@ from dotharness.sisyphus.intake import SIDECAR_SUFFIX, IntakeError, resolve_brie
 from dotharness.sisyphus.orchestrator import plan_dir_name
 from dotharness.sisyphus.resume import USED_SUFFIX, answer_path
 from dotharness.sisyphus.runrecord import RunRecord
-from dotharness.sisyphus.stoprecord import stop_record_path
+from dotharness.sisyphus.stoprecord import stop_record_path, stop_text_path
 
 
 def _workspace_root(workspace_dir: str | None) -> Path:
@@ -73,6 +73,7 @@ def _collect(config: SisyphusConfig, rec: RunRecord, archive_dir: Path | None) -
     workspace = Path(workspace_dir).expanduser() if workspace_dir else rec_path.parent
     candidates = [
         stop_record_path(rec_path),
+        stop_text_path(rec_path),
         answer_path(rec_path),
         answer_path(rec_path).with_name(answer_path(rec_path).name + USED_SUFFIX),
         workspace / plan_dir_name(rec.item),
@@ -96,7 +97,7 @@ def _collect(config: SisyphusConfig, rec: RunRecord, archive_dir: Path | None) -
 
 
 def item_files(config: SisyphusConfig, rec: RunRecord) -> list[Path]:
-    """Existing files of one item (stop record, answer files, brief and sidecar, ``plan-<n>/``), run record last.
+    """Existing files of one item (stop record, stop text, answer files, brief and sidecar, ``plan-<n>/``), run record last.
 
     Missing paths are skipped. Digests, the legacy shared ``handoffs/`` and the legacy ``.stop.json`` suffix are
     not part of the set. Does not select items.

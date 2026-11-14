@@ -1075,7 +1075,8 @@ def _gate_evidence(run: _Run) -> str:
 def _report(run: _Run) -> DigestReport:
     needs: tuple[NeedsYou, ...] = ()
     limits: tuple[str, ...] = ()
-    if run.stop_rec is not None:
+    # Checkpoint stops are rendered by the CLI (which owns the presentation step); only error stops are reported here.
+    if run.stop_rec is not None and run.stop_rec.checkpoint is None:
         needs = (needs_from_stop(run.stop_rec),)
     if run.stop is not None and run.stop.checkpoint is Checkpoint.C6:
         limits = (f"{run.item}: {run.stop.detail}",)

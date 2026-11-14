@@ -108,6 +108,7 @@ def _populate(cfg: SisyphusConfig, brief_dir: Path | None = None) -> RunRecord:
     ws = Path(cfg.project.workspace_dir or "")
     rec = RunRecord.open(ws, ITEM)
     (ws / f"{ENC}.json.stopped.json").write_text("stop")
+    (ws / f"{ENC}.stopped.md").write_text("stop text")
     (ws / f"{ENC}.answer.md").write_text("answer")
     (ws / f"{ENC}.answer.md.used").write_text("used")
     (ws / "plan-147" / "handoffs").mkdir(parents=True)
@@ -134,6 +135,7 @@ def test_item_files_set_and_order(tmp_path: Path) -> None:
     assert set(files) == {
         ws / f"{ENC}.json",
         ws / f"{ENC}.json.stopped.json",
+        ws / f"{ENC}.stopped.md",
         ws / f"{ENC}.answer.md",
         ws / f"{ENC}.answer.md.used",
         ws / f"{ENC}.brief.md",
@@ -162,6 +164,7 @@ def test_archive_moves_everything_flat(tmp_path: Path) -> None:
     assert sorted(p.name for p in arch.iterdir()) == sorted([
         f"{ENC}.json",
         f"{ENC}.json.stopped.json",
+        f"{ENC}.stopped.md",
         f"{ENC}.answer.md",
         f"{ENC}.answer.md.used",
         f"{ENC}.brief.md",
@@ -527,3 +530,16 @@ def test_is_settled_abandoned_override(tmp_path: Path) -> None:
     assert is_settled(rec, None, abandoned=True)
     assert not is_settled(rec, None, abandoned=False)
     assert not is_settled(rec, None)
+
+
+def test_collision_on_stop_text_refuses_and_moves_nothing(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    rec = _populate(cfg)
+    arch = tmp_path / "arch"
+    arch.mkdir()
+    (arch / f"{ENC}.stopped.md").write_text("different")
+    res = archive_item(cfg, rec, arch)
+    assert res.collision == arch / f"{ENC}.stopped.md"
+    assert (tmp_path / "ws" / f"{ENC}.stopped.md").read_text() == "stop text"
+    assert (arch / f"{ENC}.stopped.md").read_text() == "different"
+    assert rec.path.exists()

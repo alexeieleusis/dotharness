@@ -25,6 +25,8 @@ def test_minimal_defaults(tmp_path: Path) -> None:
     assert cfg.limits.max_tickets_per_run == 1
     assert cfg.limits.max_leaves_per_run == 32
     assert cfg.limits.max_run_minutes == 180
+    assert cfg.limits.presentation_timeout_minutes == 5
+    assert cfg.presentation.present_stops is True
     assert not hasattr(cfg, "merge")
     assert cfg.project.repo_dir is None
     assert cfg.source.work_item is None
@@ -260,7 +262,9 @@ def test_wrong_types(tmp_path: Path, text: str, key: str) -> None:
         load_config(write(tmp_path, text))
 
 
-@pytest.mark.parametrize("key", ["max_run_minutes", "max_tickets_per_run", "max_leaves_per_run"])
+@pytest.mark.parametrize(
+    "key", ["max_run_minutes", "max_tickets_per_run", "max_leaves_per_run", "presentation_timeout_minutes"]
+)
 @pytest.mark.parametrize("value", [0, -1])
 def test_limits_positive(tmp_path: Path, key: str, value: int) -> None:
     with pytest.raises(ConfigError, match=key):
@@ -344,3 +348,34 @@ def test_remove_label_when_settled_must_be_boolean(tmp_path: Path) -> None:
     text = MIN + '[source.work_item]\nkind = "github"\nremove_label_when_settled = "yes"\n'
     with pytest.raises(ConfigError, match="remove_label_when_settled must be a boolean"):
         load_config(write(tmp_path, text))
+
+
+def test_presentation_timeout_parses(tmp_path: Path) -> None:
+    cfg = load_config(write(tmp_path, MIN + "[limits]\npresentation_timeout_minutes = 2\n"))
+    assert cfg.limits.presentation_timeout_minutes == 2
+
+
+@pytest.mark.parametrize("value", ['"x"', "1.5", "true"])
+def test_presentation_timeout_rejects_non_integer(tmp_path: Path, value: str) -> None:
+    with pytest.raises(ConfigError, match="presentation_timeout_minutes"):
+        load_config(write(tmp_path, MIN + f"[limits]\npresentation_timeout_minutes = {value}\n"))
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_present_stops_parses(tmp_path: Path, value: bool) -> None:
+    cfg = load_config(write(tmp_path, MIN + f"[presentation]\npresent_stops = {str(value).lower()}\n"))
+    assert cfg.presentation.present_stops is value
+
+
+def test_present_stops_defaults_on_in_empty_table(tmp_path: Path) -> None:
+    assert load_config(write(tmp_path, MIN + "[presentation]\n")).presentation.present_stops is True
+
+
+def test_present_stops_rejects_non_boolean(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="present_stops"):
+        load_config(write(tmp_path, MIN + '[presentation]\npresent_stops = "no"\n'))
+
+
+def test_presentation_unknown_key_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="unknown key 'bogus'"):
+        load_config(write(tmp_path, MIN + "[presentation]\nbogus = 1\n"))

@@ -93,6 +93,23 @@ All values are positive integers.
 | `max_run_minutes` | integer | 180 |
 | `max_tickets_per_run` | integer | 1 |
 | `max_leaves_per_run` | integer | 32 |
+| `presentation_timeout_minutes` | integer | 5 |
+
+`presentation_timeout_minutes` is the time limit, in whole minutes, for the call that rewrites a checkpoint stop
+message (see [`[presentation]`](#presentation)). It is separate from `max_run_minutes`.
+
+### `[presentation]`
+
+Optional.
+
+| Key | Type | Default |
+|---|---|---|
+| `present_stops` | boolean | `true` |
+
+By default Sisyphus rewrites a checkpoint stop message through the agent backend. `present_stops = false` turns
+that off, and so does `--raw` on `run` and `resume` (for one invocation). With either set, Sisyphus makes no
+call, writes no `.stopped.md` and shows the raw text. A `.stopped.md` left by an earlier invocation is still
+shown by `status` and the digest.
 
 ### Ignored sections
 
