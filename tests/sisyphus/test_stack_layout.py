@@ -17,7 +17,7 @@ from dotharness.sisyphus.stack import fastapi_layout, react_layout, read_source_
         (["router = APIRouter()"], "app/x.py: router = APIRouter()"),
         (["app = FastAPI()"], "app/x.py: app = FastAPI()"),
         (["x = 1", "# no framework here"], None),
-        (["import fastapi_utils"], "app/x.py: import fastapi_utils"),
+        (["import fastapi_utils"], None),
         ([], None),
         (["x = 1", "import fastapi", "app = FastAPI()"], "app/x.py: import fastapi"),
     ],
@@ -34,7 +34,7 @@ def test_fastapi_layout(lines: list[str], expected: str | None) -> None:
         ("components/Foo.tsx", 'import { useState } from "react"', True),
         ("components/Foo.tsx", "const r = require('react')", True),
         ("components/Foo.tsx", "import x from 'react-dom'", False),
-        ("components/Foo.tsx", "import x from 'react/jsx-runtime'", False),
+        ("components/Foo.tsx", "import x from 'react/jsx-runtime'", True),
         ("src/util.ts", "import React from 'react'", False),
         ("src/hooks/useThing.ts", "import React from 'react'", True),
         ("src/components/a.js", "import React from 'react'", True),
@@ -92,3 +92,16 @@ def test_read_invalid_utf8(tmp_path: Path) -> None:
     assert error is None
     assert lines[0] == "ok"
     assert "�" in lines[1]
+
+
+def test_react_multiline_import_matches() -> None:
+    lines = ["import {", "  useState,", '} from "react";', "export const A = 1"]
+    assert react_layout("src/A.tsx", lines) == 'src/A.tsx: } from "react";'
+
+
+def test_react_jsx_runtime_matches() -> None:
+    assert react_layout("a.tsx", ["import { jsx } from 'react/jsx-runtime'"]) is not None
+
+
+def test_fastapi_users_not_fastapi() -> None:
+    assert fastapi_layout("a.py", ["from fastapi_users import X"]) is None

@@ -277,9 +277,11 @@ def package_declaration(root: Path, manifest_dir: str, name: str = "react") -> D
     return Declaration(None, ())
 
 
-_FASTAPI_IMPORT = re.compile(r"^\s*(from|import)\s+fastapi")
-_REACT_IMPORT = re.compile(r"^\s*import\b.*['\"]react['\"]")
-_REACT_REQUIRE = re.compile(r"require\(['\"]react['\"]\)")
+_FASTAPI_IMPORT = re.compile(r"^\s*(from|import)\s+fastapi\b")
+_REACT_MODULE = r"['\"]react(?:/jsx-runtime)?['\"]"
+_REACT_IMPORT = re.compile(
+    rf"\bfrom\s+{_REACT_MODULE}|^\s*import\s+{_REACT_MODULE}|\brequire\(\s*{_REACT_MODULE}\s*\)", re.M
+)
 _REACT_SUFFIXES = frozenset({".tsx", ".jsx"})
 _REACT_HINT_SUFFIXES = frozenset({".ts", ".js"})
 _REACT_HINT_DIRS = frozenset({"components", "hooks"})
@@ -309,6 +311,9 @@ def fastapi_layout(rel_path: str, lines: Sequence[str]) -> str | None:
 def react_layout(rel_path: str, lines: Sequence[str]) -> str | None:
     """Return ``<rel_path>: <stripped line>`` for the first React import or require, else ``None``.
 
+    Matching runs on the whole text, so a multi-line ``import {...} from 'react'`` is found; the
+    evidence is the line holding the match. ``react/jsx-runtime`` also counts.
+
     The path must first qualify: ``.tsx``/``.jsx``, or ``.ts``/``.js`` under a ``components`` or
     ``hooks`` directory.
     """
@@ -317,10 +322,13 @@ def react_layout(rel_path: str, lines: Sequence[str]) -> str | None:
     in_hint_dir = any(part in _REACT_HINT_DIRS for part in path.parts[:-1])
     if suffix not in _REACT_SUFFIXES and not (suffix in _REACT_HINT_SUFFIXES and in_hint_dir):
         return None
-    for line in lines:
-        if _REACT_IMPORT.search(line) or _REACT_REQUIRE.search(line):
-            return f"{rel_path}: {line.strip()}"
-    return None
+    text = "\n".join(lines)
+    found = _REACT_IMPORT.search(text)
+    if found is None:
+        return None
+    start = text.rfind("\n", 0, found.start()) + 1
+    end = text.find("\n", found.end())
+    return f"{rel_path}: {text[start : end if end != -1 else len(text)].strip()}"
 
 
 @dataclass(frozen=True)
