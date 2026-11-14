@@ -392,7 +392,7 @@ def test_refactor_unknown_key(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match=r"unknown key 'bogus' in \[refactor\] \(allowed: enabled, pattern_set\)"):
         load_config(write(tmp_path, MIN + "[refactor]\nbogus = 1\n"))
 
-        
+
 @pytest.mark.parametrize("value", [True, False])
 def test_present_stops_parses(tmp_path: Path, value: bool) -> None:
     cfg = load_config(write(tmp_path, MIN + f"[presentation]\npresent_stops = {str(value).lower()}\n"))
