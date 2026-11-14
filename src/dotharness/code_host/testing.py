@@ -2173,7 +2173,10 @@ class CodeHostConformance:
         target = await self.make_target()
         if not target.unsupported:
             return
-        everything = self._calls(replace(target, unsupported=frozenset()))
+        full_target = ConformanceTarget(
+            host=target.host, seeder=target.seeder, repository=target.repository, secret=target.secret
+        )
+        everything = self._calls(full_target)
         for operation in target.unsupported & everything.keys():
             _, call = everything[operation]
             assert await self._unsupported_op(target, operation, call)
