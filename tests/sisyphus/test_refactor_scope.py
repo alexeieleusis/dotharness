@@ -13,61 +13,65 @@ def _check(out: str, listed: set[str] | None = None) -> list[str]:
 
 
 def test_modified_unlisted_reported() -> None:
-    assert _check("M\tsrc/other.py\n") == ["M src/other.py"]
+    assert _check("M\0src/other.py\0") == ["M src/other.py"]
 
 
 def test_modified_listed_ok() -> None:
-    assert _check("M\tsrc/other.py\n", {"src/other.py"}) == []
+    assert _check("M\0src/other.py\0", {"src/other.py"}) == []
 
 
 def test_modified_test_ok() -> None:
-    assert _check("M\ttests/test_a.py\n") == []
+    assert _check("M\0tests/test_a.py\0") == []
 
 
 def test_modified_file_ok() -> None:
-    assert _check("M\tsrc/a.py\n") == []
+    assert _check("M\0src/a.py\0") == []
 
 
 def test_added_always_ok() -> None:
-    assert _check("A\tsrc/x.py\nA\tsrc/a.py\nA\ttests/test_a.py\n") == []
+    assert _check("A\0src/x.py\0A\0src/a.py\0A\0tests/test_a.py\0") == []
 
 
 def test_move_old_in_files() -> None:
-    assert _check("D\tsrc/a.py\nA\tsrc/new/a.py\n") == []
+    assert _check("D\0src/a.py\0A\0src/new/a.py\0") == []
 
 
 def test_move_old_in_tests() -> None:
-    assert _check("D\ttests/test_a.py\nA\ttests/new/test_a.py\n") == []
+    assert _check("D\0tests/test_a.py\0A\0tests/new/test_a.py\0") == []
 
 
 def test_move_old_listed() -> None:
-    assert _check("D\tsrc/old.py\nA\tsrc/new.py\n", {"src/old.py"}) == []
+    assert _check("D\0src/old.py\0A\0src/new.py\0", {"src/old.py"}) == []
 
 
 def test_move_old_in_none() -> None:
-    assert _check("D\tsrc/old.py\nA\tsrc/new.py\n") == ["D src/old.py"]
+    assert _check("D\0src/old.py\0A\0src/new.py\0") == ["D src/old.py"]
 
 
 def test_deleted_unlisted_reported() -> None:
-    assert _check("D\tsrc/other.py\n") == ["D src/other.py"]
+    assert _check("D\0src/other.py\0") == ["D src/other.py"]
 
 
 def test_several_in_order_no_duplicates() -> None:
-    out = "M\tsrc/z.py\nD\tsrc/y.py\nM\tsrc/z.py\nA\tsrc/n.py\n"
+    out = "M\0src/z.py\0D\0src/y.py\0M\0src/z.py\0A\0src/n.py\0"
     assert _check(out) == ["M src/z.py", "D src/y.py"]
 
 
 def test_empty_and_blank() -> None:
     assert _check("") == []
-    assert _check("\n  \n\n") == []
+    assert _check("\0\0") == []
 
 
 def test_type_change_reported() -> None:
-    assert _check("T\tsrc/other.py\n") == ["T src/other.py"]
+    assert _check("T\0src/other.py\0") == ["T src/other.py"]
 
 
-def test_line_without_tab_skipped() -> None:
-    assert _check("garbage\n") == []
+def test_non_ascii_path_unquoted() -> None:
+    assert _check("M\0src/café.py\0", {"src/café.py"}) == []
+
+
+def test_rename_reports_both_paths() -> None:
+    assert _check("R100\0src/a.py\0src/b.py\0") == ["R src/b.py"]
 
 
 def test_bullet_text_after_colon() -> None:

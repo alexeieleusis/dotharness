@@ -450,19 +450,31 @@ def parse_listed_edits(text: str) -> set[str]:
 def scope_violations(
     name_status_output: str, files: Sequence[str], tests: Sequence[str], listed_edits: set[str]
 ) -> list[str]:
-    """One ``"<status> <path>"`` string per non-``A`` diff line outside files, tests and listed edits."""
+    """One ``"<status> <path>"`` string per non-``A`` entry outside files, tests and listed edits.
+
+    ``name_status_output`` is ``git diff --name-status -z`` output (NUL-separated, paths unquoted).
+    """
     allowed = set(files) | set(tests) | listed_edits
     violations: list[str] = []
-    for line in name_status_output.splitlines():
-        status, sep, path = line.partition("\t")
-        if not sep or not status:
+    tokens = name_status_output.split("\0")
+    i = 0
+    while i + 1 < len(tokens):
+        status = tokens[i]
+        if not status:
+            i += 1
             continue
         letter = status[0]
-        if letter == "A" or path in allowed:
+        n_paths = 2 if letter in ("R", "C") else 1
+        paths = tokens[i + 1 : i + 1 + n_paths]
+        i += 1 + n_paths
+        if letter == "A":
             continue
-        entry = f"{letter} {path}"
-        if entry not in violations:
-            violations.append(entry)
+        for path in paths:
+            if path in allowed:
+                continue
+            entry = f"{letter} {path}"
+            if entry not in violations:
+                violations.append(entry)
     return violations
 
 
@@ -1019,7 +1031,7 @@ class _Run:
         else:
             problems.append(f"no handoff for set {group.set}")
         if on_branch:
-            diff = (await self.git("diff", "--no-renames", "--name-status", f"{head_before}..HEAD")).stdout
+            diff = (await self.git("diff", "--no-renames", "--name-status", "-z", f"{head_before}..HEAD")).stdout
             violations = scope_violations(diff, group.files, group.tests, listed)
             if violations:
                 problems.append("out-of-scope edits: " + ", ".join(violations))

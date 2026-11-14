@@ -244,17 +244,17 @@ async def test_t7_each_problem_alone(env: Env, problem: str) -> None:
 
 async def test_t8_scope_violation(env: Env) -> None:
     env.groups = [G("generic")]
-    env.fake.diff = "M\tother.py\nD\tgone.py\nA\tnew.py\n"
+    env.fake.diff = "M\0other.py\0D\0gone.py\0A\0new.py\0"
     stop = await _stop(env)
     assert stop.checkpoint == Checkpoint.C5
     assert "out-of-scope edits: M other.py, D gone.py" in stop.detail
-    assert ("git", "diff", "--no-renames", "--name-status", "h0..HEAD") in env.fake.calls
+    assert ("git", "diff", "--no-renames", "--name-status", "-z", "h0..HEAD") in env.fake.calls
     assert env.retries() == 1
 
 
 async def test_scope_honours_listed_edits(env: Env) -> None:
     env.groups = [G("generic")]
-    env.fake.diff = "M\tother.py\n"
+    env.fake.diff = "M\0other.py\0"
     env.handoff_text = "- Edits to existing files: other.py (needed)\n"
     await env.run.stage_refactor()
     assert env.retries() == 0
@@ -299,7 +299,7 @@ async def test_t11_resume_skip_reruns_scope_check(env: Env) -> None:
     env.groups = [G("generic")]
     await env.run.record_group_entry(env.groups[0])
     env.run.refactor_handoff_path("generic").write_text("x\n", encoding="utf-8")
-    env.fake.diff = "M\tother.py\n"
+    env.fake.diff = "M\0other.py\0"
     stop = await _stop(env)
     assert "out-of-scope edits" in stop.detail
     assert env.agent_calls == []
