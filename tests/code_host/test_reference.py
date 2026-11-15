@@ -650,6 +650,24 @@ class TestFallback:
             await _post(sample_report)
         assert len(_posts(mock_run)) == 1
 
+    async def test_post_uses_configured_credential_and_cwd(self, sample_report, mocker, tmp_path) -> None:
+        def handler(cmd, kwargs):
+            if "--version" in cmd:
+                return GH_OK
+            if cmd[:2] == ["echo", "bot-token"]:
+                return RunResult(0, "bot-token\n", "")
+            return RunResult(0, "", "")
+
+        mock_run = _stub(mocker, handler)
+        discussion = _create("echo bot-token", tmp_path).discussion
+        body, inline_comments = build_review(sample_report, _MAX_INLINE_COMMENTS)
+        await discussion.post_review(REPO, 42, body=body, inline_comments=inline_comments)
+        gh_calls = [c for c in mock_run.call_args_list if c.args[0][0] != "echo"]
+        assert gh_calls
+        for call in gh_calls:
+            assert call.kwargs["env"]["GH_TOKEN"] == "bot-token"  # noqa: S105
+            assert call.kwargs["cwd"] == tmp_path
+
     @pytest.mark.parametrize("exc", [AuthenticationError("denied"), UnsupportedCapabilityError("no", capability="X")])
     async def test_other_errors_do_not_trigger_fallback(self, sample_report, mocker, exc) -> None:
         _flow(mocker)
@@ -753,7 +771,7 @@ class TestPostJson:
             "dotharness.code_host.reference.run", new_callable=AsyncMock, return_value=RunResult(0, "", "")
         )
         await _post_json(["gh"], {"a": 1})
-        assert mock_run.call_args.kwargs == {"timeout": 60, "stdin": '{"a": 1}'}
+        assert mock_run.call_args.kwargs == {"cwd": None, "env": None, "timeout": 60, "stdin": '{"a": 1}'}
 
 
 # --------------------------------------------------------------------------------------------------------------------

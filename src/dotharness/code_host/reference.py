@@ -187,10 +187,10 @@ async def _run_gh(
     return _Outcome(result.returncode == 0, result.stdout, result.stderr, result.returncode)
 
 
-async def _require_gh() -> None:
+async def _require_gh(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
     """Raise OSError when ``gh --version`` fails. This is the only host-specific string vibe-heal prints."""
     try:
-        outcome = await _run_gh(gh_argv("--version"), 10)
+        outcome = await _run_gh(gh_argv("--version"), 10, cwd=cwd, env=env)
     except OSError as exc:
         raise OSError(_NOT_INSTALLED) from exc
     if not outcome.success:
@@ -204,8 +204,12 @@ class _RejectedError(CodeHostError):
 _AUTH_MARKERS = ("http 401", "http 403", "bad credentials", "gh auth login")
 
 
-async def _post_json(cmd: list[str], payload: dict[str, Any]) -> None:
+async def _post_json(
+    cmd: list[str], payload: dict[str, Any], *, cwd: Path | None = None, env: dict[str, str] | None = None
+) -> None:
     """Post JSON to a ``gh api`` endpoint on stdin (no token in the arguments).
+
+    ``cwd`` and ``env`` are those of the host's ``_Gh``, so the post acts as the configured credential.
 
     Raises:
         CodeHostTimeoutError: On timeout. The write may have succeeded.
@@ -214,7 +218,7 @@ async def _post_json(cmd: list[str], payload: dict[str, Any]) -> None:
         _RejectedError: On a validation rejection (HTTP 422).
         CodeHostError: On any other non-zero exit (5xx, dropped connection). The write may have succeeded.
     """
-    result: RunResult = await run(cmd, timeout=_POST_TIMEOUT_SECONDS, stdin=json.dumps(payload))
+    result: RunResult = await run(cmd, cwd=cwd, env=env, timeout=_POST_TIMEOUT_SECONDS, stdin=json.dumps(payload))
     if result.timed_out:
         msg = f"gh API call timed out after {_POST_TIMEOUT_SECONDS}s"
         raise CodeHostTimeoutError(msg)
@@ -1090,7 +1094,8 @@ class _Discussion:
         ``head_revision`` is accepted but unused: the ``Discussion`` protocol requires it, and the reference host
         posts the review against the pull request's current head.
         """
-        await _require_gh()
+        cwd, env = self._gh.cwd, await self._gh._env()
+        await _require_gh(cwd=cwd, env=env)
         cmd = _review_endpoint(repo, number)
         payload = {
             "event": "COMMENT",
@@ -1101,13 +1106,13 @@ class _Discussion:
             ],
         }
         try:
-            await _post_json(cmd, payload)
+            await _post_json(cmd, payload, cwd=cwd, env=env)
         except _RejectedError as inline_err:  # Only a rejection is safe to retry. Anything else may have posted.
             reason = str(inline_err)
             logger.warning("Inline review failed (%s) — falling back to top-level comment", reason)
             fallback = _truncate_body(body if fallback_body is None else fallback_body)
             try:
-                await _post_json(cmd, {"event": "COMMENT", "body": fallback, "comments": []})
+                await _post_json(cmd, {"event": "COMMENT", "body": fallback, "comments": []}, cwd=cwd, env=env)
             except CodeHostTimeoutError:
                 raise  # The fallback may have posted. Keep the type that says do not retry.
             except CodeHostError as e:
