@@ -284,21 +284,24 @@ async def _resolve_ssh_host(host: str) -> str:
     if host.startswith("-"):
         # An untrusted remote host must never be parsed by ssh as an option; fail closed.
         return host
-    resolved = host
     result = await run(["ssh", "-G", "--", host], timeout=_HELPER_TIMEOUT_SECONDS)
     if result.returncode == 0:
         for line in result.stdout.splitlines():
             if line.startswith("hostname "):
-                resolved = line.split(maxsplit=1)[1].strip()
-                break
-    _ssh_hosts[host] = resolved
-    return resolved
+                # Cache only a successful resolution, so a transient failure is retried on the next check.
+                resolved = _ssh_hosts[host] = line.split(maxsplit=1)[1].strip()
+                return resolved
+    return host  # Unresolved: the alias itself, so the check fails closed. Not cached.
 
 
 def _split_host_and_path(url: str) -> tuple[str, str] | None:
     normalized = url.strip().removesuffix(".git").rstrip("/")
     if normalized.startswith(("https://", "ssh://")):
         authority, sep, path = normalized.split("://", 1)[1].partition("/")
+        userinfo, at, hostport = authority.rpartition("@")
+        host, colon, port = hostport.rpartition(":")
+        if colon and port.isdigit():  # Strip an explicit port: it is not part of the host name.
+            authority = f"{userinfo}{at}{host}"
     else:
         authority, sep, path = normalized.partition(":")  # scp-style [user@]host:path
     if not sep or not path:

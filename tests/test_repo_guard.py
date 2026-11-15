@@ -188,3 +188,23 @@ async def test_snapshot_raises_when_harness_head_unreadable(tmp_path):
 
 async def test_assert_harness_unchanged_accepts_none():
     await assert_harness_unchanged(None)
+
+
+async def test_ssh_alias_failure_is_not_cached(monkeypatch):
+    calls = []
+
+    async def fake_run(cmd, **_kwargs):
+        calls.append(cmd)
+        if len(calls) == 1:
+            return RunResult(stdout="", stderr="", returncode=255, timed_out=True)
+        return RunResult(stdout="user git\nhostname github.com\n", stderr="", returncode=0)
+
+    monkeypatch.setattr(reference, "run", fake_run)
+    url = "git@work-gh:org/repo.git"
+    assert await reference.origin_repository(url) is None
+    assert await reference.origin_repository(url) == reference.RepositoryRef("org/repo")
+    assert len(calls) == 2
+
+
+async def test_origin_repository_strips_port():
+    assert await reference.origin_repository("ssh://git@github.com:22/o/r") == reference.RepositoryRef("o/r")
