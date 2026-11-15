@@ -88,7 +88,8 @@ Pointers: "Factory and selection", subsections "Factory" (rule on typed options)
 1. By entry point: publish the registration value in the entry-point group the design page reserves, under the name
    `examplehost`.
 2. By dotted path: point the selection at the module and attribute holding the registration. For example, use
-   `examplehost_pkg.host` with the attribute the design page's dotted-path form requires.
+   `examplehost_pkg.registration:REGISTRATION`. The value must contain a colon: a name without `:` is looked up as a
+   registered name, never as a dotted path.
 
 Pointers: "Factory and selection" (subsections "Factory", "Extension mechanism" and "Selection per tool") and "Reserved
 names", which lists the names you must not use.
@@ -109,9 +110,11 @@ names", which lists the names you must not use.
    `examplehost` does not implement goes in `ConformanceTarget.unsupported`, and the suite then asserts that it raises.
 5. Consumer tests that need a host without a network can use the in-memory fake instead.
 
-Worked example. The file below is the whole test module for `examplehost`. `ExampleTransport` is the stub of the host's
+Worked example. The file below is the test module for `examplehost`. `ExampleTransport` is the stub of the host's
 transport that you write. It implements `HostSeeder` (`dotharness.code_host.testing`). The host is built through the public
-factory, with the token `<token>` (the constant `SECRET` in the suite):
+factory, with the token `<token>` (the constant `SECRET` in the suite). The selection uses the dotted-path form, so the
+module runs without an installed entry point. A bare name such as `examplehost` resolves only when the distribution is
+installed (`pip install -e .`) with its entry point; otherwise `create_code_host` raises `ConfigurationError`:
 
 ```python
 from dotharness.code_host import HostSelection, create_code_host
@@ -122,7 +125,12 @@ class TestExampleHostConformance(CodeHostConformance):
     async def make_target(self) -> ConformanceTarget:
         transport = ExampleTransport()  # a fresh seeder per target
         host = create_code_host(
-            HostSelection(setting="code_host", name="examplehost", options={}, token_cmd=["echo", SECRET])
+            HostSelection(
+                setting="code_host",
+                name="examplehost_pkg.registration:REGISTRATION",
+                options={},
+                token_cmd=["echo", SECRET],
+            )
         )
         return ConformanceTarget(host=host, seeder=transport, secret=SECRET)
 ```
