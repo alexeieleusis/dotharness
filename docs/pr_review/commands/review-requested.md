@@ -38,17 +38,19 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
    commands share this lock (see [Shared behavior](index.md#shared-behavior)).
    If another instance holds it — this runner or any of the other four — the
    runner exits immediately with an error instead of blocking.
-2. The runner fetches a `gh` token (via `harness.gh_token_cmd`). It builds a
-   subprocess environment (`PATH` prepends + `harness.env` + `GITHUB_TOKEN`).
-   It then finds the current `gh` user's login (`gh api user --jq .login`).
+2. The runner fetches the host token (via `harness.host_token_cmd`; when it
+   is absent the reference host runs its default token command). It builds a subprocess environment (`PATH`
+   prepends + `harness.env` + `GITHUB_TOKEN`). It then finds the current host
+   user's login through the code host's session.
 3. The runner builds the list of PRs to process:
-    - If `--pr` is given, it resolves just that PR via `gh pr view` (number,
-      url, headRefName, createdAt, closingIssuesReferences).
-    - Otherwise, it runs `gh pr list --repo <repo> --state open --search user-review-requested:@me`
-      with the same `--json` field list in one call.
+    - If `--pr` is given, it resolves just that PR through the code host's
+      change-request read (number, url, head branch, creation time, linked work items).
+    - Otherwise, it lists the open PRs whose requested reviewer is the
+      current user's login (not `@me`), at most 1000, sorted by number. An empty
+      login makes no host call. A failed listing is logged as a warning and the run has no PRs.
     `createdAt` and `closingIssuesReferences` feed the traceability pass's
-    ticket resolution (see below). There is no extra `gh` cost: both fields
-    come from the same call. `closingIssuesReferences` are GitHub's own
+    ticket resolution (see below). There is no extra host cost: both fields
+    come from the same read. `closingIssuesReferences` are GitHub's own
     closing-keyword-derived issue links, for example from a `Fixes #N` in the
     PR body.
 4. The runner loads the review prompts from
@@ -118,13 +120,15 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
       marker is this runner's only idempotency signal for this pass too. If
       found, the pass is a noop. Otherwise, the runner resolves the PR's
       linked ticket(s). It primarily uses `closingIssuesReferences`
-      (GitHub's own closing-keyword linking) and fetches each entry with
-      `gh issue view {number} --repo {owner}/{name}`. If that finds nothing,
+      (GitHub's own closing-keyword linking) and reads each entry through the code host's
+      work-item read. If that finds nothing,
       it uses a second mechanism. It scans issue-timeline comments posted
       within 5 minutes of the PR's `createdAt` (any author, including bots)
-      for an issue reference. If neither mechanism resolves a ticket, the
+      for an issue reference. If both find nothing, it scans the PR body last
+      for issue references. This scan keeps only references to the PR's own
+      repository and reads at most 5 distinct references. If no mechanism resolves a ticket, the
       runner posts `# Requirement Traceability\nNo linked ticket
-      found...` directly via `gh pr comment`, with **no backend call**. This
+      found...` directly as a PR comment through the code host, with **no backend call**. This
       outcome is terminal: the runner never retries it for this PR, even if a ticket
       link is added later. Otherwise, the runner builds a PR-wide prompt
       from `review-traceability.md` and invokes the backend once. The
@@ -180,12 +184,12 @@ Only these `.harness.toml` fields affect this runner (full schema in
 |---|---|
 | `harness.backend` | Which AI backend (`opencode`/`claude`) runs the reviews |
 | `harness.backend_timeout_seconds` | Per-invocation timeout for each backend call (per file, for the summary, and for the design/traceability passes when they have not already succeeded) |
-| `harness.gh_token_cmd` | Command used to fetch the `GITHUB_TOKEN` passed to `gh` and the backend |
+| `harness.host_token_cmd` | Command used to fetch the `GITHUB_TOKEN` passed to host calls and the backend. `gh_token_cmd` was removed; a config that still has it fails to load |
 | `harness.knowledge_dir` | Where `pr-review/review-file.md`, `pr-review/review-summary.md`, `pr-review/review-design.md`, `pr-review/review-traceability.md`, and — only when `[regret_review].enabled` is `true` — `pr-review/review-regret.md` prompt templates live |
 | `harness.path_prepend` | Extra `PATH` entries for subprocesses (git/gh/backend) |
 | `harness.env` | Extra environment variables merged into the subprocess/backend env |
 | `harness.review_knowledge_file` | Optional extra instructions appended to the file, summary, design, and traceability prompts, and — only when `[regret_review].enabled` is `true` — to the regret-judgment prompt |
-| `repo.name` | GitHub repo slug used for all `gh` calls |
+| `repo.name` | GitHub repo slug used for all code-host calls |
 | `repo.working_dir` | Local git checkout where the runner detaches, fetches, and checks out branches. Its resolved path is also the basis of the lock key (see [Shared behavior](index.md#shared-behavior)) |
 | `repo.subdir[].path` | Used to locate each subdir's `sonar-project.properties` project key, to find cached vibe-heal review output for the PR branch |
 
@@ -270,14 +274,15 @@ GitHub state on every run.
   leaves that part's marker unposted, so the runner retries it next run.
   The runner does not special-case the design or traceability pass relative
   to the other two. See [State and idempotency](#state-and-idempotency).
-- Building the batch list makes one `gh pr list --search` call. No extra
-  per-PR call is needed: `headRefName`, `createdAt`, and
-  `closingIssuesReferences` all come from that one call.
-- The traceability pass's extra `gh` cost: one `gh issue view` call per
+- Building the batch list makes one change-request listing call. No extra
+  per-PR call is needed to list the batch. Each PR is then read once more
+  for the prompt builders.
+- The traceability pass's extra host cost: one work-item read per
   resolved ticket (typically one). It also makes one paginated fetch of the
   PR's issue-timeline comments for the early-comment-window fallback scan,
-  but only when the closing-keyword mechanism finds nothing. Both are cheap,
-  non-LLM `gh` calls in the same class as the other passes' marker checks.
+  but only when the closing-keyword mechanism finds nothing. The PR-body scan adds at most
+  5 work-item reads, and only when both other mechanisms find nothing. All are cheap,
+  non-LLM host calls in the same class as the other passes' marker checks.
 - The regret pass's cost is likewise independent, and gated. It runs only
   when `[regret_review].enabled` is `true` (off by default), and at most one
   backend invocation per PR. It makes zero invocations when the candidate

@@ -5,12 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dotharness.gh import build_subprocess_env
 from dotharness.pr_review.runners.common import (
     FatalGitError,
-    add_reviewer,
-    get_current_user,
-    get_gh_token,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
@@ -159,107 +155,6 @@ async def test_git_fetch_and_checkout_raises_fatal_error_on_called_process_error
         await git_fetch_and_checkout("feature-branch", str(tmp_path), {})
 
 
-def test_build_env_prepends_path():
-    original_path = os.environ.get("PATH", "")
-    env = build_subprocess_env(["/java/bin", "/node/bin"], {}, "tok")
-    assert env["PATH"].startswith("/java/bin:/node/bin:")
-    assert original_path in env["PATH"]
-
-
-def test_build_env_sets_github_token():
-    env = build_subprocess_env([], {}, "mytoken")
-    assert env["GITHUB_TOKEN"] == "mytoken"  # noqa: S105
-
-
-async def test_get_gh_token_strips_whitespace():
-    assert (await get_gh_token("printf '  tok123\\n  '")) == "tok123"
-
-
-async def test_get_gh_token_nonzero_exit_raises_even_with_partial_stdout():
-    # A nonzero exit means gh_token_cmd itself failed — trusting stray stdout here
-    # (e.g. a warning banner some wrapper printed before failing) would silently hand
-    # back a bogus "token" instead of surfacing the failure.
-    with pytest.raises(RuntimeError, match="auth error") as exc:
-        await get_gh_token("printf partial-token; printf 'auth error' >&2; exit 1")
-    assert "exit 1" in str(exc.value)
-
-
-async def test_get_gh_token_nonzero_exit_empty_stdout_raises():
-    with pytest.raises(RuntimeError, match="auth failed"):
-        await get_gh_token("printf 'auth failed' >&2; exit 1")
-
-
-async def test_get_gh_token_error_does_not_leak_command():
-    # gh_token_cmd is user config and may embed a literal credential (decision D-9).
-    with pytest.raises(RuntimeError) as exc:
-        await get_gh_token("echo SECRET-LITERAL >/dev/null; exit 3")
-    assert "SECRET-LITERAL" not in str(exc.value)
-
-
-async def test_get_gh_token_timeout_raises_without_command_and_without_hanging():
-    # A backgrounded grandchild keeps the pipe open; the shared runner's process-group kill must still return.
-    with (
-        patch("dotharness.pr_review.runners.common.TIMEOUT_GH", 1),
-        pytest.raises(RuntimeError, match="timed out") as exc,
-    ):
-        await get_gh_token("sleep 30 & echo SECRET-LITERAL; sleep 30")
-    assert "SECRET-LITERAL" not in str(exc.value)
-
-
-async def test_get_gh_token_stderr_only_raises():
-    # Exit 0 but blank stdout: build_subprocess_env would treat this token as falsy
-    # and silently skip setting GITHUB_TOKEN, so this must raise rather than return ""
-    # — an unset GITHUB_TOKEN makes every subsequent `gh` call fall back to whichever
-    # account `gh auth status` currently has active, not the one gh_token_cmd names.
-    with pytest.raises(RuntimeError, match="token not configured"):
-        await get_gh_token("printf 'token not configured' >&2")
-
-
-async def test_add_reviewer_logs_error_on_failure(caplog):
-    # preserve_reviewer_request calls add_reviewer from a `finally` with nothing else
-    # watching the outcome — a failed re-add must be logged, or it's invisible.
-    with (
-        patch(
-            "dotharness.pr_review.runners.common.run_cmd",
-            return_value=MagicMock(returncode=1, stderr=b"could not add reviewer: not found"),
-        ),
-        caplog.at_level("ERROR"),
-    ):
-        await add_reviewer(9, "acme/frontend", "alice", {})
-    assert any("could not add reviewer" in r.message for r in caplog.records)
-
-
-async def test_add_reviewer_silent_on_success(caplog):
-    with (
-        patch("dotharness.pr_review.runners.common.run_cmd", return_value=MagicMock(returncode=0, stderr=b"")),
-        caplog.at_level("ERROR"),
-    ):
-        await add_reviewer(9, "acme/frontend", "alice", {})
-    assert not caplog.records
-
-
-async def test_get_current_user_returns_login_on_success():
-    with patch(
-        "dotharness.pr_review.runners.common.run_cmd",
-        return_value=MagicMock(returncode=0, stdout=b"alice\n", stderr=b""),
-    ):
-        assert (await get_current_user({})) == "alice"
-
-
-async def test_get_current_user_logs_and_returns_blank_on_failure(caplog):
-    # Fails open (returns "" rather than raising) since every caller already treats a
-    # blank current_user as a safe no-op — but the failure must still be logged.
-    with (
-        patch(
-            "dotharness.pr_review.runners.common.run_cmd",
-            return_value=MagicMock(returncode=1, stdout=b"", stderr=b"gh: token revoked"),
-        ),
-        caplog.at_level("ERROR"),
-    ):
-        assert (await get_current_user({})) == ""
-    assert any("token revoked" in r.message for r in caplog.records)
-
-
 def _git_restore_side_effect(is_ancestor_returncode):
     def side_effect(cmd, **kwargs):
         if "rev-parse" in cmd:
@@ -342,3 +237,13 @@ async def test_git_restore_completes_when_cancelled(tmp_path):
         with pytest.raises(asyncio.CancelledError):
             await task
     assert any("checkout" in c for c in calls)
+
+
+def test_repo_identity_check_is_built_for_the_configured_repository():
+    from dotharness.pr_review.runners.common import repo_identity_check
+
+    config = MagicMock()
+    config.repo.name = "acme/web"
+    with patch("dotharness.pr_review.runners.common.reference_identity_check") as build:
+        assert repo_identity_check(config) is build.return_value
+    build.assert_called_once_with("acme/web")

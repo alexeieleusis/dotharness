@@ -1,3 +1,5 @@
+<!-- host-variables: host-minimize-comment-cmd, host-reply-inline-cmd, host-resolve-thread-cmd -->
+
 # focused-review instructions
 
 You are elaborating a single SonarQube-posted review comment that cites a knowledge
@@ -48,7 +50,7 @@ at most one code snippet. Do not paste large sections of the knowledge file verb
 ## Step 4 — Post the reply
 
 ```bash
-gh api "repos/<REPO>/pulls/<NUMBER>/comments/<COMMENT_ID>/replies" \
+<host-reply-inline-cmd> \
   -X POST -f body="<your refactor description>
 
 <Marker>"
@@ -75,7 +77,7 @@ exact marker string given below, on its own line at the end of the body.
      it before the thread is resolved and the comment hidden:
 
      ```bash
-     gh api "repos/<REPO>/pulls/<NUMBER>/comments/<COMMENT_ID>/replies" \
+     <host-reply-inline-cmd> \
        -X POST -f body="False positive: <one sentence reason>
 
      <Marker>"
@@ -84,13 +86,13 @@ exact marker string given below, on its own line at the end of the body.
   2. Resolve the thread:
 
      ```bash
-     gh api graphql -f query='mutation($threadId:ID!){ resolveReviewThread(input:{threadId:$threadId}){ thread{ id isResolved } } }' -f threadId=<THREAD_ID>
+     <host-resolve-thread-cmd>
      ```
 
   3. Then minimise the comment:
 
      ```bash
-     gh api graphql -f query='mutation($subjectId:ID!){ minimizeComment(input:{subjectId:$subjectId, classifier:RESOLVED}){ minimizedComment{ isMinimized minimizedReason } } }' -f subjectId=<COMMENT_NODE_ID>
+     <host-minimize-comment-cmd>
      ```
 
   Post only that one reply for a false positive, and no other text. Apply both

@@ -1,11 +1,9 @@
-import os
 import re
 from importlib import resources
 from pathlib import Path
 
 import pytest
 
-from dotharness.gh import build_subprocess_env
 from dotharness.pr_review.config import CiFixConfig, ConfigError, HarnessSection, MergeConfig, PreCommand, load_config
 from dotharness.pr_review.lock import working_dir_lock_key
 
@@ -19,7 +17,7 @@ def test_load_minimal(minimal_toml):
 def test_defaults_applied(minimal_toml):
     cfg = load_config(minimal_toml)
     assert cfg.harness.backend_timeout_seconds == 900
-    assert cfg.harness.gh_token_cmd == "echo test-token"  # noqa: S105
+    assert cfg.harness.host_token_cmd == "echo test-token"  # noqa: S105
     assert cfg.vibe_heal.enabled is False
 
 
@@ -475,16 +473,6 @@ def test_local_review_absent_yields_empty_config(minimal_toml):
     assert cfg.local_review.output_dir is None
 
 
-def test_build_subprocess_env_without_token_omits_github_token(monkeypatch):
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    env = build_subprocess_env(["/x/bin"], {"FOO": "bar"}, None)
-    assert "GITHUB_TOKEN" not in env
-    assert env["FOO"] == "bar"
-    assert env["PATH"].startswith("/x/bin:")
-    assert "GITHUB_TOKEN" not in build_subprocess_env([], {})
-    assert os.environ.get("GITHUB_TOKEN") is None
-
-
 @pytest.mark.parametrize("bad", ["..", ".", "a b", "a;b"])
 def test_invalid_repo_name_rejected(tmp_path, bad):
     p = tmp_path / ".harness.toml"
@@ -687,3 +675,43 @@ async def test_fetch_pr_comments_uses_per_call_output_file_not_shared_cache(tmp_
     assert [c["id"] for c in comments] == ["MINE"]
     assert seen["out"] != shared
     assert not seen["out"].exists()  # temp dir cleaned up
+
+
+def _write(tmp_path, harness_body):
+    p = tmp_path / ".harness.toml"
+    p.write_text(f'[harness]\n{harness_body}\n[repo]\nname = "a/b"\nworking_dir = "/tmp"\n')
+    return p
+
+
+def test_host_keys_default_to_absent(tmp_path):
+    h = load_config(_write(tmp_path, "")).harness
+    assert (h.host, h.host_options, h.host_token_cmd) == (None, {}, None)
+
+
+def test_host_keys_loaded(tmp_path):
+    h = load_config(_write(tmp_path, 'host = "examplehost"\n[harness.host_options]\nregion = "x"')).harness
+    assert h.host == "examplehost"
+    assert h.host_options == {"region": "x"}
+
+
+def test_host_token_cmd_loaded(tmp_path):
+    assert load_config(_write(tmp_path, 'host_token_cmd = "new"')).harness.host_token_cmd == "new"  # noqa: S105
+
+
+@pytest.mark.parametrize("extra", ["", '\nhost_token_cmd = "new"'])
+def test_gh_token_cmd_is_removed_and_names_host_token_cmd(tmp_path, extra):
+    with pytest.raises(ConfigError, match=r"gh_token_cmd.*removed.*host_token_cmd"):
+        load_config(_write(tmp_path, 'gh_token_cmd = "old"' + extra))
+
+
+@pytest.mark.parametrize(
+    ("body", "key"),
+    [
+        ("host = 3", "harness.host"),
+        ("host_options = 3", "harness.host_options"),
+        ("host_token_cmd = 3", "harness.host_token_cmd"),
+    ],
+)
+def test_host_keys_type_validated(tmp_path, body, key):
+    with pytest.raises(ConfigError, match=key):
+        load_config(_write(tmp_path, body))

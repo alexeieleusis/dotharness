@@ -211,8 +211,7 @@ dimensions, including "Maintainability," are unchanged by this effort — see §
   1. **Inline findings** (file-specific, P0/P1 only): posted exactly like
      `review-file.md`'s inline comments —
      ```
-     gh api repos/{REPO}/pulls/{PR_NUMBER}/comments \
-       -f body="...<!-- dotharness-review-design -->" -f commit_id="{COMMIT}" -f path="..." -F line=<N>
+     gh api repos/{REPO}/pulls/{PR_NUMBER}/comments -f commit_id="{COMMIT}" -f path="<PATH>" -F line=<N> -f body="...<!-- dotharness-review-design -->"
      ```
      with `DESIGN_REVIEW_MARKER` (`<!-- dotharness-review-design -->`) in place of
      `INLINE_REVIEW_MARKER`, so the two passes' inline comments are distinguishable by

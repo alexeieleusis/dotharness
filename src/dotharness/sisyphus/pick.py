@@ -2,7 +2,7 @@
 
 Tracker access goes through the injectable :class:`TrackerClient` and :class:`PullRequestLookup`
 protocols; :func:`pick_items` takes both as parameters, so tests use fakes. The real clients here
-(``gh`` for GitHub issues, the Linear GraphQL API) are built from subprocess and ``urllib`` and read
+(the configured code host's ``WorkItems`` and ``ChangeRequests`` for GitHub issues, the Linear GraphQL API) read
 credentials only from the inherited environment or a ``token_cmd`` the caller already resolved.
 Nothing in this module mutates a tracker (D-8).
 
@@ -24,12 +24,11 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
-from dotharness.gh import gh_argv
+from dotharness.code_host import CodeHost, RepositoryRef
 from dotharness.sisyphus.config import SisyphusConfig, WorkItemSource
 from dotharness.sisyphus.runrecord import fold_item, record_path
-from dotharness.sisyphus.subproc import CommandResult, run_command
 from dotharness.sisyphus.ticketfile import (
     TICKET_SUFFIX,
     parse_front_matter,
@@ -205,68 +204,51 @@ async def _take_unstarted(
 
 
 # --------------------------------------------------------------- real clients
+#
+# Unsupported-capability policy (docs/sisyphus/configuration.md has the same table). Each site below and in
+# ``cli.py``/``orchestrator.py``/``cleanup.py`` names its row; the policy is decided once, here:
+#
+# | Call site                                              | Capability     | Policy                                    |
+# | pick_items listing and linked/open-PR check (github)   | WorkItems      | stop (startup ConfigurationError)         |
+# | label removal (finish and ``abandon``)                 | WorkItems      | warn (digest note / one stderr line)      |
+# | find_pr, open_pr in the open-PR stage                  | ChangeRequests | stop (CodeHostError maps to C8)           |
+# | pr_state in branch cleanup                             | ChangeRequests | degrade (branch kept with a note)         |
+# | ``status --check-prs`` state lookup                    | ChangeRequests | warn (``warning:`` line, item shown)      |
+# | default-branch lookup for intake                       | Repository     | degrade (any failure returns ``None``)    |
 
 
-ExecResult = CommandResult
+class HostRepository:
+    """One lazily resolved :class:`RepositoryRef` for the clone; the consumer contracts below take no ref."""
 
+    def __init__(self, host: CodeHost) -> None:
+        self.host = host
+        self._ref: RepositoryRef | None = None
 
-Exec = Callable[[Sequence[str], Path | None, Mapping[str, str] | None], Awaitable[ExecResult]]
-
-
-async def default_exec(argv: Sequence[str], cwd: Path | None, env: Mapping[str, str] | None) -> ExecResult:
-    """Run ``argv`` with captured text output. ``env`` entries are added to the inherited environment."""
-    return await run_command(argv, cwd, env)
-
-
-class GhCli:
-    """Thin ``gh`` wrapper shared by the GitHub tracker and pull-request lookup."""
-
-    def __init__(self, cwd: Path | None = None, token: str | None = None, run: Exec = default_exec) -> None:
-        self.cwd = cwd
-        self.env = {"GH_TOKEN": token} if token else None
-        self._run = run
-
-    async def run(self, *args: str) -> ExecResult:
-        """Run ``gh <args>`` in the configured directory and environment; the caller inspects the result."""
-        return await self._run(gh_argv(*args), self.cwd, self.env)
-
-    async def json(self, *args: str) -> Any:
-        res = await self.run(*args)
-        if res.returncode != 0:
-            raise PickError(f"gh {' '.join(args[:2])} failed (exit {res.returncode}): {res.stderr.strip()[-300:]}")
-        try:
-            return json.loads(res.stdout or "null")
-        except ValueError as exc:
-            raise PickError(f"gh {' '.join(args[:2])} returned invalid JSON: {exc}") from exc
-
-
-class LabelRemovalError(PickError):
-    """``gh issue edit --remove-label`` failed (non-zero exit, including a timeout as 124)."""
+    async def ref(self) -> RepositoryRef:
+        if self._ref is None:
+            self._ref = await self.host.repository.current()
+        return self._ref
 
 
 class LabelRemover(Protocol):
-    """Removes one label from one GitHub issue. Raises :class:`LabelRemovalError` on failure."""
+    """Removes one label from one work item. Any failure is raised (the callers decide: warn, never stop)."""
 
     async def remove_label(self, number: int, label: str) -> None: ...
 
 
-class GhLabelRemover:
-    """Real :class:`LabelRemover`: ``gh issue edit <n> --remove-label <label>`` through :class:`GhCli`.
+class HostLabelRemover:
+    """:class:`LabelRemover` over ``WorkItems.remove_label``.
 
-    No failure is swallowed: any non-zero exit raises. Verified against real ``gh`` (decision O-1): removing a label
-    the issue does not carry exits 0 (idempotent), while a label that does not exist in the repository exits
-    non-zero (``'<label>' not found``), which is a configuration error the human must fix.
+    Policy (WorkItems unsupported): warn. The ``UnsupportedCapabilityError`` propagates; the orchestrator records a
+    digest note and ``abandon`` prints one stderr line. Removing a label the item does not carry is a no-op; a label
+    that does not exist in the repository raises (a configuration error the human must fix).
     """
 
-    def __init__(self, gh: GhCli) -> None:
-        self.gh = gh
+    def __init__(self, repo: HostRepository) -> None:
+        self.repo = repo
 
     async def remove_label(self, number: int, label: str) -> None:
-        res = await self.gh.run("issue", "edit", str(number), "--remove-label", label)
-        if res.returncode != 0:
-            raise LabelRemovalError(
-                f"gh issue edit {number} --remove-label failed (exit {res.returncode}): {res.stderr.strip()[-300:]}"
-            )
+        await self.repo.host.work_items.remove_label(await self.repo.ref(), number, label)
 
 
 _HASH_REF = re.compile(r"#(\d+)")
@@ -284,51 +266,52 @@ def label_removal_number(config: SisyphusConfig, ref: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-class GitHubIssueTracker:
-    """Open issues assigned to ``assignee`` with ``pick_label`` (D-18), read through ``gh issue list``."""
+class HostIssueTracker:
+    """Open issues assigned to ``assignee`` with ``pick_label`` (D-18), read through ``WorkItems.list_open``.
 
-    def __init__(self, gh: GhCli, limit: int = 100) -> None:
-        self.gh = gh
-        self.limit = limit
+    Policy (WorkItems unsupported): stop. ``default_services`` refuses to start for ``kind = "github"`` on a host
+    without WorkItems, so this never runs there. The host's declared list bound replaces the old fixed 100.
+    """
+
+    def __init__(self, repo: HostRepository) -> None:
+        self.repo = repo
 
     async def list_candidates(self, source: WorkItemSource) -> Sequence[Candidate]:
         assert source.assignee is not None  # noqa: S101
-        rows = await self.gh.json(
-            "issue", "list", "--state", "open", "--assignee", source.assignee, "--label", source.pick_label or "",
-            "--limit", str(self.limit), "--json", "number,title,createdAt,assignees,labels",
-        )  # fmt: skip
+        # ``label=""`` (not None) keeps ``--label ""`` in the argv when no pick_label is set, as before.
+        items = await self.repo.host.work_items.list_open(
+            await self.repo.ref(), assignee=source.assignee, label=source.pick_label or ""
+        )
         return [
             Candidate(
-                ref=f"#{row['number']}",
-                title=row.get("title", ""),
-                number=int(row["number"]),
-                created_at=row.get("createdAt", ""),
-                assignees=tuple(a.get("login", "") for a in row.get("assignees", [])),
-                labels=tuple(lbl.get("name", "") for lbl in row.get("labels", [])),
+                ref=f"#{item.number}",
+                title=item.title,
+                number=item.number,
+                created_at=item.created_at.isoformat(),
+                assignees=tuple(user.login for user in item.assignees),
+                labels=item.labels,
                 state="open",
             )
-            for row in rows or []
+            for item in items
         ]
 
 
-class GhPullRequestLookup:
-    """Linked and open pull requests via ``gh`` (``closedByPullRequestsReferences``, ``gh pr list``)."""
+class HostPullRequestLookup:
+    """Linked and open pull requests through ``WorkItems.closing_change_requests`` and ``open_change_request_bodies``.
 
-    def __init__(self, gh: GhCli, limit: int = 200) -> None:
-        self.gh = gh
-        self.limit = limit
+    Policy (WorkItems unsupported): stop, same as :class:`HostIssueTracker`.
+    """
+
+    def __init__(self, repo: HostRepository) -> None:
+        self.repo = repo
 
     async def linked_prs(self, issue_number: int) -> Sequence[LinkedPr]:
-        view = await self.gh.json("issue", "view", str(issue_number), "--json", "closedByPullRequestsReferences")
-        linked: list[LinkedPr] = []
-        for ref in (view or {}).get("closedByPullRequestsReferences", []):
-            pr = await self.gh.json("pr", "view", str(ref["number"]), "--json", "number,state")
-            linked.append(LinkedPr(int(pr["number"]), str(pr["state"])))
-        return linked
+        crs = await self.repo.host.work_items.closing_change_requests(await self.repo.ref(), issue_number)
+        return [LinkedPr(cr.number, cr.state.name) for cr in crs]
 
     async def open_pr_bodies(self) -> Sequence[str]:
-        rows = await self.gh.json("pr", "list", "--state", "open", "--limit", str(self.limit), "--json", "body")
-        return [row.get("body") or "" for row in rows or []]
+        crs = await self.repo.host.work_items.open_change_request_bodies(await self.repo.ref())
+        return [cr.body or "" for cr in crs]
 
 
 Post = Callable[[str, bytes, Mapping[str, str]], bytes]

@@ -1,4 +1,4 @@
-"""Picker tests: trackers, PR lookups and ``gh``/Linear transports are all fakes. No network, no real gh."""
+"""Picker tests: trackers, PR lookups and Linear transports are all fakes. No network, no real gh."""
 
 from __future__ import annotations
 
@@ -10,16 +10,16 @@ from pathlib import Path
 
 import pytest
 
+from dotharness.code_host import Capability, ChangeRequestState, CodeHostError, UnsupportedCapabilityError
+from dotharness.code_host.testing import InMemoryCodeHost
 from dotharness.sisyphus import pick
 from dotharness.sisyphus.config import ProjectConfig, SisyphusConfig, SourceConfig, WorkItemSource
 from dotharness.sisyphus.pick import (
     Candidate,
-    ExecResult,
-    GhCli,
-    GhLabelRemover,
-    GhPullRequestLookup,
-    GitHubIssueTracker,
-    LabelRemovalError,
+    HostIssueTracker,
+    HostLabelRemover,
+    HostPullRequestLookup,
+    HostRepository,
     LinearTracker,
     LinkedPr,
     PickError,
@@ -101,16 +101,6 @@ async def test_closed_github_issue_is_not_picked(tmp_path: Path) -> None:
 async def test_open_linked_pr_excludes_but_merged_or_closed_do_not(tmp_path: Path) -> None:
     lookup = FakeLookup({1: [LinkedPr(10, "OPEN")], 2: [LinkedPr(11, "MERGED")], 3: [LinkedPr(12, "CLOSED")]})
     assert refs(await run(GH, [issue(1), issue(2), issue(3)], tmp_path, lookup=lookup)) == ["#2", "#3"]
-
-
-async def test_draft_linked_pr_is_still_open_for_pick(tmp_path: Path) -> None:
-    ex = FakeExec([
-        ExecResult(0, json.dumps({"closedByPullRequestsReferences": [{"number": 8}]})),
-        ExecResult(0, json.dumps({"number": 8, "state": "OPEN", "isDraft": True})),
-    ])
-    linked = await GhPullRequestLookup(GhCli(None, None, ex)).linked_prs(1)
-    assert linked == [LinkedPr(8, "OPEN")]
-    assert refs(await run(GH, [issue(1), issue(2)], tmp_path, lookup=FakeLookup({1: linked}))) == ["#2"]
 
 
 async def test_hash_n_in_open_pr_body_only_excludes(tmp_path: Path) -> None:
@@ -218,53 +208,6 @@ async def test_github_without_lookup_and_bad_source(tmp_path: Path) -> None:
 # --------------------------------------------------------- real clients (fakes)
 
 
-class FakeExec:
-    def __init__(self, replies: list[ExecResult]) -> None:
-        self.replies = replies
-        self.calls: list[tuple[list[str], Path | None, Mapping[str, str] | None]] = []
-
-    async def __call__(self, argv: Sequence[str], cwd: Path | None, env: Mapping[str, str] | None) -> ExecResult:
-        self.calls.append((list(argv), cwd, env))
-        return self.replies.pop(0)
-
-
-async def test_github_issue_tracker_parses_gh_output(tmp_path: Path) -> None:
-    rows = [
-        {
-            "number": 4,
-            "title": "T",
-            "createdAt": "2026-01-01",
-            "assignees": [{"login": "me"}],
-            "labels": [{"name": "sisyphus"}],
-        }
-    ]
-    ex = FakeExec([ExecResult(0, json.dumps(rows))])
-    got = await GitHubIssueTracker(GhCli(tmp_path, "tok", ex)).list_candidates(GH)
-    assert got == [Candidate("#4", "T", 4, "2026-01-01", ("me",), ("sisyphus",), "open")]
-    argv, cwd, env = ex.calls[0]
-    assert argv[:3] == ["gh", "issue", "list"]
-    assert "--assignee" in argv and "me" in argv and "sisyphus" in argv
-    assert cwd == tmp_path and env == {"GH_TOKEN": "tok"}
-
-
-async def test_gh_failure_and_bad_json_raise(tmp_path: Path) -> None:
-    with pytest.raises(PickError, match="exit 1"):
-        await GhCli(None, None, FakeExec([ExecResult(1, "", "boom")])).json("issue", "list")
-    with pytest.raises(PickError, match="invalid JSON"):
-        await GhCli(None, None, FakeExec([ExecResult(0, "{")])).json("issue", "list")
-
-
-async def test_gh_pull_request_lookup() -> None:
-    ex = FakeExec([
-        ExecResult(0, json.dumps({"closedByPullRequestsReferences": [{"number": 8}]})),
-        ExecResult(0, json.dumps({"number": 8, "state": "MERGED"})),
-        ExecResult(0, json.dumps([{"body": "Fixes #1"}, {"body": None}])),
-    ])
-    lookup = GhPullRequestLookup(GhCli(None, None, ex))
-    assert await lookup.linked_prs(3) == [LinkedPr(8, "MERGED")]
-    assert await lookup.open_pr_bodies() == ["Fixes #1", ""]
-
-
 def _linear_post(nodes: list[dict], seen: list[tuple[str, dict, Mapping[str, str]]]):
     def post(url: str, payload: bytes, headers: Mapping[str, str]) -> bytes:
         seen.append((url, json.loads(payload), headers))
@@ -338,13 +281,6 @@ async def test_linear_tracker_display_name_assignee_filter() -> None:
 
 def test_no_harness_or_spec_prism_flow_import() -> None:
     assert not forbidden_imports(Path(pick.__file__).read_text())
-
-
-async def test_gh_cli_run_returns_the_raw_result_with_cwd_and_env(tmp_path: Path) -> None:
-    ex = FakeExec([ExecResult(1, "out", "err")])
-    res = await GhCli(tmp_path, "tok", ex).run("pr", "create")
-    assert res == ExecResult(1, "out", "err")
-    assert ex.calls == [(["gh", "pr", "create"], tmp_path, {"GH_TOKEN": "tok"})]
 
 
 # ------------------------------------------------------------------ FileTracker
@@ -529,38 +465,6 @@ def _cfg(kind: str = "github", pick_label: str | None = "bot", remove: bool | No
     return SisyphusConfig(project=ProjectConfig(), source=SourceConfig(work_item=wi))
 
 
-async def test_label_remover_runs_edit_with_configured_label(tmp_path: Path) -> None:
-    ex = FakeExec([ExecResult(0)])
-    await GhLabelRemover(GhCli(tmp_path, "tok", ex)).remove_label(7, "bot")
-    assert ex.calls == [(["gh", "issue", "edit", "7", "--remove-label", "bot"], tmp_path, {"GH_TOKEN": "tok"})]
-
-
-async def test_label_remover_maps_failure_and_timeout_to_error() -> None:
-    with pytest.raises(LabelRemovalError, match=r"exit 1.*boom"):
-        await GhLabelRemover(GhCli(None, None, FakeExec([ExecResult(1, "", "boom")]))).remove_label(7, "bot")
-    with pytest.raises(LabelRemovalError, match="exit 124"):
-        await GhLabelRemover(GhCli(None, None, FakeExec([ExecResult(124, "", "timed out after 10.0s")]))).remove_label(
-            7, "x"
-        )
-    assert issubclass(LabelRemovalError, PickError)
-
-
-async def test_timebound_label_remover_passes_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from dotharness.sisyphus import cli
-
-    seen: list[object] = []
-
-    async def fake(argv: Sequence[str], cwd: Path | None, env: object, timeout: float | None = None) -> ExecResult:
-        seen.append((list(argv), timeout))
-        return ExecResult(124, "", "timed out")
-
-    monkeypatch.setattr(cli, "run_subprocess", fake)
-    with pytest.raises(LabelRemovalError):
-        await cli.GhTimeboundLabelRemover(tmp_path, None).remove_label(3, "bot")
-    assert seen == [(["gh", "issue", "edit", "3", "--remove-label", "bot"], cli.PR_STATE_TIMEOUT)]
-    assert pytest.approx(10.0) == cli.PR_STATE_TIMEOUT
-
-
 def test_label_removal_number_gating() -> None:
     assert label_removal_number(_cfg(), "#12") == 12
     assert label_removal_number(_cfg(), "ABC-12") is None
@@ -572,18 +476,80 @@ def test_label_removal_number_gating() -> None:
     assert label_removal_number(SisyphusConfig(project=ProjectConfig()), "#12") is None
 
 
-async def test_default_gh_cli_maps_missing_gh_to_127(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PATH", str(tmp_path))
-    assert (await GhCli().run("--version")).returncode == 127
+# ------------------------------------------------- host adapters (in-memory code host)
 
 
-async def test_default_gh_cli_maps_hung_gh_to_124(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    fake = tmp_path / "gh"
-    fake.write_text("#!/bin/sh\nexec /bin/sleep 30\n")
-    fake.chmod(0o755)
-    monkeypatch.setenv("PATH", str(tmp_path))
-    # default_exec passes no timeout; shrink the shared default so the test stays fast.
-    monkeypatch.setattr("dotharness.sisyphus.subproc.DEFAULT_COMMAND_TIMEOUT", 0.5)
-    res = await GhCli().run("--version")
-    assert res.returncode == 124
-    assert "timed out after 0.5s" in res.stderr
+def _host(capabilities: frozenset[Capability] | None = None) -> tuple[InMemoryCodeHost, HostRepository]:
+    fake = InMemoryCodeHost(capabilities=capabilities)
+    return fake, HostRepository(fake.code_host())
+
+
+async def test_host_repository_resolves_once() -> None:
+    fake, repo = _host()
+    assert await repo.ref() == await repo.ref()
+    assert [c.operation for c in fake.calls].count("Repository.current") == 1
+
+
+async def test_host_issue_tracker_maps_work_items() -> None:
+    fake, repo = _host()
+    ref = await repo.ref()
+    fake.add_work_item(ref, title="T", labels=["sisyphus"], assignees=["me"])
+    fake.add_work_item(ref, title="other", labels=["x"], assignees=["me"])
+    fake.add_work_item(ref, title="theirs", labels=["sisyphus"], assignees=["you"])
+    got = await HostIssueTracker(repo).list_candidates(GH)
+    assert len(got) == 1
+    cand = got[0]
+    assert (cand.ref, cand.title, cand.number, cand.assignees, cand.labels, cand.state) == (
+        "#1", "T", 1, ("me",), ("sisyphus",), "open"
+    )  # fmt: skip
+    assert cand.created_at == fake.work_items[ref][0].created_at.isoformat()
+    list_call = next(c for c in fake.calls if c.operation == "WorkItems.list_open")
+    assert list_call.kwargs == {"assignee": "me", "label": "sisyphus"}
+
+
+async def test_host_issue_tracker_passes_empty_label_when_unset() -> None:
+    fake, repo = _host()
+    await HostIssueTracker(repo).list_candidates(WorkItemSource(kind="github", assignee="me"))
+    list_call = next(c for c in fake.calls if c.operation == "WorkItems.list_open")
+    assert list_call.kwargs["label"] == ""
+
+
+async def test_host_pull_request_lookup_maps_states_and_bodies() -> None:
+    fake, repo = _host()
+    ref = await repo.ref()
+    fake.add_work_item(ref, title="issue", labels=["sisyphus"], assignees=["me"])
+    fake.add_change_request(ref, head_reference="a", body="Fixes #1", state=ChangeRequestState.MERGED)
+    fake.add_change_request(ref, head_reference="b", body="Refs #1", is_draft=True)
+    fake.link_closing(ref, work_item=1, change_request=1)
+    fake.link_closing(ref, work_item=1, change_request=2)
+    lookup = HostPullRequestLookup(repo)
+    assert await lookup.linked_prs(1) == [LinkedPr(1, "MERGED"), LinkedPr(2, "OPEN")]
+    assert await lookup.open_pr_bodies() == ["Refs #1"]
+    # A draft linked PR is still open for the pick check.
+    assert await default_open_pr_check(Candidate("#1", number=1), lookup)
+
+
+async def test_host_label_remover_removes_and_propagates_failure() -> None:
+    fake, repo = _host()
+    ref = await repo.ref()
+    fake.add_work_item(ref, title="issue", labels=["bot"], assignees=["me"])
+    remover = HostLabelRemover(repo)
+    await remover.remove_label(1, "bot")
+    assert fake.work_items[ref][0].labels == ()
+    fake.fail_next("WorkItems.remove_label", CodeHostError("exit 124: timed out"))
+    with pytest.raises(CodeHostError, match="exit 124"):
+        await remover.remove_label(1, "bot")
+
+
+async def test_work_item_adapters_raise_when_work_items_unsupported() -> None:
+    _fake, repo = _host(frozenset(Capability) - {Capability.CHECKS, Capability.WORK_ITEMS})
+    with pytest.raises(UnsupportedCapabilityError):
+        await HostIssueTracker(repo).list_candidates(GH)
+    with pytest.raises(UnsupportedCapabilityError):
+        await HostPullRequestLookup(repo).open_pr_bodies()
+    with pytest.raises(UnsupportedCapabilityError):
+        await HostLabelRemover(repo).remove_label(1, "bot")
+
+
+def test_pick_imports_no_gh_module() -> None:
+    assert "dotharness.gh" not in Path(pick.__file__).read_text()

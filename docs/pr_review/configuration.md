@@ -10,7 +10,7 @@ The command was renamed when the tool moved into dotharness. Existing config fil
 continue to load unchanged. This page describes config files by name only.
 
 This file holds per-repo settings and can contain sensitive values (a
-`gh_token_cmd`, arbitrary `env` entries, filesystem paths). It is **not
+`host_token_cmd`, arbitrary `env` entries, filesystem paths). It is **not
 meant to be committed**. The template written by `pr_review init` starts with
 the comment `# dotharness configuration — DO NOT COMMIT this file` and
 recommends adding `.harness.toml` to your global gitignore rather than the
@@ -30,12 +30,30 @@ repo's.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `backend` | string | `"opencode"` | Which coding-agent CLI to shell out to. Must be `"opencode"` or `"claude"`. Any other value raises a `ConfigError` at load time. `"opencode"` invokes `opencode run --standalone <instructions>`. `"claude"` invokes `claude --dangerously-skip-permissions --disable-slash-commands -p <instructions>`. Both run with `cwd` set to `repo.working_dir`. |
-| `gh_token_cmd` | string | `"gh auth token"` | Shell command whose stdout is the GitHub token. The token is exported to subprocesses as `GITHUB_TOKEN`. |
+| `host_token_cmd` | string | absent | Command whose stdout is the host token. When absent, the reference host runs its default command `gh auth token` (`DEFAULT_TOKEN_CMD`). The reference host exports the token to the subprocesses it starts for the agent as `GITHUB_TOKEN` and `GH_TOKEN`. The key `gh_token_cmd` was removed: a config that still has it fails to load (see below). |
+| `host` | string | absent | Name of the code host. Absent means `reference` (the built-in GitHub-compatible host). A name is resolved as the built-in `reference`, an installed entry point in the group `dotharness.code_hosts`, or a `module:attribute` path. |
+| `[harness.host_options]` | table | `{}` (empty) | Options passed to the selected host. Their meaning is defined by the host. |
 | `backend_timeout_seconds` | integer | `900` | Wall-clock timeout (seconds) for a single backend invocation before it is killed. |
 | `knowledge_dir` | path | `"~/.harness/knowledge"` | Directory holding the review prompt templates and other knowledge files the runners read. `~` is expanded. When the key is not set and `~/.harness/knowledge` does not exist, the knowledge shipped inside the package is used (see [Path defaults when installed](#path-defaults-when-installed)). |
 | `[harness.path_prepend]` | table (string → string) | `{}` (empty) | Keys map to directories. All of the *values* are joined with `:` and prepended to `PATH` for every subprocess harness spawns (backend CLI, `git`, `gh`, pre-commands, etc.). Keys are labels for readability (e.g. `java`, `node`). Only the values matter, and they are joined in the order they appear in the TOML table. |
 | `[harness.env]` | table (string → string) | `{}` (empty) | Arbitrary `KEY = "value"` pairs merged into the environment of every subprocess harness spawns, overriding any inherited environment variable of the same name. |
 | `review_knowledge_file` | path or unset | `None` | Optional path to a markdown file with extra review guidance. `~` is expanded. When unset, no extra file is loaded. |
+
+#### Host selection and token command
+
+The loader checks that `host` is a string, `host_options` is a table and `host_token_cmd` is a string. It does not run the token command and does not read the environment.
+
+The effective token command is `host_token_cmd`, else the default of the selected host. The reference host's default is `gh auth token`.
+
+**Removed key.** `harness.gh_token_cmd` no longer exists. The loader stops with `harness.gh_token_cmd was removed; use harness.host_token_cmd` and the command exits non-zero. Rename the key to `host_token_cmd` in each `.harness.toml`.
+
+**Agent credentials.** The names of the credential variables come from the selected host. The reference host gives the agent both `GITHUB_TOKEN` and `GH_TOKEN`, and a non-empty value of either overrides an inherited variable of the same name.
+
+**Startup failure.** An unknown host name, or a host that cannot load, stops `pr_review validate` with exit code 1 (the same code as any other configuration error) and a message that names the key and its value, for example `code host setting host = "unknown-name": host is not found`. The message never holds the token or the token command.
+
+**Deviation DEV-6.** The token command runs through `shlex.split` with a 30 s timeout and without a shell. A custom `host_token_cmd` that uses pipes, `$(...)` or variable expansion may stop working. Wrap such a command in a script and point the key at the script.
+
+`pr_review validate` asks the host whether it is available (10 s, never raises) instead of looking for `gh` on `PATH`. For the reference host the error text is still `gh: binary not found on PATH`. The check for the backend binary stays.
 
 ### `[repo]`
 
@@ -162,7 +180,7 @@ Settings for the `merge` runner. Off by default: with `enabled = false` the runn
 
 Unknown keys and invalid values (a non-boolean `enabled` or `require_all_files_viewed`, or a zero, negative, boolean or non-integer `max_changed_lines`) raise `ConfigError` naming the key.
 
-No secrets belong in these sections. Credentials come from `gh_token_cmd`.
+No secrets belong in these sections. Credentials come from `host_token_cmd` (or the host's default).
 
 ### `[local_review]`
 
@@ -187,6 +205,47 @@ Optional. Used only by `pr_review run local-review`. All other commands ignore i
 | `max_diff_lines` | integer | `50` | The bugfix-shaped threshold: a PR is skipped entirely when its diff (added + removed lines across all files) exceeds this size. `50` is a round, conservative starting point for "small fix" — pending real usage data. |
 | `authors` | string or list of strings | `"*"` | Which PR authors the pass applies to. `"*"` means all authors. Otherwise it is a list of GitHub usernames. Applies to the **current** PR's author. The introducing PR's author is never filtered. The point is tracing *whoever's* old comment was ignored. |
 | `regret_review_timeout` | integer | `300` | Per-PR wall-clock budget (seconds) for the pass's own git/`gh` calls (blame, commit→PR lookups, comment fetches), checked and decremented before each call. Does not bound the backend invocation itself, which uses `harness.backend_timeout_seconds` independently. |
+
+## Unsupported-capability policy
+
+A code host declares which capabilities it supports. When a runner calls an operation of a capability the host does not
+declare, the host raises `UnsupportedCapabilityError`, which carries the capability name. Each runner site declares one
+of three behaviours in the `UNSUPPORTED_CAPABILITY_POLICY` constant in `src/dotharness/pr_review/runners/common.py`:
+
+- **degrade**: skip the operation silently and continue with reduced behaviour.
+- **warn**: log a warning naming the capability, continue, and fail open.
+- **stop**: re-raise. The runner's top-level handler exits non-zero, with the code used today for an uncaught host error.
+
+Only `UnsupportedCapabilityError` is handled. Any other host error follows the site's existing handling. A stop site never
+swallows `UnsupportedCapabilityError` in a broad host-error handler. No log line written by the policy holds the token or
+the token command. The reference host declares all six capabilities, so no policy fires with the default configuration.
+
+| Site | Capability, operation | Policy |
+|---|---|---|
+| `merge` | `ChangeRequests.squash_merge` | stop |
+| `merge` | `ChangeRequests.get` | stop |
+| `auto_approve` | `ChangeRequests.approve` | stop |
+| `auto_approve` | `ChangeRequests.reviews` | stop |
+| `auto_approve` | `ChangeRequests.commits` | stop |
+| `auto_approve_viewed` | `ChangeRequests.viewed_files` | degrade |
+| `auto_approve_viewed` | `ChangeRequests.mark_viewed` | degrade |
+| `ci_fix` | `Checks.*` | stop |
+| `ci_checks_workflows` | `Checks.list_workflows` | degrade |
+| `required_checks` | `Checks.list_checks` | stop |
+| `reviewer_request` | `ChangeRequests.request_reviewer` | warn |
+| `reviewer_request` | `ChangeRequests.get` | warn |
+| `regret_review` | `ChangeRequests.find_by_commit` | stop |
+| `traceability` | `WorkItems.get` | stop |
+| `traceability` | `WorkItems.linked_work_items` | stop |
+| `current_user` | `Session.current_user` | warn |
+
+Why: `merge`, `auto_approve` approval, `ci_fix`, required checks, regret review and traceability stop because a silent
+degrade would change what pr-review posts or approves (for example a false "no linked ticket" comment, or a gate that
+reads all checks instead of required ones). Viewed state and the workflow listing are conveniences. Reviewer requests are
+a best-effort side effect. The current user keeps the fail-open `""`.
+
+Any host call not listed above (for example `ChangeRequests.list` in the review runners, or `Discussion` reads and writes
+such as `post_comment` in regret review and `Discussion.comments` in idempotency checks) is **stop**.
 
 ## Path defaults when installed
 
@@ -230,8 +289,12 @@ out of the fallback.
 
 [harness]
 backend = "opencode"               # "opencode" or "claude"
-gh_token_cmd = "gh auth token"
+# host_token_cmd = "gh auth token"  # command printing the host token; absent means the reference host default
+# host = "reference"                # code host; absent means "reference"
 backend_timeout_seconds = 900
+
+# [harness.host_options]
+# (options passed to the selected host)
 
 # [harness.path_prepend]
 # java = "/Users/you/.sdkman/candidates/java/current/bin"

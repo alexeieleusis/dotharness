@@ -18,9 +18,9 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
 
 1. The command acquires an exclusive file lock, keyed on the resolved `repo.working_dir` path (not `repo.name`/`repo_slug` — see [Shared behavior](index.md#shared-behavior)). The lock is shared with the other four commands. A second concurrent invocation against the same working directory — running this or any other command — exits immediately with an error instead of waiting.
 2. If `focused_review.enabled` is `false`, the command logs and exits. The whole command is a no-op. The two toggles are not linked: `focused_review.enabled` is independent of `vibe_heal.enabled`.
-3. The command resolves a GitHub token via `harness.gh_token_cmd`. It then builds a subprocess environment from `harness.path_prepend` / `harness.env` plus `GITHUB_TOKEN`.
+3. The command resolves the host token through the code host's session (command: `harness.host_token_cmd`, else `harness.gh_token_cmd`, else `gh auth token`). It then builds a subprocess environment from `harness.path_prepend` / `harness.env` plus `GITHUB_TOKEN`.
 4. The command loads the prompt template `pr-review/focused-review.md` from `harness.knowledge_dir`. It also constructs a `Backend` for `harness.backend` (`opencode` or `claude`). It merges `GITHUB_TOKEN` into the backend's environment.
-5. The command lists the open PRs, drafts included. It keeps a PR when the currently active `gh` account (`@me`) is the author or assignee, or has a review requested. It deduplicates by PR number and sorts the result ascending. The listing uses `list_open_prs_for_current_user`, which does **not** read `vibe_heal.authors`. `review-prs` uses `list_open_prs_matching_authors` against the configured author list instead. If no PR is eligible, the command exits.
+5. The command lists the open PRs, drafts included. It keeps a PR when the current host user (resolved to a login, not `@me`) is the author or assignee, or has a review requested. The reads go through the code host's change-request listing (author, assignee and requested reviewer, each limited to 1000 results). A read that fails is logged as a warning and contributes nothing. An empty login makes no host call. It deduplicates by PR number and sorts the result ascending. This listing does **not** read `vibe_heal.authors`. `review-prs` filters the open PRs against the configured author list instead. If no PR is eligible, the command exits.
 6. The command detaches HEAD and records the current commit so it can restore the working tree after each PR.
 7. For each eligible PR, in ascending order:
    - It fetches all comments via `scripts/pr-comments.py fetch --pr <N>` (the same mechanism `address-comments` uses), without checking out the branch yet.
@@ -52,7 +52,7 @@ Only these `.harness.toml` fields affect `focused-review`. See [`../configuratio
 | `focused_review.enabled` | Master switch. The command is a no-op unless the field is `true` |
 | `focused_review.vibe_types_repo` | Local git checkout of `jpablo/vibe-types` used to resolve knowledge-file content via `git show` |
 | `harness.backend` / `harness.backend_timeout_seconds` | Which AI backend writes each refactor description, and its timeout |
-| `harness.gh_token_cmd` | Command used to fetch the GitHub token exported as `GITHUB_TOKEN` |
+| `harness.host_token_cmd` / `harness.gh_token_cmd` | Command used to fetch the host token exported as `GITHUB_TOKEN`. `host_token_cmd` wins when both are set. See [Configuration](../configuration.md) |
 | `harness.knowledge_dir` | Must contain `pr-review/focused-review.md`, the prompt template for this runner |
 | `harness.path_prepend` / `harness.env` | Extra `PATH` entries / env vars for git, `gh`, and the backend subprocess |
 | `repo.name` | GitHub repo (`org/repo`) queried via `gh` |

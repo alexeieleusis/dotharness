@@ -1,9 +1,12 @@
-import json
-import subprocess
-from unittest.mock import MagicMock, patch
-
 import pytest
 
+from dotharness.code_host import (
+    Capability,
+    CodeHostError,
+    CodeHostTimeoutError,
+    ReviewState,
+    UnsupportedCapabilityError,
+)
 from dotharness.pr_review.runners.auto_approve_github import GateStatus, check_timing_gate
 from dotharness.pr_review.runners.common import (
     DESIGN_REVIEW_MARKER,
@@ -11,86 +14,83 @@ from dotharness.pr_review.runners.common import (
     REGRET_REVIEW_MARKER,
     TRACEABILITY_REVIEW_MARKER,
 )
+from tests.pr_review.runners.approve_support import (
+    AUTHOR,
+    EARLIER,
+    LATER,
+    ME,
+    NUMBER,
+    REPO,
+    T,
+    hour,
+    make_host,
+    put_comment,
+    put_commit,
+    put_review,
+    put_thread,
+    seed_pr,
+)
 
-ME = "reviewer"
-AUTHOR = "alice"
-T = "2026-10-06T10:00:00Z"
-LATER = "2026-10-06T11:00:00Z"
-EARLIER = "2026-10-06T09:00:00Z"
-
-
-def issue(body, login=ME, ts=T, utype="User"):
-    return {"body": body, "created_at": ts, "user": {"login": login, "type": utype}}
-
-
-def summary(ts=T):
-    return issue("## Review summary", ts=ts)
-
-
-def design(ts=T):
-    return issue(f"x {DESIGN_REVIEW_MARKER}", ts=ts)
-
-
-def trace(ts=T):
-    return issue(f"x {TRACEABILITY_REVIEW_MARKER}", ts=ts)
-
-
-def all_three(ts=T):
-    return [summary(ts), design(ts), trace(ts)]
+SUMMARY = "## Review summary"
+DESIGN = f"x {DESIGN_REVIEW_MARKER}"
+TRACE = f"x {TRACEABILITY_REVIEW_MARKER}"
+ALL_THREE = (SUMMARY, DESIGN, TRACE)
 
 
-def inline(ts=T, login=ME):
-    return issue(f"finding {INLINE_REVIEW_MARKER}", login=login, ts=ts)
-
-
-def commits_json(date, login=AUTHOR):
-    return json.dumps({"commits": [{"committedDate": date, "authors": [{"login": login}]}]}).encode()
-
-
-async def run(issues, review_comments, reviews, commits=None, author=AUTHOR):
-    """commits: bytes stdout, or None for a failed read."""
-    pages = {"issues": issues, "pulls": review_comments, "reviews": reviews}
-
-    def fake_pages(path, env):
-        key = "issues" if "/issues/" in path else "reviews" if path.endswith("/reviews") else "pulls"
-        return pages[key]
-
-    if commits is None:
-        proc = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
-    else:
-        proc = MagicMock(returncode=0, stdout=commits, stderr=b"")
-    with (
-        patch("dotharness.pr_review.runners.auto_approve_github.fetch_all_pages", side_effect=fake_pages),
-        patch("dotharness.pr_review.runners.auto_approve_github.run_cmd", return_value=proc) as mock_cmd,
-    ):
-        result = await check_timing_gate("o/r", 7, author, ME, {})
-    for c in mock_cmd.call_args_list:
-        assert c.args[0] == COMMITS_ARGV
+async def run(
+    comments=(),
+    inline=(),
+    reviews=(),
+    commits=(),
+    *,
+    author=AUTHOR,
+    user=ME,
+    setup=None,
+    host=None,
+):
+    """comments: (login, body, at) change-request comments. inline: the same, one review thread each.
+    reviews: (login, state, at). commits: (logins, at)."""
+    host = host or make_host()
+    seed_pr(host)
+    for c in comments:
+        put_comment(host, c[0], c[1], c[2], bot=len(c) > 3 and c[3])
+    for c in inline:
+        put_thread(host, [c])
+    for r in reviews:
+        put_review(host, *r)
+    for logins, at in commits:
+        put_commit(host, logins, at)
+    ch = host.code_host()
+    if setup:
+        setup(host, ch)
+    result = await check_timing_gate(ch, REPO, NUMBER, author, user)
+    assert host.writes == []
     return result
 
 
-COMMITS_ARGV = ["gh", "pr", "view", "7", "--repo", "o/r", "--json", "commits"]
-EMPTY_COMMITS = commits_json(EARLIER)
+def trio(at=T, login=ME):
+    return [(login, body, at) for body in ALL_THREE]
+
+
+def finding(at=T, login=ME, marker=INLINE_REVIEW_MARKER):
+    return (login, f"finding {marker}", at)
 
 
 @pytest.mark.parametrize("present", [[], [0], [0, 1], [1, 2], [0, 2]])
 async def test_missing_any_of_three_not_passed(present):
-    items = all_three()
-    r = await run([items[i] for i in present], [], [], EMPTY_COMMITS)
+    r = await run([trio()[i] for i in present])
     assert r.status is GateStatus.NOT_PASSED
 
 
 async def test_zero_findings_passes():
-    r = await run(all_three(), [], [], EMPTY_COMMITS)
+    r = await run(trio())
     assert r.status is GateStatus.PASSED
     assert r.reason == "zero-findings"
 
 
 async def test_regret_comment_ignored_for_t():
-    regret = issue(f"x {REGRET_REVIEW_MARKER}", ts=LATER)
-    r = await run(
-        [*all_three(), regret, issue("later", AUTHOR, ts="2026-10-06T10:30:00Z")], [inline()], [], EMPTY_COMMITS
-    )
+    regret = (ME, f"x {REGRET_REVIEW_MARKER}", LATER)
+    r = await run([*trio(), regret, (AUTHOR, "later", hour(10, 30))], [finding()])
     assert r.status is GateStatus.PASSED
     assert r.reason == "author-activity-after-T"
 
@@ -99,161 +99,141 @@ async def test_regret_comment_ignored_for_t():
 async def test_design_and_traceability_inline_comments_are_findings(marker):
     # Regression: inline comments tagged only with the design/traceability marker were not
     # counted, so the gate passed as "zero-findings" before the author responded.
-    r = await run(all_three(), [issue(f"finding {marker}", ts=LATER)], [], EMPTY_COMMITS)
+    r = await run(trio(), [finding(LATER, marker=marker)])
     assert r.status is GateStatus.NOT_PASSED
     assert r.reason == "no author activity after T"
 
 
 async def test_design_inline_comment_without_author_activity_not_passed():
-    r = await run(all_three(), [issue(f"finding {DESIGN_REVIEW_MARKER}", ts=T)], [], EMPTY_COMMITS)
+    r = await run(trio(), [finding(marker=DESIGN_REVIEW_MARKER)])
     assert r.status is GateStatus.NOT_PASSED
 
 
 async def test_author_activity_after_design_inline_comment_passes():
-    r = await run(
-        [*all_three(), issue("reply", AUTHOR, ts=LATER)],
-        [issue(f"finding {DESIGN_REVIEW_MARKER}", ts=T)],
-        [],
-        EMPTY_COMMITS,
-    )
+    r = await run([*trio(), (AUTHOR, "reply", LATER)], [finding(marker=DESIGN_REVIEW_MARKER)])
     assert r.status is GateStatus.PASSED
     assert r.reason == "author-activity-after-T"
 
 
 async def test_inline_comments_count_for_t():
     # author comment is after the summary trio but before the newest inline comment
-    r = await run(
-        [*all_three(), issue("reply", AUTHOR, ts="2026-10-06T10:30:00Z")],
-        [inline(ts=LATER)],
-        [],
-        EMPTY_COMMITS,
-    )
+    r = await run([*trio(), (AUTHOR, "reply", hour(10, 30))], [finding(LATER)])
     assert r.status is GateStatus.NOT_PASSED
 
 
-async def test_author_issue_comment_passes():
-    r = await run([*all_three(), issue("ok", AUTHOR, ts=LATER)], [inline()], [], EMPTY_COMMITS)
+async def test_author_comment_passes():
+    r = await run([*trio(), (AUTHOR, "ok", LATER)], [finding()])
     assert (r.status, r.reason) == (GateStatus.PASSED, "author-activity-after-T")
 
 
 async def test_author_inline_reply_passes():
-    reply = issue("fixed", AUTHOR, ts=LATER)
-    assert (await run(all_three(), [inline(), reply], [], EMPTY_COMMITS)).status is GateStatus.PASSED
+    reply = (AUTHOR, "fixed", LATER)
+    assert (await run(trio(), [finding(), reply])).status is GateStatus.PASSED
 
 
 async def test_author_review_uses_submitted_at():
-    review = {"submitted_at": LATER, "state": "COMMENTED", "user": {"login": AUTHOR, "type": "User"}}
-    assert (await run(all_three(), [inline()], [review], EMPTY_COMMITS)).status is GateStatus.PASSED
-    pending = {"submitted_at": None, "created_at": LATER, "user": {"login": AUTHOR, "type": "User"}}
-    assert (await run(all_three(), [inline()], [pending], EMPTY_COMMITS)).status is GateStatus.NOT_PASSED
+    r = await run(trio(), [finding()], [(AUTHOR, ReviewState.COMMENTED, LATER)])
+    assert r.status is GateStatus.PASSED
+    pending = await run(trio(), [finding()], [(AUTHOR, ReviewState.PENDING, None)])
+    assert pending.status is GateStatus.NOT_PASSED
 
 
 async def test_author_commit_after_t_passes():
-    r = await run(all_three(), [inline()], [], commits_json(LATER))
+    r = await run(trio(), [finding()], commits=[([AUTHOR], LATER)])
     assert (r.status, r.reason) == (GateStatus.PASSED, "author-activity-after-T")
 
 
 async def test_commit_by_other_author_ignored():
-    assert (await run(all_three(), [inline()], [], commits_json(LATER, "bob"))).status is GateStatus.NOT_PASSED
+    assert (await run(trio(), [finding()], commits=[(["bob"], LATER)])).status is GateStatus.NOT_PASSED
 
 
 async def test_commit_at_or_before_t_not_passed():
-    assert (await run(all_three(), [inline()], [], commits_json(T))).status is GateStatus.NOT_PASSED
-    assert (await run(all_three(), [inline()], [], commits_json(EARLIER))).status is GateStatus.NOT_PASSED
+    assert (await run(trio(), [finding()], commits=[([AUTHOR], T)])).status is GateStatus.NOT_PASSED
+    assert (await run(trio(), [finding()], commits=[([AUTHOR], EARLIER)])).status is GateStatus.NOT_PASSED
+
+
+async def test_commit_without_a_date_is_ignored():
+    assert (await run(trio(), [finding()], commits=[([AUTHOR], None)])).status is GateStatus.NOT_PASSED
 
 
 async def test_equal_timestamp_not_passed():
-    r = await run([*all_three(), issue("same", AUTHOR, ts=T)], [inline()], [], EMPTY_COMMITS)
+    r = await run([*trio(), (AUTHOR, "same", T)], [finding()])
     assert r.status is GateStatus.NOT_PASSED
 
 
 async def test_acting_account_and_bot_activity_ignored():
     items = [
-        *all_three(),
-        issue("me", ME, ts=LATER),
-        issue("bot", AUTHOR, ts=LATER, utype="Bot"),
-        issue("bot2", "alice[bot]", ts=LATER),
-        issue("other", "bob", ts=LATER),
+        *trio(),
+        (ME, "me", LATER),
+        (AUTHOR, "bot", LATER, True),
+        ("alice[bot]", "bot2", LATER),
+        ("bob", "other", LATER),
     ]
-    assert (await run(items, [inline()], [], EMPTY_COMMITS)).status is GateStatus.NOT_PASSED
+    assert (await run(items, [finding()])).status is GateStatus.NOT_PASSED
 
 
-@pytest.mark.parametrize("failing", ["issues", "pulls", "reviews"])
-async def test_page_read_failure_is_read_failed(failing):
-    def fake_pages(path, env):
-        key = "issues" if "/issues/" in path else "reviews" if path.endswith("/reviews") else "pulls"
-        return None if key == failing else []
-
-    with (
-        patch("dotharness.pr_review.runners.auto_approve_github.fetch_all_pages", side_effect=fake_pages),
-        patch("dotharness.pr_review.runners.auto_approve_github.run_cmd") as mock_cmd,
-    ):
-        r = await check_timing_gate("o/r", 7, AUTHOR, ME, {})
+@pytest.mark.parametrize("operation", ["Discussion.comments", "Discussion.review_threads", "ChangeRequests.reviews"])
+@pytest.mark.parametrize("error", [CodeHostError("boom"), CodeHostTimeoutError("slow", write=False)])
+async def test_read_failure_is_read_failed(operation, error):
+    r = await run(trio(), [finding()], setup=lambda host, _ch: host.fail_next(operation, error))
     assert r.status is GateStatus.READ_FAILED
-    mock_cmd.assert_not_called()
+    assert r.reason.endswith("read failed")
 
 
 async def test_commits_read_failure_is_read_failed():
-    assert (await run(all_three(), [inline()], [], None)).status is GateStatus.READ_FAILED
+    r = await run(
+        trio(),
+        [finding()],
+        setup=lambda host, _ch: host.fail_next("ChangeRequests.commits", CodeHostError("boom")),
+    )
+    assert (r.status, r.reason) == (GateStatus.READ_FAILED, "commits read failed")
 
 
-async def test_unknown_acting_account_is_read_failed():
-    with patch("dotharness.pr_review.runners.auto_approve_github.fetch_all_pages") as mock_pages:
-        assert (await check_timing_gate("o/r", 7, AUTHOR, "", {})).status is GateStatus.READ_FAILED
-    mock_pages.assert_not_called()
+async def test_unknown_acting_account_is_read_failed_without_any_read():
+    host = make_host()
+    seed_pr(host)
+    assert (await check_timing_gate(host.code_host(), REPO, NUMBER, AUTHOR, "")).status is GateStatus.READ_FAILED
+    assert (await check_timing_gate(host.code_host(), REPO, NUMBER, "", ME)).status is GateStatus.READ_FAILED
+    assert host.calls == []
 
 
-@pytest.mark.parametrize("bad_ts", [None, "not-a-date"])
-@pytest.mark.parametrize("make", [summary, design, trace])
-async def test_issue_comment_bad_created_at_is_read_failed(make, bad_ts):
-    items = [make(ts=bad_ts), *[c for c in all_three() if c["body"] != make()["body"]]]
-    assert (await run(items, [], [], EMPTY_COMMITS)).status is GateStatus.READ_FAILED
+@pytest.mark.parametrize("exc", [OSError("boom"), ValueError("bad")])
+@pytest.mark.parametrize(("facet", "method"), [("discussion", "comments"), ("change_requests", "reviews")])
+async def test_raised_read_error_is_read_failed(monkeypatch, facet, method, exc):
+    def raiser(*_args, **_kwargs):
+        raise exc
+
+    def setup(_host, ch):
+        monkeypatch.setattr(getattr(ch, facet), method, raiser)
+
+    assert (await run(trio(), [finding()], setup=setup)).status is GateStatus.READ_FAILED
 
 
-@pytest.mark.parametrize("bad_ts", [None, "not-a-date"])
-async def test_inline_comment_bad_created_at_is_read_failed(bad_ts):
-    assert (await run(all_three(), [inline(ts=bad_ts)], [], EMPTY_COMMITS)).status is GateStatus.READ_FAILED
-
-
-@pytest.mark.parametrize("stdout", [b"not json", b"[]", b'{"commits": null}', b'{"commits": {}}', b"{}"])
-async def test_unusable_commits_output_is_read_failed(stdout):
-    assert (await run(all_three(), [inline()], [], stdout)).status is GateStatus.READ_FAILED
-
-
-@pytest.mark.parametrize("exc", [subprocess.TimeoutExpired("gh", 1), OSError("boom"), ValueError("bad")])
-@pytest.mark.parametrize("target", ["fetch_all_pages", "run_cmd"])
-async def test_raised_read_error_is_read_failed(target, exc):
-    def fake_pages(path, env):
-        return all_three() if "/issues/" in path else [inline()] if path.endswith("/comments") else []
-
-    with (
-        patch("dotharness.pr_review.runners.auto_approve_github.fetch_all_pages", side_effect=fake_pages),
-        patch("dotharness.pr_review.runners.auto_approve_github.run_cmd", return_value=MagicMock()),
-        patch(f"dotharness.pr_review.runners.auto_approve_github.{target}", side_effect=exc),
-    ):
-        r = await check_timing_gate("o/r", 7, AUTHOR, ME, {})
-    assert r.status is GateStatus.READ_FAILED
+@pytest.mark.parametrize("capability", [Capability.DISCUSSION, Capability.CHANGE_REQUESTS])
+async def test_unsupported_capability_stops(capability):
+    host = make_host(capabilities=frozenset(Capability) - {capability})
+    seed_pr(host)
+    with pytest.raises(UnsupportedCapabilityError) as exc:
+        await check_timing_gate(host.code_host(), REPO, NUMBER, AUTHOR, ME)
+    assert exc.value.capability == capability.value
 
 
 async def test_author_login_matched_case_insensitively():
-    items = [*all_three(), issue("ok", "Alice", ts=LATER)]
-    assert (await run(items, [inline()], [], EMPTY_COMMITS)).status is GateStatus.PASSED
-    assert (await run(all_three(), [inline()], [], commits_json(LATER, "Alice"))).status is GateStatus.PASSED
+    assert (await run([*trio(), ("Alice", "ok", LATER)], [finding()])).status is GateStatus.PASSED
+    assert (await run(trio(), [finding()], commits=[(["Alice"], LATER)])).status is GateStatus.PASSED
 
 
 async def test_acting_login_matched_case_insensitively():
     # Mixed-case acting-account comments still count as the tool's own review comments...
-    own = [issue(c["body"], "Reviewer", ts=T) for c in all_three()]
-    assert (await run(own, [inline(login="Reviewer")], [], EMPTY_COMMITS)).status is GateStatus.NOT_PASSED
+    own = trio(login="Reviewer")
+    assert (await run(own, [finding(login="Reviewer")])).status is GateStatus.NOT_PASSED
     # ...and its later activity is not author activity even when it is also the PR author.
-    later = issue("me", "Reviewer", ts=LATER)
-    assert (await run([*own, later], [inline(login="Reviewer")], [], EMPTY_COMMITS, author="reviewer")).status is (
-        GateStatus.NOT_PASSED
-    )
+    later = ("Reviewer", "me", LATER)
+    r = await run([*own, later], [finding(login="Reviewer")], author="reviewer")
+    assert r.status is GateStatus.NOT_PASSED
 
 
-async def test_items_with_null_user_do_not_raise():
-    ghost = {"body": "hi", "created_at": LATER, "user": None}
-    review = {"submitted_at": LATER, "state": "COMMENTED", "user": None}
-    r = await run([*all_three(), ghost], [inline(), dict(ghost)], [review], EMPTY_COMMITS)
+async def test_items_with_no_author_do_not_raise():
+    ghost = (None, "hi", LATER)
+    r = await run([*trio(), ghost], [finding(), ghost], [(None, ReviewState.COMMENTED, LATER)])
     assert r.status is GateStatus.NOT_PASSED

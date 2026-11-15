@@ -1,30 +1,36 @@
 import contextlib
-import json
 import logging
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from dotharness.code_host import (
+    ChangeRequestState,
+    Check,
+    CheckStatus,
+    CodeHostError,
+    CodeHostTimeoutError,
+    MergeableState,
+    RepositoryRef,
+    UnsupportedCapabilityError,
+)
+from dotharness.code_host.testing import SECRET, InMemoryCodeHost
 from dotharness.pr_review.config import CiFixConfig, HarnessConfig, HarnessSection, RepoConfig
 from dotharness.pr_review.runners import ci_fix
-from dotharness.pr_review.runners.auto_approve_github import SafetyResult, SafetyStatus
-from dotharness.pr_review.runners.ci_fix import DIGEST_PREFIX, CiFixError, _Check, _Step
+from dotharness.pr_review.runners.ci_fix import DIGEST_PREFIX, CiFixError, _Step
 
 P = "dotharness.pr_review.runners.ci_fix."
 SLUG = "acme-frontend"
+REPO = RepositoryRef("acme/frontend")
+LOG = "quality\tRun checks\t2024Z error"
+T0 = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
 
 
-def _pr(number=1, branch="feat", author="me", draft=False, state="OPEN"):
-    return {
-        "number": number,
-        "headRefName": branch,
-        "baseRefName": "main",
-        "isDraft": draft,
-        "isCrossRepository": False,
-        "state": state,
-        "author": {"login": author},
-    }
+def _pr(number=1, branch="feat", author="me", draft=False, state=ChangeRequestState.OPEN):
+    return {"number": number, "head_reference": branch, "author": author, "is_draft": draft, "state": state}
 
 
 def _cfg(tmp_path, enabled=True, max_attempts=3):
@@ -44,6 +50,55 @@ def _proc(returncode=0, stdout=b"", stderr=b""):
     return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+def _update(host, number, **fields):
+    items = host._change_requests[REPO]
+    for i, item in enumerate(items):
+        if item.number == number:
+            items[i] = replace(item, **fields)
+    host._version += 1
+
+
+def _seed_checks(host, number, names, *, status=CheckStatus.FAIL, log=LOG, failed_step="Run checks"):
+    """Required checks named ``names`` on a PR, each with a job (id ``<number>0<index>``) carrying ``log``."""
+    for index, name in enumerate(names):
+        job_id = f"{number}0{index}"
+        host.add_check(REPO, number, name=name, status=status, required=True, job_id=job_id)
+        host.add_job(REPO, job_id=job_id, failed_step=failed_step, log=log)
+
+
+class _GetOverride:
+    """The ``ChangeRequests`` facet with ``get`` answering as if the PR had changed since it was listed."""
+
+    def __init__(self, inner, fields):
+        self._inner = inner
+        self._fields = fields
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    async def get(self, repo, number):
+        return replace(await self._inner.get(repo, number), **self._fields)
+
+
+def _seeded_host(prs, green, failing, log, failed_step):
+    host = InMemoryCodeHost(repository="acme/frontend", user="me")
+    host.add_repository("acme/frontend")
+    for pr in [_pr()] if prs is None else prs:
+        host.add_change_request(
+            REPO,
+            head_reference=pr["head_reference"],
+            author=pr["author"],
+            is_draft=pr["is_draft"],
+            state=pr["state"],
+            number=pr["number"],
+        )
+        if green:
+            _seed_checks(host, pr["number"], ["Run checks"], status=CheckStatus.PASS)
+        else:
+            _seed_checks(host, pr["number"], failing or ["Run checks"], log=log, failed_step=failed_step)
+    return host
+
+
 @contextlib.contextmanager
 def _mocks(
     tmp_path,
@@ -53,22 +108,23 @@ def _mocks(
     after_rc=0,
     push_rc=0,
     push_stderr=b"! [rejected] (non-fast-forward)",
-    pr_state=None,
+    get_override=None,
     backend_raises=None,
     status=b"",
     agent_commits=True,
     failing=None,
+    log=LOG,
+    failed_step="Run checks",
 ):
-    prs = [_pr()] if prs is None else prs
+    host = _seeded_host(prs, green, failing, log, failed_step)
+    code_host = host.code_host()
+    if get_override:
+        code_host = replace(code_host, change_requests=_GetOverride(code_host.change_requests, get_override))
     head = {"sha": "sha0"}
     status_box = [status]
     pushes: list[list[str]] = []
     cmds: list[list[str]] = []
     step_results = [_proc(repro_rc, b"boom"), _proc(after_rc)]
-
-    def fake_gh(args, env):
-        data = prs if args[1] == "list" else prs[0]
-        return _proc(0, json.dumps(data).encode())
 
     def fake_run_cmd(cmd, cwd, env, timeout, check=True, shell=False):
         cmds.append(cmd)
@@ -93,22 +149,10 @@ def _mocks(
 
     backend = MagicMock()
     backend.run = AsyncMock(side_effect=backend_run)
-    safety = None if green else SafetyResult(SafetyStatus.SKIP, "ci-blocked")
-    state = pr_state or {"state": "OPEN", "isDraft": False, "mergeable": "MERGEABLE", "headRefOid": "sha0"}
     with (
         patch("dotharness.pr_review.state.XDG_DATA", tmp_path / "xdg"),
         patch(P + "acquire_lock", return_value=contextlib.nullcontext()),
-        patch(P + "get_gh_token", return_value="tok"),
-        patch(P + "build_subprocess_env", return_value={"GITHUB_TOKEN": "tok"}),
-        patch(P + "get_current_user", return_value="me"),
-        patch(P + "_gh", side_effect=fake_gh) as gh,
-        patch(P + "_check_ci", return_value=safety) as check_ci,
-        patch(P + "_read_pr_state", return_value=state),
-        patch(
-            P + "_read_failing_checks",
-            return_value=failing or [_Check("Run checks", "https://x/actions/runs/9/job/8")],
-        ),
-        patch(P + "_read_failed_log", return_value="quality\tRun checks\t2024Z error"),
+        patch("dotharness.pr_review.runners.common.create_code_host", return_value=code_host),
         patch(
             P + "find_step_command",
             return_value=_Step("Run checks", "make check", "src/dotharness/pr_review/runners/pr-review"),
@@ -121,8 +165,7 @@ def _mocks(
         patch(P + "Backend", return_value=backend) as backend_cls,
     ):
         yield SimpleNamespace(
-            gh=gh,
-            check_ci=check_ci,
+            host=host,
             checkout=checkout,
             restore=restore,
             run_step=run_step,
@@ -134,15 +177,23 @@ def _mocks(
         )
 
 
+def _ops(m):
+    return [c.operation for c in m.host.calls]
+
+
+def _gate(name):
+    return Check(name, CheckStatus.FAIL, None, None, None, None, None)
+
+
 def _digests(caplog):
     return [r.getMessage() for r in caplog.records if DIGEST_PREFIX in r.getMessage()]
 
 
 async def test_disabled_is_noop(tmp_path):
-    with _mocks(tmp_path) as m, patch(P + "get_gh_token") as tok:
+    with _mocks(tmp_path) as m, patch(P + "open_host") as opened:
         await ci_fix.run(_cfg(tmp_path, enabled=False))
-    tok.assert_not_called()
-    m.gh.assert_not_called()
+    opened.assert_not_called()
+    assert m.host.calls == []
 
 
 async def test_ac1_green_pr_no_push_no_checkout(tmp_path):
@@ -257,11 +308,7 @@ async def test_ac4_not_reproduced_no_push_digest(tmp_path, caplog):
 
 
 async def test_gate_only_failure_no_agent_no_attempt_gate_only_digest(tmp_path, caplog):
-    gates = [
-        _Check("CI Gate", "https://x/actions/runs/9/job/1"),
-        _Check("merge-reports", "https://x/actions/runs/9/job/2"),
-    ]
-    with _mocks(tmp_path, failing=gates) as m, caplog.at_level(logging.INFO):
+    with _mocks(tmp_path, failing=["CI Gate", "merge-reports"]) as m, caplog.at_level(logging.INFO):
         await ci_fix.run(_cfg(tmp_path))
     m.backend.run.assert_not_called()
     m.checkout.assert_not_called()
@@ -274,20 +321,16 @@ async def test_gate_only_failure_no_agent_no_attempt_gate_only_digest(tmp_path, 
 
 @pytest.mark.parametrize("name", ["aggregate-coverage", "propagate-labels", "investigate-flaky", "delegate-tests"])
 def test_words_containing_gate_are_not_gates(name):
-    assert not ci_fix._is_gate(_Check(name, "https://x/actions/runs/9/job/1"))
+    assert not ci_fix._is_gate(_gate(name))
 
 
 @pytest.mark.parametrize("name", ["gate", "CI Gate", "ci-gate", "merge-gate", "integration-gate-tests"])
 def test_gate_names_are_gates(name):
-    assert ci_fix._is_gate(_Check(name, "https://x/actions/runs/9/job/1"))
+    assert ci_fix._is_gate(_gate(name))
 
 
 async def test_non_gate_picked_even_when_gate_listed_first(tmp_path):
-    failing = [
-        _Check("ci-GATE", "https://x/actions/runs/9/job/1"),
-        _Check("Run checks", "https://x/actions/runs/9/job/8"),
-    ]
-    with _mocks(tmp_path, failing=failing) as m:
+    with _mocks(tmp_path, failing=["ci-GATE", "Run checks"]) as m:
         await ci_fix.run(_cfg(tmp_path))
     assert len(m.pushes) == 1
     assert ci_fix.get_attempts(SLUG, 1) == 1
@@ -295,11 +338,7 @@ async def test_non_gate_picked_even_when_gate_listed_first(tmp_path):
 
 
 async def test_gates_never_sent_after_non_gate_did_not_reproduce(tmp_path, caplog):
-    failing = [
-        _Check("Run checks", "https://x/actions/runs/9/job/8"),
-        _Check("ci-gate", "https://x/actions/runs/9/job/1"),
-    ]
-    with _mocks(tmp_path, failing=failing, repro_rc=0) as m, caplog.at_level(logging.INFO):
+    with _mocks(tmp_path, failing=["Run checks", "ci-gate"], repro_rc=0) as m, caplog.at_level(logging.INFO):
         await ci_fix.run(_cfg(tmp_path))
     m.backend.run.assert_not_called()
     m.checkout.assert_called_once()  # only the non-gate was tried
@@ -327,20 +366,27 @@ async def test_ac5_dry_run_no_push_no_counter_change(tmp_path):
 
 @pytest.mark.parametrize(
     "pr",
-    [_pr(author="someone-else"), _pr(draft=True), _pr(state="CLOSED")],
+    [_pr(author="someone-else"), _pr(draft=True), _pr(state=ChangeRequestState.CLOSED)],
     ids=["other-author", "draft", "closed"],
 )
 async def test_ac6_out_of_scope_prs_are_skipped(tmp_path, pr):
     with _mocks(tmp_path, prs=[pr]) as m:
         await ci_fix.run(_cfg(tmp_path))
     assert m.pushes == []
-    m.check_ci.assert_not_called()
+    assert "Checks.list_checks" not in _ops(m)
     m.checkout.assert_not_called()
 
 
+async def test_ac6_fork_pr_and_head_equal_to_base_are_skipped(tmp_path):
+    with _mocks(tmp_path, prs=[_pr(1, "a"), _pr(2, "main")]) as m:
+        _update(m.host, 1, is_cross_repository=True)
+        await ci_fix.run(_cfg(tmp_path))
+    assert m.pushes == []
+    assert "Checks.list_checks" not in _ops(m)
+
+
 async def test_ac6_pr_found_closed_on_recheck_is_skipped(tmp_path):
-    state = {"state": "CLOSED", "isDraft": False, "mergeable": "MERGEABLE", "headRefOid": "sha0"}
-    with _mocks(tmp_path, pr_state=state) as m:
+    with _mocks(tmp_path, get_override={"state": ChangeRequestState.CLOSED}) as m:
         await ci_fix.run(_cfg(tmp_path))
     assert m.pushes == []
     m.checkout.assert_not_called()
@@ -349,9 +395,9 @@ async def test_ac6_pr_found_closed_on_recheck_is_skipped(tmp_path):
 async def test_ac7_pr_option_processes_only_that_pr(tmp_path):
     with _mocks(tmp_path, prs=[_pr(number=7, branch="seven")]) as m:
         await ci_fix.run(_cfg(tmp_path), pr=7)
-    assert m.gh.call_args.args[0][:3] == ["pr", "view", "7"]
-    assert m.check_ci.call_args.args[1] == 7
-    assert m.check_ci.call_args.args[2] == "main"
+    gets = [c for c in m.host.calls if c.operation == "ChangeRequests.get"]
+    assert gets[0].args == (REPO, 7)
+    assert "ChangeRequests.list" not in _ops(m)
     assert m.pushes == [["git", "push", "origin", "seven"]]
 
 
@@ -393,8 +439,7 @@ async def test_push_failure_other_than_rejection_raises_and_still_restores(tmp_p
 
 
 async def test_conflicting_pr_is_rebase_needed_digest(tmp_path, caplog):
-    state = {"state": "OPEN", "isDraft": False, "mergeable": "CONFLICTING", "headRefOid": "sha0"}
-    with _mocks(tmp_path, pr_state=state) as m, caplog.at_level(logging.INFO):
+    with _mocks(tmp_path, get_override={"mergeable": MergeableState.CONFLICTING}) as m, caplog.at_level(logging.INFO):
         await ci_fix.run(_cfg(tmp_path))
     assert m.pushes == []
     m.checkout.assert_not_called()
@@ -402,7 +447,9 @@ async def test_conflicting_pr_is_rebase_needed_digest(tmp_path, caplog):
 
 
 async def test_unreadable_check_output_is_parse_failure_digest(tmp_path, caplog):
-    with _mocks(tmp_path) as m, patch(P + "_read_failing_checks", return_value=None), caplog.at_level(logging.INFO):
+    with _mocks(tmp_path) as m, caplog.at_level(logging.INFO):
+        # A failing check that names neither a job nor a link cannot be followed up.
+        m.host._checks[REPO][1][:] = [replace(c, details_url=None, job_id=None) for c in m.host._checks[REPO][1]]
         await ci_fix.run(_cfg(tmp_path))
     assert m.pushes == []
     m.checkout.assert_not_called()
@@ -573,35 +620,70 @@ def test_find_step_command_picks_the_workflow_the_check_belongs_to(tmp_path):
     )
 
 
+def _fresh_host():
+    host = InMemoryCodeHost(repository="acme/frontend", user="me")
+    host.add_repository("acme/frontend")
+    host.add_change_request(REPO, head_reference="feat", author="me", number=1)
+    return host
+
+
+def _put(host, checks, *, required=True):
+    """Check runs exactly as given (the seeder cannot set a workflow name or timestamps)."""
+    host._checks.setdefault(REPO, {}).setdefault(1, []).extend(checks)
+    if required:
+        host._required.update((REPO, 1, c.name) for c in checks)
+    host._version += 1
+
+
+def _run_of(name, status, *, job_id="2", workflow="W", started=None, completed=None):
+    return Check(name, status, f"https://example.test/runs/1/job/{job_id}", workflow, started, completed, job_id)
+
+
 async def test_read_failing_checks_carries_the_workflow():
-    out = b'[{"name":"t (3.12)","bucket":"fail","link":"https://x/actions/runs/1/job/2","workflow":"Beta"}]'
-    with patch("dotharness.pr_review.runners.ci_checks.gh", return_value=_proc(0, out)):
-        assert (await ci_fix._read_failing_checks("o/r", 1, {})) == [
-            _Check("t (3.12)", "https://x/actions/runs/1/job/2", "Beta")
-        ]
+    host = _fresh_host()
+    _put(host, [_run_of("t (3.12)", CheckStatus.FAIL, workflow="Beta")])
+    failing = await ci_fix._read_failing_checks(host.code_host(), REPO, 1)
+    assert failing is not None
+    assert [(c.name, c.workflow_name, c.job_id) for c in failing] == [("t (3.12)", "Beta", "2")]
 
 
 async def test_read_failing_checks_ignores_superseded_failed_run():
-    out = (
-        b'[{"name":"t","bucket":"fail","link":"https://x/actions/runs/1/job/2","workflow":"W",'
-        b'"startedAt":"2026-01-01T10:00:00Z","completedAt":"2026-01-01T10:05:00Z"},'
-        b'{"name":"t","bucket":"pass","link":"https://x/actions/runs/3/job/4","workflow":"W",'
-        b'"startedAt":"2026-01-01T11:00:00Z","completedAt":"2026-01-01T11:05:00Z"}]'
+    host = _fresh_host()
+    _put(
+        host,
+        [
+            _run_of("t", CheckStatus.FAIL, started=T0, completed=T0 + timedelta(minutes=5)),
+            _run_of(
+                "t", CheckStatus.PASS, job_id="4", started=T0 + timedelta(hours=1), completed=T0 + timedelta(hours=1)
+            ),
+        ],
     )
-    with patch("dotharness.pr_review.runners.ci_checks.gh", return_value=_proc(0, out)):
-        assert (await ci_fix._read_failing_checks("o/r", 1, {})) == []
+    assert (await ci_fix._read_failing_checks(host.code_host(), REPO, 1)) == []
 
 
 async def test_read_failing_checks_keeps_latest_failed_run_and_fails_closed_without_timestamps():
-    base = '{"name":"t","bucket":"%s","link":"https://x/actions/runs/%d/job/2","workflow":"W"%s}'
-    ts = lambda a, b: f',"startedAt":"{a}","completedAt":"{b}"'
-    newer_fail = f"[{base % ('pass', 1, ts('2026-01-01T10:00:00Z', '2026-01-01T10:05:00Z'))},"
-    newer_fail += f"{base % ('fail', 3, ts('2026-01-01T11:00:00Z', '2026-01-01T11:05:00Z'))}]"
-    with patch("dotharness.pr_review.runners.ci_checks.gh", return_value=_proc(0, newer_fail.encode())):
-        assert (await ci_fix._read_failing_checks("o/r", 1, {})) == [_Check("t", "https://x/actions/runs/3/job/2", "W")]
-    no_ts = f"[{base % ('fail', 1, '')},{base % ('pass', 3, '')}]"
-    with patch("dotharness.pr_review.runners.ci_checks.gh", return_value=_proc(0, no_ts.encode())):
-        assert (await ci_fix._read_failing_checks("o/r", 1, {})) is None
+    host = _fresh_host()
+    _put(
+        host,
+        [
+            _run_of("t", CheckStatus.PASS, started=T0, completed=T0 + timedelta(minutes=5)),
+            _run_of(
+                "t", CheckStatus.FAIL, job_id="4", started=T0 + timedelta(hours=1), completed=T0 + timedelta(hours=1)
+            ),
+        ],
+    )
+    failing = await ci_fix._read_failing_checks(host.code_host(), REPO, 1)
+    assert failing is not None
+    assert [c.job_id for c in failing] == ["4"]
+    undated = _fresh_host()
+    _put(undated, [_run_of("t", CheckStatus.FAIL), _run_of("t", CheckStatus.PASS, job_id="4")])
+    assert (await ci_fix._read_failing_checks(undated.code_host(), REPO, 1)) is None
+
+
+async def test_read_failing_checks_none_when_the_read_fails():
+    host = _fresh_host()
+    host.fail_next("Checks.list_checks", CodeHostError("boom"))
+    assert (await ci_fix._read_failing_checks(host.code_host(), REPO, 1)) is None
 
 
 def test_failed_step_name_from_log():
@@ -615,40 +697,137 @@ def test_failed_step_name_ignores_unknown_step_placeholder():
     assert ci_fix._failed_step_name(log) == "Run checks"
 
 
-async def test_failed_step_from_api_picks_first_failed_step():
-    steps = [{"name": "Set up", "conclusion": "success"}, {"name": "Run checks", "conclusion": "failure"}]
-    with patch(P + "_gh", return_value=_proc(0, json.dumps({"steps": steps}).encode())) as gh:
-        assert (await ci_fix._failed_step_from_api("o/r", "https://x/actions/runs/9/job/8", {})) == "Run checks"
-    assert gh.call_args.args[0] == ["api", "repos/o/r/actions/jobs/8"]
+def _failing_check(host, **seed):
+    _seed_checks(host, 1, ["t"], **seed)
+    return host._checks[REPO][1][0]
 
 
-@pytest.mark.parametrize(
-    ("link", "result"),
-    [
-        ("https://x/actions/runs/9", _proc(0, b"{}")),  # no job id: no call at all
-        ("https://x/actions/runs/9/job/8", _proc(1)),
-        ("https://x/actions/runs/9/job/8", _proc(0, b"not json")),
-        ("https://x/actions/runs/9/job/8", _proc(0, b"[]")),
-        ("https://x/actions/runs/9/job/8", _proc(0, b'{"steps":[{"name":"a","conclusion":"success"}]}')),
-    ],
-)
-async def test_failed_step_from_api_none_when_unavailable(link, result):
-    with patch(P + "_gh", return_value=result):
-        assert (await ci_fix._failed_step_from_api("o/r", link, {})) is None
+async def test_read_failed_log_returns_the_job_log():
+    host = _fresh_host()
+    check = _failing_check(host, log="the log")
+    assert await ci_fix._read_failed_log(host.code_host(), REPO, check) == "the log"
+    assert [c.operation for c in host.calls] == ["Checks.failed_log"]
+
+
+async def test_read_failed_log_failure_is_a_ci_fix_error_from_the_host_error():
+    host = _fresh_host()
+    check = _failing_check(host)
+    host.fail_next("Checks.failed_log", CodeHostError("no log"))
+    with pytest.raises(CiFixError, match="no log") as exc:
+        await ci_fix._read_failed_log(host.code_host(), REPO, check)
+    assert isinstance(exc.value.__cause__, CodeHostError)
+
+
+async def test_read_failed_log_timeout_is_a_ci_fix_error():
+    host = _fresh_host()
+    check = _failing_check(host)
+    host.fail_next("Checks.failed_log", CodeHostTimeoutError("slow", write=False))
+    with pytest.raises(CiFixError, match="slow"):
+        await ci_fix._read_failed_log(host.code_host(), REPO, check)
+
+
+async def test_read_failed_log_unsupported_stops_unwrapped():
+    host = _fresh_host()
+    check = _failing_check(host)
+    host.fail_next("Checks.failed_log", UnsupportedCapabilityError("no", capability="Checks"))
+    with pytest.raises(UnsupportedCapabilityError):
+        await ci_fix._read_failed_log(host.code_host(), REPO, check)
+
+
+async def test_failed_step_from_api_picks_the_failed_step():
+    host = _fresh_host()
+    check = _failing_check(host, failed_step="Run checks")
+    assert await ci_fix._failed_step_from_api(host.code_host(), REPO, check) == "Run checks"
+    assert host.calls[-1].operation == "Checks.get_job"
+    assert host.calls[-1].args == (REPO, check.job_id)
+
+
+async def test_failed_step_from_api_none_without_a_job_or_a_failed_step():
+    host = _fresh_host()
+    no_job = Check("t", CheckStatus.FAIL, "https://example.test/runs/9", None, None, None, None)
+    assert await ci_fix._failed_step_from_api(host.code_host(), REPO, no_job) is None
+    assert host.calls == []
+    no_step = _failing_check(host, failed_step=None)
+    assert await ci_fix._failed_step_from_api(host.code_host(), REPO, no_step) is None
+
+
+async def test_failed_step_from_api_failure_is_a_ci_fix_error():
+    host = _fresh_host()
+    check = _failing_check(host)
+    host.fail_next("Checks.get_job", CodeHostError("job gone"))
+    with pytest.raises(CiFixError, match="job gone") as exc:
+        await ci_fix._failed_step_from_api(host.code_host(), REPO, check)
+    assert isinstance(exc.value.__cause__, CodeHostError)
+
+
+async def test_failed_step_from_api_unsupported_stops_unwrapped():
+    host = _fresh_host()
+    check = _failing_check(host)
+    host.fail_next("Checks.get_job", UnsupportedCapabilityError("no", capability="Checks"))
+    with pytest.raises(UnsupportedCapabilityError):
+        await ci_fix._failed_step_from_api(host.code_host(), REPO, check)
 
 
 async def test_fix_check_uses_api_step_when_log_says_unknown_step(tmp_path):
-    unknown = "quality\tUNKNOWN STEP\t2024Z error"
     with (
-        _mocks(tmp_path) as m,
-        patch(P + "_read_failed_log", return_value=unknown),
-        patch(P + "_failed_step_from_api", return_value="Run checks") as api,
+        _mocks(tmp_path, log="quality\tUNKNOWN STEP\t2024Z error", failed_step="Run checks") as m,
         patch(P + "find_step_command", return_value=_Step("Run checks", "make check", "")) as find,
     ):
         await ci_fix.run(_cfg(tmp_path))
-    api.assert_called_once()
+    assert "Checks.get_job" in _ops(m)
     assert find.call_args.args[1] == "Run checks"
     assert m.pushes
+
+
+async def test_log_read_failure_is_a_parse_failure_digest_and_continues(tmp_path, caplog):
+    with _mocks(tmp_path, prs=[_pr(1, "a"), _pr(2, "b")]) as m:
+        m.run_step.side_effect = [_proc(1), _proc(0)]
+        m.host.fail_next("Checks.failed_log", CodeHostError("no log"))
+        await ci_fix.run(_cfg(tmp_path))  # no CiFixError: the failure is a per-check digest
+    assert "parse-failure" in caplog.text
+    assert "no log" in caplog.text
+    assert [p[3] for p in m.pushes] == ["b"]
+    m.checkout.assert_called_once()  # PR 1 never reached the checkout
+
+
+async def test_unsupported_log_read_stops_the_run(tmp_path):
+    with _mocks(tmp_path, prs=[_pr(1, "a"), _pr(2, "b")]) as m:
+        m.host.fail_next("Checks.failed_log", UnsupportedCapabilityError("no", capability="Checks"))
+        with pytest.raises(UnsupportedCapabilityError):
+            await ci_fix.run(_cfg(tmp_path))
+    assert m.pushes == []
+    assert _ops(m).count("Checks.failed_log") == 1
+
+
+async def test_unsupported_checks_capability_stops_before_any_checkout(tmp_path):
+    with _mocks(tmp_path) as m:
+        m.host.fail_next("Checks.list_checks", UnsupportedCapabilityError("no", capability="Checks"))
+        with pytest.raises(UnsupportedCapabilityError):
+            await ci_fix.run(_cfg(tmp_path))
+    m.checkout.assert_not_called()
+    assert m.pushes == []
+
+
+async def test_list_failure_is_collected_and_raised(tmp_path):
+    with _mocks(tmp_path) as m:
+        m.host.fail_next("ChangeRequests.list", CodeHostError("listing broke"))
+        with pytest.raises(CiFixError, match="listing broke"):
+            await ci_fix.run(_cfg(tmp_path))
+    m.checkout.assert_not_called()
+
+
+async def test_agent_gets_the_credential_through_the_host_environment(tmp_path):
+    with _mocks(tmp_path) as m:
+        await ci_fix.run(_cfg(tmp_path))
+    env = m.backend_cls.call_args.args[3]
+    assert env["GITHUB_TOKEN"] == SECRET
+    assert "Session.agent_environment" in _ops(m)
+
+
+async def test_no_write_reaches_the_host(tmp_path):
+    with _mocks(tmp_path) as m:
+        await ci_fix.run(_cfg(tmp_path))
+    assert m.host.writes == []
 
 
 def _git_repo(tmp_path):

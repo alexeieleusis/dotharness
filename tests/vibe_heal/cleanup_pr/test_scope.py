@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from dotharness.code_host.testing import InMemoryCodeHost
 from dotharness.vibe_heal.cleanup_pr.scope import select_in_scope_duplications, select_in_scope_issues
 from dotharness.vibe_heal.deduplication.models import DuplicationBlock, DuplicationGroup, DuplicationsResponse
 from dotharness.vibe_heal.review.models import ReviewIssue
@@ -277,7 +278,9 @@ class TestActiveFindingBehaviorUnchanged:
         mock_analyzer = MagicMock()
         mock_analyzer.repo.working_dir = "/repo"
         mock_parser = MagicMock()
-        return ReviewOrchestrator(config, mock_client, mock_analyzer, mock_parser)
+        return ReviewOrchestrator(
+            config, mock_client, mock_analyzer, mock_parser, code_host=InMemoryCodeHost().code_host()
+        )
 
     @staticmethod
     def _make_response() -> MagicMock:

@@ -157,12 +157,9 @@ def _render_resolved_duplications(resolved: list[ResolvedDuplication], base_bran
 def format_coverage_table(file_reviews: list[FileReview]) -> str:
     """Render a Markdown table summarising coverage across files.
 
-    Returns an empty string when *file_reviews* is empty or no file has a
-    non-None ``coverage_pct``.  Coverage percentages below 80 % are rendered
-    in bold to draw attention.
+    Returns an empty string when no file has a non-None ``coverage_pct``. Coverage percentages below 80 % are
+    rendered in bold to draw attention.
     """
-    if not file_reviews:
-        return ""
     header = "| File | Covered Lines | Instrumented Changed Lines | Coverage % |"
     alignment = "| :--- | ---: | ---: | ---: |"
     rows = []

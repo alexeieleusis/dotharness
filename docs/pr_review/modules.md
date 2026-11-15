@@ -4,6 +4,8 @@
 
 ## Command modules
 
+Every command module reads and writes the code host through `dotharness.code_host` (`open_host` and the `CodeHost` interfaces). `runners/common.py` holds the shared readers and prompt builders on top of them. No runner builds a host CLI command itself. The remaining direct `git` calls go through `common.run_cmd`.
+
 The `local-review` command lives in the package `dotharness.pr_review.runners.local_review`. See [`local-review`](commands/local-review.md) for how to use it. The package re-exports its public names, so `from dotharness.pr_review.runners.local_review import run` and the like keep working. Each name is defined in one submodule:
 
 - `types`: `LocalReviewError`, `NothingToReviewError`, `RepoMutatedError` and `LocalReviewTarget`.

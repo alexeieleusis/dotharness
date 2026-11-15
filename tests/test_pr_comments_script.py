@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-SCRIPT = Path(__file__).parent.parent / "src" / "dotharness" / "scripts" / "pr-comments.py"
+SCRIPT = Path(__file__).parent.parent / "src" / "dotharness" / "code_host" / "scripts" / "pr-comments.py"
 
 
 def _load():

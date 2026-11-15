@@ -40,9 +40,9 @@ from dotharness.opencode_guards import (
 )
 from dotharness.paths import data_dir
 from dotharness.repo_guard import (
+    IdentityCheck,
     RepoIdentityError,
     assert_harness_unchanged,
-    assert_repo_identity,
     snapshot_harness_repo,
 )
 from dotharness.subprocess_runner import RunResult, run
@@ -279,7 +279,7 @@ async def _attempt(
     prompt_via_file: bool,
     options: BackendOptions,
     prefix: str,
-    expected_repo_name: str | None,
+    identity_check: IdentityCheck | None,
     harness: tuple[Path, str] | None,
 ) -> RunResult:
     prompt_file = _write_prompt_file(prompt) if prompt_via_file else None
@@ -298,8 +298,8 @@ async def _attempt(
             await _wait_for_group_exit(pgid, prefix)
         if result.timed_out:
             await _warn_if_backend_survived(backend, prefix)
-        elif not result.not_found and expected_repo_name is not None:
-            await assert_repo_identity(cwd, expected_repo_name)
+        elif not result.not_found and identity_check is not None:
+            await identity_check(cwd)
         if not result.not_found:
             await assert_harness_unchanged(harness)
         return result
@@ -320,13 +320,13 @@ async def _run_attempts(
     prompt_via_file: bool,
     options: BackendOptions,
     prefix: str,
-    expected_repo_name: str | None,
+    identity_check: IdentityCheck | None,
     harness: tuple[Path, str] | None,
 ) -> RunResult:
     """Run up to ``total_attempts`` attempts, stopping at the first success, ``not_found`` or (unless ``retry_on_nonzero``) non-zero exit; return the last result."""
     for attempt in range(1, total_attempts + 1):
-        if expected_repo_name is not None:
-            await assert_repo_identity(cwd, expected_repo_name)
+        if identity_check is not None:
+            await identity_check(cwd)
         logger.info("%sRunning %s backend (attempt %d/%d, cwd=%s)", prefix, backend, attempt, total_attempts, cwd)
         result = await _attempt(
             backend,
@@ -337,7 +337,7 @@ async def _run_attempts(
             prompt_via_file=prompt_via_file,
             options=options,
             prefix=prefix,
-            expected_repo_name=expected_repo_name,
+            identity_check=identity_check,
             harness=harness,
         )
         if result.not_found or (not result.timed_out and (result.returncode == 0 or not retry_on_nonzero)):
@@ -354,9 +354,9 @@ async def _run_attempts(
     return result
 
 
-async def _log_identity_failure_after_timeout(cwd: str, expected_repo_name: str, prefix: str) -> None:
+async def _log_identity_failure_after_timeout(cwd: str, identity_check: IdentityCheck, prefix: str) -> None:
     try:
-        await assert_repo_identity(cwd, expected_repo_name)
+        await identity_check(cwd)
     except RepoIdentityError:
         logger.exception("%sRepo identity check failed after a timeout-kill", prefix)
 
@@ -373,7 +373,7 @@ async def launch(
     context: str | None = None,
     max_retries: int = 0,
     retry_on_nonzero: bool = False,
-    expected_repo_name: str | None = None,
+    identity_check: IdentityCheck | None = None,
     harness_repo_root: str | Path | None = None,
     backend_options: BackendOptions | None = None,
 ) -> RunResult:
@@ -387,7 +387,8 @@ async def launch(
     ``max_retries``: extra attempts after a timeout; also after a non-zero exit only with ``retry_on_nonzero=True``
     (default off: a failed run may already have had side effects such as posted replies or pushed commits, so
     re-running it is opt-in). Never after ``not_found``. Guards:
-    ``expected_repo_name`` (``owner/repo``) checks the identity of ``cwd`` before and after each attempt;
+    ``identity_check`` (an async callable taking ``cwd``, raising ``RepoIdentityError``; the code host supplies it)
+    checks the identity of ``cwd`` before and after each attempt;
     a non-None ``harness_repo_root`` checks that checkout's HEAD did not move;
     ``OpencodeOptions.monitor_cwd`` kills the run if its real cwd diverges; ``OpencodeOptions.check_plugins``
     raises ``OpencodePluginError`` when ``opencode plugin list`` reports plugins.
@@ -419,9 +420,9 @@ async def launch(
         prompt_via_file=prompt_via_file,
         options=options,
         prefix=prefix,
-        expected_repo_name=expected_repo_name,
+        identity_check=identity_check,
         harness=harness,
     )
-    if result.timed_out and expected_repo_name is not None:
-        await _log_identity_failure_after_timeout(cwd_str, expected_repo_name, prefix)
+    if result.timed_out and identity_check is not None:
+        await _log_identity_failure_after_timeout(cwd_str, identity_check, prefix)
     return result

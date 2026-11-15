@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from dotharness.code_host.errors import CodeHostError
 from dotharness.sisyphus import orchestrator, pick
 from dotharness.sisyphus.cleanup import PrInfo
 from dotharness.sisyphus.config import (
@@ -35,7 +36,6 @@ from dotharness.sisyphus.intake import resolve_brief_path
 from dotharness.sisyphus.lock import LockHeld, clone_lock
 from dotharness.sisyphus.orchestrator import (
     CommandResult,
-    GitHubError,
     OrchestratorError,
     OrchestratorOptions,
     PullRequest,
@@ -137,9 +137,9 @@ class World:
         # PR client behaviour
         self.existing_pr: PullRequest | None = None
         self.opened: list[tuple[str, str, str, str]] = []
-        self.client_error: GitHubError | None = None
+        self.client_error: CodeHostError | None = None
         self.pr_info: PrInfo | None = None
-        self.pr_state_error: GitHubError | None = None
+        self.pr_state_error: CodeHostError | None = None
         self.pr_state_refs: list[str] = []
         self.find_calls = 0
         # label remover behaviour
@@ -643,7 +643,7 @@ async def test_c7_branch_needs_rebase(world: World) -> None:
 
 
 async def test_c8_pr_client_failure(world: World) -> None:
-    world.client_error = GitHubError("auth failed")
+    world.client_error = CodeHostError("auth failed")
     result = await world.run()
     _assert_stop(world, result, Checkpoint.C8)
     assert "auth failed" in result.detail
@@ -1788,11 +1788,11 @@ async def test_squash_merge_proof_uses_the_stored_pr_number_and_gh_error_keeps(w
     world.branch_present_after_pr = True
     world.remote_exists = False
     world.ancestor_rc_after_pr = 1
-    world.pr_state_error = GitHubError("gh pr view failed (exit 1): boom")
+    world.pr_state_error = CodeHostError("gh pr view failed (exit 1): boom")
     await world.run()
     assert world.pr_state_refs == ["42"]
     assert world.branch_cmds == []
-    assert "(3) gh lookup of 42 failed: gh pr view failed (exit 1): boom" in world.digest_text()
+    assert "(3) code host lookup of 42 failed (CodeHostError): gh pr view failed (exit 1): boom" in world.digest_text()
 
 
 async def test_commits_not_on_origin_keep_the_branch(world: World) -> None:
@@ -2006,7 +2006,7 @@ async def test_label_removed_once_when_gate_failed(world: World) -> None:
 async def test_removal_failure_with_gate_failed_is_a_digest_note_only(world: World) -> None:
     _github(world)
     world.gate_rc = 2
-    world.label_error = pick.LabelRemovalError("permission denied")
+    world.label_error = CodeHostError("permission denied")
     assert (await world.run()).completed
     assert "Label kept: #7 label 'bot-pick' removal failed" in world.digest_text()
 
@@ -2020,14 +2020,14 @@ async def test_no_call_when_a_checkpoint_is_set(world: World) -> None:
 
 async def test_removal_failure_is_a_digest_note_only(world: World) -> None:
     _github(world)
-    world.label_error = pick.LabelRemovalError("permission denied")
+    world.label_error = CodeHostError("permission denied")
     result = await world.run()
     assert result.completed
     assert result.checkpoint is None
     rec = RunRecord.open(world.tmp / "ws", "#7")
     assert rec.checkpoint is None
     assert read_stop_record(rec.path) is None
-    assert "Label kept: #7 label 'bot-pick' removal failed: LabelRemovalError: permission denied" in world.digest_text()
+    assert "Label kept: #7 label 'bot-pick' removal failed: CodeHostError: permission denied" in world.digest_text()
 
 
 async def test_unexpected_removal_error_is_also_swallowed(world: World) -> None:

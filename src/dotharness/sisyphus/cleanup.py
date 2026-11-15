@@ -2,18 +2,18 @@
 
 The only module that deletes a branch. Standard library only; git is injected as a callable
 (``git(args) -> result`` with ``returncode``/``stdout``/``stderr``, run in the dedicated clone) and so is the
-pull-request lookup (``pr_lookup(ref) -> PrInfo | None``, raising on a gh failure), so the orchestrator's
+pull-request lookup (``pr_lookup(ref) -> PrInfo | None``, raising on a lookup failure), so the orchestrator's
 runners (and tests' fakes) are used unchanged.
 
 Nothing is deleted on trust. Preconditions, each of which keeps the branch and returns a reason for the digest:
 the local branch exists (if not: nothing to do, silently; that makes a rerun idempotent); the clone is clean
 (never stash, reset or clean). Then ONE of three proofs, checked in this order, cheapest first (a later proof is
-not evaluated once an earlier one holds, so ``gh`` is only asked when git alone cannot prove it):
+not evaluated once an earlier one holds, so the code host is only asked when git alone cannot prove it):
 
 1. the branch head is an ancestor of ``origin/<branch>`` (``ls-remote`` + fetch + ``merge-base --is-ancestor``);
 2. the branch head is an ancestor of ``origin/<base>`` (base fetched first; a merge-commit or rebase merge, also
    once the remote branch is gone);
-3. ``gh pr view`` reports the PR MERGED with ``headRefOid`` equal to the local head (squash merges).
+3. the code host reports the PR MERGED with ``headRefOid`` equal to the local head (squash merges).
 
 A detached HEAD must itself be on the branch, ``origin/<branch>`` or
 ``origin/<base>`` so leaving it loses nothing. The clone is then switched to the base branch and fast-forwarded
@@ -41,7 +41,7 @@ ABSENT = "absent"
 
 @dataclass(frozen=True)
 class PrInfo:
-    """What ``gh pr view --json number,state,headRefOid`` says."""
+    """What the code host says about a PR: number, state (``OPEN``, ``MERGED``, ``CLOSED``) and head SHA."""
 
     number: int | None
     state: str
@@ -109,13 +109,16 @@ async def _prove_on_base(git: GitFn, base: str, sha: str) -> str | None:
 
 
 async def _prove_pr_merged(pr_lookup: PrLookup | None, ref: str, sha: str) -> tuple[str | None, str]:
-    """Proof (3). ``(None, detail)`` when the PR is MERGED with ``headRefOid == sha``, else ``(reason, "")``."""
+    """Proof (3). ``(None, detail)`` when the PR is MERGED with head SHA ``== sha``, else ``(reason, "")``.
+
+    Policy (ChangeRequests unsupported or the lookup failing): degrade, i.e. keep the branch with the reason.
+    """
     if pr_lookup is None:
-        return "no GitHub client available", ""
+        return "no code host client available", ""
     try:
         info = await pr_lookup(ref)
-    except Exception as exc:  # a gh failure must keep the branch, never crash the run
-        return f"gh lookup of {ref} failed: {str(exc)[-200:]}", ""
+    except Exception as exc:  # a lookup failure must keep the branch, never crash the run
+        return f"code host lookup of {ref} failed ({type(exc).__name__}): {str(exc)[-200:]}", ""
     if info is None:
         return f"no PR found for {ref}", ""
     label = f"PR #{info.number}" if info.number is not None else f"the PR of {ref}"

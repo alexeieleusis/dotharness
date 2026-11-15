@@ -5,9 +5,10 @@ from dotharness.vibe_heal.config.exceptions import (
     InvalidConfigurationError,
     MissingConfigurationError,
 )
-from dotharness.vibe_heal.config.models import VibeHealConfig
+from dotharness.vibe_heal.config.models import CodeHostSettings, VibeHealConfig
 
 __all__ = [
+    "CodeHostSettings",
     "ConfigurationError",
     "InvalidConfigurationError",
     "MissingConfigurationError",
