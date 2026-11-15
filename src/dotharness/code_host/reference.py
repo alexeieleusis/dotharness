@@ -1585,7 +1585,7 @@ class ReferenceOptions:
     """Options of the reference host. There are none yet."""
 
 
-def _create(options: ReferenceOptions, token_cmd: TokenCmd, working_directory: Path | None = None) -> CodeHost:
+def _create(token_cmd: TokenCmd, working_directory: Path | None = None) -> CodeHost:
     """Build the reference ``CodeHost``. Runs no command: the token command runs at ``Session.credential()``.
 
     ``working_directory`` is the directory of every ``gh`` call (the process directory when ``None``). With a token
@@ -1611,7 +1611,7 @@ def _create_with_default_token_cmd(
     options: ReferenceOptions, token_cmd: TokenCmd, working_directory: Path | None = None
 ) -> CodeHost:
     """The registered factory: ``DEFAULT_TOKEN_CMD`` when the caller configured no token command (``None`` or empty)."""
-    return _create(options, token_cmd or DEFAULT_TOKEN_CMD, working_directory)
+    return _create(token_cmd or DEFAULT_TOKEN_CMD, working_directory)
 
 
 REGISTRATION = HostRegistration(

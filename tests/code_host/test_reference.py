@@ -64,7 +64,7 @@ GH_OK = RunResult(0, "gh version 2.52.0", "")
 
 
 def _host():
-    return _create(REGISTRATION.options_model(), None)
+    return _create(None)
 
 
 def _stub(mocker, handler) -> AsyncMock:
@@ -1078,7 +1078,7 @@ class TestTimeouts:
 class TestWorkingDirectoryAndEnvironment:
     async def test_gh_runs_in_working_directory(self, mocker, tmp_path: Path) -> None:
         mock_run = _recorder(mocker, (0, "[]", ""), (0, '{"state": "OPEN"}', ""), (0, "", ""))
-        host = _create(REGISTRATION.options_model(), None, tmp_path)
+        host = _create(None, tmp_path)
         await host.work_items.list_open(REPO, assignee="a", label="l")
         await host.change_requests.state(REPO, 1)
         await host.work_items.remove_label(REPO, 1, "x")
@@ -1103,7 +1103,7 @@ class TestWorkingDirectoryAndEnvironment:
         monkeypatch.setenv("GITHUB_TOKEN", "inherited")
         monkeypatch.setenv("KEEP", "me")
         mock_run = _recorder(mocker, (0, f"{SECRET}\n", ""), (0, "[]", ""), (0, "[]", ""))
-        host = _create(REGISTRATION.options_model(), "tokencmd --flag 'a b'", None)
+        host = _create("tokencmd --flag 'a b'", None)
         await host.work_items.list_open(REPO)
         await host.work_items.list_open(REPO)
         token_call, first, second = mock_run.call_args_list
@@ -1120,7 +1120,7 @@ class TestWorkingDirectoryAndEnvironment:
 
     async def test_credential_returns_token_hidden_from_repr(self, mocker) -> None:
         _recorder(mocker, (0, f"  {SECRET}  \n", ""))
-        host = _create(REGISTRATION.options_model(), ["tokencmd"], None)
+        host = _create(["tokencmd"], None)
         credential = await host.session.credential()
         assert credential.token == SECRET
         assert SECRET not in repr(credential)
@@ -1131,7 +1131,7 @@ class TestWorkingDirectoryAndEnvironment:
 
     async def test_gh_failure_message_never_holds_the_token(self, mocker) -> None:
         _recorder(mocker, (0, f"{SECRET}\n", ""), (1, "", f"bad {SECRET} here"))
-        host = _create(REGISTRATION.options_model(), "tokencmd", None)
+        host = _create("tokencmd", None)
         with pytest.raises(CodeHostError) as info:
             await host.work_items.list_open(REPO)
         assert SECRET not in str(info.value)
@@ -1155,7 +1155,7 @@ class TestTokenCommand:
 
     async def test_nonzero_exit_carries_exit_code_as_data(self, mocker) -> None:
         _recorder(mocker, (3, "", f"secret stderr {SECRET}"))
-        host = _create(REGISTRATION.options_model(), f"mycmd {SECRET}", None)
+        host = _create(f"mycmd {SECRET}", None)
         with pytest.raises(TokenCommandError) as info:
             await host.session.credential()
         assert info.value.exit_code == 3
@@ -1167,12 +1167,12 @@ class TestTokenCommand:
     async def test_empty_output_raises(self, mocker) -> None:
         _recorder(mocker, (0, "  \n", ""))
         with pytest.raises(TokenCommandError) as info:
-            await _create(REGISTRATION.options_model(), "mycmd", None).session.credential()
+            await _create("mycmd", None).session.credential()
         assert info.value.exit_code == 0
 
     async def test_timeout_is_a_read_timeout(self, mocker) -> None:
         mock_run = _recorder(mocker, RunResult(124, "", "timed out after 30s", timed_out=True))
-        host = _create(REGISTRATION.options_model(), f"mycmd {SECRET}", None)
+        host = _create(f"mycmd {SECRET}", None)
         with pytest.raises(CodeHostTimeoutError) as info:
             await host.session.credential()
         assert info.value.write is False
@@ -1183,7 +1183,7 @@ class TestTokenCommand:
     async def test_not_found(self, mocker) -> None:
         _recorder(mocker, RunResult(127, "", f"No such file: {SECRET}", not_found=True))
         with pytest.raises(TokenCommandError) as info:
-            await _create(REGISTRATION.options_model(), "mycmd", None).session.credential()
+            await _create("mycmd", None).session.credential()
         assert info.value.detail == "OSError"
         assert SECRET not in str(info.value)
 
@@ -1191,13 +1191,13 @@ class TestTokenCommand:
     async def test_unparsable_command(self, mocker, cmd) -> None:
         mock_run = mocker.patch("dotharness.code_host.reference.run", new_callable=AsyncMock)
         with pytest.raises(TokenCommandError) as info:
-            await _create(REGISTRATION.options_model(), cmd, None).session.credential()
+            await _create(cmd, None).session.credential()
         assert info.value.detail == "ValueError"
         assert mock_run.await_count == 0
 
     async def test_failed_command_stops_the_gh_call(self, mocker) -> None:
         mock_run = _recorder(mocker, (1, "", ""))
-        host = _create(REGISTRATION.options_model(), "mycmd", None)
+        host = _create("mycmd", None)
         with pytest.raises(AuthenticationError):
             await host.work_items.list_open(REPO)
         assert mock_run.await_count == 1  # gh never ran
@@ -1308,7 +1308,7 @@ class TestSessionOperations:
     async def test_current_user_runs_with_gh_token_only(self, mocker, monkeypatch) -> None:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         mock_run = _recorder(mocker, (0, f"{SECRET}\n", ""), (0, "ann\n", ""))
-        host = _create(REGISTRATION.options_model(), "tokencmd", None)
+        host = _create("tokencmd", None)
         await host.session.current_user()
         env = mock_run.call_args.kwargs["env"]
         assert env["GH_TOKEN"] == SECRET
@@ -1319,7 +1319,7 @@ class TestSessionOperations:
 
     async def test_agent_environment_adds_both_variables_and_credential_wins(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, f"{SECRET}\n", ""))
-        host = _create(REGISTRATION.options_model(), ["tokencmd", "--x"], None)
+        host = _create(["tokencmd", "--x"], None)
         env = await host.session.agent_environment({"KEEP": "me", "GH_TOKEN": "old", "GITHUB_TOKEN": "old"})
         assert env == {"KEEP": "me", "GH_TOKEN": SECRET, "GITHUB_TOKEN": SECRET}
         assert _argv(mock_run) == ["tokencmd", "--x"]
@@ -1333,14 +1333,14 @@ class TestSessionOperations:
 
     async def test_agent_environment_token_command_failure_never_shows_the_command(self, mocker) -> None:
         _recorder(mocker, (2, "", SECRET))
-        host = _create(REGISTRATION.options_model(), f"mycmd {SECRET}", None)
+        host = _create(f"mycmd {SECRET}", None)
         with pytest.raises(TokenCommandError) as info:
             await host.session.agent_environment()
         assert SECRET not in str(info.value)
 
     async def test_agent_environment_token_timeout(self, mocker) -> None:
         _recorder(mocker, RunResult(124, "", "", timed_out=True))
-        host = _create(REGISTRATION.options_model(), "mycmd", None)
+        host = _create("mycmd", None)
         with pytest.raises(CodeHostTimeoutError) as info:
             await host.session.agent_environment()
         assert info.value.write is False
@@ -1563,7 +1563,7 @@ class TestPagingRetries:
     async def test_token_never_in_logged_failures(self, mocker, caplog) -> None:
         results = [(0, f"{SECRET}\n", ""), *[(1, "", f"bad {SECRET}")] * 3]
         _pages(mocker, *results)
-        host = _create(REGISTRATION.options_model(), "tokencmd", None)
+        host = _create("tokencmd", None)
         with caplog.at_level(logging.WARNING), pytest.raises(CodeHostError) as info:
             await host.change_requests.reviews(REPO, 1)
         assert SECRET not in caplog.text
@@ -2005,7 +2005,7 @@ class TestPhase3Environment:
             mocker,
             lambda cmd, kw: RunResult(0, f"{SECRET}\n", "") if cmd == ["tokencmd"] else RunResult(0, "[]", ""),
         )
-        host = _create(REGISTRATION.options_model(), "tokencmd", None)
+        host = _create("tokencmd", None)
         with contextlib.suppress(CodeHostError):  # an empty payload may be unusable. Only the environment matters here.
             await call(host)
         gh_env = mock_run.call_args_list[-1].kwargs["env"]
@@ -2236,7 +2236,7 @@ class TestChecks:
             return RunResult(1, "", f"denied {SECRET}")
 
         _stub(mocker, handler)
-        host = _create(REGISTRATION.options_model(), ["echo", "x"])
+        host = _create(["echo", "x"])
         with pytest.raises(CodeHostError) as info:
             await host.checks.list_checks(REPO, 1)
         assert SECRET not in str(info.value)
