@@ -38,8 +38,8 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
    commands share this lock (see [Shared behavior](index.md#shared-behavior)).
    If another instance holds it — this runner or any of the other four — the
    runner exits immediately with an error instead of blocking.
-2. The runner fetches the host token (via `harness.host_token_cmd`, else
-   `harness.gh_token_cmd`). It builds a subprocess environment (`PATH`
+2. The runner fetches the host token (via `harness.host_token_cmd`; when it
+   is absent the reference host runs its default token command). It builds a subprocess environment (`PATH`
    prepends + `harness.env` + `GITHUB_TOKEN`). It then finds the current host
    user's login through the code host's session.
 3. The runner builds the list of PRs to process:
@@ -184,7 +184,7 @@ Only these `.harness.toml` fields affect this runner (full schema in
 |---|---|
 | `harness.backend` | Which AI backend (`opencode`/`claude`) runs the reviews |
 | `harness.backend_timeout_seconds` | Per-invocation timeout for each backend call (per file, for the summary, and for the design/traceability passes when they have not already succeeded) |
-| `harness.host_token_cmd` / `harness.gh_token_cmd` | Command used to fetch the `GITHUB_TOKEN` passed to host calls and the backend. `host_token_cmd` wins when both are set |
+| `harness.host_token_cmd` | Command used to fetch the `GITHUB_TOKEN` passed to host calls and the backend. `gh_token_cmd` was removed; a config that still has it fails to load |
 | `harness.knowledge_dir` | Where `pr-review/review-file.md`, `pr-review/review-summary.md`, `pr-review/review-design.md`, `pr-review/review-traceability.md`, and — only when `[regret_review].enabled` is `true` — `pr-review/review-regret.md` prompt templates live |
 | `harness.path_prepend` | Extra `PATH` entries for subprocesses (git/gh/backend) |
 | `harness.env` | Extra environment variables merged into the subprocess/backend env |
