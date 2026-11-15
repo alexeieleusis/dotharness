@@ -1512,6 +1512,43 @@ async def test_stop_record_written_for_each_checkpoint(world: World, setup, cp: 
     assert f"Resume: `{stop.resume_command}`" in line
 
 
+async def test_c3_stop_record_carries_leaf_and_detail_prefix(world: World) -> None:
+    _stop_c3(world)
+    await world.run()
+    stop = _stop(world)
+    assert stop is not None
+    assert stop.leaf == "13-foo"
+    assert stop.detail == "leaf 13-foo: Use A or B?"
+
+
+@pytest.mark.parametrize("setup", [_stop_c1, _stop_c2, _stop_c6, _stop_c8])
+async def test_stops_without_a_leaf_record_null(world: World, setup) -> None:
+    setup(world)
+    await world.run()
+    stop = _stop(world)
+    assert stop is not None
+    assert stop.leaf is None
+
+
+@pytest.mark.parametrize("report", [{"leaf": None}, {"leaf": ""}, {}])
+async def test_null_empty_or_missing_leaf_in_report_records_none(world: World, report: dict) -> None:
+    world.build_stops = [{"checkpoint": "C3", "detail": "Use A or B?", **report}]
+    await world.run()
+    stop = _stop(world)
+    assert stop is not None
+    assert stop.leaf is None
+    assert stop.detail == "Use A or B?"
+
+
+async def test_non_string_leaf_in_report_is_coerced(world: World) -> None:
+    world.build_stops = [{"checkpoint": "C3", "leaf": 7, "detail": "d"}]
+    await world.run()
+    stop = _stop(world)
+    assert stop is not None
+    assert stop.leaf == "7"
+    assert stop.detail == "leaf 7: d"
+
+
 async def test_c1_stop_record_lists_each_open_decision(world: World) -> None:
     world.brief_text = "# B\n\n## Open decisions log\n\n1. Which tracker?\n2. Which base?\n"
     await world.run()
