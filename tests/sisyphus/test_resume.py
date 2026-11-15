@@ -661,6 +661,16 @@ def test_consume_answer_logs_before_rename(tmp_path: Path, monkeypatch: pytest.M
     assert len(answers_log_path(rec).read_text(encoding="utf-8").splitlines()) == 1
 
 
+def test_consume_answer_logs_content_edited_after_it_was_read(tmp_path: Path) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d", ("Q?",))
+    answer_path(rec).write_text("A\nactually B")
+    consume_answer(rec, "Q-1", "A")
+    lines = [json.loads(x) for x in answers_log_path(rec).read_text(encoding="utf-8").splitlines()]
+    assert [x["answer"] for x in lines] == ["A", "A\nactually B"]
+    assert not answer_path(rec).exists()
+
+
 def test_consume_answer_rename_failure_leaves_the_line_and_the_answer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

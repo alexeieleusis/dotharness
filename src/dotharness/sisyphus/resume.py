@@ -160,10 +160,17 @@ def consume_answer(rec_path: Path, item: str, answer: str) -> None:
 
     The answers-log line is appended first (FR-13); an OSError from it propagates and the
     answer file stays un-renamed (FR-18). A crash between the two steps can only duplicate a line.
+
+    ``answer`` is what the agent saw; the file may have been edited while the agent ran. The file is
+    re-read here, and if its content differs, that content is logged too (after ``answer``), so the text
+    that is renamed to ``.used`` is always in the log.
     """
     path = answer_path(rec_path)
     if path.is_file():
         append_answer_log(rec_path, item, answer)
+        current = read_answer(rec_path)
+        if current and current != answer.strip():
+            append_answer_log(rec_path, item, current)
         path.replace(path.with_name(path.name + USED_SUFFIX))
 
 
