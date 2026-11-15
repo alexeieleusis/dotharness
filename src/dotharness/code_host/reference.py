@@ -1288,7 +1288,9 @@ class _WorkItems:
         rows = await self._gh.json(args, _LIST_OPEN_OP)
         return [_work_item(repo, row) for row in rows or [] if isinstance(row, dict)]
 
-    async def remove_label(self, repo: RepositoryRef, number: int, label: str) -> None:
+    async def remove_label(  # NOSONAR python:S1172 - repo is required by the WorkItems protocol
+        self, repo: RepositoryRef, number: int, label: str
+    ) -> None:
         """Remove ``label`` (``gh issue edit N --remove-label L``). A non-zero exit raises, a timeout is a write timeout.
 
         A label the issue does not carry exits 0 (no-op). A label that does not exist in the repository exits non-zero.
