@@ -298,7 +298,10 @@ def _parse_merge(section: dict) -> MergeConfig:
 def _parse_host_keys(h: dict) -> tuple[str | None, dict[str, Any], str | None]:
     """Validate ``[harness] host``, ``[harness.host_options]`` and ``host_token_cmd`` types. Reads no environment."""
     if "gh_token_cmd" in h:
-        raise ConfigError("harness.gh_token_cmd was removed; use harness.host_token_cmd")  # noqa: TRY003
+        raise ConfigError(  # noqa: TRY003
+            "harness.gh_token_cmd was removed; use harness.host_token_cmd "
+            "(the command is no longer run through a shell: pipes, redirects and variable expansion are not interpreted)"
+        )
     host = h.get("host")
     if host is not None and not isinstance(host, str):
         raise ConfigError(f"harness.host must be a string, got {host!r}")  # noqa: TRY003
