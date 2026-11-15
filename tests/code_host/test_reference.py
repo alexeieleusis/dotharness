@@ -1051,7 +1051,7 @@ class TestTimeouts:
         ("call", "seconds"),
         [
             (lambda h: h.change_requests.state(REPO, 1), "10s"),
-            (lambda h: h.work_items.list_open(REPO, assignee="a", label="l"), "30s"),
+            (lambda h: h.work_items.list_open(REPO, assignee="a", label="l"), "3600s"),
             (lambda h: h.change_requests.get(REPO, 1), "30s"),
             (lambda h: h.repository.default_branch(REPO), "30s"),
         ],
@@ -1073,6 +1073,7 @@ class TestTimeouts:
         with pytest.raises(CodeHostTimeoutError) as info:
             await _host().change_requests.create_draft(REPO, head="h", base="b", title="t", body="b")
         assert info.value.write is True
+        assert "3600s" in str(info.value)  # DEC-45
 
 
 class TestWorkingDirectoryAndEnvironment:
@@ -1992,6 +1993,8 @@ class TestPhase3Timeouts:
             "Session.available",
             "ChangeRequests.find_by_branch",
             "WorkItems.remove_label",
+            "ChangeRequests.create_draft",  # DEC-45
+            "WorkItems.list_open",  # DEC-45
             "Discussion.post_review",
         }
         assert DECLARATION.limits.timeouts.default_seconds == 30

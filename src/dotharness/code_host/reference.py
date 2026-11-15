@@ -126,6 +126,7 @@ def render_prompt(template: str, variables: Mapping[str, str] | None = None) -> 
 _MAX_INLINE_COMMENTS = 50
 _MAX_REVIEW_BODY_CHARS = 60_000  # The host limit is about 65536. Keep headroom.
 _POST_TIMEOUT_SECONDS = 60
+_SLOW_REPO_TIMEOUT_SECONDS = 3600.0  # sisyphus limit before Phase 2 (DEC-45)
 _TRUNCATION_NOTICE = "\n\n_...review body truncated to fit GitHub's size limit._"
 _NOT_INSTALLED = "gh CLI is not installed or not in PATH. Install it from https://cli.github.com/"
 _PR_VIEW = "pr view"
@@ -1551,6 +1552,8 @@ DECLARATION = HostDeclaration(
                 _FIND_BY_BRANCH_OP: 30,
                 "WorkItems.remove_label": 10.0,
                 "Discussion.post_review": _POST_TIMEOUT_SECONDS,
+                "ChangeRequests.create_draft": _SLOW_REPO_TIMEOUT_SECONDS,
+                _LIST_OPEN_OP: _SLOW_REPO_TIMEOUT_SECONDS,
             },
         ),
         page_attempts=_PAGE_ATTEMPTS,
