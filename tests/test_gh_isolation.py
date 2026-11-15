@@ -9,9 +9,12 @@ import pytest
 import dotharness
 
 SRC = Path(dotharness.__file__).parent
-# The reference implementation (``code_host/reference*``), its bundled comments script, and the fake host's
-# stand-in credential variable names are the only places allowed to name the GitHub CLI or its variables.
-EXEMPT_PREFIXES = ("code_host/reference", "code_host/scripts/", "code_host/testing.py")
+# The reference implementation and its bundled comments script are the only files allowed to name the GitHub CLI.
+# Exact paths, not prefixes, so a new sibling file or script can never slip into the exemption.
+EXEMPT_PATHS = frozenset({"code_host/reference.py", "code_host/reference_gh.py", "code_host/scripts/pr-comments.py"})
+# The fake host may name the credential variables it stands in for, but nothing else: every other pattern still
+# applies to it.
+CREDENTIAL_ONLY_EXEMPT = {"code_host/testing.py": "a credential variable"}
 FORBIDDEN = {
     "the old module": re.compile(r"dotharness\.gh\b|from dotharness import gh\b"),
     "gh_argv": re.compile(r"\bgh_argv\b"),
@@ -25,10 +28,15 @@ def _scanned_files() -> list[Path]:
     files = []
     for path in sorted(SRC.rglob("*")):
         relative = path.relative_to(SRC).as_posix()
-        if not path.is_file() or "__pycache__" in path.parts or relative.startswith(EXEMPT_PREFIXES):
+        if not path.is_file() or "__pycache__" in path.parts or relative in EXEMPT_PATHS:
             continue
         files.append(path)
     return files
+
+
+def test_exemptions_name_existing_files() -> None:
+    for relative in EXEMPT_PATHS | CREDENTIAL_ONLY_EXEMPT.keys():
+        assert (SRC / relative).is_file(), f"stale exemption: {relative}"
 
 
 def test_scan_covers_code_and_knowledge_prompts() -> None:
@@ -45,10 +53,11 @@ def test_gh_knowledge_stays_in_the_reference_host(label: str) -> None:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
+        relative = path.relative_to(SRC).as_posix()
+        if CREDENTIAL_ONLY_EXEMPT.get(relative) == label:
+            continue
         hits.extend(
-            f"{path.relative_to(SRC).as_posix()}:{number}"
-            for number, line in enumerate(text.splitlines(), start=1)
-            if pattern.search(line)
+            f"{relative}:{number}" for number, line in enumerate(text.splitlines(), start=1) if pattern.search(line)
         )
     assert hits == [], f"{label} found outside the reference code host: {hits}"
 
