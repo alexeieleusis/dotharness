@@ -889,7 +889,7 @@ class TestArgv:
         items = await _host().work_items.list_open(REPO, assignee="bob", label="ready")
         assert mock_run.await_count == 1
         assert _argv(mock_run) == [
-            "gh", "issue", "list", "--state", "open", "--assignee", "bob", "--label", "ready",
+            "gh", "issue", "list", "--repo", R, "--state", "open", "--assignee", "bob", "--label", "ready",
             "--limit", "100", "--json", "number,title,createdAt,assignees,labels",
         ]  # fmt: skip
         (item,) = items
@@ -918,7 +918,7 @@ class TestArgv:
         mock_run = _recorder(mocker, (0, "", ""))
         await _host().work_items.remove_label(REPO, 12, "ready")
         assert mock_run.await_count == 1
-        assert _argv(mock_run) == ["gh", "issue", "edit", "12", "--remove-label", "ready"]
+        assert _argv(mock_run) == ["gh", "issue", "edit", "12", "--repo", R, "--remove-label", "ready"]
 
     async def test_closing_change_requests(self, mocker) -> None:
         mock_run = _recorder(
@@ -929,9 +929,9 @@ class TestArgv:
         )
         found = await _host().work_items.closing_change_requests(REPO, 3)
         assert [_argv(mock_run, i) for i in range(3)] == [
-            ["gh", "issue", "view", "3", "--json", "closedByPullRequestsReferences"],
-            ["gh", "pr", "view", "4", "--json", "number,state"],
-            ["gh", "pr", "view", "8", "--json", "number,state"],
+            ["gh", "issue", "view", "3", "--repo", R, "--json", "closedByPullRequestsReferences"],
+            ["gh", "pr", "view", "4", "--repo", R, "--json", "number,state"],
+            ["gh", "pr", "view", "8", "--repo", R, "--json", "number,state"],
         ]
         assert [(c.number, c.state) for c in found] == [
             (4, ChangeRequestState.OPEN),
@@ -945,13 +945,19 @@ class TestArgv:
     async def test_open_change_request_bodies(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, '[{"body": "Fixes #3"}, {"body": null}]', ""))
         found = await _host().work_items.open_change_request_bodies(REPO)
-        assert _argv(mock_run) == ["gh", "pr", "list", "--state", "open", "--limit", "200", "--json", "body"]
+        assert _argv(mock_run) == [
+            *("gh", "pr", "list", "--repo", R, "--state", "open"),
+            *("--limit", "200", "--json", "body"),
+        ]
         assert [c.body for c in found] == ["Fixes #3", ""]
 
     async def test_find_by_branch_open(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, '[{"number": 5, "url": "https://h/pull/5"}]', ""))
         (cr,) = await _host().change_requests.find_by_branch(REPO, "feat/x")
-        assert _argv(mock_run) == ["gh", "pr", "list", "--head", "feat/x", "--state", "open", "--json", "number,url"]
+        assert _argv(mock_run) == [
+            *("gh", "pr", "list", "--repo", R, "--head", "feat/x", "--state", "open"),
+            *("--json", "number,url"),
+        ]
         assert (cr.number, cr.url, cr.state, cr.head_reference) == (
             5,
             "https://h/pull/5",
@@ -962,12 +968,12 @@ class TestArgv:
     async def test_find_by_branch_other_state(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, "[]", ""))
         assert await _host().change_requests.find_by_branch(REPO, "b", state=ChangeRequestState.MERGED) == []
-        assert _argv(mock_run)[5:7] == ["--state", "merged"]
+        assert _argv(mock_run)[7:9] == ["--state", "merged"]
 
     async def test_find_by_branch_any_state_is_pr_view(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, '{"number": 9, "state": "MERGED", "headRefOid": "abc"}', ""))
         (cr,) = await _host().change_requests.find_by_branch(REPO, "feat/x", state=None)
-        assert _argv(mock_run) == ["gh", "pr", "view", "feat/x", "--json", "number,state,headRefOid"]
+        assert _argv(mock_run) == ["gh", "pr", "view", "feat/x", "--repo", R, "--json", "number,state,headRefOid"]
         assert (cr.number, cr.state, cr.head_revision) == (9, ChangeRequestState.MERGED, "abc")
 
     async def test_find_by_branch_any_state_none_found_is_empty(self, mocker) -> None:
@@ -1108,10 +1114,11 @@ class TestWorkingDirectoryAndEnvironment:
         await _host().work_items.list_open(REPO)
         assert mock_run.call_args.kwargs["cwd"] == Path.cwd()
 
-    async def test_no_repo_flag_on_list_open(self, mocker) -> None:
+    async def test_repo_flag_on_list_open_follows_argument(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, "[]", ""))
-        await _host().work_items.list_open(REPO, assignee="a", label="l")
-        assert "--repo" not in _argv(mock_run)
+        await _host().work_items.list_open(RepositoryRef("org/b"), assignee="a", label="l")
+        argv = _argv(mock_run)
+        assert argv[argv.index("--repo") + 1] == "org/b"
 
     async def test_no_token_command_inherits_environment(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, "[]", ""))

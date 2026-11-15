@@ -906,7 +906,7 @@ class _ChangeRequests:
         is none, which is an empty result here.
         """
         if state is None:
-            args = ("pr", "view", branch, "--json", "number,state,headRefOid")
+            args = ("pr", "view", branch, "--repo", repo.value, "--json", "number,state,headRefOid")
             outcome = await self._gh.run(args, _FIND_BY_BRANCH_OP)
             if not outcome.success:
                 if "no pull requests found" in outcome.stderr.lower():
@@ -919,7 +919,7 @@ class _ChangeRequests:
                 raise CodeHostError(msg) from None
             return [_summary(repo, _object(data, _PR_VIEW), head=branch)]
         rows = await self._gh.json(
-            ("pr", "list", "--head", branch, "--state", state.value, "--json", "number,url"),
+            ("pr", "list", "--repo", repo.value, "--head", branch, "--state", state.value, "--json", "number,url"),
             _FIND_BY_BRANCH_OP,
         )
         return [_summary(repo, row, state=state, head=branch) for row in rows or [] if isinstance(row, dict)]
@@ -1413,31 +1413,36 @@ class _WorkItems:
         self, repo: RepositoryRef, *, assignee: str | None = None, label: str | None = None
     ) -> Sequence[WorkItem]:
         """Open issues in ``gh`` order, bounded by the declared list bound."""
-        args = ["issue", "list", "--state", "open"]
+        args = ["issue", "list", "--repo", repo.value, "--state", "open"]
         if assignee is not None:
             args += ["--assignee", assignee]
         if label is not None:
             args += ["--label", label]
         bound = _bound(_LIST_OPEN_OP)
-        args += ["--limit", str(bound), "--json", "number,title,createdAt,assignees,labels"]
+        args += [
+            "--limit",
+            str(_UNBOUNDED_LIMIT if bound is None else bound),
+            "--json",
+            "number,title,createdAt,assignees,labels",
+        ]
         rows = await self._gh.json(args, _LIST_OPEN_OP)
         return [_work_item(repo, row) for row in rows or [] if isinstance(row, dict)]
 
-    async def remove_label(  # NOSONAR python:S1172 - repo is required by the WorkItems protocol
-        self, repo: RepositoryRef, number: int, label: str
-    ) -> None:
-        """Remove ``label`` (``gh issue edit N --remove-label L``). A non-zero exit raises, a timeout is a write timeout.
+    async def remove_label(self, repo: RepositoryRef, number: int, label: str) -> None:
+        """Remove ``label`` (``gh issue edit N --repo R --remove-label L``). A non-zero exit raises, a timeout is a write timeout.
 
         A label the issue does not carry exits 0 (no-op). A label that does not exist in the repository exits non-zero.
-
-        ``repo`` is unused: the ``WorkItems`` protocol requires it, and ``gh`` resolves the repository from the clone.
         """
-        await self._gh.ok(("issue", "edit", str(number), "--remove-label", label), "WorkItems.remove_label", write=True)
+        await self._gh.ok(
+            ("issue", "edit", str(number), "--repo", repo.value, "--remove-label", label),
+            "WorkItems.remove_label",
+            write=True,
+        )
 
     async def closing_change_requests(self, repo: RepositoryRef, number: int) -> Sequence[ChangeRequest]:
         """Change requests GitHub links as closing the issue, any state, each resolved by ``gh pr view``."""
         view = await self._gh.json(
-            ("issue", "view", str(number), "--json", "closedByPullRequestsReferences"),
+            ("issue", "view", str(number), "--repo", repo.value, "--json", "closedByPullRequestsReferences"),
             "WorkItems.closing_change_requests",
         )
         # gh returns each reference as {number, repository: {name, owner: {login}}, ...}.
@@ -1447,7 +1452,8 @@ class _WorkItems:
             if not isinstance(ref, dict) or _int(ref, "number") == 0 or not _same_repository(repo, ref):
                 continue
             pr = await self._gh.json(
-                ("pr", "view", str(_int(ref, "number")), "--json", "number,state"), "WorkItems.closing_change_requests"
+                ("pr", "view", str(_int(ref, "number")), "--repo", repo.value, "--json", "number,state"),
+                "WorkItems.closing_change_requests",
             )
             found.append(_summary(repo, _object(pr, _PR_VIEW)))
         return found
@@ -1455,8 +1461,9 @@ class _WorkItems:
     async def open_change_request_bodies(self, repo: RepositoryRef) -> Sequence[ChangeRequest]:
         """Open change requests with their bodies, bounded by the declared list bound."""
         bound = _bound(_OPEN_CR_BODIES_OP)
+        limit = _UNBOUNDED_LIMIT if bound is None else bound
         rows = await self._gh.json(
-            ("pr", "list", "--state", "open", "--limit", str(bound), "--json", "body"),
+            ("pr", "list", "--repo", repo.value, "--state", "open", "--limit", str(limit), "--json", "body"),
             _OPEN_CR_BODIES_OP,
         )
         return [_summary(repo, row, state=ChangeRequestState.OPEN) for row in rows or [] if isinstance(row, dict)]
