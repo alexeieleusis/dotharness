@@ -1,4 +1,4 @@
-<!-- host-variables: host-list-review-comments-cmd, host-post-comment-cmd -->
+<!-- host-variables: host-post-review-comment-cmd, host-post-comment-cmd -->
 
 # Design Review Instructions
 
@@ -44,7 +44,7 @@ specific file/line, post an inline review comment. Append the literal marker
 rendered on GitHub and is how this tool recognizes its own design-review comments on a
 later run, so it must be present on every comment you post here:
 
-    <host-list-review-comments-cmd> \
+    <host-post-review-comment-cmd> \
       -f body="...<!-- dotharness-review-design -->" -f commit_id="{COMMIT}" -f path="..." -F line=<N>
 
 If the exact line is unavailable, fall back to line 1 of the file. Be specific:

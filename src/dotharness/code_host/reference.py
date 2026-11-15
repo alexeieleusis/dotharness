@@ -77,13 +77,13 @@ PROMPT_VARIABLES: Mapping[str, str] = {
     "host-cli": "gh",
     "host-direct-reply-cmds": "gh api` / `gh pr comment",
     "host-issue-comment-cmd": 'gh api "repos/<REPO>/issues/<NUMBER>/comments"',
-    "host-list-review-comments-cmd": "gh api repos/{REPO}/pulls/{PR_NUMBER}/comments",
     "host-minimize-comment-cmd": (
         "gh api graphql -f query='mutation($subjectId:ID!){ minimizeComment(input:{subjectId:$subjectId, "
         "classifier:RESOLVED}){ minimizedComment{ isMinimized minimizedReason } } }' -f subjectId=<COMMENT_NODE_ID>"
     ),
     "host-post-comment-cmd": "gh pr comment {PR_NUMBER} --repo {REPO} --body",
     "host-pr-comment-cmd": "gh pr comment <NUMBER> --repo <REPO> --body",
+    "host-post-review-comment-cmd": "gh api repos/{REPO}/pulls/{PR_NUMBER}/comments",
     "host-reply-inline-cmd": 'gh api "repos/<REPO>/pulls/<NUMBER>/comments/<COMMENT_ID>/replies"',
     "host-resolve-thread-cmd": (
         "gh api graphql -f query='mutation($threadId:ID!){ resolveReviewThread(input:{threadId:$threadId}){ "

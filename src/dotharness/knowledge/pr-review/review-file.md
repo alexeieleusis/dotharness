@@ -1,4 +1,4 @@
-<!-- host-variables: host-list-review-comments-cmd -->
+<!-- host-variables: host-post-review-comment-cmd -->
 
 # Code Review Instructions
 
@@ -38,7 +38,7 @@ Append the literal marker `<!-- dotharness-review-inline -->` to the end of the 
 is invisible when rendered on GitHub and is how this tool recognizes its own comments on a
 later run, so it must be present on every comment you post here:
 
-    <host-list-review-comments-cmd> \
+    <host-post-review-comment-cmd> \
       -f body="...<!-- dotharness-review-inline -->" -f commit_id="{COMMIT}" -f path="..." -F line=<N>
 
 If the exact line is unavailable, fall back to line 1 of the file.

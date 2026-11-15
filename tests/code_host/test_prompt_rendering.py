@@ -86,3 +86,11 @@ def test_local_review_builders_render_the_template() -> None:
     out = (REPO_ROOT / "out.md").resolve()
     expected = baseline.replace("{OUTPUT_FILE}", str(out)) + "\n\nSECTION\n\nCTX"
     assert build_file_prompt(template, out, "\n\nSECTION", "\n\nCTX") == expected
+
+
+def test_render_keeps_runner_placeholders_in_host_values() -> None:
+    text = "<!-- host-variables: host-post-review-comment-cmd -->\n\n<host-post-review-comment-cmd> -f body=x"
+    rendered = render_prompt(text, {"host-post-review-comment-cmd": "gh api repos/{REPO}/pulls/{PR_NUMBER}/comments"})
+    assert "{REPO}" in rendered
+    assert "{PR_NUMBER}" in rendered
+    assert "<host-" not in rendered
