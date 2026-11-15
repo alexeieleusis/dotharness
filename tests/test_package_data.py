@@ -99,3 +99,11 @@ def test_pr_comments_script_is_package_data_and_matches_runner_path():
     packaged = PACKAGE_DIR / "scripts" / "pr-comments.py"
     assert packaged.is_file()
     assert PR_COMMENTS_SCRIPT_PATH.resolve() == packaged.resolve()
+
+
+def test_pr_comments_script_path_is_provided_by_the_reference_host():
+    from dotharness.code_host.reference import PR_COMMENTS_SCRIPT
+    from dotharness.pr_review.runners.common import PR_COMMENTS_SCRIPT_PATH
+
+    assert PR_COMMENTS_SCRIPT_PATH == PR_COMMENTS_SCRIPT
+    assert not (PACKAGE_DIR.parent.parent / "docs" / "pr_review" / "scripts" / "pr-comments.py").exists()

@@ -64,6 +64,7 @@ from dotharness.code_host.models import (
 )
 from dotharness.code_host.version import CODE_HOST_INTERFACE_VERSION
 from dotharness.gh import gh_argv
+from dotharness.repo_guard import IdentityCheck, assert_repo_identity
 from dotharness.subprocess_runner import RunResult, run
 
 logger = logging.getLogger(__name__)
@@ -255,6 +256,77 @@ def _parse_remote_url(remote_url: str) -> str | None:
     if len(parts) == 2 and parts[0] and parts[1]:
         return f"{parts[0]}/{parts[1]}"
     return None
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# Repository identity of a clone (used by the identity check the runners pass to the AI backend)
+# --------------------------------------------------------------------------------------------------------------------
+
+_GITHUB_HOST = "github.com"
+_HELPER_TIMEOUT_SECONDS = 30.0
+_ssh_hosts: dict[str, str] = {}
+
+PR_COMMENTS_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "pr-comments.py"
+"""The stdlib-only ``fetch`` / ``reply`` script of this host; its ``gh`` and ``git`` calls live in that file."""
+
+
+async def _resolve_ssh_host(host: str) -> str:
+    """Resolve an SSH config host alias to its real HostName; fall back to the alias (fail closed)."""
+    if host.lower() == _GITHUB_HOST:
+        return _GITHUB_HOST
+    if host in _ssh_hosts:
+        return _ssh_hosts[host]
+    if host.startswith("-"):
+        # An untrusted remote host must never be parsed by ssh as an option; fail closed.
+        return host
+    resolved = host
+    result = await run(["ssh", "-G", "--", host], timeout=_HELPER_TIMEOUT_SECONDS)
+    if result.returncode == 0:
+        for line in result.stdout.splitlines():
+            if line.startswith("hostname "):
+                resolved = line.split(maxsplit=1)[1].strip()
+                break
+    _ssh_hosts[host] = resolved
+    return resolved
+
+
+def _split_host_and_path(url: str) -> tuple[str, str] | None:
+    normalized = url.strip().removesuffix(".git").rstrip("/")
+    if normalized.startswith(("https://", "ssh://")):
+        authority, sep, path = normalized.split("://", 1)[1].partition("/")
+    else:
+        authority, sep, path = normalized.partition(":")  # scp-style [user@]host:path
+    if not sep or not path:
+        return None
+    return authority.rpartition("@")[2] or authority, path
+
+
+async def origin_repository(url: str) -> RepositoryRef | None:
+    """The repository an ``origin`` remote URL points at on this host, or None (other host, unparsable URL)."""
+    split = _split_host_and_path(url)
+    if split is None:
+        return None
+    host, path = split
+    if (await _resolve_ssh_host(host)).lower() != _GITHUB_HOST:
+        return None
+    return RepositoryRef(path)
+
+
+def identity_check(expected_repo_name: str) -> IdentityCheck:
+    """Async check that a directory is the git toplevel of the clone of ``expected_repo_name`` (``owner/repo``).
+
+    Raises ``RepoIdentityError`` for a non-toplevel directory, a missing ``origin`` or a mismatch. Alias resolution
+    fails closed.
+    """
+    expected = RepositoryRef(expected_repo_name)
+
+    async def matches(url: str) -> bool:
+        return await origin_repository(url) == expected
+
+    async def check(working_dir: str | Path) -> None:
+        await assert_repo_identity(working_dir, matches, expected_repo_name)
+
+    return check
 
 
 # --------------------------------------------------------------------------------------------------------------------

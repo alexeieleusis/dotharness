@@ -29,6 +29,7 @@ from dotharness.code_host import (
     WorkItem,
     create_code_host,
 )
+from dotharness.code_host.reference import PR_COMMENTS_SCRIPT
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig, RepoConfig, SubDir
 from dotharness.subprocess_runner import run
@@ -67,7 +68,7 @@ def env_file_error(config: HarnessConfig, subdir: SubDir) -> str | None:
     return f"env_file for subdir {subdir.path} is not an existing regular file: {resolved}"
 
 
-PR_COMMENTS_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "pr-comments.py"
+PR_COMMENTS_SCRIPT_PATH = PR_COMMENTS_SCRIPT  # the active host provides the script
 
 FOCUSED_REVIEW_MARKER = "[focused-review-bot]"
 INLINE_REVIEW_MARKER = "<!-- dotharness-review-inline -->"

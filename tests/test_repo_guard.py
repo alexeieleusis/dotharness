@@ -4,10 +4,13 @@ These cover what the pr-review sync ``repo_guard`` module used to test; that mod
 """
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from dotharness import repo_guard
+from dotharness.code_host import reference
+from dotharness.code_host.reference import identity_check
 from dotharness.repo_guard import (
     RepoIdentityError,
     assert_harness_unchanged,
@@ -19,10 +22,10 @@ from dotharness.subprocess_runner import RunResult
 
 @pytest.fixture(autouse=True)
 def _clear_ssh_host_cache():
-    """`_resolve_ssh_host` memoizes per process; keep a mocked `ssh -G` result from leaking across tests."""
-    repo_guard._ssh_hosts.clear()
+    """reference `_resolve_ssh_host` memoizes per process; keep a mocked `ssh -G` result from leaking across tests."""
+    reference._ssh_hosts.clear()
     yield
-    repo_guard._ssh_hosts.clear()
+    reference._ssh_hosts.clear()
 
 
 def _init_repo(path, origin_url):
@@ -46,7 +49,7 @@ def _commit(path, content="content"):
 
 async def test_passes_when_toplevel_and_origin_match(tmp_path):
     _init_repo(tmp_path, "git@github.com:acme/frontend.git")
-    await assert_repo_identity(tmp_path, "acme/frontend")
+    await identity_check("acme/frontend")(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -61,11 +64,11 @@ async def test_passes_when_toplevel_and_origin_match(tmp_path):
 )
 async def test_matches_across_url_forms(tmp_path, origin_url):
     _init_repo(tmp_path, origin_url)
-    await assert_repo_identity(tmp_path, "acme/frontend")
+    await identity_check("acme/frontend")(tmp_path)
 
 
 async def test_matches_via_ssh_config_host_alias(tmp_path, monkeypatch):
-    real_run = repo_guard.run
+    real_run = reference.run
 
     async def fake_run(argv, **kwargs):
         if argv[:2] == ["ssh", "-G"]:
@@ -73,36 +76,68 @@ async def test_matches_via_ssh_config_host_alias(tmp_path, monkeypatch):
             return RunResult(0, "hostname github.com\n", "", False)
         return await real_run(argv, **kwargs)
 
-    monkeypatch.setattr(repo_guard, "run", fake_run)
+    monkeypatch.setattr(reference, "run", fake_run)
 
     _init_repo(tmp_path, "git@github-personal:acme/frontend.git")
-    await assert_repo_identity(tmp_path, "acme/frontend")
+    await identity_check("acme/frontend")(tmp_path)
 
 
 async def test_unresolvable_ssh_alias_fails_closed(tmp_path, monkeypatch):
-    real_run = repo_guard.run
+    real_run = reference.run
 
     async def fake_run(argv, **kwargs):
         if argv[:2] == ["ssh", "-G"]:
             return RunResult(255, "", "ssh: not found", False)
         return await real_run(argv, **kwargs)
 
-    monkeypatch.setattr(repo_guard, "run", fake_run)
+    monkeypatch.setattr(reference, "run", fake_run)
 
     _init_repo(tmp_path, "git@some-alias:acme/frontend.git")
     with pytest.raises(RepoIdentityError, match="does not match"):
-        await assert_repo_identity(tmp_path, "acme/frontend")
+        await identity_check("acme/frontend")(tmp_path)
+
+
+async def test_matcher_decides_and_repo_guard_names_no_host(tmp_path):
+    _init_repo(tmp_path, "whatever://example/x")
+    seen: list[str] = []
+
+    async def accept(url: str) -> bool:
+        seen.append(url)
+        return True
+
+    async def reject(url: str) -> bool:
+        return False
+
+    await assert_repo_identity(tmp_path, accept)
+    assert seen == ["whatever://example/x"]
+    with pytest.raises(RepoIdentityError, match="does not match"):
+        await assert_repo_identity(tmp_path, reject, "some/repo")
+
+
+def test_repo_guard_source_names_no_host():
+    source = Path(repo_guard.__file__).read_text()
+    assert "github" not in source.lower()
+    assert "ssh" not in source.lower()
+
+
+async def test_non_github_host_and_option_like_host_do_not_match(tmp_path):
+    for url in ("https://gitlab.com/acme/frontend.git", "ssh://git@-oProxyCommand=x/acme/frontend"):
+        fresh = tmp_path / url.split("/")[2].replace("@", "_").replace("=", "_")
+        fresh.mkdir()
+        _init_repo(fresh, url)
+        with pytest.raises(RepoIdentityError, match="does not match"):
+            await identity_check("acme/frontend")(fresh)
 
 
 async def test_raises_on_mismatched_origin(tmp_path):
     _init_repo(tmp_path, "git@github.com:alexeieleusis/dotharness.git")
     with pytest.raises(RepoIdentityError, match="does not match"):
-        await assert_repo_identity(tmp_path, "acme/frontend")
+        await identity_check("acme/frontend")(tmp_path)
 
 
 async def test_raises_when_working_dir_is_not_a_git_repo(tmp_path):
     with pytest.raises(RepoIdentityError, match="not inside a git repository"):
-        await assert_repo_identity(tmp_path, "acme/frontend")
+        await identity_check("acme/frontend")(tmp_path)
 
 
 async def test_raises_when_working_dir_is_a_subdirectory_of_a_repo(tmp_path):
@@ -110,13 +145,13 @@ async def test_raises_when_working_dir_is_a_subdirectory_of_a_repo(tmp_path):
     subdir = tmp_path / "packages" / "web"
     subdir.mkdir(parents=True)
     with pytest.raises(RepoIdentityError, match="not itself the toplevel"):
-        await assert_repo_identity(subdir, "acme/frontend")
+        await identity_check("acme/frontend")(subdir)
 
 
 async def test_raises_when_origin_remote_is_missing(tmp_path):
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)  # noqa: S607
     with pytest.raises(RepoIdentityError, match="no 'origin' remote"):
-        await assert_repo_identity(tmp_path, "acme/frontend")
+        await identity_check("acme/frontend")(tmp_path)
 
 
 async def test_snapshot_uses_explicit_root_and_detects_head_move(tmp_path):
