@@ -937,6 +937,20 @@ async def _resolve_ref_repo(
     return found
 
 
+async def _get_work_item_or_none(host: CodeHost, ticket_repo: RepositoryRef, number: int | str):
+    """``WorkItems.get`` where any ``CodeHostError`` means None; ``UnsupportedCapabilityError`` propagates."""
+    try:
+        return await host.work_items.get(ticket_repo, number)
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError:
+        return None
+
+
+def _refs_budget_spent(attempted: set, max_refs: int | None) -> bool:
+    return max_refs is not None and len(attempted) >= max_refs
+
+
 async def _resolve_comment_issue_refs(
     host: CodeHost,
     repo: RepositoryRef,
@@ -973,8 +987,7 @@ async def _resolve_comment_issue_refs(
             continue
         if same_repo_only and identity is not None:
             # Drop foreign identities by text before any host call, so the body can't drive unbounded resolves.
-            if own_name is None:
-                own_name = (await host.repository.display_name(repo)).lower()
+            own_name = own_name or (await host.repository.display_name(repo)).lower()
             if identity.lower() != own_name:
                 continue
         ticket_repo = await _resolve_ref_repo(host, repo, identity, resolved)
@@ -985,15 +998,10 @@ async def _resolve_comment_issue_refs(
         key = (ticket_repo, number)
         if key in seen or key in attempted:
             continue
-        if max_refs is not None and len(attempted) >= max_refs:
+        if _refs_budget_spent(attempted, max_refs):
             break
         attempted.add(key)
-        try:
-            item = await host.work_items.get(ticket_repo, number)
-        except UnsupportedCapabilityError:
-            raise
-        except CodeHostError:
-            continue
+        item = await _get_work_item_or_none(host, ticket_repo, number)
         if item is None:
             continue
         seen.add(key)
