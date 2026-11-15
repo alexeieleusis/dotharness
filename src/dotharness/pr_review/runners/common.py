@@ -949,17 +949,24 @@ async def _resolve_comment_issue_refs(
     of the reference. `seen` is shared and mutated across every
     comment in the scan, so a ticket already found (by this or the Linear-linkback path)
     isn't re-fetched or duplicated. `source` is the tag stamped on each returned ticket.
-    `same_repo_only` drops refs naming any repository other than `repo` before any fetch (and before
-    any work-item read; the identity is still resolved, as a ``RepositoryRef`` is opaque and cannot be
-    compared as text) — used for the author-controlled PR body so it can't steer cross-repo
+    `same_repo_only` drops refs naming any repository other than `repo` before any host call (the identity
+    text is compared case-insensitively with ``Repository.display_name(repo)``, so foreign identities are
+    never resolved) — used for the author-controlled PR body so it can't steer cross-repo
     reads with the harness token. `max_refs` bounds the number of distinct refs fetched."""
     tickets: list[LinkedTicket] = []
     attempted: set[tuple[RepositoryRef | str, int | str]] = set()
     resolved: dict = {}  # per-call cache: one resolve per distinct identity in this body
+    own_name: str | None = None
     for match in _ISSUE_REF_RE.finditer(body):
         identity, number = _match_identity_and_number(match)
         if number is None:
             continue
+        if same_repo_only and identity is not None:
+            # Drop foreign identities by text before any host call, so the body can't drive unbounded resolves.
+            if own_name is None:
+                own_name = (await host.repository.display_name(repo)).lower()
+            if identity.lower() != own_name:
+                continue
         ticket_repo = await _resolve_ref_repo(host, repo, identity, resolved)
         if ticket_repo is None:
             continue
