@@ -197,8 +197,8 @@ agent gets the answer text with its next prompt and the file is renamed `*.answe
 Before the rename, one JSON line with the question and the answer is appended to
 `<workspace_dir>/<item-encoded>.answers.jsonl`, which is archived with the item. Its fields are `item`,
 `checkpoint`, `stage`, `stage_status`, `leaf`, `questions`, `detail`, `stopped_at`, `answer`, `answered_at`. A
-crash between the write and the rename can duplicate a line (consumers may dedupe on `item` + `answered_at` +
-`answer`), and readers must tolerate a truncated last line. C1 answers are not logged because they live in the
+crash between the write and the rename can duplicate a line (consumers may dedupe on `item` + `stopped_at` +
+`answer`; `answered_at` differs between the retry and the original), and readers must tolerate a truncated last line. C1 answers are not logged because they live in the
 brief.
 
 **Automatic or explicit.** Each `run` first resumes the stopped items that are cleared, with no agent call

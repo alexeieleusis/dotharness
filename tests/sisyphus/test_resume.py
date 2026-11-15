@@ -673,3 +673,26 @@ def test_consume_answer_log_failure_propagates_and_keeps_answer(
         consume_answer(rec, "Q-1", "A1")
     assert answer_path(rec).read_text() == "A1"
     assert not answer_path(rec).with_name(answer_path(rec).name + ".used").exists()
+
+
+def test_consume_answer_retry_duplicate_dedupes_on_item_stopped_at_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d", ("Q?",))
+    answer_path(rec).write_text("A1")
+    real_replace = Path.replace
+
+    def fail(self: Path, target: Any) -> Any:
+        raise OSError("rename failed")  # noqa: TRY003
+
+    monkeypatch.setattr(Path, "replace", fail)
+    with pytest.raises(OSError, match="rename failed"):
+        consume_answer(rec, "Q-1", "A1")
+    monkeypatch.setattr(Path, "replace", real_replace)
+    consume_answer(rec, "Q-1", "A1")
+    lines = [json.loads(x) for x in answers_log_path(rec).read_text(encoding="utf-8").splitlines()]
+    assert len(lines) == 2
+    assert lines[0]["answered_at"] != lines[1]["answered_at"]
+    keys = {(x["item"], x["stopped_at"], x["answer"]) for x in lines}
+    assert len(keys) == 1
