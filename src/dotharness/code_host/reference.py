@@ -949,7 +949,7 @@ class _Discussion:
         *,
         body: str,
         inline_comments: Sequence[InlineComment],
-        head_revision: str | None = None,
+        head_revision: str | None = None,  # NOSONAR python:S1172 - required by the Discussion protocol
         fallback_body: str | None = None,
     ) -> ReviewPostResult:
         """Post the review. On a rejection post one top-level fallback comment.
