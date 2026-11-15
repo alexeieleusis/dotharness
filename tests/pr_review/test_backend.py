@@ -39,7 +39,10 @@ def _make_backend(backend="opencode", **kwargs):
 
 
 async def test_opencode_flag_mapping_and_guards_passed(tmp_path):
-    b = Backend("opencode", 77, ["/x/bin"], {"A": "1"}, expected_repo_name="acme/web")
+    async def check(cwd):
+        return None
+
+    b = Backend("opencode", 77, ["/x/bin"], {"A": "1"}, identity_check=check)
     with patch(LAUNCH, return_value=RunResult(0, "o", "e")) as m:
         await b.run("do it", str(tmp_path), opencode_dir="/some/dir", context="ctx")
     args, kw = m.call_args
@@ -52,20 +55,10 @@ async def test_opencode_flag_mapping_and_guards_passed(tmp_path):
     assert kw["env"] == {"A": "1"}
     assert kw["path_prepend"] == ["/x/bin"]
     assert kw["context"] == "ctx"
-    assert callable(kw["identity_check"])
+    assert kw["identity_check"] is check
 
 
-async def test_explicit_identity_check_wins_over_expected_repo_name(tmp_path):
-    async def check(cwd):
-        return None
-
-    b = Backend("claude", 5, [], {}, expected_repo_name="acme/web", identity_check=check)
-    with patch(LAUNCH, return_value=RunResult(0, "o", "e")) as m:
-        await b.run("do it", str(tmp_path))
-    assert m.call_args.kwargs["identity_check"] is check
-
-
-async def test_no_identity_check_without_expected_repo_name(tmp_path):
+async def test_no_identity_check_by_default(tmp_path):
     b = Backend("claude", 5, [], {})
     with patch(LAUNCH, return_value=RunResult(0, "o", "e")) as m:
         await b.run("do it", str(tmp_path))

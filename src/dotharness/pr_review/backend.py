@@ -19,7 +19,6 @@ import subprocess
 from pathlib import Path
 
 from dotharness.ai_backend import BACKEND_NAMES, ClaudeOptions, OpencodeOptions, launch
-from dotharness.code_host.reference import identity_check as reference_identity_check
 from dotharness.opencode_guards import BackendCwdDivergedError, OpencodePluginError
 from dotharness.repo_guard import IdentityCheck, RepoIdentityError
 
@@ -52,7 +51,6 @@ class Backend:
         env_vars: dict[str, str],
         max_retries: int = 1,
         *,
-        expected_repo_name: str | None = None,
         identity_check: IdentityCheck | None = None,
         harness_repo_root: Path | None = None,
     ):
@@ -63,11 +61,6 @@ class Backend:
         self.path_prepend = path_prepend
         self.env_vars = env_vars
         self.max_retries = max_retries
-        # An explicit identity check (supplied by the code host) wins; ``expected_repo_name`` is the transitional
-        # shorthand that builds the reference host's check.
-        self.expected_repo_name = expected_repo_name
-        if identity_check is None and expected_repo_name is not None:
-            identity_check = reference_identity_check(expected_repo_name)
         self.identity_check = identity_check
         # Explicit root wins; otherwise the source checkout (None when installed, which skips the harness-HEAD guard).
         self.harness_repo_root = harness_repo_root if harness_repo_root is not None else find_harness_checkout()

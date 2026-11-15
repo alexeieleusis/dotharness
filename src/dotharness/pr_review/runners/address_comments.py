@@ -20,7 +20,6 @@ from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
     FOCUSED_REVIEW_MARKER,
-    PR_COMMENTS_SCRIPT_PATH,
     TIMEOUT_GIT,
     backend_env,
     fetch_pr_comments,
@@ -34,6 +33,7 @@ from dotharness.pr_review.runners.common import (
     is_ancestor,
     open_host,
     preserve_reviewer_request,
+    repo_identity_check,
     run_cmd,
 )
 
@@ -105,7 +105,7 @@ async def _run_locked(config: HarnessConfig) -> None:
 
     our_login = await host_current_user(host)
     prs = await _list_prs_to_check(host, repo_ref, our_login)
-    script_path = PR_COMMENTS_SCRIPT_PATH
+    script_path = await host.discussion.comments_script()
     knowledge_file = config.harness.knowledge_dir / "pr-review" / "address-comment.md"
     instructions_template = render_prompt(knowledge_file.read_text(encoding="utf-8"))
     backend = Backend(
@@ -113,7 +113,7 @@ async def _run_locked(config: HarnessConfig) -> None:
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
         backend_env(config, env),
-        expected_repo_name=config.repo.name,
+        identity_check=repo_identity_check(config),
     )
 
     wdir = str(config.repo.working_dir)

@@ -48,6 +48,7 @@ from dotharness.pr_review.runners.common import (
     post_no_linked_ticket_comment,
     pr_from_url,
     preserve_reviewer_request,
+    repo_identity_check,
     resolve_linked_tickets,
     run_pr_level_pass,
 )
@@ -92,7 +93,7 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
         backend_env(config, env),
-        expected_repo_name=config.repo.name,
+        identity_check=repo_identity_check(config),
     )
     wdir = str(config.repo.working_dir)
 
@@ -585,7 +586,14 @@ async def _run_regret_review(
         introducing_hunks = await find_introducing_prs(
             ctx["host"], ctx["repo"], _change_request(ctx, pr_number), config, wdir, env, budget_start
         )
-        found = await find_regret_candidates(introducing_hunks, config, wdir, env, budget_start)
+        found = await find_regret_candidates(
+            introducing_hunks,
+            config,
+            wdir,
+            env,
+            budget_start,
+            script_path=await ctx["host"].discussion.comments_script(),
+        )
         if not found:
             logger.debug("PR #%d: no regret candidates — nothing to judge this run", pr_number)
             return True

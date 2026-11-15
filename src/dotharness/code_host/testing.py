@@ -305,6 +305,7 @@ _WRITES = frozenset({
     "WorkItems.remove_label",
 })
 _EPOCH = datetime.fromisoformat(_BASE_DATE)
+_COMMENTS_SCRIPT = Path(__file__).resolve().parent / "scripts" / "pr-comments.py"
 # Per repository, per change request number, in insertion order.
 _PerChangeRequest = dict[RepositoryRef, dict[int, list[_T]]]
 
@@ -1154,6 +1155,10 @@ def _truncate(text: str, limit: int) -> str:
 
 
 class _FakeDiscussion(_Facet):
+    async def comments_script(self) -> Path:  # NOSONAR python:S7503 - implements an async protocol
+        """The fake host models no script of its own; it serves the reference host's file."""
+        return _COMMENTS_SCRIPT
+
     def _attempt(self, *, inline: bool) -> str | None:
         """Count one post attempt. Raise an injected error. Return a rejection reason, or None to accept."""
         host = self._host
@@ -1587,6 +1592,20 @@ class CodeHostConformance:
         name = await target.host.repository.display_name(current)
         assert isinstance(name, str)
         assert name
+
+    # -- discussion script ---------------------------------------------------------------------------------------
+
+    async def test_comments_script_is_an_existing_python_file(self) -> None:
+        """B-DIS-1: comments_script returns the path of an existing stdlib-only script file."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.DISCUSSION):
+            return
+        path = await target.host.discussion.comments_script()
+        assert path.is_file()
+        assert path.suffix == ".py"
+        text = path.read_text(encoding="utf-8")
+        assert "import dotharness" not in text
+        assert "from dotharness" not in text
 
     # -- change requests -----------------------------------------------------------------------------------------
 

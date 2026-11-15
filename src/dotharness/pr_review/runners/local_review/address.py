@@ -11,7 +11,12 @@ from pathlib import Path
 from dotharness.gh import build_subprocess_env
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
-from dotharness.pr_review.runners.common import get_file_diff, get_vibe_heal_context, is_ancestor
+from dotharness.pr_review.runners.common import (
+    get_file_diff,
+    get_vibe_heal_context,
+    is_ancestor,
+    repo_identity_check,
+)
 from dotharness.pr_review.runners.local_review.findings import AddressFinding, parse_findings
 from dotharness.pr_review.runners.local_review.git import (
     MAX_DIRTY_PATHS_SHOWN,
@@ -225,7 +230,7 @@ def _make_backend(config: HarnessConfig, max_retries: int = 1) -> Backend:
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
         dict(config.harness.env),
-        expected_repo_name=config.repo.name if config.repo.name_provided else None,
+        identity_check=repo_identity_check(config) if config.repo.name_provided else None,
         max_retries=max_retries,
     )
 

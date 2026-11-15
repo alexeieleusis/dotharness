@@ -30,8 +30,10 @@ from dotharness.code_host import (
     create_code_host,
 )
 from dotharness.code_host.reference import PR_COMMENTS_SCRIPT
+from dotharness.code_host.reference import identity_check as reference_identity_check
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig, RepoConfig, SubDir
+from dotharness.repo_guard import IdentityCheck
 from dotharness.subprocess_runner import run
 
 logger = logging.getLogger(__name__)
@@ -68,7 +70,14 @@ def env_file_error(config: HarnessConfig, subdir: SubDir) -> str | None:
     return f"env_file for subdir {subdir.path} is not an existing regular file: {resolved}"
 
 
-PR_COMMENTS_SCRIPT_PATH = PR_COMMENTS_SCRIPT  # the active host provides the script
+PR_COMMENTS_SCRIPT_PATH = PR_COMMENTS_SCRIPT
+"""The reference host's script. Runners ask the active host (``host.discussion.comments_script()``); this is the default."""
+
+
+def repo_identity_check(config: HarnessConfig) -> IdentityCheck:
+    """The host's check that a backend's working directory is the clone of ``config.repo.name`` (R-GUARD-2)."""
+    return reference_identity_check(config.repo.name)
+
 
 FOCUSED_REVIEW_MARKER = "[focused-review-bot]"
 INLINE_REVIEW_MARKER = "<!-- dotharness-review-inline -->"

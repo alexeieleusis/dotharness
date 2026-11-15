@@ -96,7 +96,7 @@ def test_importlib_resources_resolves_knowledge_and_skills() -> None:
 def test_pr_comments_script_is_package_data_and_matches_runner_path():
     from dotharness.pr_review.runners.common import PR_COMMENTS_SCRIPT_PATH
 
-    packaged = PACKAGE_DIR / "scripts" / "pr-comments.py"
+    packaged = PACKAGE_DIR / "code_host" / "scripts" / "pr-comments.py"
     assert packaged.is_file()
     assert PR_COMMENTS_SCRIPT_PATH.resolve() == packaged.resolve()
 
@@ -107,3 +107,13 @@ def test_pr_comments_script_path_is_provided_by_the_reference_host():
 
     assert PR_COMMENTS_SCRIPT_PATH == PR_COMMENTS_SCRIPT
     assert not (PACKAGE_DIR.parent.parent / "docs" / "pr_review" / "scripts" / "pr-comments.py").exists()
+
+
+async def test_reference_host_provides_the_comments_script():
+    from dotharness.code_host import HostSelection, create_code_host
+    from dotharness.code_host.reference import PR_COMMENTS_SCRIPT
+
+    host = create_code_host(HostSelection(setting="host", name="reference", options={}, token_cmd="echo t"))  # noqa: S106
+    assert await host.discussion.comments_script() == PR_COMMENTS_SCRIPT
+    assert PR_COMMENTS_SCRIPT.parent == PACKAGE_DIR / "code_host" / "scripts"
+    assert PR_COMMENTS_SCRIPT.is_file()

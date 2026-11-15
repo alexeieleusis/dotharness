@@ -266,7 +266,7 @@ _GITHUB_HOST = "github.com"
 _HELPER_TIMEOUT_SECONDS = 30.0
 _ssh_hosts: dict[str, str] = {}
 
-PR_COMMENTS_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "pr-comments.py"
+PR_COMMENTS_SCRIPT = Path(__file__).resolve().parent / "scripts" / "pr-comments.py"
 """The stdlib-only ``fetch`` / ``reply`` script of this host; its ``gh`` and ``git`` calls live in that file."""
 
 
@@ -1067,6 +1067,9 @@ def _review_endpoint(repo: RepositoryRef, number: int) -> list[str]:
 class _Discussion:
     def __init__(self, gh: _Gh) -> None:
         self._gh = gh
+
+    async def comments_script(self) -> Path:  # NOSONAR python:S7503 - implements an async protocol
+        return PR_COMMENTS_SCRIPT
 
     async def post_review(
         self,

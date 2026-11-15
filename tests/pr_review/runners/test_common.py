@@ -250,3 +250,13 @@ async def test_git_restore_completes_when_cancelled(tmp_path):
         with pytest.raises(asyncio.CancelledError):
             await task
     assert any("checkout" in c for c in calls)
+
+
+def test_repo_identity_check_is_built_for_the_configured_repository():
+    from dotharness.pr_review.runners.common import repo_identity_check
+
+    config = MagicMock()
+    config.repo.name = "acme/web"
+    with patch("dotharness.pr_review.runners.common.reference_identity_check") as build:
+        assert repo_identity_check(config) is build.return_value
+    build.assert_called_once_with("acme/web")

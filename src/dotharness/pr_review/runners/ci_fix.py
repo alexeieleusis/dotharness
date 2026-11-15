@@ -63,6 +63,7 @@ from dotharness.pr_review.runners.common import (
     git_restore,
     host_current_user,
     open_host,
+    repo_identity_check,
     run_cmd,
 )
 from dotharness.pr_review.state import _state_path, _update_state
@@ -645,7 +646,7 @@ async def _agent_fix_and_push(
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
         dict(await host.session.agent_environment(config.harness.env)),
-        expected_repo_name=config.repo.name,
+        identity_check=repo_identity_check(config),
     )
     opencode_dir = str(config.repo.opencode_dir) if config.repo.opencode_dir else None
     pre_sha = await _head(wdir, env)
