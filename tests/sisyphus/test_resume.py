@@ -537,15 +537,35 @@ def test_append_line_does_not_double_supplied_newline(tmp_path: Path) -> None:
     assert p.read_bytes() == b'{"a":1}\n'
 
 
-def test_append_line_truncated_tail_is_preserved_and_new_line_separate(tmp_path: Path) -> None:
+def _strict_read(p: Path) -> list[Any]:
+    """Follows the documented contract: tolerate only an unparseable FINAL line."""
+    lines = p.read_bytes().split(b"\n")
+    if lines and lines[-1] == b"":
+        lines.pop()
+    out = []
+    for i, ln in enumerate(lines):
+        try:
+            out.append(json.loads(ln))
+        except ValueError:
+            if i != len(lines) - 1:
+                raise
+    return out
+
+
+def test_append_line_truncated_tail_is_dropped_so_strict_reader_passes(tmp_path: Path) -> None:
     p = tmp_path / "x.answers.jsonl"
-    original = b'{"a":1}\n{"a":'
-    p.write_bytes(original)
+    p.write_bytes(b'{"a":1}\n{"a":')
     _append_line(p, '{"a":2}')
-    data = p.read_bytes()
-    assert data.startswith(original)
-    assert data.split(b"\n")[-2] == b'{"a":2}'
-    assert _tolerant_read(p) == [{"a": 1}, {"a": 2}]
+    assert p.read_bytes() == b'{"a":1}\n{"a":2}\n'
+    assert _strict_read(p) == [{"a": 1}, {"a": 2}]
+
+
+def test_append_line_truncated_only_line_strict_reader_passes(tmp_path: Path) -> None:
+    p = tmp_path / "x.answers.jsonl"
+    p.write_bytes(b'{"item":"a","ans')
+    _append_line(p, '{"a":2}')
+    assert p.read_bytes() == b'{"a":2}\n'
+    assert _strict_read(p) == [{"a": 2}]
 
 
 def test_append_line_after_newline_adds_no_blank_line(tmp_path: Path) -> None:
@@ -572,7 +592,7 @@ def test_append_line_oserror_propagates(tmp_path: Path, monkeypatch: pytest.Monk
 
 def test_append_line_single_write_and_fsync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     p = tmp_path / "x.answers.jsonl"
-    p.write_bytes(b'{"a":')  # forces the repair prefix into the same write
+    p.write_bytes(b'{"a":')  # forces the truncate-repair path
     writes: list[bytes] = []
     fsyncs: list[int] = []
     real_open = builtins.open
@@ -607,7 +627,7 @@ def test_append_line_single_write_and_fsync(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setattr(builtins, "open", fake_open)
     monkeypatch.setattr(os, "fsync", fake_fsync)
     _append_line(p, '{"a":2}')
-    assert writes == [b'\n{"a":2}\n']
+    assert writes == [b'{"a":2}\n']
     assert len(fsyncs) >= 1
 
 

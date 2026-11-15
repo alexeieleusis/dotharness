@@ -110,29 +110,29 @@ def _append_line(path: Path, line: str) -> None:
 
     ``line`` is passed without a trailing newline; one is added (a single supplied
     trailing newline is not doubled). The parent directory is created. If the
-    existing file is non-empty and does not end in a newline (a truncated last
-    line left by a crash), a leading newline is folded into the same single
-    write, so the new record starts on its own line and the truncated bytes are
-    left untouched. The write is one ``write`` call, then ``flush`` and
-    ``os.fsync``. Any ``OSError`` propagates unchanged.
+    existing file is non-empty and does not end in a newline (a partial last
+    line left by a crash or a failed write), the file is first truncated back to
+    the last newline (or to empty), so the partial bytes never become a mid-file
+    line. The new record is then written in one ``write`` call, followed by
+    ``flush`` and ``os.fsync``. Any ``OSError`` propagates unchanged.
 
-    Reader tolerance (FR-12): readers of the answers log must skip a final line
-    that does not parse. An unparseable line anywhere else is not covered.
+    Reader tolerance (FR-12): readers of the answers log need only skip a final
+    line that does not parse; the append path never leaves an unparseable line
+    anywhere else.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    prefix = ""
     try:
-        with open(path, "rb") as probe:
-            probe.seek(0, os.SEEK_END)
-            if probe.tell() > 0:
-                probe.seek(-1, os.SEEK_END)
-                if probe.read(1) != b"\n":
-                    prefix = "\n"
+        with open(path, "r+b") as fh:
+            data = fh.read()
+            if data and not data.endswith(b"\n"):
+                fh.truncate(data.rfind(b"\n") + 1)
+                fh.flush()
+                os.fsync(fh.fileno())
     except FileNotFoundError:
         pass
     body = line[:-1] if line.endswith("\n") else line
     with open(path, "ab") as fh:
-        fh.write((prefix + body + "\n").encode("utf-8"))
+        fh.write((body + "\n").encode("utf-8"))
         fh.flush()
         os.fsync(fh.fileno())
 
@@ -141,8 +141,8 @@ def append_answer_log(rec_path: Path, item: str, answer: str) -> None:
     """Log one answer as a single JSON line (does not rename the answer file).
 
     The log is append-only and nothing deletes it. Reader tolerance (FR-12): a
-    reader must skip a final line that does not parse (a crash may leave a
-    truncated last line); the next append starts on a fresh line.
+    reader need only skip a final line that does not parse (a crash may leave a
+    truncated last line); the next append truncates it away first.
     """
     record = build_answer_log_record(rec_path, item, answer)
     _append_line(answers_log_path(rec_path), json.dumps(record, ensure_ascii=False, separators=(",", ":")))
