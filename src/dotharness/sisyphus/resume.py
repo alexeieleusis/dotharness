@@ -12,6 +12,7 @@ import json
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from dotharness.sisyphus.config import SisyphusConfig
 from dotharness.sisyphus.intake import IntakeError, parse_open_decisions, resolve_brief_path
@@ -38,6 +39,7 @@ from dotharness.sisyphus.stoprecord import (
 
 SIDECAR_SUFFIXES = (".stop.json", ".intake.json", ".stopped.json")
 ANSWER_SUFFIX = ".answer.md"
+ANSWERS_LOG_SUFFIX = ".answers.jsonl"
 USED_SUFFIX = ".used"
 
 # `sisyphus resume --reset-retries` zeroes exactly these run-record counters for the RECORDED stage of the
@@ -73,6 +75,45 @@ def reset_stage_retries(rec: RunRecord, now: datetime | None = None) -> dict[str
 def answer_path(rec_path: Path) -> Path:
     """``<item-encoded>.answer.md`` next to the run record; the user writes the answer here."""
     return rec_path.with_suffix(ANSWER_SUFFIX)
+
+
+def answers_log_path(rec_path: Path) -> Path:
+    """``<item-encoded>.answers.jsonl`` next to the run record: the append-only log of consumed answers."""
+    return rec_path.with_suffix(ANSWERS_LOG_SUFFIX)
+
+
+def build_answer_log_record(rec_path: Path, item: str, answer: str) -> dict[str, Any]:
+    """One answers-log entry: the answer plus what the stop record says it answered (never raises)."""
+    stop = read_stop_record(rec_path)
+    questions: Any = () if stop is None else stop.questions
+    if isinstance(questions, str):
+        # DESIGN DECISION (OD-1): a bare string (legacy or hand-written sidecar) is NOT split; it becomes
+        # one question, and an empty string becomes none.
+        questions = [questions] if questions else []
+    return {
+        "item": item,
+        "checkpoint": stop.checkpoint if stop else None,
+        "stage": stop.stage if stop else None,
+        "stage_status": stop.stage_status if stop else None,
+        "leaf": getattr(stop, "leaf", None),
+        "questions": list(questions or ()),
+        "detail": stop.detail if stop else None,
+        "stopped_at": stop.stopped_at if stop else None,
+        "answer": answer.strip(),
+        "answered_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def _append_line(path: Path, line: str) -> None:
+    """Append one line to ``path``. Child 2 replaces this body with the durable implementation."""
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(line)
+
+
+def append_answer_log(rec_path: Path, item: str, answer: str) -> None:
+    """Log one answer as a single JSON line (does not rename the answer file)."""
+    record = build_answer_log_record(rec_path, item, answer)
+    _append_line(answers_log_path(rec_path), json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
 def read_answer(rec_path: Path) -> str:

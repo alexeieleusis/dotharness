@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -13,7 +15,16 @@ from dotharness.sisyphus.config import SisyphusConfig
 from dotharness.sisyphus.intake import resolve_brief_path
 from dotharness.sisyphus.lock import clone_lock
 from dotharness.sisyphus.orchestrator import BRANCH_CREATED_KEY, OPEN_PR_STAGE, PullRequest, branch_name
-from dotharness.sisyphus.resume import AUTO_RETRY_KEY, answer_path, cleared, iter_records, list_waiting
+from dotharness.sisyphus.resume import (
+    AUTO_RETRY_KEY,
+    answer_path,
+    answers_log_path,
+    append_answer_log,
+    build_answer_log_record,
+    cleared,
+    iter_records,
+    list_waiting,
+)
 from dotharness.sisyphus.runrecord import RunRecord
 from dotharness.sisyphus.stoprecord import (
     AUTO_RETRY_DELAY_MINUTES,
@@ -416,3 +427,78 @@ def test_intake_command_writes_and_clears_the_c1_stop_record(tmp_path: Path, mon
     assert stop.resume_command.startswith("sisyphus resume ENG-1 --config ")
     assert env.invoke("intake", "ENG-1", "--config", str(env.config)).exit_code == 0
     assert read_stop_record(rec_path) is None
+
+
+LOG_KEYS = [
+    "item", "checkpoint", "stage", "stage_status", "leaf", "questions", "detail", "stopped_at", "answer",
+    "answered_at",
+]  # fmt: skip
+
+
+def _stop(rec: Path, checkpoint: str | None, detail: str, questions: tuple[str, ...] = ()) -> None:
+    write_stop_record(
+        rec,
+        build_stop_record(
+            "Q-1", checkpoint=checkpoint, stage="build", stage_status="blocked", detail=detail,
+            resume_command="sisyphus resume Q-1", questions=questions, now=NOW,
+        ),
+    )  # fmt: skip
+
+
+def test_answers_log_path_is_jsonl_sibling(tmp_path: Path) -> None:
+    assert answers_log_path(tmp_path / "x.json") == tmp_path / "x.answers.jsonl"
+
+
+def test_append_answer_log_two_appends_in_order(tmp_path: Path) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d1", ("Q1?",))
+    append_answer_log(rec, "Q-1", "A1\n")
+    _stop(rec, "C3", "d2", ("Q2?",))
+    append_answer_log(rec, "Q-1", "A2")
+    lines = answers_log_path(rec).read_text(encoding="utf-8").splitlines()
+    objs = [json.loads(line) for line in lines]
+    assert [list(o) for o in objs] == [LOG_KEYS, LOG_KEYS]
+    assert [(o["questions"], o["answer"]) for o in objs] == [(["Q1?"], "A1"), (["Q2?"], "A2")]
+    assert objs[0]["checkpoint"] == "C3" and objs[0]["stage"] == "build" and objs[0]["leaf"] is None
+
+
+def test_append_answer_log_missing_stop_record(tmp_path: Path) -> None:
+    rec = tmp_path / "Q-1.json"
+    append_answer_log(rec, "Q-1", "hi")
+    obj = json.loads(answers_log_path(rec).read_text(encoding="utf-8"))
+    assert obj["item"] == "Q-1" and obj["questions"] == []
+    for key in ("checkpoint", "stage", "stage_status", "leaf", "detail", "stopped_at"):
+        assert obj[key] is None
+
+
+def test_append_answer_log_error_stop_logs_detail_as_questions(tmp_path: Path) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C5", "tests keep failing")
+    append_answer_log(rec, "Q-1", "retry")
+    obj = json.loads(answers_log_path(rec).read_text(encoding="utf-8"))
+    assert obj["questions"] == ["tests keep failing"]
+
+
+def test_append_answer_log_unicode_multiline_one_line(tmp_path: Path) -> None:
+    rec = tmp_path / "Q-1.json"
+    append_answer_log(rec, "Q-1", " line one\nl\u00edne two \u2713\n")
+    text = answers_log_path(rec).read_text(encoding="utf-8")
+    assert text.count("\n") == 1 and text.endswith("\n")
+    assert json.loads(text)["answer"] == "line one\nl\u00edne two \u2713"
+
+
+def test_build_answer_log_record_normalises_string_questions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d")
+    stop = read_stop_record(rec)
+    assert stop is not None
+    for raw, expected in (("free text", ["free text"]), ("", [])):
+        odd = dataclasses.replace(stop, questions=raw)  # type: ignore[arg-type]
+        monkeypatch.setattr("dotharness.sisyphus.resume.read_stop_record", lambda _p, odd=odd: odd)
+        assert build_answer_log_record(rec, "Q-1", "a")["questions"] == expected
+
+
+def test_build_answer_log_record_leaf_is_none(tmp_path: Path) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d")
+    assert build_answer_log_record(rec, "Q-1", "a")["leaf"] is None
