@@ -18,7 +18,7 @@ One id namespace. Every entry is decided. The entry gives the rationale.
 | DEC-3 | pr-review is one phase (Phase 3). | No split was requested. Reopen only if Phase 3 review is too large. |
 | DEC-4 | `scripts/pr-comments.py` runs no dotharness entry point, so there is no command name. How it reaches the interface is decided in Phase 4 (#196). | The script only starts `gh` and `git` through its local `run()` helper. Phase 4 decision: the host provides the script through `Discussion.comments_script()` and runners run that file as a child process. |
 | DEC-5 | Issue numbers for Phases 2 to 4 are #194, #195, #196. Remaining "to be filed" items are handled in #196. | Fixed by the ticket breakdown. |
-| DEC-6 | Session exposes the agent-visible variable names as data and keeps `GITHUB_TOKEN` and `GH_TOKEN` for the reference implementation. No neutral name. | With the default config the child process must receive the same variable names and values as today. |
+| DEC-6 | Session exposes the agent-visible variable names as data and keeps `GITHUB_TOKEN` and `GH_TOKEN` for the reference implementation. No neutral name. | With the default config the child process must receive the same variable names and values as today, except the widening that DEC-43 accepts: agent children also get `GH_TOKEN`. |
 | DEC-7 | Rename aliases emit no `DeprecationWarning`. | A warning changes stderr and test output. |
 | DEC-8 | `PR_COMMENTS_SCRIPT_PATH` is kept and may later be re-pointed to a host-declared script. | It names a script path, not a host. Phase 4 re-pointed its value to the reference host's script (`code_host/scripts/pr-comments.py`). Runners use `Discussion.comments_script()`. |
 | DEC-9 | `MergeError`, `AutoApproveError`, `CiFixError` keep their names and stay consumer-local. Phase 3 wraps `CodeHostError` in them at raise sites only (`raise ... from`). | They are named for the command. Only the cause chain changes. |
@@ -55,6 +55,7 @@ One id namespace. Every entry is decided. The entry gives the rationale.
 | DEC-40 | The conformance section has no target size. | Comparable to Interfaces and Error model. |
 | DEC-41 | B-ERR-2 asserts the error type and `write` flag, not retry-safety. | The model defines no idempotency promise. |
 | DEC-42 | Removing an absent label is a no-op. | The Interfaces section names no error for it. |
+| DEC-43 | Agent child processes receive `GH_TOKEN` as well as `GITHUB_TOKEN` (before Phase 4 only `GITHUB_TOKEN`). This closes open decision OD-3 and is the one accepted exception to the "same names" rule of DEC-6. Host-run `gh` calls get `GH_TOKEN` only. | `gh` reads `GH_TOKEN` before `GITHUB_TOKEN`, so one credential under both names keeps every agent-run `gh` call on the host's token regardless of the inherited environment. The value is the same credential already present under `GITHUB_TOKEN`, so no new secret reaches the child. Cost: code that logs or forwards the environment, or a tool that reads `GH_TOKEN` first, now sees the token under a second name that the previous release did not expose. Operators who forward agent environments must treat both names as secret. |
 
 ## Inventory
 
@@ -413,13 +414,13 @@ runners versus `cli.py`/`config.py`, with `ci_checks.py`, `merge.py` and `ci_fix
 
 ## Phase 4 outcome
 
-Facts of the final state (#196). Decisions DEC-1..DEC-42 stay as written above.
+Facts of the final state (#196). Decisions DEC-1..DEC-43 stay as written above.
 
 - **Interface version 3.** `CODE_HOST_INTERFACE_VERSION` is 3 (`src/dotharness/code_host/version.py`). The only change since version 2 is the new method `Discussion.comments_script() -> Path`. The reference host, the in-memory fake and the conformance suite moved together. A host that targets version 2 fails the version check ("Version and stability contract").
 - **Script.** `pr-comments.py` lives at `src/dotharness/code_host/scripts/pr-comments.py`. The host provides it and runners call `Discussion.comments_script()`. `docs/pr_review/scripts/pr-comments.py` is deleted.
 - **Reference module.** `gh.py` moved to `code_host/reference_gh.py`. `repo_guard.py` is git-only and takes an async identity-check callable from the host. Prompt files use `<host-...>` placeholders rendered by the host (`render_prompt`).
 - **Token.** `harness.gh_token_cmd` is removed. Use `harness.host_token_cmd` (pr-review) or `[source.host] token_cmd` (sisyphus). `DEFAULT_TOKEN_CMD = "gh auth token"` lives in `code_host/reference.py` and the reference host factory applies it when no token command is configured. A sisyphus run without `[source.host] token_cmd` therefore also uses `gh auth token` (it used gh's own authentication before).
-- **Agent environment.** Credential variable names come from `Session.agent_environment_names()`. Agents receive `GH_TOKEN` as well as `GITHUB_TOKEN` (before, only `GITHUB_TOKEN`).
+- **Agent environment.** Credential variable names come from `Session.agent_environment_names()`. Agents receive `GH_TOKEN` as well as `GITHUB_TOKEN` (before, only `GITHUB_TOKEN`). This widening is accepted in DEC-43.
 - **Removed names.** `vibe_heal/review/github.py`, `NoOpenPrError` (and its export from `vibe_heal.review`), `GitHubReviewClient`, `GitHubReviewError`, `GitHubTimeoutError` and the sisyphus `GitHubError` no longer exist. Catch `NoChangeRequestError`, `CodeHostTimeoutError` and `CodeHostError`.
 
 ## Rename plan
@@ -513,9 +514,9 @@ Owned by Session. This section states the rule and the table only.
 | Id | Variable | Set by | Decision |
 | --- | --- | --- | --- |
 | REN-35 | `GITHUB_TOKEN` | `gh.py` `build_subprocess_env` (when the token is truthy); hand-built dicts in `focused_review.py`, `address_comments.py`, `review_requested.py`, `self_review.py`, `ci_fix.py` (the last three read it back from `env`) | KEEP the name for the reference implementation. |
-| REN-36 | `GH_TOKEN` | `sisyphus/pick.py` `GhCli` | KEEP the name for the reference implementation. |
+| REN-36 | `GH_TOKEN` | `sisyphus/pick.py` `GhCli` | KEEP the name for the reference implementation. Phase 4 also sets it in agent children next to `GITHUB_TOKEN` (DEC-43). |
 
-Rule (DEC-6): with the default config the child process receives exactly the same variable names and values as today. A
+Rule (DEC-6, with the exception DEC-43): with the default config the child process receives the same variable names and values as today, plus `GH_TOKEN` in agent children. A
 neutral variable name is allowed only if behavior does not change. Session exposes the variable names as
 data (a mapping returned for the reference implementation, containing `GITHUB_TOKEN` and `GH_TOKEN` as applicable per call
 site). Hand-built env dicts migrate to that data in Phase 3. Knowledge files under `src/dotharness/knowledge/` that
@@ -1656,7 +1657,7 @@ Deviations of the reference implementation from today's `gh` calls (A-1). Each i
 | DEV-2 | `user-review-requested:@me` becomes `user-review-requested:<login>`, the same login. |
 | DEV-3 | Single-field `pr view` reads (INV-PR-14, INV-PR-15, INV-PR-16 and similar) become `ChangeRequests.get`, which reads the full field set in one call. |
 | DEV-4 | `--limit 500` becomes the declared bound 1000 for `ChangeRequests.list`. |
-| DEV-5 | `Session.agent_environment` sets `GITHUB_TOKEN` and `GH_TOKEN` for an agent child process. The `gh` children of the host get `GH_TOKEN` only. Whether the extra `GH_TOKEN` in an agent child is acceptable under the parity goal is open decision OD-3: DEC-6 does not say. This page records the behavior as built. The conformance case B-SES-4 asserts both names. |
+| DEV-5 | `Session.agent_environment` sets `GITHUB_TOKEN` and `GH_TOKEN` for an agent child process. The `gh` children of the host get `GH_TOKEN` only. The extra `GH_TOKEN` in an agent child is a widening against the parity rule of DEC-6. DEC-43 accepts it and gives the rationale. This page records the behavior as built. The conformance case B-SES-4 asserts both names. |
 | DEV-6 | The token command runs through `shlex.split`, with no shell, under a 30 s timeout. A command that needs a shell no longer works. A timeout is `CodeHostTimeoutError(write=False)`. |
 | DEV-7 | Conditional (DS-2). If `is_pr_open` reads the state with `ChangeRequests.state`, its timeout is 10 s, as today. If it reads with `ChangeRequests.get`, the 30 s default applies and the timeout changes from 10 s to 30 s. Resolved in Phase 3: `is_pr_open` became `is_change_request_open` and reads with `ChangeRequests.state`, so the 10 s key applies. |
 | DEV-8 | pr-review runners guard an empty login: with no current user they log a warning and make no listing call (an empty filter would list every change request). `auto_approve` is stricter: an unknown current user raises `AutoApproveError` (before, `@me` made `gh` fail). |
