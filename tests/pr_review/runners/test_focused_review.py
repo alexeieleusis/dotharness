@@ -13,6 +13,7 @@ from dotharness.code_host import (
     UnsupportedCapabilityError,
     User,
 )
+from dotharness.code_host.reference import render_prompt
 from dotharness.code_host.testing import InMemoryCodeHost
 from dotharness.pr_review.config import FocusedReviewConfig, HarnessConfig, HarnessSection, RepoConfig, VibehealConfig
 from dotharness.pr_review.runners import focused_review
@@ -678,7 +679,7 @@ _MINIMIZE_MUTATION = (
 
 
 def _template() -> str:
-    return _TEMPLATE_PATH.read_text()
+    return render_prompt(_TEMPLATE_PATH.read_text())
 
 
 def test_template_path_is_real_file():

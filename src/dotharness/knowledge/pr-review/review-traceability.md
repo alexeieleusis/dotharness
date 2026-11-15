@@ -1,3 +1,5 @@
+<!-- host-variables: host-list-review-comments-cmd, host-post-comment-cmd -->
+
 # Requirement Traceability Review Instructions
 
 You are performing a requirement-traceability review of this pull request — comparing
@@ -61,7 +63,7 @@ to the end of the body — it is invisible when rendered on GitHub and is how th
 recognizes its own traceability-review comments on a later run, so it must be present on
 every comment you post here:
 
-    gh api repos/{REPO}/pulls/{PR_NUMBER}/comments \
+    <host-list-review-comments-cmd> \
       -f body="...<!-- dotharness-review-traceability -->" -f commit_id="{COMMIT}" -f path="..." -F line=<N>
 
 If the exact line is unavailable, fall back to line 1 of the file. Be specific: reference
@@ -79,7 +81,7 @@ flagged it.
 Always post exactly one PR-level comment, regardless of whether there are any findings,
 appending the same marker:
 
-    gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Requirement Traceability\n...<!-- dotharness-review-traceability -->'
+    <host-post-comment-cmd> $'# Requirement Traceability\n...<!-- dotharness-review-traceability -->'
 
 - Start by linking back to the ticket(s) checked against: `Linked ticket: #N` for a
   same-repo ticket, or `owner/repo#N` for a cross-repo one (one line per ticket if more
@@ -90,7 +92,7 @@ appending the same marker:
   detail.
 - If there are no findings at all, post:
 
-      gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Requirement Traceability\nLinked ticket: #N\nNo scope creep or requirement gaps found relative to the linked ticket.\n<!-- dotharness-review-traceability -->'
+      <host-post-comment-cmd> $'# Requirement Traceability\nLinked ticket: #N\nNo scope creep or requirement gaps found relative to the linked ticket.\n<!-- dotharness-review-traceability -->'
 
 This PR-level comment must always be posted, whether or not there are inline findings —
 it is how future runs detect that this PR's traceability review already happened.

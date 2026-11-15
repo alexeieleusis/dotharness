@@ -1,3 +1,5 @@
+<!-- host-variables: host-cli -->
+
 # Review Summary Instructions
 
 You just completed a per-file code review of a local branch. Write the final summary.
@@ -7,7 +9,7 @@ anywhere outside it:
 
     {OUTPUT_FILE}
 
-Do not run `gh` and do not post anywhere. The summary should be concise (3-6
+Do not run `<host-cli>` and do not post anywhere. The summary should be concise (3-6
 sentences). Cover:
 - A 1-2 sentence executive summary of what the change does.
 - Whether any P0/P1 findings were written (or "No blocking issues found").

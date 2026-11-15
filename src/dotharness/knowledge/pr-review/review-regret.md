@@ -1,3 +1,5 @@
+<!-- host-variables: host-cli -->
+
 # Regret Review Instructions
 
 You are performing a regret review of this pull request: judging, for a numbered
@@ -77,7 +79,7 @@ CANDIDATE 2: NO — <one sentence: why addressing it back then would not have pr
 - Exactly one line per candidate, numbered exactly as in the input, with an
   uppercase `YES` or `NO` immediately after `CANDIDATE <n>: `, then an em dash
   and one sentence of rationale.
-- Do not run any command. Do not call `gh` or post anything to the PR — no
+- Do not run any command. Do not call `<host-cli>` or post anything to the PR — no
   comments, no reviews, nothing. You post nothing: the tooling that runs you
   parses these lines and posts the result itself. Your entire reply is the
   verdict lines.
