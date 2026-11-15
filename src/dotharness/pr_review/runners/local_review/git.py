@@ -14,8 +14,7 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
-from dotharness.gh import build_subprocess_env
-from dotharness.pr_review.runners.common import run_cmd
+from dotharness.pr_review.runners.common import build_agent_base_env, run_cmd
 from dotharness.pr_review.runners.local_review.types import LocalReviewError, LocalReviewTarget, NothingToReviewError
 
 _GIT_TIMEOUT_SECONDS = 30
@@ -180,7 +179,7 @@ async def check_preconditions(
 
 
 def _git_env() -> dict[str, str]:
-    return build_subprocess_env([], {})
+    return build_agent_base_env([], {})
 
 
 async def _commit_time(wdir: Path, sha: str) -> int:

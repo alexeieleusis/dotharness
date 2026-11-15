@@ -62,8 +62,8 @@ from dotharness.code_host.models import (
     WorkItem,
     WorkItemState,
 )
+from dotharness.code_host.reference_gh import gh_argv
 from dotharness.code_host.version import CODE_HOST_INTERFACE_VERSION
-from dotharness.gh import gh_argv
 from dotharness.repo_guard import IdentityCheck, assert_repo_identity
 from dotharness.subprocess_runner import RunResult, run
 
@@ -1604,8 +1604,18 @@ def _create(options: ReferenceOptions, token_cmd: TokenCmd, working_directory: P
     )
 
 
+DEFAULT_TOKEN_CMD = "gh auth token"  # noqa: S105  # the reference host's token command when none is configured
+
+
+def _create_with_default_token_cmd(
+    options: ReferenceOptions, token_cmd: TokenCmd, working_directory: Path | None = None
+) -> CodeHost:
+    """The registered factory: ``DEFAULT_TOKEN_CMD`` when the caller configured no token command (``None`` or empty)."""
+    return _create(options, token_cmd or DEFAULT_TOKEN_CMD, working_directory)
+
+
 REGISTRATION = HostRegistration(
     interface_version=CODE_HOST_INTERFACE_VERSION,
     options_model=ReferenceOptions,
-    factory=_create,
+    factory=_create_with_default_token_cmd,
 )

@@ -104,9 +104,6 @@ class OrchestratorError(Exception):
     """Raised for an unusable setup or an unexpected state that is not one of C1..C8."""
 
 
-GitHubError = CodeHostError  # REN-14: a PullRequestClient raises this for an unrecoverable failure; it maps to C8.
-
-
 SubprocessRunner = Callable[[Sequence[str], Path | None], Awaitable[CommandResult]]
 
 

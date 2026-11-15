@@ -92,7 +92,7 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
-        backend_env(config, env),
+        await backend_env(config, host, env),
         identity_check=repo_identity_check(config),
     )
     wdir = str(config.repo.working_dir)

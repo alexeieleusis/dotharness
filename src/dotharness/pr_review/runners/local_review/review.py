@@ -11,12 +11,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dotharness.gh import build_subprocess_env
 from dotharness.opencode_guards import BackendCwdDivergedError, OpencodePluginError
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
+    build_agent_base_env,
     build_file_review_section,
     get_changed_files,
     get_file_diff,
@@ -306,7 +306,7 @@ async def run(
     wdir = Path(config.repo.working_dir)
     check_output_dir_outside_repo(wdir, output_root)
     review_dir = review_dir_for(output_root.expanduser(), config.repo_slug, target.branch, target.head_sha)
-    env = build_subprocess_env(config.harness.path_prepend, config.harness.env)
+    env = build_agent_base_env(config.harness.path_prepend, config.harness.env)
     # keep user git config (color.diff=always) out of the diff text sent to the model
     env.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "color.diff", "GIT_CONFIG_VALUE_0": "never"})
     if backend is None:

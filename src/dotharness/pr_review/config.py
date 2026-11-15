@@ -123,7 +123,6 @@ class RepoConfig:
 @dataclass
 class HarnessSection:
     backend: str = "opencode"
-    gh_token_cmd: str = "gh auth token"  # noqa: S105
     host: str | None = None  # None means the built-in ``reference`` host
     host_options: dict[str, Any] = field(default_factory=dict)
     host_token_cmd: str | None = None
@@ -132,11 +131,6 @@ class HarnessSection:
     path_prepend: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     review_knowledge_file: Path | None = None
-
-    @property
-    def effective_token_cmd(self) -> str:
-        """``host_token_cmd`` if set, else ``gh_token_cmd``, else ``gh auth token``. Never empty."""
-        return self.host_token_cmd or self.gh_token_cmd or "gh auth token"
 
 
 @dataclass
@@ -303,6 +297,8 @@ def _parse_merge(section: dict) -> MergeConfig:
 
 def _parse_host_keys(h: dict) -> tuple[str | None, dict[str, Any], str | None]:
     """Validate ``[harness] host``, ``[harness.host_options]`` and ``host_token_cmd`` types. Reads no environment."""
+    if "gh_token_cmd" in h:
+        raise ConfigError("harness.gh_token_cmd was removed; use harness.host_token_cmd")  # noqa: TRY003
     host = h.get("host")
     if host is not None and not isinstance(host, str):
         raise ConfigError(f"harness.host must be a string, got {host!r}")  # noqa: TRY003
@@ -334,7 +330,6 @@ def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
         host=host,
         host_options=host_options,
         host_token_cmd=host_token_cmd,
-        gh_token_cmd=h.get("gh_token_cmd", "gh auth token"),
         backend_timeout_seconds=h.get("backend_timeout_seconds", 900),
         knowledge_dir=Path(h["knowledge_dir"]).expanduser() if "knowledge_dir" in h else default_knowledge_dir(),
         path_prepend=path_prepend,

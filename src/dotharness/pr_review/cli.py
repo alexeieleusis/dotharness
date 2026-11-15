@@ -34,8 +34,7 @@ TEMPLATE = """\
 
 [harness]
 backend = "opencode"               # "opencode" or "claude"
-gh_token_cmd = "gh auth token"
-# host_token_cmd = "gh auth token"  # host-neutral name; wins over gh_token_cmd when both are set
+# host_token_cmd = "..."            # command printing the host token; absent means the host's default
 # host = "reference"                # code host; absent means "reference"
 backend_timeout_seconds = 900
 
@@ -133,7 +132,7 @@ def _build_host(cfg: HarnessConfig) -> CodeHost:
         setting="host",
         name=cfg.harness.host,
         options=cfg.harness.host_options,
-        token_cmd=cfg.harness.effective_token_cmd,
+        token_cmd=cfg.harness.host_token_cmd,
         working_directory=cfg.repo.working_dir if cfg.repo.working_dir.is_dir() else None,
     )
     return create_code_host(selection)

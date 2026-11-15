@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dotharness.gh import build_subprocess_env
 from dotharness.pr_review.runners.common import (
     FatalGitError,
     git_detach_and_record,
@@ -154,18 +153,6 @@ async def test_git_fetch_and_checkout_raises_fatal_error_on_called_process_error
         pytest.raises(FatalGitError),
     ):
         await git_fetch_and_checkout("feature-branch", str(tmp_path), {})
-
-
-def test_build_env_prepends_path():
-    original_path = os.environ.get("PATH", "")
-    env = build_subprocess_env(["/java/bin", "/node/bin"], {}, "tok")
-    assert env["PATH"].startswith("/java/bin:/node/bin:")
-    assert original_path in env["PATH"]
-
-
-def test_build_env_sets_github_token():
-    env = build_subprocess_env([], {}, "mytoken")
-    assert env["GITHUB_TOKEN"] == "mytoken"  # noqa: S105
 
 
 def _git_restore_side_effect(is_ancestor_returncode):

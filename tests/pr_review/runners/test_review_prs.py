@@ -46,7 +46,7 @@ def _make_config(tmp_path, authors="*", subdirs=None):
     return HarnessConfig(
         harness=HarnessSection(
             backend="opencode",
-            gh_token_cmd="echo tok",  # noqa: S106
+            host_token_cmd="echo tok",  # noqa: S106
             knowledge_dir=tmp_path / "knowledge",
             path_prepend=[],
             env={},

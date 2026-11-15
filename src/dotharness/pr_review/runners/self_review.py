@@ -78,15 +78,16 @@ def _get_extra_knowledge(config) -> str | None:
     return None
 
 
-def _build_backend(config, env: dict) -> Backend:
-    token = env.get("GITHUB_TOKEN", "")
-    if not token:
-        raise RuntimeError("GITHUB_TOKEN is not set in the subprocess environment")  # noqa: TRY003
+async def _build_backend(config, host: CodeHost, env: dict) -> Backend:
+    names = await host.session.agent_environment_names()
+    credentials = {name: env[name] for name in names if env.get(name)}
+    if names and not credentials:
+        raise RuntimeError("the host credential is not set in the subprocess environment")  # noqa: TRY003
     return Backend(
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
-        {**config.harness.env, "GITHUB_TOKEN": token},
+        {**config.harness.env, **credentials},
         identity_check=repo_identity_check(config),
     )
 
@@ -721,7 +722,7 @@ async def _run_locked(config: HarnessConfig) -> None:
         else ""
     )
     extra_knowledge = _get_extra_knowledge(config)
-    backend = _build_backend(config, env)
+    backend = await _build_backend(config, host, env)
     wdir = str(config.repo.working_dir)
     original_sha = await git_detach_and_record(wdir, env)
     cycle = _CycleContext(

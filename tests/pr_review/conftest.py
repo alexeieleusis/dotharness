@@ -21,7 +21,7 @@ def minimal_toml(tmp_path):
     content = f"""
 [harness]
 backend = "opencode"
-gh_token_cmd = "echo test-token"
+host_token_cmd = "echo test-token"
 knowledge_dir = "{knowledge_dir}"
 
 [repo]

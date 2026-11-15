@@ -292,12 +292,13 @@ class HostScaffold:
 
 
 def host_selection(config: HarnessConfig) -> HostSelection:
-    """The ``HostSelection`` for ``config``: host name, options and the effective token command (never empty)."""
+    """The ``HostSelection`` for ``config``: host name, options and ``host_token_cmd`` (``None`` when unset; the host
+    then applies its own default)."""
     return HostSelection(
         setting="host",
         name=config.harness.host,
         options=config.harness.host_options,
-        token_cmd=config.harness.effective_token_cmd,
+        token_cmd=config.harness.host_token_cmd,
         working_directory=config.repo.working_dir if config.repo.working_dir.is_dir() else None,
     )
 
@@ -324,14 +325,16 @@ async def agent_env(host: CodeHost, config: HarnessConfig) -> dict[str, str]:
     return dict(await host.session.agent_environment(base))
 
 
-def backend_env(config: HarnessConfig, env: Mapping[str, str]) -> dict[str, str]:
-    """``[harness] env`` plus ``GITHUB_TOKEN`` from the scaffold env, only when the scaffold has a non-empty one.
+async def backend_env(config: HarnessConfig, host: CodeHost, env: Mapping[str, str]) -> dict[str, str]:
+    """``[harness] env`` plus the host's credential variables from the scaffold env, each only when non-empty.
 
-    An absent or empty scaffold token must not overwrite a ``GITHUB_TOKEN`` the user configured in ``[harness.env]``.
+    The names come from ``Session.agent_environment_names``. An absent or empty scaffold value must not overwrite a
+    variable the user configured in ``[harness.env]``.
     """
     merged = dict(config.harness.env)
-    if token := env.get("GITHUB_TOKEN"):
-        merged["GITHUB_TOKEN"] = token
+    for name in await host.session.agent_environment_names():
+        if value := env.get(name):
+            merged[name] = value
     return merged
 
 

@@ -8,10 +8,10 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dotharness.gh import build_subprocess_env
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.runners.common import (
+    build_agent_base_env,
     get_file_diff,
     get_vibe_heal_context,
     is_ancestor,
@@ -377,7 +377,7 @@ def _build_address_context(
     config: HarnessConfig, target: LocalReviewTarget, review_dir: Path, backend: Backend | None
 ) -> _AddressContext:
     wdir = Path(config.repo.working_dir).expanduser().resolve()
-    env = build_subprocess_env(config.harness.path_prepend, config.harness.env)
+    env = build_agent_base_env(config.harness.path_prepend, config.harness.env)
     env.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "color.diff", "GIT_CONFIG_VALUE_0": "never"})
     review_head = target.head_sha
     manifest = read_manifest(review_dir)

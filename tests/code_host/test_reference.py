@@ -810,6 +810,24 @@ class TestRegistration:
         create_code_host(HostSelection(setting="s", name="reference", options={}, token_cmd="secret-cmd"))  # noqa: S106
         assert mock_run.await_count == 0
 
+    async def test_registered_factory_defaults_the_token_command(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, f"{SECRET}\n", ""))
+        host = create_code_host(HostSelection(setting="s", name="reference", options={}, token_cmd=None))
+        assert (await host.session.credential()).token == SECRET
+        assert _argv(mock_run) == ["gh", "auth", "token"]
+
+    async def test_registered_factory_keeps_a_configured_token_command(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, f"{SECRET}\n", ""))
+        host = create_code_host(HostSelection(setting="s", name="reference", options={}, token_cmd="mycmd --x"))  # noqa: S106
+        await host.session.credential()
+        assert _argv(mock_run) == ["mycmd", "--x"]
+
+    def test_gh_argv_is_gh_plus_args(self) -> None:
+        from dotharness.code_host.reference_gh import gh_argv
+
+        assert gh_argv("pr", "view") == ["gh", "pr", "view"]
+        assert gh_argv() == ["gh"]
+
     def test_options_are_empty(self) -> None:
         with pytest.raises(Exception, match="options are not valid"):
             create_code_host(HostSelection(setting="s", name="reference", options={"x": 1}, token_cmd=None))
@@ -1124,7 +1142,7 @@ class TestWorkingDirectoryAndEnvironment:
         assert mock_run.await_count == 0
 
     async def test_factory_passes_working_directory(self, mocker, tmp_path: Path) -> None:
-        mock_run = _recorder(mocker, (0, "[]", ""))
+        mock_run = _recorder(mocker, (0, f"{SECRET}\n", ""), (0, "[]", ""))
         host = create_code_host(
             HostSelection(setting="s", name="reference", options={}, token_cmd=None, working_directory=tmp_path)
         )
