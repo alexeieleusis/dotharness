@@ -353,6 +353,16 @@ async def open_host(config: HarnessConfig) -> HostScaffold:
     return HostScaffold(host=host, repo=repo, env=await agent_env(host, config))
 
 
+async def host_prompt_variables(config: HarnessConfig) -> Mapping[str, str]:
+    """The prompt variables of the selected host, for a flow that has no open host (it runs no host command)."""
+    try:
+        host = create_code_host(host_selection(config))
+    except ConfigurationError as e:
+        sys.stderr.write(f"{e}\n")
+        sys.exit(1)
+    return await host.discussion.prompt_variables()
+
+
 async def host_token(host: CodeHost) -> str:
     """The host credential's token. Raises ``TokenCommandError``, ``AuthenticationError``, ``CodeHostTimeoutError``.
 

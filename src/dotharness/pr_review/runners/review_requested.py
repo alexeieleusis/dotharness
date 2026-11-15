@@ -15,7 +15,7 @@ from dotharness.code_host import (
     ReviewState,
     UnsupportedCapabilityError,
 )
-from dotharness.code_host.reference import render_prompt
+from dotharness.code_host.prompts import render_prompt
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
@@ -325,7 +325,9 @@ async def _run_file_reviews(
     ctx: dict,
 ) -> bool:
     pr_number = pr.number
-    file_instructions = render_prompt((knowledge_dir / "review-file.md").read_text(encoding="utf-8"))
+    file_instructions = render_prompt(
+        (knowledge_dir / "review-file.md").read_text(encoding="utf-8"), await ctx["host"].discussion.prompt_variables()
+    )
     files = ctx["files"]
     commit_sha = ctx["commit_sha"]
     pr_description = ctx["pr_description"]
@@ -414,7 +416,10 @@ async def _run_design_review(
     repo_name = config.repo.name
 
     async def build_prompt() -> str:
-        design_instructions = render_prompt((knowledge_dir / "review-design.md").read_text(encoding="utf-8"))
+        design_instructions = render_prompt(
+            (knowledge_dir / "review-design.md").read_text(encoding="utf-8"),
+            await ctx["host"].discussion.prompt_variables(),
+        )
         diff_sections = "".join([
             build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
             for file in ctx["files"]
@@ -492,7 +497,8 @@ async def _run_traceability_review(
 
     async def build_prompt() -> str:
         traceability_instructions = render_prompt(
-            (knowledge_dir / "review-traceability.md").read_text(encoding="utf-8")
+            (knowledge_dir / "review-traceability.md").read_text(encoding="utf-8"),
+            await ctx["host"].discussion.prompt_variables(),
         )
         diff_sections = "".join([
             build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
@@ -601,7 +607,10 @@ async def _run_regret_review(
         return None
 
     async def build_prompt() -> str:
-        regret_instructions = render_prompt((knowledge_dir / "review-regret.md").read_text(encoding="utf-8"))
+        regret_instructions = render_prompt(
+            (knowledge_dir / "review-regret.md").read_text(encoding="utf-8"),
+            await ctx["host"].discussion.prompt_variables(),
+        )
         diff_sections = "".join([
             build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
             for file in ctx["files"]
@@ -653,7 +662,10 @@ async def _run_summary_review(
     ctx: dict,
 ) -> bool:
     pr_number = pr.number
-    summary_instructions = render_prompt((knowledge_dir / "review-summary.md").read_text(encoding="utf-8"))
+    summary_instructions = render_prompt(
+        (knowledge_dir / "review-summary.md").read_text(encoding="utf-8"),
+        await ctx["host"].discussion.prompt_variables(),
+    )
     files = ctx["files"]
     pr_description = ctx["pr_description"]
     vibe_heal_context = ctx["vibe_heal_context"]

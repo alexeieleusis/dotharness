@@ -183,6 +183,14 @@ class Discussion(Protocol):
         """
         ...
 
+    async def prompt_variables(self) -> Mapping[str, str]:
+        """The commands this host runs, keyed by the ``host-*`` variable names of the prompt templates.
+
+        Prompts are rendered with these values, so an agent is never told to run a tool the host does not provide.
+        Never raises for a declared host.
+        """
+        ...
+
 
 class Checks(Protocol):
     async def list_checks(self, repo: RepositoryRef, number: int, *, required_only: bool = False) -> Sequence[Check]:

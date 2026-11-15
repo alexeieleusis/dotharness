@@ -7,10 +7,11 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotharness.code_host.prompts import render_prompt
 from dotharness.opencode_guards import BackendCwdDivergedError, OpencodePluginError
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
@@ -21,6 +22,7 @@ from dotharness.pr_review.runners.common import (
     get_changed_files,
     get_file_diff,
     get_vibe_heal_context,
+    host_prompt_variables,
 )
 from dotharness.pr_review.runners.local_review.address import (
     _make_backend,
@@ -160,6 +162,7 @@ class _ReviewPasses:
         extra_knowledge: str | None,
         description: str,
         guard_head: str,
+        prompt_variables: Mapping[str, str],
     ) -> None:
         self.target = target
         self.review_dir = review_dir
@@ -171,9 +174,9 @@ class _ReviewPasses:
         self.wdir = Path(config.repo.working_dir)
         self.wdir_s = str(self.wdir)
         knowledge = Path(config.harness.knowledge_dir) / "pr-review"
-        self.file_instr = (knowledge / FILE_TEMPLATE).read_text(encoding="utf-8")
-        self.summary_instr = (knowledge / SUMMARY_TEMPLATE).read_text(encoding="utf-8")
-        self.design_instr = (knowledge / DESIGN_TEMPLATE).read_text(encoding="utf-8")
+        self.file_instr = render_prompt((knowledge / FILE_TEMPLATE).read_text(encoding="utf-8"), prompt_variables)
+        self.summary_instr = render_prompt((knowledge / SUMMARY_TEMPLATE).read_text(encoding="utf-8"), prompt_variables)
+        self.design_instr = render_prompt((knowledge / DESIGN_TEMPLATE).read_text(encoding="utf-8"), prompt_variables)
         self.context = build_change_context(config.repo.name, self.wdir, target, description)
         self.vibe = get_vibe_heal_context(config.repo.subdirs, self.wdir_s, target.branch) or None
         self.result = ReviewResult(review_dir=review_dir, manifest=manifest)
@@ -326,7 +329,17 @@ async def run(
     description = await build_change_description(wdir, target)
     guard_head = await _read_head_sha(wdir)
     passes = _ReviewPasses(
-        config, target, review_dir, manifest, backend, env, files, extra_knowledge, description, guard_head
+        config,
+        target,
+        review_dir,
+        manifest,
+        backend,
+        env,
+        files,
+        extra_knowledge,
+        description,
+        guard_head,
+        await host_prompt_variables(config),
     )
     await passes.run_file_passes()
     await passes.run_summary_and_design()

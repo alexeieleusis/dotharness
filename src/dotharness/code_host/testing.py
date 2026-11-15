@@ -51,7 +51,7 @@ from dotharness.code_host.models import (
     WorkItem,
     WorkItemState,
 )
-from dotharness.code_host.reference import DECLARATION
+from dotharness.code_host.reference import DECLARATION, PROMPT_VARIABLES
 from dotharness.code_host.version import CODE_HOST_INTERFACE_VERSION
 
 # Sentinel: it must never appear in an error, log or repr.
@@ -335,7 +335,9 @@ class InMemoryCodeHost:
         token: str = SECRET,
         capabilities: frozenset[Capability] | None = None,
         declaration: HostDeclaration | None = None,
+        prompt_variables: Mapping[str, str] | None = None,
     ) -> None:
+        self._prompt_variables: Mapping[str, str] = PROMPT_VARIABLES if prompt_variables is None else prompt_variables
         if capabilities is not None:
             declared = frozenset(capabilities)
             if declaration is not None and declaration.capabilities != declared:
@@ -1158,6 +1160,10 @@ class _FakeDiscussion(_Facet):
     async def comments_script(self) -> Path:  # NOSONAR python:S7503 - implements an async protocol
         """The fake host models no script of its own; it serves the reference host's file."""
         return _COMMENTS_SCRIPT
+
+    async def prompt_variables(self) -> Mapping[str, str]:  # NOSONAR python:S7503 - implements an async protocol
+        """The values given to ``InMemoryCodeHost(prompt_variables=...)``; the reference host's by default."""
+        return self._host._prompt_variables
 
     def _attempt(self, *, inline: bool) -> str | None:
         """Count one post attempt. Raise an injected error. Return a rejection reason, or None to accept."""

@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-from dotharness.code_host.reference import render_prompt
 from dotharness.pr_review.runners.local_review.findings import AddressFinding
 from dotharness.pr_review.runners.local_review.git import git
 from dotharness.pr_review.runners.local_review.types import LocalReviewTarget
@@ -65,7 +64,7 @@ def build_change_context(config_repo_name: str, working_dir: Path, target: Local
 
 
 def _with_output_path(instructions: str, output_file: Path) -> str:
-    return render_prompt(instructions).replace(OUTPUT_FILE_PLACEHOLDER, str(output_file.resolve()))
+    return instructions.replace(OUTPUT_FILE_PLACEHOLDER, str(output_file.resolve()))
 
 
 def _guide(extra_knowledge: str | None) -> str:
@@ -141,7 +140,7 @@ def build_address_prompt(
     """Template text, then the finding under `**Finding to address**` (the template has no placeholders)."""
     diff_text = diff if len(diff) <= MAX_DIFF_CHARS else diff[:MAX_DIFF_CHARS] + f"\n{TRUNCATED_MARKER}\n"
     parts = [
-        render_prompt(instructions).rstrip(),
+        instructions.rstrip(),
         "",
         "---",
         "",

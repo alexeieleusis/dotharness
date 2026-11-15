@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from dotharness.code_host.reference import PROMPT_VARIABLES, PromptVariableError, render_prompt
+from dotharness.code_host.prompts import PromptVariableError, render_prompt
+from dotharness.code_host.reference import PROMPT_VARIABLES
+from dotharness.code_host.testing import InMemoryCodeHost
 from dotharness.pr_review.runners.local_review.prompts import build_file_prompt
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -39,7 +41,7 @@ def test_baseline_covers_every_changed_prompt() -> None:
 
 @pytest.mark.parametrize("name", ALL_PROMPTS)
 def test_reference_rendering_equals_the_frozen_baseline(name: str) -> None:
-    assert render_prompt(_read(TEMPLATES / name)) == _read(BASELINE / name)
+    assert render_prompt(_read(TEMPLATES / name), PROMPT_VARIABLES) == _read(BASELINE / name)
 
 
 @pytest.mark.parametrize("name", ALL_PROMPTS)
@@ -57,9 +59,9 @@ def test_prohibition_prompts_use_only_the_cli_name(name: str) -> None:
 
 
 def test_render_is_idempotent_and_leaves_plain_text() -> None:
-    rendered = render_prompt(_read(TEMPLATES / "review-summary.md"))
-    assert render_prompt(rendered) == rendered
-    assert render_prompt("no preamble <host-cli>") == "no preamble <host-cli>"
+    rendered = render_prompt(_read(TEMPLATES / "review-summary.md"), PROMPT_VARIABLES)
+    assert render_prompt(rendered, PROMPT_VARIABLES) == rendered
+    assert render_prompt("no preamble <host-cli>", PROMPT_VARIABLES) == "no preamble <host-cli>"
 
 
 def test_render_uses_the_variables_the_host_supplies() -> None:
@@ -81,7 +83,7 @@ def test_render_rejects_mismatched_or_unsupplied_variables(text: str, values: di
 
 
 def test_local_review_builders_render_the_template() -> None:
-    template = _read(TEMPLATES / "local-review-file.md")
+    template = render_prompt(_read(TEMPLATES / "local-review-file.md"), PROMPT_VARIABLES)
     baseline = _read(BASELINE / "local-review-file.md")
     out = (REPO_ROOT / "out.md").resolve()
     expected = baseline.replace("{OUTPUT_FILE}", str(out)) + "\n\nSECTION\n\nCTX"
@@ -89,7 +91,7 @@ def test_local_review_builders_render_the_template() -> None:
 
 
 def test_render_keeps_runner_placeholders_in_host_values() -> None:
-    text = "<!-- host-variables: host-post-inline-comment-cmd -->\n\n<host-post-inline-comment-cmd>\"x\""
+    text = '<!-- host-variables: host-post-inline-comment-cmd -->\n\n<host-post-inline-comment-cmd>"x"'
     rendered = render_prompt(text, {"host-post-inline-comment-cmd": PROMPT_VARIABLES["host-post-inline-comment-cmd"]})
     assert "{REPO}" in rendered
     assert "{PR_NUMBER}" in rendered
@@ -105,3 +107,13 @@ def test_inline_comment_flags_come_from_the_host(name: str) -> None:
     rendered = render_prompt(text, fake)
     assert "fake-post --inline" in rendered
     assert not re.search(r"\s-[fF]\s", rendered)
+
+
+async def test_prompt_variables_come_from_the_active_host() -> None:
+    fake = {**PROMPT_VARIABLES, "host-post-inline-comment-cmd": "fake-post --inline"}
+    host = InMemoryCodeHost(prompt_variables=fake)
+    variables = await host.code_host().discussion.prompt_variables()
+    rendered = render_prompt(_read(TEMPLATES / "review-file.md"), variables)
+    assert "fake-post --inline" in rendered
+    assert "gh api" not in rendered
+    assert await InMemoryCodeHost().code_host().discussion.prompt_variables() == PROMPT_VARIABLES

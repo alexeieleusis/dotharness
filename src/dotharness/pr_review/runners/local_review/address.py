@@ -5,15 +5,18 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotharness.code_host.prompts import render_prompt
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.runners.common import (
     build_agent_base_env,
     get_file_diff,
     get_vibe_heal_context,
+    host_prompt_variables,
     is_ancestor,
     repo_identity_check,
 )
@@ -374,7 +377,11 @@ async def _address_one(ctx: _AddressContext, finding: AddressFinding, result: Ad
 
 
 def _build_address_context(
-    config: HarnessConfig, target: LocalReviewTarget, review_dir: Path, backend: Backend | None
+    config: HarnessConfig,
+    target: LocalReviewTarget,
+    review_dir: Path,
+    backend: Backend | None,
+    prompt_variables: Mapping[str, str],
 ) -> _AddressContext:
     wdir = Path(config.repo.working_dir).expanduser().resolve()
     env = build_agent_base_env(config.harness.path_prepend, config.harness.env)
@@ -389,7 +396,10 @@ def _build_address_context(
         env=env,
         # the backend edits and commits, so a retry is not idempotent; the loop handles failures itself
         backend=backend or _make_backend(config, max_retries=0),
-        instructions=(Path(config.harness.knowledge_dir) / "pr-review" / ADDRESS_TEMPLATE).read_text(encoding="utf-8"),
+        instructions=render_prompt(
+            (Path(config.harness.knowledge_dir) / "pr-review" / ADDRESS_TEMPLATE).read_text(encoding="utf-8"),
+            prompt_variables,
+        ),
         vibe=get_vibe_heal_context(config.repo.subdirs, str(wdir), target.branch) or None,
         review_head=review_head,
         res_dir=review_dir / RESOLUTIONS_DIR,
@@ -418,7 +428,7 @@ async def address_findings(
     otherwise it is `failed` and keeps `status: open`. Stops (no repair, no further backend calls)
     when history was rewritten, tracked files are dirty, or the branch changed (7.4).
     """
-    ctx = _build_address_context(config, target, review_dir, backend)
+    ctx = _build_address_context(config, target, review_dir, backend, await host_prompt_variables(config))
     result = AddressResult()
     pending = list(collection.open)
     ctx.res_dir.mkdir(parents=True, exist_ok=True)
