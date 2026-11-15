@@ -155,10 +155,15 @@ def read_answer(rec_path: Path) -> str:
         return ""
 
 
-def consume_answer(rec_path: Path) -> None:
-    """Rename the answer file to ``*.answer.md.used`` so a stale answer does not clear a later stop."""
+def consume_answer(rec_path: Path, item: str, answer: str) -> None:
+    """Log the answer, then rename the answer file to ``*.answer.md.used`` so a stale answer does not clear a later stop.
+
+    The answers-log line is appended first (FR-13); an OSError from it propagates and the
+    answer file stays un-renamed (FR-18). A crash between the two steps can only duplicate a line.
+    """
     path = answer_path(rec_path)
     if path.is_file():
+        append_answer_log(rec_path, item, answer)
         path.replace(path.with_name(path.name + USED_SUFFIX))
 
 

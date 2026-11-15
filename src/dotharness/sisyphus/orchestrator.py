@@ -867,7 +867,7 @@ class _Run:
             prompt += f"\n\nThe user answered your earlier stop. Their answer:\n\n{answer}\n"
         await self.agent(prompt)
         if answer:
-            consume_answer(self.rec.path)
+            consume_answer(self.rec.path, self.rec.item, answer)
         if stop_file.is_file():
             self.raise_stop_report(stage, stop_file)
 

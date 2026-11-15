@@ -25,6 +25,7 @@ from dotharness.sisyphus.resume import (
     append_answer_log,
     build_answer_log_record,
     cleared,
+    consume_answer,
     iter_records,
     list_waiting,
 )
@@ -620,3 +621,55 @@ def test_clear_stop_record_leaves_answers_log(tmp_path: Path) -> None:
     clear_stop_record(rec)
     assert not stop_record_path(rec).exists()
     assert log.read_bytes() == b'{"a":1}\n'
+
+
+def test_consume_answer_logs_before_rename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d", ("Q?",))
+    answer_path(rec).write_text("A1\n")
+    seen: list[bool] = []
+    real_replace = Path.replace
+
+    def spy(self: Path, target: Any) -> Any:
+        seen.append(answers_log_path(rec).exists())
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", spy)
+    consume_answer(rec, "Q-1", "A1")
+    assert seen == [True]
+    assert not answer_path(rec).exists()
+    assert len(answers_log_path(rec).read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_consume_answer_rename_failure_leaves_the_line_and_the_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d", ("Q?",))
+    answer_path(rec).write_text("A1")
+
+    def fail(self: Path, target: Any) -> Any:
+        raise OSError("rename failed")  # noqa: TRY003
+
+    monkeypatch.setattr(Path, "replace", fail)
+    with pytest.raises(OSError, match="rename failed"):
+        consume_answer(rec, "Q-1", "A1")
+    assert json.loads(answers_log_path(rec).read_text(encoding="utf-8"))["answer"] == "A1"
+    assert answer_path(rec).read_text() == "A1"
+
+
+def test_consume_answer_log_failure_propagates_and_keeps_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d", ("Q?",))
+    answer_path(rec).write_text("A1")
+
+    def fail(path: Path, line: str) -> None:
+        raise OSError("disk full")  # noqa: TRY003
+
+    monkeypatch.setattr("dotharness.sisyphus.resume._append_line", fail)
+    with pytest.raises(OSError, match="disk full"):
+        consume_answer(rec, "Q-1", "A1")
+    assert answer_path(rec).read_text() == "A1"
+    assert not answer_path(rec).with_name(answer_path(rec).name + ".used").exists()
