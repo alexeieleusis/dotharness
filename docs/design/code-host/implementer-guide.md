@@ -1,6 +1,6 @@
 # Code host: implementer guide
 
-Status: this guide belongs to the Phase 0 design for #192. The package `src/dotharness/code_host/` exists and the vibe-heal review flow (Phase 1, #193) and the sisyphus flow (Phase 2, #194) are implemented. The reference host and the fake implement every method of the six interfaces. The interface version is 2. Code location: `src/dotharness/code_host/`.
+Status: this guide belongs to the design for #192 and is current for the final state of Phase 4 (#196). The package `src/dotharness/code_host/` exists, and vibe-heal, sisyphus and pr-review call only the capability interfaces. The reference host and the fake implement every method of the six interfaces. The interface version is 3 (`CODE_HOST_INTERFACE_VERSION` in `src/dotharness/code_host/version.py`). Version 3 added `Discussion.comments_script()`. Code location: `src/dotharness/code_host/`.
 
 This guide is an ordered checklist for the author of a new code-host implementation. It states no contract. Each step points to
 the section of the design page [`docs/design/code-host.md`](../code-host.md) that owns the contract. The pointer names the section
@@ -38,6 +38,10 @@ values", which shows what the reference implementation declares.
 3. Raise `OSError` from `for_current_branch` and `post_review` when the host client is not installed. `Session.available()` returns
    `False` instead and never raises.
 4. Return `reason` in `ReviewPostResult` only when `fell_back` is true.
+5. Provide the comments script (interface version 3). `Discussion.comments_script()` returns the path of a stdlib-only Python
+   file with the `fetch` and `reply` subcommands. It must exist, must not import `dotharness`, and must make its own host calls
+   (the reference host ships `src/dotharness/code_host/scripts/pr-comments.py`). Runners run this file as a child process and
+   no consumer names a script path. A host that cannot provide one does not declare `Capability.DISCUSSION`.
 
 Pointers: "Error model", subsections "Hierarchy", "Failure conventions per call site", "Unsupported-capability policy" and
 "Message and secret rules".
@@ -105,12 +109,37 @@ names", which lists the names you must not use.
    `examplehost` does not implement goes in `ConformanceTarget.unsupported`, and the suite then asserts that it raises.
 5. Consumer tests that need a host without a network can use the in-memory fake instead.
 
+Worked example. The file below is the whole test module for `examplehost`. `ExampleTransport` is the stub of the host's
+transport that you write. It implements `HostSeeder` (`dotharness.code_host.testing`). The host is built through the public
+factory, with the token `<token>` (the constant `SECRET` in the suite):
+
+```python
+from dotharness.code_host import HostSelection, create_code_host
+from dotharness.code_host.testing import SECRET, CodeHostConformance, ConformanceTarget
+
+
+class TestExampleHostConformance(CodeHostConformance):
+    async def make_target(self) -> ConformanceTarget:
+        transport = ExampleTransport()  # a fresh seeder per target
+        host = create_code_host(
+            HostSelection(setting="code_host", name="examplehost", options={}, token_cmd=["echo", SECRET])
+        )
+        return ConformanceTarget(host=host, seeder=transport, secret=SECRET)
+```
+
+Running `pytest` on that module runs every behavior for each capability the host declares, including B-DIS-6 (the
+`comments_script()` file exists and does not import `dotharness`). For running examples in this repository, read
+`tests/code_host/test_in_memory.py` (`TestInMemoryCodeHost`, the fake as the target, with a stub-free seeder) and
+`tests/code_host/test_reference_conformance.py` (`TestReferenceHostConformance`, a real host over a stubbed command runner:
+the closest model for a new host). Both run in `uv run pytest`.
+
 Pointers: "Conformance suite and in-memory fake", subsections "Module, packaging and run mechanism", "Behaviors asserted" and
 "In-memory fake".
 
 ## 7. Stating the targeted interface version
 
-1. State the interface version the host targets in its registration value.
+1. State the interface version the host targets in its registration value. It is 3 for this dotharness release. A host
+   registered for version 2 does not provide `comments_script()` and fails the exact-match version check.
 2. When dotharness changes the version, re-run the suite and update the statement.
 
 Pointer: "Factory and selection", subsection "Version and stability contract".

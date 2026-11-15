@@ -43,6 +43,20 @@ The workflow has two phases, plus a third standalone mode for CI baseline mainte
 
 5. An open GitHub Pull Request for the current branch.
 
+### Code host selection
+
+vibe_heal reaches the code host through the code-host interface (see
+[`docs/design/code-host.md`](../design/code-host.md)). Two settings select the host. Put them in the environment or in
+`.env.vibeheal` / `.env`:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DOTHARNESS_CODE_HOST` | unset (the reference host, which uses the `gh` CLI for GitHub) | Name of the code host: `reference`, an installed entry point in the group `dotharness.code_hosts`, or a `module:attribute` path. |
+| `DOTHARNESS_CODE_HOST_OPTIONS` | `{}` | JSON object with the options of that host. Setting options without a host name is an error. |
+
+An unknown host or invalid options stop the command with a message that names the variable. The `gh` prerequisites above
+apply to the reference host only.
+
 ### Configuration
 
 Create `.env.vibeheal`:
