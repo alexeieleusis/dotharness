@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import builtins
 import dataclasses
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,7 @@ from dotharness.sisyphus.lock import clone_lock
 from dotharness.sisyphus.orchestrator import BRANCH_CREATED_KEY, OPEN_PR_STAGE, PullRequest, branch_name
 from dotharness.sisyphus.resume import (
     AUTO_RETRY_KEY,
+    _append_line,
     answer_path,
     answers_log_path,
     append_answer_log,
@@ -502,3 +505,118 @@ def test_build_answer_log_record_leaf_is_none(tmp_path: Path) -> None:
     rec = tmp_path / "Q-1.json"
     _stop(rec, "C3", "d")
     assert build_answer_log_record(rec, "Q-1", "a")["leaf"] is None
+
+
+def _tolerant_read(path: Path) -> list[Any]:
+    """Parse each non-empty line; skip lines that do not parse.
+
+    A truncated line is only ever last when read before the next append; once an
+    append repairs the newline, the truncated bytes sit mid-file and are skipped too.
+    """
+    out: list[Any] = []
+    for ln in path.read_bytes().decode("utf-8").split("\n"):
+        if not ln:
+            continue
+        try:
+            out.append(json.loads(ln))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def test_append_line_creates_missing_parent(tmp_path: Path) -> None:
+    p = tmp_path / "a" / "b" / "x.answers.jsonl"
+    _append_line(p, '{"a":1}')
+    assert p.read_bytes() == b'{"a":1}\n'
+
+
+def test_append_line_does_not_double_supplied_newline(tmp_path: Path) -> None:
+    p = tmp_path / "x.answers.jsonl"
+    _append_line(p, '{"a":1}\n')
+    assert p.read_bytes() == b'{"a":1}\n'
+
+
+def test_append_line_truncated_tail_is_preserved_and_new_line_separate(tmp_path: Path) -> None:
+    p = tmp_path / "x.answers.jsonl"
+    original = b'{"a":1}\n{"a":'
+    p.write_bytes(original)
+    _append_line(p, '{"a":2}')
+    data = p.read_bytes()
+    assert data.startswith(original)
+    assert data.split(b"\n")[-2] == b'{"a":2}'
+    assert _tolerant_read(p) == [{"a": 1}, {"a": 2}]
+
+
+def test_append_line_after_newline_adds_no_blank_line(tmp_path: Path) -> None:
+    p = tmp_path / "x.answers.jsonl"
+    p.write_bytes(b'{"a":1}\n')
+    _append_line(p, '{"a":2}')
+    assert b"\n\n" not in p.read_bytes()
+    assert _tolerant_read(p) == [{"a": 1}, {"a": 2}]
+
+
+def test_append_line_oserror_propagates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    with pytest.raises(OSError):
+        _append_line(blocker / "x.answers.jsonl", "{}")
+
+    def boom(fd: int) -> None:
+        raise OSError(5, "fsync failed")
+
+    monkeypatch.setattr(os, "fsync", boom)
+    with pytest.raises(OSError, match="fsync failed"):
+        _append_line(tmp_path / "y.answers.jsonl", "{}")
+
+
+def test_append_line_single_write_and_fsync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    p = tmp_path / "x.answers.jsonl"
+    p.write_bytes(b'{"a":')  # forces the repair prefix into the same write
+    writes: list[bytes] = []
+    fsyncs: list[int] = []
+    real_open = builtins.open
+
+    class Counting:
+        def __init__(self, fh: Any) -> None:
+            self._fh = fh
+
+        def write(self, data: bytes) -> int:
+            writes.append(data)
+            return self._fh.write(data)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._fh, name)
+
+        def __enter__(self) -> Counting:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self._fh.close()
+
+    def fake_open(file: Any, mode: str = "r", *a: Any, **kw: Any) -> Any:
+        fh = real_open(file, mode, *a, **kw)
+        return Counting(fh) if mode == "ab" else fh
+
+    real_fsync = os.fsync
+
+    def fake_fsync(fd: int) -> None:
+        fsyncs.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    monkeypatch.setattr(os, "fsync", fake_fsync)
+    _append_line(p, '{"a":2}')
+    assert writes == [b'\n{"a":2}\n']
+    assert len(fsyncs) >= 1
+
+
+def test_clear_stop_record_leaves_answers_log(tmp_path: Path) -> None:
+    rec = tmp_path / "enc.json"
+    write_stop_record(
+        rec, build_stop_record("X-1", checkpoint="C3", stage=None, stage_status=None, detail="d", resume_command="r")
+    )
+    log = answers_log_path(rec)
+    log.write_bytes(b'{"a":1}\n')
+    clear_stop_record(rec)
+    assert not stop_record_path(rec).exists()
+    assert log.read_bytes() == b'{"a":1}\n'

@@ -9,6 +9,7 @@ explicit ``sisyphus resume``. Imports only Package A modules.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -105,15 +106,46 @@ def build_answer_log_record(rec_path: Path, item: str, answer: str) -> dict[str,
 
 
 def _append_line(path: Path, line: str) -> None:
-    """Append one line to ``path``. Child 2 replaces this body with the durable implementation."""
-    with open(path, "a", encoding="utf-8") as fh:
-        fh.write(line)
+    """Durably append exactly one newline-terminated line to the JSONL file ``path``.
+
+    ``line`` is passed without a trailing newline; one is added (a single supplied
+    trailing newline is not doubled). The parent directory is created. If the
+    existing file is non-empty and does not end in a newline (a truncated last
+    line left by a crash), a leading newline is folded into the same single
+    write, so the new record starts on its own line and the truncated bytes are
+    left untouched. The write is one ``write`` call, then ``flush`` and
+    ``os.fsync``. Any ``OSError`` propagates unchanged.
+
+    Reader tolerance (FR-12): readers of the answers log must skip a final line
+    that does not parse. An unparseable line anywhere else is not covered.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    prefix = ""
+    try:
+        with open(path, "rb") as probe:
+            probe.seek(0, os.SEEK_END)
+            if probe.tell() > 0:
+                probe.seek(-1, os.SEEK_END)
+                if probe.read(1) != b"\n":
+                    prefix = "\n"
+    except FileNotFoundError:
+        pass
+    body = line[:-1] if line.endswith("\n") else line
+    with open(path, "ab") as fh:
+        fh.write((prefix + body + "\n").encode("utf-8"))
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
 def append_answer_log(rec_path: Path, item: str, answer: str) -> None:
-    """Log one answer as a single JSON line (does not rename the answer file)."""
+    """Log one answer as a single JSON line (does not rename the answer file).
+
+    The log is append-only and nothing deletes it. Reader tolerance (FR-12): a
+    reader must skip a final line that does not parse (a crash may leave a
+    truncated last line); the next append starts on a fresh line.
+    """
     record = build_answer_log_record(rec_path, item, answer)
-    _append_line(answers_log_path(rec_path), json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+    _append_line(answers_log_path(rec_path), json.dumps(record, ensure_ascii=False, separators=(",", ":")))
 
 
 def read_answer(rec_path: Path) -> str:
