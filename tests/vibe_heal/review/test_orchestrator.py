@@ -155,7 +155,7 @@ class TestResolveBaseBranch:
         mock_parser = MagicMock()
         fake = InMemoryCodeHost()
         orchestrator = ReviewOrchestrator(config, mock_client, mock_analyzer, mock_parser, code_host=fake.code_host())
-        orchestrator.fake = fake  # ty: ignore[unresolved-attribute]
+        setattr(orchestrator, "fake", fake)  # noqa: B010
         return orchestrator
 
     @pytest.mark.asyncio
@@ -249,7 +249,7 @@ class TestRunAnalysis:
         orchestrator = ReviewOrchestrator(
             config, mock_client, mock_branch_analyzer, mock_diff_parser, code_host=fake.code_host()
         )
-        orchestrator.fake = fake  # ty: ignore[unresolved-attribute]
+        setattr(orchestrator, "fake", fake)  # noqa: B010
         return orchestrator
 
     @pytest.mark.asyncio
