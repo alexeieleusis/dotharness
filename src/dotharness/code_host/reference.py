@@ -339,9 +339,14 @@ def _bound(operation: str) -> int | None:
 class _Gh:
     """Runs ``gh`` for one host: in the working directory, with ``GH_TOKEN`` when a token command is set."""
 
-    def __init__(self, token_cmd: TokenCmd, working_directory: Path | None) -> None:
+    def __init__(
+        self, token_cmd: TokenCmd, working_directory: Path | None, *, credential_default: TokenCmd = None
+    ) -> None:
         self.cwd = working_directory
-        self._token_cmd = token_cmd
+        # Only a configured command puts ``GH_TOKEN`` on host-run ``gh`` calls. ``credential_default`` serves
+        # ``credential()`` alone (agent environments), so a caller that configures nothing keeps ``gh``'s own auth.
+        self._configured = bool(token_cmd)
+        self._token_cmd = token_cmd or credential_default
         self._credential: Credential | None = None
 
     def __repr__(self) -> str:
@@ -378,7 +383,7 @@ class _Gh:
 
     async def _env(self) -> dict[str, str] | None:
         """The child environment: the inherited one plus ``GH_TOKEN`` only. ``None`` when no token command is set."""
-        if not self._token_cmd:
+        if not self._configured:
             return None
         return {**os.environ, "GH_TOKEN": (await self.credential()).token}
 
@@ -1577,14 +1582,16 @@ class ReferenceOptions:
     """Options of the reference host. There are none yet."""
 
 
-def _create(token_cmd: TokenCmd, working_directory: Path | None = None) -> CodeHost:
+def _create(
+    token_cmd: TokenCmd, working_directory: Path | None = None, *, credential_default: TokenCmd = None
+) -> CodeHost:
     """Build the reference ``CodeHost``. Runs no command: the token command runs at ``Session.credential()``.
 
     ``working_directory`` is the directory of every ``gh`` call (the process directory when ``None``). With a token
     command, ``gh`` calls get ``GH_TOKEN`` in their child environment (never ``GITHUB_TOKEN``). Without one, ``gh``
     owns its own authentication.
     """
-    gh = _Gh(token_cmd, working_directory)
+    gh = _Gh(token_cmd, working_directory, credential_default=credential_default)
     return CodeHost(
         session=_Session(gh),
         repository=_Repository(gh),
@@ -1602,8 +1609,9 @@ DEFAULT_TOKEN_CMD = "gh auth token"  # noqa: S105  # the reference host's token 
 def _create_with_default_token_cmd(
     options: ReferenceOptions, token_cmd: TokenCmd, working_directory: Path | None = None
 ) -> CodeHost:
-    """The registered factory: ``DEFAULT_TOKEN_CMD`` when the caller configured no token command (``None`` or empty)."""
-    return _create(token_cmd or DEFAULT_TOKEN_CMD, working_directory)
+    """The registered factory. ``DEFAULT_TOKEN_CMD`` serves ``Session.credential()`` when no token command is configured
+    (``None`` or empty). Host-run ``gh`` calls then keep ``gh``'s own authentication (no ``GH_TOKEN``)."""
+    return _create(token_cmd, working_directory, credential_default=DEFAULT_TOKEN_CMD)
 
 
 REGISTRATION = HostRegistration(

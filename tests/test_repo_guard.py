@@ -121,7 +121,7 @@ def test_repo_guard_source_names_no_host():
 
 
 async def test_non_github_host_and_option_like_host_do_not_match(tmp_path):
-    for url in ("https://gitlab.com/acme/frontend.git", "ssh://git@-oProxyCommand=x/acme/frontend"):
+    for url in ("https://example.com/acme/frontend.git", "ssh://git@-oProxyCommand=x/acme/frontend"):
         fresh = tmp_path / url.split("/")[2].replace("@", "_").replace("=", "_")
         fresh.mkdir()
         _init_repo(fresh, url)

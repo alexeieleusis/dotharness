@@ -834,6 +834,15 @@ class TestRegistration:
         assert (await host.session.credential()).token == SECRET
         assert _argv(mock_run) == ["gh", "auth", "token"]
 
+    async def test_registered_factory_default_leaves_host_calls_on_ambient_auth(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, "[]", ""))
+        host = create_code_host(HostSelection(setting="s", name="reference", options={}, token_cmd=None))
+        await host.work_items.list_open(REPO)
+        assert mock_run.await_count == 1
+        assert _argv(mock_run)[:1] == ["gh"]
+        assert _argv(mock_run) != ["gh", "auth", "token"]
+        assert mock_run.call_args.kwargs["env"] is None
+
     async def test_registered_factory_keeps_a_configured_token_command(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, f"{SECRET}\n", ""))
         host = create_code_host(HostSelection(setting="s", name="reference", options={}, token_cmd="mycmd --x"))  # noqa: S106
@@ -1168,7 +1177,7 @@ class TestWorkingDirectoryAndEnvironment:
         assert mock_run.await_count == 0
 
     async def test_factory_passes_working_directory(self, mocker, tmp_path: Path) -> None:
-        mock_run = _recorder(mocker, (0, f"{SECRET}\n", ""), (0, "[]", ""))
+        mock_run = _recorder(mocker, (0, "[]", ""))
         host = create_code_host(
             HostSelection(setting="s", name="reference", options={}, token_cmd=None, working_directory=tmp_path)
         )
