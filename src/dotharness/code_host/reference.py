@@ -1030,7 +1030,9 @@ class _Discussion:
             url=url,
         )
 
-    async def reply(self, repo: RepositoryRef, number: int, thread_id: str, body: str) -> Comment:
+    async def reply(  # NOSONAR python:S1172 - repo and number are required by the Discussion protocol
+        self, repo: RepositoryRef, number: int, thread_id: str, body: str
+    ) -> Comment:
         """Reply in a review thread (GraphQL mutation). ``thread_id`` is the id from ``ReviewThread``.
 
         ``repo`` and ``number`` are unused: the ``Discussion`` protocol requires them, and the thread id identifies the
