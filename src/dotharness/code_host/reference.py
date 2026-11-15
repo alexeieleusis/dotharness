@@ -72,7 +72,7 @@ logger = logging.getLogger(__name__)
 # Prompt variables. A prompt template under ``knowledge/pr-review`` that needs a host-specific command starts with a
 # preamble line ``<!-- host-variables: a, b -->`` followed by a blank line, and uses ``<a>`` and ``<b>`` in its body.
 # The host supplies the value of each variable; the values below are the commands this host runs. A value may hold
-# ``{REPO}``/``{PR_NUMBER}`` (filled by the runner) and ``<REPO>``/``<NUMBER>`` (filled by the agent) placeholders.
+# ``{REPO}``/``{PR_NUMBER}``/``{COMMIT}`` (filled by the runner) and ``<REPO>``/``<NUMBER>`` (filled by the agent) placeholders.
 PROMPT_VARIABLES: Mapping[str, str] = {
     "host-cli": "gh",
     "host-direct-reply-cmds": "gh api` / `gh pr comment",
@@ -83,7 +83,9 @@ PROMPT_VARIABLES: Mapping[str, str] = {
     ),
     "host-post-comment-cmd": "gh pr comment {PR_NUMBER} --repo {REPO} --body",
     "host-pr-comment-cmd": "gh pr comment <NUMBER> --repo <REPO> --body",
-    "host-post-review-comment-cmd": "gh api repos/{REPO}/pulls/{PR_NUMBER}/comments",
+    "host-post-inline-comment-cmd": (
+        'gh api repos/{REPO}/pulls/{PR_NUMBER}/comments -f commit_id="{COMMIT}" -f path="<PATH>" -F line=<N> -f body='
+    ),
     "host-reply-inline-cmd": 'gh api "repos/<REPO>/pulls/<NUMBER>/comments/<COMMENT_ID>/replies"',
     "host-resolve-thread-cmd": (
         "gh api graphql -f query='mutation($threadId:ID!){ resolveReviewThread(input:{threadId:$threadId}){ "

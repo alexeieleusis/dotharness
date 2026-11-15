@@ -42,8 +42,7 @@ specific file/line, post an inline review comment. Append the literal marker
 rendered on GitHub and is how this tool recognizes its own design-review comments on a
 later run, so it must be present on every comment you post here:
 
-    gh api repos/{REPO}/pulls/{PR_NUMBER}/comments \
-      -f body="...<!-- dotharness-review-design -->" -f commit_id="{COMMIT}" -f path="..." -F line=<N>
+    gh api repos/{REPO}/pulls/{PR_NUMBER}/comments -f commit_id="{COMMIT}" -f path="<PATH>" -F line=<N> -f body="...<!-- dotharness-review-design -->"
 
 If the exact line is unavailable, fall back to line 1 of the file. Be specific:
 reference the exact code, explain the abstraction/placement/engineering problem, and

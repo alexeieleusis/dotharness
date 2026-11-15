@@ -89,8 +89,19 @@ def test_local_review_builders_render_the_template() -> None:
 
 
 def test_render_keeps_runner_placeholders_in_host_values() -> None:
-    text = "<!-- host-variables: host-post-review-comment-cmd -->\n\n<host-post-review-comment-cmd> -f body=x"
-    rendered = render_prompt(text, {"host-post-review-comment-cmd": "gh api repos/{REPO}/pulls/{PR_NUMBER}/comments"})
+    text = "<!-- host-variables: host-post-inline-comment-cmd -->\n\n<host-post-inline-comment-cmd>\"x\""
+    rendered = render_prompt(text, {"host-post-inline-comment-cmd": PROMPT_VARIABLES["host-post-inline-comment-cmd"]})
     assert "{REPO}" in rendered
     assert "{PR_NUMBER}" in rendered
+    assert "{COMMIT}" in rendered
     assert "<host-" not in rendered
+
+
+@pytest.mark.parametrize("name", ["review-file.md", "review-design.md", "review-traceability.md"])
+def test_inline_comment_flags_come_from_the_host(name: str) -> None:
+    text = _read(TEMPLATES / name)
+    assert not re.search(r"\s-[fF]\s", text)
+    fake = {**PROMPT_VARIABLES, "host-post-inline-comment-cmd": "fake-post --inline"}
+    rendered = render_prompt(text, fake)
+    assert "fake-post --inline" in rendered
+    assert not re.search(r"\s-[fF]\s", rendered)
