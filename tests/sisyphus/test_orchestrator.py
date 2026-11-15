@@ -186,9 +186,13 @@ class World:
             if self.touch_repo_in_intake:
                 (self.repo / "tracked.txt").write_text("changed\n")
             return
-        stage = re.search(r"Stage to run now: `(\w+)`", prompt).group(1)  # ty: ignore[unresolved-attribute]
+        stage_match = re.search(r"Stage to run now: `(\w+)`", prompt)
+        assert stage_match is not None
+        stage = stage_match.group(1)
         self.events.append(f"agent:{stage}")
-        stop_path = Path(re.search(r"Stop report file: (\S+)", prompt).group(1))  # ty: ignore[unresolved-attribute]
+        stop_match = re.search(r"Stop report file: (\S+)", prompt)
+        assert stop_match is not None
+        stop_path = Path(stop_match.group(1))
         if stage == "plan":
             self.clock.now += 0
             for i in range(self.leaves):
