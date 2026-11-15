@@ -1217,6 +1217,8 @@ def build_traceability_review_prompt(
 def author_matches(login: str, authors_config: str | list) -> bool:
     if authors_config == "*":
         return True
+    if isinstance(authors_config, str):
+        return login == authors_config
     return login in authors_config
 
 
@@ -1241,8 +1243,11 @@ async def list_open_change_requests_matching_authors(
     except CodeHostError as e:
         logger.error("Failed to list PRs: %s", e)  # noqa: TRY400
         return None
+    # A change request with no known author only matches the wildcard config.
     eligible = [
-        c for c in found if not c.is_draft and author_matches(c.author.login if c.author else "", authors_config)
+        c
+        for c in found
+        if not c.is_draft and (author_matches(c.author.login, authors_config) if c.author else authors_config == "*")
     ]
     return sorted(eligible, key=lambda c: c.number)
 

@@ -20,6 +20,7 @@ from dotharness.pr_review.runners.common import (
     is_inline_review_comment,
     is_review_summary_comment,
     is_traceability_review_comment,
+    list_open_change_requests_matching_authors,
     pr_from_url,
     preserve_reviewer_request,
     was_review_requested,
@@ -29,6 +30,20 @@ from tests.pr_review.runners.approve_support import REPO, make_host, seed_pr, up
 
 def test_author_matches_star_allows_all():
     assert author_matches("anyone", "*") is True
+
+
+def test_author_matches_str_config_is_equality_not_substring():
+    assert author_matches("alice", "alice") is True
+    assert author_matches("ali", "alice") is False
+    assert author_matches("", "alice") is False
+
+
+@pytest.mark.parametrize(("authors_config", "expected"), [("alice", []), (["alice"], []), ("*", [1])])
+async def test_list_open_change_requests_matching_authors_authorless_only_matches_wildcard(authors_config, expected):
+    host = make_host()
+    seed_pr(host, 1, author=None)
+    found = await list_open_change_requests_matching_authors(host.code_host(), REPO, authors_config)
+    assert [c.number for c in found] == expected
 
 
 def test_author_matches_list_rejects_unknown():
