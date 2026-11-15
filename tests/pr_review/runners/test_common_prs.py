@@ -43,6 +43,7 @@ async def test_list_open_change_requests_matching_authors_authorless_only_matche
     host = make_host()
     seed_pr(host, 1, author=None)
     found = await list_open_change_requests_matching_authors(host.code_host(), REPO, authors_config)
+    assert found is not None
     assert [c.number for c in found] == expected
 
 

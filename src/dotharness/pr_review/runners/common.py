@@ -937,7 +937,7 @@ async def _resolve_ref_repo(
     return found
 
 
-async def _get_work_item_or_none(host: CodeHost, ticket_repo: RepositoryRef, number: int | str):
+async def _get_work_item_or_none(host: CodeHost, ticket_repo: RepositoryRef, number: int):
     """``WorkItems.get`` where any ``CodeHostError`` means None; ``UnsupportedCapabilityError`` propagates."""
     try:
         return await host.work_items.get(ticket_repo, number)
