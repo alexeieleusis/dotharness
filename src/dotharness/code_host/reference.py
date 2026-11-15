@@ -62,6 +62,17 @@ from dotharness.code_host.models import (
     WorkItem,
     WorkItemState,
 )
+from dotharness.code_host.prompts import (
+    HOST_CLI,
+    HOST_DIRECT_REPLY_CMDS,
+    HOST_ISSUE_COMMENT_CMD,
+    HOST_MINIMIZE_COMMENT_CMD,
+    HOST_POST_COMMENT_CMD,
+    HOST_POST_INLINE_COMMENT_CMD,
+    HOST_PR_COMMENT_CMD,
+    HOST_REPLY_INLINE_CMD,
+    HOST_RESOLVE_THREAD_CMD,
+)
 from dotharness.code_host.reference_gh import gh_argv
 from dotharness.code_host.version import CODE_HOST_INTERFACE_VERSION
 from dotharness.repo_guard import IdentityCheck, assert_repo_identity
@@ -74,20 +85,20 @@ logger = logging.getLogger(__name__)
 # The host supplies the value of each variable; the values below are the commands this host runs. A value may hold
 # ``{REPO}``/``{PR_NUMBER}``/``{COMMIT}`` (filled by the runner) and ``<REPO>``/``<NUMBER>`` (filled by the agent) placeholders.
 PROMPT_VARIABLES: Mapping[str, str] = {
-    "host-cli": "gh",
-    "host-direct-reply-cmds": "gh api` / `gh pr comment",
-    "host-issue-comment-cmd": 'gh api "repos/<REPO>/issues/<NUMBER>/comments"',
-    "host-minimize-comment-cmd": (
+    HOST_CLI: "gh",
+    HOST_DIRECT_REPLY_CMDS: "gh api` / `gh pr comment",
+    HOST_ISSUE_COMMENT_CMD: 'gh api "repos/<REPO>/issues/<NUMBER>/comments"',
+    HOST_MINIMIZE_COMMENT_CMD: (
         "gh api graphql -f query='mutation($subjectId:ID!){ minimizeComment(input:{subjectId:$subjectId, "
         "classifier:RESOLVED}){ minimizedComment{ isMinimized minimizedReason } } }' -f subjectId=<COMMENT_NODE_ID>"
     ),
-    "host-post-comment-cmd": "gh pr comment {PR_NUMBER} --repo {REPO} --body",
-    "host-pr-comment-cmd": "gh pr comment <NUMBER> --repo <REPO> --body",
-    "host-post-inline-comment-cmd": (
+    HOST_POST_COMMENT_CMD: "gh pr comment {PR_NUMBER} --repo {REPO} --body",
+    HOST_PR_COMMENT_CMD: "gh pr comment <NUMBER> --repo <REPO> --body",
+    HOST_POST_INLINE_COMMENT_CMD: (
         'gh api repos/{REPO}/pulls/{PR_NUMBER}/comments -f commit_id="{COMMIT}" -f path="<PATH>" -F line=<N> -f body='
     ),
-    "host-reply-inline-cmd": 'gh api "repos/<REPO>/pulls/<NUMBER>/comments/<COMMENT_ID>/replies"',
-    "host-resolve-thread-cmd": (
+    HOST_REPLY_INLINE_CMD: 'gh api "repos/<REPO>/pulls/<NUMBER>/comments/<COMMENT_ID>/replies"',
+    HOST_RESOLVE_THREAD_CMD: (
         "gh api graphql -f query='mutation($threadId:ID!){ resolveReviewThread(input:{threadId:$threadId}){ "
         "thread{ id isResolved } } }' -f threadId=<THREAD_ID>"
     ),

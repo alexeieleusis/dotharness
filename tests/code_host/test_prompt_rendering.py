@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from dotharness.code_host.prompts import PromptVariableError, render_prompt
+from dotharness.code_host.prompts import HOST_CLI, HOST_VARIABLES, PromptVariableError, render_prompt
 from dotharness.code_host.reference import PROMPT_VARIABLES
 from dotharness.code_host.testing import InMemoryCodeHost
 from dotharness.pr_review.runners.local_review.prompts import build_file_prompt
@@ -49,13 +49,13 @@ def test_template_names_no_gh_and_declares_what_it_uses(name: str) -> None:
     text = _read(TEMPLATES / name)
     assert not re.search(r"\bgh\b", text)
     declared = set(text.split("\n", 1)[0].removeprefix("<!-- host-variables: ").removesuffix(" -->").split(", "))
-    assert declared <= PROMPT_VARIABLES.keys()
+    assert declared <= HOST_VARIABLES
     assert re.search(r"\bgh\b", _read(BASELINE / name))
 
 
 @pytest.mark.parametrize("name", PROHIBITION_PROMPTS)
 def test_prohibition_prompts_use_only_the_cli_name(name: str) -> None:
-    assert _read(TEMPLATES / name).startswith("<!-- host-variables: host-cli -->\n\n")
+    assert _read(TEMPLATES / name).startswith(f"<!-- host-variables: {HOST_CLI} -->\n\n")
 
 
 def test_render_is_idempotent_and_leaves_plain_text() -> None:
@@ -117,3 +117,12 @@ async def test_prompt_variables_come_from_the_active_host() -> None:
     assert "fake-post --inline" in rendered
     assert "gh api" not in rendered
     assert await InMemoryCodeHost().code_host().discussion.prompt_variables() == PROMPT_VARIABLES
+
+
+def test_reference_host_supplies_exactly_the_valid_variables() -> None:
+    assert PROMPT_VARIABLES.keys() == HOST_VARIABLES
+
+
+def test_render_rejects_a_declared_name_outside_the_valid_set() -> None:
+    with pytest.raises(PromptVariableError):
+        render_prompt("<!-- host-variables: host-bogus -->\n\n<host-bogus>", {"host-bogus": "x"})
