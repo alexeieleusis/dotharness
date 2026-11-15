@@ -1,3 +1,5 @@
+<!-- host-variables: host-cli -->
+
 # Code Review Instructions
 
 You are performing a detailed code review on a single file from a local branch.
@@ -36,7 +38,7 @@ else anywhere outside it:
 
     {OUTPUT_FILE}
 
-Do not run `gh` and do not post anywhere. For each P0 (critical) or P1 (high priority)
+Do not run `<host-cli>` and do not post anywhere. For each P0 (critical) or P1 (high priority)
 finding, add one block in exactly this format:
 
 ```

@@ -39,7 +39,7 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
    the other four commands. If another run — `review-prs` or any of the other four — already holds the lock
    for the same working directory, the new invocation exits immediately with an error instead of waiting.
 2. If `vibe_heal.enabled` is `false` in config, logs and exits — the whole command is a no-op.
-3. Builds a subprocess environment: resolves the host token via `harness.host_token_cmd` (else `harness.gh_token_cmd`, else `gh auth token`), applies
+3. Builds a subprocess environment: resolves the host token via `harness.host_token_cmd` (the reference host defaults to `gh auth token` when it is absent), applies
    `harness.path_prepend` / `harness.env`.
 3a. **Prune stale projects** (`prune_projects.run`): if `vibe_heal.prune_projects_enabled` is `true`, runs
    `vibe_heal prune-projects --yes --older-than <vibe_heal.prune_older_than_minutes>` once in each
@@ -117,7 +117,7 @@ Only the fields below affect this command. See [`../configuration.md`](../config
 
 | Field | Effect |
 |---|---|
-| `harness.host_token_cmd` / `harness.gh_token_cmd` | Command used to obtain the host token passed to host and git subprocesses. `host_token_cmd` wins when both are set. |
+| `harness.host_token_cmd` | Command used to obtain the host token passed to host and git subprocesses. The former `harness.gh_token_cmd` key was removed and fails config load; see the removed-key note in [configuration.md](../configuration.md). |
 | `harness.path_prepend` | Directories prepended to `PATH` for all subprocesses this runner spawns. |
 | `harness.env` | Extra environment variables merged into the subprocess environment. |
 | `repo.name` | GitHub repo (`org/repo`) queried through the code host and used for posting comments. |

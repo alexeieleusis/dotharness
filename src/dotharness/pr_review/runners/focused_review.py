@@ -9,13 +9,13 @@ from dotharness.code_host import (
     CodeHost,
     RepositoryRef,
 )
+from dotharness.code_host.prompts import render_prompt
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock, working_dir_lock_key
 from dotharness.pr_review.runners.common import (
     FOCUSED_REVIEW_MARKER,
     INLINE_REVIEW_MARKER,
-    PR_COMMENTS_SCRIPT_PATH,
     TIMEOUT_GIT,
     FatalGitError,
     backend_env,
@@ -29,6 +29,7 @@ from dotharness.pr_review.runners.common import (
     merge_thread_state,
     open_host,
     preserve_reviewer_request,
+    repo_identity_check,
     run_cmd,
 )
 
@@ -55,16 +56,17 @@ async def _run_locked(config: HarnessConfig) -> None:
     host, repo, env = scaffold.host, scaffold.repo, scaffold.env
     current_user = await host_current_user(host)
 
-    script_path = PR_COMMENTS_SCRIPT_PATH
-    instructions_template = (config.harness.knowledge_dir / "pr-review" / "focused-review.md").read_text(
-        encoding="utf-8"
+    script_path = await host.discussion.comments_script()
+    instructions_template = render_prompt(
+        (config.harness.knowledge_dir / "pr-review" / "focused-review.md").read_text(encoding="utf-8"),
+        await host.discussion.prompt_variables(),
     )
     backend = Backend(
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
-        backend_env(config, env),
-        expected_repo_name=config.repo.name,
+        await backend_env(config, host, env),
+        identity_check=repo_identity_check(config),
     )
 
     wdir = str(config.repo.working_dir)

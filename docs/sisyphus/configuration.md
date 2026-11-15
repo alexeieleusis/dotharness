@@ -81,7 +81,7 @@ keep the label. Merged or closed PRs still do not exclude an issue from the pick
 
 | Key | Type | Default |
 |---|---|---|
-| `token_cmd` | string | none |
+| `token_cmd` | string | none (`gh` uses its own authentication) |
 | `name` | string, the name of a code host | none (the reference host) |
 | `options` | table | `{}` |
 
@@ -90,7 +90,8 @@ keep the label. Merged or closed PRs still do not exclude an issue from the pick
 The loader checks only the types. It does not run `token_cmd`.
 
 `token_cmd` runs once at startup, with no shell. Its stdout is the token. The reference host passes the token to
-`gh` as `GH_TOKEN` only. If the command fails, the CLI stops with a `config error:` line (see
+`gh` as `GH_TOKEN` only. When `token_cmd` is unset, no command runs and `gh`
+uses its own authentication, as in earlier releases. If the command fails, the CLI stops with a `config error:` line (see
 [Credentials and backends](usage.md#credentials-and-backends)). The host runs in `[project].repo_dir`.
 
 #### Unsupported-capability policy

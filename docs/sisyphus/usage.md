@@ -60,7 +60,7 @@ The CLI takes the clone lock once, at the start of `run` and `intake`, and relea
 ### Credentials and backends
 
 Credentials come only from the inherited environment and `[source.host].token_cmd` (no shell. Its stdout is
-the token, passed to `gh` as `GH_TOKEN` only). Linear always reads its API key from `LINEAR_API_KEY` in the
+the token, passed to `gh` as `GH_TOKEN` only). Without `token_cmd`, `gh` uses its own authentication. Linear always reads its API key from `LINEAR_API_KEY` in the
 environment. `token_cmd` is never sent to Linear. `gh` must be installed and able to reach the repository. The `file` kind needs no API key and makes no network
 call to pick an item.
 

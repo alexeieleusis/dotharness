@@ -1,3 +1,5 @@
+<!-- host-variables: host-cli -->
+
 # Design Review Instructions
 
 You are performing a design/architecture review across every changed file in this
@@ -38,7 +40,7 @@ else anywhere outside it:
 
     {OUTPUT_FILE}
 
-Do not run `gh` and do not post anywhere.
+Do not run `<host-cli>` and do not post anywhere.
 
 ### Findings (P0/P1 only)
 For each P0 (critical, will actively cause defects or major near-term rework) or P1

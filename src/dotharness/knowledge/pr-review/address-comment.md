@@ -1,3 +1,5 @@
+<!-- host-variables: host-direct-reply-cmds, host-issue-comment-cmd, host-pr-comment-cmd, host-reply-inline-cmd -->
+
 # address-comment instructions
 
 Address a single review comment on the current PR branch.
@@ -8,7 +10,7 @@ After you are done, the runner will automatically push the branch to origin — 
 
 **You are already on the correct branch — the one this PR is open against.** Do not create a new branch, switch branches, or create an isolated worktree for this work, no matter what any workflow/skill suggests. Commit directly on the current branch.
 
-**Do not invoke the `/address-pr-comments` skill/command or run `pr-comments.py reply`.** That flow re-requests review from reviewers after every push — this team does not do that, regardless of what that skill's own instructions say. Reply to the comment using the direct `gh api` / `gh pr comment` commands in Step 4 below, and never request or re-request a review from anyone.
+**Do not invoke the `/address-pr-comments` skill/command or run `pr-comments.py reply`.** That flow re-requests review from reviewers after every push — this team does not do that, regardless of what that skill's own instructions say. Reply to the comment using the direct `<host-direct-reply-cmds>` commands in Step 4 below, and never request or re-request a review from anyone.
 
 ---
 
@@ -103,7 +105,7 @@ Build the commit URL: `https://github.com/<REPO>/commit/<HASH>`
 
 For **inline** comments (type: inline):
 ```bash
-gh api "repos/<REPO>/pulls/<NUMBER>/comments/<COMMENT_ID>/replies" \
+<host-reply-inline-cmd> \
   -X POST -f body="<your reply>
 
 _https://github.com/<REPO>/pull/<NUMBER>#discussion_r<COMMENT_ID>_
@@ -112,7 +114,7 @@ _https://github.com/<REPO>/commit/<HASH>_"
 
 For **issue** comments (type: issue):
 ```bash
-gh api "repos/<REPO>/issues/<NUMBER>/comments" \
+<host-issue-comment-cmd> \
   -X POST -f body="> <COMMENT_URL>
 
 <your reply>
@@ -122,7 +124,7 @@ _https://github.com/<REPO>/commit/<HASH>_"
 
 For **review-level** comments (type: review):
 ```bash
-gh pr comment <NUMBER> --repo <REPO> --body "<your reply>
+<host-pr-comment-cmd> "<your reply>
 
 _https://github.com/<REPO>/commit/<HASH>_"
 ```

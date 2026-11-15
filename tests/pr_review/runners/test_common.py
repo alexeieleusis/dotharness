@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dotharness.gh import build_subprocess_env
 from dotharness.pr_review.runners.common import (
     FatalGitError,
     git_detach_and_record,
@@ -156,18 +155,6 @@ async def test_git_fetch_and_checkout_raises_fatal_error_on_called_process_error
         await git_fetch_and_checkout("feature-branch", str(tmp_path), {})
 
 
-def test_build_env_prepends_path():
-    original_path = os.environ.get("PATH", "")
-    env = build_subprocess_env(["/java/bin", "/node/bin"], {}, "tok")
-    assert env["PATH"].startswith("/java/bin:/node/bin:")
-    assert original_path in env["PATH"]
-
-
-def test_build_env_sets_github_token():
-    env = build_subprocess_env([], {}, "mytoken")
-    assert env["GITHUB_TOKEN"] == "mytoken"  # noqa: S105
-
-
 def _git_restore_side_effect(is_ancestor_returncode):
     def side_effect(cmd, **kwargs):
         if "rev-parse" in cmd:
@@ -250,3 +237,13 @@ async def test_git_restore_completes_when_cancelled(tmp_path):
         with pytest.raises(asyncio.CancelledError):
             await task
     assert any("checkout" in c for c in calls)
+
+
+def test_repo_identity_check_is_built_for_the_configured_repository():
+    from dotharness.pr_review.runners.common import repo_identity_check
+
+    config = MagicMock()
+    config.repo.name = "acme/web"
+    with patch("dotharness.pr_review.runners.common.reference_identity_check") as build:
+        assert repo_identity_check(config) is build.return_value
+    build.assert_called_once_with("acme/web")

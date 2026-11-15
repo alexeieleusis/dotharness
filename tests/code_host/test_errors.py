@@ -49,34 +49,14 @@ def test_no_secret_in_text() -> None:
         assert sentinel not in repr(exc)
 
 
-def test_aliases_are_identical() -> None:
-    from dotharness.vibe_heal.review import github
+def test_vibe_heal_aliases_are_removed() -> None:
+    import importlib
 
-    assert github.GitHubReviewError is CodeHostError
-    assert github.NoOpenPrError is NoChangeRequestError
-    assert github.GitHubTimeoutError is CodeHostTimeoutError
+    from dotharness.vibe_heal import review
 
-
-def test_old_import_paths() -> None:
-    from dotharness.vibe_heal.review import NoOpenPrError
-    from dotharness.vibe_heal.review.github import GitHubReviewError, GitHubTimeoutError
-    from dotharness.vibe_heal.review.github import NoOpenPrError as GithubNoOpenPrError
-
-    assert NoOpenPrError is GithubNoOpenPrError is NoChangeRequestError
-    assert issubclass(NoOpenPrError, GitHubReviewError)
-    assert issubclass(GitHubTimeoutError, GitHubReviewError)
-
-
-def test_old_root_catches_subclasses() -> None:
-    from dotharness.vibe_heal.review.github import GitHubReviewError, GitHubTimeoutError, NoOpenPrError
-
-    for exc in (
-        NoOpenPrError("x"),
-        GitHubTimeoutError("y"),
-        *(c("z") for c in (AuthenticationError, ConfigurationError)),
-    ):
-        with pytest.raises(GitHubReviewError):
-            raise exc
+    assert not hasattr(review, "NoOpenPrError")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("dotharness.vibe_heal.review.github")
 
 
 def test_module_exports() -> None:

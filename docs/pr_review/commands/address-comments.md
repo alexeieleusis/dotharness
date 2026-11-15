@@ -17,9 +17,9 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
 ## What it does
 
 1. Acquires an exclusive file lock keyed on the resolved `repo.working_dir` path (not `repo.name`/`repo_slug` — see [Shared behavior](index.md#shared-behavior)). The lock is shared with the other four commands. A second concurrent invocation against the same working directory — running this or any other command — exits immediately with an error instead of waiting.
-2. Resolves the host token via `harness.host_token_cmd` (else `harness.gh_token_cmd`). It builds the subprocess environment from `harness.path_prepend` / `harness.env` plus `GITHUB_TOKEN`.
+2. Resolves the host token via `harness.host_token_cmd` (else the selected host's default, `gh auth token` for the reference host). It builds the subprocess environment from `harness.path_prepend` / `harness.env` plus the host's credential variables (`GITHUB_TOKEN` and `GH_TOKEN` for the reference host).
 3. Lists the open PRs to check: two code-host listings of open PRs, one with the current user's login as author and one as assignee (the login replaces `@me`; each is limited to 1000). An empty login lists nothing. The results are merged and deduplicated by PR number, then sorted ascending.
-4. Loads the single prompt template `pr-review/address-comment.md` from `harness.knowledge_dir`. It constructs a `Backend` for `harness.backend` (`opencode` or `claude`), with `GITHUB_TOKEN` merged into its environment.
+4. Loads the single prompt template `pr-review/address-comment.md` from `harness.knowledge_dir`. It constructs a `Backend` for `harness.backend` (`opencode` or `claude`), with the host's credential variables (`GITHUB_TOKEN` and `GH_TOKEN` for the reference host) merged into its environment.
 5. If `repo.opencode_dir` is set, it computes that path relative to `repo.working_dir` (`plugin_prefix`). That path is used later to restrict which inline comments are considered.
 6. Detaches HEAD and records the current commit so it can restore the working tree after each PR.
 7. For each PR, in ascending order:
@@ -27,7 +27,7 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
    - Resolves the current host user's login once, before listing PRs, and reuses it for the rest of the run.
    - Checks whether the current user is currently a requested reviewer on this PR, before doing anything else with it.
    - Fetches and checks out the PR's head branch (using `git checkout -B` to `origin/<branch>` — see [Shared behavior](index.md#shared-behavior)).
-   - Fetches all comments via `scripts/pr-comments.py fetch --pr <N>` and reads the JSON it caches at `~/.harness/cache/pr-<N>-comments.json`. The actionable set is:
+   - Fetches all comments by running the host's comments script (`Discussion.comments_script()`, for the reference host `src/dotharness/code_host/scripts/pr-comments.py`) with `fetch --pr <N>` and reads the JSON it caches at `~/.harness/cache/pr-<N>-comments.json`. The actionable set is:
      - all inline (review-thread) comments,
      - all PR-level review comments, and
      - issue comments whose author doesn't end in `[bot]` and whose body doesn't contain `[` followed by `bot]` (case-insensitive).
@@ -58,7 +58,7 @@ Only these `.harness.toml` fields affect `address-comments`. See [`../configurat
 |---|---|
 | `harness.backend` | Which AI backend (`opencode`/`claude`) evaluates and addresses each comment |
 | `harness.backend_timeout_seconds` | Timeout for each backend invocation (one per actionable comment) |
-| `harness.host_token_cmd` / `harness.gh_token_cmd` | Command used to fetch the host token exported as `GITHUB_TOKEN`. `host_token_cmd` wins when both are set |
+| `harness.host_token_cmd` | Command used to fetch the host token, exported as `GITHUB_TOKEN` and `GH_TOKEN` (reference host). Absent means `gh auth token`. `harness.gh_token_cmd` was removed and fails the config load |
 | `harness.knowledge_dir` | Must contain `pr-review/address-comment.md`, the prompt template for this runner |
 | `harness.path_prepend` / `harness.env` | Extra `PATH` entries / env vars for git, `gh`, and the backend subprocess |
 | `repo.name` | GitHub repo (`org/repo`) queried through the code host |

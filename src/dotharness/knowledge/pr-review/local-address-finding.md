@@ -1,3 +1,5 @@
+<!-- host-variables: host-cli -->
+
 # local-address-finding instructions
 
 Address a single review finding on the current branch.
@@ -5,7 +7,7 @@ The finding details are at the end of these instructions (under **Finding to add
 
 The finding comes from an automated reviewer and **may be wrong**. Verify it against the code before changing anything.
 
-This is a local, offline workflow. Do not use `gh`, any GitHub or reply API, `git push`, or request a review from anyone. The runner handles everything after you finish.
+This is a local, offline workflow. Do not use `<host-cli>`, any GitHub or reply API, `git push`, or request a review from anyone. The runner handles everything after you finish.
 
 **You are already on the correct branch.** Do not create a new branch, switch branches, or set up a worktree. Commit directly on the current branch.
 
@@ -94,5 +96,5 @@ You must not write `decision: fixed` unless you made a commit for this finding.
 - Never amend, rebase, or reset existing commits. Always commit fresh on top of HEAD.
 - Never use `git add -A` or `git add .`. Stage only the files you changed.
 - Never use `--no-verify`.
-- Never push, and never use `gh` or any GitHub API.
+- Never push, and never use `<host-cli>` or any GitHub API.
 - If the finding is unclear, make your best judgment and note the uncertainty in the resolution.

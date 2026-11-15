@@ -480,9 +480,12 @@ def test_validate_available_raising_is_reported_as_error(minimal_toml):
     assert "Traceback" not in result.output
 
 
-def test_validate_passes_effective_token_cmd_and_host_selection(minimal_toml):
-    text = minimal_toml.read_text().replace(
-        "[harness]\n", '[harness]\nhost = "examplehost"\nhost_token_cmd = "echo h"\n', 1
+def test_validate_passes_host_token_cmd_and_host_selection(minimal_toml):
+    text = (
+        minimal_toml
+        .read_text()
+        .replace("[harness]\n", '[harness]\nhost = "examplehost"\n', 1)
+        .replace("echo test-token", "echo h")
     )
     minimal_toml.write_text(text + '\n[harness.host_options]\nk = "v"\n')
     with (
@@ -500,8 +503,8 @@ def test_validate_passes_effective_token_cmd_and_host_selection(minimal_toml):
     )
 
 
-def test_template_shows_host_token_cmd_and_keeps_default():
+def test_template_shows_host_token_cmd_and_not_the_removed_key():
     from dotharness.pr_review.cli import TEMPLATE
 
-    assert '\ngh_token_cmd = "gh auth token"\n' in TEMPLATE
+    assert "gh_token_cmd" not in TEMPLATE
     assert "host_token_cmd" in TEMPLATE

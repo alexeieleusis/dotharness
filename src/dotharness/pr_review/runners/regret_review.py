@@ -4,6 +4,7 @@ import re
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotharness.code_host import (
     ChangeRequest,
@@ -579,6 +580,7 @@ async def find_regret_candidates(
     wdir: str,
     env: dict,
     budget_start: float | None = None,
+    script_path: Path = PR_COMMENTS_SCRIPT_PATH,
 ) -> list[RegretCandidate]:
     """The comment-fetch + hunk-match leaf (regret-review-requirements.md §7.2 steps 1-2):
     given find_introducing_prs' output, the candidate (comment, blamed_change) pairs
@@ -634,7 +636,9 @@ async def find_regret_candidates(
     budget_start = _budget_clock(budget_start)
     budget_seconds = config.regret_review.regret_review_timeout
 
-    comments_by_pr = await _fetch_comments_by_pr(introducing_hunks, wdir, env, budget_start, budget_seconds)
+    comments_by_pr = await _fetch_comments_by_pr(
+        introducing_hunks, wdir, env, budget_start, budget_seconds, script_path
+    )
     if comments_by_pr is None:
         return []
 
@@ -653,6 +657,7 @@ async def _fetch_comments_by_pr(
     env: dict,
     budget_start: float,
     budget_seconds: int,
+    script_path: Path,
 ) -> dict[int, list[dict]] | None:
     """G1: one fetch_pr_comments call per unique introducing PR number across the whole
     run, pointed at the introducing PR's number through the existing shared helper. A
@@ -669,7 +674,7 @@ async def _fetch_comments_by_pr(
                 budget_seconds,
             )
             return None
-        comments_by_pr[pr_number] = await fetch_pr_comments(pr_number, PR_COMMENTS_SCRIPT_PATH, wdir, env)
+        comments_by_pr[pr_number] = await fetch_pr_comments(pr_number, script_path, wdir, env)
     return comments_by_pr
 
 

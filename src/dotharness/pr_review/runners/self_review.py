@@ -14,6 +14,7 @@ from dotharness.code_host import (
     RepositoryRef,
     UnsupportedCapabilityError,
 )
+from dotharness.code_host.prompts import render_prompt
 from dotharness.pr_review import state
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
@@ -47,6 +48,7 @@ from dotharness.pr_review.runners.common import (
     open_host,
     post_no_linked_ticket_comment,
     preserve_reviewer_request,
+    repo_identity_check,
     resolve_linked_tickets,
     run_pr_level_pass,
 )
@@ -76,16 +78,17 @@ def _get_extra_knowledge(config) -> str | None:
     return None
 
 
-def _build_backend(config, env: dict) -> Backend:
-    token = env.get("GITHUB_TOKEN", "")
-    if not token:
-        raise RuntimeError("GITHUB_TOKEN is not set in the subprocess environment")  # noqa: TRY003
+async def _build_backend(config, host: CodeHost, env: dict) -> Backend:
+    names = await host.session.agent_environment_names()
+    credentials = {name: env[name] for name in names if env.get(name)}
+    if names and not credentials:
+        raise RuntimeError("the host credential is not set in the subprocess environment")  # noqa: TRY003
     return Backend(
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
-        {**config.harness.env, "GITHUB_TOKEN": token},
-        expected_repo_name=config.repo.name,
+        {**config.harness.env, **credentials},
+        identity_check=repo_identity_check(config),
     )
 
 
@@ -444,7 +447,14 @@ async def _run_regret_review(
         introducing_hunks = await find_introducing_prs(
             ctx["host"], ctx["repo"], _change_request(ctx, number), config, wdir, env, budget_start
         )
-        found = await find_regret_candidates(introducing_hunks, config, wdir, env, budget_start)
+        found = await find_regret_candidates(
+            introducing_hunks,
+            config,
+            wdir,
+            env,
+            budget_start,
+            script_path=await ctx["host"].discussion.comments_script(),
+        )
         if not found:
             logger.debug("PR #%d: no regret candidates — nothing to judge this run", number)
             return False
@@ -702,15 +712,20 @@ async def _run_locked(config: HarnessConfig) -> None:
     regret_reviewed = set(pruned_state["regret_reviewed_prs"])
 
     knowledge_dir = Path(config.harness.knowledge_dir) / "pr-review"
-    file_instructions = (knowledge_dir / "review-file.md").read_text(encoding="utf-8")
-    summary_instructions = (knowledge_dir / "review-summary.md").read_text(encoding="utf-8")
-    design_instructions = (knowledge_dir / "review-design.md").read_text(encoding="utf-8")
-    traceability_instructions = (knowledge_dir / "review-traceability.md").read_text(encoding="utf-8")
+    variables = await host.discussion.prompt_variables()
+    file_instructions = render_prompt((knowledge_dir / "review-file.md").read_text(encoding="utf-8"), variables)
+    summary_instructions = render_prompt((knowledge_dir / "review-summary.md").read_text(encoding="utf-8"), variables)
+    design_instructions = render_prompt((knowledge_dir / "review-design.md").read_text(encoding="utf-8"), variables)
+    traceability_instructions = render_prompt(
+        (knowledge_dir / "review-traceability.md").read_text(encoding="utf-8"), variables
+    )
     regret_instructions = (
-        (knowledge_dir / "review-regret.md").read_text(encoding="utf-8") if config.regret_review.enabled else ""
+        render_prompt((knowledge_dir / "review-regret.md").read_text(encoding="utf-8"), variables)
+        if config.regret_review.enabled
+        else ""
     )
     extra_knowledge = _get_extra_knowledge(config)
-    backend = _build_backend(config, env)
+    backend = await _build_backend(config, host, env)
     wdir = str(config.repo.working_dir)
     original_sha = await git_detach_and_record(wdir, env)
     cycle = _CycleContext(

@@ -10,7 +10,7 @@ The command was renamed when the tool moved into dotharness. Existing config fil
 continue to load unchanged. This page describes config files by name only.
 
 This file holds per-repo settings and can contain sensitive values (a
-`gh_token_cmd`, arbitrary `env` entries, filesystem paths). It is **not
+`host_token_cmd`, arbitrary `env` entries, filesystem paths). It is **not
 meant to be committed**. The template written by `pr_review init` starts with
 the comment `# dotharness configuration — DO NOT COMMIT this file` and
 recommends adding `.harness.toml` to your global gitignore rather than the
@@ -30,8 +30,7 @@ repo's.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `backend` | string | `"opencode"` | Which coding-agent CLI to shell out to. Must be `"opencode"` or `"claude"`. Any other value raises a `ConfigError` at load time. `"opencode"` invokes `opencode run --standalone <instructions>`. `"claude"` invokes `claude --dangerously-skip-permissions --disable-slash-commands -p <instructions>`. Both run with `cwd` set to `repo.working_dir`. |
-| `gh_token_cmd` | string | `"gh auth token"` | Command whose stdout is the host token. The token is exported to subprocesses as `GITHUB_TOKEN`. Kept as an alias of `host_token_cmd` until a later release removes it. |
-| `host_token_cmd` | string | absent | Host-neutral name for the token command, with the same meaning as `gh_token_cmd`. When both are set, `host_token_cmd` wins and no warning is shown. When neither is set, the effective command is `gh auth token`. |
+| `host_token_cmd` | string | absent | Command whose stdout is the host token. When absent, the reference host runs its default command `gh auth token` (`DEFAULT_TOKEN_CMD`). The reference host exports the token to the subprocesses it starts for the agent as `GITHUB_TOKEN` and `GH_TOKEN`. The key `gh_token_cmd` was removed: a config that still has it fails to load (see below). |
 | `host` | string | absent | Name of the code host. Absent means `reference` (the built-in GitHub-compatible host). A name is resolved as the built-in `reference`, an installed entry point in the group `dotharness.code_hosts`, or a `module:attribute` path. |
 | `[harness.host_options]` | table | `{}` (empty) | Options passed to the selected host. Their meaning is defined by the host. |
 | `backend_timeout_seconds` | integer | `900` | Wall-clock timeout (seconds) for a single backend invocation before it is killed. |
@@ -44,11 +43,15 @@ repo's.
 
 The loader checks that `host` is a string, `host_options` is a table and `host_token_cmd` is a string. It does not run the token command and does not read the environment.
 
-The effective token command is `host_token_cmd`, else `gh_token_cmd`, else `gh auth token`.
+The effective token command is `host_token_cmd`, else the default of the selected host. The reference host's default is `gh auth token`.
+
+**Removed key.** `harness.gh_token_cmd` no longer exists. The loader stops with `harness.gh_token_cmd was removed; use harness.host_token_cmd` and the command exits non-zero. Rename the key to `host_token_cmd` in each `.harness.toml`.
+
+**Agent credentials.** The names of the credential variables come from the selected host. The reference host gives the agent both `GITHUB_TOKEN` and `GH_TOKEN`, and a non-empty value of either overrides an inherited variable of the same name.
 
 **Startup failure.** An unknown host name, or a host that cannot load, stops `pr_review validate` with exit code 1 (the same code as any other configuration error) and a message that names the key and its value, for example `code host setting host = "unknown-name": host is not found`. The message never holds the token or the token command.
 
-**Deviation DEV-6.** The token command runs through `shlex.split` with a 30 s timeout and without a shell. A custom `gh_token_cmd` or `host_token_cmd` that uses pipes, `$(...)` or variable expansion may stop working. Wrap such a command in a script and point the key at the script.
+**Deviation DEV-6.** The token command runs through `shlex.split` with a 30 s timeout and without a shell. A custom `host_token_cmd` that uses pipes, `$(...)` or variable expansion may stop working. Wrap such a command in a script and point the key at the script.
 
 `pr_review validate` asks the host whether it is available (10 s, never raises) instead of looking for `gh` on `PATH`. For the reference host the error text is still `gh: binary not found on PATH`. The check for the backend binary stays.
 
@@ -177,7 +180,7 @@ Settings for the `merge` runner. Off by default: with `enabled = false` the runn
 
 Unknown keys and invalid values (a non-boolean `enabled` or `require_all_files_viewed`, or a zero, negative, boolean or non-integer `max_changed_lines`) raise `ConfigError` naming the key.
 
-No secrets belong in these sections. Credentials come from `gh_token_cmd`.
+No secrets belong in these sections. Credentials come from `host_token_cmd` (or the host's default).
 
 ### `[local_review]`
 
@@ -286,8 +289,7 @@ out of the fallback.
 
 [harness]
 backend = "opencode"               # "opencode" or "claude"
-gh_token_cmd = "gh auth token"
-# host_token_cmd = "gh auth token"  # host-neutral name; wins over gh_token_cmd when both are set
+# host_token_cmd = "gh auth token"  # command printing the host token; absent means the reference host default
 # host = "reference"                # code host; absent means "reference"
 backend_timeout_seconds = 900
 

@@ -19,6 +19,7 @@ from dotharness.ai_backend import (
     launch,
     select_backend,
 )
+from dotharness.code_host.reference import identity_check
 from dotharness.opencode_guards import BackendCwdDivergedError, OpencodePluginError
 from dotharness.repo_guard import RepoIdentityError
 
@@ -356,23 +357,23 @@ def make_repo(path: Path, origin: str) -> Path:
 async def test_repo_identity_guard(bin_dir: Path, tmp_path: Path) -> None:
     make_exe(bin_dir, "claude", "exit 0\n")
     repo = make_repo(tmp_path / "repo", "https://github.com/acme/widgets.git")
-    result = await launch("claude", "p", cwd=repo, timeout=10, expected_repo_name="acme/widgets")
+    result = await launch("claude", "p", cwd=repo, timeout=10, identity_check=identity_check("acme/widgets"))
     assert result.returncode == 0
     with pytest.raises(RepoIdentityError, match="does not match"):
-        await launch("claude", "p", cwd=repo, timeout=10, expected_repo_name="acme/other")
+        await launch("claude", "p", cwd=repo, timeout=10, identity_check=identity_check("acme/other"))
     sub = repo / "sub"
     sub.mkdir()
     with pytest.raises(RepoIdentityError, match="toplevel"):
-        await launch("claude", "p", cwd=sub, timeout=10, expected_repo_name="acme/widgets")
+        await launch("claude", "p", cwd=sub, timeout=10, identity_check=identity_check("acme/widgets"))
     with pytest.raises(RepoIdentityError, match="not inside a git repository"):
-        await launch("claude", "p", cwd=tmp_path / "bin", timeout=10, expected_repo_name="acme/widgets")
+        await launch("claude", "p", cwd=tmp_path / "bin", timeout=10, identity_check=identity_check("acme/widgets"))
     assert prompt_files() == []
 
 
 async def test_repo_identity_scp_origin(bin_dir: Path, tmp_path: Path) -> None:
     make_exe(bin_dir, "claude", "exit 0\n")
     repo = make_repo(tmp_path / "repo", "git@github.com:acme/widgets.git")
-    result = await launch("claude", "p", cwd=repo, timeout=10, expected_repo_name="acme/widgets")
+    result = await launch("claude", "p", cwd=repo, timeout=10, identity_check=identity_check("acme/widgets"))
     assert result.returncode == 0
 
 
@@ -466,7 +467,12 @@ async def test_no_argv_or_env_in_logs_results_or_errors(
             )
         with pytest.raises(RepoIdentityError) as ident:
             await launch(
-                "claude", "p", cwd=repo, timeout=20, env={"API_TOKEN": SENTINEL}, expected_repo_name="acme/other"
+                "claude",
+                "p",
+                cwd=repo,
+                timeout=20,
+                env={"API_TOKEN": SENTINEL},
+                identity_check=identity_check("acme/other"),
             )
         texts += [str(div.value), str(ident.value)]
     texts.append(caplog.text)

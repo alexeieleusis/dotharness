@@ -550,3 +550,13 @@ def test_design_prompt_minimal_inputs():
     assert prompt == (
         "D\n\nPR URL: https://github.com/acme/frontend/pull/39\nPR number: 39\nRepo: acme/frontend\nCommit: abc"
     )
+
+
+async def test_body_scan_does_not_resolve_foreign_identities():
+    host = _host()
+    host.add_work_item(REPO, title="T", number=170)
+    _with_body(host, " ".join(f"owner{i}/repo{i}#1" for i in range(50)) + " #170")
+    tickets = await _resolve(host)
+    assert tickets is not None
+    assert [t.number for t in tickets] == [170]
+    assert [c.operation for c in host.calls].count("Repository.resolve") == 0

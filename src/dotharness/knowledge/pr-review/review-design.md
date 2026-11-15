@@ -1,3 +1,5 @@
+<!-- host-variables: host-post-inline-comment-cmd, host-post-comment-cmd -->
+
 # Design Review Instructions
 
 You are performing a design/architecture review across every changed file in this
@@ -42,8 +44,7 @@ specific file/line, post an inline review comment. Append the literal marker
 rendered on GitHub and is how this tool recognizes its own design-review comments on a
 later run, so it must be present on every comment you post here:
 
-    gh api repos/{REPO}/pulls/{PR_NUMBER}/comments \
-      -f body="...<!-- dotharness-review-design -->" -f commit_id="{COMMIT}" -f path="..." -F line=<N>
+    <host-post-inline-comment-cmd>"...<!-- dotharness-review-design -->"
 
 If the exact line is unavailable, fall back to line 1 of the file. Be specific:
 reference the exact code, explain the abstraction/placement/engineering problem, and
@@ -53,14 +54,14 @@ suggest a concrete alternative.
 Always post exactly one PR-level comment, regardless of whether there are any inline
 findings, appending the same marker:
 
-    gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Design Review\n...<!-- dotharness-review-design -->'
+    <host-post-comment-cmd> $'# Design Review\n...<!-- dotharness-review-design -->'
 
 - If there are P0/P1 design findings, briefly summarize them here (a sentence or two
   per finding is enough — the inline comments carry the detail), plus any genuinely
   cross-cutting observation that doesn't anchor to one file/line.
 - If there are no P0/P1 design findings, post:
 
-      gh pr comment {PR_NUMBER} --repo {REPO} --body $'# Design Review\nNo blocking design/architecture issues found.\n<!-- dotharness-review-design -->'
+      <host-post-comment-cmd> $'# Design Review\nNo blocking design/architecture issues found.\n<!-- dotharness-review-design -->'
 
 This PR-level comment must always be posted, whether or not there are inline
 findings — it is how future runs detect that this PR's design review already happened.

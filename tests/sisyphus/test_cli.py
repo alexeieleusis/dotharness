@@ -39,7 +39,6 @@ from dotharness.sisyphus.orchestrator import (
     GATE_FAILED_KEY,
     OPEN_PR_STAGE,
     PR_NUMBER_KEY,
-    GitHubError,
     PullRequest,
     branch_name,
 )
@@ -874,10 +873,10 @@ async def test_host_pull_request_client_find_and_open() -> None:
     )  # fmt: skip
     assert await client.find_pr("b") == opened
     fake.fail_next("ChangeRequests.create_draft", CodeHostError("exit 1: no auth"))
-    with pytest.raises(GitHubError, match="no auth"):
+    with pytest.raises(CodeHostError, match="no auth"):
         await client.open_pr("c", "base", "T", "B")
     fake.fail_next("ChangeRequests.find_by_branch", CodeHostError("exit 1: no auth"))
-    with pytest.raises(GitHubError):
+    with pytest.raises(CodeHostError):
         await client.find_pr("b")
 
 
@@ -896,7 +895,7 @@ async def test_host_client_pr_state_by_number_or_branch_any_state() -> None:
     assert await client.pr_state(str(merged.number)) == PrInfo(merged.number, "MERGED", "abc")
     assert await client.pr_state("b") == PrInfo(merged.number, "MERGED", "abc")  # a branch ref sees any state
     assert await client.pr_state("nobranch") is None  # an empty result is None, not an error
-    with pytest.raises(GitHubError):
+    with pytest.raises(CodeHostError):
         await client.pr_state("99")  # a missing number raises; cleanup keeps the branch with a note
 
 

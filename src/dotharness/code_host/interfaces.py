@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from dotharness.code_host.declarations import HostDeclaration
@@ -172,6 +173,22 @@ class Discussion(Protocol):
 
     async def reply(self, repo: RepositoryRef, number: int, thread_id: str, body: str) -> Comment:
         """Reply in a review thread; `thread_id` is the opaque id from ReviewThread."""
+        ...
+
+    async def comments_script(self) -> Path:
+        """Path of the host's stdlib-only PR-comments script (`fetch` and `reply` subcommands).
+
+        The file exists and is readable by `python3`. The script must not import `dotharness`; its host client
+        calls live in the script itself. Never raises for a declared host.
+        """
+        ...
+
+    async def prompt_variables(self) -> Mapping[str, str]:
+        """The commands this host runs, keyed by the ``host-*`` variable names of the prompt templates.
+
+        Prompts are rendered with these values, so an agent is never told to run a tool the host does not provide.
+        Never raises for a declared host.
+        """
         ...
 
 

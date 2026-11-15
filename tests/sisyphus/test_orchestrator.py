@@ -36,7 +36,6 @@ from dotharness.sisyphus.intake import resolve_brief_path
 from dotharness.sisyphus.lock import LockHeld, clone_lock
 from dotharness.sisyphus.orchestrator import (
     CommandResult,
-    GitHubError,
     OrchestratorError,
     OrchestratorOptions,
     PullRequest,
@@ -138,9 +137,9 @@ class World:
         # PR client behaviour
         self.existing_pr: PullRequest | None = None
         self.opened: list[tuple[str, str, str, str]] = []
-        self.client_error: GitHubError | None = None
+        self.client_error: CodeHostError | None = None
         self.pr_info: PrInfo | None = None
-        self.pr_state_error: GitHubError | None = None
+        self.pr_state_error: CodeHostError | None = None
         self.pr_state_refs: list[str] = []
         self.find_calls = 0
         # label remover behaviour
@@ -640,7 +639,7 @@ async def test_c7_branch_needs_rebase(world: World) -> None:
 
 
 async def test_c8_pr_client_failure(world: World) -> None:
-    world.client_error = GitHubError("auth failed")
+    world.client_error = CodeHostError("auth failed")
     result = await world.run()
     _assert_stop(world, result, Checkpoint.C8)
     assert "auth failed" in result.detail
@@ -1785,7 +1784,7 @@ async def test_squash_merge_proof_uses_the_stored_pr_number_and_gh_error_keeps(w
     world.branch_present_after_pr = True
     world.remote_exists = False
     world.ancestor_rc_after_pr = 1
-    world.pr_state_error = GitHubError("gh pr view failed (exit 1): boom")
+    world.pr_state_error = CodeHostError("gh pr view failed (exit 1): boom")
     await world.run()
     assert world.pr_state_refs == ["42"]
     assert world.branch_cmds == []

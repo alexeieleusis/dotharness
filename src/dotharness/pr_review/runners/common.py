@@ -29,8 +29,11 @@ from dotharness.code_host import (
     WorkItem,
     create_code_host,
 )
+from dotharness.code_host.reference import PR_COMMENTS_SCRIPT
+from dotharness.code_host.reference import identity_check as reference_identity_check
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig, RepoConfig, SubDir
+from dotharness.repo_guard import IdentityCheck
 from dotharness.subprocess_runner import run
 
 logger = logging.getLogger(__name__)
@@ -67,7 +70,14 @@ def env_file_error(config: HarnessConfig, subdir: SubDir) -> str | None:
     return f"env_file for subdir {subdir.path} is not an existing regular file: {resolved}"
 
 
-PR_COMMENTS_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "pr-comments.py"
+PR_COMMENTS_SCRIPT_PATH = PR_COMMENTS_SCRIPT
+"""The reference host's script. Runners ask the active host (``host.discussion.comments_script()``); this is the default."""
+
+
+def repo_identity_check(config: HarnessConfig) -> IdentityCheck:
+    """The host's check that a backend's working directory is the clone of ``config.repo.name`` (R-GUARD-2)."""
+    return reference_identity_check(config.repo.name)
+
 
 FOCUSED_REVIEW_MARKER = "[focused-review-bot]"
 INLINE_REVIEW_MARKER = "<!-- dotharness-review-inline -->"
@@ -282,12 +292,13 @@ class HostScaffold:
 
 
 def host_selection(config: HarnessConfig) -> HostSelection:
-    """The ``HostSelection`` for ``config``: host name, options and the effective token command (never empty)."""
+    """The ``HostSelection`` for ``config``: host name, options and ``host_token_cmd`` (``None`` when unset; the host
+    then applies its own default)."""
     return HostSelection(
         setting="host",
         name=config.harness.host,
         options=config.harness.host_options,
-        token_cmd=config.harness.effective_token_cmd,
+        token_cmd=config.harness.host_token_cmd,
         working_directory=config.repo.working_dir if config.repo.working_dir.is_dir() else None,
     )
 
@@ -314,14 +325,16 @@ async def agent_env(host: CodeHost, config: HarnessConfig) -> dict[str, str]:
     return dict(await host.session.agent_environment(base))
 
 
-def backend_env(config: HarnessConfig, env: Mapping[str, str]) -> dict[str, str]:
-    """``[harness] env`` plus ``GITHUB_TOKEN`` from the scaffold env, only when the scaffold has a non-empty one.
+async def backend_env(config: HarnessConfig, host: CodeHost, env: Mapping[str, str]) -> dict[str, str]:
+    """``[harness] env`` plus the host's credential variables from the scaffold env, each only when non-empty.
 
-    An absent or empty scaffold token must not overwrite a ``GITHUB_TOKEN`` the user configured in ``[harness.env]``.
+    The names come from ``Session.agent_environment_names``. An absent or empty scaffold value must not overwrite a
+    variable the user configured in ``[harness.env]``.
     """
     merged = dict(config.harness.env)
-    if token := env.get("GITHUB_TOKEN"):
-        merged["GITHUB_TOKEN"] = token
+    for name in await host.session.agent_environment_names():
+        if value := env.get(name):
+            merged[name] = value
     return merged
 
 
@@ -338,6 +351,16 @@ async def open_host(config: HarnessConfig) -> HostScaffold:
         sys.stderr.write(f"{e}\n")
         sys.exit(1)
     return HostScaffold(host=host, repo=repo, env=await agent_env(host, config))
+
+
+async def host_prompt_variables(config: HarnessConfig) -> Mapping[str, str]:
+    """The prompt variables of the selected host, for a flow that has no open host (it runs no host command)."""
+    try:
+        host = create_code_host(host_selection(config))
+    except ConfigurationError as e:
+        sys.stderr.write(f"{e}\n")
+        sys.exit(1)
+    return await host.discussion.prompt_variables()
 
 
 async def host_token(host: CodeHost) -> str:
@@ -914,6 +937,20 @@ async def _resolve_ref_repo(
     return found
 
 
+async def _get_work_item_or_none(host: CodeHost, ticket_repo: RepositoryRef, number: int):
+    """``WorkItems.get`` where any ``CodeHostError`` means None; ``UnsupportedCapabilityError`` propagates."""
+    try:
+        return await host.work_items.get(ticket_repo, number)
+    except UnsupportedCapabilityError:
+        raise
+    except CodeHostError:
+        return None
+
+
+def _refs_budget_spent(attempted: set, max_refs: int | None) -> bool:
+    return max_refs is not None and len(attempted) >= max_refs
+
+
 async def _resolve_comment_issue_refs(
     host: CodeHost,
     repo: RepositoryRef,
@@ -936,17 +973,23 @@ async def _resolve_comment_issue_refs(
     of the reference. `seen` is shared and mutated across every
     comment in the scan, so a ticket already found (by this or the Linear-linkback path)
     isn't re-fetched or duplicated. `source` is the tag stamped on each returned ticket.
-    `same_repo_only` drops refs naming any repository other than `repo` before any fetch (and before
-    any work-item read; the identity is still resolved, as a ``RepositoryRef`` is opaque and cannot be
-    compared as text) — used for the author-controlled PR body so it can't steer cross-repo
+    `same_repo_only` drops refs naming any repository other than `repo` before any host call (the identity
+    text is compared case-insensitively with ``Repository.display_name(repo)``, so foreign identities are
+    never resolved) — used for the author-controlled PR body so it can't steer cross-repo
     reads with the harness token. `max_refs` bounds the number of distinct refs fetched."""
     tickets: list[LinkedTicket] = []
     attempted: set[tuple[RepositoryRef | str, int | str]] = set()
     resolved: dict = {}  # per-call cache: one resolve per distinct identity in this body
+    own_name: str | None = None
     for match in _ISSUE_REF_RE.finditer(body):
         identity, number = _match_identity_and_number(match)
         if number is None:
             continue
+        if same_repo_only and identity is not None:
+            # Drop foreign identities by text before any host call, so the body can't drive unbounded resolves.
+            own_name = own_name or (await host.repository.display_name(repo)).lower()
+            if identity.lower() != own_name:
+                continue
         ticket_repo = await _resolve_ref_repo(host, repo, identity, resolved)
         if ticket_repo is None:
             continue
@@ -955,15 +998,10 @@ async def _resolve_comment_issue_refs(
         key = (ticket_repo, number)
         if key in seen or key in attempted:
             continue
-        if max_refs is not None and len(attempted) >= max_refs:
+        if _refs_budget_spent(attempted, max_refs):
             break
         attempted.add(key)
-        try:
-            item = await host.work_items.get(ticket_repo, number)
-        except UnsupportedCapabilityError:
-            raise
-        except CodeHostError:
-            continue
+        item = await _get_work_item_or_none(host, ticket_repo, number)
         if item is None:
             continue
         seen.add(key)
@@ -1204,6 +1242,8 @@ def build_traceability_review_prompt(
 def author_matches(login: str, authors_config: str | list) -> bool:
     if authors_config == "*":
         return True
+    if isinstance(authors_config, str):
+        return login == authors_config
     return login in authors_config
 
 
@@ -1228,8 +1268,11 @@ async def list_open_change_requests_matching_authors(
     except CodeHostError as e:
         logger.error("Failed to list PRs: %s", e)  # noqa: TRY400
         return None
+    # A change request with no known author only matches the wildcard config.
     eligible = [
-        c for c in found if not c.is_draft and author_matches(c.author.login if c.author else "", authors_config)
+        c
+        for c in found
+        if not c.is_draft and (author_matches(c.author.login, authors_config) if c.author else authors_config == "*")
     ]
     return sorted(eligible, key=lambda c: c.number)
 

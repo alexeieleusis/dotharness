@@ -62,15 +62,53 @@ from dotharness.code_host.models import (
     WorkItem,
     WorkItemState,
 )
+from dotharness.code_host.prompts import (
+    HOST_CLI,
+    HOST_DIRECT_REPLY_CMDS,
+    HOST_ISSUE_COMMENT_CMD,
+    HOST_MINIMIZE_COMMENT_CMD,
+    HOST_POST_COMMENT_CMD,
+    HOST_POST_INLINE_COMMENT_CMD,
+    HOST_PR_COMMENT_CMD,
+    HOST_REPLY_INLINE_CMD,
+    HOST_RESOLVE_THREAD_CMD,
+)
+from dotharness.code_host.reference_gh import gh_argv
 from dotharness.code_host.version import CODE_HOST_INTERFACE_VERSION
-from dotharness.gh import gh_argv
+from dotharness.repo_guard import IdentityCheck, assert_repo_identity
 from dotharness.subprocess_runner import RunResult, run
 
 logger = logging.getLogger(__name__)
 
+# Prompt variables. A prompt template under ``knowledge/pr-review`` that needs a host-specific command starts with a
+# preamble line ``<!-- host-variables: a, b -->`` followed by a blank line, and uses ``<a>`` and ``<b>`` in its body.
+# The host supplies the value of each variable; the values below are the commands this host runs. A value may hold
+# ``{REPO}``/``{PR_NUMBER}``/``{COMMIT}`` (filled by the runner) and ``<REPO>``/``<NUMBER>`` (filled by the agent) placeholders.
+PROMPT_VARIABLES: Mapping[str, str] = {
+    HOST_CLI: "gh",
+    HOST_DIRECT_REPLY_CMDS: "gh api` / `gh pr comment",
+    HOST_ISSUE_COMMENT_CMD: 'gh api "repos/<REPO>/issues/<NUMBER>/comments"',
+    HOST_MINIMIZE_COMMENT_CMD: (
+        "gh api graphql -f query='mutation($subjectId:ID!){ minimizeComment(input:{subjectId:$subjectId, "
+        "classifier:RESOLVED}){ minimizedComment{ isMinimized minimizedReason } } }' -f subjectId=<COMMENT_NODE_ID>"
+    ),
+    HOST_POST_COMMENT_CMD: "gh pr comment {PR_NUMBER} --repo {REPO} --body",
+    HOST_PR_COMMENT_CMD: "gh pr comment <NUMBER> --repo <REPO> --body",
+    HOST_POST_INLINE_COMMENT_CMD: (
+        'gh api repos/{REPO}/pulls/{PR_NUMBER}/comments -f commit_id="{COMMIT}" -f path="<PATH>" -F line=<N> -f body='
+    ),
+    HOST_REPLY_INLINE_CMD: 'gh api "repos/<REPO>/pulls/<NUMBER>/comments/<COMMENT_ID>/replies"',
+    HOST_RESOLVE_THREAD_CMD: (
+        "gh api graphql -f query='mutation($threadId:ID!){ resolveReviewThread(input:{threadId:$threadId}){ "
+        "thread{ id isResolved } } }' -f threadId=<THREAD_ID>"
+    ),
+}
+
+
 _MAX_INLINE_COMMENTS = 50
 _MAX_REVIEW_BODY_CHARS = 60_000  # The host limit is about 65536. Keep headroom.
 _POST_TIMEOUT_SECONDS = 60
+_SLOW_REPO_TIMEOUT_SECONDS = 3600.0  # sisyphus limit before Phase 2 (DEC-45)
 _TRUNCATION_NOTICE = "\n\n_...review body truncated to fit GitHub's size limit._"
 _NOT_INSTALLED = "gh CLI is not installed or not in PATH. Install it from https://cli.github.com/"
 _PR_VIEW = "pr view"
@@ -131,10 +169,10 @@ async def _run_gh(
     return _Outcome(result.returncode == 0, result.stdout, result.stderr, result.returncode)
 
 
-async def _require_gh() -> None:
+async def _require_gh(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
     """Raise OSError when ``gh --version`` fails. This is the only host-specific string vibe-heal prints."""
     try:
-        outcome = await _run_gh(gh_argv("--version"), 10)
+        outcome = await _run_gh(gh_argv("--version"), 10, cwd=cwd, env=env)
     except OSError as exc:
         raise OSError(_NOT_INSTALLED) from exc
     if not outcome.success:
@@ -148,8 +186,12 @@ class _RejectedError(CodeHostError):
 _AUTH_MARKERS = ("http 401", "http 403", "bad credentials", "gh auth login")
 
 
-async def _post_json(cmd: list[str], payload: dict[str, Any]) -> None:
+async def _post_json(
+    cmd: list[str], payload: dict[str, Any], *, cwd: Path | None = None, env: dict[str, str] | None = None
+) -> None:
     """Post JSON to a ``gh api`` endpoint on stdin (no token in the arguments).
+
+    ``cwd`` and ``env`` are those of the host's ``_Gh``, so the post acts as the configured credential.
 
     Raises:
         CodeHostTimeoutError: On timeout. The write may have succeeded.
@@ -158,7 +200,7 @@ async def _post_json(cmd: list[str], payload: dict[str, Any]) -> None:
         _RejectedError: On a validation rejection (HTTP 422).
         CodeHostError: On any other non-zero exit (5xx, dropped connection). The write may have succeeded.
     """
-    result: RunResult = await run(cmd, timeout=_POST_TIMEOUT_SECONDS, stdin=json.dumps(payload))
+    result: RunResult = await run(cmd, cwd=cwd, env=env, timeout=_POST_TIMEOUT_SECONDS, stdin=json.dumps(payload))
     if result.timed_out:
         msg = f"gh API call timed out after {_POST_TIMEOUT_SECONDS}s"
         raise CodeHostTimeoutError(msg)
@@ -204,6 +246,80 @@ def _parse_remote_url(remote_url: str) -> str | None:
 
 
 # --------------------------------------------------------------------------------------------------------------------
+# Repository identity of a clone (used by the identity check the runners pass to the AI backend)
+# --------------------------------------------------------------------------------------------------------------------
+
+_GITHUB_HOST = "github.com"
+_HELPER_TIMEOUT_SECONDS = 30.0
+_ssh_hosts: dict[str, str] = {}
+
+PR_COMMENTS_SCRIPT = Path(__file__).resolve().parent / "scripts" / "pr-comments.py"
+"""The stdlib-only ``fetch`` / ``reply`` script of this host; its ``gh`` and ``git`` calls live in that file."""
+
+
+async def _resolve_ssh_host(host: str) -> str:
+    """Resolve an SSH config host alias to its real HostName; fall back to the alias (fail closed)."""
+    if host.lower() == _GITHUB_HOST:
+        return _GITHUB_HOST
+    if host in _ssh_hosts:
+        return _ssh_hosts[host]
+    if host.startswith("-"):
+        # An untrusted remote host must never be parsed by ssh as an option; fail closed.
+        return host
+    result = await run(["ssh", "-G", "--", host], timeout=_HELPER_TIMEOUT_SECONDS)
+    if result.returncode == 0:
+        for line in result.stdout.splitlines():
+            if line.startswith("hostname "):
+                # Cache only a successful resolution, so a transient failure is retried on the next check.
+                resolved = _ssh_hosts[host] = line.split(maxsplit=1)[1].strip()
+                return resolved
+    return host  # Unresolved: the alias itself, so the check fails closed. Not cached.
+
+
+def _split_host_and_path(url: str) -> tuple[str, str] | None:
+    normalized = url.strip().removesuffix(".git").rstrip("/")
+    if normalized.startswith(("https://", "ssh://")):
+        authority, sep, path = normalized.split("://", 1)[1].partition("/")
+        userinfo, at, hostport = authority.rpartition("@")
+        host, colon, port = hostport.rpartition(":")
+        if colon and port.isdigit():  # Strip an explicit port: it is not part of the host name.
+            authority = f"{userinfo}{at}{host}"
+    else:
+        authority, sep, path = normalized.partition(":")  # scp-style [user@]host:path
+    if not sep or not path:
+        return None
+    return authority.rpartition("@")[2] or authority, path
+
+
+async def origin_repository(url: str) -> RepositoryRef | None:
+    """The repository an ``origin`` remote URL points at on this host, or None (other host, unparsable URL)."""
+    split = _split_host_and_path(url)
+    if split is None:
+        return None
+    host, path = split
+    if (await _resolve_ssh_host(host)).lower() != _GITHUB_HOST:
+        return None
+    return RepositoryRef(path)
+
+
+def identity_check(expected_repo_name: str) -> IdentityCheck:
+    """Async check that a directory is the git toplevel of the clone of ``expected_repo_name`` (``owner/repo``).
+
+    Raises ``RepoIdentityError`` for a non-toplevel directory, a missing ``origin`` or a mismatch. Alias resolution
+    fails closed.
+    """
+    expected = RepositoryRef(expected_repo_name)
+
+    async def matches(url: str) -> bool:
+        return await origin_repository(url) == expected
+
+    async def check(working_dir: str | Path) -> None:
+        await assert_repo_identity(working_dir, matches, expected_repo_name)
+
+    return check
+
+
+# --------------------------------------------------------------------------------------------------------------------
 # Size limits
 # --------------------------------------------------------------------------------------------------------------------
 
@@ -234,9 +350,14 @@ def _bound(operation: str) -> int | None:
 class _Gh:
     """Runs ``gh`` for one host: in the working directory, with ``GH_TOKEN`` when a token command is set."""
 
-    def __init__(self, token_cmd: TokenCmd, working_directory: Path | None) -> None:
+    def __init__(
+        self, token_cmd: TokenCmd, working_directory: Path | None, *, credential_default: TokenCmd = None
+    ) -> None:
         self.cwd = working_directory
-        self._token_cmd = token_cmd
+        # Only a configured command puts ``GH_TOKEN`` on host-run ``gh`` calls. ``credential_default`` serves
+        # ``credential()`` alone (agent environments), so a caller that configures nothing keeps ``gh``'s own auth.
+        self._configured = bool(token_cmd)
+        self._token_cmd = token_cmd or credential_default
         self._credential: Credential | None = None
 
     def __repr__(self) -> str:
@@ -273,7 +394,7 @@ class _Gh:
 
     async def _env(self) -> dict[str, str] | None:
         """The child environment: the inherited one plus ``GH_TOKEN`` only. ``None`` when no token command is set."""
-        if not self._token_cmd:
+        if not self._configured:
             return None
         return {**os.environ, "GH_TOKEN": (await self.credential()).token}
 
@@ -775,7 +896,7 @@ class _ChangeRequests:
         is none, which is an empty result here.
         """
         if state is None:
-            args = ("pr", "view", branch, "--json", "number,state,headRefOid")
+            args = ("pr", "view", branch, "--repo", repo.value, "--json", "number,state,headRefOid")
             outcome = await self._gh.run(args, _FIND_BY_BRANCH_OP)
             if not outcome.success:
                 if "no pull requests found" in outcome.stderr.lower():
@@ -788,7 +909,7 @@ class _ChangeRequests:
                 raise CodeHostError(msg) from None
             return [_summary(repo, _object(data, _PR_VIEW), head=branch)]
         rows = await self._gh.json(
-            ("pr", "list", "--head", branch, "--state", state.value, "--json", "number,url"),
+            ("pr", "list", "--repo", repo.value, "--head", branch, "--state", state.value, "--json", "number,url"),
             _FIND_BY_BRANCH_OP,
         )
         return [_summary(repo, row, state=state, head=branch) for row in rows or [] if isinstance(row, dict)]
@@ -942,6 +1063,12 @@ class _Discussion:
     def __init__(self, gh: _Gh) -> None:
         self._gh = gh
 
+    async def comments_script(self) -> Path:  # NOSONAR python:S7503 - implements an async protocol
+        return PR_COMMENTS_SCRIPT
+
+    async def prompt_variables(self) -> Mapping[str, str]:  # NOSONAR python:S7503 - implements an async protocol
+        return PROMPT_VARIABLES
+
     async def post_review(
         self,
         repo: RepositoryRef,
@@ -960,7 +1087,8 @@ class _Discussion:
         ``head_revision`` is accepted but unused: the ``Discussion`` protocol requires it, and the reference host
         posts the review against the pull request's current head.
         """
-        await _require_gh()
+        cwd, env = self._gh.cwd, await self._gh._env()
+        await _require_gh(cwd=cwd, env=env)
         cmd = _review_endpoint(repo, number)
         payload = {
             "event": "COMMENT",
@@ -971,13 +1099,13 @@ class _Discussion:
             ],
         }
         try:
-            await _post_json(cmd, payload)
+            await _post_json(cmd, payload, cwd=cwd, env=env)
         except _RejectedError as inline_err:  # Only a rejection is safe to retry. Anything else may have posted.
             reason = str(inline_err)
             logger.warning("Inline review failed (%s) — falling back to top-level comment", reason)
             fallback = _truncate_body(body if fallback_body is None else fallback_body)
             try:
-                await _post_json(cmd, {"event": "COMMENT", "body": fallback, "comments": []})
+                await _post_json(cmd, {"event": "COMMENT", "body": fallback, "comments": []}, cwd=cwd, env=env)
             except CodeHostTimeoutError:
                 raise  # The fallback may have posted. Keep the type that says do not retry.
             except CodeHostError as e:
@@ -1278,31 +1406,36 @@ class _WorkItems:
         self, repo: RepositoryRef, *, assignee: str | None = None, label: str | None = None
     ) -> Sequence[WorkItem]:
         """Open issues in ``gh`` order, bounded by the declared list bound."""
-        args = ["issue", "list", "--state", "open"]
+        args = ["issue", "list", "--repo", repo.value, "--state", "open"]
         if assignee is not None:
             args += ["--assignee", assignee]
         if label is not None:
             args += ["--label", label]
         bound = _bound(_LIST_OPEN_OP)
-        args += ["--limit", str(bound), "--json", "number,title,createdAt,assignees,labels"]
+        args += [
+            "--limit",
+            str(_UNBOUNDED_LIMIT if bound is None else bound),
+            "--json",
+            "number,title,createdAt,assignees,labels",
+        ]
         rows = await self._gh.json(args, _LIST_OPEN_OP)
         return [_work_item(repo, row) for row in rows or [] if isinstance(row, dict)]
 
-    async def remove_label(  # NOSONAR python:S1172 - repo is required by the WorkItems protocol
-        self, repo: RepositoryRef, number: int, label: str
-    ) -> None:
-        """Remove ``label`` (``gh issue edit N --remove-label L``). A non-zero exit raises, a timeout is a write timeout.
+    async def remove_label(self, repo: RepositoryRef, number: int, label: str) -> None:
+        """Remove ``label`` (``gh issue edit N --repo R --remove-label L``). A non-zero exit raises, a timeout is a write timeout.
 
         A label the issue does not carry exits 0 (no-op). A label that does not exist in the repository exits non-zero.
-
-        ``repo`` is unused: the ``WorkItems`` protocol requires it, and ``gh`` resolves the repository from the clone.
         """
-        await self._gh.ok(("issue", "edit", str(number), "--remove-label", label), "WorkItems.remove_label", write=True)
+        await self._gh.ok(
+            ("issue", "edit", str(number), "--repo", repo.value, "--remove-label", label),
+            "WorkItems.remove_label",
+            write=True,
+        )
 
     async def closing_change_requests(self, repo: RepositoryRef, number: int) -> Sequence[ChangeRequest]:
         """Change requests GitHub links as closing the issue, any state, each resolved by ``gh pr view``."""
         view = await self._gh.json(
-            ("issue", "view", str(number), "--json", "closedByPullRequestsReferences"),
+            ("issue", "view", str(number), "--repo", repo.value, "--json", "closedByPullRequestsReferences"),
             "WorkItems.closing_change_requests",
         )
         # gh returns each reference as {number, repository: {name, owner: {login}}, ...}.
@@ -1312,7 +1445,8 @@ class _WorkItems:
             if not isinstance(ref, dict) or _int(ref, "number") == 0 or not _same_repository(repo, ref):
                 continue
             pr = await self._gh.json(
-                ("pr", "view", str(_int(ref, "number")), "--json", "number,state"), "WorkItems.closing_change_requests"
+                ("pr", "view", str(_int(ref, "number")), "--repo", repo.value, "--json", "number,state"),
+                "WorkItems.closing_change_requests",
             )
             found.append(_summary(repo, _object(pr, _PR_VIEW)))
         return found
@@ -1320,8 +1454,9 @@ class _WorkItems:
     async def open_change_request_bodies(self, repo: RepositoryRef) -> Sequence[ChangeRequest]:
         """Open change requests with their bodies, bounded by the declared list bound."""
         bound = _bound(_OPEN_CR_BODIES_OP)
+        limit = _UNBOUNDED_LIMIT if bound is None else bound
         rows = await self._gh.json(
-            ("pr", "list", "--state", "open", "--limit", str(bound), "--json", "body"),
+            ("pr", "list", "--repo", repo.value, "--state", "open", "--limit", str(limit), "--json", "body"),
             _OPEN_CR_BODIES_OP,
         )
         return [_summary(repo, row, state=ChangeRequestState.OPEN) for row in rows or [] if isinstance(row, dict)]
@@ -1422,6 +1557,8 @@ DECLARATION = HostDeclaration(
                 _FIND_BY_BRANCH_OP: 30,
                 "WorkItems.remove_label": 10.0,
                 "Discussion.post_review": _POST_TIMEOUT_SECONDS,
+                "ChangeRequests.create_draft": _SLOW_REPO_TIMEOUT_SECONDS,
+                _LIST_OPEN_OP: _SLOW_REPO_TIMEOUT_SECONDS,
             },
         ),
         page_attempts=_PAGE_ATTEMPTS,
@@ -1456,14 +1593,16 @@ class ReferenceOptions:
     """Options of the reference host. There are none yet."""
 
 
-def _create(options: ReferenceOptions, token_cmd: TokenCmd, working_directory: Path | None = None) -> CodeHost:
+def _create(
+    token_cmd: TokenCmd, working_directory: Path | None = None, *, credential_default: TokenCmd = None
+) -> CodeHost:
     """Build the reference ``CodeHost``. Runs no command: the token command runs at ``Session.credential()``.
 
     ``working_directory`` is the directory of every ``gh`` call (the process directory when ``None``). With a token
     command, ``gh`` calls get ``GH_TOKEN`` in their child environment (never ``GITHUB_TOKEN``). Without one, ``gh``
     owns its own authentication.
     """
-    gh = _Gh(token_cmd, working_directory)
+    gh = _Gh(token_cmd, working_directory, credential_default=credential_default)
     return CodeHost(
         session=_Session(gh),
         repository=_Repository(gh),
@@ -1475,8 +1614,19 @@ def _create(options: ReferenceOptions, token_cmd: TokenCmd, working_directory: P
     )
 
 
+DEFAULT_TOKEN_CMD = "gh auth token"  # noqa: S105  # the reference host's token command when none is configured
+
+
+def _create_with_default_token_cmd(
+    options: ReferenceOptions, token_cmd: TokenCmd, working_directory: Path | None = None
+) -> CodeHost:
+    """The registered factory. ``DEFAULT_TOKEN_CMD`` serves ``Session.credential()`` when no token command is configured
+    (``None`` or empty). Host-run ``gh`` calls then keep ``gh``'s own authentication (no ``GH_TOKEN``)."""
+    return _create(token_cmd, working_directory, credential_default=DEFAULT_TOKEN_CMD)
+
+
 REGISTRATION = HostRegistration(
     interface_version=CODE_HOST_INTERFACE_VERSION,
     options_model=ReferenceOptions,
-    factory=_create,
+    factory=_create_with_default_token_cmd,
 )

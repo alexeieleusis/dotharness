@@ -64,7 +64,7 @@ GH_OK = RunResult(0, "gh version 2.52.0", "")
 
 
 def _host():
-    return _create(REGISTRATION.options_model(), None)
+    return _create(None)
 
 
 def _stub(mocker, handler) -> AsyncMock:
@@ -650,6 +650,24 @@ class TestFallback:
             await _post(sample_report)
         assert len(_posts(mock_run)) == 1
 
+    async def test_post_uses_configured_credential_and_cwd(self, sample_report, mocker, tmp_path) -> None:
+        def handler(cmd, kwargs):
+            if "--version" in cmd:
+                return GH_OK
+            if cmd[:2] == ["echo", "bot-token"]:
+                return RunResult(0, "bot-token\n", "")
+            return RunResult(0, "", "")
+
+        mock_run = _stub(mocker, handler)
+        discussion = _create("echo bot-token", tmp_path).discussion
+        body, inline_comments = build_review(sample_report, _MAX_INLINE_COMMENTS)
+        await discussion.post_review(REPO, 42, body=body, inline_comments=inline_comments)
+        gh_calls = [c for c in mock_run.call_args_list if c.args[0][0] != "echo"]
+        assert gh_calls
+        for call in gh_calls:
+            assert call.kwargs["env"]["GH_TOKEN"] == "bot-token"  # noqa: S105
+            assert call.kwargs["cwd"] == tmp_path
+
     @pytest.mark.parametrize("exc", [AuthenticationError("denied"), UnsupportedCapabilityError("no", capability="X")])
     async def test_other_errors_do_not_trigger_fallback(self, sample_report, mocker, exc) -> None:
         _flow(mocker)
@@ -753,7 +771,7 @@ class TestPostJson:
             "dotharness.code_host.reference.run", new_callable=AsyncMock, return_value=RunResult(0, "", "")
         )
         await _post_json(["gh"], {"a": 1})
-        assert mock_run.call_args.kwargs == {"timeout": 60, "stdin": '{"a": 1}'}
+        assert mock_run.call_args.kwargs == {"cwd": None, "env": None, "timeout": 60, "stdin": '{"a": 1}'}
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -810,6 +828,33 @@ class TestRegistration:
         create_code_host(HostSelection(setting="s", name="reference", options={}, token_cmd="secret-cmd"))  # noqa: S106
         assert mock_run.await_count == 0
 
+    async def test_registered_factory_defaults_the_token_command(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, f"{SECRET}\n", ""))
+        host = create_code_host(HostSelection(setting="s", name="reference", options={}, token_cmd=None))
+        assert (await host.session.credential()).token == SECRET
+        assert _argv(mock_run) == ["gh", "auth", "token"]
+
+    async def test_registered_factory_default_leaves_host_calls_on_ambient_auth(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, "[]", ""))
+        host = create_code_host(HostSelection(setting="s", name="reference", options={}, token_cmd=None))
+        await host.work_items.list_open(REPO)
+        assert mock_run.await_count == 1
+        assert _argv(mock_run)[:1] == ["gh"]
+        assert _argv(mock_run) != ["gh", "auth", "token"]
+        assert mock_run.call_args.kwargs["env"] is None
+
+    async def test_registered_factory_keeps_a_configured_token_command(self, mocker) -> None:
+        mock_run = _recorder(mocker, (0, f"{SECRET}\n", ""))
+        host = create_code_host(HostSelection(setting="s", name="reference", options={}, token_cmd="mycmd --x"))  # noqa: S106
+        await host.session.credential()
+        assert _argv(mock_run) == ["mycmd", "--x"]
+
+    def test_gh_argv_is_gh_plus_args(self) -> None:
+        from dotharness.code_host.reference_gh import gh_argv
+
+        assert gh_argv("pr", "view") == ["gh", "pr", "view"]
+        assert gh_argv() == ["gh"]
+
     def test_options_are_empty(self) -> None:
         with pytest.raises(Exception, match="options are not valid"):
             create_code_host(HostSelection(setting="s", name="reference", options={"x": 1}, token_cmd=None))
@@ -853,7 +898,7 @@ class TestArgv:
         items = await _host().work_items.list_open(REPO, assignee="bob", label="ready")
         assert mock_run.await_count == 1
         assert _argv(mock_run) == [
-            "gh", "issue", "list", "--state", "open", "--assignee", "bob", "--label", "ready",
+            "gh", "issue", "list", "--repo", R, "--state", "open", "--assignee", "bob", "--label", "ready",
             "--limit", "100", "--json", "number,title,createdAt,assignees,labels",
         ]  # fmt: skip
         (item,) = items
@@ -882,7 +927,7 @@ class TestArgv:
         mock_run = _recorder(mocker, (0, "", ""))
         await _host().work_items.remove_label(REPO, 12, "ready")
         assert mock_run.await_count == 1
-        assert _argv(mock_run) == ["gh", "issue", "edit", "12", "--remove-label", "ready"]
+        assert _argv(mock_run) == ["gh", "issue", "edit", "12", "--repo", R, "--remove-label", "ready"]
 
     async def test_closing_change_requests(self, mocker) -> None:
         mock_run = _recorder(
@@ -893,9 +938,9 @@ class TestArgv:
         )
         found = await _host().work_items.closing_change_requests(REPO, 3)
         assert [_argv(mock_run, i) for i in range(3)] == [
-            ["gh", "issue", "view", "3", "--json", "closedByPullRequestsReferences"],
-            ["gh", "pr", "view", "4", "--json", "number,state"],
-            ["gh", "pr", "view", "8", "--json", "number,state"],
+            ["gh", "issue", "view", "3", "--repo", R, "--json", "closedByPullRequestsReferences"],
+            ["gh", "pr", "view", "4", "--repo", R, "--json", "number,state"],
+            ["gh", "pr", "view", "8", "--repo", R, "--json", "number,state"],
         ]
         assert [(c.number, c.state) for c in found] == [
             (4, ChangeRequestState.OPEN),
@@ -909,13 +954,19 @@ class TestArgv:
     async def test_open_change_request_bodies(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, '[{"body": "Fixes #3"}, {"body": null}]', ""))
         found = await _host().work_items.open_change_request_bodies(REPO)
-        assert _argv(mock_run) == ["gh", "pr", "list", "--state", "open", "--limit", "200", "--json", "body"]
+        assert _argv(mock_run) == [
+            *("gh", "pr", "list", "--repo", R, "--state", "open"),
+            *("--limit", "200", "--json", "body"),
+        ]
         assert [c.body for c in found] == ["Fixes #3", ""]
 
     async def test_find_by_branch_open(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, '[{"number": 5, "url": "https://h/pull/5"}]', ""))
         (cr,) = await _host().change_requests.find_by_branch(REPO, "feat/x")
-        assert _argv(mock_run) == ["gh", "pr", "list", "--head", "feat/x", "--state", "open", "--json", "number,url"]
+        assert _argv(mock_run) == [
+            *("gh", "pr", "list", "--repo", R, "--head", "feat/x", "--state", "open"),
+            *("--json", "number,url"),
+        ]
         assert (cr.number, cr.url, cr.state, cr.head_reference) == (
             5,
             "https://h/pull/5",
@@ -926,12 +977,12 @@ class TestArgv:
     async def test_find_by_branch_other_state(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, "[]", ""))
         assert await _host().change_requests.find_by_branch(REPO, "b", state=ChangeRequestState.MERGED) == []
-        assert _argv(mock_run)[5:7] == ["--state", "merged"]
+        assert _argv(mock_run)[7:9] == ["--state", "merged"]
 
     async def test_find_by_branch_any_state_is_pr_view(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, '{"number": 9, "state": "MERGED", "headRefOid": "abc"}', ""))
         (cr,) = await _host().change_requests.find_by_branch(REPO, "feat/x", state=None)
-        assert _argv(mock_run) == ["gh", "pr", "view", "feat/x", "--json", "number,state,headRefOid"]
+        assert _argv(mock_run) == ["gh", "pr", "view", "feat/x", "--repo", R, "--json", "number,state,headRefOid"]
         assert (cr.number, cr.state, cr.head_revision) == (9, ChangeRequestState.MERGED, "abc")
 
     async def test_find_by_branch_any_state_none_found_is_empty(self, mocker) -> None:
@@ -1033,7 +1084,7 @@ class TestTimeouts:
         ("call", "seconds"),
         [
             (lambda h: h.change_requests.state(REPO, 1), "10s"),
-            (lambda h: h.work_items.list_open(REPO, assignee="a", label="l"), "30s"),
+            (lambda h: h.work_items.list_open(REPO, assignee="a", label="l"), "3600s"),
             (lambda h: h.change_requests.get(REPO, 1), "30s"),
             (lambda h: h.repository.default_branch(REPO), "30s"),
         ],
@@ -1055,12 +1106,13 @@ class TestTimeouts:
         with pytest.raises(CodeHostTimeoutError) as info:
             await _host().change_requests.create_draft(REPO, head="h", base="b", title="t", body="b")
         assert info.value.write is True
+        assert "3600s" in str(info.value)  # DEC-45
 
 
 class TestWorkingDirectoryAndEnvironment:
     async def test_gh_runs_in_working_directory(self, mocker, tmp_path: Path) -> None:
         mock_run = _recorder(mocker, (0, "[]", ""), (0, '{"state": "OPEN"}', ""), (0, "", ""))
-        host = _create(REGISTRATION.options_model(), None, tmp_path)
+        host = _create(None, tmp_path)
         await host.work_items.list_open(REPO, assignee="a", label="l")
         await host.change_requests.state(REPO, 1)
         await host.work_items.remove_label(REPO, 1, "x")
@@ -1071,10 +1123,11 @@ class TestWorkingDirectoryAndEnvironment:
         await _host().work_items.list_open(REPO)
         assert mock_run.call_args.kwargs["cwd"] == Path.cwd()
 
-    async def test_no_repo_flag_on_list_open(self, mocker) -> None:
+    async def test_repo_flag_on_list_open_follows_argument(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, "[]", ""))
-        await _host().work_items.list_open(REPO, assignee="a", label="l")
-        assert "--repo" not in _argv(mock_run)
+        await _host().work_items.list_open(RepositoryRef("org/b"), assignee="a", label="l")
+        argv = _argv(mock_run)
+        assert argv[argv.index("--repo") + 1] == "org/b"
 
     async def test_no_token_command_inherits_environment(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, "[]", ""))
@@ -1085,7 +1138,7 @@ class TestWorkingDirectoryAndEnvironment:
         monkeypatch.setenv("GITHUB_TOKEN", "inherited")
         monkeypatch.setenv("KEEP", "me")
         mock_run = _recorder(mocker, (0, f"{SECRET}\n", ""), (0, "[]", ""), (0, "[]", ""))
-        host = _create(REGISTRATION.options_model(), "tokencmd --flag 'a b'", None)
+        host = _create("tokencmd --flag 'a b'", None)
         await host.work_items.list_open(REPO)
         await host.work_items.list_open(REPO)
         token_call, first, second = mock_run.call_args_list
@@ -1102,7 +1155,7 @@ class TestWorkingDirectoryAndEnvironment:
 
     async def test_credential_returns_token_hidden_from_repr(self, mocker) -> None:
         _recorder(mocker, (0, f"  {SECRET}  \n", ""))
-        host = _create(REGISTRATION.options_model(), ["tokencmd"], None)
+        host = _create(["tokencmd"], None)
         credential = await host.session.credential()
         assert credential.token == SECRET
         assert SECRET not in repr(credential)
@@ -1113,7 +1166,7 @@ class TestWorkingDirectoryAndEnvironment:
 
     async def test_gh_failure_message_never_holds_the_token(self, mocker) -> None:
         _recorder(mocker, (0, f"{SECRET}\n", ""), (1, "", f"bad {SECRET} here"))
-        host = _create(REGISTRATION.options_model(), "tokencmd", None)
+        host = _create("tokencmd", None)
         with pytest.raises(CodeHostError) as info:
             await host.work_items.list_open(REPO)
         assert SECRET not in str(info.value)
@@ -1137,7 +1190,7 @@ class TestTokenCommand:
 
     async def test_nonzero_exit_carries_exit_code_as_data(self, mocker) -> None:
         _recorder(mocker, (3, "", f"secret stderr {SECRET}"))
-        host = _create(REGISTRATION.options_model(), f"mycmd {SECRET}", None)
+        host = _create(f"mycmd {SECRET}", None)
         with pytest.raises(TokenCommandError) as info:
             await host.session.credential()
         assert info.value.exit_code == 3
@@ -1149,12 +1202,12 @@ class TestTokenCommand:
     async def test_empty_output_raises(self, mocker) -> None:
         _recorder(mocker, (0, "  \n", ""))
         with pytest.raises(TokenCommandError) as info:
-            await _create(REGISTRATION.options_model(), "mycmd", None).session.credential()
+            await _create("mycmd", None).session.credential()
         assert info.value.exit_code == 0
 
     async def test_timeout_is_a_read_timeout(self, mocker) -> None:
         mock_run = _recorder(mocker, RunResult(124, "", "timed out after 30s", timed_out=True))
-        host = _create(REGISTRATION.options_model(), f"mycmd {SECRET}", None)
+        host = _create(f"mycmd {SECRET}", None)
         with pytest.raises(CodeHostTimeoutError) as info:
             await host.session.credential()
         assert info.value.write is False
@@ -1165,7 +1218,7 @@ class TestTokenCommand:
     async def test_not_found(self, mocker) -> None:
         _recorder(mocker, RunResult(127, "", f"No such file: {SECRET}", not_found=True))
         with pytest.raises(TokenCommandError) as info:
-            await _create(REGISTRATION.options_model(), "mycmd", None).session.credential()
+            await _create("mycmd", None).session.credential()
         assert info.value.detail == "OSError"
         assert SECRET not in str(info.value)
 
@@ -1173,13 +1226,13 @@ class TestTokenCommand:
     async def test_unparsable_command(self, mocker, cmd) -> None:
         mock_run = mocker.patch("dotharness.code_host.reference.run", new_callable=AsyncMock)
         with pytest.raises(TokenCommandError) as info:
-            await _create(REGISTRATION.options_model(), cmd, None).session.credential()
+            await _create(cmd, None).session.credential()
         assert info.value.detail == "ValueError"
         assert mock_run.await_count == 0
 
     async def test_failed_command_stops_the_gh_call(self, mocker) -> None:
         mock_run = _recorder(mocker, (1, "", ""))
-        host = _create(REGISTRATION.options_model(), "mycmd", None)
+        host = _create("mycmd", None)
         with pytest.raises(AuthenticationError):
             await host.work_items.list_open(REPO)
         assert mock_run.await_count == 1  # gh never ran
@@ -1290,7 +1343,7 @@ class TestSessionOperations:
     async def test_current_user_runs_with_gh_token_only(self, mocker, monkeypatch) -> None:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         mock_run = _recorder(mocker, (0, f"{SECRET}\n", ""), (0, "ann\n", ""))
-        host = _create(REGISTRATION.options_model(), "tokencmd", None)
+        host = _create("tokencmd", None)
         await host.session.current_user()
         env = mock_run.call_args.kwargs["env"]
         assert env["GH_TOKEN"] == SECRET
@@ -1301,7 +1354,7 @@ class TestSessionOperations:
 
     async def test_agent_environment_adds_both_variables_and_credential_wins(self, mocker) -> None:
         mock_run = _recorder(mocker, (0, f"{SECRET}\n", ""))
-        host = _create(REGISTRATION.options_model(), ["tokencmd", "--x"], None)
+        host = _create(["tokencmd", "--x"], None)
         env = await host.session.agent_environment({"KEEP": "me", "GH_TOKEN": "old", "GITHUB_TOKEN": "old"})
         assert env == {"KEEP": "me", "GH_TOKEN": SECRET, "GITHUB_TOKEN": SECRET}
         assert _argv(mock_run) == ["tokencmd", "--x"]
@@ -1315,14 +1368,14 @@ class TestSessionOperations:
 
     async def test_agent_environment_token_command_failure_never_shows_the_command(self, mocker) -> None:
         _recorder(mocker, (2, "", SECRET))
-        host = _create(REGISTRATION.options_model(), f"mycmd {SECRET}", None)
+        host = _create(f"mycmd {SECRET}", None)
         with pytest.raises(TokenCommandError) as info:
             await host.session.agent_environment()
         assert SECRET not in str(info.value)
 
     async def test_agent_environment_token_timeout(self, mocker) -> None:
         _recorder(mocker, RunResult(124, "", "", timed_out=True))
-        host = _create(REGISTRATION.options_model(), "mycmd", None)
+        host = _create("mycmd", None)
         with pytest.raises(CodeHostTimeoutError) as info:
             await host.session.agent_environment()
         assert info.value.write is False
@@ -1545,7 +1598,7 @@ class TestPagingRetries:
     async def test_token_never_in_logged_failures(self, mocker, caplog) -> None:
         results = [(0, f"{SECRET}\n", ""), *[(1, "", f"bad {SECRET}")] * 3]
         _pages(mocker, *results)
-        host = _create(REGISTRATION.options_model(), "tokencmd", None)
+        host = _create("tokencmd", None)
         with caplog.at_level(logging.WARNING), pytest.raises(CodeHostError) as info:
             await host.change_requests.reviews(REPO, 1)
         assert SECRET not in caplog.text
@@ -1974,6 +2027,8 @@ class TestPhase3Timeouts:
             "Session.available",
             "ChangeRequests.find_by_branch",
             "WorkItems.remove_label",
+            "ChangeRequests.create_draft",  # DEC-45
+            "WorkItems.list_open",  # DEC-45
             "Discussion.post_review",
         }
         assert DECLARATION.limits.timeouts.default_seconds == 30
@@ -1987,7 +2042,7 @@ class TestPhase3Environment:
             mocker,
             lambda cmd, kw: RunResult(0, f"{SECRET}\n", "") if cmd == ["tokencmd"] else RunResult(0, "[]", ""),
         )
-        host = _create(REGISTRATION.options_model(), "tokencmd", None)
+        host = _create("tokencmd", None)
         with contextlib.suppress(CodeHostError):  # an empty payload may be unusable. Only the environment matters here.
             await call(host)
         gh_env = mock_run.call_args_list[-1].kwargs["env"]
@@ -2218,7 +2273,7 @@ class TestChecks:
             return RunResult(1, "", f"denied {SECRET}")
 
         _stub(mocker, handler)
-        host = _create(REGISTRATION.options_model(), ["echo", "x"])
+        host = _create(["echo", "x"])
         with pytest.raises(CodeHostError) as info:
             await host.checks.list_checks(REPO, 1)
         assert SECRET not in str(info.value)

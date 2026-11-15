@@ -30,20 +30,20 @@ KNOWLEDGE_SHA256 = {
     "patterns/react/QUICK_START_MIGRATION.md": "b5e52bbf85e255d767438dfcb041e7ea6aa9c938957409f7fd6aa1c459ee6ce5",
     "patterns/react/QUICK_START_NEW_COMPONENT.md": "af38bab722bcaa63561db2a27a31e81314c979f00e27dfbff7c8315cbe337868",
     "patterns/react/README.md": "9e0f93c945880084b8c7b729d16cadb988e93087d6d35ca4ca96511fef6a31e1",
-    "pr-review/address-comment.md": "5cf92379f415251eeb06a6167c3907a5baf270f86bc52e7e90514a2d3c912b5f",
+    "pr-review/address-comment.md": "c13ecaf2611e2eef2a3980d04bc1cfb6c196ba5d0c8e8cf7adfc6b78a5e027b0",
     "pr-review/address-comments.md": "250c23e0d005604382ef0d732baa7dd919d1428ae4967575c28f217952d5886d",
     "pr-review/ci-fix-prompt.md": "aee41d42cb556d914a0962c7cb94c4ff6b8917f98d3bc11cefb50997ee725047",
-    "pr-review/focused-review.md": "3c108e1a952ec5128de9dbfbd62cfecd301c7ad95542a97e69a48f988c06ebaf",
-    "pr-review/local-address-finding.md": "c9dbddac30bb03c14d5e65e1dff9ed4cc46b04cec0bd268457dc853833d1801f",
-    "pr-review/local-review-design.md": "18dcf449909dae03048035f7af5f86d6137e18255869c3672b283522c0c728d4",
-    "pr-review/local-review-file.md": "efd49e46fcd61b118515fbae18a8842c2cb41a1dff1cf2e82905333beffe33fa",
-    "pr-review/local-review-summary.md": "14cb77f51e6bd8a05a10cd52d3a0f6094b94bb5035199b8dd9b6124a6c0f1162",
-    "pr-review/review-design.md": "67edcb7caef80e10270cd9f0794d60e952101a37449d36717383cb026d85051e",
-    "pr-review/review-file.md": "506f5daac9f2c302798a659477a6d84d7e3cef76ddfb002e28596712ccac9ada",
+    "pr-review/focused-review.md": "4e9fe8f1eb55b8aa4304434cdbe7909ff824d2ad55931dbabcf5579f02238985",
+    "pr-review/local-address-finding.md": "5bc748e734c7fdf8e3b6d52286c87b5b82dc5615f28ca5a7b6faf33aacda3838",
+    "pr-review/local-review-design.md": "ea4e46e550e2ea4aef8c93704bcaa97ec06ffbc127064b9d85f02fe0eeedb764",
+    "pr-review/local-review-file.md": "218b969e6ad698081c687c8c4117138b1c06689bc19ac850b1e548beeb023361",
+    "pr-review/local-review-summary.md": "92bfeef0fbf88337d992858120ddd181be8c29503c59f36006c1602eccf78a2f",
+    "pr-review/review-design.md": "05b6c3b7912251fd90b32d6fc49aebdb7d80b4ccc9ec1494f56428554846921d",
+    "pr-review/review-file.md": "ebe822b7228ff78850e5afc14116e5916a06b5aeb7bb71f9d59562e23b6b4a13",
     "pr-review/review-prs.md": "1bfa0785e2d22f077fbd253cf664f081bfa9233c6ebbf4c0fc88024c1c31e9c5",
-    "pr-review/review-regret.md": "594442dcfe762b50eddad7b2e56f0e2e2dc970bd04874766c5db680cdea4f88e",
-    "pr-review/review-summary.md": "5a9a2e432d570d4d31c5cedbf8011fac3d1fc66a29a988399f690b16e2d7bf1b",
-    "pr-review/review-traceability.md": "0f3fee691506e277494f2e82fc62eb8a3dae6fa378520d4834b100ae963a20e7",
+    "pr-review/review-regret.md": "3537507b7e614d1b301782447ecc7cc3da4d010d2c99f4ed73ae290348ef52c7",
+    "pr-review/review-summary.md": "751c2cb9f080688b0b722cde80ce4eaeedfc59b3f7d0f5118074547207293640",
+    "pr-review/review-traceability.md": "8e6aff876b134440a2396b32304ba72865bd3b2852084c4e15c4bfd576d69c94",
     "sisyphus/intake-prompt.md": "77f69497f895ac2137743f5533daa1444e30e70cea20d77d58089d7650159d87",
     "sisyphus/linear-feed-prompt.md": "e76652507f9fdb9aaafc933dadb1c9c76eef4597791203dcade167e70fb3eddc",
     "sisyphus/orchestration-prompt.md": "00a740a2e90866a446cb602ecdb3d0d2190082c6eca50c3794b250382b808364",
@@ -96,6 +96,24 @@ def test_importlib_resources_resolves_knowledge_and_skills() -> None:
 def test_pr_comments_script_is_package_data_and_matches_runner_path():
     from dotharness.pr_review.runners.common import PR_COMMENTS_SCRIPT_PATH
 
-    packaged = PACKAGE_DIR / "scripts" / "pr-comments.py"
+    packaged = PACKAGE_DIR / "code_host" / "scripts" / "pr-comments.py"
     assert packaged.is_file()
     assert PR_COMMENTS_SCRIPT_PATH.resolve() == packaged.resolve()
+
+
+def test_pr_comments_script_path_is_provided_by_the_reference_host():
+    from dotharness.code_host.reference import PR_COMMENTS_SCRIPT
+    from dotharness.pr_review.runners.common import PR_COMMENTS_SCRIPT_PATH
+
+    assert PR_COMMENTS_SCRIPT_PATH == PR_COMMENTS_SCRIPT
+    assert not (PACKAGE_DIR.parent.parent / "docs" / "pr_review" / "scripts" / "pr-comments.py").exists()
+
+
+async def test_reference_host_provides_the_comments_script():
+    from dotharness.code_host import HostSelection, create_code_host
+    from dotharness.code_host.reference import PR_COMMENTS_SCRIPT
+
+    host = create_code_host(HostSelection(setting="host", name="reference", options={}, token_cmd="echo t"))  # noqa: S106
+    assert await host.discussion.comments_script() == PR_COMMENTS_SCRIPT
+    assert PR_COMMENTS_SCRIPT.parent == PACKAGE_DIR / "code_host" / "scripts"
+    assert PR_COMMENTS_SCRIPT.is_file()

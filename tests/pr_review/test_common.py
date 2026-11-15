@@ -19,6 +19,7 @@ from dotharness.code_host.testing import SECRET, InMemoryCodeHost
 from dotharness.pr_review.config import HarnessConfig, HarnessSection, RepoConfig
 from dotharness.pr_review.runners.common import (
     agent_env,
+    backend_env,
     build_agent_base_env,
     host_current_user,
     host_selection,
@@ -41,18 +42,18 @@ def fake() -> InMemoryCodeHost:
 
 
 def test_host_selection_carries_config(tmp_path):
-    cfg = _config(tmp_path, host="examplehost", host_options={"a": 1}, gh_token_cmd="old cmd")  # noqa: S106
+    cfg = _config(tmp_path, host="examplehost", host_options={"a": 1}, host_token_cmd="host cmd")  # noqa: S106
     selection = host_selection(cfg)
     assert selection.setting == "host"
     assert selection.name == "examplehost"
     assert dict(selection.options) == {"a": 1}
-    assert selection.token_cmd == "old cmd"  # noqa: S105
+    assert selection.token_cmd == "host cmd"  # noqa: S105
     assert selection.working_directory == tmp_path
 
 
-def test_host_selection_default_token_command_and_missing_directory(tmp_path):
+def test_host_selection_leaves_unset_token_command_to_the_host_and_missing_directory(tmp_path):
     selection = host_selection(_config(tmp_path / "absent"))
-    assert selection.token_cmd == "gh auth token"  # noqa: S105
+    assert selection.token_cmd is None
     assert selection.working_directory is None
     assert selection.name is None
 
@@ -165,3 +166,24 @@ async def test_host_current_user_fails_open_and_logs(fake, caplog):
         assert await host_current_user(fake.code_host()) == ""
     assert any("token revoked" in r.getMessage() for r in caplog.records)
     assert SECRET not in caplog.text
+
+
+async def test_backend_env_copies_the_host_credential_variables_by_name(tmp_path, fake):
+    cfg = _config(tmp_path, env={"KEEP": "1", "GITHUB_TOKEN": "configured"})
+    scaffold_env = {"GITHUB_TOKEN": SECRET, "GH_TOKEN": "", "OTHER": "x"}
+    merged = await backend_env(cfg, fake.code_host(), scaffold_env)
+    assert merged == {"KEEP": "1", "GITHUB_TOKEN": SECRET}
+
+
+async def test_backend_env_keeps_configured_value_when_scaffold_has_none(tmp_path, fake):
+    cfg = _config(tmp_path, env={"GITHUB_TOKEN": "configured"})
+    assert await backend_env(cfg, fake.code_host(), {}) == {"GITHUB_TOKEN": "configured"}
+
+
+async def test_backend_env_holds_no_variable_name_of_its_own(tmp_path):
+    from unittest.mock import AsyncMock, MagicMock
+
+    host = MagicMock()
+    host.session.agent_environment_names = AsyncMock(return_value=["ACME_KEY"])
+    merged = await backend_env(_config(tmp_path), host, {"ACME_KEY": "k", "GITHUB_TOKEN": "ignored"})
+    assert merged == {"ACME_KEY": "k"}

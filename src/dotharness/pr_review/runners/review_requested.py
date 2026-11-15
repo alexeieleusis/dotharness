@@ -15,6 +15,7 @@ from dotharness.code_host import (
     ReviewState,
     UnsupportedCapabilityError,
 )
+from dotharness.code_host.prompts import render_prompt
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
@@ -47,6 +48,7 @@ from dotharness.pr_review.runners.common import (
     post_no_linked_ticket_comment,
     pr_from_url,
     preserve_reviewer_request,
+    repo_identity_check,
     resolve_linked_tickets,
     run_pr_level_pass,
 )
@@ -90,8 +92,8 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
-        backend_env(config, env),
-        expected_repo_name=config.repo.name,
+        await backend_env(config, host, env),
+        identity_check=repo_identity_check(config),
     )
     wdir = str(config.repo.working_dir)
 
@@ -323,7 +325,9 @@ async def _run_file_reviews(
     ctx: dict,
 ) -> bool:
     pr_number = pr.number
-    file_instructions = (knowledge_dir / "review-file.md").read_text(encoding="utf-8")
+    file_instructions = render_prompt(
+        (knowledge_dir / "review-file.md").read_text(encoding="utf-8"), await ctx["host"].discussion.prompt_variables()
+    )
     files = ctx["files"]
     commit_sha = ctx["commit_sha"]
     pr_description = ctx["pr_description"]
@@ -412,7 +416,10 @@ async def _run_design_review(
     repo_name = config.repo.name
 
     async def build_prompt() -> str:
-        design_instructions = (knowledge_dir / "review-design.md").read_text(encoding="utf-8")
+        design_instructions = render_prompt(
+            (knowledge_dir / "review-design.md").read_text(encoding="utf-8"),
+            await ctx["host"].discussion.prompt_variables(),
+        )
         diff_sections = "".join([
             build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
             for file in ctx["files"]
@@ -489,7 +496,10 @@ async def _run_traceability_review(
         return None
 
     async def build_prompt() -> str:
-        traceability_instructions = (knowledge_dir / "review-traceability.md").read_text(encoding="utf-8")
+        traceability_instructions = render_prompt(
+            (knowledge_dir / "review-traceability.md").read_text(encoding="utf-8"),
+            await ctx["host"].discussion.prompt_variables(),
+        )
         diff_sections = "".join([
             build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
             for file in ctx["files"]
@@ -582,7 +592,14 @@ async def _run_regret_review(
         introducing_hunks = await find_introducing_prs(
             ctx["host"], ctx["repo"], _change_request(ctx, pr_number), config, wdir, env, budget_start
         )
-        found = await find_regret_candidates(introducing_hunks, config, wdir, env, budget_start)
+        found = await find_regret_candidates(
+            introducing_hunks,
+            config,
+            wdir,
+            env,
+            budget_start,
+            script_path=await ctx["host"].discussion.comments_script(),
+        )
         if not found:
             logger.debug("PR #%d: no regret candidates — nothing to judge this run", pr_number)
             return True
@@ -590,7 +607,10 @@ async def _run_regret_review(
         return None
 
     async def build_prompt() -> str:
-        regret_instructions = (knowledge_dir / "review-regret.md").read_text(encoding="utf-8")
+        regret_instructions = render_prompt(
+            (knowledge_dir / "review-regret.md").read_text(encoding="utf-8"),
+            await ctx["host"].discussion.prompt_variables(),
+        )
         diff_sections = "".join([
             build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
             for file in ctx["files"]
@@ -642,7 +662,10 @@ async def _run_summary_review(
     ctx: dict,
 ) -> bool:
     pr_number = pr.number
-    summary_instructions = (knowledge_dir / "review-summary.md").read_text(encoding="utf-8")
+    summary_instructions = render_prompt(
+        (knowledge_dir / "review-summary.md").read_text(encoding="utf-8"),
+        await ctx["host"].discussion.prompt_variables(),
+    )
     files = ctx["files"]
     pr_description = ctx["pr_description"]
     vibe_heal_context = ctx["vibe_heal_context"]

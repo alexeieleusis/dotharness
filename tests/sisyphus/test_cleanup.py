@@ -12,8 +12,9 @@ from pathlib import Path
 
 import pytest
 
+from dotharness.code_host.errors import CodeHostError
 from dotharness.sisyphus.cleanup import ABSENT, DELETED, KEPT, PrInfo, cleanup_branch
-from dotharness.sisyphus.orchestrator import CommandResult, GitHubError
+from dotharness.sisyphus.orchestrator import CommandResult
 
 BRANCH = "sisyphus/eng-1-abcd1234"
 ITEM = "ENG-1"
@@ -300,7 +301,7 @@ async def test_draft_pr_is_open_so_cleanup_keeps_the_branch(repo: Repo) -> None:
         (PrInfo(5, "OPEN", "x"), "PR #5 is OPEN, not MERGED"),
         (PrInfo(5, "CLOSED", "x"), "PR #5 is CLOSED, not MERGED"),
         (
-            GitHubError("gh pr view failed (exit 1): boom"),
+            CodeHostError("gh pr view failed (exit 1): boom"),
             "code host lookup of " + BRANCH + " failed (CodeHostError): gh pr view failed",
         ),
         (None, "no PR found for " + BRANCH),
@@ -359,7 +360,7 @@ async def test_squash_merge_is_deleted_with_capital_d_only_after_the_merged_head
         PrInfo(9, "OPEN", "x"),
         PrInfo(9, "CLOSED", "x"),
         PrInfo(9, "MERGED", "0" * 40),
-        GitHubError("gh pr view failed (exit 1): boom"),
+        CodeHostError("gh pr view failed (exit 1): boom"),
         None,
     ],
 )

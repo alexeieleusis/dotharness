@@ -1,6 +1,6 @@
 # Code host: capability interfaces and direct gh user inventory
 
-Status: Phase 0 design for #192. The package `src/dotharness/code_host/` exists and the vibe-heal review flow is implemented (Phase 1, #193). The sisyphus flow is implemented (Phase 2, #194). The reference host and the in-memory fake implement every method of the six interfaces (A-1). The pr-review flow is implemented (Phase 3, #195): every `INV-PR-*` row is migrated and the interface version stays 2. The remaining direct users of `gh` or `dotharness.gh` in `src/` are the reference implementation (`code_host/reference.py`), `gh.py`, `repo_guard.py`, the `scripts/pr-comments.py` copies and the knowledge prompt files. The leftover users (Phase 4, #196) are not migrated yet.
+Status: Phase 4 (#196) is implemented. The package `src/dotharness/code_host/` holds the interfaces, the reference host (`reference.py`, `reference_gh.py`), the in-memory fake and the conformance suite. Vibe-heal (Phase 1, #193), sisyphus (Phase 2, #194) and pr-review (Phase 3, #195) call only the capability interfaces. The interface version is 3: Phase 4 added `Discussion.comments_script()` (see "Phase 4 outcome" below). `gh` and `GITHUB_TOKEN`/`GH_TOKEN` occur in `src/` only inside the reference implementation (`code_host/reference.py`, `code_host/reference_gh.py`, `code_host/scripts/pr-comments.py`) and its test double. All `GitHub*` rename aliases and the `gh_token_cmd` key are removed. The Inventory and Decision log below describe the code as audited before each phase and are kept as the record.
 
 This page is the contract for Phases 1 to 4 (#193 to #196). Sections: Inventory, Phase split, Rename plan, Interfaces,
 Models, Error model, Declarations, Factory and selection, Conformance suite and in-memory fake, and the Decision log
@@ -14,17 +14,17 @@ One id namespace. Every entry is decided. The entry gives the rationale.
 | Id | Decision | Rationale |
 |---|---|---|
 | DEC-1 | Phase 1 (#193) creates `src/dotharness/code_host/` and migrates vibe-heal (`INV-VH-*`). Phase 2 (#194) migrates sisyphus (`INV-SY-*`). | Confirmed by a human. Vibe-heal is the first migrating tool: its review flow needs the fewest capabilities. |
-| DEC-2 | The issue that deletes `docs/pr_review/scripts/pr-comments.py` is filed as part of #196. | Not blocking earlier phases. |
+| DEC-2 | The issue that deletes `docs/pr_review/scripts/pr-comments.py` is filed as part of #196. | Not blocking earlier phases. Done in Phase 4: the file is deleted. |
 | DEC-3 | pr-review is one phase (Phase 3). | No split was requested. Reopen only if Phase 3 review is too large. |
-| DEC-4 | `scripts/pr-comments.py` runs no dotharness entry point, so there is no command name. How it reaches the interface is decided in Phase 4 (#196). | The script only starts `gh` and `git` through its local `run()` helper. |
+| DEC-4 | `scripts/pr-comments.py` runs no dotharness entry point, so there is no command name. How it reaches the interface is decided in Phase 4 (#196). | The script only starts `gh` and `git` through its local `run()` helper. Phase 4 decision: the host provides the script through `Discussion.comments_script()` and runners run that file as a child process. |
 | DEC-5 | Issue numbers for Phases 2 to 4 are #194, #195, #196. Remaining "to be filed" items are handled in #196. | Fixed by the ticket breakdown. |
-| DEC-6 | Session exposes the agent-visible variable names as data and keeps `GITHUB_TOKEN` and `GH_TOKEN` for the reference implementation. No neutral name. | With the default config the child process must receive the same variable names and values as today. |
+| DEC-6 | Session exposes the agent-visible variable names as data and keeps `GITHUB_TOKEN` and `GH_TOKEN` for the reference implementation. No neutral name. | With the default config the child process must receive the same variable names and values as today, except the widening that DEC-43 accepts: agent children also get `GH_TOKEN`. |
 | DEC-7 | Rename aliases emit no `DeprecationWarning`. | A warning changes stderr and test output. |
-| DEC-8 | `PR_COMMENTS_SCRIPT_PATH` is kept and may later be re-pointed to a host-declared script. | It names a script path, not a host. |
+| DEC-8 | `PR_COMMENTS_SCRIPT_PATH` is kept and may later be re-pointed to a host-declared script. | It names a script path, not a host. Phase 4 re-pointed its value to the reference host's script (`code_host/scripts/pr-comments.py`). Runners use `Discussion.comments_script()`. |
 | DEC-9 | `MergeError`, `AutoApproveError`, `CiFixError` keep their names and stay consumer-local. Phase 3 wraps `CodeHostError` in them at raise sites only (`raise ... from`). | They are named for the command. Only the cause chain changes. |
-| DEC-10 | No warning when both `gh_token_cmd` and `host_token_cmd` are set. `host_token_cmd` wins. | Additive key. The old key is accepted until Phase 4. |
+| DEC-10 | No warning when both `gh_token_cmd` and `host_token_cmd` are set. `host_token_cmd` wins. | Additive key. The old key was accepted until Phase 4. Phase 4 removed it: the loader raises `ConfigError` naming `harness.host_token_cmd`. |
 | DEC-11 | `kind = "github"` stays. No neutral spelling in Phases 1 to 3. | Existing configs and error messages must load unchanged. |
-| DEC-12 | A neutral `[harness]` key `host_token_cmd` is added, additive only. | Same semantics as `gh_token_cmd`. |
+| DEC-12 | A neutral `[harness]` key `host_token_cmd` is added, additive only. | Same timeout and default as `gh_token_cmd`, which Phase 4 removed. Not the same execution model: `gh_token_cmd` ran with `shell=True`, `host_token_cmd` runs through `shlex.split` with no shell (DEV-6). |
 | DEC-13 | Display label is `Repository.display_name(repo)`. | Display is a method, not an attribute consumers read. |
 | DEC-14 | `WorkflowRun` is omitted. | No consumer in the audit. |
 | DEC-15 | Default branch is `Repository.default_branch(repo)`. | There is no `Repository` model. |
@@ -55,13 +55,16 @@ One id namespace. Every entry is decided. The entry gives the rationale.
 | DEC-40 | The conformance section has no target size. | Comparable to Interfaces and Error model. |
 | DEC-41 | B-ERR-2 asserts the error type and `write` flag, not retry-safety. | The model defines no idempotency promise. |
 | DEC-42 | Removing an absent label is a no-op. | The Interfaces section names no error for it. |
+| DEC-43 | Agent child processes receive `GH_TOKEN` as well as `GITHUB_TOKEN` (before Phase 4 only `GITHUB_TOKEN`). This closes open decision OD-3 and is the one accepted exception to the "same names" rule of DEC-6. Host-run `gh` calls get `GH_TOKEN` only. | `gh` reads `GH_TOKEN` before `GITHUB_TOKEN`, so one credential under both names keeps every agent-run `gh` call on the host's token regardless of the inherited environment. The value is the same credential already present under `GITHUB_TOKEN`, so no new secret reaches the child. Cost: code that logs or forwards the environment, or a tool that reads `GH_TOKEN` first, now sees the token under a second name that the previous release did not expose. Operators who forward agent environments must treat both names as secret. |
+| DEC-44 | Superseded in review of #196: a sisyphus (or vibe-heal) run without `[source.host] token_cmd` keeps `gh`'s own authentication, as before Phase 4. The factory supplies `DEFAULT_TOKEN_CMD` (`gh auth token`) to `Session.credential()` only, which pr-review calls for the agent environment. Host-run `gh` calls get `GH_TOKEN` only when a token command is configured. | The ticket and #192 say default behavior must not change. A host whose `gh` authenticates through an environment token or a keyring `gh auth token` cannot read keeps working. The loader still has no default and runs nothing. |
+| DEC-45 | Accepted with a mitigation: the sisyphus `gh` calls move from a 3600 s limit to the 30 s default, except `ChangeRequests.create_draft` and `WorkItems.list_open`, which declare 3600.0 s per operation (`_SLOW_REPO_TIMEOUT_SECONDS` in `code_host/reference.py`). | `pr create` and `issue list` on a large repository can exceed 30 s. A timeout on `create_draft` is `CodeHostTimeoutError(write=True)` for a write that may have taken effect, and consumers must not retry it, so the old limit is kept for exactly the two calls that can be slow. Every other sisyphus call stays on the 30 s default. |
 
 ## Inventory
 
 ### Terms used here
 
-- **Direct gh user**: a function, class or script in `src/` or either `pr-comments.py` copy that builds a gh argv, runs gh,
-  reads `GITHUB_TOKEN`/`GH_TOKEN`, or runs `gh_token_cmd`/`token_cmd`.
+- **Direct gh user**: a function, class or script in `src/` that builds a gh argv, runs gh,
+  reads `GITHUB_TOKEN`/`GH_TOKEN`, or runs a token command (`token_cmd`).
 - **Owner**: the one capability interface an inventoried operation belongs to. Starting set: Session (Ses), Repository
   (Repo), ChangeRequests (CR), Discussion (Disc), Checks (Chk), WorkItems (WI).
 - **Change request (CR)**: a pull request. Existing code keeps "PR". New names use "change request".
@@ -75,9 +78,9 @@ below, or to the "Non-call hits" list.
 
 ```
 grep -rnE "gh_argv\(|['\"]gh['\"]|\b_gh\(|run_gh\(|\bgh [a-z]" src
-grep -rnE "GITHUB_TOKEN|GH_TOKEN|gh_token_cmd|token_cmd" src
+grep -rnE "GITHUB_TOKEN|GH_TOKEN|token_cmd" src
 grep -rnE "shutil\.which\(.gh|get-url origin|PR_COMMENTS_SCRIPT_PATH|build_subprocess_env" src
-grep -nE "\"gh\"|gh " docs/pr_review/scripts/pr-comments.py
+grep -nE "\"gh\"|gh " src/dotharness/code_host/scripts/pr-comments.py
 ```
 
 Rules:
@@ -148,9 +151,9 @@ Consumers: `vibe_heal/review/orchestrator.py`, `vibe_heal/cli.py`.
 Host side: the reference host and the fake implement every method these rows need (A-1), and the shared conformance suite
 covers them. All 47 rows are migrated (Phase 3). The pr-review runners no longer run `gh` themselves. The reference host runs it
 behind the capability interfaces. The "Today's gh call" and "File and function" cells describe the code before Phase 3.
-Notes on rows that keep a name or a script: INV-PR-18 still spawns `scripts/pr-comments.py` by path (its own `gh` calls are
-INV-LO-02..05, Phase 4). INV-PR-46 (`shutil.which("gh")` in `cmd_validate`) and INV-PR-47 (the `gh_token_cmd` key, kept as an
-alias of `host_token_cmd`, NG3) keep their names until Phase 4.
+Notes on rows that keep a name or a script: INV-PR-18 spawns the host's comments script (`Discussion.comments_script()`) by path; its own `gh` calls are
+INV-LO-02..05 (Phase 4, migrated into `code_host/scripts/pr-comments.py`). INV-PR-46 (`shutil.which("gh")` in `cmd_validate`) keeps its name. INV-PR-47 (the `gh_token_cmd` key) was
+removed in Phase 4: only `host_token_cmd` exists.
 
 | Row id | Operation | Today's gh call | File and function | Owner | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -208,21 +211,21 @@ are `CodeHostError`), `MergeError` (INV-PR-34),
 exists at the audited commit. Consumers of INV-PR-07 that are not direct gh callers: `_check_timing_gate` and
 `_check_approval_safety` in `auto_approve_github.py` (via `fetch_all_pages`).
 
-### Group `leftovers` (Phase 4)
+### Group `leftovers` (Phase 4, migrated)
 
-| Row id | Operation | Today's gh call | File and function | Owner |
-| --- | --- | --- | --- | --- |
-| INV-LO-01 | shared argv/env helpers | `GH = "gh"`, `gh_argv`, `build_subprocess_env` (sets `GITHUB_TOKEN`) | `gh.py` | Ses |
-| INV-LO-02 | script: resolve CR for current branch | `run(["gh","pr","view","--json","number"])` | `scripts/pr-comments.py` `get_pr_number` | CR |
-| INV-LO-03 | script: read comments, paginated | `run(["gh", *args])` in `gh_json` / `gh_json_paginated` | `scripts/pr-comments.py` | Disc |
-| INV-LO-04 | script: post comment / reply | `gh api PATH -X POST -F body=@-` | `scripts/pr-comments.py` `_post_reply` (line ~243) | Disc |
-| INV-LO-05 | script: add reviewer | `gh pr edit N --add-reviewer a,b` | `scripts/pr-comments.py` `_request_re_review` (line ~305) | CR |
-| INV-LO-06 | docs copy: same operations, `gh_paginated(endpoint)` | as INV-LO-02..05 | `docs/pr_review/scripts/pr-comments.py` (outside `src/dotharness/`. First-line note: "Historical: describes the pre-migration tools/pr-review (harness) tool. Not maintained.") | Disc (dominant operation, and the copy is not migrated) |
+| Row id | Operation | Today's gh call | File and function | Owner | Status |
+| --- | --- | --- | --- | --- | --- |
+| INV-LO-01 | shared argv/env helpers | `GH = "gh"`, `gh_argv`, `build_subprocess_env` (sets `GITHUB_TOKEN`) | `gh.py`; moved to `code_host/reference_gh.py` (`GH`, `gh_argv`; the token branch of `build_subprocess_env` was dropped) | Ses | migrated (Phase 4) |
+| INV-LO-02 | script: resolve CR for current branch | `run(["gh","pr","view","--json","number"])` | `scripts/pr-comments.py` `get_pr_number` | CR | migrated (Phase 4) |
+| INV-LO-03 | script: read comments, paginated | `run(["gh", *args])` in `gh_json` / `gh_json_paginated` | `scripts/pr-comments.py` | Disc | migrated (Phase 4) |
+| INV-LO-04 | script: post comment / reply | `gh api PATH -X POST -F body=@-` | `scripts/pr-comments.py` `_post_reply` (line ~243) | Disc | migrated (Phase 4) |
+| INV-LO-05 | script: add reviewer | `gh pr edit N --add-reviewer a,b` | `scripts/pr-comments.py` `_request_re_review` (line ~305) | CR | migrated (Phase 4) |
+| INV-LO-06 | docs copy: same operations, `gh_paginated(endpoint)` | as INV-LO-02..05 | `docs/pr_review/scripts/pr-comments.py` (outside `src/dotharness/`. First-line note: "Historical: describes the pre-migration tools/pr-review (harness) tool. Not maintained.") | Disc (dominant operation, and the copy is not migrated) | none: deleted in Phase 4 |
 
-Both script copies live under `src/dotharness/scripts/` (413 lines) and `docs/pr_review/scripts/` (379 lines). The `src`
-script is stdlib only and must not import dotharness (F-DUP-8 in `docs/design/shared-async-layer.md`). The two copies differ
-(359 lines of `diff` output at the audited commit). This page RECORDS the divergence and does not reconcile it. The docs copy
-is inventoried only, not migrated. Deleting it is filed in #196 (DEC-2).
+Both script copies lived under `src/dotharness/scripts/` (413 lines) and `docs/pr_review/scripts/` (379 lines) at the audited commit. The `src`
+script is stdlib only and must not import dotharness (F-DUP-8 in `docs/design/shared-async-layer.md`). Phase 4 kept one copy:
+`src/dotharness/code_host/scripts/pr-comments.py`, moved from `src/dotharness/scripts/` with its contents unchanged and
+provided by the reference host through `Discussion.comments_script()`. The `docs/pr_review/scripts/pr-comments.py` copy was deleted (DEC-2).
 
 Phase column rule:
 
@@ -331,8 +334,8 @@ commit: 12 + 7 + 47 + 6 = 72 rows).
 | 1 | #193 | `INV-VH-01` .. `INV-VH-07` | `vibe_heal/review/github.py` (`GitHubReviewClient`) |
 | 2 | #194 | `INV-SY-01` .. `INV-SY-12` | `sisyphus/pick.py` (`GhCli`, `GhLabelRemover`, `GhPullRequestLookup`, candidate lister); `sisyphus/cli.py` (`GhPullRequestClient`, `GhPrStateLookup`, `run_token_cmd` and its env); `sisyphus/config.py` `HostSource.token_cmd` (INV-SY-12, same package as `run_token_cmd`) |
 | 3 | #195 | `INV-PR-01` .. `INV-PR-47` | `pr_review/runners/*` (`common.py`, `ci_checks.py`, `ci_fix.py`, `auto_approve.py`, `auto_approve_github.py`, `merge.py`, `regret_review.py`, `address_comments.py`, `review_requested.py`, `self_review.py`, `focused_review.py`, `review_prs.py`), `pr_review/cli.py`, `pr_review/config.py` |
-| 4 | #196 | `INV-LO-01` .. `INV-LO-05` | `gh.py` (`GH`, `gh_argv`, `build_subprocess_env`); `src/dotharness/scripts/pr-comments.py`; removal of the rename aliases; final grep check |
-| none | filed in #196 (DEC-2) | `INV-LO-06` | `docs/pr_review/scripts/pr-comments.py`: inventoried only, not migrated or deleted. Its Inventory cell reads "none: not migrated". This is the single allowed exception to "one removing phase per row". |
+| 4 | #196 | `INV-LO-01` .. `INV-LO-05` | `gh.py` (`GH`, `gh_argv`; now `code_host/reference_gh.py`); `pr-comments.py` (now `code_host/scripts/pr-comments.py`); removal of the rename aliases; final grep check |
+| none | filed in #196 (DEC-2) | `INV-LO-06` | `docs/pr_review/scripts/pr-comments.py`: inventoried only, never migrated. Deleted in Phase 4. Its Inventory cell reads "none: not migrated". This is the single allowed exception to "one removing phase per row". |
 
 INV-LO-06 sits in the `leftovers` table of the Inventory for grouping only. Its removing phase is "none", so it is excluded
 from the four lists. Confirmed decisions:
@@ -341,13 +344,12 @@ from the four lists. Confirmed decisions:
 - INV-PR-46 and INV-PR-47 are Phase 3.
 - INV-LO-06 is grouped with Phase 4 although it is never migrated.
 
-Remaining direct gh users after Phase 3: the 7 vibe-heal rows (`INV-VH-01` .. `INV-VH-07`), the 12 sisyphus rows
-(`INV-SY-01` .. `INV-SY-12`) and the 47 pr-review rows (`INV-PR-01` .. `INV-PR-47`) are migrated (marked in their tables).
-A search of `src/` finds `gh` or `dotharness.gh` users only in `code_host/reference.py` (the reference host), `gh.py`,
-`repo_guard.py`, the `scripts/pr-comments.py` copies and the knowledge prompt files under `src/dotharness/knowledge/`.
-`pr_review/runners/local_review/*` imports `build_subprocess_env` from `gh.py` and passes no token. 6 of the 72 inventory
-rows are still direct users: the leftover rows (`INV-LO-*`, Phase 4; `INV-LO-06` is never migrated). `vibe_heal/review/github.py`
-keeps the old names as aliases of the `code_host` errors until Phase 4 (R3).
+Remaining direct gh users after Phase 4: none outside the reference implementation. The 7 vibe-heal rows (`INV-VH-01` .. `INV-VH-07`), the 12 sisyphus rows
+(`INV-SY-01` .. `INV-SY-12`), the 47 pr-review rows (`INV-PR-01` .. `INV-PR-47`) and the 5 leftover rows (`INV-LO-01` .. `INV-LO-05`) are migrated (marked in their tables).
+A search of `src/` finds `gh` users only in `code_host/reference.py`, `code_host/reference_gh.py`, `code_host/scripts/pr-comments.py`
+and the in-memory fake (`code_host/testing.py`). `repo_guard.py` is git-only: the remote-URL parsing and `ssh -G` resolution moved to the
+reference host (`identity_check`). The knowledge prompt files carry `<host-...>` placeholders that the host fills (`render_prompt`).
+`INV-LO-06` was never migrated and is deleted. The rename aliases were removed in Phase 4 (R3). `tests/test_gh_isolation.py` guards the reference-only rule.
 
 Git code (`repo_guard.py` origin check, `git fetch origin refs/pull/{n}/head` in `auto_approve.py`) is in no list.
 
@@ -397,15 +399,12 @@ define. Every child process it starts goes through its local `run()` helper (a w
 `spec_prism_flow`, `sisyphus`). Checked by grep and by reading the `run(` call sites. The rest of the file was not read line
 by line.
 
-Consequence: its gh calls are INV-LO-02..05, owned by Phase 4. The earlier assumption that Phase 4 makes the script call a
-dotharness entry point is withdrawn. How the script reaches the code-host interface (for example a new neutral entry point, or
-receiving already-fetched data from the runners) is a Phase 4 design question for #196. Phase 0 does not define a command name.
-Until then the script keeps its `run(argv)` seam so `patch.object(mod, "run", ...)` still works, and `parse_paginated` stays.
+Consequence: its gh calls are INV-LO-02..05, owned by Phase 4. Phase 4 decision: the host provides the script. `Discussion.comments_script()` returns
+its path and the runners run that file as a child process. The reference host returns `code_host/scripts/pr-comments.py`. The script keeps its
+`run(argv)` seam so `patch.object(mod, "run", ...)` still works, and `parse_paginated` stays. `reply` is kept.
+The rejected alternative (the script receives already-fetched data) stays rejected: it would change the script's CLI.
 
-Rejected alternative, kept for Phase 4: the script receives already-fetched data. It works only if the three runners fetch
-first, which moves the fetch into Phase 3 and changes the script's CLI.
-
-Tests: `tests/test_pr_comments_script.py` passes unchanged through Phase 3. In Phase 4 only the argv asserted in the post-reply
+Tests: `tests/test_pr_comments_script.py` passes with the new script path (`SCRIPT`). The post-reply argv assertion is unchanged.
 test changes, and that edit is part of Phase 4.
 
 ### pr-review is one phase (R-SPLIT-5, DEC-3)
@@ -414,6 +413,17 @@ pr-review is not split: all of group `pr-review` is Phase 3. In particular `merg
 its own phase. Reason: `ci_checks.gh` is shared by `merge.py` and `ci_fix.py`, so a split would need a temporary adapter that
 Phase 0 does not design. Risk: Phase 3 is the largest phase (about fourteen modules). Fallback if reviewers find it too large:
 runners versus `cli.py`/`config.py`, with `ci_checks.py`, `merge.py` and `ci_fix.py` together in the first part.
+
+## Phase 4 outcome
+
+Facts of the final state (#196). Decisions DEC-1..DEC-45 stay as written above.
+
+- **Interface version 3.** `CODE_HOST_INTERFACE_VERSION` is 3 (`src/dotharness/code_host/version.py`). The only change since version 2 is the new method `Discussion.comments_script() -> Path`. The reference host, the in-memory fake and the conformance suite moved together. A host that targets version 2 fails the version check ("Version and stability contract").
+- **Script.** `pr-comments.py` lives at `src/dotharness/code_host/scripts/pr-comments.py`. The host provides it and runners call `Discussion.comments_script()`. `docs/pr_review/scripts/pr-comments.py` is deleted.
+- **Reference module.** `gh.py` moved to `code_host/reference_gh.py`. `repo_guard.py` is git-only and takes an async identity-check callable from the host. Prompt files use `<host-...>` placeholders rendered by the host (`render_prompt`).
+- **Token.** `harness.gh_token_cmd` is removed. Use `harness.host_token_cmd` (pr-review) or `[source.host] token_cmd` (sisyphus). `DEFAULT_TOKEN_CMD = "gh auth token"` lives in `code_host/reference.py`. The reference host factory uses it for `Session.credential()` when no token command is configured. Host-run `gh` calls get `GH_TOKEN` only from a configured command, so a sisyphus or vibe-heal run without `[source.host] token_cmd` keeps using gh's own authentication (DEC-44).
+- **Agent environment.** Credential variable names come from `Session.agent_environment_names()`. Agents receive `GH_TOKEN` as well as `GITHUB_TOKEN` (before, only `GITHUB_TOKEN`). This widening is accepted in DEC-43.
+- **Removed names.** `vibe_heal/review/github.py`, `NoOpenPrError` (and its export from `vibe_heal.review`), `GitHubReviewClient`, `GitHubReviewError`, `GitHubTimeoutError` and the sisyphus `GitHubError` no longer exist. Catch `NoChangeRequestError`, `CodeHostTimeoutError` and `CodeHostError`.
 
 ## Rename plan
 
@@ -453,20 +463,20 @@ and new names never name a third-party host. The "Old name" column quotes existi
 
 | Id | Old name | Where | New name | Intro | Alias / removal | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| REN-01 | module `dotharness.gh` | `src/dotharness/gh.py` | `dotharness.code_host.reference` (module path fixed by Phase 1) | 1 | Old module stays a re-export shim until Phase 4 (R3). INV-LO-01 | Package location is `src/dotharness/code_host/`. |
-| REN-02 | `GH = "gh"` | `gh.py` | `REFERENCE_CLI = "gh"` in the reference module | 1 | Alias `GH` (R3) | The string `"gh"` is the executable name and does not change. The `GH` in `tests/sisyphus/test_pick.py` is a different object (REN-25). |
-| REN-03 | `gh_argv(*args)` | `gh.py`; callers in `vibe_heal/review/github.py`, `sisyphus/pick.py`, `pr_review/runners/*` and tests (49 grep hits) | `reference_argv(*args)` (reference module only) | 1 (defined). Consumers stop in 1 (vibe-heal), 2 (sisyphus), 3 (pr-review) | Alias `gh_argv` (R3) | Returns `[REFERENCE_CLI, *args]`. Semantics unchanged. Consumers call capability interfaces and stop building argv. |
-| REN-04 | `build_subprocess_env(path_prepend, env_vars, gh_token=None)` | `gh.py` | Function name KEEPS. Parameter `gh_token` becomes `host_token`. | 3 | During transition the function accepts both `gh_token=` and `host_token=`. If both are given, `host_token` wins. Removal of the `gh_token=` keyword: R3 on `gh_token=` | Sets `env["GITHUB_TOKEN"]` when the token is truthy (variable name: Child-agent environment). All `pr_review` runners pass it positionally. `local_review/review.py`, `local_review/address.py` and `local_review/git.py` pass no token. Only the parameter name changes. |
+| REN-01 | module `dotharness.gh` | `src/dotharness/gh.py` | `dotharness.code_host.reference` (module path fixed by Phase 1) | 1 | Old module stays a re-export shim until Phase 4 (R3). INV-LO-01 | Package location is `src/dotharness/code_host/`. **Phase 4:** `dotharness.gh` was moved to `dotharness.code_host.reference_gh` and the shim is removed. |
+| REN-02 | `GH = "gh"` | `gh.py` | `REFERENCE_CLI = "gh"` in the reference module | 1 | Alias `GH` (R3) | The string `"gh"` is the executable name and does not change. The `GH` in `tests/sisyphus/test_pick.py` is a different object (REN-25). **Phase 4:** the alias `GH` is removed. `GH` lives in `code_host/reference_gh.py`. |
+| REN-03 | `gh_argv(*args)` | `gh.py`; callers in `vibe_heal/review/github.py`, `sisyphus/pick.py`, `pr_review/runners/*` and tests (49 grep hits) | `reference_argv(*args)` (reference module only) | 1 (defined). Consumers stop in 1 (vibe-heal), 2 (sisyphus), 3 (pr-review) | Alias `gh_argv` (R3) | Returns `[REFERENCE_CLI, *args]`. Semantics unchanged. Consumers call capability interfaces and stop building argv. **Phase 4:** the alias `gh_argv` is removed. `gh_argv` is defined in `code_host/reference_gh.py` and used only inside the reference implementation. |
+| REN-04 | `build_subprocess_env(path_prepend, env_vars, gh_token=None)` | `gh.py` | Function name KEEPS. Parameter `gh_token` becomes `host_token`. | 3 | During transition the function accepts both `gh_token=` and `host_token=`. If both are given, `host_token` wins. Removal of the `gh_token=` keyword: R3 on `gh_token=` | Sets `env["GITHUB_TOKEN"]` when the token is truthy (variable name: Child-agent environment). All `pr_review` runners pass it positionally. `local_review/review.py`, `local_review/address.py` and `local_review/git.py` pass no token. Only the parameter name changes. **Phase 4:** `build_subprocess_env` and its token branch are removed with `gh.py`. Runners use `common.build_agent_base_env`, and the host adds credential variables (`Session.agent_environment`). |
 | REN-05 | local variable `gh_token` | `pr_review/runners/*.py` (`focused_review`, `ci_fix`, `self_review`, `auto_approve`, `review_requested`, `address_comments`, `review_prs`, `merge`) | `host_token` | 3 | none (local name, not importable) | Internal rename. |
-| REN-06 | `get_gh_token(gh_token_cmd)` | `pr_review/runners/common.py` | `get_host_token(token_cmd)` | 3 | Alias `get_gh_token` (R3). R5 applies | Runs the command with `shell=True`. The default string `gh auth token` is not moved or changed (REN-31). Imported by 8 runner modules and patched in tests. |
-| REN-07 | `PR_COMMENTS_SCRIPT_PATH` | `pr_review/runners/common.py`; used by `focused_review`, `address_comments`, `regret_review` | KEEP | n/a | n/a | It names a script path, not a host. The script `src/dotharness/scripts/pr-comments.py` is stdlib only, runs as a child process and must not import `dotharness` (F-DUP-8 in `docs/design/shared-async-layer.md`). "PR" stays per the glossary. How the script reaches the interface is a Phase 4 design question (see `scripts/pr-comments.py` in Phase split). This row does not decide it (DEC-8). |
-| REN-08 | `gh_json`, `gh_json_paginated` | `scripts/pr-comments.py` (both copies) | KEEP | n/a | n/a | Script-local helpers, never imported by `dotharness` code (the file name is not a valid module name). The file must stay dependency-free. Their gh calls are INV-LO-02..06. |
+| REN-06 | `get_gh_token(gh_token_cmd)` | `pr_review/runners/common.py` | `get_host_token(token_cmd)` | 3 | Alias `get_gh_token` (R3). R5 applies | Phase 3 ran the command with `shell=True`; Phase 4 runs it through `shlex.split` with no shell (DEV-6). The default string `gh auth token` is not moved or changed (REN-31). Imported by 8 runner modules and patched in tests. **Phase 4:** the alias `get_gh_token` is removed. |
+| REN-07 | `PR_COMMENTS_SCRIPT_PATH` | `pr_review/runners/common.py`; used by `focused_review`, `address_comments`, `regret_review` | KEEP | n/a | n/a | It names a script path, not a host. The script is stdlib only, runs as a child process and must not import `dotharness` (F-DUP-8 in `docs/design/shared-async-layer.md`). **Phase 4:** the value is derived from the reference host (`src/dotharness/code_host/scripts/pr-comments.py`). Runners call `Discussion.comments_script()` (DEC-8). |
+| REN-08 | `gh_json`, `gh_json_paginated` | `scripts/pr-comments.py` (both copies) | KEEP | n/a | n/a | Script-local helpers, never imported by `dotharness` code (the file name is not a valid module name). The file must stay dependency-free. Their gh calls are INV-LO-02..06. **Phase 4:** the file is `src/dotharness/code_host/scripts/pr-comments.py`. The docs copy is deleted. |
 | REN-09 | `ci_checks.gh` (`async def gh(args, env)`), imported as `_gh` by `merge.py` and `ci_fix.py` | `pr_review/runners/ci_checks.py` | `run_host_cli(args, env)` in `ci_checks.py`. Consumers move to the Checks capability | 3 | Alias `gh`; the `_gh` import alias is local to each importer and disappears when that importer is migrated (R3 covers `ci_checks.gh`) | 14 `_gh` grep hits. `merge.py`, `ci_fix.py` and `ci_checks.py` move together (R-SPLIT-5). |
-| REN-10 | `GitHubReviewClient` | `vibe_heal/review/github.py`; used in `vibe_heal/review/orchestrator.py`, `vibe_heal/cli.py` and tests (55 hits) | `ChangeRequestReviewClient` (reference module); consumers depend on the ChangeRequests and Discussion interfaces | 1 | Alias `GitHubReviewClient` (R3) | `vibe_heal/review/github.py` becomes a shim under the same alias rule. |
-| REN-11 | `GitHubReviewError` | `vibe_heal/review/github.py` | `CodeHostError` (in `code_host`. Error model, 6.1 note 1) | 1 | Alias `GitHubReviewError` (R3). Subclass relation preserved: the aliases of REN-12 and REN-13 stay subclasses, so `except GitHubReviewError` still catches them | Existing catches must keep working without edit. |
-| REN-12 | `NoOpenPrError(GitHubReviewError)` | same | `NoChangeRequestError` | 1 | Alias `NoOpenPrError` (R3) | R1. Also re-exported from `vibe_heal/review/__init__.py` and imported by `vibe_heal/cli.py`. Both keep working through the alias. |
-| REN-13 | `GitHubTimeoutError(GitHubReviewError)` | same | `CodeHostTimeoutError` | 1 | Alias `GitHubTimeoutError` (R3) | |
-| REN-14 | `GitHubError` | `sisyphus/orchestrator.py`, imported by `sisyphus/cli.py` | `CodeHostError` (in `code_host`) | 2 | `GitHubError = CodeHostError` stays in `sisyphus/orchestrator.py` (it imports `code_host.errors` only) | Raised at the sisyphus orchestration boundary. The failure text is new (exit code and a short reason, D-11). |
+| REN-10 | `GitHubReviewClient` | `vibe_heal/review/github.py`; used in `vibe_heal/review/orchestrator.py`, `vibe_heal/cli.py` and tests (55 hits) | `ChangeRequestReviewClient` (reference module); consumers depend on the ChangeRequests and Discussion interfaces | 1 | Alias `GitHubReviewClient` (R3) | `vibe_heal/review/github.py` becomes a shim under the same alias rule. **Phase 4:** `vibe_heal/review/github.py` and the alias `GitHubReviewClient` are removed. |
+| REN-11 | `GitHubReviewError` | `vibe_heal/review/github.py` | `CodeHostError` (in `code_host`. Error model, 6.1 note 1) | 1 | Alias `GitHubReviewError` (R3). Subclass relation preserved: the aliases of REN-12 and REN-13 stay subclasses, so `except GitHubReviewError` still catches them | Existing catches must keep working without edit. **Phase 4:** the alias `GitHubReviewError` is removed. |
+| REN-12 | `NoOpenPrError(GitHubReviewError)` | same | `NoChangeRequestError` | 1 | Alias `NoOpenPrError` (R3) | R1. Also re-exported from `vibe_heal/review/__init__.py` and imported by `vibe_heal/cli.py`. Both keep working through the alias. **Phase 4:** the alias `NoOpenPrError` and its re-export from `vibe_heal/review/__init__.py` are removed. |
+| REN-13 | `GitHubTimeoutError(GitHubReviewError)` | same | `CodeHostTimeoutError` | 1 | Alias `GitHubTimeoutError` (R3) | **Phase 4:** the alias `GitHubTimeoutError` is removed. |
+| REN-14 | `GitHubError` | `sisyphus/orchestrator.py`, imported by `sisyphus/cli.py` | `CodeHostError` (in `code_host`) | 2 | `GitHubError = CodeHostError` stays in `sisyphus/orchestrator.py` (it imports `code_host.errors` only) | Raised at the sisyphus orchestration boundary. The failure text is new (exit code and a short reason, D-11). **Phase 4:** the alias `GitHubError` in `sisyphus/orchestrator.py` is removed. Callers catch `CodeHostError`. |
 | REN-15 | `GhCli` | `sisyphus/pick.py` (27 hits. Constructed as `GhCli(cwd, token, executor)`) | Removed. The reference host runs `gh` through its private `_Gh` context | 2 | None (D-8, no alias) | Env `GH_TOKEN` only. The host runs in `working_directory`. |
 | REN-16 | `GhLabelRemover` | `sisyphus/pick.py` | `HostLabelRemover` in `sisyphus/pick.py` (WorkItems `remove_label`) | 2 | None (D-8, no alias) | The `LabelRemover` protocol stays. |
 | REN-17 | `GhTimeboundLabelRemover(GhLabelRemover)` | `sisyphus/cli.py` | Removed. The declared `WorkItems.remove_label` timeout (10.0 s) replaces it | 2 | None (D-8, no alias) | The base class is gone too. |
@@ -490,13 +500,13 @@ Keys are renamed only additively. "Gh" in the config key column is quoted from e
 
 | Id | Old key | File / section | New key | Precedence and behavior | Alias / removal |
 | --- | --- | --- | --- | --- | --- |
-| REN-31 | `gh_token_cmd` | `[harness]` of the `pr_review` config; field `gh_token_cmd: str = "gh auth token"` in `pr_review/config.py`; the template written by `pr_review/cli.py`; docs `docs/pr_review/configuration.md`, `commands/address-comments.md`, `commands/self-review.md`, `commands/local-review.md` | `host_token_cmd` (additive) | If only `gh_token_cmd` is set, behavior is exactly today's. If only `host_token_cmd` is set, its value is used with the same semantics. If both are set, `host_token_cmd` wins, the old key is ignored and no error is raised (DEC-10). Neither key set: the effective value is `gh auth token`, same as today. The command string runs with `shell=True` exactly as in `get_gh_token`. | Introduced in Phase 3. The old key is accepted until Phase 4. Removal: R3 on `gh_token_cmd`, docs mention only the new key. Users' config files that still use the old key break at Phase 4, so the Phase 4 release notes MUST say so. |
-| REN-32 | `token_cmd` | `[source.host]` of the sisyphus config (`token_cmd: str \| None = None` in `sisyphus/config.py`, `run_token_cmd` in `sisyphus/cli.py`, removed in Phase 2: the reference host `Session.credential()` runs the command at startup) | KEEP, no new key | Unchanged: default `None`, split with `shlex.split`, no shell, no default command. The key is already neutral. | n/a |
+| REN-31 | `gh_token_cmd` | `[harness]` of the `pr_review` config; field `gh_token_cmd: str = "gh auth token"` in `pr_review/config.py`; the template written by `pr_review/cli.py`; docs `docs/pr_review/configuration.md`, `commands/address-comments.md`, `commands/self-review.md`, `commands/local-review.md` | `host_token_cmd` (additive) | If only `gh_token_cmd` is set, behavior is exactly today's. If only `host_token_cmd` is set, its value is used. Phase 4 changed the execution model (see below). If both are set, `host_token_cmd` wins, the old key is ignored and no error is raised (DEC-10). Neither key set: the effective value is `gh auth token`, same as today. In Phase 3 the command string ran with `shell=True` exactly as in `get_gh_token`. | Introduced in Phase 3. The old key is accepted until Phase 4. Removal: R3 on `gh_token_cmd`, docs mention only the new key. Users' config files that still use the old key break at Phase 4, so the Phase 4 release notes MUST say so. **Phase 4:** the key is removed. The loader raises `ConfigError("harness.gh_token_cmd was removed; use harness.host_token_cmd (the command is no longer run through a shell: pipes, redirects and variable expansion are not interpreted)")` and the tool exits non-zero. The default command `gh auth token` is `DEFAULT_TOKEN_CMD` in `code_host/reference.py`, applied by the reference host factory when no token command is configured (also for sisyphus, which passes none when `[source.host] token_cmd` is unset). |
+| REN-32 | `token_cmd` | `[source.host]` of the sisyphus config (`token_cmd: str \| None = None` in `sisyphus/config.py`, `run_token_cmd` in `sisyphus/cli.py`, removed in Phase 2: the reference host `Session.credential()` runs the command at startup) | KEEP, no new key | Unchanged: default `None`, split with `shlex.split`, no shell. The loader has no default. When the key is unset, `gh` keeps its own authentication for host-run calls (DEC-44). The key is already neutral. | n/a |
 | REN-33 | `kind = "github"` | `[source.work_item]` of the sisyphus config, `TRACKER_KINDS` in `sisyphus/config.py` | KEEP the value `"github"`. A neutral spelling would be additive and is chosen when the WorkItems capability is designed. | Existing configs must load unchanged. User-visible error messages (for example "mixed tracker") are unchanged. | n/a (DEC-11) |
 | REN-34 | `[harness] env` passthrough (`config.harness.env`) | `pr_review/config.py` | KEEP | Used as `{**config.harness.env, "GITHUB_TOKEN": token}` in `focused_review.py`, `address_comments.py`, `review_requested.py`, `self_review.py` and `ci_fix.py`: the explicit variable overrides a same-named `env` entry. This order is preserved. | n/a |
 
 Loader constraint (binds REN-32, REN-33 and any future sisyphus key): `src/dotharness/sisyphus/config.py` is stdlib only,
-never executes `token_cmd` and never reads the environment. A neutral sisyphus key is a plain parsed value. Resolving it
+never executes `token_cmd` and never reads the environment, and it supplies no default token command (the factory supplies one for `Session.credential()` only, DEC-44). A neutral sisyphus key is a plain parsed value. Resolving it
 (running a command, reading a variable) belongs to `sisyphus/cli.py` and Session, not the loader.
 
 ### Child-agent environment
@@ -506,9 +516,9 @@ Owned by Session. This section states the rule and the table only.
 | Id | Variable | Set by | Decision |
 | --- | --- | --- | --- |
 | REN-35 | `GITHUB_TOKEN` | `gh.py` `build_subprocess_env` (when the token is truthy); hand-built dicts in `focused_review.py`, `address_comments.py`, `review_requested.py`, `self_review.py`, `ci_fix.py` (the last three read it back from `env`) | KEEP the name for the reference implementation. |
-| REN-36 | `GH_TOKEN` | `sisyphus/pick.py` `GhCli` | KEEP the name for the reference implementation. |
+| REN-36 | `GH_TOKEN` | `sisyphus/pick.py` `GhCli` | KEEP the name for the reference implementation. Phase 4 also sets it in agent children next to `GITHUB_TOKEN` (DEC-43). |
 
-Rule (DEC-6): with the default config the child process receives exactly the same variable names and values as today. A
+Rule (DEC-6, with the exception DEC-43): with the default config the child process receives the same variable names and values as today, plus `GH_TOKEN` in agent children. A
 neutral variable name is allowed only if behavior does not change. Session exposes the variable names as
 data (a mapping returned for the reference implementation, containing `GITHUB_TOKEN` and `GH_TOKEN` as applicable per call
 site). Hand-built env dicts migrate to that data in Phase 3. Knowledge files under `src/dotharness/knowledge/` that
@@ -704,7 +714,7 @@ class ChangeRequests(Protocol):
     ) -> Sequence[ChangeRequest]:
         """Change requests whose head is `branch`. Empty when none.
 
-        `state=None` means any state, most recent match first (interface version 2)."""
+        `state=None` means any state, most recent match first (added in interface version 2)."""
         ...
 
     async def for_current_branch(self, repo: RepositoryRef) -> ChangeRequest:
@@ -828,6 +838,13 @@ class Discussion(Protocol):
     async def reply(self, repo: RepositoryRef, number: int, thread_id: str, body: str) -> Comment:
         """Reply in a review thread; `thread_id` is the opaque id from ReviewThread."""
         ...
+
+    async def comments_script(self) -> Path:
+        """Path of the host's stdlib-only comments script (`fetch` and `reply` subcommands). Added in interface version 3.
+
+        The file exists and `python3` can read it. It must not import `dotharness`; its host calls live in the script.
+        Never raises for a declared host."""
+        ...
 ```
 
 | Method | Replaces | Rows |
@@ -837,9 +854,10 @@ class Discussion(Protocol):
 | `post_comment` | `pr comment` | INV-PR-10, INV-PR-36 |
 | `post_review` | POST review with inline comments, and the fallback comment | INV-VH-03, INV-VH-04 |
 | `reply` | POST reply in a thread | INV-LO-04 |
+| `comments_script` | the host's `pr-comments.py` (path of a stdlib-only script, `fetch` and `reply` subcommands) | INV-LO-02..05 (added in interface version 3) |
 
-INV-LO-06 (documentation copy, not migrated) is not covered by any method. How `scripts/pr-comments.py` reaches this
-interface is a Phase 4 design question (Phase split).
+INV-LO-06 (documentation copy, deleted in Phase 4) is not covered by any method. `comments_script` (interface version 3) lets the host provide the script that the runners run (Phase split, `scripts/pr-comments.py`).
+
 
 ### Checks
 
@@ -1591,7 +1609,7 @@ class HostLimits:
   - `timeouts`: the host implementation, which applies them to its own calls. A consumer never passes a timeout.
   - `list_bounds`: the host implementation of every list-returning operation, which returns at most that many items. A bound of `None` means the host returns every item. A host never
     truncates silently: if it cannot return the whole result under the bound that applies, it raises `CodeHostError` instead.
-- `page_attempts` and `page_retry_delay_seconds` (added in A-1, with defaults, so the interface version stays 2): a host that
+- `page_attempts` and `page_retry_delay_seconds` (added in A-1, with defaults, so the interface version did not change): a host that
   reads a list page by page tries each page `page_attempts` times and pauses `page_retry_delay_seconds` times the attempt
   number between tries. A timeout or an authentication error is not retried. The page loops of `common.py` and
   `review_requested.py` retry the same way today.
@@ -1620,6 +1638,7 @@ means the default applies).
 | timeout, installed check (INV-VH-01) | 10 | `Session.available` | `validate_installed` in `vibe_heal/review/github.py` |
 | timeout, CR field read of the current branch (INV-VH-02) | 30 | `ChangeRequests.find_by_branch` | `_view_pr_field` in the same file. `ChangeRequests.for_current_branch` runs under the same 30 s |
 | timeout, review post (INV-VH-03) | 60 | `Discussion.post_review` | `_POST_TIMEOUT_SECONDS` in the same file |
+| timeout, draft CR creation (INV-SY-08) and work-item listing (INV-SY-03) | 3600.0 | `ChangeRequests.create_draft`, `WorkItems.list_open` | the sisyphus 3600 s limit before Phase 2 (DEC-45) |
 | `list_bounds.default` | 100 | | `per_page=100` in `ci_checks.py` (single call). Exhaustive reads are `None`, see below |
 | list bound, CR listings | 1000 | `ChangeRequests.list` | `--limit 1000` in `address_comments.py` (covers the `--limit 500` listings, INV-PR-11, INV-PR-27, INV-PR-41) |
 | list bound, work-item candidate listing (INV-SY-03) | 100 | `WorkItems.list_open` | `GitHubIssueTracker.__init__(limit=100)` in `sisyphus/pick.py` |
@@ -1641,7 +1660,7 @@ Deviations of the reference implementation from today's `gh` calls (A-1). Each i
 | DEV-2 | `user-review-requested:@me` becomes `user-review-requested:<login>`, the same login. |
 | DEV-3 | Single-field `pr view` reads (INV-PR-14, INV-PR-15, INV-PR-16 and similar) become `ChangeRequests.get`, which reads the full field set in one call. |
 | DEV-4 | `--limit 500` becomes the declared bound 1000 for `ChangeRequests.list`. |
-| DEV-5 | `Session.agent_environment` sets `GITHUB_TOKEN` and `GH_TOKEN` for an agent child process. The `gh` children of the host get `GH_TOKEN` only. Whether the extra `GH_TOKEN` in an agent child is acceptable under the parity goal is open decision OD-3: DEC-6 does not say. This page records the behavior as built. The conformance case B-SES-4 asserts both names. |
+| DEV-5 | `Session.agent_environment` sets `GITHUB_TOKEN` and `GH_TOKEN` for an agent child process. The `gh` children of the host get `GH_TOKEN` only. The extra `GH_TOKEN` in an agent child is a widening against the parity rule of DEC-6. DEC-43 accepts it and gives the rationale. This page records the behavior as built. The conformance case B-SES-4 asserts both names. |
 | DEV-6 | The token command runs through `shlex.split`, with no shell, under a 30 s timeout. A command that needs a shell no longer works. A timeout is `CodeHostTimeoutError(write=False)`. |
 | DEV-7 | Conditional (DS-2). If `is_pr_open` reads the state with `ChangeRequests.state`, its timeout is 10 s, as today. If it reads with `ChangeRequests.get`, the 30 s default applies and the timeout changes from 10 s to 30 s. Resolved in Phase 3: `is_pr_open` became `is_change_request_open` and reads with `ChangeRequests.state`, so the 10 s key applies. |
 | DEV-8 | pr-review runners guard an empty login: with no current user they log a warning and make no listing call (an empty filter would list every change request). `auto_approve` is stricter: an unknown current user raises `AutoApproveError` (before, `@me` made `gh` fail). |
@@ -1667,7 +1686,8 @@ Phase 3 test disposition (DS-11). The files under `tests/pr_review` that matched
 | `test_config.py`, `test_state.py` | kept (the hits are the `gh_token_cmd` / `gh auth token` config strings and state helpers, no host call) |
 
 Phase 2 deviation from G1: the reference host applies these declared limits. The other sisyphus `gh` calls ran with a
-3600 s limit before. They now run under the 30 s default. The two sisyphus listings use the host's own list bounds. The
+3600 s limit before. They now run under the 30 s default, except `ChangeRequests.create_draft` and `WorkItems.list_open`,
+which keep 3600.0 s (DEC-45). Release notes: sisyphus `gh` calls other than those two now time out after 30 s. The two sisyphus listings use the host's own list bounds. The
 fixed 100 and 200 are gone from the consumer.
 
 The page contains no other values. Examples of other hosts use the placeholder `examplehost`, and a token, where one
@@ -1801,7 +1821,7 @@ it.
 
 | Tool | Where the selection lives | Options | How it is read |
 | --- | --- | --- | --- |
-| pr-review | TOML key `host` in table `[harness]` of `.harness.toml`, next to `gh_token_cmd` / `host_token_cmd` (Rename plan REN-31). `src/dotharness/pr_review/config.py`. | Table `[harness.host_options]` | Plain string (or absent), validated as a string at load time. The factory validates its value at startup. |
+| pr-review | TOML key `host` in table `[harness]` of `.harness.toml`, next to `host_token_cmd` (Rename plan REN-31). `src/dotharness/pr_review/config.py`. | Table `[harness.host_options]` | Plain string (or absent), validated as a string at load time. The factory validates its value at startup. |
 | sisyphus | TOML key `name` in table `[source.host]` of `.sisyphus.toml`, next to `token_cmd` (Rename plan REN-32). `src/dotharness/sisyphus/config.py`. | Table `[source.host.options]` | Plain string. The loader is stdlib only, never executes `token_cmd` and never reads the environment: it checks only that the value is a non-empty string and that `options` is a table. Resolving the name belongs to the factory. |
 | vibe-heal | Settings field `code_host` plus environment variable `DOTHARNESS_CODE_HOST` on `VibeHealConfig(BaseSettings)` (`vibe_heal/config/models.py`). | Field `code_host_options` (a JSON object), environment variable `DOTHARNESS_CODE_HOST_OPTIONS` | vibe-heal has no TOML file. `VibeHealConfig` uses `env_prefix=""`, `case_sensitive=False`, `extra="ignore"` and the env files `.env.vibeheal` and `.env`. With an empty prefix a field named `code_host` would read a bare `CODE_HOST`, so the environment name carries the `DOTHARNESS_` prefix explicitly (overview D-5). The field declares `validation_alias="DOTHARNESS_CODE_HOST"` (and the options field `"DOTHARNESS_CODE_HOST_OPTIONS"`), so a bare `CODE_HOST` is not read. |
 | spec-prism-flow | No host key today (overview D-9). | n/a | If a key is added later it is validated strictly at startup (an unknown or unloadable value stops the tool with the rule 3 message). sisyphus reads the same `.spec-prism-flow.toml`. It ignores a host key placed there, so a spec-prism-flow key never selects the sisyphus host. |
@@ -1874,9 +1894,9 @@ placeholder `examplehost`.
   `interface_version` is not an `int` is also a load failure.
 - **Aliases and the deprecation window (Rename plan, task 8).** Backward-compatible aliases for the old `GitHub*` / `Gh*`
   names and the `gh_token_cmd` key are added in the migrating phase of each tool (Phase 1 vibe-heal, Phase 2 sisyphus,
-  Phase 3 pr-review) and removed in Phase 4 (#196). The window is therefore "until Phase 4", counted in phases and not in
+  Phase 3 pr-review) and removed in Phase 4 (#196). The window is therefore "until Phase 4", counted in phases and not in Phase 4 removed them.
   interface versions. The aliases are not part of the interface and are not covered by `CODE_HOST_INTERFACE_VERSION`. No
-  `DeprecationWarning` is emitted (DEC-7). Phase 4 release notes say that `gh_token_cmd` stops working (REN-31).
+  `DeprecationWarning` is emitted (DEC-7). `gh_token_cmd` no longer works: the loader raises a `ConfigError` that names `harness.host_token_cmd` (REN-31). Release notes must say so, and must also say that the renamed key is not a drop-in rename: the command string is split with `shlex.split` and no longer shell-interpreted, so a command such as `pass show gh/token | head -1` must be wrapped, for example `sh -c 'pass show gh/token | head -1'`.
 - The conformance suite (Declarations and Error model readers) runs against `CODE_HOST_INTERFACE_VERSION` and the fake
   registers itself with that value.
 
@@ -2024,6 +2044,7 @@ model says consumers must not retry after `write=True` and defines no idempotenc
 | B-DIS-3 | `reply(thread_id, body)` appends a `Comment` to that thread. An unknown `thread_id` raises `CodeHostError`. |
 | B-DIS-4 | `post_review` with anchors the host's `AnchorRules` accept returns `fell_back=False` and the inline comments appear in `review_threads`. With an anchor the rules reject (a side not in `sides`, or a line outside the diff when `requires_line_in_diff`) it returns `fell_back=True` and the body is a top-level comment. |
 | B-DIS-5 | A `CodeHostTimeoutError` with `write=True` from `post_review` propagates and the body is not posted a second time (no fallback; Declarations, "Anchor and anchor rules"). |
+| B-DIS-6 | `comments_script()` returns the path of an existing `.py` file that does not import `dotharness` (interface version 3). The test in `testing.py` cites it as B-DIS-1 in its docstring. |
 | B-CHK-1 | `list_checks` returns seeded checks. `required_only=True` returns only the required ones. A change request with no checks returns an empty sequence, which is not an error. |
 | B-CHK-2 | `list_workflows` returns seeded workflows, empty when none. |
 | B-CHK-3 | `failed_log(check)` returns the seeded log text. `get_job(job_id)` returns the `Job` with its `failed_step`. An unknown id raises `CodeHostError`. |
