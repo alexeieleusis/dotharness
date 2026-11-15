@@ -13,6 +13,7 @@ from dotharness.code_host import (
     RepositoryRef,
     UnsupportedCapabilityError,
 )
+from dotharness.code_host.reference import render_prompt
 from dotharness.pr_review import state
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
@@ -106,7 +107,7 @@ async def _run_locked(config: HarnessConfig) -> None:
     prs = await _list_prs_to_check(host, repo_ref, our_login)
     script_path = PR_COMMENTS_SCRIPT_PATH
     knowledge_file = config.harness.knowledge_dir / "pr-review" / "address-comment.md"
-    instructions_template = knowledge_file.read_text(encoding="utf-8")
+    instructions_template = render_prompt(knowledge_file.read_text(encoding="utf-8"))
     backend = Backend(
         config.harness.backend,
         config.harness.backend_timeout_seconds,

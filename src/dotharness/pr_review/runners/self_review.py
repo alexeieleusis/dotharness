@@ -14,6 +14,7 @@ from dotharness.code_host import (
     RepositoryRef,
     UnsupportedCapabilityError,
 )
+from dotharness.code_host.reference import render_prompt
 from dotharness.pr_review import state
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
@@ -702,12 +703,14 @@ async def _run_locked(config: HarnessConfig) -> None:
     regret_reviewed = set(pruned_state["regret_reviewed_prs"])
 
     knowledge_dir = Path(config.harness.knowledge_dir) / "pr-review"
-    file_instructions = (knowledge_dir / "review-file.md").read_text(encoding="utf-8")
-    summary_instructions = (knowledge_dir / "review-summary.md").read_text(encoding="utf-8")
-    design_instructions = (knowledge_dir / "review-design.md").read_text(encoding="utf-8")
-    traceability_instructions = (knowledge_dir / "review-traceability.md").read_text(encoding="utf-8")
+    file_instructions = render_prompt((knowledge_dir / "review-file.md").read_text(encoding="utf-8"))
+    summary_instructions = render_prompt((knowledge_dir / "review-summary.md").read_text(encoding="utf-8"))
+    design_instructions = render_prompt((knowledge_dir / "review-design.md").read_text(encoding="utf-8"))
+    traceability_instructions = render_prompt((knowledge_dir / "review-traceability.md").read_text(encoding="utf-8"))
     regret_instructions = (
-        (knowledge_dir / "review-regret.md").read_text(encoding="utf-8") if config.regret_review.enabled else ""
+        render_prompt((knowledge_dir / "review-regret.md").read_text(encoding="utf-8"))
+        if config.regret_review.enabled
+        else ""
     )
     extra_knowledge = _get_extra_knowledge(config)
     backend = _build_backend(config, env)

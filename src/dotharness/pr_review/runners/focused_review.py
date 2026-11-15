@@ -9,6 +9,7 @@ from dotharness.code_host import (
     CodeHost,
     RepositoryRef,
 )
+from dotharness.code_host.reference import render_prompt
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock, working_dir_lock_key
@@ -56,8 +57,8 @@ async def _run_locked(config: HarnessConfig) -> None:
     current_user = await host_current_user(host)
 
     script_path = PR_COMMENTS_SCRIPT_PATH
-    instructions_template = (config.harness.knowledge_dir / "pr-review" / "focused-review.md").read_text(
-        encoding="utf-8"
+    instructions_template = render_prompt(
+        (config.harness.knowledge_dir / "pr-review" / "focused-review.md").read_text(encoding="utf-8")
     )
     backend = Backend(
         config.harness.backend,
