@@ -111,6 +111,7 @@ def _populate(cfg: SisyphusConfig, brief_dir: Path | None = None) -> RunRecord:
     (ws / f"{ENC}.stopped.md").write_text("stop text")
     (ws / f"{ENC}.answer.md").write_text("answer")
     (ws / f"{ENC}.answer.md.used").write_text("used")
+    (ws / f"{ENC}.answers.jsonl").write_text('{"a": 1}\n')
     (ws / "plan-147" / "handoffs").mkdir(parents=True)
     (ws / "plan-147" / "a.md").write_text("a")
     (ws / "plan-147" / "handoffs" / "h.md").write_text("h")
@@ -132,12 +133,15 @@ def test_item_files_set_and_order(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     files = item_files(cfg, rec)
     assert files[-1] == ws / f"{ENC}.json"
+    used, log, plan = (files.index(ws / n) for n in (f"{ENC}.answer.md.used", f"{ENC}.answers.jsonl", "plan-147"))
+    assert used < log < plan
     assert set(files) == {
         ws / f"{ENC}.json",
         ws / f"{ENC}.json.stopped.json",
         ws / f"{ENC}.stopped.md",
         ws / f"{ENC}.answer.md",
         ws / f"{ENC}.answer.md.used",
+        ws / f"{ENC}.answers.jsonl",
         ws / f"{ENC}.brief.md",
         ws / f"{ENC}.brief.md.intake.json",
         ws / "plan-147",
@@ -167,6 +171,7 @@ def test_archive_moves_everything_flat(tmp_path: Path) -> None:
         f"{ENC}.stopped.md",
         f"{ENC}.answer.md",
         f"{ENC}.answer.md.used",
+        f"{ENC}.answers.jsonl",
         f"{ENC}.brief.md",
         f"{ENC}.brief.md.intake.json",
         "plan-147",
@@ -221,6 +226,35 @@ def test_collision_refuses_and_moves_nothing(tmp_path: Path) -> None:
     assert (tmp_path / "ws" / "plan-147" / "a.md").exists()
     assert (tmp_path / "ws" / f"{ENC}.answer.md").exists()
     assert list((arch / "plan-147").iterdir()) == []
+
+
+def test_answers_log_is_archived_with_its_item(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    rec = _populate(cfg)
+    arch = tmp_path / "arch"
+    res = archive_item(cfg, rec, arch)
+    assert not res.refused
+    assert (arch / f"{ENC}.answers.jsonl").read_text() == '{"a": 1}\n'
+    assert not (tmp_path / "ws" / f"{ENC}.answers.jsonl").exists()
+
+
+def test_answers_log_collision_refuses_and_never_overwrites(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    rec = _populate(cfg)
+    arch = tmp_path / "arch"
+    arch.mkdir()
+    (arch / f"{ENC}.answers.jsonl").write_text("prior\n")
+    res = archive_item(cfg, rec, arch)
+    assert res.refused
+    assert res.collision == arch / f"{ENC}.answers.jsonl"
+    assert res.moved == []
+    assert (arch / f"{ENC}.answers.jsonl").read_text() == "prior\n"
+    ws = tmp_path / "ws"
+    assert (ws / f"{ENC}.answers.jsonl").read_text() == '{"a": 1}\n'
+    assert rec.path.exists()
+    assert (ws / f"{ENC}.answer.md").exists()
+    assert (ws / "plan-147" / "a.md").exists()
+    assert not (arch / f"{ENC}.json").exists()
 
 
 def test_collision_on_run_record_never_overwrites(tmp_path: Path) -> None:

@@ -81,6 +81,7 @@ class StopRecord:
     action: str
     resume_command: str
     stopped_at: str
+    leaf: str | None = None
 
     @property
     def clears_by(self) -> str:
@@ -110,6 +111,7 @@ class StopRecord:
             "clears_by": self.clears_by,
             "resume_command": self.resume_command,
             "stopped_at": self.stopped_at,
+            "leaf": self.leaf,
         }
 
 
@@ -177,6 +179,7 @@ def build_stop_record(
     brief_path: str = "the brief",
     answer_path: str = "the answer file",
     now: datetime | None = None,
+    leaf: str | None = None,
 ) -> StopRecord:
     return StopRecord(
         item=item,
@@ -189,6 +192,7 @@ def build_stop_record(
         action=action_for(checkpoint, brief_path, answer_path, resume_command, stage),
         resume_command=resume_command,
         stopped_at=(now or datetime.now(UTC)).isoformat(),
+        leaf=leaf,
     )
 
 
@@ -213,6 +217,7 @@ def build_abandoned_record(
         action=ABANDONED_ACTION,
         resume_command=reenable_command,
         stopped_at=(now or datetime.now(UTC)).isoformat(),
+        leaf=None,
     )
 
 
@@ -248,6 +253,7 @@ def read_stop_record(record_path: Path) -> StopRecord | None:
             action=str(data.get("action", "")),
             resume_command=str(data.get("resume_command", "")),
             stopped_at=str(data.get("stopped_at", "")),
+            leaf=data.get("leaf"),
         )
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None

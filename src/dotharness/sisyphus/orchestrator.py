@@ -186,11 +186,18 @@ FALLBACK_BASE = "main"  # last intake candidate when neither the base nor a loca
 
 
 class _Stop(Exception):
-    def __init__(self, checkpoint: Checkpoint, detail: str, questions: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        checkpoint: Checkpoint,
+        detail: str,
+        questions: tuple[str, ...] = (),
+        leaf: str | None = None,
+    ) -> None:
         super().__init__(detail)
         self.checkpoint = checkpoint
         self.detail = detail
         self.questions = questions
+        self.leaf = leaf
 
 
 # ------------------------------------------------------------------ helpers
@@ -600,7 +607,7 @@ class _Run:
         except _Stop as stop:
             self.rec.set_checkpoint(stop.checkpoint.value)
             self.stop = stop
-            self.stop_rec = self.write_stop(stop.checkpoint.value, stop.detail, stop.questions)
+            self.stop_rec = self.write_stop(stop.checkpoint.value, stop.detail, stop.questions, stop.leaf)
             return stop.checkpoint
         self.was_abandoned = is_abandoned(self.rec.path)
         clear_stop_record(self.rec.path)
@@ -675,7 +682,13 @@ class _Run:
         template = self.opt.resume_command or "sisyphus resume {item} --config <your .sisyphus.toml>"
         return fill_resume_template(template, self.item)
 
-    def write_stop(self, checkpoint: str | None, detail: str, questions: tuple[str, ...] = ()) -> StopRecord:
+    def write_stop(
+        self,
+        checkpoint: str | None,
+        detail: str,
+        questions: tuple[str, ...] = (),
+        leaf: str | None = None,
+    ) -> StopRecord:
         stop = build_stop_record(
             self.item,
             checkpoint=checkpoint,
@@ -684,6 +697,7 @@ class _Run:
             detail=detail,
             resume_command=self.resume_command(),
             questions=questions,
+            leaf=leaf,
             brief_path=str(resolve_brief_path(self.config, self.item)),
             answer_path=str(answer_path(self.rec.path)),
         )
@@ -856,7 +870,7 @@ class _Run:
             prompt += f"\n\nThe user answered your earlier stop. Their answer:\n\n{answer}\n"
         await self.agent(prompt)
         if answer:
-            consume_answer(self.rec.path)
+            consume_answer(self.rec.path, self.rec.item, answer)
         if stop_file.is_file():
             self.raise_stop_report(stage, stop_file)
 
@@ -865,7 +879,8 @@ class _Run:
             data = json.loads(path.read_text(encoding="utf-8"))
             cp = data["checkpoint"]
             detail = str(data.get("detail", ""))
-            leaf = str(data.get("leaf", ""))
+            raw_leaf = data.get("leaf")
+            leaf = None if raw_leaf is None or raw_leaf == "" else str(raw_leaf)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise OrchestratorError(f"unreadable stop report {path}: {exc}") from exc
         if cp not in _STOP_CHECKPOINTS[stage]:
@@ -875,7 +890,7 @@ class _Run:
             self.rec.increment_retry(BUILD_RETRY_KEY)
         if stage == REFACTOR_STAGE and cp == "C5":
             self.rec.increment_retry(REFACTOR_RETRY_KEY)
-        raise _Stop(Checkpoint(cp), text)
+        raise _Stop(Checkpoint(cp), text, leaf=leaf)
 
     async def stage_plan(self) -> None:
         # After a leaf-limit stop the leaves already exist: only re-check the limit, no new agent run.

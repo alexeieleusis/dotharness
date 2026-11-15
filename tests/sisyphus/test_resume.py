@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import builtins
+import dataclasses
+import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -13,7 +17,18 @@ from dotharness.sisyphus.config import SisyphusConfig
 from dotharness.sisyphus.intake import resolve_brief_path
 from dotharness.sisyphus.lock import clone_lock
 from dotharness.sisyphus.orchestrator import BRANCH_CREATED_KEY, OPEN_PR_STAGE, PullRequest, branch_name
-from dotharness.sisyphus.resume import AUTO_RETRY_KEY, answer_path, cleared, iter_records, list_waiting
+from dotharness.sisyphus.resume import (
+    AUTO_RETRY_KEY,
+    _append_line,
+    answer_path,
+    answers_log_path,
+    append_answer_log,
+    build_answer_log_record,
+    cleared,
+    consume_answer,
+    iter_records,
+    list_waiting,
+)
 from dotharness.sisyphus.runrecord import RunRecord
 from dotharness.sisyphus.stoprecord import (
     AUTO_RETRY_DELAY_MINUTES,
@@ -416,3 +431,298 @@ def test_intake_command_writes_and_clears_the_c1_stop_record(tmp_path: Path, mon
     assert stop.resume_command.startswith("sisyphus resume ENG-1 --config ")
     assert env.invoke("intake", "ENG-1", "--config", str(env.config)).exit_code == 0
     assert read_stop_record(rec_path) is None
+
+
+LOG_KEYS = [
+    "item", "checkpoint", "stage", "stage_status", "leaf", "questions", "detail", "stopped_at", "answer",
+    "answered_at",
+]  # fmt: skip
+
+
+def _stop(rec: Path, checkpoint: str | None, detail: str, questions: tuple[str, ...] = ()) -> None:
+    write_stop_record(
+        rec,
+        build_stop_record(
+            "Q-1", checkpoint=checkpoint, stage="build", stage_status="blocked", detail=detail,
+            resume_command="sisyphus resume Q-1", questions=questions, now=NOW,
+        ),
+    )  # fmt: skip
+
+
+def test_answers_log_path_is_jsonl_sibling(tmp_path: Path) -> None:
+    assert answers_log_path(tmp_path / "x.json") == tmp_path / "x.answers.jsonl"
+
+
+def test_append_answer_log_two_appends_in_order(tmp_path: Path) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d1", ("Q1?",))
+    append_answer_log(rec, "Q-1", "A1\n")
+    _stop(rec, "C3", "d2", ("Q2?",))
+    append_answer_log(rec, "Q-1", "A2")
+    lines = answers_log_path(rec).read_text(encoding="utf-8").splitlines()
+    objs = [json.loads(line) for line in lines]
+    assert [list(o) for o in objs] == [LOG_KEYS, LOG_KEYS]
+    assert [(o["questions"], o["answer"]) for o in objs] == [(["Q1?"], "A1"), (["Q2?"], "A2")]
+    assert objs[0]["checkpoint"] == "C3" and objs[0]["stage"] == "build" and objs[0]["leaf"] is None
+
+
+def test_append_answer_log_missing_stop_record(tmp_path: Path) -> None:
+    rec = tmp_path / "Q-1.json"
+    append_answer_log(rec, "Q-1", "hi")
+    obj = json.loads(answers_log_path(rec).read_text(encoding="utf-8"))
+    assert obj["item"] == "Q-1" and obj["questions"] == []
+    for key in ("checkpoint", "stage", "stage_status", "leaf", "detail", "stopped_at"):
+        assert obj[key] is None
+
+
+def test_append_answer_log_error_stop_logs_detail_as_questions(tmp_path: Path) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C5", "tests keep failing")
+    append_answer_log(rec, "Q-1", "retry")
+    obj = json.loads(answers_log_path(rec).read_text(encoding="utf-8"))
+    assert obj["questions"] == ["tests keep failing"]
+
+
+def test_append_answer_log_unicode_multiline_one_line(tmp_path: Path) -> None:
+    rec = tmp_path / "Q-1.json"
+    append_answer_log(rec, "Q-1", " line one\nl\u00edne two \u2713\n")
+    text = answers_log_path(rec).read_text(encoding="utf-8")
+    assert text.count("\n") == 1 and text.endswith("\n")
+    assert json.loads(text)["answer"] == "line one\nl\u00edne two \u2713"
+
+
+def test_build_answer_log_record_normalises_string_questions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d")
+    stop = read_stop_record(rec)
+    assert stop is not None
+    for raw, expected in (("free text", ["free text"]), ("", [])):
+        odd = dataclasses.replace(stop, questions=raw)  # type: ignore[arg-type]
+        monkeypatch.setattr("dotharness.sisyphus.resume.read_stop_record", lambda _p, odd=odd: odd)
+        assert build_answer_log_record(rec, "Q-1", "a")["questions"] == expected
+
+
+def test_build_answer_log_record_leaf_is_none(tmp_path: Path) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d")
+    assert build_answer_log_record(rec, "Q-1", "a")["leaf"] is None
+
+
+def _tolerant_read(path: Path) -> list[Any]:
+    """Parse each non-empty line; skip lines that do not parse.
+
+    A truncated line is only ever last when read before the next append; once an
+    append repairs the newline, the truncated bytes sit mid-file and are skipped too.
+    """
+    out: list[Any] = []
+    for ln in path.read_bytes().decode("utf-8").split("\n"):
+        if not ln:
+            continue
+        try:
+            out.append(json.loads(ln))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def test_append_line_creates_missing_parent(tmp_path: Path) -> None:
+    p = tmp_path / "a" / "b" / "x.answers.jsonl"
+    _append_line(p, '{"a":1}')
+    assert p.read_bytes() == b'{"a":1}\n'
+
+
+def test_append_line_does_not_double_supplied_newline(tmp_path: Path) -> None:
+    p = tmp_path / "x.answers.jsonl"
+    _append_line(p, '{"a":1}\n')
+    assert p.read_bytes() == b'{"a":1}\n'
+
+
+def _strict_read(p: Path) -> list[Any]:
+    """Follows the documented contract: tolerate only an unparseable FINAL line."""
+    lines = p.read_bytes().split(b"\n")
+    if lines and lines[-1] == b"":
+        lines.pop()
+    out = []
+    for i, ln in enumerate(lines):
+        try:
+            out.append(json.loads(ln))
+        except ValueError:
+            if i != len(lines) - 1:
+                raise
+    return out
+
+
+def test_append_line_truncated_tail_is_dropped_so_strict_reader_passes(tmp_path: Path) -> None:
+    p = tmp_path / "x.answers.jsonl"
+    p.write_bytes(b'{"a":1}\n{"a":')
+    _append_line(p, '{"a":2}')
+    assert p.read_bytes() == b'{"a":1}\n{"a":2}\n'
+    assert _strict_read(p) == [{"a": 1}, {"a": 2}]
+
+
+def test_append_line_truncated_only_line_strict_reader_passes(tmp_path: Path) -> None:
+    p = tmp_path / "x.answers.jsonl"
+    p.write_bytes(b'{"item":"a","ans')
+    _append_line(p, '{"a":2}')
+    assert p.read_bytes() == b'{"a":2}\n'
+    assert _strict_read(p) == [{"a": 2}]
+
+
+def test_append_line_after_newline_adds_no_blank_line(tmp_path: Path) -> None:
+    p = tmp_path / "x.answers.jsonl"
+    p.write_bytes(b'{"a":1}\n')
+    _append_line(p, '{"a":2}')
+    assert b"\n\n" not in p.read_bytes()
+    assert _tolerant_read(p) == [{"a": 1}, {"a": 2}]
+
+
+def test_append_line_oserror_propagates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    with pytest.raises(OSError):
+        _append_line(blocker / "x.answers.jsonl", "{}")
+
+    def boom(fd: int) -> None:
+        raise OSError(5, "fsync failed")
+
+    monkeypatch.setattr(os, "fsync", boom)
+    with pytest.raises(OSError, match="fsync failed"):
+        _append_line(tmp_path / "y.answers.jsonl", "{}")
+
+
+def test_append_line_single_write_and_fsync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    p = tmp_path / "x.answers.jsonl"
+    p.write_bytes(b'{"a":')  # forces the truncate-repair path
+    writes: list[bytes] = []
+    fsyncs: list[int] = []
+    real_open = builtins.open
+
+    class Counting:
+        def __init__(self, fh: Any) -> None:
+            self._fh = fh
+
+        def write(self, data: bytes) -> int:
+            writes.append(data)
+            return self._fh.write(data)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._fh, name)
+
+        def __enter__(self) -> Counting:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self._fh.close()
+
+    def fake_open(file: Any, mode: str = "r", *a: Any, **kw: Any) -> Any:
+        fh = real_open(file, mode, *a, **kw)
+        return Counting(fh) if mode == "ab" else fh
+
+    real_fsync = os.fsync
+
+    def fake_fsync(fd: int) -> None:
+        fsyncs.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    monkeypatch.setattr(os, "fsync", fake_fsync)
+    _append_line(p, '{"a":2}')
+    assert writes == [b'{"a":2}\n']
+    assert len(fsyncs) >= 1
+
+
+def test_clear_stop_record_leaves_answers_log(tmp_path: Path) -> None:
+    rec = tmp_path / "enc.json"
+    write_stop_record(
+        rec, build_stop_record("X-1", checkpoint="C3", stage=None, stage_status=None, detail="d", resume_command="r")
+    )
+    log = answers_log_path(rec)
+    log.write_bytes(b'{"a":1}\n')
+    clear_stop_record(rec)
+    assert not stop_record_path(rec).exists()
+    assert log.read_bytes() == b'{"a":1}\n'
+
+
+def test_consume_answer_logs_before_rename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d", ("Q?",))
+    answer_path(rec).write_text("A1\n")
+    seen: list[bool] = []
+    real_replace = Path.replace
+
+    def spy(self: Path, target: Any) -> Any:
+        seen.append(answers_log_path(rec).exists())
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", spy)
+    consume_answer(rec, "Q-1", "A1")
+    assert seen == [True]
+    assert not answer_path(rec).exists()
+    assert len(answers_log_path(rec).read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_consume_answer_logs_content_edited_after_it_was_read(tmp_path: Path) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d", ("Q?",))
+    answer_path(rec).write_text("A\nactually B")
+    consume_answer(rec, "Q-1", "A")
+    lines = [json.loads(x) for x in answers_log_path(rec).read_text(encoding="utf-8").splitlines()]
+    assert [x["answer"] for x in lines] == ["A", "A\nactually B"]
+    assert not answer_path(rec).exists()
+
+
+def test_consume_answer_rename_failure_leaves_the_line_and_the_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d", ("Q?",))
+    answer_path(rec).write_text("A1")
+
+    def fail(self: Path, target: Any) -> Any:
+        raise OSError("rename failed")  # noqa: TRY003
+
+    monkeypatch.setattr(Path, "replace", fail)
+    with pytest.raises(OSError, match="rename failed"):
+        consume_answer(rec, "Q-1", "A1")
+    assert json.loads(answers_log_path(rec).read_text(encoding="utf-8"))["answer"] == "A1"
+    assert answer_path(rec).read_text() == "A1"
+
+
+def test_consume_answer_log_failure_propagates_and_keeps_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d", ("Q?",))
+    answer_path(rec).write_text("A1")
+
+    def fail(path: Path, line: str) -> None:
+        raise OSError("disk full")  # noqa: TRY003
+
+    monkeypatch.setattr("dotharness.sisyphus.resume._append_line", fail)
+    with pytest.raises(OSError, match="disk full"):
+        consume_answer(rec, "Q-1", "A1")
+    assert answer_path(rec).read_text() == "A1"
+    assert not answer_path(rec).with_name(answer_path(rec).name + ".used").exists()
+
+
+def test_consume_answer_retry_duplicate_dedupes_on_item_stopped_at_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rec = tmp_path / "Q-1.json"
+    _stop(rec, "C3", "d", ("Q?",))
+    answer_path(rec).write_text("A1")
+    real_replace = Path.replace
+
+    def fail(self: Path, target: Any) -> Any:
+        raise OSError("rename failed")  # noqa: TRY003
+
+    monkeypatch.setattr(Path, "replace", fail)
+    with pytest.raises(OSError, match="rename failed"):
+        consume_answer(rec, "Q-1", "A1")
+    monkeypatch.setattr(Path, "replace", real_replace)
+    consume_answer(rec, "Q-1", "A1")
+    lines = [json.loads(x) for x in answers_log_path(rec).read_text(encoding="utf-8").splitlines()]
+    assert len(lines) == 2
+    assert lines[0]["answered_at"] != lines[1]["answered_at"]
+    keys = {(x["item"], x["stopped_at"], x["answer"]) for x in lines}
+    assert len(keys) == 1

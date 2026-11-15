@@ -9,9 +9,11 @@ explicit ``sisyphus resume``. Imports only Package A modules.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from dotharness.sisyphus.config import SisyphusConfig
 from dotharness.sisyphus.intake import IntakeError, parse_open_decisions, resolve_brief_path
@@ -38,6 +40,7 @@ from dotharness.sisyphus.stoprecord import (
 
 SIDECAR_SUFFIXES = (".stop.json", ".intake.json", ".stopped.json")
 ANSWER_SUFFIX = ".answer.md"
+ANSWERS_LOG_SUFFIX = ".answers.jsonl"
 USED_SUFFIX = ".used"
 
 # `sisyphus resume --reset-retries` zeroes exactly these run-record counters for the RECORDED stage of the
@@ -75,6 +78,76 @@ def answer_path(rec_path: Path) -> Path:
     return rec_path.with_suffix(ANSWER_SUFFIX)
 
 
+def answers_log_path(rec_path: Path) -> Path:
+    """``<item-encoded>.answers.jsonl`` next to the run record: the append-only log of consumed answers."""
+    return rec_path.with_suffix(ANSWERS_LOG_SUFFIX)
+
+
+def build_answer_log_record(rec_path: Path, item: str, answer: str) -> dict[str, Any]:
+    """One answers-log entry: the answer plus what the stop record says it answered (never raises)."""
+    stop = read_stop_record(rec_path)
+    questions: Any = () if stop is None else stop.questions
+    if isinstance(questions, str):
+        # DESIGN DECISION (OD-1): a bare string (legacy or hand-written sidecar) is NOT split; it becomes
+        # one question, and an empty string becomes none.
+        questions = [questions] if questions else []
+    return {
+        "item": item,
+        "checkpoint": stop.checkpoint if stop else None,
+        "stage": stop.stage if stop else None,
+        "stage_status": stop.stage_status if stop else None,
+        "leaf": getattr(stop, "leaf", None),
+        "questions": list(questions or ()),
+        "detail": stop.detail if stop else None,
+        "stopped_at": stop.stopped_at if stop else None,
+        "answer": answer.strip(),
+        "answered_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def _append_line(path: Path, line: str) -> None:
+    """Durably append exactly one newline-terminated line to the JSONL file ``path``.
+
+    ``line`` is passed without a trailing newline; one is added (a single supplied
+    trailing newline is not doubled). The parent directory is created. If the
+    existing file is non-empty and does not end in a newline (a partial last
+    line left by a crash or a failed write), the file is first truncated back to
+    the last newline (or to empty), so the partial bytes never become a mid-file
+    line. The new record is then written in one ``write`` call, followed by
+    ``flush`` and ``os.fsync``. Any ``OSError`` propagates unchanged.
+
+    Reader tolerance (FR-12): readers of the answers log need only skip a final
+    line that does not parse; the append path never leaves an unparseable line
+    anywhere else.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(path, "r+b") as fh:
+            data = fh.read()
+            if data and not data.endswith(b"\n"):
+                fh.truncate(data.rfind(b"\n") + 1)
+                fh.flush()
+                os.fsync(fh.fileno())
+    except FileNotFoundError:
+        pass
+    body = line[:-1] if line.endswith("\n") else line
+    with open(path, "ab") as fh:
+        fh.write((body + "\n").encode("utf-8"))
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+def append_answer_log(rec_path: Path, item: str, answer: str) -> None:
+    """Log one answer as a single JSON line (does not rename the answer file).
+
+    The log is append-only and nothing deletes it. Reader tolerance (FR-12): a
+    reader need only skip a final line that does not parse (a crash may leave a
+    truncated last line); the next append truncates it away first.
+    """
+    record = build_answer_log_record(rec_path, item, answer)
+    _append_line(answers_log_path(rec_path), json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+
+
 def read_answer(rec_path: Path) -> str:
     try:
         return answer_path(rec_path).read_text(encoding="utf-8").strip()
@@ -82,10 +155,22 @@ def read_answer(rec_path: Path) -> str:
         return ""
 
 
-def consume_answer(rec_path: Path) -> None:
-    """Rename the answer file to ``*.answer.md.used`` so a stale answer does not clear a later stop."""
+def consume_answer(rec_path: Path, item: str, answer: str) -> None:
+    """Log the answer, then rename the answer file to ``*.answer.md.used`` so a stale answer does not clear a later stop.
+
+    The answers-log line is appended first (FR-13); an OSError from it propagates and the
+    answer file stays un-renamed (FR-18). A crash between the two steps can only duplicate a line.
+
+    ``answer`` is what the agent saw; the file may have been edited while the agent ran. The file is
+    re-read here, and if its content differs, that content is logged too (after ``answer``), so the text
+    that is renamed to ``.used`` is always in the log.
+    """
     path = answer_path(rec_path)
     if path.is_file():
+        append_answer_log(rec_path, item, answer)
+        current = read_answer(rec_path)
+        if current and current != answer.strip():
+            append_answer_log(rec_path, item, current)
         path.replace(path.with_name(path.name + USED_SUFFIX))
 
 

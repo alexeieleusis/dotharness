@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -11,8 +12,10 @@ from dotharness.sisyphus.stoprecord import (
     ACTIONS,
     StopRecord,
     action_for,
+    build_abandoned_record,
     build_stop_record,
     clear_stop_record,
+    read_stop_record,
     read_stop_text,
     remove_stop_text,
     stop_record_path,
@@ -159,3 +162,53 @@ def test_unremovable_stop_text_does_not_lose_stop_record(tmp_path: Path) -> None
     assert stop_record_path(rec).exists()
     clear_stop_record(rec)
     assert not stop_record_path(rec).exists()
+
+
+def test_leaf_defaults_to_none_and_serializes_null(tmp_path: Path) -> None:
+    stop = _stop()
+    assert stop.leaf is None
+    assert "leaf" in stop.to_dict()
+    assert stop.to_dict()["leaf"] is None
+    rec = tmp_path / "_1.json"
+    write_stop_record(rec, stop)
+    raw = json.loads(stop_record_path(rec).read_text(encoding="utf-8"))
+    assert "leaf" in raw
+    assert raw["leaf"] is None
+
+
+def test_leaf_roundtrips_and_detail_unchanged(tmp_path: Path) -> None:
+    detail = "leaf A-1a: which option?"
+    stop = build_stop_record(
+        "#186",
+        checkpoint="C3",
+        stage="build",
+        stage_status="in_progress",
+        detail=detail,
+        resume_command=RESUME,
+        leaf="A-1a",
+    )
+    assert stop.leaf == "A-1a"
+    assert stop.to_dict()["leaf"] == "A-1a"
+    rec = tmp_path / "_1.json"
+    write_stop_record(rec, stop)
+    back = read_stop_record(rec)
+    assert back is not None
+    assert back.leaf == "A-1a"
+    assert back.detail == detail
+
+
+def test_old_sidecar_without_leaf_reads_as_none(tmp_path: Path) -> None:
+    rec = tmp_path / "_1.json"
+    old = _stop().to_dict()
+    del old["leaf"]
+    stop_record_path(rec).write_text(json.dumps(old), encoding="utf-8")
+    back = read_stop_record(rec)
+    assert back is not None
+    assert back.leaf is None
+
+
+def test_abandoned_record_has_no_leaf() -> None:
+    stop = build_abandoned_record(
+        "#186", stage="build", stage_status="in_progress", prior_label="C3", reenable_command="sisyphus enable"
+    )
+    assert stop.leaf is None

@@ -1512,6 +1512,43 @@ async def test_stop_record_written_for_each_checkpoint(world: World, setup, cp: 
     assert f"Resume: `{stop.resume_command}`" in line
 
 
+async def test_c3_stop_record_carries_leaf_and_detail_prefix(world: World) -> None:
+    _stop_c3(world)
+    await world.run()
+    stop = _stop(world)
+    assert stop is not None
+    assert stop.leaf == "13-foo"
+    assert stop.detail == "leaf 13-foo: Use A or B?"
+
+
+@pytest.mark.parametrize("setup", [_stop_c1, _stop_c2, _stop_c6, _stop_c8])
+async def test_stops_without_a_leaf_record_null(world: World, setup) -> None:
+    setup(world)
+    await world.run()
+    stop = _stop(world)
+    assert stop is not None
+    assert stop.leaf is None
+
+
+@pytest.mark.parametrize("report", [{"leaf": None}, {"leaf": ""}, {}])
+async def test_null_empty_or_missing_leaf_in_report_records_none(world: World, report: dict) -> None:
+    world.build_stops = [{"checkpoint": "C3", "detail": "Use A or B?", **report}]
+    await world.run()
+    stop = _stop(world)
+    assert stop is not None
+    assert stop.leaf is None
+    assert stop.detail == "Use A or B?"
+
+
+async def test_non_string_leaf_in_report_is_coerced(world: World) -> None:
+    world.build_stops = [{"checkpoint": "C3", "leaf": 7, "detail": "d"}]
+    await world.run()
+    stop = _stop(world)
+    assert stop is not None
+    assert stop.leaf == "7"
+    assert stop.detail == "leaf 7: d"
+
+
 async def test_c1_stop_record_lists_each_open_decision(world: World) -> None:
     world.brief_text = "# B\n\n## Open decisions log\n\n1. Which tracker?\n2. Which base?\n"
     await world.run()
@@ -1644,6 +1681,91 @@ async def test_answer_file_is_given_to_the_agent_once_then_consumed(world: World
     assert "Use B." not in build_prompts[0]
     assert not answer_path(rec_path).exists()
     assert answer_path(rec_path).with_name(answer_path(rec_path).name + ".used").exists()
+
+
+def _answers_log(world: World) -> list[dict]:
+    from dotharness.sisyphus.resume import answers_log_path
+
+    path = answers_log_path(RunRecord.open(world.tmp / "ws", ITEM).path)
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+async def test_consumption_after_a_non_answer_stop_is_logged(world: World) -> None:
+    from dotharness.sisyphus.resume import answer_path
+
+    _stop_c5(world)
+    await world.run()
+    rec_path = RunRecord.open(world.tmp / "ws", ITEM).path
+    answer_path(rec_path).write_text("go ahead\n")
+    world.branch_exists = True
+    assert (await world.run()).completed
+    (line,) = _answers_log(world)
+    assert line["checkpoint"] == "C5"
+    assert line["answer"] == "go ahead"
+    assert line["item"] == ITEM
+
+
+async def test_c1_clearing_through_the_brief_writes_no_log(world: World) -> None:
+    world.brief_text = BRIEF_OPEN
+    await world.run()
+    _brief(world).write_text(BRIEF_NONE)
+    assert (await world.run()).completed
+    assert _answers_log(world) == []
+
+
+async def test_two_stop_answer_cycles_log_two_lines_in_order(world: World) -> None:
+    from dotharness.sisyphus.resume import answer_path
+
+    world.build_stops = [
+        {"checkpoint": "C3", "leaf": "13-foo", "detail": "Question one?"},
+        {"checkpoint": "C3", "leaf": "13-foo", "detail": "Question two?"},
+    ]
+    await world.run()
+    rec_path = RunRecord.open(world.tmp / "ws", ITEM).path
+    answer_path(rec_path).write_text("Answer one")
+    world.branch_exists = True
+    await world.run()
+    answer_path(rec_path).write_text("Answer two")
+    assert (await world.run()).completed
+    lines = _answers_log(world)
+    assert [line["answer"] for line in lines] == ["Answer one", "Answer two"]
+    assert "Question one?" in json.dumps(lines[0]["questions"] + [lines[0]["detail"]])
+    assert "Question two?" in json.dumps(lines[1]["questions"] + [lines[1]["detail"]])
+    assert "Question one?" not in json.dumps(lines[1])
+    used = answer_path(rec_path).with_name(answer_path(rec_path).name + ".used")
+    assert used.read_text() == "Answer two"
+
+
+async def test_agent_raising_writes_no_log_and_keeps_the_answer_file(world: World) -> None:
+    from dotharness.sisyphus.resume import answer_path
+
+    world.build_stops = [{"checkpoint": "C3", "leaf": "13-foo", "detail": "Use A or B?"}]
+    await world.run()
+    rec_path = RunRecord.open(world.tmp / "ws", ITEM).path
+    answer_path(rec_path).write_text("Use B.")
+    world.branch_exists = True
+    original = world.agent
+
+    async def boom(prompt: str) -> None:
+        if "Stage to run now: `build`" in prompt:
+            raise RuntimeError("agent died")
+        await original(prompt)
+
+    with pytest.raises(RuntimeError, match="agent died"):
+        await run_item(
+            ITEM,
+            world.config(),
+            world.options(),
+            agent_runner=boom,
+            subprocess_runner=world.shell,
+            pr_client=world,
+            clock=world.clock,
+            today=TODAY,
+        )
+    assert _answers_log(world) == []
+    assert answer_path(rec_path).read_text() == "Use B."
 
 
 # ------------------------------------------------------ single dedicated clone
