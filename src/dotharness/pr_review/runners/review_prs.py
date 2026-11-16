@@ -45,7 +45,7 @@ async def run(config: HarnessConfig, pr_url: str | None = None) -> None:
 
 
 async def _discover_prs(
-    config: HarnessConfig, pr_url: str | None, host: CodeHost, repo: RepositoryRef
+    config: HarnessConfig, pr_url: str | None, host: CodeHost, repo: RepositoryRef, current_user: str
 ) -> list[ChangeRequest] | None:
     if pr_url:
         change_request = await pr_from_url(host, repo, pr_url)
@@ -53,7 +53,7 @@ async def _discover_prs(
             return []
         return [change_request]
 
-    return await list_open_change_requests_matching_authors(host, repo, config.vibe_heal.authors)
+    return await list_open_change_requests_matching_authors(host, repo, config.vibe_heal.authors, current_user)
 
 
 def _already_reviewed(reviewed_shas: dict, pr: ChangeRequest, min_interval_seconds: float, now: float) -> bool:
@@ -95,7 +95,7 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
 
     current_user = await host_current_user(host)
 
-    candidates = await _discover_prs(config, pr_url, host, repo)
+    candidates = await _discover_prs(config, pr_url, host, repo, current_user)
 
     if pr_url is not None:
         to_process = candidates

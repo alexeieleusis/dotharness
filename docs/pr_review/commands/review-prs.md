@@ -1,7 +1,7 @@
 # review-prs
 
-Runs an automated static-analysis review against open, non-draft pull requests in a repo, using the external
-`vibe_heal` tool. It posts the results as PR comments.
+Runs an automated static-analysis review against open pull requests in a repo (drafts are skipped unless the
+acting user authored them), using the external `vibe_heal` tool. It posts the results as PR comments.
 
 It is a batch command meant to run on a schedule, for example via `pr_review schedule install review-prs`.
 That way, every open PR gets vibe_heal/SonarQube-style feedback without anyone triggering it by hand.
@@ -72,8 +72,8 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
    - If `--pr` was given, resolves just that PR through the code host's change-request read (number, head and base branch,
      head revision).
    - Otherwise, lists open PRs through the code host (at most 1000). Filters to PRs
-     that are **not a draft** and whose author matches `vibe_heal.authors` (`"*"` or an explicit login
-     list). Then drops any PR that is ineligible per its `reviewed_shas` entry (see [State and
+     that are **not a draft** (or are a draft authored by the acting user, the owner of the code-host token) and
+     whose author matches `vibe_heal.authors` (`"*"` or an explicit login list). Then drops any PR that is ineligible per its `reviewed_shas` entry (see [State and
      idempotency](#state-and-idempotency)). A PR is ineligible if either its current head commit
      (`headRefOid`) matches the SHA already recorded for it (unchanged since the last successful review), or
      it changed but less than `vibe_heal.min_reanalysis_interval_hours` has passed since that last
@@ -170,8 +170,9 @@ baseline analysis step. See the `--pr` description under [Usage](#usage) and ste
 
 ## Notes
 
-- **Draft PRs are always skipped** in the batch case, unconditionally — there is no config flag to include
-  them. A PR passed explicitly via `--pr` is processed even if it's a draft.
+- **Draft PRs are skipped** in the batch case unless the acting user authored them (they must still match
+  `vibe_heal.authors`). If the acting user cannot be resolved, no drafts are reviewed. There is no config flag to
+  include them. A PR passed explicitly via `--pr` is processed even if it's a draft.
 - `reviewed_shas` is a per-PR "already reviewed, at this exact commit, at this time" record, not a
   monotonic watermark. A PR whose head SHA has changed becomes eligible again once
   `min_reanalysis_interval_hours` has passed since its last successful review, regardless of PR number.

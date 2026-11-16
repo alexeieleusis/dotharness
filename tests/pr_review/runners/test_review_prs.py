@@ -1108,7 +1108,7 @@ async def test_unset_env_file_logs_no_env_file_message(tmp_path, caplog):
     assert not [r for r in caplog.records if "regular file" in r.getMessage()]
 
 
-async def test_discover_prs_lists_open_non_draft_matching_authors_sorted(tmp_path):
+async def test_discover_prs_lists_open_matching_authors_sorted_and_own_drafts(tmp_path):
     cfg = _make_config(tmp_path, authors=["alice"])
     host = _seed([
         _pr(9, "b", author=User("alice")),
@@ -1117,30 +1117,30 @@ async def test_discover_prs_lists_open_non_draft_matching_authors_sorted(tmp_pat
         _pr(5, "e", author=User("eve")),
         _pr(6, "f", author=User("alice"), state=ChangeRequestState.CLOSED),
     ])
-    found = await review_prs._discover_prs(cfg, None, host.code_host(), REPO)
+    found = await review_prs._discover_prs(cfg, None, host.code_host(), REPO, "alice")
     assert found is not None
-    assert [pr.number for pr in found] == [2, 9]
+    assert [pr.number for pr in found] == [2, 4, 9]
     assert [c.operation for c in host.calls] == ["ChangeRequests.list"]
 
 
 async def test_discover_prs_returns_none_when_the_list_fails_and_empty_when_there_are_none(tmp_path):
     cfg = _make_config(tmp_path)
     host = _seed()
-    assert await review_prs._discover_prs(cfg, None, host.code_host(), REPO) == []
+    assert await review_prs._discover_prs(cfg, None, host.code_host(), REPO, "alice") == []
     host.fail_next("ChangeRequests.list", CodeHostError("boom"))
-    assert await review_prs._discover_prs(cfg, None, host.code_host(), REPO) is None
+    assert await review_prs._discover_prs(cfg, None, host.code_host(), REPO, "alice") is None
 
 
 async def test_discover_prs_timeout_on_list_is_a_failed_read(tmp_path):
     host = _seed([_pr(1)])
     host.fail_next("ChangeRequests.list", CodeHostTimeoutError("slow", write=False))
-    assert await review_prs._discover_prs(_make_config(tmp_path), None, host.code_host(), REPO) is None
+    assert await review_prs._discover_prs(_make_config(tmp_path), None, host.code_host(), REPO, "alice") is None
 
 
 async def test_discover_prs_with_url_reads_only_that_change_request(tmp_path):
     host = _seed([_pr(3, "feat", "sha3"), _pr(4)])
     found = await review_prs._discover_prs(
-        _make_config(tmp_path), "https://example.test/acme/frontend/pull/3", host.code_host(), REPO
+        _make_config(tmp_path), "https://example.test/acme/frontend/pull/3", host.code_host(), REPO, "alice"
     )
     assert found is not None
     assert [(pr.number, pr.head_revision, pr.base_reference) for pr in found] == [(3, "sha3", "main")]
@@ -1152,7 +1152,7 @@ async def test_discover_prs_stops_when_the_host_cannot_list_change_requests(tmp_
         repository="acme/frontend", user="alice", capabilities=frozenset(Capability) - {Capability.CHANGE_REQUESTS}
     )
     with pytest.raises(UnsupportedCapabilityError):
-        await review_prs._discover_prs(_make_config(tmp_path), None, host.code_host(), REPO)
+        await review_prs._discover_prs(_make_config(tmp_path), None, host.code_host(), REPO, "alice")
 
 
 async def test_process_pr_skips_when_the_state_read_fails(tmp_path):
