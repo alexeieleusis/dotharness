@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -282,6 +283,10 @@ def _modified_items(modified: object) -> list[str]:
         and isinstance(item.get("path"), str)
         and isinstance(item.get("ratio"), int | float)
         and not isinstance(item.get("ratio"), bool)
+        and math.isfinite(item["ratio"])
+        and 0 <= item["ratio"] <= 1
+        and "\n" not in item["path"]
+        and "\r" not in item["path"]
     ]
 
 

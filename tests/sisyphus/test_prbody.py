@@ -1057,6 +1057,12 @@ def test_refactor_record_lines_modified_present() -> None:
         [{"ratio": 0.5}],
         [{"path": 1, "ratio": 0.5}],
         [{"path": "a.py", "ratio": "x"}],
+        [{"path": "a.py", "ratio": float("nan")}],
+        [{"path": "a.py", "ratio": float("inf")}],
+        [{"path": "a.py", "ratio": float("-inf")}],
+        [{"path": "a.py", "ratio": -0.5}],
+        [{"path": "a.py", "ratio": 2.5}],
+        [{"path": "a.py\n- injected", "ratio": 0.5}],
     ],
 )
 def test_refactor_record_lines_modified_missing_or_malformed(modified: object) -> None:
