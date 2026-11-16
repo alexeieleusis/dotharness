@@ -564,16 +564,24 @@ class _Run:
         for path in modified:
             if path not in sources:
                 continue
-            added_lines = await self._numstat_added(base, path)
-            if added_lines is None:
-                continue
-            blob = await self.git("show", f"{tip}:{path}", ok=False)
-            if blob.returncode != 0:
-                continue
-            lines_at_tip = blob.stdout.count("\n") + (0 if not blob.stdout or blob.stdout.endswith("\n") else 1)
-            if is_heavily_modified(added_lines, lines_at_tip):
-                units[path] = round(added_lines / lines_at_tip, 2)
+            ratio = await self._modified_unit_ratio(base, tip, path)
+            if ratio is not None:
+                units[path] = ratio
         return units
+
+    async def _modified_unit_ratio(self, base: str, tip: str, path: str) -> float | None:
+        """``round(added_lines / lines_at_tip, 2)`` when heavily modified; ``None`` if below the minimum or unreadable."""
+        added_lines = await self._numstat_added(base, path)
+        if added_lines is None:
+            return None
+        blob = await self.git("show", f"{tip}:{path}", ok=False)
+        if blob.returncode != 0:
+            return None
+        text = blob.stdout
+        lines_at_tip = text.count("\n") + (0 if not text or text.endswith("\n") else 1)
+        if not is_heavily_modified(added_lines, lines_at_tip):
+            return None
+        return round(added_lines / lines_at_tip, 2)
 
     async def _numstat_added(self, base: str, path: str) -> int | None:
         """Added-line count of ``path`` in ``base``; ``None`` for binary files, git failures and unparsable output."""
