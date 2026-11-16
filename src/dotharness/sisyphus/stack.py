@@ -26,7 +26,7 @@ The framework detection rules live in ``FRAMEWORK_RULES``; ``match_file`` applie
 ``group_added_files`` assigns each added test to one group or to none (steps a to d,
 non-override case only). ``M(P)`` is ``nearest_manifest_dir(root, P)``:
 
-a. For a test T, take ``M(T)``; each added source S has ``M(S)``.
+a. For a test T, take ``M(T)``; each candidate source S has ``M(S)``.
 b. Candidate groups hold at least one source S with ``M(S) == M(T)``, and only when
    ``M(T)`` is not ``None`` (``''``, the repo root, is valid). With exactly one
    candidate, T goes to it.
@@ -37,7 +37,8 @@ c. With several candidates, T goes to the group of the source S (among those wit
 d. With no candidate, T goes to the ``generic`` group if one exists, else to no group;
    no source-less ``generic`` group is created.
 
-Only added sources count: existing code that was not added is invisible to this rule.
+Only candidate sources count: added sources, plus existing sources the caller found heavily modified
+(``MODIFIED_SHARE_MIN``). Other existing code is invisible to this rule. This module sees paths only, not git status.
 """
 
 from __future__ import annotations
@@ -436,7 +437,7 @@ def pattern_set_names() -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class StackGroup:
-    """One group of added files sharing a matched pattern set (no validation; the grouping code sorts)."""
+    """One group of candidate files sharing a matched pattern set (no validation; the grouping code sorts)."""
 
     set: str
     files: tuple[str, ...]
@@ -461,8 +462,9 @@ def group_added_files(
     set_names: Collection[str] | None = None,
     pattern_set: str | None = None,
 ) -> tuple[StackGroup, ...]:
-    """Group the added source files by pattern set.
+    """Group the candidate source files by pattern set.
 
+    ``added`` holds every candidate path: added files plus heavily modified existing files.
     With ``pattern_set`` given, all sources form one group and no manifest is read.
     Otherwise each source file lands in exactly one group: framework groups in
     ascending set-name order, then ``generic`` last. ``tests`` follows steps a to d of
