@@ -42,9 +42,40 @@ def test_author_matches_str_config_is_equality_not_substring():
 async def test_list_open_change_requests_matching_authors_authorless_only_matches_wildcard(authors_config, expected):
     host = make_host()
     seed_pr(host, 1, author=None)
-    found = await list_open_change_requests_matching_authors(host.code_host(), REPO, authors_config)
+    found = await list_open_change_requests_matching_authors(host.code_host(), REPO, authors_config, "alice")
     assert found is not None
     assert [c.number for c in found] == expected
+
+
+@pytest.mark.parametrize(
+    ("authors_config", "current_user", "expected"),
+    [
+        ("*", "alice", [1, 3, 4, 5]),  # own draft (#3) included, bob's draft (#2) excluded
+        (["bob"], "alice", [4]),  # own draft still subject to the authors filter (D-1)
+        (["alice"], "alice", [1, 3]),
+        ("*", "", [1, 4, 5]),  # unresolved acting user: no drafts
+        ("*", "ALICE", [1, 4, 5]),  # exact comparison, no case folding (D-2)
+    ],
+)
+async def test_list_open_change_requests_matching_authors_drafts_only_when_own(authors_config, current_user, expected):
+    host = make_host()
+    seed_pr(host, 5, author=User("carol"))
+    seed_pr(host, 3, is_draft=True)
+    seed_pr(host, 1)
+    seed_pr(host, 2, author=User("bob"), is_draft=True)
+    seed_pr(host, 4, author=User("bob"))
+    found = await list_open_change_requests_matching_authors(host.code_host(), REPO, authors_config, current_user)
+    assert found is not None
+    assert [c.number for c in found] == expected
+    assert [c.operation for c in host.calls] == ["ChangeRequests.list"]
+
+
+@pytest.mark.parametrize("current_user", ["alice", ""])
+async def test_list_open_change_requests_matching_authors_authorless_draft_excluded(current_user):
+    host = make_host()
+    seed_pr(host, 1, author=None, is_draft=True)
+    found = await list_open_change_requests_matching_authors(host.code_host(), REPO, "*", current_user)
+    assert found == []
 
 
 def test_author_matches_list_rejects_unknown():

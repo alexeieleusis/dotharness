@@ -1248,9 +1248,13 @@ def author_matches(login: str, authors_config: str | list) -> bool:
 
 
 async def list_open_change_requests_matching_authors(
-    host: CodeHost, repo: RepositoryRef, authors_config: str | list
+    host: CodeHost, repo: RepositoryRef, authors_config: str | list, current_user: str
 ) -> list[ChangeRequest] | None:
-    """List open, non-draft change requests whose author matches authors_config, sorted ascending by number.
+    """List open change requests whose author matches authors_config, sorted ascending by number.
+
+    Drafts are skipped unless authored by ``current_user`` (the acting user, exact login match). An empty
+    ``current_user`` (unresolved) never matches, so no draft is included then. Own drafts must still match
+    ``authors_config``.
 
     Returns None (rather than []) when the host read fails (logged), so callers can distinguish "the list failed"
     from "confirmed zero open change requests" instead of treating a transient hiccup as an authoritative empty
@@ -1272,7 +1276,8 @@ async def list_open_change_requests_matching_authors(
     eligible = [
         c
         for c in found
-        if not c.is_draft and (author_matches(c.author.login, authors_config) if c.author else authors_config == "*")
+        if (not c.is_draft or (c.author is not None and current_user != "" and c.author.login == current_user))
+        and (author_matches(c.author.login, authors_config) if c.author else authors_config == "*")
     ]
     return sorted(eligible, key=lambda c: c.number)
 
