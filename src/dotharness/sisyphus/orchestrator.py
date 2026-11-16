@@ -521,41 +521,46 @@ class _Run:
 
     # -- refactor input
 
-    async def list_added_paths(self, tip: str = "HEAD") -> list[str]:
-        """Paths with git status ``A`` in ``origin/<base>...<tip>`` (default rename detection), in git order."""
+    async def _name_status(self, tip: str = "HEAD") -> list[tuple[str, str]]:
+        """``(status, path)`` pairs of ``origin/<base>...<tip>`` (default rename detection), in git order.
+
+        Renames and copies (``R``/``C``, which carry two paths) are skipped.
+        """
         res = await self.git("diff", "--name-status", "-z", f"origin/{self.opt.base_branch}...{tip}")
         tokens = res.stdout.split("\0")
-        added: list[str] = []
+        entries: list[tuple[str, str]] = []
         i = 0
         while i + 1 < len(tokens):
             status = tokens[i]
             if status[:1] in ("R", "C"):
                 i += 3
                 continue
-            if status == "A":
-                added.append(tokens[i + 1])
+            entries.append((status, tokens[i + 1]))
             i += 2
-        return added
+        return entries
 
-    async def list_modified_code_units(self, tip: str = "HEAD") -> dict[str, float]:
+    async def list_added_paths(self, tip: str = "HEAD", entries: list[tuple[str, str]] | None = None) -> list[str]:
+        """Paths with git status ``A`` in ``origin/<base>...<tip>``, in git order.
+
+        Pass ``entries`` from ``_name_status`` to reuse one diff snapshot.
+        """
+        if entries is None:
+            entries = await self._name_status(tip)
+        return [path for status, path in entries if status == "A"]
+
+    async def list_modified_code_units(
+        self, tip: str = "HEAD", entries: list[tuple[str, str]] | None = None
+    ) -> dict[str, float]:
         """Modified source files (status ``M``) whose share of added lines is at least the minimum, with ratios.
 
         Path to ``round(added_lines / lines_at_tip, 2)`` in git order. Binary files, files with no lines at the
-        tip and paths whose numstat or blob git cannot read are left out.
+        tip and paths whose numstat or blob git cannot read are left out. Pass ``entries`` from ``_name_status``
+        to reuse one diff snapshot.
         """
         base = f"origin/{self.opt.base_branch}...{tip}"
-        res = await self.git("diff", "--name-status", "-z", base)
-        tokens = res.stdout.split("\0")
-        modified: list[str] = []
-        i = 0
-        while i + 1 < len(tokens):
-            status = tokens[i]
-            if status[:1] in ("R", "C"):
-                i += 3
-                continue
-            if status == "M":
-                modified.append(tokens[i + 1])
-            i += 2
+        if entries is None:
+            entries = await self._name_status(tip)
+        modified = [path for status, path in entries if status == "M"]
         sources = set(classify_paths(modified).sources)
         units: dict[str, float] = {}
         for path in modified:
@@ -588,10 +593,11 @@ class _Run:
         The groups are empty when no candidate exists. The mapping holds every modified code unit's ratio.
         """
         # On resume, measure from the pre-refactor HEAD so files the agent itself added are not regrouped.
-        entries = self.read_refactor_input()
-        tip = str(entries[0]["head_before"]) if entries else "HEAD"
-        added = await self.list_added_paths(tip)
-        ratios = await self.list_modified_code_units(tip)
+        recorded = self.read_refactor_input()
+        tip = str(recorded[0]["head_before"]) if recorded else "HEAD"
+        entries = await self._name_status(tip)
+        added = await self.list_added_paths(tip, entries)
+        ratios = await self.list_modified_code_units(tip, entries)
         candidates = [*added, *(p for p in ratios if p not in added)]
         return group_added_files(self.repo, candidates, pattern_set=pattern_set), ratios
 
