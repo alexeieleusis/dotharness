@@ -57,6 +57,19 @@ _SOURCE_SUFFIXES = frozenset({".py", ".ts", ".tsx", ".js", ".jsx"})
 _TEST_DIR_NAMES = frozenset({"tests", "test", "__tests__"})
 _TEST_NAME_PATTERNS = ("test_*.py", "*_test.py", "*.test.*", "*.spec.*")
 
+MODIFIED_SHARE_MIN = 0.50
+"""Smallest share of a modified file (``added_lines / lines_at_tip``) that makes it a modified code unit."""
+
+
+def is_heavily_modified(added_lines: int, lines_at_tip: int) -> bool:
+    """True when ``added_lines`` is at least ``MODIFIED_SHARE_MIN`` of ``lines_at_tip`` (integer compare).
+
+    A file with no lines at the tip never qualifies.
+    """
+    if lines_at_tip <= 0:
+        return False
+    return added_lines * 100 >= lines_at_tip * round(MODIFIED_SHARE_MIN * 100)
+
 
 def _validate_path(path: str) -> None:
     """Raise ``ValueError`` if ``path`` is absolute or has a ``..`` component.
