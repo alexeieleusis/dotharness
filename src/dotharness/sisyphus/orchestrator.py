@@ -608,6 +608,7 @@ class _Run:
 
         ``modified`` lists the group's files found in ``ratios``, sorted by path, ratio rounded to two places.
         """
+        measured = ratios or {}
         entries = self.read_refactor_input()
         for entry in entries:
             if entry["set"] == record.set:
@@ -620,9 +621,7 @@ class _Run:
             "evidence": list(record.evidence),
             "fallback": record.fallback,
             "head_before": await self.rev_parse_head(),
-            "modified": [
-                {"path": p, "ratio": round(ratios[p], 2)} for p in sorted(record.files) if p in (ratios or {})
-            ],
+            "modified": [{"path": p, "ratio": round(measured[p], 2)} for p in sorted(record.files) if p in measured],
         }
         atomic_write_json(self.refactor_input_path, [*entries, entry])
         return entry

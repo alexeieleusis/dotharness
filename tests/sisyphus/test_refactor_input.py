@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from dotharness.sisyphus import orchestrator, prbody
-from dotharness.sisyphus.orchestrator import REFACTOR_INPUT_FILE, OrchestratorError
+from dotharness.sisyphus.orchestrator import REFACTOR_INPUT_FILE, OrchestratorError, SubprocessRunner
 from dotharness.sisyphus.stack import StackGroup, is_heavily_modified
 from dotharness.sisyphus.subproc import CommandResult
 from tests.sisyphus.test_orchestrator import ITEM, World
@@ -33,7 +33,7 @@ class Shell:
         raise AssertionError(argv)
 
 
-def _run(tmp_path: Path, shell: Shell) -> orchestrator._Run:
+def _run(tmp_path: Path, shell: SubprocessRunner) -> orchestrator._Run:
     w = World(tmp_path)
     return orchestrator._Run(ITEM, w.config(), w.options(), w.agent, shell, w, w.clock, w)
 
@@ -196,7 +196,7 @@ async def test_modified_listing_boundaries(tmp_path: Path) -> None:
         "bin.py": "x",
     }
     shell = GitShell(status, numstat, blobs)
-    run = _run(tmp_path, shell)  # type: ignore[arg-type]
+    run = _run(tmp_path, shell)
     units = await run.list_modified_code_units()
     assert units == {"a50.py": 0.5, "h1of2.py": 0.5, "nonl.py": 0.5}
     assert not any("--no-renames" in c for c in shell.calls)
@@ -209,20 +209,20 @@ async def test_modified_git_failure_skips_path(tmp_path: Path) -> None:
     status = "M\0bad_numstat.py\0M\0no_blob.py\0M\0ok.py\0"
     numstat = {"no_blob.py": "9\t0\tno_blob.py\n", "ok.py": "9\t0\tok.py\n"}
     blobs: dict[str, str | None] = {"ok.py": _lines(10)}
-    run = _run(tmp_path, GitShell(status, numstat, blobs))  # type: ignore[arg-type]
+    run = _run(tmp_path, GitShell(status, numstat, blobs))
     assert await run.list_modified_code_units() == {"ok.py": 0.9}
 
 
 async def test_ratio_rounded_two_places(tmp_path: Path) -> None:
     shell = GitShell("M\0a.py\0", {"a.py": "2\t0\ta.py\n"}, {"a.py": _lines(3)})
-    run = _run(tmp_path, shell)  # type: ignore[arg-type]
+    run = _run(tmp_path, shell)
     assert await run.list_modified_code_units() == {"a.py": 0.67}
 
 
 async def test_union_and_ratios(tmp_path: Path) -> None:
     status = "A\0new.py\0M\0old.py\0A\0tests/test_new.py\0M\0tests/test_old.py\0"
     shell = GitShell(status, {"old.py": "8\t0\told.py\n", "tests/test_old.py": "9\t0\tx\n"}, {"old.py": _lines(10)})
-    run = _run(tmp_path, shell)  # type: ignore[arg-type]
+    run = _run(tmp_path, shell)
     groups, ratios = await run.refactor_groups(pattern_set="fastapi")
     assert ratios == {"old.py": 0.8}
     assert len(groups) == 1
@@ -234,7 +234,7 @@ async def test_union_and_ratios(tmp_path: Path) -> None:
 async def test_union_two_stacks_in_set_order(tmp_path: Path) -> None:
     status = "A\0api.py\0M\0web/old.tsx\0"
     shell = GitShell(status, {"web/old.tsx": "10\t0\tx\n"}, {"web/old.tsx": _lines(10)})
-    run = _run(tmp_path, shell)  # type: ignore[arg-type]
+    run = _run(tmp_path, shell)
     groups, _ = await run.refactor_groups()
     assert [g.set for g in groups] == ["generic"]
     assert groups[0].files == ("api.py", "web/old.tsx")
@@ -242,7 +242,7 @@ async def test_union_two_stacks_in_set_order(tmp_path: Path) -> None:
 
 async def test_resume_measures_at_recorded_head(tmp_path: Path) -> None:
     shell = GitShell("M\0a.py\0", {"a.py": "9\t0\ta.py\n"}, {"a.py": _lines(10)}, head=SHA_A)
-    run = _run(tmp_path, shell)  # type: ignore[arg-type]
+    run = _run(tmp_path, shell)
     await run.record_group_entry(_group("generic", ("a.py",)), {"a.py": 0.9})
     shell.calls.clear()
     shell.head = SHA_B
