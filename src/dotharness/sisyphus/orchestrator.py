@@ -443,6 +443,20 @@ def _tail(text: str, n: int = 400) -> str:
 # --------------------------------------------------------------- the run
 
 
+def modified_files_text(modified: object) -> str:
+    """``path (NN%)`` per line for the group's modified entries, or ``none``."""
+    lines = []
+    if isinstance(modified, list):
+        for item in modified:
+            if (
+                isinstance(item, dict)
+                and isinstance(item.get("path"), str)
+                and isinstance(item.get("ratio"), int | float)
+            ):
+                lines.append(f"{item['path']} ({round(item['ratio'] * 100)}%)")
+    return "\n".join(lines) or "none"
+
+
 class _Run:
     def __init__(
         self,
@@ -1014,13 +1028,14 @@ class _Run:
                 )
                 if not resume_skip:
                     self.handoff_dir.mkdir(parents=True, exist_ok=True)
-                    await self.record_group_entry(group, ratios)
+                    recorded_entry = await self.record_group_entry(group, ratios)
                     await self.run_agent_stage(
                         REFACTOR_STAGE,
                         prompt_file=REFACTOR_PROMPT_FILE,
                         extra_values={
                             "refactor_set": group.set,
                             "group_files": "\n".join(group.files),
+                            "modified_files": modified_files_text(recorded_entry.get("modified")),
                             "input_file": str(self.refactor_input_path),
                         },
                     )

@@ -1,4 +1,4 @@
-# Prompt: Refactor the code that one build added, for one stack group
+# Prompt: Refactor the code that one build wrote, for one stack group
 
 > Every value in angle brackets below is a parameter. The caller substitutes all of them
 > before you see this text. This prompt names the files you must follow. It does not copy them.
@@ -20,6 +20,14 @@ You orchestrate the refactor of one stack group for a single work item. Run only
 
 <group_files>
 
+- Files in this group that existed before this work item, with the share of each file this
+  branch changed (`none` when there are none):
+
+<modified_files>
+
+Some listed files existed before this work item. Refactor each of them as a whole file under the
+same rules as the added files. Do not refactor an existing file that is not in the list.
+
 ## First
 
 Read the pattern set guide. Read `<input_file>` and use only the entry whose `set` equals
@@ -33,8 +41,8 @@ one sub-agent per file in the group, strictly one after the other, never in
 parallel. Give each sub-agent the guide path, the file path and the rules in this section. Then:
 
 - Touch only the files listed above (`<group_files>`). New files you add (extracted modules) are allowed.
-- Edit an existing file that is not in the list only on lines that reference an added file (an
-  import or a call site). List each such file in the handoff.
+- Edit an existing file that is not in the list only on lines that reference a file in the group
+  (an import or a call site). List each such file in the handoff.
 - Do not refactor tests beyond keeping them passing. Do not change a test's assertions.
 - Do not change behavior. Do not fix a bug, add a feature or rename a public interface. If you
   find a defect, report it as a deviation in the handoff and keep the behavior as it is. If the

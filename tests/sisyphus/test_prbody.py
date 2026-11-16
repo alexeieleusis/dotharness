@@ -1029,3 +1029,52 @@ def test_refactor_text_degrades_on_malformed_records() -> None:
     mixed = _refactor_text([bad[0], good], None)
     assert "### ok" in mixed
     assert "malformed selection record for generic" in mixed
+
+
+def test_refactor_record_lines_modified_present() -> None:
+    mod = [{"path": "a.py", "ratio": 0.62}, {"path": "b/c.py", "ratio": 1.0}]
+    lines = _refactor_record_lines(_record(modified=mod))
+    assert lines[:5] == [
+        "### fastapi",
+        "",
+        "- Modified files (share of file changed in this branch):",
+        "- a.py: 62%",
+        "- b/c.py: 100%",
+    ]
+    assert lines[5] == "- Evidence:"
+
+
+@pytest.mark.parametrize(
+    "modified",
+    [
+        [],
+        None,
+        "a.py",
+        5,
+        {"path": "a.py", "ratio": 0.6},
+        ["a.py"],
+        [{"path": "a.py"}],
+        [{"ratio": 0.5}],
+        [{"path": 1, "ratio": 0.5}],
+        [{"path": "a.py", "ratio": "x"}],
+    ],
+)
+def test_refactor_record_lines_modified_missing_or_malformed(modified: object) -> None:
+    lines = _refactor_record_lines(_record(modified=modified))
+    assert not any("Modified files" in line for line in lines)
+    assert lines == _refactor_record_lines(_record())
+
+
+def test_refactor_record_lines_modified_skips_bad_items() -> None:
+    lines = _refactor_record_lines(_record(modified=["x", {"path": "a.py", "ratio": 0.5}]))
+    assert "- a.py: 50%" in lines
+
+
+def test_record_well_formed_without_modified() -> None:
+    assert prbody._is_well_formed_record(_record())
+    assert prbody._is_well_formed_record(_record(modified="junk"))
+
+
+def test_format_refactor_section_modified_before_evidence() -> None:
+    text = format_refactor_section([_record(modified=[{"path": "a.py", "ratio": 0.5}])], {})
+    assert text.index("- Modified files") < text.index("- Evidence:")

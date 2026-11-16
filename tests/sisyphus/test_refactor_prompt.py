@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from dotharness.sisyphus import prbody
-from dotharness.sisyphus.orchestrator import build_orchestration_prompt
+from dotharness.sisyphus.orchestrator import build_orchestration_prompt, modified_files_text
 from dotharness.sisyphus.paths import knowledge_file
 
 NAME = "sisyphus/refactor-prompt.md"
@@ -24,6 +24,7 @@ VALUES = {
     "stop report path": "/w/stop.json",
     "refactor_set": "fastapi",
     "group_files": "\n".join(GROUP_FILES),
+    "modified_files": "src/a.py (62%)",
     "input_file": "/w/refactor-input.json",
     "patterns dir": "/k/patterns",
 }
@@ -160,3 +161,27 @@ def test_example_handoffs_parse(tmp_path: Path) -> None:
 def test_handoff_name_does_not_collide_with_leaf(tmp_path: Path) -> None:
     (tmp_path / "refactor-fastapi.md").write_text("- x\n", encoding="utf-8")
     assert prbody.select_handoffs(tmp_path, ["01-example"]) == {"01-example": []}
+
+
+def test_modified_files_rendered_and_none() -> None:
+    text = build_orchestration_prompt(raw(), VALUES)
+    assert "src/a.py (62%)" in text.splitlines()
+    none_text = build_orchestration_prompt(raw(), {**VALUES, "modified_files": "none"})
+    assert "none" in none_text.splitlines()
+    assert re.findall(r"<[^<>\n]+>", none_text) == []
+
+
+def test_prompt_text_about_existing_files() -> None:
+    text = raw()
+    assert "existed before this work item" in text
+    assert "Do not refactor an existing file that is not in the list" in text
+    assert "that one build added" not in text
+    assert "reference an added file" not in text
+
+
+def test_modified_files_text() -> None:
+    mod = [{"path": "a.py", "ratio": 0.62}, {"path": "b.py", "ratio": 0.5}, {"path": "c.py", "ratio": 0.605}]
+    assert modified_files_text(mod).splitlines() == ["a.py (62%)", "b.py (50%)", "c.py (60%)"]
+    assert modified_files_text([]) == "none"
+    assert modified_files_text(None) == "none"
+    assert modified_files_text([{"path": "a.py"}, "x"]) == "none"

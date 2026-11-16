@@ -271,9 +271,26 @@ def extract_refactor_handoffs(paths: Sequence[Path]) -> list[RefactorHandoff]:
     return results
 
 
+def _modified_items(modified: object) -> list[str]:
+    """``- <path>: <NN>%`` per well-formed ``modified`` item; ``[]`` for a missing or malformed value."""
+    if not isinstance(modified, list):
+        return []
+    return [
+        f"- {item['path']}: {round(item['ratio'] * 100)}%"
+        for item in modified
+        if isinstance(item, dict)
+        and isinstance(item.get("path"), str)
+        and isinstance(item.get("ratio"), int | float)
+        and not isinstance(item.get("ratio"), bool)
+    ]
+
+
 def _refactor_record_lines(record: Mapping[str, Any]) -> list[str]:
     """Heading plus the Evidence and Fallback bullets of one selection record."""
     lines = [f"### {record['set']}", ""]
+    modified = _modified_items(record.get("modified"))
+    if modified:
+        lines.extend(["- Modified files (share of file changed in this branch):", *modified])
     entries = [f"  - {item}" for item in record["evidence"]]
     lines.extend(["- Evidence:", *entries] if entries else ["- Evidence: none"])
     lines.append(f"- Fallback: {'yes' if record['fallback'] else 'no'}")

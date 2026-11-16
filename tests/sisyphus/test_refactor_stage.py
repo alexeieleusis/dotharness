@@ -140,6 +140,7 @@ async def test_t2_no_commits_no_gate(env: Env) -> None:
     assert kw["extra_values"] == {
         "refactor_set": "generic",
         "group_files": "a.py",
+        "modified_files": "none",
         "input_file": str(env.run.refactor_input_path),
     }
 
@@ -364,3 +365,4 @@ async def test_modified_ratios_reach_input_entry(env: Env) -> None:
     entry = env.run.read_refactor_input()[0]
     assert entry["files"] == ["a.py", "b.py"]
     assert entry["modified"] == [{"path": "b.py", "ratio": 0.75}]
+    assert env.agent_calls[0]["extra_values"]["modified_files"] == "b.py (75%)"
