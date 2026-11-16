@@ -41,6 +41,7 @@ from dotharness.sisyphus.digest import (
 )
 from dotharness.sisyphus.intake import AgentRunner, BoundaryViolation, resolve_brief_path, run_intake
 from dotharness.sisyphus.lock import clone_lock
+from dotharness.sisyphus.modified import format_percent
 from dotharness.sisyphus.paths import knowledge_file
 from dotharness.sisyphus.pick import LabelRemover, label_removal_number
 from dotharness.sisyphus.plan import leaf_stems, plan_path
@@ -443,18 +444,15 @@ def _tail(text: str, n: int = 400) -> str:
 # --------------------------------------------------------------- the run
 
 
-def modified_files_text(modified: object) -> str:
+def modified_files_text(modified: Sequence[tuple[str, float]]) -> str:
     """``path (NN%)`` per line for the group's modified entries, or ``none``."""
-    lines = []
-    if isinstance(modified, list):
-        for item in modified:
-            if (
-                isinstance(item, dict)
-                and isinstance(item.get("path"), str)
-                and isinstance(item.get("ratio"), int | float)
-            ):
-                lines.append(f"{item['path']} ({round(item['ratio'] * 100)}%)")
-    return "\n".join(lines) or "none"
+    return "\n".join(f"{path} ({format_percent(ratio)})" for path, ratio in modified) or "none"
+
+
+def measured_modified(files: Sequence[str], ratios: Mapping[str, float] | None) -> list[tuple[str, float]]:
+    """``(path, ratio)`` for the files found in ``ratios``, sorted by path, ratio rounded to two places."""
+    measured = ratios or {}
+    return [(p, round(measured[p], 2)) for p in sorted(files) if p in measured]
 
 
 class _Run:
@@ -614,7 +612,6 @@ class _Run:
 
         ``modified`` lists the group's files found in ``ratios``, sorted by path, ratio rounded to two places.
         """
-        measured = ratios or {}
         entries = self.read_refactor_input()
         for entry in entries:
             if entry["set"] == record.set:
@@ -627,7 +624,7 @@ class _Run:
             "evidence": list(record.evidence),
             "fallback": record.fallback,
             "head_before": await self.rev_parse_head(),
-            "modified": [{"path": p, "ratio": round(measured[p], 2)} for p in sorted(record.files) if p in measured],
+            "modified": [{"path": p, "ratio": r} for p, r in measured_modified(record.files, ratios)],
         }
         atomic_write_json(self.refactor_input_path, [*entries, entry])
         return entry
@@ -1033,14 +1030,14 @@ class _Run:
                 )
                 if not resume_skip:
                     self.handoff_dir.mkdir(parents=True, exist_ok=True)
-                    recorded_entry = await self.record_group_entry(group, ratios)
+                    await self.record_group_entry(group, ratios)
                     await self.run_agent_stage(
                         REFACTOR_STAGE,
                         prompt_file=REFACTOR_PROMPT_FILE,
                         extra_values={
                             "refactor_set": group.set,
                             "group_files": "\n".join(group.files),
-                            "modified_files": modified_files_text(recorded_entry.get("modified")),
+                            "modified_files": modified_files_text(measured_modified(group.files, ratios)),
                             "input_file": str(self.refactor_input_path),
                         },
                     )

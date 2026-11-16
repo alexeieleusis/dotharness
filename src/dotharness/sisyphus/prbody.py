@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import math
 import os
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -17,6 +16,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from dotharness.sisyphus.intake import parse_resolved_decisions, split_resolved_decision
+from dotharness.sisyphus.modified import format_percent, parse_modified
 from dotharness.sisyphus.plan import leaf_stems as _plan_leaf_stems
 from dotharness.sisyphus.plan import plan_path, read_spf_config
 
@@ -274,20 +274,7 @@ def extract_refactor_handoffs(paths: Sequence[Path]) -> list[RefactorHandoff]:
 
 def _modified_items(modified: object) -> list[str]:
     """``- <path>: <NN>%`` per well-formed ``modified`` item; ``[]`` for a missing or malformed value."""
-    if not isinstance(modified, list):
-        return []
-    return [
-        f"- {item['path']}: {round(item['ratio'] * 100)}%"
-        for item in modified
-        if isinstance(item, dict)
-        and isinstance(item.get("path"), str)
-        and isinstance(item.get("ratio"), int | float)
-        and not isinstance(item.get("ratio"), bool)
-        and math.isfinite(item["ratio"])
-        and 0 <= item["ratio"] <= 1
-        and "\n" not in item["path"]
-        and "\r" not in item["path"]
-    ]
+    return [f"- {path}: {format_percent(ratio)}" for path, ratio in parse_modified(modified)]
 
 
 def _refactor_record_lines(record: Mapping[str, Any]) -> list[str]:

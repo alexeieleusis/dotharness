@@ -180,8 +180,13 @@ def test_prompt_text_about_existing_files() -> None:
 
 
 def test_modified_files_text() -> None:
-    mod = [{"path": "a.py", "ratio": 0.62}, {"path": "b.py", "ratio": 0.5}, {"path": "c.py", "ratio": 0.605}]
+    mod = [("a.py", 0.62), ("b.py", 0.5), ("c.py", 0.605)]
     assert modified_files_text(mod).splitlines() == ["a.py (62%)", "b.py (50%)", "c.py (60%)"]
     assert modified_files_text([]) == "none"
-    assert modified_files_text(None) == "none"
-    assert modified_files_text([{"path": "a.py"}, "x"]) == "none"
+
+
+def test_parse_modified_rejects_malformed_and_bool() -> None:
+    from dotharness.sisyphus.modified import parse_modified
+
+    assert parse_modified([{"path": "a.py", "ratio": True}, {"path": "b.py", "ratio": 0.5}, "x"]) == [("b.py", 0.5)]
+    assert parse_modified(None) == []
