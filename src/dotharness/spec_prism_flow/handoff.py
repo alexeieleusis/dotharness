@@ -1,30 +1,12 @@
 from __future__ import annotations
 
-import logging
-import os
-import subprocess
 from pathlib import Path
 
 import typer
 
-logger = logging.getLogger(__name__)
-
 
 class HandoffError(Exception):
     pass
-
-
-def _run_best_effort(cmd: list[str], text: str, tool_name: str) -> None:
-    try:
-        proc = subprocess.run(cmd, input=text.encode(), capture_output=True, timeout=3)  # noqa: S603
-    except OSError:
-        logger.warning("%s not found on PATH; skipping copy", tool_name)
-        return
-    except subprocess.TimeoutExpired:
-        logger.warning("%s timed out; skipping copy", tool_name)
-        return
-    if proc.returncode != 0:
-        logger.warning("%s exited %d: %s", tool_name, proc.returncode, proc.stderr.decode("utf-8", errors="replace"))
 
 
 def wait_for_confirmation(prompt: str) -> None:
@@ -46,10 +28,6 @@ def run_handoff(
 
     typer.echo(f"Prompt written to: {prompt_path}")
     typer.echo(f"Expected output at: {output_path}")
-
-    _run_best_effort(["pbcopy"], str(prompt_path), "pbcopy")
-    if os.environ.get("TMUX"):
-        _run_best_effort(["tmux", "load-buffer", "-"], str(prompt_path), "tmux load-buffer")
 
     wait_for_confirmation("Agent finished writing output?")
 
