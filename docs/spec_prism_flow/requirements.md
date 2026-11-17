@@ -204,11 +204,9 @@ go-ahead.
 **Human ↔ agent-harness hand-off (§11 #7, resolved for v1):** every stage below that needs an
 actual agent run follows the same protocol. The coding-agent harness (Claude Code or opencode) is
 an interactive CLI that the tool can't call as a library. `spec_prism_flow` prints the prompt
-file's path and the expected output file's path to the console. It copies the prompt file's path
-to both the system clipboard and the current tmux paste buffer, covering both local/GUI clipboard
-use and SSH/tmux-only sessions. Then it waits. The human starts the coding-agent harness and
-pastes the prompt file path into it. The harness reads the prompt and begins. The agent writes its
-result to the specified output file. `spec_prism_flow` reads it from there once the human signals
+file's path and the expected output file's path to the console. Then it waits. The human starts
+the coding-agent harness and gives it the prompt file path. The harness reads the prompt and
+begins. The agent writes its result to the specified output file. `spec_prism_flow` reads it from there once the human signals
 the stage is done. This protocol is expected to iterate if it proves too manual in practice.
 
 1. **`spec_prism_flow plan init`** — it takes a rough brief (a text/markdown file the human wrote)
@@ -488,9 +486,8 @@ than decided unilaterally by an agent building it:
 6. ~~**Feedback loop for trivial-breakdown deadlocks (§9).**~~ **Resolved:** just log it (§9). v1
    has no automatic adjustment of the generator prompt or sizing bands.
 7. ~~**Human-agent-harness interaction mechanism.**~~ **Resolved for v1** (§7.2): the tool prints
-   the prompt/output file paths to the console. It copies the prompt file's path to both the
-   system clipboard and the current tmux paste buffer. Then it waits for the human to start the
-   coding-agent harness and paste the path in. This design is explicitly expected to iterate if it
+   the prompt/output file paths to the console, then waits for the human to start the
+   coding-agent harness and give it the path. This design is explicitly expected to iterate if it
    proves too manual in practice.
 8. ~~**Does `build` (Feature B) stay part of the tool?**~~ **Resolved: yes, unified.** Both
    features ship as one tool, one CLI, one repo — `spec_prism_flow plan` and `build`

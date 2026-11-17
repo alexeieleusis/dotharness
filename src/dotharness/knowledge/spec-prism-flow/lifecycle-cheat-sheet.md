@@ -92,9 +92,8 @@ for. Every drafting step — `draft-overview`, `draft-requirements`, and
 each tree node `decompose` visits — blocks on the same protocol
 (`spec_prism_flow/handoff.py`):
 
-1. It writes `{stage}_prompt.md` into `workspace_dir` and prints its path. It also copies
-   the path, best-effort, to the clipboard (`pbcopy`) and, inside tmux, to the paste
-   buffer. It skips this silently if neither is available.
+1. It writes `{stage}_prompt.md` into `workspace_dir` and prints its path. It copies
+   nothing to the clipboard or the tmux paste buffer.
 2. It prints the exact expected output path, then blocks on
    `Agent finished writing output? [y/N]`.
 3. You must read that prompt, do the drafting, and write the file at the exact expected
@@ -103,8 +102,7 @@ each tree node `decompose` visits — blocks on the same protocol
 If you answer "y" before the output file exists, the command does not just re-prompt. It
 raises `HandoffError: Expected output file not found` and stops the whole command
 outright. Watch for each `Prompt written to:` / `Expected output at:` pair. Read the
-prompt **file** itself, not the clipboard — that is a manual-mode convenience for a
-human, and you cannot see it. Write the output file. Only then send "y" to the
+prompt **file** at the path printed after `Prompt written to:`. Write the output file. Only then send "y" to the
 subprocess's stdin.
 
 `decompose` runs this protocol once per tree node, not once for the whole command. Each

@@ -276,8 +276,7 @@ and INV-SY-05.
 
 - Git code that stays OUT of the interface: the origin URL check in `repo_guard.py` (`git remote get-url origin`), and
   `git fetch origin refs/pull/{n}/head` in `pr_review/runners/auto_approve.py`.
-- Not code-host calls: crontab/launchctl in `pr_review/scheduler.py`, the clipboard call in `spec_prism_flow/handoff.py`,
-  `sisyphus/intake.py` `_git`, and claude/opencode launches (`ai_backend.py`).
+- Not code-host calls: crontab/launchctl in `pr_review/scheduler.py`, `sisyphus/intake.py` `_git`, and claude/opencode launches (`ai_backend.py`).
 - `sisyphus/config.py` states it "never executes token_cmd and never reads the environment". It is kept only as INV-SY-12.
 - Linear (`LINEAR_API_URL` in `sisyphus/pick.py`, `LinearTracker`, `LINEAR_API_KEY` read in `sisyphus/cli.py`
   `default_services`) is another tracker, not gh, and is out of this inventory. Confirm the WorkItems section agrees.
