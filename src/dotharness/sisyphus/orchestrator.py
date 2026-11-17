@@ -18,7 +18,7 @@ import math
 import re
 import shlex
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import nullcontext, suppress
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -41,6 +41,7 @@ from dotharness.sisyphus.digest import (
 )
 from dotharness.sisyphus.intake import AgentRunner, BoundaryViolation, resolve_brief_path, run_intake
 from dotharness.sisyphus.lock import clone_lock
+from dotharness.sisyphus.modified import format_percent
 from dotharness.sisyphus.paths import knowledge_file
 from dotharness.sisyphus.pick import LabelRemover, label_removal_number
 from dotharness.sisyphus.plan import leaf_stems, plan_path
@@ -57,7 +58,7 @@ from dotharness.sisyphus.refactor_handoff import parse_listed_edits, scope_viola
 from dotharness.sisyphus.resume import answer_path, consume_answer, read_answer
 from dotharness.sisyphus.runrecord import STAGE_COMPLETE, RunRecord, fold_item
 from dotharness.sisyphus.settled import is_settled
-from dotharness.sisyphus.stack import StackGroup, group_added_files
+from dotharness.sisyphus.stack import StackGroup, classify_paths, group_added_files, is_heavily_modified
 from dotharness.sisyphus.stages import (
     BUILD_RETRY_KEY,
     BUILD_STAGE,
@@ -443,6 +444,17 @@ def _tail(text: str, n: int = 400) -> str:
 # --------------------------------------------------------------- the run
 
 
+def modified_files_text(modified: Sequence[tuple[str, float]]) -> str:
+    """``path (NN%)`` per line for the group's modified entries, or ``none``."""
+    return "\n".join(f"{path} ({format_percent(ratio)})" for path, ratio in modified) or "none"
+
+
+def measured_modified(files: Sequence[str], ratios: Mapping[str, float] | None) -> list[tuple[str, float]]:
+    """``(path, ratio)`` for the files found in ``ratios``, sorted by path, ratio rounded to two places."""
+    measured = ratios or {}
+    return [(p, round(measured[p], 2)) for p in sorted(files) if p in measured]
+
+
 class _Run:
     def __init__(
         self,
@@ -507,28 +519,93 @@ class _Run:
 
     # -- refactor input
 
-    async def list_added_paths(self, tip: str = "HEAD") -> list[str]:
-        """Paths with git status ``A`` in ``origin/<base>...<tip>`` (default rename detection), in git order."""
+    async def _name_status(self, tip: str = "HEAD") -> list[tuple[str, str]]:
+        """``(status, path)`` pairs of ``origin/<base>...<tip>`` (default rename detection), in git order.
+
+        Renames and copies (``R``/``C``, which carry two paths) are skipped.
+        """
         res = await self.git("diff", "--name-status", "-z", f"origin/{self.opt.base_branch}...{tip}")
         tokens = res.stdout.split("\0")
-        added: list[str] = []
+        entries: list[tuple[str, str]] = []
         i = 0
         while i + 1 < len(tokens):
             status = tokens[i]
             if status[:1] in ("R", "C"):
                 i += 3
                 continue
-            if status == "A":
-                added.append(tokens[i + 1])
+            entries.append((status, tokens[i + 1]))
             i += 2
-        return added
+        return entries
 
-    async def refactor_groups(self, pattern_set: str | None = None) -> tuple[StackGroup, ...]:
-        """Selection records for the added paths; empty when no added source file exists."""
+    async def list_added_paths(self, tip: str = "HEAD", entries: list[tuple[str, str]] | None = None) -> list[str]:
+        """Paths with git status ``A`` in ``origin/<base>...<tip>``, in git order.
+
+        Pass ``entries`` from ``_name_status`` to reuse one diff snapshot.
+        """
+        if entries is None:
+            entries = await self._name_status(tip)
+        return [path for status, path in entries if status == "A"]
+
+    async def list_modified_code_units(
+        self, tip: str = "HEAD", entries: list[tuple[str, str]] | None = None
+    ) -> dict[str, float]:
+        """Modified source files (status ``M``) whose share of added lines is at least the minimum, with ratios.
+
+        Path to ``round(added_lines / lines_at_tip, 2)`` in git order. Binary files, files with no lines at the
+        tip and paths whose numstat or blob git cannot read are left out. Pass ``entries`` from ``_name_status``
+        to reuse one diff snapshot.
+        """
+        base = f"origin/{self.opt.base_branch}...{tip}"
+        if entries is None:
+            entries = await self._name_status(tip)
+        modified = [path for status, path in entries if status == "M"]
+        sources = set(classify_paths(modified).sources)
+        units: dict[str, float] = {}
+        for path in modified:
+            if path not in sources:
+                continue
+            ratio = await self._modified_unit_ratio(base, tip, path)
+            if ratio is not None:
+                units[path] = ratio
+        return units
+
+    async def _modified_unit_ratio(self, base: str, tip: str, path: str) -> float | None:
+        """``round(added_lines / lines_at_tip, 2)`` when heavily modified; ``None`` if below the minimum or unreadable."""
+        added_lines = await self._numstat_added(base, path)
+        if added_lines is None:
+            return None
+        blob = await self.git("show", f"{tip}:{path}", ok=False)
+        if blob.returncode != 0:
+            return None
+        text = blob.stdout
+        lines_at_tip = text.count("\n") + (0 if not text or text.endswith("\n") else 1)
+        if not is_heavily_modified(added_lines, lines_at_tip):
+            return None
+        return round(added_lines / lines_at_tip, 2)
+
+    async def _numstat_added(self, base: str, path: str) -> int | None:
+        """Added-line count of ``path`` in ``base``; ``None`` for binary files, git failures and unparsable output."""
+        res = await self.git("diff", "--numstat", base, "--", path, ok=False)
+        if res.returncode != 0:
+            return None
+        first = res.stdout.split("\n", 1)[0].split("\t")
+        if len(first) < 3 or not first[0].isdigit():
+            return None
+        return int(first[0])
+
+    async def refactor_groups(self, pattern_set: str | None = None) -> tuple[tuple[StackGroup, ...], dict[str, float]]:
+        """Selection records for added and heavily modified source paths, with the modified paths' ratios.
+
+        The groups are empty when no candidate exists. The mapping holds every modified code unit's ratio.
+        """
         # On resume, measure from the pre-refactor HEAD so files the agent itself added are not regrouped.
-        entries = self.read_refactor_input()
-        tip = str(entries[0]["head_before"]) if entries else "HEAD"
-        return group_added_files(self.repo, await self.list_added_paths(tip), pattern_set=pattern_set)
+        recorded = self.read_refactor_input()
+        tip = str(recorded[0]["head_before"]) if recorded else "HEAD"
+        entries = await self._name_status(tip)
+        added = await self.list_added_paths(tip, entries)
+        ratios = await self.list_modified_code_units(tip, entries)
+        candidates = [*added, *(p for p in ratios if p not in added)]
+        return group_added_files(self.repo, candidates, pattern_set=pattern_set), ratios
 
     @property
     def refactor_input_path(self) -> Path:
@@ -538,8 +615,11 @@ class _Run:
         """Entries of ``refactor-input.json`` (``[]`` if absent); malformed content raises."""
         return _load_refactor_input(self.refactor_input_path, strict=True)
 
-    async def record_group_entry(self, record: StackGroup) -> dict[str, Any]:
-        """Return the group's entry, writing it (with ``head_before``) only if its ``set`` is not recorded yet."""
+    async def record_group_entry(self, record: StackGroup, ratios: Mapping[str, float] | None = None) -> dict[str, Any]:
+        """Return the group's entry, writing it (with ``head_before``) only if its ``set`` is not recorded yet.
+
+        ``modified`` lists the group's files found in ``ratios``, sorted by path, ratio rounded to two places.
+        """
         entries = self.read_refactor_input()
         for entry in entries:
             if entry["set"] == record.set:
@@ -552,6 +632,7 @@ class _Run:
             "evidence": list(record.evidence),
             "fallback": record.fallback,
             "head_before": await self.rev_parse_head(),
+            "modified": [{"path": p, "ratio": r} for p, r in measured_modified(record.files, ratios)],
         }
         atomic_write_json(self.refactor_input_path, [*entries, entry])
         return entry
@@ -941,9 +1022,10 @@ class _Run:
                     Checkpoint.C5, f"refactor already failed {bound.attempts} retry cycles; not launching again"
                 )
             await self.prepare_branch()
-            groups = [g for g in await self.refactor_groups() if g.files]
+            all_groups, ratios = await self.refactor_groups()
+            groups = [g for g in all_groups if g.files]
             if not groups:
-                self.note("refactor: no added source files")
+                self.note("refactor: no added or heavily modified source files")
                 return
             for index, group in enumerate(groups):
                 if index > 0:
@@ -956,13 +1038,14 @@ class _Run:
                 )
                 if not resume_skip:
                     self.handoff_dir.mkdir(parents=True, exist_ok=True)
-                    await self.record_group_entry(group)
+                    await self.record_group_entry(group, ratios)
                     await self.run_agent_stage(
                         REFACTOR_STAGE,
                         prompt_file=REFACTOR_PROMPT_FILE,
                         extra_values={
                             "refactor_set": group.set,
                             "group_files": "\n".join(group.files),
+                            "modified_files": modified_files_text(measured_modified(group.files, ratios)),
                             "input_file": str(self.refactor_input_path),
                         },
                     )

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from dotharness.sisyphus.intake import parse_resolved_decisions, split_resolved_decision
+from dotharness.sisyphus.modified import format_percent, parse_modified
 from dotharness.sisyphus.plan import leaf_stems as _plan_leaf_stems
 from dotharness.sisyphus.plan import plan_path, read_spf_config
 
@@ -271,9 +272,17 @@ def extract_refactor_handoffs(paths: Sequence[Path]) -> list[RefactorHandoff]:
     return results
 
 
+def _modified_items(modified: object) -> list[str]:
+    """``- <path>: <NN>%`` per well-formed ``modified`` item; ``[]`` for a missing or malformed value."""
+    return [f"- {path}: {format_percent(ratio)}" for path, ratio in parse_modified(modified)]
+
+
 def _refactor_record_lines(record: Mapping[str, Any]) -> list[str]:
     """Heading plus the Evidence and Fallback bullets of one selection record."""
     lines = [f"### {record['set']}", ""]
+    modified = _modified_items(record.get("modified"))
+    if modified:
+        lines.extend(["- Modified files (share of file changed in this branch):", *modified])
     entries = [f"  - {item}" for item in record["evidence"]]
     lines.extend(["- Evidence:", *entries] if entries else ["- Evidence: none"])
     lines.append(f"- Fallback: {'yes' if record['fallback'] else 'no'}")

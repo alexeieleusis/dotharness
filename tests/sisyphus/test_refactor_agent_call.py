@@ -20,10 +20,15 @@ from dotharness.sisyphus.rails import Checkpoint
 from dotharness.sisyphus.stages import BUILD_STAGE, PLAN_STAGE, REFACTOR_STAGE
 from tests.sisyphus.test_orchestrator import ITEM, World
 
-EXTRA = {"refactor_set": "generic", "group_files": "a.py\nb.py", "input_file": "/x/refactor-input.json"}
+EXTRA = {
+    "refactor_set": "generic",
+    "group_files": "a.py\nb.py",
+    "modified_files": "a.py (62%)",
+    "input_file": "/x/refactor-input.json",
+}
 TEMPLATE = (
     "Stage to run now: `<stage>`\\nStop report file: <stop report path>\\nbranch <target branch>\\n"
-    "handoff <handoff dir>\\npatterns <patterns dir>\\nset <refactor_set>\\nfiles <group_files>\\ninput <input_file>\\n"
+    "handoff <handoff dir>\\npatterns <patterns dir>\\nset <refactor_set>\\nfiles <group_files>\\nmodified <modified_files>\\ninput <input_file>\\n"
 ).replace("\\n", "\n")
 
 

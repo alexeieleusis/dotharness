@@ -185,7 +185,9 @@ Optional.
 - An unknown `pattern_set` name is a `ConfigError` at load time, and the message lists the valid names (the
   directories present under `knowledge/patterns/`, so the three packaged sets are the current ones, not a fixed
   list).
-- With `pattern_set` set, all added files get that one set.
+- With `pattern_set` set, all candidates (added or heavily modified source files) get that one set.
+- The 50% modified-share threshold for existing files is a constant (`MODIFIED_SHARE_MIN` in `sisyphus/stack.py`),
+  not a config key. There is no flag or gate for it.
 - A `.sisyphus.toml` without `[refactor]` loads unchanged, with `enabled = true`.
 - There is no per-run CLI override: the `[refactor]` config table is the only switch.
 

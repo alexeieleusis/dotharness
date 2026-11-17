@@ -58,6 +58,7 @@ class Env:
         self.run = orchestrator._Run(ITEM, w.config(), w.options(), w.agent, self.fake, w, w.clock, w)
         self.fake.branch = self.run.branch
         self.groups: list[StackGroup] = []
+        self.ratios: dict[str, float] = {}
         self.agent_calls: list[dict[str, Any]] = []
         self.on_agent: Callable[[str], None] = lambda s: None
         self.write_handoff = True
@@ -71,8 +72,8 @@ class Env:
         self.entries_at_agent: list[list[str]] = []
         run = self.run
 
-        async def groups_() -> tuple[StackGroup, ...]:
-            return tuple(self.groups)
+        async def groups_() -> tuple[tuple[StackGroup, ...], dict[str, float]]:
+            return tuple(self.groups), dict(self.ratios)
 
         async def prepare() -> None:
             self.prepared += 1
@@ -115,7 +116,7 @@ async def _stop(env: Env) -> _Stop:
 
 async def test_t1_no_files(env: Env) -> None:
     await env.run.stage_refactor()
-    assert "refactor: no added source files" in env.run.notes
+    assert "refactor: no added or heavily modified source files" in env.run.notes
     assert env.agent_calls == []
     assert env.prepared == 1
     assert env.run.rec.stage == "refactor"
@@ -126,7 +127,7 @@ async def test_empty_group_dropped(env: Env) -> None:
     env.groups = [G("fastapi", files=())]
     await env.run.stage_refactor()
     assert env.agent_calls == []
-    assert "refactor: no added source files" in env.run.notes
+    assert "refactor: no added or heavily modified source files" in env.run.notes
 
 
 async def test_t2_no_commits_no_gate(env: Env) -> None:
@@ -139,6 +140,7 @@ async def test_t2_no_commits_no_gate(env: Env) -> None:
     assert kw["extra_values"] == {
         "refactor_set": "generic",
         "group_files": "a.py",
+        "modified_files": "none",
         "input_file": str(env.run.refactor_input_path),
     }
 
@@ -354,3 +356,13 @@ async def test_no_no_commits_error(env: Env) -> None:
         await env.run.stage_refactor()
     except OrchestratorError as exc:  # pragma: no cover
         pytest.fail(str(exc))
+
+
+async def test_modified_ratios_reach_input_entry(env: Env) -> None:
+    env.groups = [G("generic", files=("a.py", "b.py"))]
+    env.ratios = {"b.py": 0.75, "elsewhere.py": 0.6}
+    await env.run.stage_refactor()
+    entry = env.run.read_refactor_input()[0]
+    assert entry["files"] == ["a.py", "b.py"]
+    assert entry["modified"] == [{"path": "b.py", "ratio": 0.75}]
+    assert env.agent_calls[0]["extra_values"]["modified_files"] == "b.py (75%)"

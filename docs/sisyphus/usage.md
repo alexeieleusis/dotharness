@@ -233,7 +233,7 @@ run record or the item is not stopped, and exits 0 quietly if another invocation
 | C2 | OPEN_QUESTIONS.md unresolved after draft-overview | write the answer file | automatic (answer file) | re-runs the plan stage with your answer, then build |
 | C3 | a leaf has an open question | write the answer file | automatic (answer file) | re-runs build with your answer. The build prompt continues from the stopped leaf. A refactor stop at C3 or C4 uses the same answer-file flow |
 | C4 | a leaf deviation may change later leaves | write the answer file (accept or redirect) | automatic (answer file) | same as C3 |
-| C5 | retries exhausted or scope violation, or intake changing the target repository. In the refactor stage: retries exhausted, a refactor gate failure, or a scope violation (code edits outside the group's added files without a listed reason) | decide: change the leaf or config, or fix the cause. For an intake stop, revert or remove the paths listed in the detail by hand and run `sisyphus resume REF --config F`. No `--reset-retries` is needed. To give the stage that stopped another budget, run `sisyphus resume REF --config F --reset-retries` | explicit | re-runs the stage. Build and refactor each have their own retry budget, 3 each (`DEFAULT_MAX_RETRY_CYCLES`). Build uses `build:retry-cycles` and refactor uses `refactor:retry-cycles`. The budget of the stage that stopped is kept, so an exhausted budget stops again at C5 without a new agent run, unless you pass `--reset-retries` (below), which gives that stage a fresh budget of 3 (it does not skip the stage) |
+| C5 | retries exhausted or scope violation, or intake changing the target repository. In the refactor stage: retries exhausted, a refactor gate failure, or a scope violation (code edits outside the group's files without a listed reason) | decide: change the leaf or config, or fix the cause. For an intake stop, revert or remove the paths listed in the detail by hand and run `sisyphus resume REF --config F`. No `--reset-retries` is needed. To give the stage that stopped another budget, run `sisyphus resume REF --config F --reset-retries` | explicit | re-runs the stage. Build and refactor each have their own retry budget, 3 each (`DEFAULT_MAX_RETRY_CYCLES`). Build uses `build:retry-cycles` and refactor uses `refactor:retry-cycles`. The budget of the stage that stopped is kept, so an exhausted budget stops again at C5 without a new agent run, unless you pass `--reset-retries` (below), which gives that stage a fresh budget of 3 (it does not skip the stage) |
 | C6 | a limit was hit | raise the limit in `.sisyphus.toml` (`max_run_minutes` needs nothing: the clock is per invocation) | explicit | leaf limit: re-counts the leaves, no re-plan. Time limit: continues at the next stage |
 | C7 | branch cannot be updated without rebase | no automatic way out: run `sisyphus abandon REF --config F` (the branch and any PR stay as they are for you to handle) | explicit | after you fixed the branch outside Sisyphus: re-runs the push stage on the same branch and PR |
 | C8 | a code host call (see "Failure text" below), Linear or git network call failed, or a dirty clone | fix access. For a dirty clone, clean it yourself | automatic retry after 30 minutes, 3 times, then explicit | retries the failed call in the same stage |
@@ -278,6 +278,24 @@ no keys ("no counters to reset") and continues.
 Every reset is recorded durably in the run record (additive `resets` list: time, stage, each key with its
 previous value) and is shown by `sisyphus status` and under Deviations in the digest, for example
 `Retry reset: PROJ-7 at stage build on 2026-03-04T05:06:00+00:00: build:retry-cycles 3->0, auto-retry 1->0`.
+
+## Refactor stage: input files and known limits
+
+The refactor stage works on candidates: source files added on the branch (git status `A`), and existing source files
+(status `M`) that are heavily modified. A file is heavily modified when at least 50% of it was written on the branch:
+the lines added against the base, divided by the lines of the file at the tip, is 0.50 or more. Such a file is
+refactored as a whole, like an added file. The threshold is a constant, not a config key. If there are no candidates,
+the stage ends `complete` with the note `refactor: no added or heavily modified source files` and makes no agent call.
+The PR "Refactor" section lists the modified files with their share.
+
+Known limits:
+
+- The boundary is exact: a file at 49% is out, a file at 50% is in.
+- Whitespace-only edits count (no `-w`).
+- A handler added to an existing router file is not refactored when that file is below 50%.
+- Moved or renamed files are not refactored. Only status `A`, and `M` at 50% or more, is listed.
+- A formatter that rewrites whole files can inflate the share and pull a file in.
+- Modified test files are not refactored.
 
 ## Refactor stage: gate failures and handoffs
 
