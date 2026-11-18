@@ -145,6 +145,19 @@ addressed using that reply's own content as the actual "comment to address"
 (not the terse original finding it responded to). See
 [`address-comments`](commands/address-comments.md#notes) for details.
 
+A bot-authored PR-level (issue) comment is addressed when the current user's
+login reacts to it with a rocket. It is addressed in the next run, and again
+after each edit of that comment while the rocket stays. Removing the rocket
+stops it. At most 10 rounds are run per rocket; removing and re-adding the
+rocket resets the count. The cap is a module constant
+(`MAX_ROUNDS_PER_ROCKET`), not a setting, so there is no field for it in the
+table above. A rocket does not override `trusted_commenters`: a bot that is
+not in a non-empty `trusted_commenters` list is still blocked. Reading the
+reactions is an optional signal: a host without it behaves as if no comment
+had a rocket (see the `address_comments_reactions` row in the policy table
+below). See [`address-comments`](commands/address-comments.md#rocket-path) for
+details.
+
 ### `[auto_approve]`
 
 Used by `pr_review run auto-approve` (and `pr_review run all`). Off by default.
