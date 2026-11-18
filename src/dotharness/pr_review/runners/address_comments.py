@@ -1027,8 +1027,9 @@ async def _signal_snapshot(
     host: CodeHost, repo: RepositoryRef, pr_number: int, our_login: str | None, repo_slug: str | None
 ) -> _SignalSnapshot:
     """Read the PR's comments and reactions once and decide which signalled comments are due. Empty (and no
-    reactions call) when our login is unknown or no candidate comment is newer than its handled version."""
-    if not our_login:
+    reactions call) when our login or the repo slug is unknown (without a slug no watermark or round count can
+    be recorded, so the round cap would never trip) or no candidate comment is newer than its handled version."""
+    if not our_login or not repo_slug:
         return _SignalSnapshot()
     comments = await _read_issue_comments(host, repo, pr_number)
     if not comments:
@@ -1056,8 +1057,9 @@ async def _has_signalled_comment(
 ) -> bool:
     """True when some comment would be selected as a signal comment. Stops at the first one. A signalled comment
     dropped on the way (no edit time, round cap) warns here too, because a PR with nothing else pending never
-    reaches selection; the same comment can warn again in selection when another one makes the PR pending."""
-    if not our_login:
+    reaches selection; the same comment can warn again in selection when another one makes the PR pending.
+    Always False without a repo slug: the signal path cannot record state, so it stays disabled."""
+    if not our_login or not repo_slug:
         return False
     for comment in comments:
         if not _is_signal_candidate(comment, our_login):

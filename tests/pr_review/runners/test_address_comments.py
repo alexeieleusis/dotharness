@@ -1695,6 +1695,16 @@ async def test_has_pending_feedback_true_when_the_only_item_is_a_signal_comment(
     assert await address_comments._has_pending_feedback(host, REPO, 1, "reviewer", "acme-frontend") is False
 
 
+async def test_signal_path_is_disabled_without_a_repo_slug(tmp_xdg, tmp_path):
+    # Without a slug no watermark or round count can be recorded, so a rocketed comment would be due on every
+    # run and the round cap would never trip. The signal path must stay off instead.
+    fake, _ = _signal_host()
+    host = fake.code_host()
+    assert await address_comments._has_pending_feedback(host, REPO, 1, "reviewer", None) is False
+    snapshot = await address_comments._signal_snapshot(host, REPO, 1, "reviewer", None)
+    assert snapshot.due == () and snapshot.skip_keys == frozenset()
+
+
 async def test_has_pending_feedback_reads_reactions_only_for_unhandled_bot_comments(tmp_xdg):
     from dotharness.pr_review import state
 
