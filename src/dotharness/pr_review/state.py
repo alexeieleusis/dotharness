@@ -4,6 +4,8 @@ import logging
 import re
 from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from dotharness.fileio import atomic_write_text, file_lock
@@ -288,45 +290,80 @@ def record_replied_comment(repo_slug: str, pr_number: int, key: str) -> None:
     _update_state(repo_slug, ADDRESS_COMMENTS_FILE, read_address_comments_state, mutate)
 
 
-def get_comment_watermark(repo_slug: str, pr_number: int, key: str) -> dict | None:
-    """The stored `{"version", "rounds", "rocket_at"}` for a comment key on this PR, or None if never
-    handled (or the entry is malformed). `version` is the edit version (REST `updated_at`, ISO string)."""
-    entry = read_address_comments_state(repo_slug)["handled_versions"].get(str(pr_number), {})
-    entry = entry.get(key) if isinstance(entry, dict) else None
-    if not isinstance(entry, dict) or not isinstance(entry.get("version"), str):
+@dataclass(frozen=True)
+class Watermark:
+    """What the signal path has handled for one comment: the edit `version` last handled (REST
+    `updated_at`), and the `rounds` run for the rocket created at `rocket_at`. Owns the on-disk ISO-string
+    format; an unparseable timestamp reads as None (an edit then counts as unhandled, no rocket matches)."""
+
+    version: datetime | None
+    rounds: int
+    rocket_at: datetime | None
+
+    @classmethod
+    def from_entry(cls, entry: object) -> "Watermark | None":
+        """Parse a stored entry; None when it is malformed (no string `version`)."""
+        if not isinstance(entry, dict) or not isinstance(entry.get("version"), str):
+            return None
+        rounds = entry.get("rounds")
+        return cls(
+            version=_parse_timestamp(entry["version"]),
+            rounds=rounds if isinstance(rounds, int) and rounds >= 0 else 0,
+            rocket_at=_parse_timestamp(entry.get("rocket_at")),
+        )
+
+    def to_entry(self) -> dict:
+        return {
+            "version": self.version.isoformat() if self.version is not None else "",
+            "rounds": self.rounds,
+            "rocket_at": self.rocket_at.isoformat() if self.rocket_at is not None else "",
+        }
+
+    def is_stale(self, updated_at: datetime | None) -> bool:
+        """True when the comment was edited after the handled version (or the version is unreadable)."""
+        if updated_at is None:
+            return False
+        if self.version is None:
+            return True
+        try:
+            return updated_at > self.version
+        except TypeError:  # naive vs aware
+            return True
+
+    def rounds_for(self, rocket_at: datetime) -> int:
+        """Rounds already run for the rocket created at `rocket_at`: 0 when the stored `rocket_at` differs
+        (the rocket was removed and re-added)."""
+        return self.rounds if self.rocket_at == rocket_at else 0
+
+    def advanced(self, version: datetime, rocket_at: datetime) -> "Watermark":
+        """The watermark after one more round: new `version`, rounds restarting when `rocket_at` changed."""
+        return Watermark(version=version, rounds=self.rounds_for(rocket_at) + 1, rocket_at=rocket_at)
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str):
         return None
-    rounds = entry.get("rounds")
-    rocket_at = entry.get("rocket_at")
-    return {
-        "version": entry["version"],
-        "rounds": rounds if isinstance(rounds, int) and rounds >= 0 else 0,
-        "rocket_at": rocket_at if isinstance(rocket_at, str) else "",
-    }
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
-def rounds_for_rocket(watermark: dict | None, rocket_at: str) -> int:
-    """Rounds already run for the rocket created at `rocket_at`: 0 with no watermark or when the stored
-    `rocket_at` differs (the rocket was removed and re-added)."""
-    if watermark is None or watermark["rocket_at"] != rocket_at:
-        return 0
-    return watermark["rounds"]
+def get_comment_watermark(repo_slug: str, pr_number: int, key: str) -> Watermark | None:
+    """The stored `Watermark` for a comment key on this PR, or None if never handled (or the entry is
+    malformed)."""
+    entries = read_address_comments_state(repo_slug)["handled_versions"].get(str(pr_number), {})
+    return Watermark.from_entry(entries.get(key) if isinstance(entries, dict) else None)
 
 
-def record_handled_comment(repo_slug: str, pr_number: int, key: str, version: str, rocket_at: str) -> None:
+def record_handled_comment(repo_slug: str, pr_number: int, key: str, version: datetime, rocket_at: datetime) -> None:
     """Advance the watermark for a comment key: store the snapshot edit `version` and `rocket_at`, and
     increment `rounds` (restarting from 0 when `rocket_at` changed) in the same locked write."""
 
     def mutate(current: dict) -> bool:
         per_pr = current["handled_versions"].setdefault(str(pr_number), {})
-        previous = per_pr.get(key)
-        rounds = 0
-        if (
-            isinstance(previous, dict)
-            and previous.get("rocket_at") == rocket_at
-            and isinstance(previous.get("rounds"), int)
-        ):
-            rounds = previous["rounds"]
-        per_pr[key] = {"version": version, "rounds": rounds + 1, "rocket_at": rocket_at}
+        previous = Watermark.from_entry(per_pr.get(key)) or Watermark(None, 0, None)
+        per_pr[key] = previous.advanced(version, rocket_at).to_entry()
         return True
 
     _update_state(repo_slug, ADDRESS_COMMENTS_FILE, read_address_comments_state, mutate)

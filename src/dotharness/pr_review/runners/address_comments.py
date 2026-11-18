@@ -407,29 +407,12 @@ def _issue_comment_key(host_comment_id: str) -> str:
     return _reply_key({"type": "issue", "id": f"issue-comment-{host_comment_id}"})
 
 
-def _edit_version(updated_at: datetime | None) -> str:
-    """Stable string form of an edit version (REST `updated_at`) for storage and comparison."""
-    return updated_at.isoformat() if updated_at is not None else ""
-
-
-def _edit_is_unhandled(watermark: dict | None, updated_at: datetime | None) -> bool:
-    """True when no edit was handled yet, or the comment was edited after the handled version."""
-    if watermark is None:
-        return True
-    if updated_at is None:
-        return False
-    try:
-        return updated_at > datetime.fromisoformat(watermark["version"])
-    except ValueError:
-        return True
-
-
 def _round_cap_reached(
-    watermark: dict | None, rocket_at: datetime, pr_number: int, comment_id: str, *, warn: bool = True
+    watermark: state.Watermark | None, rocket_at: datetime, pr_number: int, comment_id: str, *, warn: bool = True
 ) -> bool:
     """True when the rocket created at `rocket_at` has used its `MAX_ROUNDS_PER_ROCKET` rounds. Logs one
     warning per call (call once per comment per run) telling the user to remove and re-add the rocket."""
-    if state.rounds_for_rocket(watermark, _edit_version(rocket_at)) < MAX_ROUNDS_PER_ROCKET:
+    if (watermark.rounds_for(rocket_at) if watermark else 0) < MAX_ROUNDS_PER_ROCKET:
         return False
     if warn:
         logger.warning(
@@ -728,9 +711,7 @@ async def _address_single_comment(
     # replied key, which would suppress every later round.
     if clean_run and (made_commit or observed) and repo_slug and ctype in _NON_THREADED_TYPES:
         if handled_version is not None and rocket_at is not None:
-            state.record_handled_comment(
-                repo_slug, pr_number, _reply_key(comment), _edit_version(handled_version), _edit_version(rocket_at)
-            )
+            state.record_handled_comment(repo_slug, pr_number, _reply_key(comment), handled_version, rocket_at)
         else:
             state.record_replied_comment(repo_slug, pr_number, _reply_key(comment))
     return post_sha, rewritten
@@ -1015,7 +996,7 @@ async def _evaluate_signal(
     owned = watermark is not None
     # Reactions are read only for a comment newer than its handled version. An unknown edit time (None) with no
     # watermark is read too, so a signalled one can be reported below; with a watermark it is never newer.
-    if watermark is not None and not _edit_is_unhandled(watermark, comment.updated_at):
+    if watermark is not None and not watermark.is_stale(comment.updated_at):
         return _SignalVerdict(owned=owned)
     # A rocket does not override trusted_commenters. Checked before the reactions read and before anything is
     # marked due, so a blocked comment is neither pending nor due and the gate cannot fire on it every poll.

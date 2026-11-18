@@ -19,6 +19,7 @@ from dotharness.code_host import (
     User,
 )
 from dotharness.opencode_guards import BackendCwdDivergedError, OpencodePluginError
+from dotharness.pr_review import state
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.runners import address_comments
 from dotharness.pr_review.runners.address_comments import (
@@ -1406,20 +1407,10 @@ def test_signalled_comment_key_format_is_pinned():
     assert address_comments._issue_comment_key("123") == "issue:issue-comment-123"
 
 
-def test_edit_is_unhandled_compares_against_the_watermark():
-    t1 = datetime(2026, 1, 1, tzinfo=UTC)
-    t2 = datetime(2026, 1, 2, tzinfo=UTC)
-    wm = {"version": t1.isoformat(), "rounds": 1, "rocket_at": ""}
-    assert address_comments._edit_is_unhandled(None, t1)
-    assert not address_comments._edit_is_unhandled(wm, t1)
-    assert address_comments._edit_is_unhandled(wm, t2)
-
-
 def test_round_cap_warns_once_naming_pr_and_comment(caplog):
     rocket = datetime(2026, 1, 1, tzinfo=UTC)
-    rv = address_comments._edit_version(rocket)
-    below = {"version": "v", "rounds": address_comments.MAX_ROUNDS_PER_ROCKET - 1, "rocket_at": rv}
-    at_cap = {**below, "rounds": address_comments.MAX_ROUNDS_PER_ROCKET}
+    below = state.Watermark(None, address_comments.MAX_ROUNDS_PER_ROCKET - 1, rocket)
+    at_cap = state.Watermark(None, address_comments.MAX_ROUNDS_PER_ROCKET, rocket)
     assert address_comments.MAX_ROUNDS_PER_ROCKET == 10
     with caplog.at_level("WARNING"):
         assert not address_comments._round_cap_reached(below, rocket, 7, "issue-comment-123")
@@ -1459,7 +1450,7 @@ async def test_clean_signalled_run_advances_watermark_and_rounds(tmp_xdg):
     for expected in (1, 2):
         await _run_single(_SIGNAL_COMMENT, tmp_xdg, handled_version=edit, rocket_at=rocket)
         wm = state.get_comment_watermark("acme-frontend", 1, "issue:issue-comment-123")
-        assert wm == {"version": edit.isoformat(), "rounds": expected, "rocket_at": rocket.isoformat()}
+        assert wm == state.Watermark(edit, expected, rocket)
     # no permanent replied key, so a later edit can be addressed again
     assert state.get_replied_comment_keys("acme-frontend", 1) == set()
 
@@ -1663,7 +1654,7 @@ async def test_signal_stops_at_the_round_cap_until_the_rocket_is_re_added(tmp_xd
     fake, comment = _signal_host()
     key = address_comments._issue_comment_key(comment.id)
     for _ in range(address_comments.MAX_ROUNDS_PER_ROCKET):
-        state.record_handled_comment(_SIGNAL_REPO_SLUG.replace("/", "-"), 1, key, _E1.isoformat(), _R1.isoformat())
+        state.record_handled_comment(_SIGNAL_REPO_SLUG.replace("/", "-"), 1, key, _E1, _R1)
     fake.edit_comment(REPO, 1, comment.id, updated_at=_E2)
     with caplog.at_level("WARNING"):
         run = await _signal_run(tmp_path, fake)
@@ -1720,9 +1711,7 @@ async def test_has_pending_feedback_reads_reactions_only_for_unhandled_bot_comme
         assert await address_comments._has_pending_feedback(host, REPO, 1, "reviewer", "acme-frontend") is False
         assert reactions.await_count == 1
         reactions.reset_mock()
-        state.record_handled_comment(
-            "acme-frontend", 1, address_comments._issue_comment_key(comment.id), _E1.isoformat(), _R1.isoformat()
-        )
+        state.record_handled_comment("acme-frontend", 1, address_comments._issue_comment_key(comment.id), _E1, _R1)
         assert await address_comments._has_pending_feedback(host, REPO, 1, "reviewer", "acme-frontend") is False
         reactions.assert_not_called()
 
