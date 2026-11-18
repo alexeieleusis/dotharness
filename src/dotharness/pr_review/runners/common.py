@@ -411,6 +411,7 @@ class Site(StrEnum):
     TRACEABILITY = "traceability"
     CURRENT_USER = "current_user"
     CHANGE_REQUEST_READ = "change_request_read"
+    ADDRESS_COMMENTS_REACTIONS = "address_comments_reactions"
 
 
 _CR_GET = "ChangeRequests.get"
@@ -436,6 +437,7 @@ UNSUPPORTED_CAPABILITY_POLICY: Mapping[tuple[Site, str], UnsupportedPolicy] = Ma
     (Site.TRACEABILITY, "WorkItems.get"): "stop",
     (Site.TRACEABILITY, "WorkItems.linked_work_items"): "stop",
     (Site.CURRENT_USER, "Session.current_user"): "warn",
+    (Site.ADDRESS_COMMENTS_REACTIONS, "Discussion.comment_reactions"): "degrade",
 })
 
 _T = TypeVar("_T")

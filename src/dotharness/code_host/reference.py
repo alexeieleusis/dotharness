@@ -51,6 +51,7 @@ from dotharness.code_host.models import (
     InlineComment,
     Job,
     MergeableState,
+    Reaction,
     RepositoryRef,
     Review,
     ReviewDecision,
@@ -1119,6 +1120,13 @@ class _Discussion:
         rows = await self._gh.paged(f"repos/{repo.value}/issues/{number}/comments", "Discussion.comments")
         return [_rest_comment(row) for row in rows]
 
+    async def comment_reactions(self, repo: RepositoryRef, comment_id: str) -> Sequence[Reaction]:
+        """Reactions on one change-request-level comment, every page (``issues/comments/ID/reactions``)."""
+        rows = await self._gh.paged(
+            f"repos/{repo.value}/issues/comments/{comment_id}/reactions", "Discussion.comment_reactions"
+        )
+        return [_rest_reaction(row) for row in rows]
+
     async def review_threads(self, repo: RepositoryRef, number: int) -> Sequence[ReviewThread]:
         """Review threads with their comments, every page. More than 100 comments in one thread raises."""
         owner, name = _split(repo)
@@ -1217,6 +1225,25 @@ def _rest_comment(row: Mapping[str, Any]) -> Comment:
         body=_str(row, "body"),
         created_at=_parse_time_strict(row.get("created_at"), "comment"),
         url=url if isinstance(url, str) else None,
+        updated_at=_parse_time_optional(row.get("updated_at")),
+    )
+
+
+def _parse_time_optional(value: object) -> datetime | None:
+    """A timestamp, or None when absent, null or unparseable (the host does not report it)."""
+    if isinstance(value, str):
+        try:
+            return _aware(datetime.fromisoformat(value))
+        except ValueError:
+            return None
+    return None
+
+
+def _rest_reaction(row: Mapping[str, Any]) -> Reaction:
+    return Reaction(
+        reactor=_rest_user(row.get("user")),
+        content=_str(row, "content").strip().lower(),
+        created_at=_parse_time_strict(row.get("created_at"), "reaction"),
     )
 
 
@@ -1570,6 +1597,7 @@ DECLARATION = HostDeclaration(
                 _LIST_OPEN_OP: 100,
                 _OPEN_CR_BODIES_OP: 200,
                 "Discussion.comments": None,
+                "Discussion.comment_reactions": None,
                 "Discussion.review_threads": None,
                 "ChangeRequests.reviews": None,
                 "ChangeRequests.commits": None,

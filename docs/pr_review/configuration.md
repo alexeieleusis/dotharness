@@ -238,11 +238,13 @@ the token command. The reference host declares all six capabilities, so no polic
 | `traceability` | `WorkItems.get` | stop |
 | `traceability` | `WorkItems.linked_work_items` | stop |
 | `current_user` | `Session.current_user` | warn |
+| `address_comments_reactions` | `Discussion.comment_reactions` | degrade |
 
 Why: `merge`, `auto_approve` approval, `ci_fix`, required checks, regret review and traceability stop because a silent
 degrade would change what pr-review posts or approves (for example a false "no linked ticket" comment, or a gate that
 reads all checks instead of required ones). Viewed state and the workflow listing are conveniences. Reviewer requests are
-a best-effort side effect. The current user keeps the fail-open `""`.
+a best-effort side effect. The current user keeps the fail-open `""`. Comment reactions are an optional signal, so a host
+without them behaves as if no comment had a reaction.
 
 Any host call not listed above (for example `ChangeRequests.list` in the review runners, or `Discussion` reads and writes
 such as `post_comment` in regret review and `Discussion.comments` in idempotency checks) is **stop**.

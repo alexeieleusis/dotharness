@@ -534,7 +534,9 @@ class GhStub:
         path = path.removeprefix("repos/").partition("/")  # owner
         rest = f"{path[0]}/{path[2]}"
         match = re.fullmatch(
-            r"[^/]+/[^/]+/(pulls/(\d+)/(commits|reviews)|issues/(\d+)/comments|commits/([^/]+)/pulls)", rest
+            r"[^/]+/[^/]+/(pulls/(\d+)/(commits|reviews)|issues/(\d+)/comments|commits/([^/]+)/pulls"
+            r"|issues/comments/([^/]+)/reactions)",
+            rest,
         )
         if match:
             return self._rest_list(match, fields)
@@ -560,6 +562,8 @@ class GhStub:
                 if c.head_revision == sha or any(k.revision == sha for k in self.commits.get(c.number, []))
             ]
             return self._page_of([self._rest_pr(c) for c in found], fields)
+        if match.group(6):  # issues/comments/ID/reactions
+            return self._page_of([], fields)
         if match.group(4):  # issues/N/comments
             rows = [
                 {
