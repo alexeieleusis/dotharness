@@ -1747,3 +1747,17 @@ def test_signal_prompt_skips_step_zero_and_keeps_the_fence():
     plain = address_comments._build_comment_instructions("template", _SIGNAL_COMMENT, 3, "acme/frontend")
     assert "Skip Step 0" not in plain
     assert "automatically updated" not in plain
+
+
+async def test_gate_hands_its_snapshot_to_selection_so_reactions_are_read_once(tmp_xdg):
+    fake, comment = _signal_host()
+    host = fake.code_host()
+    spy = AsyncMock(wraps=host.discussion.comment_reactions)
+    snapshots: dict = {}
+    with patch.object(host.discussion, "comment_reactions", spy):
+        assert (
+            await address_comments._has_pending_feedback(host, REPO, 1, "reviewer", "acme-frontend", "*", snapshots)
+            is True
+        )
+    assert spy.await_count == 1
+    assert [s.comment["id"] for s in snapshots[1].due] == [f"issue-comment-{comment.id}"]

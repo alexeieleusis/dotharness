@@ -1,7 +1,8 @@
+import asyncio
 import logging
 import secrets
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -167,11 +168,13 @@ async def _run_locked(config: HarnessConfig) -> None:
                     our_login,
                     config.repo_slug,
                     config.address_comments.trusted_commenters,
+                    ctx.signal_snapshots,
                 )
             except Exception:
                 logger.exception("PR #%d: pending-feedback check failed, skipping", number)
                 continue
             if not has_feedback:
+                ctx.signal_snapshots.pop(number, None)
                 logger.info("PR #%d: no pending feedback, skipping", number)
                 continue
             await _process_single_pr(number, branch, ctx)
@@ -197,6 +200,8 @@ class _ProcessPrContext:
     opencode_dir: str | None = None
     plugin_prefix: str | None = None
     repo_slug: str | None = None
+    # Snapshots the pending-feedback gate already read, by PR number, so selection does not read reactions again.
+    signal_snapshots: dict[int, "_SignalSnapshot"] = field(default_factory=dict)
 
 
 async def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -> None:
@@ -219,7 +224,9 @@ async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrCon
     comments = await fetch_pr_comments(number, ctx.script_path, ctx.wdir, ctx.env)
     # Read once per PR, before the loop: each signalled comment's edit version is the one handled below, so an
     # edit landing during the run stays newer than the stored watermark and is addressed next run.
-    signals = await _signal_snapshot(
+    # The gate may have read it already (a PR pending only through a signal): reuse it, so each candidate's
+    # reactions are read once per PR per run.
+    signals = ctx.signal_snapshots.pop(number, None) or await _signal_snapshot(
         ctx.host, ctx.repo_ref, number, ctx.our_login, ctx.repo_slug, ctx.trusted_commenters
     )
     if not comments and not signals.due:
@@ -1027,7 +1034,6 @@ async def _evaluate_signal(
         )
         return _SignalVerdict(owned=True)
     script_id = f"issue-comment-{comment.id}"
-    # The cap check warns once per call (see `_has_signalled_comment` for when a comment is evaluated twice).
     if _round_cap_reached(watermark, rocket_at, pr_number, script_id):
         return _SignalVerdict(owned=True)
     dict_comment = {
@@ -1048,50 +1054,30 @@ async def _signal_snapshot(
     our_login: str | None,
     repo_slug: str | None,
     trusted_commenters: str | list[str] = "*",
+    comments: Sequence[Comment] | None = None,
 ) -> _SignalSnapshot:
-    """Read the PR's comments and reactions once and decide which signalled comments are due. Empty (and no
+    """Read the PR's comments (unless the caller already has them) and reactions once and decide which signalled comments are due. Empty (and no
     reactions call) when our login or the repo slug is unknown (without a slug no watermark or round count can
     be recorded, so the round cap would never trip) or no candidate comment is newer than its handled version."""
     if not our_login or not repo_slug:
         return _SignalSnapshot()
-    comments = await _read_issue_comments(host, repo, pr_number)
+    if comments is None:
+        comments = await _read_issue_comments(host, repo, pr_number)
     if not comments:
         return _SignalSnapshot()
+    candidates = [c for c in comments if _is_signal_candidate(c, our_login)]
+    # The reactions reads are independent, so they run concurrently.
+    verdicts = await asyncio.gather(
+        *(_evaluate_signal(host, repo, pr_number, c, our_login, repo_slug, trusted_commenters) for c in candidates)
+    )
     due: list[_SignalledComment] = []
     skip: set[str] = set()
-    for comment in comments:
-        if not _is_signal_candidate(comment, our_login):
-            continue
-        verdict = await _evaluate_signal(host, repo, pr_number, comment, our_login, repo_slug, trusted_commenters)
+    for comment, verdict in zip(candidates, verdicts, strict=True):
         if verdict.owned:
             skip.add(_issue_comment_key(comment.id))
         if verdict.due:
             due.append(verdict.due)
     return _SignalSnapshot(tuple(due), frozenset(skip))
-
-
-async def _has_signalled_comment(
-    host: CodeHost,
-    repo: RepositoryRef,
-    pr_number: int,
-    comments: Sequence[Comment],
-    our_login: str | None,
-    repo_slug: str | None,
-    trusted_commenters: str | list[str] = "*",
-) -> bool:
-    """True when some comment would be selected as a signal comment. Stops at the first one. A signalled comment
-    dropped on the way (no edit time, round cap) warns here too, because a PR with nothing else pending never
-    reaches selection; the same comment can warn again in selection when another one makes the PR pending.
-    Always False without a repo slug: the signal path cannot record state, so it stays disabled."""
-    if not our_login or not repo_slug:
-        return False
-    for comment in comments:
-        if not _is_signal_candidate(comment, our_login):
-            continue
-        verdict = await _evaluate_signal(host, repo, pr_number, comment, our_login, repo_slug, trusted_commenters)
-        if verdict.due is not None:
-            return True
-    return False
 
 
 async def _has_pending_feedback(
@@ -1101,7 +1087,11 @@ async def _has_pending_feedback(
     our_login: str | None = None,
     repo_slug: str | None = None,
     trusted_commenters: str | list[str] = "*",
+    signal_snapshots: dict[int, _SignalSnapshot] | None = None,
 ) -> bool:
+    """Whether the PR has anything to address. When the PR is pending only through a signalled comment, the
+    snapshot that decided it is left in `signal_snapshots` for the selection step to reuse. Always False for the
+    signal path without a repo slug: it cannot record state, so it stays disabled."""
     total_threads, total_unresolved, gql_ok = await _count_threads(host, repo, pr_number)
 
     if gql_ok:
@@ -1114,4 +1104,9 @@ async def _has_pending_feedback(
         return False
     if _count_human_comments(pr_number, comments) > 0:
         return True
-    return await _has_signalled_comment(host, repo, pr_number, comments, our_login, repo_slug, trusted_commenters)
+    snapshot = await _signal_snapshot(host, repo, pr_number, our_login, repo_slug, trusted_commenters, comments)
+    if not snapshot.due:
+        return False
+    if signal_snapshots is not None:
+        signal_snapshots[pr_number] = snapshot
+    return True
