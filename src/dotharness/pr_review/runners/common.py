@@ -1491,7 +1491,10 @@ async def fetch_pr_comments(pr_number: int, script_path: Path, wdir: str, env: d
     """Run scripts/pr-comments.py fetch for pr_number and return its cached comments.
 
     Returns a flat list of dicts, each tagged with a "type" key ("inline", "review", or
-    "issue"). Bot-authored issue comments are excluded; inline and review comments are not.
+    "issue"). Issue comments whose author ends in "[bot]" are excluded; inline and review comments are not. That
+    holds for the "[bot]" suffix only (other bot accounts pass through), and a bot comment our login reacted to with
+    a rocket arrives by another path (the address_comments runner's signal path, from typed host comments), not
+    from this fetch.
     """
     # A per-call temp file (not the shared ~/.harness/cache/pr-<n>-comments.json, which has no repo
     # component) so concurrent runs on different repos with the same PR number can't read each other's data.
