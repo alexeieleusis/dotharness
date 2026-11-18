@@ -59,6 +59,9 @@ query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
 # so "already answered" can only be known from our own persisted record (see dotharness.pr_review.state).
 _NON_THREADED_TYPES = ("issue", "review")
 
+# At most this many clean runs per rocket on one signalled comment; removing and re-adding the rocket resets it.
+MAX_ROUNDS_PER_ROCKET = 10
+
 COMMENT_BODY_LABEL = "Comment body:"
 COMMENT_BODY_GUARDRAIL_TEMPLATE = (
     "-- USER-SUPPLIED CONTENT BEGINS [{nonce}] --\n"
@@ -372,6 +375,47 @@ def _reply_key(comment: dict) -> str:
     return f"{comment.get('type')}:{comment.get('id')}"
 
 
+def _issue_comment_key(host_comment_id: str) -> str:
+    """The `_reply_key` of a host issue comment (`Comment.id` is the bare number; the comments script
+    ids it `issue-comment-<id>`). The one key format of the signalled path."""
+    return _reply_key({"type": "issue", "id": f"issue-comment-{host_comment_id}"})
+
+
+def _edit_version(updated_at: datetime | None) -> str:
+    """Stable string form of an edit version (REST `updated_at`) for storage and comparison."""
+    return updated_at.isoformat() if updated_at is not None else ""
+
+
+def _edit_is_unhandled(watermark: dict | None, updated_at: datetime | None) -> bool:
+    """True when no edit was handled yet, or the comment was edited after the handled version."""
+    if watermark is None:
+        return True
+    if updated_at is None:
+        return False
+    try:
+        return updated_at > datetime.fromisoformat(watermark["version"])
+    except ValueError:
+        return True
+
+
+def _round_cap_reached(
+    watermark: dict | None, rocket_at: datetime, pr_number: int, comment_id: str, *, warn: bool = True
+) -> bool:
+    """True when the rocket created at `rocket_at` has used its `MAX_ROUNDS_PER_ROCKET` rounds. Logs one
+    warning per call (call once per comment per run) telling the user to remove and re-add the rocket."""
+    if state.rounds_for_rocket(watermark, _edit_version(rocket_at)) < MAX_ROUNDS_PER_ROCKET:
+        return False
+    if warn:
+        logger.warning(
+            "PR #%d comment %s: reached the %d-round limit for this rocket; remove and re-add the rocket "
+            "reaction to address it again",
+            pr_number,
+            comment_id,
+            MAX_ROUNDS_PER_ROCKET,
+        )
+    return True
+
+
 def _is_comment_already_replied(comment: dict, our_login: str, replied_keys: set[str] | None = None) -> bool:
     """Return True if `our_login` has already replied to this comment."""
     if comment["type"] == "inline":
@@ -570,6 +614,8 @@ async def _address_single_comment(
     opencode_dir: str | None = None,
     our_login: str | None = None,
     repo_slug: str | None = None,
+    handled_version: datetime | None = None,
+    rocket_at: datetime | None = None,
 ) -> tuple[str, bool]:
     """Run the backend for `comment`, then return the resulting HEAD sha (or `pre_sha`
     unchanged if HEAD didn't move / couldn't be read) so the caller can pass it as the
@@ -621,8 +667,16 @@ async def _address_single_comment(
         observed = await _check_reply_observed(comment, host, repo_ref, pr_number, our_login, since_iso)
     # Recorded only when the run was clean AND a commit or reply was seen, so a crashed
     # attempt or a silent skip is retried next pass instead of being suppressed forever.
+    # A signalled comment (handled_version given: the edit version snapshotted before the backend ran, so a
+    # later edit stays newer) advances its watermark and round count in one write instead of the permanent
+    # replied key, which would suppress every later round.
     if clean_run and (made_commit or observed) and repo_slug and ctype in _NON_THREADED_TYPES:
-        state.record_replied_comment(repo_slug, pr_number, _reply_key(comment))
+        if handled_version is not None and rocket_at is not None:
+            state.record_handled_comment(
+                repo_slug, pr_number, _reply_key(comment), _edit_version(handled_version), _edit_version(rocket_at)
+            )
+        else:
+            state.record_replied_comment(repo_slug, pr_number, _reply_key(comment))
     return post_sha, rewritten
 
 

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from dotharness.pr_review import state
@@ -516,3 +518,50 @@ def test_read_state_wrong_typed_fields_are_coerced(tmp_xdg):
     sr = state.read_self_review_state("acme-frontend")
     assert sr["reviewed_prs"] == [] and sr["partial_reviews"] == {}
     assert state.read_address_comments_state("acme-frontend")["replied"] == {}
+
+
+def test_old_format_address_comments_file_loads_with_default_handled_versions(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "XDG_DATA", tmp_path)
+    d = tmp_path / "state" / "acme-frontend"
+    d.mkdir(parents=True)
+    (d / "address_comments.json").write_text(json.dumps({"version": 1, "replied": {"1": ["issue:10"]}}))
+    data = state.read_address_comments_state("acme-frontend")
+    assert data == {"version": 1, "replied": {"1": ["issue:10"]}, "handled_versions": {}}
+    assert state.get_comment_watermark("acme-frontend", 1, "issue:issue-comment-5") is None
+
+
+def test_record_handled_comment_counts_rounds_and_resets_on_new_rocket(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "XDG_DATA", tmp_path)
+    key = "issue:issue-comment-5"
+    state.record_handled_comment("acme-frontend", 1, key, "v1", "r1")
+    state.record_handled_comment("acme-frontend", 1, key, "v2", "r1")
+    wm = state.get_comment_watermark("acme-frontend", 1, key)
+    assert wm == {"version": "v2", "rounds": 2, "rocket_at": "r1"}
+    assert state.rounds_for_rocket(wm, "r1") == 2
+    assert state.rounds_for_rocket(wm, "r2") == 0
+    assert state.rounds_for_rocket(None, "r1") == 0
+    state.record_handled_comment("acme-frontend", 1, key, "v3", "r2")
+    assert state.get_comment_watermark("acme-frontend", 1, key) == {"version": "v3", "rounds": 1, "rocket_at": "r2"}
+    # the replied shape is untouched
+    assert state.get_replied_comment_keys("acme-frontend", 1) == set()
+
+
+def test_prune_address_comments_state_drops_handled_versions_of_closed_prs(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "XDG_DATA", tmp_path)
+    state.record_handled_comment("acme-frontend", 1, "issue:issue-comment-5", "v1", "r1")
+    state.record_handled_comment("acme-frontend", 2, "issue:issue-comment-6", "v1", "r1")
+    state.prune_address_comments_state("acme-frontend", {2})
+    assert state.get_comment_watermark("acme-frontend", 1, "issue:issue-comment-5") is None
+    assert state.get_comment_watermark("acme-frontend", 2, "issue:issue-comment-6") is not None
+
+
+def test_get_comment_watermark_tolerates_malformed_entries(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "XDG_DATA", tmp_path)
+    d = tmp_path / "state" / "acme-frontend"
+    d.mkdir(parents=True)
+    (d / "address_comments.json").write_text(
+        json.dumps({"handled_versions": {"1": {"a": "oops", "b": {"version": "v", "rounds": "x"}}, "2": []}})
+    )
+    assert state.get_comment_watermark("acme-frontend", 1, "a") is None
+    assert state.get_comment_watermark("acme-frontend", 1, "b") == {"version": "v", "rounds": 0, "rocket_at": ""}
+    assert state.get_comment_watermark("acme-frontend", 2, "a") is None

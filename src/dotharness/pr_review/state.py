@@ -262,7 +262,10 @@ def add_regret_reviewed_pr(repo_slug: str, pr_number: int) -> None:
 
 
 def read_address_comments_state(repo_slug: str) -> dict:
-    defaults = {"version": 1, "replied": {}}
+    # `handled_versions` is {pr: {comment_key: {"version": str, "rounds": int, "rocket_at": str}}}: the
+    # edit version last handled, and the rounds run for the rocket created at `rocket_at`. Files written
+    # before it existed load with the empty default.
+    defaults = {"version": 1, "replied": {}, "handled_versions": {}}
     return _load_json_dict(_state_path(repo_slug, ADDRESS_COMMENTS_FILE), defaults)
 
 
@@ -285,14 +288,59 @@ def record_replied_comment(repo_slug: str, pr_number: int, key: str) -> None:
     _update_state(repo_slug, ADDRESS_COMMENTS_FILE, read_address_comments_state, mutate)
 
 
+def get_comment_watermark(repo_slug: str, pr_number: int, key: str) -> dict | None:
+    """The stored `{"version", "rounds", "rocket_at"}` for a comment key on this PR, or None if never
+    handled (or the entry is malformed). `version` is the edit version (REST `updated_at`, ISO string)."""
+    entry = read_address_comments_state(repo_slug)["handled_versions"].get(str(pr_number), {})
+    entry = entry.get(key) if isinstance(entry, dict) else None
+    if not isinstance(entry, dict) or not isinstance(entry.get("version"), str):
+        return None
+    rounds = entry.get("rounds")
+    rocket_at = entry.get("rocket_at")
+    return {
+        "version": entry["version"],
+        "rounds": rounds if isinstance(rounds, int) and rounds >= 0 else 0,
+        "rocket_at": rocket_at if isinstance(rocket_at, str) else "",
+    }
+
+
+def rounds_for_rocket(watermark: dict | None, rocket_at: str) -> int:
+    """Rounds already run for the rocket created at `rocket_at`: 0 with no watermark or when the stored
+    `rocket_at` differs (the rocket was removed and re-added)."""
+    if watermark is None or watermark["rocket_at"] != rocket_at:
+        return 0
+    return watermark["rounds"]
+
+
+def record_handled_comment(repo_slug: str, pr_number: int, key: str, version: str, rocket_at: str) -> None:
+    """Advance the watermark for a comment key: store the snapshot edit `version` and `rocket_at`, and
+    increment `rounds` (restarting from 0 when `rocket_at` changed) in the same locked write."""
+
+    def mutate(current: dict) -> bool:
+        per_pr = current["handled_versions"].setdefault(str(pr_number), {})
+        previous = per_pr.get(key)
+        rounds = 0
+        if (
+            isinstance(previous, dict)
+            and previous.get("rocket_at") == rocket_at
+            and isinstance(previous.get("rounds"), int)
+        ):
+            rounds = previous["rounds"]
+        per_pr[key] = {"version": version, "rounds": rounds + 1, "rocket_at": rocket_at}
+        return True
+
+    _update_state(repo_slug, ADDRESS_COMMENTS_FILE, read_address_comments_state, mutate)
+
+
 def prune_address_comments_state(repo_slug: str, open_pr_numbers: set[int]) -> None:
     """Drop entries for PRs that are no longer open, so the map doesn't grow unboundedly."""
     keep = {str(n) for n in open_pr_numbers}
 
     def mutate(current: dict) -> bool:
-        to_drop = current["replied"].keys() - keep
+        to_drop = (current["replied"].keys() | current["handled_versions"].keys()) - keep
         for pr in to_drop:
-            del current["replied"][pr]
+            current["replied"].pop(pr, None)
+            current["handled_versions"].pop(pr, None)
         return bool(to_drop)
 
     _update_state(repo_slug, ADDRESS_COMMENTS_FILE, read_address_comments_state, mutate)

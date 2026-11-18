@@ -1396,3 +1396,84 @@ def test_build_comment_instructions_fences_replies_and_original():
     begins = [ln for ln in instructions.splitlines() if ln.startswith("-- USER-SUPPLIED CONTENT BEGINS [")]
     ends = [ln for ln in instructions.splitlines() if ln.startswith("-- USER-SUPPLIED CONTENT ENDS [")]
     assert len(begins) == len(ends) == 3  # body, reply, original finding
+
+
+_SIGNAL_COMMENT = {"type": "issue", "id": "issue-comment-123", "author": "bot", "body": "x", "url": "u"}
+
+
+def test_signalled_comment_key_format_is_pinned():
+    assert address_comments._reply_key(_SIGNAL_COMMENT) == "issue:issue-comment-123"
+    assert address_comments._issue_comment_key("123") == "issue:issue-comment-123"
+
+
+def test_edit_is_unhandled_compares_against_the_watermark():
+    t1 = datetime(2026, 1, 1, tzinfo=UTC)
+    t2 = datetime(2026, 1, 2, tzinfo=UTC)
+    wm = {"version": t1.isoformat(), "rounds": 1, "rocket_at": ""}
+    assert address_comments._edit_is_unhandled(None, t1)
+    assert not address_comments._edit_is_unhandled(wm, t1)
+    assert address_comments._edit_is_unhandled(wm, t2)
+
+
+def test_round_cap_warns_once_naming_pr_and_comment(caplog):
+    rocket = datetime(2026, 1, 1, tzinfo=UTC)
+    rv = address_comments._edit_version(rocket)
+    below = {"version": "v", "rounds": address_comments.MAX_ROUNDS_PER_ROCKET - 1, "rocket_at": rv}
+    at_cap = {**below, "rounds": address_comments.MAX_ROUNDS_PER_ROCKET}
+    assert address_comments.MAX_ROUNDS_PER_ROCKET == 10
+    with caplog.at_level("WARNING"):
+        assert not address_comments._round_cap_reached(below, rocket, 7, "issue-comment-123")
+        assert not caplog.records
+        assert address_comments._round_cap_reached(at_cap, rocket, 7, "issue-comment-123")
+        # re-added rocket (different created_at) resets the count
+        assert not address_comments._round_cap_reached(at_cap, rocket.replace(year=2027), 7, "issue-comment-123")
+    warnings = [r.message for r in caplog.records]
+    assert len(warnings) == 1
+    assert "PR #7" in warnings[0] and "issue-comment-123" in warnings[0] and "re-add" in warnings[0]
+
+
+async def _run_single(comment, tmp_xdg, *, backend_error=False, **kwargs):
+    mock_backend = MagicMock()
+    mock_backend.run = AsyncMock(side_effect=RuntimeError("boom") if backend_error else None)
+    with patch("dotharness.pr_review.runners.address_comments.get_head_sha", return_value="sha-0"):
+        await _address_single_comment(
+            comment,
+            1,
+            "i",
+            mock_backend,
+            "/repo",
+            "acme/frontend",
+            {},
+            *_hr(),
+            "sha-0",
+            repo_slug="acme-frontend",
+            **kwargs,
+        )
+
+
+async def test_clean_signalled_run_advances_watermark_and_rounds(tmp_xdg):
+    from dotharness.pr_review import state
+
+    edit = datetime(2026, 1, 1, tzinfo=UTC)
+    rocket = datetime(2026, 1, 2, tzinfo=UTC)
+    for expected in (1, 2):
+        await _run_single(_SIGNAL_COMMENT, tmp_xdg, handled_version=edit, rocket_at=rocket)
+        wm = state.get_comment_watermark("acme-frontend", 1, "issue:issue-comment-123")
+        assert wm == {"version": edit.isoformat(), "rounds": expected, "rocket_at": rocket.isoformat()}
+    # no permanent replied key, so a later edit can be addressed again
+    assert state.get_replied_comment_keys("acme-frontend", 1) == set()
+
+
+async def test_backend_error_leaves_watermark_unchanged(tmp_xdg):
+    from dotharness.pr_review import state
+
+    edit = datetime(2026, 1, 1, tzinfo=UTC)
+    await _run_single(_SIGNAL_COMMENT, tmp_xdg, backend_error=True, handled_version=edit, rocket_at=edit)
+    assert state.get_comment_watermark("acme-frontend", 1, "issue:issue-comment-123") is None
+
+
+async def test_unsignalled_run_still_records_replied_key(tmp_xdg):
+    from dotharness.pr_review import state
+
+    await _run_single(_SIGNAL_COMMENT, tmp_xdg)
+    assert state.get_replied_comment_keys("acme-frontend", 1) == {"issue:issue-comment-123"}
