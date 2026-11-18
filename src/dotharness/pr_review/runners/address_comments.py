@@ -160,7 +160,14 @@ async def _run_locked(config: HarnessConfig) -> None:
             branch = pr.head_reference
             logger.debug("PR #%d (branch=%s): checking for pending feedback", number, branch)
             try:
-                has_feedback = await _has_pending_feedback(host, repo_ref, number, our_login, config.repo_slug)
+                has_feedback = await _has_pending_feedback(
+                    host,
+                    repo_ref,
+                    number,
+                    our_login,
+                    config.repo_slug,
+                    config.address_comments.trusted_commenters,
+                )
             except Exception:
                 logger.exception("PR #%d: pending-feedback check failed, skipping", number)
                 continue
@@ -212,7 +219,9 @@ async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrCon
     comments = await fetch_pr_comments(number, ctx.script_path, ctx.wdir, ctx.env)
     # Read once per PR, before the loop: each signalled comment's edit version is the one handled below, so an
     # edit landing during the run stays newer than the stored watermark and is addressed next run.
-    signals = await _signal_snapshot(ctx.host, ctx.repo_ref, number, ctx.our_login, ctx.repo_slug)
+    signals = await _signal_snapshot(
+        ctx.host, ctx.repo_ref, number, ctx.our_login, ctx.repo_slug, ctx.trusted_commenters
+    )
     if not comments and not signals.due:
         logger.info("PR #%d: no actionable comments found", number)
         return
@@ -990,6 +999,7 @@ async def _evaluate_signal(
     comment: Comment,
     our_login: str,
     repo_slug: str | None,
+    trusted_commenters: str | list[str] = "*",
 ) -> _SignalVerdict:
     key = _issue_comment_key(comment.id)
     watermark = state.get_comment_watermark(repo_slug, pr_number, key) if repo_slug else None
@@ -999,6 +1009,14 @@ async def _evaluate_signal(
     # Reactions are read only for a comment newer than its handled version. An unknown edit time (None) with no
     # watermark is read too, so a signalled one can be reported below; with a watermark it is never newer.
     if watermark is not None and not _edit_is_unhandled(watermark, comment.updated_at):
+        return _SignalVerdict(owned=owned)
+    # A rocket does not override trusted_commenters. Checked before the reactions read and before anything is
+    # marked due, so a blocked comment is neither pending nor due and the gate cannot fire on it every poll.
+    author = comment.author.login if comment.author else ""
+    if not _filter_by_trusted_commenters([{"author": author}], pr_number, trusted_commenters):
+        logger.debug(
+            "PR #%d comment %s: author %r is not a trusted commenter, ignoring signal", pr_number, comment.id, author
+        )
         return _SignalVerdict(owned=owned)
     rocket_at = await _our_rocket_at(host, repo, pr_number, comment, our_login)
     if rocket_at is None:
@@ -1024,7 +1042,12 @@ async def _evaluate_signal(
 
 
 async def _signal_snapshot(
-    host: CodeHost, repo: RepositoryRef, pr_number: int, our_login: str | None, repo_slug: str | None
+    host: CodeHost,
+    repo: RepositoryRef,
+    pr_number: int,
+    our_login: str | None,
+    repo_slug: str | None,
+    trusted_commenters: str | list[str] = "*",
 ) -> _SignalSnapshot:
     """Read the PR's comments and reactions once and decide which signalled comments are due. Empty (and no
     reactions call) when our login or the repo slug is unknown (without a slug no watermark or round count can
@@ -1039,7 +1062,7 @@ async def _signal_snapshot(
     for comment in comments:
         if not _is_signal_candidate(comment, our_login):
             continue
-        verdict = await _evaluate_signal(host, repo, pr_number, comment, our_login, repo_slug)
+        verdict = await _evaluate_signal(host, repo, pr_number, comment, our_login, repo_slug, trusted_commenters)
         if verdict.owned:
             skip.add(_issue_comment_key(comment.id))
         if verdict.due:
@@ -1054,6 +1077,7 @@ async def _has_signalled_comment(
     comments: Sequence[Comment],
     our_login: str | None,
     repo_slug: str | None,
+    trusted_commenters: str | list[str] = "*",
 ) -> bool:
     """True when some comment would be selected as a signal comment. Stops at the first one. A signalled comment
     dropped on the way (no edit time, round cap) warns here too, because a PR with nothing else pending never
@@ -1064,7 +1088,7 @@ async def _has_signalled_comment(
     for comment in comments:
         if not _is_signal_candidate(comment, our_login):
             continue
-        verdict = await _evaluate_signal(host, repo, pr_number, comment, our_login, repo_slug)
+        verdict = await _evaluate_signal(host, repo, pr_number, comment, our_login, repo_slug, trusted_commenters)
         if verdict.due is not None:
             return True
     return False
@@ -1076,6 +1100,7 @@ async def _has_pending_feedback(
     pr_number: int,
     our_login: str | None = None,
     repo_slug: str | None = None,
+    trusted_commenters: str | list[str] = "*",
 ) -> bool:
     total_threads, total_unresolved, gql_ok = await _count_threads(host, repo, pr_number)
 
@@ -1089,4 +1114,4 @@ async def _has_pending_feedback(
         return False
     if _count_human_comments(pr_number, comments) > 0:
         return True
-    return await _has_signalled_comment(host, repo, pr_number, comments, our_login, repo_slug)
+    return await _has_signalled_comment(host, repo, pr_number, comments, our_login, repo_slug, trusted_commenters)
