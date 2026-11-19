@@ -219,6 +219,17 @@ Optional. Used only by `pr_review run local-review`. All other commands ignore i
 | `authors` | string or list of strings | `"*"` | Which PR authors the pass applies to. `"*"` means all authors. Otherwise it is a list of GitHub usernames. Applies to the **current** PR's author. The introducing PR's author is never filtered. The point is tracing *whoever's* old comment was ignored. |
 | `regret_review_timeout` | integer | `300` | Per-PR wall-clock budget (seconds) for the pass's own git/`gh` calls (blame, commit→PR lookups, comment fetches), checked and decremented before each call. Does not bound the backend invocation itself, which uses `harness.backend_timeout_seconds` independently. |
 
+### `[test_layer_review]`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `true` | Runs the PR-level test-layer pass. Setting it to `false` stops the PR-level pass and its backend call. A non-boolean value raises `ConfigError`. |
+
+```toml
+[test_layer_review]
+# enabled = true
+```
+
 ## Unsupported-capability policy
 
 A code host declares which capabilities it supports. When a runner calls an operation of a capability the host does not

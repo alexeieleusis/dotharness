@@ -29,6 +29,7 @@ def test_read_self_review_defaults(tmp_xdg):
         "design_reviewed_prs": [],
         "traceability_reviewed_prs": [],
         "regret_reviewed_prs": [],
+        "test_layer_reviewed_prs": [],
     }
 
 
@@ -217,6 +218,7 @@ def test_read_self_review_corrupted_json_fallback(tmp_xdg, caplog):
         "design_reviewed_prs": [],
         "traceability_reviewed_prs": [],
         "regret_reviewed_prs": [],
+        "test_layer_reviewed_prs": [],
     }
     assert "Corrupted state file" in caplog.text
 
@@ -273,6 +275,31 @@ def test_prune_self_review_state_drops_regret_reviewed_prs_too(tmp_xdg):
     state.add_regret_reviewed_pr("acme-frontend", 9)
     state.prune_self_review_state("acme-frontend", {9})
     assert state.get_regret_reviewed_prs("acme-frontend") == {9}
+
+
+def test_add_test_layer_reviewed_pr_is_independent_of_other_state(tmp_xdg):
+    state.write_self_review_state("acme-frontend", [7])
+    state.add_regret_reviewed_pr("acme-frontend", 8)
+    state.add_test_layer_reviewed_pr("acme-frontend", 9)
+    assert state.get_test_layer_reviewed_prs("acme-frontend") == {9}
+    assert state.get_regret_reviewed_prs("acme-frontend") == {8}
+    assert state.read_self_review_state("acme-frontend")["reviewed_prs"] == [7]
+
+
+def test_add_test_layer_reviewed_pr_is_idempotent(tmp_xdg, monkeypatch):
+    state.add_test_layer_reviewed_pr("acme-frontend", 9)
+    calls = []
+    monkeypatch.setattr(state, "atomic_write_text", lambda *a: calls.append(a))
+    state.add_test_layer_reviewed_pr("acme-frontend", 9)
+    assert calls == []
+    assert state.get_test_layer_reviewed_prs("acme-frontend") == {9}
+
+
+def test_prune_self_review_state_drops_test_layer_reviewed_prs_too(tmp_xdg):
+    state.add_test_layer_reviewed_pr("acme-frontend", 7)
+    state.add_test_layer_reviewed_pr("acme-frontend", 9)
+    state.prune_self_review_state("acme-frontend", {9})
+    assert state.get_test_layer_reviewed_prs("acme-frontend") == {9}
 
 
 # --- local-review: state reset, CLI, scheduler -------------------------------------------------

@@ -147,6 +147,7 @@ def read_self_review_state(repo_slug: str) -> dict:
         "design_reviewed_prs": [],
         "traceability_reviewed_prs": [],
         "regret_reviewed_prs": [],
+        "test_layer_reviewed_prs": [],
     }
     return _load_json_dict(_state_path(repo_slug, SELF_REVIEW_FILE), defaults)
 
@@ -176,7 +177,7 @@ def set_partial_reviewed_files(repo_slug: str, pr_number: int, files: list[str])
 
 def prune_self_review_state(repo_slug: str, open_pr_numbers: set[int]) -> dict:
     """Drop reviewed_prs / partial_reviews / design_reviewed_prs / traceability_reviewed_prs /
-    regret_reviewed_prs entries for PRs that are no longer open, so self_review.json doesn't
+    regret_reviewed_prs / test_layer_reviewed_prs entries for PRs that are no longer open, so self_review.json doesn't
     grow unboundedly as the user's own PRs get merged/closed over time. Returns the
     resulting state dict."""
     keep = {str(n) for n in open_pr_numbers}
@@ -187,18 +188,21 @@ def prune_self_review_state(repo_slug: str, open_pr_numbers: set[int]) -> dict:
         design_reviewed_after = [n for n in current["design_reviewed_prs"] if str(n) in keep]
         traceability_reviewed_after = [n for n in current["traceability_reviewed_prs"] if str(n) in keep]
         regret_reviewed_after = [n for n in current["regret_reviewed_prs"] if str(n) in keep]
+        test_layer_reviewed_after = [n for n in current["test_layer_reviewed_prs"] if str(n) in keep]
         changed = (
             reviewed_after != current["reviewed_prs"]
             or partial_after != current["partial_reviews"]
             or design_reviewed_after != current["design_reviewed_prs"]
             or traceability_reviewed_after != current["traceability_reviewed_prs"]
             or regret_reviewed_after != current["regret_reviewed_prs"]
+            or test_layer_reviewed_after != current["test_layer_reviewed_prs"]
         )
         current["reviewed_prs"] = reviewed_after
         current["partial_reviews"] = partial_after
         current["design_reviewed_prs"] = design_reviewed_after
         current["traceability_reviewed_prs"] = traceability_reviewed_after
         current["regret_reviewed_prs"] = regret_reviewed_after
+        current["test_layer_reviewed_prs"] = test_layer_reviewed_after
         return changed
 
     return _update_state(repo_slug, SELF_REVIEW_FILE, read_self_review_state, mutate)
@@ -258,6 +262,24 @@ def add_regret_reviewed_pr(repo_slug: str, pr_number: int) -> None:
             return False
         regret_reviewed.add(pr_number)
         current["regret_reviewed_prs"] = sorted(regret_reviewed)
+        return True
+
+    _update_state(repo_slug, SELF_REVIEW_FILE, read_self_review_state, mutate)
+
+
+def get_test_layer_reviewed_prs(repo_slug: str) -> set[int]:
+    """PRs whose test-layer pass completed. Kept separate from every other pass's list so a
+    test-layer retry never forces, or is forced by, any other pass's retry."""
+    return set(read_self_review_state(repo_slug).get("test_layer_reviewed_prs", []))
+
+
+def add_test_layer_reviewed_pr(repo_slug: str, pr_number: int) -> None:
+    def mutate(current: dict) -> bool:
+        reviewed = set(current.get("test_layer_reviewed_prs", []))
+        if pr_number in reviewed:
+            return False
+        reviewed.add(pr_number)
+        current["test_layer_reviewed_prs"] = sorted(reviewed)
         return True
 
     _update_state(repo_slug, SELF_REVIEW_FILE, read_self_review_state, mutate)
