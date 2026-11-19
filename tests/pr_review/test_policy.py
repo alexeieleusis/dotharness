@@ -41,6 +41,7 @@ _CALLS: dict[str, Callable[[CodeHost], Awaitable[Any]]] = {
     "WorkItems.get": lambda h: h.work_items.get(REPO, 1),
     "WorkItems.linked_work_items": lambda h: h.work_items.linked_work_items(REPO, 1),
     "Session.current_user": lambda h: h.session.current_user(),
+    "Discussion.comment_reactions": lambda h: h.discussion.comment_reactions(REPO, "1"),
 }
 
 _ROWS = sorted(UNSUPPORTED_CAPABILITY_POLICY.items())
@@ -79,6 +80,7 @@ def test_table_matches_the_confirmed_policy() -> None:
         "regret_review": {"stop"},
         "traceability": {"stop"},
         "current_user": {"warn"},
+        "address_comments_reactions": {"degrade"},
     }
 
 

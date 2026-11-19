@@ -182,6 +182,7 @@ def test_reference_declaration_limits() -> None:
     assert limits.list_bounds.per_operation["ChangeRequests.list"] == 1000
     for operation in (
         "Discussion.comments",
+        "Discussion.comment_reactions",
         "Discussion.review_threads",
         "ChangeRequests.reviews",
         "ChangeRequests.commits",

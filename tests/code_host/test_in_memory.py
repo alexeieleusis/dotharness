@@ -1,6 +1,7 @@
 """The in-memory fake passes the conformance suite and behaves as a consumer test needs."""
 
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 
@@ -407,6 +408,25 @@ class TestChangeRequestMethods:
 
 
 class TestDiscussionMethods:
+    async def test_reactions_and_edit_time(self) -> None:
+        fake = InMemoryCodeHost(user="me")
+        cr = fake.add_change_request(REPO, head_reference="a")
+        plain = fake.add_comment(REPO, cr.number, author="ann", body="hello")
+        edited_at = datetime(2030, 1, 1, tzinfo=UTC)
+        assert plain.updated_at is None
+        edited = fake.edit_comment(REPO, cr.number, plain.id, body="hello again", updated_at=edited_at)
+        assert (edited.body, edited.updated_at) == ("hello again", edited_at)
+        assert (await fake.code_host().discussion.comments(REPO, cr.number))[0] == edited
+        reaction = fake.add_reaction(REPO, plain.id, user="me")
+        discussion = fake.code_host().discussion
+        assert list(await discussion.comment_reactions(REPO, plain.id)) == [reaction]
+        assert (reaction.reactor, reaction.content) == (User("me"), "rocket")
+        assert list(await discussion.comment_reactions(REPO, "other")) == []
+        fake.fail_next("Discussion.comment_reactions", CodeHostError("boom"))
+        with pytest.raises(CodeHostError):
+            await discussion.comment_reactions(REPO, plain.id)
+        assert list(await discussion.comment_reactions(REPO, plain.id)) == [reaction]
+
     async def test_comments_threads_and_post(self) -> None:
         fake = InMemoryCodeHost(user="me")
         cr = fake.add_change_request(REPO, head_reference="a")

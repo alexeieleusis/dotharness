@@ -15,6 +15,7 @@ from dotharness.code_host.models import (
     Credential,
     InlineComment,
     Job,
+    Reaction,
     RepositoryRef,
     Review,
     ReviewPostResult,
@@ -137,6 +138,14 @@ class ChangeRequests(Protocol):
 class Discussion(Protocol):
     async def comments(self, repo: RepositoryRef, number: int) -> Sequence[Comment]:
         """Change-request-level comments."""
+        ...
+
+    async def comment_reactions(self, repo: RepositoryRef, comment_id: str) -> Sequence[Reaction]:
+        """Every reaction on one change-request-level comment (a `Comment.id` from `comments`), all pages.
+
+        Contents are normalised (the rocket is ``rocket``). A failure raises `CodeHostError`; it is never swallowed,
+        so the caller can isolate it per comment. A host without reactions raises `UnsupportedCapabilityError`.
+        """
         ...
 
     async def review_threads(self, repo: RepositoryRef, number: int) -> Sequence[ReviewThread]:

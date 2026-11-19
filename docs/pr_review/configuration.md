@@ -145,6 +145,19 @@ addressed using that reply's own content as the actual "comment to address"
 (not the terse original finding it responded to). See
 [`address-comments`](commands/address-comments.md#notes) for details.
 
+A bot-authored PR-level (issue) comment is addressed when the current user's
+login reacts to it with a rocket. It is addressed in the next run, and again
+after each edit of that comment while the rocket stays. Removing the rocket
+stops it. At most 10 rounds are run per rocket; removing and re-adding the
+rocket resets the count. The cap is a module constant
+(`MAX_ROUNDS_PER_ROCKET`), not a setting, so there is no field for it in the
+table above. A rocket does not override `trusted_commenters`: a bot that is
+not in a non-empty `trusted_commenters` list is still blocked. Reading the
+reactions is an optional signal: a host without it behaves as if no comment
+had a rocket (see the `address_comments_reactions` row in the policy table
+below). See [`address-comments`](commands/address-comments.md#rocket-path) for
+details.
+
 ### `[auto_approve]`
 
 Used by `pr_review run auto-approve` (and `pr_review run all`). Off by default.
@@ -238,11 +251,13 @@ the token command. The reference host declares all six capabilities, so no polic
 | `traceability` | `WorkItems.get` | stop |
 | `traceability` | `WorkItems.linked_work_items` | stop |
 | `current_user` | `Session.current_user` | warn |
+| `address_comments_reactions` | `Discussion.comment_reactions` | degrade |
 
 Why: `merge`, `auto_approve` approval, `ci_fix`, required checks, regret review and traceability stop because a silent
 degrade would change what pr-review posts or approves (for example a false "no linked ticket" comment, or a gate that
 reads all checks instead of required ones). Viewed state and the workflow listing are conveniences. Reviewer requests are
-a best-effort side effect. The current user keeps the fail-open `""`.
+a best-effort side effect. The current user keeps the fail-open `""`. Comment reactions are an optional signal, so a host
+without them behaves as if no comment had a reaction.
 
 Any host call not listed above (for example `ChangeRequests.list` in the review runners, or `Discussion` reads and writes
 such as `post_comment` in regret review and `Discussion.comments` in idempotency checks) is **stop**.

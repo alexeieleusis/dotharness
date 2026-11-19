@@ -5,6 +5,7 @@ import json
 import logging
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import AsyncMock
@@ -1605,7 +1606,12 @@ class TestPagingRetries:
         assert SECRET not in str(info.value)
 
     async def test_unbounded_when_declared_none(self) -> None:
-        for op in ("Discussion.comments", "Discussion.review_threads", "ChangeRequests.reviews"):
+        for op in (
+            "Discussion.comments",
+            "Discussion.comment_reactions",
+            "Discussion.review_threads",
+            "ChangeRequests.reviews",
+        ):
             assert DECLARATION.limits.list_bounds.per_operation[op] is None
         assert DECLARATION.limits.list_bounds.per_operation["ChangeRequests.list"] == 1000
 
@@ -1800,6 +1806,38 @@ class TestDiscussionOperations:
             ("6", "x[bot]", True, "c"),
         ]
         assert (comments[0].url, comments[1].url, comments[0].is_hidden) == ("u", None, False)
+
+    async def test_comment_updated_at(self, mocker) -> None:
+        rows = [
+            {"id": 5, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-02T00:00:00Z"},
+            {"id": 6, "created_at": "2026-01-01T00:00:00Z", "updated_at": None},
+            {"id": 7, "created_at": "2026-01-01T00:00:00Z"},
+        ]
+        _pages(mocker, _ok(rows))
+        comments = await _host().discussion.comments(REPO, 3)
+        assert comments[0].updated_at == datetime(2026, 1, 2, tzinfo=UTC)
+        assert (comments[1].updated_at, comments[2].updated_at) == (None, None)
+
+    async def test_comment_reactions_all_pages_normalised(self, mocker) -> None:
+        first = [
+            {"content": "ROCKET", "user": {"login": "ann", "type": "User"}, "created_at": "2026-01-01T00:00:00Z"}
+        ] * 100
+        second = [{"content": "+1", "user": None, "created_at": "2026-01-02T00:00:00Z"}]
+        mock_run = _pages(mocker, _ok(first), _ok(second))
+        reactions = await _host().discussion.comment_reactions(REPO, "55")
+        assert _argv(mock_run) == _page_argv(f"repos/{R}/issues/comments/55/reactions")
+        assert len(reactions) == 101
+        assert (reactions[0].reactor.login, reactions[0].content) == ("ann", "rocket")
+        assert (reactions[0].created_at, reactions[100].reactor, reactions[100].content) == (
+            datetime(2026, 1, 1, tzinfo=UTC),
+            None,
+            "+1",
+        )
+
+    async def test_comment_reactions_failure_raises(self, mocker) -> None:
+        _pages(mocker, *[(1, "", "HTTP 500")] * 3)
+        with pytest.raises(CodeHostError):
+            await _host().discussion.comment_reactions(REPO, "55")
 
     async def test_comments_are_never_truncated(self, mocker) -> None:
         _pages(

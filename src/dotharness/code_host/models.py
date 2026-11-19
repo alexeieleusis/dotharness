@@ -84,6 +84,19 @@ class Comment:
     url: str | None
     is_hidden: bool = False
     diff_hunk: str | None = None
+    updated_at: datetime | None = None  # last edit time; None when the host does not report it
+
+
+@dataclass(frozen=True)
+class Reaction:
+    """One reaction on a comment. ``content`` is normalised (lower case, e.g. ``rocket``, ``+1``, ``eyes``).
+
+    ``reactor`` is None when the host does not name the user (for example a deleted account).
+    """
+
+    reactor: User | None
+    content: str
+    created_at: datetime
 
 
 @dataclass(frozen=True)

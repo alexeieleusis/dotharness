@@ -1,6 +1,8 @@
+import asyncio
 import logging
 import secrets
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,7 +23,9 @@ from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
     FOCUSED_REVIEW_MARKER,
     TIMEOUT_GIT,
+    Site,
     backend_env,
+    call_or,
     fetch_pr_comments,
     fetch_review_threads,
     find_last_reply_if_marked,
@@ -58,6 +62,9 @@ query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
 # Comment types with no reply linkage in the GitHub API: a reply is just a new issue comment,
 # so "already answered" can only be known from our own persisted record (see dotharness.pr_review.state).
 _NON_THREADED_TYPES = ("issue", "review")
+
+# At most this many clean runs per rocket on one signalled comment; removing and re-adding the rocket resets it.
+MAX_ROUNDS_PER_ROCKET = 10
 
 COMMENT_BODY_LABEL = "Comment body:"
 COMMENT_BODY_GUARDRAIL_TEMPLATE = (
@@ -154,11 +161,20 @@ async def _run_locked(config: HarnessConfig) -> None:
             branch = pr.head_reference
             logger.debug("PR #%d (branch=%s): checking for pending feedback", number, branch)
             try:
-                has_feedback = await _has_pending_feedback(host, repo_ref, number)
+                has_feedback = await _has_pending_feedback(
+                    host,
+                    repo_ref,
+                    number,
+                    our_login,
+                    config.repo_slug,
+                    config.address_comments.trusted_commenters,
+                    ctx.signal_snapshots,
+                )
             except Exception:
                 logger.exception("PR #%d: pending-feedback check failed, skipping", number)
                 continue
             if not has_feedback:
+                ctx.signal_snapshots.pop(number, None)
                 logger.info("PR #%d: no pending feedback, skipping", number)
                 continue
             await _process_single_pr(number, branch, ctx)
@@ -184,6 +200,8 @@ class _ProcessPrContext:
     opencode_dir: str | None = None
     plugin_prefix: str | None = None
     repo_slug: str | None = None
+    # Snapshots the pending-feedback gate already read, by PR number, so selection does not read reactions again.
+    signal_snapshots: dict[int, "_SignalSnapshot"] = field(default_factory=dict)
 
 
 async def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -> None:
@@ -204,7 +222,14 @@ async def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -
 async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) -> None:
     await git_fetch_and_checkout(branch, ctx.wdir, ctx.env)
     comments = await fetch_pr_comments(number, ctx.script_path, ctx.wdir, ctx.env)
-    if not comments:
+    # Read once per PR, before the loop: each signalled comment's edit version is the one handled below, so an
+    # edit landing during the run stays newer than the stored watermark and is addressed next run.
+    # The gate may have read it already (a PR pending only through a signal): reuse it, so each candidate's
+    # reactions are read once per PR per run.
+    signals = ctx.signal_snapshots.pop(number, None) or await _signal_snapshot(
+        ctx.host, ctx.repo_ref, number, ctx.our_login, ctx.repo_slug, ctx.trusted_commenters
+    )
+    if not comments and not signals.due:
         logger.info("PR #%d: no actionable comments found", number)
         return
     comments = await _filter_comments(
@@ -216,6 +241,7 @@ async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrCon
         ctx.trusted_commenters,
         ctx.plugin_prefix,
         state.get_replied_comment_keys(ctx.repo_slug, number) if ctx.repo_slug else None,
+        signals,
     )
     if not comments:
         logger.info("PR #%d: no unresolved comments remain after filtering", number)
@@ -242,6 +268,7 @@ async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrCon
                 comment.get("id", "?"),
             )
             continue
+        signal = signals.by_script_id.get(comment["id"]) if comment.get("rocket_signal") else None
         head_sha, rewritten = await _address_single_comment(
             comment,
             number,
@@ -256,6 +283,8 @@ async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrCon
             ctx.opencode_dir,
             ctx.our_login,
             ctx.repo_slug,
+            handled_version=signal.updated_at if signal else None,
+            rocket_at=signal.rocket_at if signal else None,
         )
         if rewritten:
             logger.warning(
@@ -372,6 +401,30 @@ def _reply_key(comment: dict) -> str:
     return f"{comment.get('type')}:{comment.get('id')}"
 
 
+def _issue_comment_key(host_comment_id: str) -> str:
+    """The `_reply_key` of a host issue comment (`Comment.id` is the bare number; the comments script
+    ids it `issue-comment-<id>`). The one key format of the signalled path."""
+    return _reply_key({"type": "issue", "id": f"issue-comment-{host_comment_id}"})
+
+
+def _round_cap_reached(
+    watermark: state.Watermark | None, rocket_at: datetime, pr_number: int, comment_id: str, *, warn: bool = True
+) -> bool:
+    """True when the rocket created at `rocket_at` has used its `MAX_ROUNDS_PER_ROCKET` rounds. Logs one
+    warning per call (call once per comment per run) telling the user to remove and re-add the rocket."""
+    if (watermark.rounds_for(rocket_at) if watermark else 0) < MAX_ROUNDS_PER_ROCKET:
+        return False
+    if warn:
+        logger.warning(
+            "PR #%d comment %s: reached the %d-round limit for this rocket; remove and re-add the rocket "
+            "reaction to address it again",
+            pr_number,
+            comment_id,
+            MAX_ROUNDS_PER_ROCKET,
+        )
+    return True
+
+
 def _is_comment_already_replied(comment: dict, our_login: str, replied_keys: set[str] | None = None) -> bool:
     """Return True if `our_login` has already replied to this comment."""
     if comment["type"] == "inline":
@@ -478,6 +531,31 @@ def _filter_by_plugin_prefix(comments: list[dict], pr_number: int, plugin_prefix
     return comments
 
 
+@dataclass(frozen=True)
+class _SignalledComment:
+    """A PR-level issue comment our login reacted to with a rocket, due for addressing. `comment` is in the
+    comments script's dict shape plus `rocket_signal`; `updated_at` is the edit version snapshotted before the
+    loop and `rocket_at` the creation time of the newest rocket from our login."""
+
+    comment: dict
+    updated_at: datetime
+    rocket_at: datetime
+
+
+@dataclass(frozen=True)
+class _SignalSnapshot:
+    """Per-PR result of the signal read. `due` are the comments to address; `skip_keys` are the `_reply_key`s
+    of every comment the signal path owns (signalled or already handled as a signal), which the ordinary path
+    must not pick up, even when not due, or an unsuppressed bot comment would be re-addressed every run."""
+
+    due: tuple[_SignalledComment, ...] = ()
+    skip_keys: frozenset[str] = frozenset()
+
+    @property
+    def by_script_id(self) -> dict[str, _SignalledComment]:
+        return {s.comment["id"]: s for s in self.due}
+
+
 async def _filter_comments(
     comments: list[dict],
     pr_number: int,
@@ -487,7 +565,12 @@ async def _filter_comments(
     trusted_commenters: str | list[str] = "*",
     plugin_prefix: str | None = None,
     replied_keys: set[str] | None = None,
+    signals: _SignalSnapshot | None = None,
 ) -> list[dict]:
+    signals = signals or _SignalSnapshot()
+    comments = [c for c in comments if _reply_key(c) not in signals.skip_keys]
+    # A rocket does not override trusted_commenters, and a signalled comment skips the replied/own-login rules.
+    signalled = _filter_by_trusted_commenters([s.comment for s in signals.due], pr_number, trusted_commenters)
     comments = _filter_by_trusted_commenters(comments, pr_number, trusted_commenters)
     thread_state = await _get_unresolved_comment_ids(host, repo, pr_number)
     comments = _filter_by_unresolved(comments, pr_number, thread_state)
@@ -501,7 +584,7 @@ async def _filter_comments(
     comments = _filter_already_replied(comments, pr_number, our_login, replied_keys)
     comments = selected + comments
     comments = _filter_by_plugin_prefix(comments, pr_number, plugin_prefix)
-    return comments
+    return comments + signalled
 
 
 async def _reply_observed(
@@ -570,6 +653,8 @@ async def _address_single_comment(
     opencode_dir: str | None = None,
     our_login: str | None = None,
     repo_slug: str | None = None,
+    handled_version: datetime | None = None,
+    rocket_at: datetime | None = None,
 ) -> tuple[str, bool]:
     """Run the backend for `comment`, then return the resulting HEAD sha (or `pre_sha`
     unchanged if HEAD didn't move / couldn't be read) so the caller can pass it as the
@@ -621,8 +706,14 @@ async def _address_single_comment(
         observed = await _check_reply_observed(comment, host, repo_ref, pr_number, our_login, since_iso)
     # Recorded only when the run was clean AND a commit or reply was seen, so a crashed
     # attempt or a silent skip is retried next pass instead of being suppressed forever.
+    # A signalled comment (handled_version given: the edit version snapshotted before the backend ran, so a
+    # later edit stays newer) advances its watermark and round count in one write instead of the permanent
+    # replied key, which would suppress every later round.
     if clean_run and (made_commit or observed) and repo_slug and ctype in _NON_THREADED_TYPES:
-        state.record_replied_comment(repo_slug, pr_number, _reply_key(comment))
+        if handled_version is not None and rocket_at is not None:
+            state.record_handled_comment(repo_slug, pr_number, _reply_key(comment), handled_version, rocket_at)
+        else:
+            state.record_replied_comment(repo_slug, pr_number, _reply_key(comment))
     return post_sha, rewritten
 
 
@@ -720,6 +811,18 @@ def _build_comment_instructions(template: str, comment: dict, pr_number: int, re
             *_fence_user_content(body, nonce),
         ]
     else:  # issue
+        if comment.get("rocket_signal"):
+            lines += [
+                "This comment is an automatically updated report (its author edits it in place as it re-runs). "
+                "The acting account reacted to it with a rocket to ask for its current findings to be addressed, "
+                "so it was selected programmatically and needs a real pass, not a judgment call. Skip Step 0 of "
+                "the instructions above entirely: go straight to Steps 1-4. Work through the findings in the "
+                "current body below, fix the ones that are valid, commit, and post the issue-comment reply from "
+                "Step 4 (the '> <COMMENT_URL>' quote, then your text). The reply must say which findings were "
+                "addressed and which were not and why. Do not reply with just an acknowledgment, and do not claim "
+                "a finding is fixed unless you actually made and committed the change.",
+                "",
+            ]
         lines += [
             f"Comment ID: {comment['id']}",
             f"Author: @{comment['author']}",
@@ -814,21 +917,162 @@ def _is_bot_comment(comment: Comment) -> bool:
     return comment.author is not None and (comment.author.is_bot or comment.author.login in _KNOWN_BOT_LOGINS)
 
 
-async def _check_human_issue_comments(host: CodeHost, repo: RepositoryRef, pr_number: int) -> bool:
-    """Return True if the PR has any non-bot issue comments."""
+async def _read_issue_comments(host: CodeHost, repo: RepositoryRef, pr_number: int) -> Sequence[Comment] | None:
+    """The PR-level comments, or None when the read failed. An unsupported capability stops."""
     try:
-        comments = await host.discussion.comments(repo, pr_number)
+        return await host.discussion.comments(repo, pr_number)
     except UnsupportedCapabilityError:
         raise
     except CodeHostError as e:
         logger.debug("PR #%d: reading the issue comments failed: %s", pr_number, e)
-        return False
+        return None
+
+
+def _count_human_comments(pr_number: int, comments: Sequence[Comment]) -> int:
     human_comments = [c for c in comments if not _is_bot_comment(c)]
     logger.debug("PR #%d: %d issue comment(s), %d from humans", pr_number, len(comments), len(human_comments))
-    return len(human_comments) > 0
+    return len(human_comments)
 
 
-async def _has_pending_feedback(host: CodeHost, repo: RepositoryRef, pr_number: int) -> bool:
+async def _check_human_issue_comments(host: CodeHost, repo: RepositoryRef, pr_number: int) -> bool:
+    """Return True if the PR has any non-bot issue comments."""
+    comments = await _read_issue_comments(host, repo, pr_number)
+    return comments is not None and _count_human_comments(pr_number, comments) > 0
+
+
+def _is_signal_candidate(comment: Comment, our_login: str | None) -> bool:
+    """Comments whose rocket is worth reading: bot comments, and ones by our own login (which the ordinary
+    path always drops). Human comments keep today's rules and cost no reactions call."""
+    return _is_bot_comment(comment) or (comment.author is not None and comment.author.login == our_login)
+
+
+async def _our_rocket_at(
+    host: CodeHost, repo: RepositoryRef, pr_number: int, comment: Comment, our_login: str
+) -> datetime | None:
+    """Creation time of the newest rocket from `our_login` on `comment`, or None. A host without the reactions
+    read degrades to no reactions (policy of `Site.ADDRESS_COMMENTS_REACTIONS`); any other failure is logged and
+    also gives None, so the comment is dropped (fail closed). Read in every run, never cached."""
+
+    def warn(error: CodeHostError) -> None:
+        logger.warning("PR #%d comment %s: reading its reactions failed, skipping it: %s", pr_number, comment.id, error)
+
+    reactions = await call_or(
+        Site.ADDRESS_COMMENTS_REACTIONS,
+        "Discussion.comment_reactions",
+        lambda: host.discussion.comment_reactions(repo, comment.id),
+        [],
+        on_error=warn,
+    )
+    times = [
+        r.created_at
+        for r in reactions
+        if r.content == "rocket" and r.reactor is not None and r.reactor.login == our_login
+    ]
+    return max(times, default=None)
+
+
+@dataclass(frozen=True)
+class _SignalVerdict:
+    """What the signal path decided for one candidate: `owned` (its rocket is ours, so the ordinary path must
+    leave it alone) and `due` (to address now)."""
+
+    owned: bool = False
+    due: _SignalledComment | None = None
+
+
+async def _evaluate_signal(
+    host: CodeHost,
+    repo: RepositoryRef,
+    pr_number: int,
+    comment: Comment,
+    our_login: str,
+    repo_slug: str | None,
+    trusted_commenters: str | list[str] = "*",
+) -> _SignalVerdict:
+    key = _issue_comment_key(comment.id)
+    watermark = state.get_comment_watermark(repo_slug, pr_number, key) if repo_slug else None
+    # A watermark means the signal path handled this comment before: the ordinary path must not pick it up
+    # (it carries no replied key), whether or not the rocket is still there.
+    owned = watermark is not None
+    # Reactions are read only for a comment newer than its handled version. An unknown edit time (None) with no
+    # watermark is read too, so a signalled one can be reported below; with a watermark it is never newer.
+    if watermark is not None and not watermark.is_stale(comment.updated_at):
+        return _SignalVerdict(owned=owned)
+    # A rocket does not override trusted_commenters. Checked before the reactions read and before anything is
+    # marked due, so a blocked comment is neither pending nor due and the gate cannot fire on it every poll.
+    author = comment.author.login if comment.author else ""
+    if not _filter_by_trusted_commenters([{"author": author}], pr_number, trusted_commenters):
+        logger.debug(
+            "PR #%d comment %s: author %r is not a trusted commenter, ignoring signal", pr_number, comment.id, author
+        )
+        return _SignalVerdict(owned=owned)
+    rocket_at = await _our_rocket_at(host, repo, pr_number, comment, our_login)
+    if rocket_at is None:
+        return _SignalVerdict(owned=owned)
+    if comment.updated_at is None:
+        logger.warning(
+            "PR #%d comment %s: signalled but the host reports no edit time, skipping it", pr_number, comment.id
+        )
+        return _SignalVerdict(owned=True)
+    script_id = f"issue-comment-{comment.id}"
+    if _round_cap_reached(watermark, rocket_at, pr_number, script_id):
+        return _SignalVerdict(owned=True)
+    dict_comment = {
+        "type": "issue",
+        "id": script_id,
+        "author": comment.author.login if comment.author else "",
+        "body": comment.body,
+        "url": comment.url or "",
+        "rocket_signal": True,
+    }
+    return _SignalVerdict(owned=True, due=_SignalledComment(dict_comment, comment.updated_at, rocket_at))
+
+
+async def _signal_snapshot(
+    host: CodeHost,
+    repo: RepositoryRef,
+    pr_number: int,
+    our_login: str | None,
+    repo_slug: str | None,
+    trusted_commenters: str | list[str] = "*",
+    comments: Sequence[Comment] | None = None,
+) -> _SignalSnapshot:
+    """Read the PR's comments (unless the caller already has them) and reactions once and decide which signalled comments are due. Empty (and no
+    reactions call) when our login or the repo slug is unknown (without a slug no watermark or round count can
+    be recorded, so the round cap would never trip) or no candidate comment is newer than its handled version."""
+    if not our_login or not repo_slug:
+        return _SignalSnapshot()
+    if comments is None:
+        comments = await _read_issue_comments(host, repo, pr_number)
+    if not comments:
+        return _SignalSnapshot()
+    candidates = [c for c in comments if _is_signal_candidate(c, our_login)]
+    # The reactions reads are independent, so they run concurrently.
+    verdicts = await asyncio.gather(
+        *(_evaluate_signal(host, repo, pr_number, c, our_login, repo_slug, trusted_commenters) for c in candidates)
+    )
+    due: list[_SignalledComment] = []
+    skip: set[str] = set()
+    for comment, verdict in zip(candidates, verdicts, strict=True):
+        if verdict.owned:
+            skip.add(_issue_comment_key(comment.id))
+        if verdict.due:
+            due.append(verdict.due)
+    return _SignalSnapshot(tuple(due), frozenset(skip))
+
+
+async def _has_pending_feedback(
+    host: CodeHost,
+    repo: RepositoryRef,
+    pr_number: int,
+    our_login: str | None = None,
+    repo_slug: str | None = None,
+    trusted_commenters: str | list[str] = "*",
+    signal_snapshots: dict[int, _SignalSnapshot] | None = None,
+) -> bool:
+    """Whether the PR has anything to address. When the PR is pending only through a signalled comment, the
+    snapshot that decided it is left in `signal_snapshots` for the selection step to reuse. Always False for the
+    signal path without a repo slug: it cannot record state, so it stays disabled."""
     total_threads, total_unresolved, gql_ok = await _count_threads(host, repo, pr_number)
 
     if gql_ok:
@@ -836,4 +1080,14 @@ async def _has_pending_feedback(host: CodeHost, repo: RepositoryRef, pr_number: 
         if total_unresolved:
             return True
 
-    return await _check_human_issue_comments(host, repo, pr_number)
+    comments = await _read_issue_comments(host, repo, pr_number)
+    if comments is None:
+        return False
+    if _count_human_comments(pr_number, comments) > 0:
+        return True
+    snapshot = await _signal_snapshot(host, repo, pr_number, our_login, repo_slug, trusted_commenters, comments)
+    if not snapshot.due:
+        return False
+    if signal_snapshots is not None:
+        signal_snapshots[pr_number] = snapshot
+    return True

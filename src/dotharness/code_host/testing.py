@@ -41,6 +41,7 @@ from dotharness.code_host.models import (
     Credential,
     InlineComment,
     Job,
+    Reaction,
     RepositoryRef,
     Review,
     ReviewPostResult,
@@ -363,6 +364,7 @@ class InMemoryCodeHost:
         self._commits: _PerChangeRequest[CommitInfo] = {}
         self._reviews: _PerChangeRequest[Review] = {}
         self._comments: _PerChangeRequest[Comment] = {}
+        self._reactions: dict[tuple[RepositoryRef, str], list[Reaction]] = {}
         self._threads: _PerChangeRequest[ReviewThread] = {}
         self._checks: _PerChangeRequest[Check] = {}
         self._required: set[tuple[RepositoryRef, int, str]] = set()
@@ -613,13 +615,45 @@ class InMemoryCodeHost:
         self._version += 1
         return review
 
-    def add_comment(self, repo: RepositoryRef, number: int, *, author: str, body: str) -> Comment:
-        """Append a change-request-level comment."""
+    def add_comment(
+        self, repo: RepositoryRef, number: int, *, author: str, body: str, updated_at: datetime | None = None
+    ) -> Comment:
+        """Append a change-request-level comment. ``updated_at`` is its edit time (None: the host reports none)."""
         self._require_change_request(repo, number)
-        comment = self._new_comment(repo, number, User(author), body)
+        comment = replace(self._new_comment(repo, number, User(author), body), updated_at=updated_at)
         self._comments.setdefault(repo, {}).setdefault(number, []).append(comment)
         self._version += 1
         return comment
+
+    def edit_comment(
+        self, repo: RepositoryRef, number: int, comment_id: str, *, body: str | None = None, updated_at: datetime
+    ) -> Comment:
+        """Record an edit of a change-request-level comment: new ``updated_at`` and, when given, a new body."""
+        comments = self._comments.get(repo, {}).get(number, [])
+        index = next((i for i, c in enumerate(comments) if c.id == comment_id), None)
+        if index is None:
+            msg = f"comment {comment_id!r} not found"
+            raise CodeHostError(msg)
+        comments[index] = replace(
+            comments[index], body=comments[index].body if body is None else body, updated_at=updated_at
+        )
+        self._version += 1
+        return comments[index]
+
+    def add_reaction(
+        self,
+        repo: RepositoryRef,
+        comment_id: str,
+        *,
+        user: str,
+        content: str = "rocket",
+        created_at: datetime | None = None,
+    ) -> Reaction:
+        """Add a reaction to a change-request-level comment. ``content`` is stored as given (use ``rocket``)."""
+        reaction = Reaction(User(user), content, created_at if created_at is not None else self._tick())
+        self._reactions.setdefault((repo, comment_id), []).append(reaction)
+        self._version += 1
+        return reaction
 
     def _new_comment(self, repo: RepositoryRef, number: int, author: User, body: str) -> Comment:
         comment_id = self._next_id()
@@ -1225,6 +1259,14 @@ class _FakeDiscussion(_Facet):
             return list(self._host._comments.get(repo, {}).get(number, []))
 
         return self._do("Discussion.comments", action, repo, number)
+
+    async def comment_reactions(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, comment_id: str
+    ) -> Sequence[Reaction]:
+        def action() -> list[Reaction]:
+            return list(self._host._reactions.get((repo, comment_id), []))
+
+        return self._do("Discussion.comment_reactions", action, repo, comment_id)
 
     async def review_threads(  # NOSONAR python:S7503 - implements an async protocol
         self, repo: RepositoryRef, number: int
@@ -2099,7 +2141,7 @@ class CodeHostConformance:
         n = cr.number
         seeder.add_commit(repo, n, revision="rev-ops", message="a commit", authors=["ann"])
         seeder.add_review(repo, n, author="bob", state=ReviewState.COMMENTED, revision="rev-ops")
-        seeder.add_comment(repo, n, author="bob", body="a comment")
+        comment = seeder.add_comment(repo, n, author="bob", body="a comment")
         thread = seeder.add_thread(
             repo, n, anchor=Anchor("src/a.py", 1, "RIGHT"), comments=[_comment("2001", "bob", "t")]
         )
@@ -2122,6 +2164,7 @@ class CodeHostConformance:
             "ChangeRequests.approve": (True, lambda: crs.approve(repo, n, head_revision="rev-ops")),
             "ChangeRequests.mark_viewed": (True, lambda: crs.mark_viewed(repo, n, "src/a.py")),
             "Discussion.comments": (False, lambda: discussion.comments(repo, n)),
+            "Discussion.comment_reactions": (False, lambda: discussion.comment_reactions(repo, comment.id)),
             "Discussion.review_threads": (False, lambda: discussion.review_threads(repo, n)),
             "Discussion.post_comment": (True, lambda: discussion.post_comment(repo, n, "new")),
             "Discussion.reply": (True, lambda: discussion.reply(repo, n, thread.id, "new")),
@@ -2154,6 +2197,7 @@ class CodeHostConformance:
         if self._declares(target, Capability.DISCUSSION):
             assert list(await host.discussion.comments(repo, n)) == []
             assert list(await host.discussion.review_threads(repo, n)) == []
+            assert list(await host.discussion.comment_reactions(repo, "no-such-comment")) == []
         if self._declares(target, Capability.CHECKS):
             assert list(await host.checks.list_checks(repo, n)) == []
             assert list(await host.checks.list_workflows(repo)) == []
