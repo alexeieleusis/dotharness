@@ -91,18 +91,10 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> list[int]:
     host, repo, env = scaffold.host, scaffold.repo, scaffold.env
     current_user = await host_current_user(host)
 
-    if pr_url:
-        change_request = await pr_from_url(host, repo, pr_url)
-        prs = [] if change_request is None else [change_request]
-    else:
-        prs = [p for p in await _get_prs(host, repo, current_user) if p.head_reference]
+    prs = await _select_prs(host, repo, current_user, pr_url)
 
     knowledge_dir = Path(config.harness.knowledge_dir) / "pr-review"
-    extra_knowledge = (
-        config.harness.review_knowledge_file.read_text(encoding="utf-8")
-        if config.harness.review_knowledge_file and config.harness.review_knowledge_file.exists()
-        else None
-    )
+    extra_knowledge = _read_extra_knowledge(config)
     backend = Backend(
         config.harness.backend,
         config.harness.backend_timeout_seconds,
@@ -114,18 +106,8 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> list[int]:
 
     for pr in prs:
         pr_number = pr.number
-        files_summary_done = await _should_skip_pr(pr, host, repo, current_user)
-        design_done = await has_design_review_comment(host, repo, pr_number, current_user)
-        traceability_done = await has_traceability_review_comment(host, repo, pr_number, current_user)
-        # The regret pass is the only config-gated PR-level pass here (off by default);
-        # when disabled, regret_done is True so the gate below and the call in
-        # _process_pr are both unchanged, and no extra marker check runs.
-        regret_done = (
-            await has_regret_review_comment(host, repo, pr_number, current_user)
-            if config.regret_review.enabled
-            else True
-        )
-        if files_summary_done and design_done and traceability_done and regret_done:
+        files_summary_done, pr_level_done = await _passes_done(pr, config, host, repo, current_user)
+        if files_summary_done and pr_level_done.all_done:
             # The correctness pipeline and all (independently tracked) PR-level passes
             # already succeeded for this PR revision — nothing left to do.
             continue
@@ -142,7 +124,7 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> list[int]:
                 env,
                 current_user,
                 not files_summary_done,
-                PrLevelPassesDone(design=design_done, traceability=traceability_done, regret=regret_done),
+                pr_level_done,
             )
         except FatalGitError as exc:
             failed.append(pr_number)
@@ -210,6 +192,43 @@ class PrLevelPassesDone:
     design: bool
     traceability: bool
     regret: bool
+
+    @property
+    def all_done(self) -> bool:
+        return self.design and self.traceability and self.regret
+
+
+async def _select_prs(
+    host: CodeHost, repo: RepositoryRef, current_user: str, pr_url: str | None
+) -> list[ChangeRequest]:
+    if pr_url:
+        change_request = await pr_from_url(host, repo, pr_url)
+        return [] if change_request is None else [change_request]
+    return [p for p in await _get_prs(host, repo, current_user) if p.head_reference]
+
+
+def _read_extra_knowledge(config: HarnessConfig) -> str | None:
+    knowledge_file = config.harness.review_knowledge_file
+    if knowledge_file and knowledge_file.exists():
+        return knowledge_file.read_text(encoding="utf-8")
+    return None
+
+
+async def _passes_done(
+    pr: ChangeRequest, config: HarnessConfig, host: CodeHost, repo: RepositoryRef, current_user: str
+) -> tuple[bool, PrLevelPassesDone]:
+    """Whether the files/summary pass is done, and which PR-level passes already posted their marker."""
+    pr_number = pr.number
+    files_summary_done = await _should_skip_pr(pr, host, repo, current_user)
+    design_done = await has_design_review_comment(host, repo, pr_number, current_user)
+    traceability_done = await has_traceability_review_comment(host, repo, pr_number, current_user)
+    # The regret pass is the only config-gated PR-level pass here (off by default);
+    # when disabled, regret_done is True so the gate and the call in _process_pr are
+    # both unchanged, and no extra marker check runs.
+    regret_done = (
+        await has_regret_review_comment(host, repo, pr_number, current_user) if config.regret_review.enabled else True
+    )
+    return files_summary_done, PrLevelPassesDone(design=design_done, traceability=traceability_done, regret=regret_done)
 
 
 async def _process_pr(
