@@ -11,9 +11,13 @@ from dotharness.pr_review.runners import prune_projects
 from dotharness.pr_review.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
+    IdentifiedGitFailure,
     env_file_args,
     env_file_error,
+    failure_summary,
     get_changed_files,
+    git_clean_if_dirty,
+    git_clean_working_dir,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
@@ -24,7 +28,9 @@ from dotharness.pr_review.runners.common import (
     open_host,
     pr_from_url,
     preserve_reviewer_request,
+    reraise_git_failure_if_clean,
     run_cmd,
+    skipped_prs_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,9 +45,21 @@ class BaseAnalysisError(RuntimeError):
         super().__init__(f"git {cmd_name} {reason}")
 
 
+class PrGitFailureError(RuntimeError):
+    """The cycle skipped at least one PR because of a git failure (exit status 1)."""
+
+    def __init__(self, failed: list[int]) -> None:
+        super().__init__(skipped_prs_message("review-prs", failed))
+        self.failed = failed
+
+
 async def run(config: HarnessConfig, pr_url: str | None = None) -> None:
     with acquire_lock(config.lock_key):
-        await _run_locked(config, pr_url)
+        failed = await _run_locked(config, pr_url)
+    if failed:
+        # Raised after the lock is released so the cycle's exit status is non-zero (never 0)
+        # even when later PRs succeeded.
+        raise PrGitFailureError(failed)
 
 
 async def _discover_prs(
@@ -75,14 +93,15 @@ def _already_reviewed(reviewed_shas: dict, pr: ChangeRequest, min_interval_secon
     return False
 
 
-async def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
+async def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> list[int]:
+    """Process the PRs; return the numbers of PRs skipped because of a git failure."""
     if not config.vibe_heal.enabled:
         logger.info("vibe_heal disabled, skipping")
-        return
+        return []
 
     if not config.repo.subdirs:
         logger.error("vibe_heal enabled but repo.subdirs is empty; add a [[repo.subdir]] entry to .harness.toml")
-        return
+        return []
 
     scaffold = await open_host(config)
     host, repo, env = scaffold.host, scaffold.repo, scaffold.env
@@ -91,7 +110,7 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
 
     if not await _run_base_analysis(config, env):
         logger.warning("Base analysis failed; skipping PR review for this run")
-        return
+        return []
 
     current_user = await host_current_user(host)
 
@@ -102,7 +121,7 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
     else:
         if candidates is None:
             logger.warning("Failed to fetch open PRs; skipping this cycle without touching reviewed_shas")
-            return
+            return []
 
         # Authoritative "still open" set for this batch — prune closed/merged PRs out of
         # reviewed_shas even on a cycle that finds nothing new to process, so stale entries
@@ -114,23 +133,46 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> None:
         to_process = [pr for pr in candidates if not _already_reviewed(reviewed_shas, pr, min_interval_seconds, now)]
 
     if not to_process:
-        return
+        return []
 
     wdir = str(config.repo.working_dir)
     original_sha = await git_detach_and_record(wdir, env)
 
+    return await _process_pr_loop(to_process, pr_url, config, host, repo, env, current_user, wdir, original_sha)
+
+
+async def _process_pr_loop(
+    to_process: list[ChangeRequest],
+    pr_url: str | None,
+    config: HarnessConfig,
+    host: CodeHost,
+    repo: RepositoryRef,
+    env: dict,
+    current_user: str,
+    wdir: str,
+    original_sha: str,
+) -> list[int]:
+    """Process each PR; return the numbers of PRs skipped because of a git failure."""
+    failed: list[int] = []
     # Each PR's success is recorded the moment it happens (via record_reviewed_sha below),
     # independent of every other PR in this batch — so one perpetually-failing PR (e.g. a
     # vibe_heal review that hangs) never withholds credit from PRs that already succeeded.
-    # A FatalGitError still breaks the loop immediately; PRs processed before it keep their
-    # credit regardless.
+    # A PR skipped for a git failure gets no credit (it is retried next run). The loop continues
+    # after an identified failure (cleanup succeeded and the tree probes clean) and stops
+    # otherwise; PRs processed before it keep their credit regardless.
     for pr in to_process:
-        success, fatal = await _process_pr_safely(pr, config, host, repo, env, current_user, wdir, original_sha)
-        if fatal:
-            break
+        try:
+            success = await _process_pr_safely(pr, config, host, repo, env, current_user, wdir, original_sha)
+        except FatalGitError as exc:
+            failed.append(pr.number)
+            logger.error("PR #%d skipped: git failure: %s", pr.number, failure_summary(exc), exc_info=True)
+            if not isinstance(exc, IdentifiedGitFailure):
+                break
+            continue
 
         if pr_url is None and success:
             state.record_reviewed_sha(config.repo_slug, pr.number, pr.head_revision, time.time())
+    return failed
 
 
 async def _process_pr_safely(
@@ -142,21 +184,23 @@ async def _process_pr_safely(
     current_user: str,
     wdir: str,
     original_sha: str,
-) -> tuple[bool, bool]:
-    """Run _process_pr for one PR, always restoring HEAD afterward. Returns (success, fatal)."""
+) -> bool:
+    """Run _process_pr for one PR, always restoring HEAD afterward.
+
+    A git failure is cleaned up and re-raised as :class:`IdentifiedGitFailure` (loop may continue)
+    or the original ``FatalGitError`` (loop must stop), like the other runners.
+    """
     logger.info("PR #%d: starting", pr.number)
     success = False
-    fatal = False
     try:
         success = await _process_pr(pr, config, host, repo, env, current_user, wdir)
-    except FatalGitError:
-        logger.exception("PR #%d: fatal git error", pr.number)
-        fatal = True
+    except FatalGitError as exc:
+        await reraise_git_failure_if_clean(exc, wdir, env, original_sha)
     except Exception:
         logger.exception("PR #%d: error", pr.number)
     finally:
         await git_restore(original_sha, pr.head_reference, wdir, env)
-    return success, fatal
+    return success
 
 
 async def _process_pr(
@@ -305,9 +349,12 @@ async def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:
     regardless of outcome. Raises BaseAnalysisError on a git timeout or non-zero exit."""
     wdir = str(config.repo.working_dir)
 
-    await _run_base_git("fetch", ["git", "fetch", "--recurse-submodules", "origin", "main"], wdir, env)
-
-    result = await _run_base_git("rev-parse", ["git", "rev-parse", "origin/main"], wdir, env)
+    try:
+        await _run_base_git("fetch", ["git", "fetch", "--recurse-submodules", "origin", "main"], wdir, env)
+        result = await _run_base_git("rev-parse", ["git", "rev-parse", "origin/main"], wdir, env)
+    except BaseAnalysisError:
+        await git_clean_working_dir(wdir, env)
+        raise
     main_sha = result.stdout.decode("utf-8").strip()
 
     vh_state = state.read_vibe_heal_state(config.repo_slug)
@@ -319,6 +366,7 @@ async def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:
     try:
         original_sha = await git_detach_and_record(wdir, env)
 
+        await git_clean_if_dirty(wdir, env)
         await _run_base_git("checkout", ["git", "checkout", "--recurse-submodules", "--detach", main_sha], wdir, env)
 
         success = True
@@ -328,6 +376,9 @@ async def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:
                 break
         if success:
             state.write_vibe_heal_state(config.repo_slug, last_main_sha=main_sha)
+    except BaseAnalysisError:
+        await git_clean_working_dir(wdir, env, original_sha)
+        raise
     except FatalGitError:
         logger.exception("Base analysis: fatal git error")
         return False

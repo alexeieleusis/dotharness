@@ -64,10 +64,13 @@ from dotharness.pr_review.runners.common import (
     Site,
     call_with_policy,
     get_head_sha,
+    git_clean_if_dirty,
     git_detach_and_record,
     git_restore,
     host_current_user,
     open_host,
+    record_git_failure,
+    reraise_git_failure_if_clean,
     run_cmd,
 )
 
@@ -107,9 +110,8 @@ async def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
         try:
             await _process_pr(pr, config, wdir, env, host, repo, current_user, dry_run)
         except FatalGitError as e:
-            logger.exception("PR #%d: fatal git error", pr_number)
-            failures.append(f"#{pr_number}: {e}")
-            break
+            if not record_git_failure(pr_number, e, failures):
+                break
         except Exception as e:
             logger.exception("PR #%d: error", pr_number)
             failures.append(f"#{pr_number}: {e}")
@@ -172,7 +174,10 @@ async def _process_pr(
     logger.info("PR #%d: starting%s", pr_number, " (dry-run)" if dry_run else "")
     original_sha = await git_detach_and_record(wdir, env)
     try:
-        checked_out_sha = await _checkout_pr_head(pr_number, wdir, env)
+        try:
+            checked_out_sha = await _checkout_pr_head(pr_number, wdir, env)
+        except FatalGitError as exc:
+            await reraise_git_failure_if_clean(exc, wdir, env, original_sha)
         size = await evaluate_size(pr.base_reference, wdir, env, config.auto_approve)
         await _decide_and_act(pr, size, checked_out_sha, config, host, repo, current_user, dry_run)
     finally:
@@ -188,6 +193,7 @@ async def _checkout_pr_head(pr_number: int, wdir: str, env: dict) -> str:
     """
     try:
         await run_cmd(["git", "fetch", "origin", f"refs/pull/{pr_number}/head"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
+        await git_clean_if_dirty(wdir, env)
         await run_cmd(
             ["git", "checkout", "--recurse-submodules", "--detach", "FETCH_HEAD"],
             cwd=wdir,

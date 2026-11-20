@@ -106,8 +106,13 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
      **only if every subdir it was processed in succeeded**. This write happens immediately, right after
      this PR finishes, and does not depend on how any other PR in this batch turns out. A PR that fails (or
      partially fails across subdirs) is retried against the same head SHA on the next run.
-   - A `FatalGitError` aborts processing of all remaining PRs in this run. Any other exception is logged
-     and processing continues to the next PR.
+   - A git failure while processing a PR (a `FatalGitError`, for example a checkout timeout) skips that PR
+     (no `reviewed_shas` credit, so it is retried next run) and is logged at ERROR as
+     `PR #N skipped: git failure: <first line of git's stderr>`. The working directory is then cleaned and
+     probed with `git status --porcelain`. If the cleanup succeeded and the tree is clean, the failure is
+     identified and processing continues with the next PR; otherwise the cycle stops. Either way, a cycle
+     that skipped at least one PR for a git failure ends with exit code 1, even if later PRs succeeded.
+     Any other exception is logged and processing continues to the next PR.
    - After each PR (success, failure, or exception), the working directory is restored to the SHA recorded
      in step 7.
 

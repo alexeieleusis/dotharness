@@ -1,9 +1,10 @@
 import contextlib
 import logging
+import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -21,6 +22,7 @@ from dotharness.code_host.testing import SECRET, InMemoryCodeHost
 from dotharness.pr_review.config import CiFixConfig, HarnessConfig, HarnessSection, RepoConfig
 from dotharness.pr_review.runners import ci_fix
 from dotharness.pr_review.runners.ci_fix import DIGEST_PREFIX, CiFixError, _Step
+from dotharness.pr_review.runners.common import FatalGitError
 
 P = "dotharness.pr_review.runners.ci_fix."
 SLUG = "acme-frontend"
@@ -160,6 +162,8 @@ def _mocks(
         patch(P + "git_detach_and_record", return_value="orig"),
         patch(P + "git_fetch_and_checkout") as checkout,
         patch(P + "git_restore") as restore,
+        patch("dotharness.pr_review.runners.common.git_clean_working_dir", return_value=True) as clean,
+        patch("dotharness.pr_review.runners.common.git_is_dirty", return_value=False) as dirty,
         patch(P + "_run_step", side_effect=step_results) as run_step,
         patch(P + "run_cmd", side_effect=fake_run_cmd),
         patch(P + "Backend", return_value=backend) as backend_cls,
@@ -168,6 +172,8 @@ def _mocks(
             host=host,
             checkout=checkout,
             restore=restore,
+            clean=clean,
+            dirty=dirty,
             run_step=run_step,
             pushes=pushes,
             cmds=cmds,
@@ -469,6 +475,77 @@ async def test_step_is_looked_up_after_checkout_of_the_pr_branch(tmp_path, caplo
     assert m.pushes == []
     m.restore.assert_called_once()
     assert any("parse-failure" in d for d in _digests(caplog))
+
+
+async def test_checkout_failure_cleans_working_dir_with_original_sha(tmp_path):
+    with _mocks(tmp_path) as m:
+        m.checkout.side_effect = FatalGitError("checkout failed")
+        with pytest.raises(Exception, match="checkout failed"):
+            await ci_fix.run(_cfg(tmp_path))
+    m.clean.assert_called_once_with(str(tmp_path), ANY, "orig")
+    m.restore.assert_called_once()
+
+
+def _checkout_fails_on(*branches):
+    async def checkout(branch, wdir, env):
+        if branch in branches:
+            raise FatalGitError(f"checkout of {branch} failed")  # noqa: TRY003
+
+    return checkout
+
+
+def _three_prs():
+    return [_pr(number=n, branch=f"b{n}") for n in (1, 2, 3)]
+
+
+async def test_identified_git_failure_skips_pr_continues_and_raises(tmp_path, caplog):
+    with _mocks(tmp_path, prs=_three_prs()) as m, caplog.at_level(logging.INFO):
+        m.checkout.side_effect = _checkout_fails_on("b2")
+        m.run_step.side_effect = [_proc(1, b"boom"), _proc(0), _proc(1, b"boom"), _proc(0)]
+        with pytest.raises(CiFixError) as exc:
+            await ci_fix.run(_cfg(tmp_path))
+    assert "#2" in str(exc.value)
+    assert "#1" not in str(exc.value)
+    assert "#3" not in str(exc.value)
+    assert [c.args[0] for c in m.checkout.call_args_list] == ["b1", "b2", "b3"]
+    assert m.restore.call_count == 3
+    assert m.run_step.call_count == 4  # PR 1 and PR 3 were processed
+    assert len(m.pushes) == 2
+    messages = [
+        r.getMessage() for r in caplog.records if r.levelno == logging.ERROR and "skipped: git" in r.getMessage()
+    ]
+    assert messages == ["PR #2 skipped: git failure: checkout of b2 failed"]
+
+
+@pytest.mark.parametrize(("cleaned", "probe"), [(False, False), (True, True), (True, None)])
+async def test_unidentified_git_failure_stops_loop(tmp_path, cleaned, probe):
+    with _mocks(tmp_path, prs=_three_prs()) as m:
+        m.checkout.side_effect = _checkout_fails_on("b2")
+        m.clean.return_value = cleaned
+        m.dirty.return_value = probe
+        with pytest.raises(CiFixError) as exc:
+            await ci_fix.run(_cfg(tmp_path))
+    assert "#2" in str(exc.value)
+    assert [c.args[0] for c in m.checkout.call_args_list] == ["b1", "b2"]
+
+
+async def test_skip_log_uses_first_stderr_line(tmp_path, caplog):
+    err = subprocess.CalledProcessError(1, ["git", "checkout"], stderr=b"fatal: bad object\nsecond line\n")
+    failure = FatalGitError("checkout failed")
+    failure.__cause__ = err
+    with _mocks(tmp_path) as m, caplog.at_level(logging.ERROR):
+        m.checkout.side_effect = failure
+        with pytest.raises(CiFixError):
+            await ci_fix.run(_cfg(tmp_path))
+    messages = [r.getMessage() for r in caplog.records if "skipped: git failure" in r.getMessage()]
+    assert messages == ["PR #1 skipped: git failure: fatal: bad object"]
+
+
+async def test_successful_checkout_does_not_clean(tmp_path):
+    with _mocks(tmp_path) as m:
+        await ci_fix.run(_cfg(tmp_path))
+    m.checkout.assert_called_once()
+    m.clean.assert_not_called()
 
 
 async def test_ac9_restore_runs_when_exception_mid_run(tmp_path):

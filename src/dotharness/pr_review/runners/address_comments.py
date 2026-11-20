@@ -23,6 +23,7 @@ from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
     FOCUSED_REVIEW_MARKER,
     TIMEOUT_GIT,
+    FatalGitError,
     Site,
     backend_env,
     call_or,
@@ -30,6 +31,7 @@ from dotharness.pr_review.runners.common import (
     fetch_review_threads,
     find_last_reply_if_marked,
     get_head_sha,
+    git_clean_working_dir,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
@@ -220,7 +222,11 @@ async def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -
 
 
 async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) -> None:
-    await git_fetch_and_checkout(branch, ctx.wdir, ctx.env)
+    try:
+        await git_fetch_and_checkout(branch, ctx.wdir, ctx.env)
+    except FatalGitError:
+        await git_clean_working_dir(ctx.wdir, ctx.env)
+        raise
     comments = await fetch_pr_comments(number, ctx.script_path, ctx.wdir, ctx.env)
     # Read once per PR, before the loop: each signalled comment's edit version is the one handled below, so an
     # edit landing during the run stays newer than the stored watermark and is addressed next run.

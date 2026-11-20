@@ -1593,3 +1593,18 @@ async def test_does_not_re_request_review_if_not_previously_requested(tmp_xdg, t
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
         await self_review._run_locked(cfg)
     mock_add_reviewer.assert_not_called()
+
+
+async def test_gather_pr_context_checkout_failure_cleans_working_dir_without_sha():
+    from dotharness.pr_review.runners.common import FatalGitError
+
+    mod = "dotharness.pr_review.runners.self_review"
+    with (
+        patch(f"{mod}.git_fetch_and_checkout", side_effect=FatalGitError("boom")),
+        patch(f"{mod}.git_clean_working_dir") as clean,
+        pytest.raises(FatalGitError),
+    ):
+        await self_review._gather_pr_context(
+            make_change_request(1, head_reference="b"), 1, None, MagicMock(), REPO, "w", {}
+        )
+    clean.assert_called_once_with("w", {})

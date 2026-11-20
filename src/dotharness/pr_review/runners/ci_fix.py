@@ -63,7 +63,9 @@ from dotharness.pr_review.runners.common import (
     git_restore,
     host_current_user,
     open_host,
+    record_git_failure,
     repo_identity_check,
+    reraise_git_failure_if_clean,
     run_cmd,
 )
 from dotharness.pr_review.state import _state_path, _update_state
@@ -132,7 +134,7 @@ async def _process_prs(
     prompt: str,
     dry_run: bool,
 ) -> list[str]:
-    """Process each in-scope PR; returns one failure message per PR that errored (stops at a fatal git error)."""
+    """Process each in-scope PR; returns one failure message per PR that errored (stops at a git error whose cleanup did not leave a clean tree)."""
     failures: list[str] = []
     wdir = str(config.repo.working_dir)
     for pr in prs:
@@ -144,9 +146,8 @@ async def _process_prs(
         except UnsupportedCapabilityError:
             raise
         except FatalGitError as e:
-            logger.exception("PR #%d: fatal git error", number)
-            failures.append(f"#{number}: {e}")
-            break
+            if not record_git_failure(number, e, failures):
+                break
         except Exception as e:
             logger.exception("PR #%d: error", number)
             failures.append(f"#{number}: {e}")
@@ -587,7 +588,10 @@ async def _fix_check(
 
     original_sha = await git_detach_and_record(wdir, env)
     try:
-        await git_fetch_and_checkout(branch, wdir, env)
+        try:
+            await git_fetch_and_checkout(branch, wdir, env)
+        except FatalGitError as exc:
+            await reraise_git_failure_if_clean(exc, wdir, env, original_sha)
         # Look the step up only now: the failing run's step name comes from the PR head's workflows.
         step = find_step_command(wdir, step_name, check.workflow_name or "")
         if step is None:

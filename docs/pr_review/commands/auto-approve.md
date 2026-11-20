@@ -100,7 +100,13 @@ file. Files already marked viewed are skipped, and a PR that the account has alr
 
 The command logs a `gh` failure (a read of the PR list, the timing gate, the safety checks or the viewed states, or a failed approval or mark-viewed write) as an error, with `gh`'s stderr for the approval. It does not fail the run. A failed read means no writes for that PR. Every PR is checked again on the next run.
 
-If a git error or an unexpected exception occurs, the command logs it, keeps
-going with the other PRs (a git error stops the loop), and exits non-zero at
-the end with the list of failures. In
+If a git error or an unexpected exception occurs, the command logs it and
+keeps going with the other PRs. A git failure while checking out a PR (for
+example a timeout) skips that PR and is logged at ERROR as
+`PR #N skipped: git failure: <first line of git's stderr>`. The working
+directory is then cleaned and probed with `git status --porcelain`. If the
+cleanup succeeded and the tree is clean, the failure is identified and the
+command continues with the next PR. Otherwise the loop stops. Either way, a
+cycle that skipped a PR for a git failure never exits 0: it exits non-zero at
+the end, and the aggregate error lists the skipped PR numbers. In
 `pr_review run all` this makes `all` exit non-zero.

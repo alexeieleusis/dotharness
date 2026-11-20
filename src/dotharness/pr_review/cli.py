@@ -232,7 +232,7 @@ def run_review_prs(
     cfg = load_config(ctx.obj["config_path"])
     try:
         asyncio.run(review_prs.run(cfg, pr_url=pr_url))
-    except review_prs.BaseAnalysisError as exc:
+    except (review_prs.BaseAnalysisError, review_prs.PrGitFailureError) as exc:
         logging.getLogger(__name__).error(RUNNER_FAILED_MSG, "review_prs", exc)  # noqa: TRY400
         sys.exit(1)
 
@@ -408,7 +408,7 @@ def run_all(ctx: typer.Context) -> None:
         for name, fn in runners:
             try:
                 await fn()
-            except review_prs.BaseAnalysisError as exc:
+            except (review_prs.BaseAnalysisError, review_prs.PrGitFailureError) as exc:
                 log.error(RUNNER_FAILED_MSG, name, exc)  # noqa: TRY400
                 failed.append(name)
             except Exception as exc:

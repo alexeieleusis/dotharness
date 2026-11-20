@@ -1750,3 +1750,29 @@ async def test_gate_hands_its_snapshot_to_selection_so_reactions_are_read_once(t
         )
     assert spy.await_count == 1
     assert [s.comment["id"] for s in snapshots[1].due] == [f"issue-comment-{comment.id}"]
+
+
+async def test_checkout_failure_cleans_working_dir_without_sha_and_reraises():
+    from dotharness.pr_review.runners.common import FatalGitError
+
+    mod = "dotharness.pr_review.runners.address_comments"
+    ctx = address_comments._ProcessPrContext(
+        script_path=Path("s"),
+        instructions_template="t",
+        backend=MagicMock(),
+        our_login="alexei",
+        wdir="w",
+        original_sha="sha",
+        repo="acme/frontend",
+        env={},
+        host=make_scaffold().host,
+        repo_ref=REPO,
+        trusted_commenters=[],
+    )
+    with (
+        patch(f"{mod}.git_fetch_and_checkout", side_effect=FatalGitError("boom")),
+        patch(f"{mod}.git_clean_working_dir") as clean,
+        pytest.raises(FatalGitError),
+    ):
+        await address_comments._address_pending_comments(1, "b", ctx)
+    clean.assert_called_once_with("w", {})

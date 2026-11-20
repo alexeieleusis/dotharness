@@ -130,6 +130,57 @@ class FatalGitError(Exception):
     pass
 
 
+class IdentifiedGitFailure(FatalGitError):
+    """A per-PR git failure after which the cleanup succeeded and the tree probes clean.
+
+    Still a ``FatalGitError`` (so ``_process_pr`` keeps propagating it); the PR loop skips the
+    PR and continues instead of stopping the cycle.
+    """
+
+
+async def reraise_git_failure_if_clean(exc: FatalGitError, wdir: str, env: dict, original_sha: str) -> None:
+    """Clean the working tree after a git failure; raise the right error for the PR loop.
+
+    Raises :class:`IdentifiedGitFailure` (loop may continue) when the cleanup succeeded and the
+    tree probes clean, otherwise re-raises ``exc`` (loop must stop). Call from an ``except`` block.
+    """
+    cleaned = await git_clean_working_dir(wdir, env, original_sha)
+    if cleaned and await git_is_dirty(wdir, env) is False:
+        raise IdentifiedGitFailure(str(exc)) from exc
+    raise exc
+
+
+def record_git_failure(pr_number: int, exc: FatalGitError, failures: list[str]) -> bool:
+    """Log and record a per-PR git failure; return True when the PR loop may continue to the next PR.
+
+    The loop continues only for an :class:`IdentifiedGitFailure` (cleanup left a clean tree).
+    """
+    logger.error("PR #%d skipped: git failure: %s", pr_number, failure_summary(exc), exc_info=True)
+    failures.append(f"#{pr_number}: {exc}")
+    return isinstance(exc, IdentifiedGitFailure)
+
+
+def skipped_prs_message(runner: str, failed: list[int]) -> str:
+    """The error text a runner raises when PRs were skipped for git failures."""
+    return f"{runner} skipped PRs for git failures: " + ", ".join(f"#{n}" for n in failed)
+
+
+def failure_summary(exc: BaseException) -> str:
+    """First line of git's stderr when anything in the cause chain carries one, else the exception text."""
+    link: BaseException | None = exc
+    for _ in range(10):
+        if link is None:
+            break
+        stderr = getattr(link, "stderr", None)
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        if stderr and stderr.strip():
+            return stderr.strip().splitlines()[0]
+        link = link.__cause__ or link.__context__
+    lines = str(exc).strip().splitlines()
+    return lines[0] if lines else repr(exc)
+
+
 def log_called_process_output(e: subprocess.CalledProcessError, log_func: Callable[..., None], label: str) -> None:
     if e.stdout:
         log_func("%s stdout: %s", label, e.stdout.decode("utf-8", errors="replace"))
@@ -185,6 +236,7 @@ async def git_detach_and_record(cwd: str, env: dict) -> str:
 async def git_fetch_and_checkout(branch: str, cwd: str, env: dict) -> None:
     try:
         await run_cmd(["git", "fetch", "origin"], cwd=cwd, env=env, timeout=TIMEOUT_GIT)
+        await git_clean_if_dirty(cwd, env)
         await run_cmd(
             ["git", "checkout", "--recurse-submodules", "-B", branch, f"origin/{branch}"],
             cwd=cwd,
@@ -238,6 +290,89 @@ async def _git_restore_impl(original_sha: str, branch: str, cwd: str, env: dict)
             await run_cmd(["git", "branch", "-D", branch], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
     except Exception:
         logger.exception("git restore failed")
+
+
+async def git_clean_working_dir(cwd: str, env: dict, sha: str | None = None) -> bool:
+    """Failure-path clean: remove untracked, non-ignored debris from ``cwd``; cancellation-safe.
+
+    With ``sha``, first ``git checkout --recurse-submodules -f <sha>``. Then a ``git clean -fdn`` dry run (its
+    listing is logged at WARNING) and the real ``git clean -fd``. Never raises; returns True only when the
+    ``-f`` checkout (when ``sha`` is given) and the real clean both succeeded. Callers decide when to run it; ``_git_restore_impl`` does not.
+    """
+    task = asyncio.ensure_future(_git_clean_working_dir_impl(cwd, env, sha))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.wait([task])
+        raise
+
+
+def _first_line(data: bytes | None) -> str:
+    text = (data or b"").decode("utf-8", errors="replace").strip()
+    return text.splitlines()[0] if text else ""
+
+
+async def _git_clean_working_dir_impl(cwd: str, env: dict, sha: str | None) -> bool:
+    checkout_ok = True
+    if sha:
+        try:
+            result = await run_cmd(
+                ["git", "checkout", "--recurse-submodules", "-f", sha],
+                cwd=cwd,
+                env=env,
+                timeout=TIMEOUT_GIT,
+                check=False,
+            )
+            if result.returncode != 0:
+                checkout_ok = False
+                logger.warning("git_clean: checkout -f %s failed: %s", sha, _first_line(result.stderr))
+        except Exception:
+            checkout_ok = False
+            logger.exception("git_clean: checkout -f %s failed", sha)
+    try:
+        dry = await run_cmd(["git", "clean", "-fdn"], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
+        if dry.returncode != 0:
+            logger.warning("git_clean: dry run failed: %s", _first_line(dry.stderr))
+        else:
+            listing = dry.stdout.decode("utf-8", errors="replace").strip()
+            if listing:
+                logger.warning("git_clean: removing untracked paths from %s: %s", cwd, "; ".join(listing.splitlines()))
+    except Exception:
+        logger.exception("git_clean: dry run failed")
+    try:
+        result = await run_cmd(["git", "clean", "-fd"], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
+    except Exception:
+        logger.exception("git_clean: git clean -fd failed")
+        return False
+    if result.returncode != 0:
+        logger.warning("git_clean: git clean -fd failed: %s", _first_line(result.stderr))
+        return False
+    return checkout_ok
+
+
+async def git_is_dirty(cwd: str, env: dict) -> bool | None:
+    """True when ``git status --porcelain`` lists anything, False when empty, None when the probe failed."""
+    try:
+        result = await run_cmd(["git", "status", "--porcelain"], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
+    except Exception:
+        logger.exception("git_is_dirty: git status failed")
+        return None
+    if result.returncode != 0:
+        logger.warning("git_is_dirty: git status failed: %s", _first_line(result.stderr))
+        return None
+    return bool(result.stdout.strip())
+
+
+async def git_clean_if_dirty(cwd: str, env: dict) -> None:
+    """Pre-checkout step: clean untracked files only when the tree is dirty. Never raises.
+
+    A failed probe is logged and the checkout proceeds; its own error path handles real failures.
+    """
+    dirty = await git_is_dirty(cwd, env)
+    if dirty is None:
+        logger.warning("git_clean_if_dirty: could not probe %s; proceeding to checkout", cwd)
+    elif dirty:
+        await git_clean_working_dir(cwd, env)
 
 
 async def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:

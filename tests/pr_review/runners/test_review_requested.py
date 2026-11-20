@@ -93,6 +93,8 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
         patch("dotharness.pr_review.runners.review_requested.git_detach_and_record", return_value="sha") as detach,
         patch("dotharness.pr_review.runners.review_requested.git_fetch_and_checkout") as fetch_checkout,
         patch("dotharness.pr_review.runners.review_requested.git_restore") as restore,
+        patch("dotharness.pr_review.runners.common.git_clean_working_dir", return_value=True) as clean,
+        patch("dotharness.pr_review.runners.common.git_is_dirty", return_value=False) as dirty,
         patch("dotharness.pr_review.runners.review_requested.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.review_requested.get_pr_head_sha", return_value="abc123"),
         patch(
@@ -114,6 +116,8 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
             detach=detach,
             fetch_checkout=fetch_checkout,
             restore=restore,
+            clean=clean,
+            dirty=dirty,
             host=host,
             os=os_mock,
             backend=backend,
@@ -705,19 +709,142 @@ async def test_re_requests_review_even_when_fully_done(tmp_xdg, tmp_path):
     mocks.add_reviewer.assert_called_once_with(ANY, REPO, 1, "bot")
 
 
-async def test_fatal_git_error_stops_loop_and_restores(tmp_xdg, tmp_path):
-    """FatalGitError must propagate out of _process_pr (not be swallowed by the generic
-    handler) so _run_locked aborts the loop; git_restore still runs via finally."""
+def _checkout_fails_on(*numbers: int):
+    """fetch_checkout side effect raising FatalGitError (cause: CalledProcessError) for the given branch numbers."""
+    import subprocess
+
     from dotharness.pr_review.runners.common import FatalGitError
 
+    def side_effect(branch, *_args, **_kwargs):
+        if int(branch[1:]) in numbers:
+            err = FatalGitError("git checkout failed")
+            err.__cause__ = subprocess.CalledProcessError(1, ["git"], b"", b"fatal: collision\nsecond line")
+            raise err
+
+    return side_effect
+
+
+async def test_fatal_git_error_propagates_out_of_process_pr(tmp_path):
+    """FatalGitError must propagate out of _process_pr (not be swallowed by the generic
+    handler); git_restore still runs via finally and the clean helper ran with the original sha."""
+    from dotharness.pr_review.runners.common import FatalGitError
+
+    _setup_knowledge(tmp_path)
+    with _full_run_mocks() as mocks:
+        mocks.fetch_checkout.side_effect = FatalGitError("boom")
+        mocks.dirty.return_value = True
+        with pytest.raises(FatalGitError):
+            await review_requested._process_pr(
+                _pr(1, url="u", head_reference="feat"),
+                _cfg(tmp_path),
+                mocks.host,
+                REPO,
+                tmp_path,
+                None,
+                mocks.backend.return_value,
+                str(tmp_path),
+                {},
+                "bot",
+                True,
+                review_requested.PrLevelPassesDone(design=True, traceability=True, regret=True),
+            )
+    mocks.restore.assert_called_once()
+    mocks.clean.assert_called_once_with(str(tmp_path), ANY, "sha")
+
+
+async def test_identified_git_failure_skips_pr_and_continues(tmp_xdg, tmp_path, caplog):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     prs = [_pr(n, url=f"u{n}", head_reference=f"b{n}") for n in (1, 2, 3)]
     with _full_run_mocks(prs=prs) as mocks:
-        mocks.fetch_checkout.side_effect = FatalGitError("boom")
-        await review_requested._run_locked(cfg, pr_url=None)
-    assert mocks.fetch_checkout.call_count == 1
-    mocks.restore.assert_called_once()
+        mocks.fetch_checkout.side_effect = _checkout_fails_on(2)
+        with caplog.at_level("ERROR"):
+            failed = await review_requested._run_locked(cfg, pr_url=None)
+    assert failed == [2]
+    assert [c.args[0] for c in mocks.fetch_checkout.call_args_list] == ["b1", "b2", "b3"]
+    assert mocks.restore.call_count == 3
+    assert "PR #2 skipped: git failure: fatal: collision" in caplog.text
+    assert "second line" not in caplog.text.split("skipped: git failure:")[1].splitlines()[0]
+
+
+@pytest.mark.parametrize(
+    ("clean_result", "dirty_result"),
+    [(False, False), (True, True), (True, None)],
+    ids=["helper-false", "probe-dirty", "probe-none"],
+)
+async def test_unidentified_git_failure_stops_cycle(tmp_xdg, tmp_path, caplog, clean_result, dirty_result):
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    prs = [_pr(n, url=f"u{n}", head_reference=f"b{n}") for n in (1, 2, 3)]
+    with _full_run_mocks(prs=prs) as mocks:
+        mocks.fetch_checkout.side_effect = _checkout_fails_on(2)
+        mocks.clean.return_value = clean_result
+        mocks.dirty.return_value = dirty_result
+        with caplog.at_level("ERROR"):
+            failed = await review_requested._run_locked(cfg, pr_url=None)
+    assert failed == [2]
+    assert [c.args[0] for c in mocks.fetch_checkout.call_args_list] == ["b1", "b2"]
+    assert "PR #2 skipped: git failure:" in caplog.text
+
+
+async def test_git_failure_log_uses_exception_text_when_stderr_empty(tmp_xdg, tmp_path, caplog):
+    from dotharness.pr_review.runners.common import FatalGitError
+
+    _setup_knowledge(tmp_path)
+    with _full_run_mocks() as mocks:
+        mocks.fetch_checkout.side_effect = FatalGitError("git checkout timed out")
+        with caplog.at_level("ERROR"):
+            await review_requested._run_locked(_cfg(tmp_path), pr_url=None)
+    assert "PR #1 skipped: git failure: git checkout timed out" in caplog.text
+
+
+async def test_detach_failure_stays_fatal(tmp_xdg, tmp_path):
+    from dotharness.pr_review.runners.common import FatalGitError
+
+    _setup_knowledge(tmp_path)
+    prs = [_pr(n, url=f"u{n}", head_reference=f"b{n}") for n in (1, 2)]
+    with _full_run_mocks(prs=prs) as mocks:
+        mocks.detach.side_effect = FatalGitError("git detach failed")
+        failed = await review_requested._run_locked(_cfg(tmp_path), pr_url=None)
+    assert failed == [1]
+    assert mocks.detach.call_count == 1
+    mocks.clean.assert_not_called()
+
+
+async def test_run_raises_after_lock_release_when_prs_failed(tmp_path):
+    import contextlib as cl
+
+    cfg = _cfg(tmp_path)
+    events: list[str] = []
+
+    @cl.contextmanager
+    def fake_lock(_key):
+        events.append("acquire")
+        yield
+        events.append("release")
+
+    async def fake_locked(*_a):
+        events.append("run")
+        return [2]
+
+    with (
+        patch("dotharness.pr_review.runners.review_requested.acquire_lock", fake_lock),
+        patch("dotharness.pr_review.runners.review_requested._run_locked", fake_locked),
+        pytest.raises(review_requested.ReviewRequestedError, match="#2"),
+    ):
+        await review_requested.run(cfg)
+    assert events == ["acquire", "run", "release"]
+
+
+async def test_run_returns_normally_when_nothing_failed(tmp_path):
+    async def fake_locked(*_a):
+        return []
+
+    with (
+        patch("dotharness.pr_review.runners.review_requested.acquire_lock", contextlib.nullcontext),
+        patch("dotharness.pr_review.runners.review_requested._run_locked", fake_locked),
+    ):
+        await review_requested.run(_cfg(tmp_path))
 
 
 async def test_process_pr_skips_summary_when_file_reviews_fail(tmp_path):
