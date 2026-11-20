@@ -116,6 +116,17 @@ async def test_nonzero_real_clean_returns_false(tmp_path):
         assert await git_clean_working_dir(str(tmp_path), {}) is False
 
 
+async def test_failed_restore_checkout_returns_false_even_if_clean_succeeds(tmp_path):
+    def side_effect(cmd, **_):
+        rc = 1 if cmd[:2] == ["git", "checkout"] else 0
+        return subprocess.CompletedProcess(cmd, rc, b"", b"fatal: Unable to create index.lock")
+
+    mock = AsyncMock(side_effect=side_effect)
+    with patch(RUN_CMD, mock):
+        assert await git_clean_working_dir(str(tmp_path), {}, sha="s") is False
+    assert ["git", "clean", "-fd"] in [c.args[0] for c in mock.call_args_list]
+
+
 async def test_clean_completes_when_cancelled(tmp_path):
     started = asyncio.Event()
     finished = []

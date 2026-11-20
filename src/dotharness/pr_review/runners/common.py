@@ -296,8 +296,8 @@ async def git_clean_working_dir(cwd: str, env: dict, sha: str | None = None) -> 
     """Failure-path clean: remove untracked, non-ignored debris from ``cwd``; cancellation-safe.
 
     With ``sha``, first ``git checkout --recurse-submodules -f <sha>``. Then a ``git clean -fdn`` dry run (its
-    listing is logged at WARNING) and the real ``git clean -fd``. Never raises; returns True only when the real
-    clean exited 0. Callers decide when to run it; ``_git_restore_impl`` does not.
+    listing is logged at WARNING) and the real ``git clean -fd``. Never raises; returns True only when the
+    ``-f`` checkout (when ``sha`` is given) and the real clean both succeeded. Callers decide when to run it; ``_git_restore_impl`` does not.
     """
     task = asyncio.ensure_future(_git_clean_working_dir_impl(cwd, env, sha))
     try:
@@ -313,6 +313,7 @@ def _first_line(data: bytes | None) -> str:
 
 
 async def _git_clean_working_dir_impl(cwd: str, env: dict, sha: str | None) -> bool:
+    checkout_ok = True
     if sha:
         try:
             result = await run_cmd(
@@ -323,8 +324,10 @@ async def _git_clean_working_dir_impl(cwd: str, env: dict, sha: str | None) -> b
                 check=False,
             )
             if result.returncode != 0:
+                checkout_ok = False
                 logger.warning("git_clean: checkout -f %s failed: %s", sha, _first_line(result.stderr))
         except Exception:
+            checkout_ok = False
             logger.exception("git_clean: checkout -f %s failed", sha)
     try:
         dry = await run_cmd(["git", "clean", "-fdn"], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
@@ -344,7 +347,7 @@ async def _git_clean_working_dir_impl(cwd: str, env: dict, sha: str | None) -> b
     if result.returncode != 0:
         logger.warning("git_clean: git clean -fd failed: %s", _first_line(result.stderr))
         return False
-    return True
+    return checkout_ok
 
 
 async def git_is_dirty(cwd: str, env: dict) -> bool | None:
