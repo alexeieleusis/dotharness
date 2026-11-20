@@ -713,13 +713,13 @@ async def _address_single_comment(
     env: dict,
     host: CodeHost,
     repo_ref: RepositoryRef,
-    pre_sha: str,
+    pre_sha: str | None,
     opencode_dir: str | None = None,
     our_login: str | None = None,
     repo_slug: str | None = None,
     handled_version: datetime | None = None,
     rocket_at: datetime | None = None,
-) -> tuple[str, bool]:
+) -> tuple[str | None, bool]:
     """Run the backend for `comment`, then return the resulting HEAD sha (or `pre_sha`
     unchanged if HEAD didn't move / couldn't be read) so the caller can pass it as the
     next comment's `pre_sha` without re-deriving it, plus whether the backend rewrote
@@ -754,7 +754,7 @@ async def _address_single_comment(
         logger.exception("PR #%d comment %s: error", pr_number, cid)
     finally:
         post_sha = await get_head_sha(wdir, env) or pre_sha
-        if pre_sha and post_sha != pre_sha and not await _is_ancestor(pre_sha, post_sha, wdir, env):
+        if pre_sha and post_sha and post_sha != pre_sha and not await _is_ancestor(pre_sha, post_sha, wdir, env):
             rewritten = True
             logger.error(
                 "PR #%d comment %s: HEAD %s..%s is not a fast-forward — branch history was "

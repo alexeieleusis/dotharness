@@ -448,8 +448,8 @@ async def test_stops_processing_comments_after_history_rewrite(tmp_xdg, tmp_path
     push_calls = [c for c in mock_run.call_args_list if c.args and "push" in c.args[0]]
     assert push_calls == []
     assert "already-pushed commits" not in caplog.text
-    assert "stay local" in caplog.text
-    assert "recovery ref" in caplog.text
+    assert "will NOT be retried" in caplog.text
+    assert "refs/harness-recovery/" in caplog.text
     mock_restore.assert_called()
 
 
