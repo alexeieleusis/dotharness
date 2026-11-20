@@ -56,7 +56,7 @@ KNOWLEDGE_SHA256 = {
 
 
 # Files added after the byte-identical port; covered by their own tests, so no digest is pinned.
-NEW_KNOWLEDGE_FILES = {"sisyphus/refactor-prompt.md"}
+NEW_KNOWLEDGE_FILES = {"sisyphus/refactor-prompt.md", "pr-review/review-test-layers.md"}
 
 
 def _sha256(path: Path) -> str:

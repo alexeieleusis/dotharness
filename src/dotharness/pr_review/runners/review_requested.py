@@ -44,6 +44,7 @@ from dotharness.pr_review.runners.common import (
     has_inline_review_comments,
     has_regret_review_comment,
     has_review_summary_comment,
+    has_test_layer_review_comment,
     has_traceability_review_comment,
     host_current_user,
     open_host,
@@ -66,6 +67,7 @@ from dotharness.pr_review.runners.regret_review import (
     parse_regret_judgment,
     post_regret_comment,
 )
+from dotharness.pr_review.runners.self_review import has_test_and_non_test_files
 
 logger = logging.getLogger(__name__)
 
@@ -191,10 +193,11 @@ class PrLevelPassesDone:
     design: bool
     traceability: bool
     regret: bool
+    test_layer: bool
 
     @property
     def all_done(self) -> bool:
-        return self.design and self.traceability and self.regret
+        return self.design and self.traceability and self.regret and self.test_layer
 
 
 async def _select_prs(
@@ -227,7 +230,14 @@ async def _passes_done(
     regret_done = (
         await has_regret_review_comment(host, repo, pr_number, current_user) if config.regret_review.enabled else True
     )
-    return files_summary_done, PrLevelPassesDone(design=design_done, traceability=traceability_done, regret=regret_done)
+    test_layer_done = (
+        await has_test_layer_review_comment(host, repo, pr_number, current_user)
+        if config.test_layer_review.enabled
+        else True
+    )
+    return files_summary_done, PrLevelPassesDone(
+        design=design_done, traceability=traceability_done, regret=regret_done, test_layer=test_layer_done
+    )
 
 
 async def _process_pr(
@@ -301,6 +311,19 @@ async def _process_pr(
                     env,
                     current_user,
                     pr_level_done.regret,
+                    ctx,
+                )
+            if config.test_layer_review.enabled:
+                await _run_test_layer_review(
+                    pr,
+                    config,
+                    knowledge_dir,
+                    extra_knowledge,
+                    backend,
+                    wdir,
+                    env,
+                    current_user,
+                    pr_level_done.test_layer,
                     ctx,
                 )
     except FatalGitError as exc:
@@ -485,6 +508,65 @@ async def _run_design_review(
             build_prompt=build_prompt,
             has_comment_fn=lambda: has_design_review_comment(ctx["host"], ctx["repo"], pr_number, current_user),
             label="design review",
+        )
+    )
+
+
+async def _run_test_layer_review(
+    pr: ChangeRequest,
+    config: HarnessConfig,
+    knowledge_dir: Path,
+    extra_knowledge: str | None,
+    backend: Backend,
+    wdir: str,
+    env: dict,
+    current_user: str,
+    test_layer_done: bool,
+    ctx: dict,
+) -> bool:
+    """Mirrors _run_design_review: no persisted state, so the marker comment (checked once by the
+    caller as test_layer_done) is the only idempotency signal. A PR whose changed files lack a test
+    file or a non-test file makes no backend call."""
+    pr_number = pr.number
+
+    async def short_circuit() -> bool | None:
+        if has_test_and_non_test_files(ctx["files"]):
+            return None
+        logger.info("PR #%d: test layer review skipped — changed files lack a test file or a non-test file", pr_number)
+        return False
+
+    async def build_prompt() -> str:
+        test_layer_instructions = render_prompt(
+            (knowledge_dir / "review-test-layers.md").read_text(encoding="utf-8"),
+            await ctx["host"].discussion.prompt_variables(),
+        )
+        diff_sections = "".join([
+            build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
+            for file in ctx["files"]
+        ])
+        return build_design_review_prompt(
+            test_layer_instructions,
+            extra_knowledge,
+            diff_sections,
+            _change_request(ctx, pr_number),
+            pr_number,
+            config.repo.name,
+            ctx["commit_sha"],
+            ctx["pr_description"],
+            ctx["vibe_heal_context"],
+            [],
+        )
+
+    return bool(
+        await run_pr_level_pass(
+            pr_number,
+            backend,
+            wdir,
+            is_done=test_layer_done,
+            build_prompt=build_prompt,
+            has_comment_fn=lambda: has_test_layer_review_comment(ctx["host"], ctx["repo"], pr_number, current_user),
+            label="test layer review",
+            short_circuit=short_circuit,
         )
     )
 

@@ -59,6 +59,7 @@ def _setup_knowledge(tmp_path, content="instructions"):
     (kdir / "review-design.md").write_text(content)
     (kdir / "review-traceability.md").write_text(content)
     (kdir / "review-regret.md").write_text(content)
+    (kdir / "review-test-layers.md").write_text(content)
 
 
 @contextlib.contextmanager
@@ -875,6 +876,66 @@ async def test_process_pr_skips_summary_when_file_reviews_fail(tmp_path):
             {},
             "me",
             True,
-            review_requested.PrLevelPassesDone(design=True, traceability=True, regret=True),
+            review_requested.PrLevelPassesDone(design=True, traceability=True, regret=True, test_layer=True),
         )
     summary.assert_not_called()
+
+
+_TEST_LAYER_FILES = ["src/foo.py", "tests/test_foo.py"]
+
+
+async def test_test_layer_review_not_run_when_disabled(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    cfg.test_layer_review.enabled = False
+    with (
+        _full_run_mocks(changed_files=_TEST_LAYER_FILES) as mocks,
+        patch("dotharness.pr_review.runners.review_requested.has_test_layer_review_comment") as mock_has,
+        patch("dotharness.pr_review.runners.review_requested._run_test_layer_review") as mock_pass,
+    ):
+        await review_requested._run_locked(cfg, pr_url=None)
+    mock_has.assert_not_called()
+    mock_pass.assert_not_called()
+    # 2 file reviews + 1 summary; no test-layer call.
+    assert mocks.backend.return_value.run.call_count == 3
+
+
+async def test_test_layer_review_invoked_when_enabled_and_both_file_kinds_present(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        _full_run_mocks(changed_files=_TEST_LAYER_FILES) as mocks,
+        patch("dotharness.pr_review.runners.review_requested.has_test_layer_review_comment", side_effect=[False, True]),
+    ):
+        await review_requested._run_locked(cfg, pr_url=None)
+    # 2 file reviews + 1 summary + 1 test layer
+    assert mocks.backend.return_value.run.call_count == 4
+    assert mocks.backend.return_value.run.call_args_list[-1].kwargs["context"] == "PR #1 test layer review"
+
+
+@pytest.mark.parametrize("files", [["tests/test_foo.py"], ["src/foo.py", "src/bar.py"]])
+async def test_test_layer_review_makes_no_backend_call_when_only_one_file_kind(tmp_xdg, tmp_path, files):
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        _full_run_mocks(changed_files=files) as mocks,
+        patch("dotharness.pr_review.runners.review_requested.has_test_layer_review_comment", return_value=False),
+    ):
+        await review_requested._run_locked(cfg, pr_url=None)
+    # Only the per-file reviews and the summary; the test-layer pass is short-circuited.
+    assert mocks.backend.return_value.run.call_count == len(files) + 1
+    contexts = [c.kwargs["context"] for c in mocks.backend.return_value.run.call_args_list]
+    assert "PR #1 test layer review" not in contexts
+
+
+async def test_test_layer_review_noop_when_marker_already_present(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path)
+    cfg = _cfg(tmp_path)
+    with (
+        _full_run_mocks(changed_files=_TEST_LAYER_FILES, skip_pr=True) as mocks,
+        patch("dotharness.pr_review.runners.review_requested.has_test_layer_review_comment", return_value=True),
+    ):
+        await review_requested._run_locked(cfg, pr_url=None)
+    # Everything already done: the all-done short-circuit means no backend call and no checkout.
+    mocks.backend.return_value.run.assert_not_called()
+    mocks.fetch_checkout.assert_not_called()

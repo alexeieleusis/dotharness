@@ -1,4 +1,6 @@
+import contextlib
 import subprocess
+from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
@@ -45,6 +47,7 @@ def _setup_knowledge(tmp_path, content="instructions"):
     (kdir / "review-design.md").write_text(content)
     (kdir / "review-traceability.md").write_text(content)
     (kdir / "review-regret.md").write_text(content)
+    (kdir / "review-test-layers.md").write_text(content)
 
 
 async def test_skips_already_reviewed_pr(tmp_xdg, tmp_path):
@@ -701,6 +704,7 @@ async def test_design_review_already_done_is_skipped_without_any_backend_call(tm
     state.add_design_reviewed_pr("acme-frontend", 9)
     state.add_traceability_reviewed_pr("acme-frontend", 9)
     cfg = _cfg(tmp_path)
+    cfg.test_layer_review.enabled = False  # keep this scenario to the pass under test
     with (
         patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
         patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
@@ -1156,6 +1160,7 @@ async def test_traceability_review_already_done_is_skipped_without_any_backend_c
     state.add_design_reviewed_pr("acme-frontend", 9)
     state.add_traceability_reviewed_pr("acme-frontend", 9)
     cfg = _cfg(tmp_path)
+    cfg.test_layer_review.enabled = False  # keep this scenario to the pass under test
     with (
         patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
         patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
@@ -1204,6 +1209,7 @@ async def test_regret_review_not_run_when_disabled(tmp_xdg, tmp_path):
     state.add_design_reviewed_pr("acme-frontend", 50)
     state.add_traceability_reviewed_pr("acme-frontend", 50)
     cfg = _cfg(tmp_path)
+    cfg.test_layer_review.enabled = False  # keep this scenario to the pass under test
     with (
         patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
         patch("dotharness.pr_review.runners.self_review.host_current_user", return_value="alice"),
@@ -1231,6 +1237,7 @@ async def test_regret_review_not_run_when_already_regret_reviewed(tmp_xdg, tmp_p
     state.add_traceability_reviewed_pr("acme-frontend", 51)
     state.add_regret_reviewed_pr("acme-frontend", 51)
     cfg = _cfg(tmp_path)
+    cfg.test_layer_review.enabled = False  # keep this scenario to the pass under test
     cfg.regret_review.enabled = True
     with (
         patch("dotharness.pr_review.runners.self_review.open_host", return_value=make_scaffold()),
@@ -1608,3 +1615,106 @@ async def test_gather_pr_context_checkout_failure_cleans_working_dir_without_sha
             make_change_request(1, head_reference="b"), 1, None, MagicMock(), REPO, "w", {}
         )
     clean.assert_called_once_with("w", {})
+
+
+@contextlib.contextmanager
+def _test_layer_run(
+    tmp_path, number, *, changed_files, enabled=True, has_comment=False, confirmed=True, prs=None, backend_rc=0
+):
+    """Drive _run_locked so that only the test-layer pass can run: files/summary, design and
+    traceability are all already done for the PR."""
+    state.write_self_review_state("acme-frontend", [number])
+    state.add_design_reviewed_pr("acme-frontend", number)
+    state.add_traceability_reviewed_pr("acme-frontend", number)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    cfg = _cfg(tmp_path)
+    cfg.test_layer_review.enabled = enabled
+    prs = prs if prs is not None else [make_change_request(number, url="u", head_reference="b")]
+    base = "dotharness.pr_review.runners.self_review."
+    with (
+        patch(base + "open_host", return_value=make_scaffold()),
+        patch(base + "host_current_user", return_value="alice"),
+        patch(base + "_list_my_prs", return_value=prs),
+        patch(base + "has_test_layer_review_comment", return_value=has_comment),
+        patch(base + "check_test_layer_review_comment_status", return_value=confirmed),
+        patch(base + "git_detach_and_record", return_value="sha"),
+        patch(base + "git_fetch_and_checkout") as mock_checkout,
+        patch(base + "git_restore"),
+        patch(base + "get_pr_base_branch", return_value="main"),
+        patch(base + "get_pr_head_sha", return_value="abc123"),
+        patch(base + "get_change_request", return_value=make_change_request()),
+        patch(base + "get_changed_files", return_value=changed_files),
+        patch(base + "get_file_diff", return_value="@@diff"),
+        patch(base + "Backend") as mock_be,
+    ):
+        mock_be.return_value.run = AsyncMock()
+        mock_be.return_value.run.return_value = MagicMock(returncode=backend_rc)
+        yield SimpleNamespace(cfg=cfg, backend=mock_be.return_value, checkout=mock_checkout)
+
+
+async def test_test_layer_review_runs_when_enabled_and_both_file_kinds_present(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path, content="TEST-LAYER-INSTRUCTIONS")
+    with _test_layer_run(tmp_path, 60, changed_files=["src/foo.py", "tests/test_foo.py"]) as run:
+        await self_review._run_locked(run.cfg)
+    assert run.backend.run.call_count == 1
+    assert run.backend.run.call_args.kwargs["context"] == "PR #60 test layer review"
+    assert run.backend.run.call_args.args[0].startswith("TEST-LAYER-INSTRUCTIONS")
+    assert 60 in state.get_test_layer_reviewed_prs("acme-frontend")
+
+
+async def test_test_layer_review_disabled_makes_no_backend_call_and_counts_as_done(tmp_xdg, tmp_path):
+    """Disabled: no marker check, no backend call, and (everything else done) the all-done early exit
+    means not even a checkout."""
+    _setup_knowledge(tmp_path)
+    with (
+        _test_layer_run(tmp_path, 61, changed_files=["src/foo.py", "tests/test_foo.py"], enabled=False) as run,
+        patch("dotharness.pr_review.runners.self_review._run_test_layer_review") as mock_pass,
+    ):
+        await self_review._run_locked(run.cfg)
+    mock_pass.assert_not_called()
+    run.backend.run.assert_not_called()
+    run.checkout.assert_not_called()
+    assert 61 not in state.get_test_layer_reviewed_prs("acme-frontend")
+
+
+@pytest.mark.parametrize("files", [["tests/test_foo.py", "tests/test_bar.py"], ["src/foo.py", "src/bar.py"], []])
+async def test_test_layer_review_skipped_without_backend_call_when_only_one_file_kind(tmp_xdg, tmp_path, files):
+    _setup_knowledge(tmp_path)
+    with _test_layer_run(tmp_path, 62, changed_files=files) as run:
+        await self_review._run_locked(run.cfg)
+    run.backend.run.assert_not_called()
+    # Left unmarked so a later push that adds the missing kind is evaluated afresh.
+    assert 62 not in state.get_test_layer_reviewed_prs("acme-frontend")
+
+
+async def test_test_layer_review_idempotent_when_marker_comment_exists(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path)
+    with _test_layer_run(tmp_path, 63, changed_files=["src/foo.py", "tests/test_foo.py"], has_comment=True) as run:
+        await self_review._run_locked(run.cfg)
+    run.backend.run.assert_not_called()
+    assert 63 in state.get_test_layer_reviewed_prs("acme-frontend")
+
+
+@pytest.mark.parametrize("confirmed", [False, None])
+async def test_test_layer_review_not_marked_when_marker_unconfirmed(tmp_xdg, tmp_path, confirmed):
+    """Nothing posted (no findings) or an inconclusive check leaves the pass unmarked; its retry is its own."""
+    _setup_knowledge(tmp_path)
+    with _test_layer_run(tmp_path, 64, changed_files=["src/foo.py", "tests/test_foo.py"], confirmed=confirmed) as run:
+        await self_review._run_locked(run.cfg)
+    assert run.backend.run.call_count == 1
+    assert 64 not in state.get_test_layer_reviewed_prs("acme-frontend")
+
+
+async def test_test_layer_review_not_marked_when_backend_fails(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path)
+    with _test_layer_run(tmp_path, 65, changed_files=["src/foo.py", "tests/test_foo.py"], backend_rc=1) as run:
+        await self_review._run_locked(run.cfg)
+    assert 65 not in state.get_test_layer_reviewed_prs("acme-frontend")
+
+
+async def test_test_layer_review_state_pruned_for_closed_prs(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path)
+    state.add_test_layer_reviewed_pr("acme-frontend", 999)
+    with _test_layer_run(tmp_path, 66, changed_files=["src/foo.py", "tests/test_foo.py"]) as run:
+        await self_review._run_locked(run.cfg)
+    assert state.get_test_layer_reviewed_prs("acme-frontend") == {66}
