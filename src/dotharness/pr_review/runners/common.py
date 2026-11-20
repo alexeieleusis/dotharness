@@ -1243,10 +1243,11 @@ async def run_pr_level_pass(
     backend: Backend,
     wdir: str,
     is_done: bool,
-    build_prompt: Callable[[], Awaitable[str]],
+    build_prompt: Callable[..., Awaitable[str]],
     has_comment_fn: Callable[[], Awaitable[bool | None]],
     label: str,
     short_circuit: Callable[[], Awaitable[bool | None]] | None = None,
+    pre_pass: Callable[[], Awaitable[str | None]] | None = None,
 ) -> bool | None:
     """Shared orchestration skeleton for every PR-level pass (design review, requirement-
     traceability review, ...): noop-if-already-done → optional short-circuit (e.g.
@@ -1265,6 +1266,11 @@ async def run_pr_level_pass(
     return None (no persisted state to protect there), so that branch is simply never hit
     for its callers.
 
+    `pre_pass` is an optional explicit step that runs after the noop/short-circuit checks and
+    before `build_prompt` (e.g. the design review's test-layer backend pass). Its result is
+    passed to `build_prompt` as the single positional argument; without it `build_prompt` is
+    called with no arguments, so `build_prompt` itself stays a pure prompt assembler.
+
     Returns True if the pass is confirmed complete (already done, short-circuited to
     success, or backend ran and the marker was confirmed), False if it's confirmed not
     complete, or None if a post-backend completion check was inconclusive.
@@ -1276,7 +1282,7 @@ async def run_pr_level_pass(
         outcome = await short_circuit()
         if outcome is not None:
             return outcome
-    prompt = await build_prompt()
+    prompt = await (build_prompt() if pre_pass is None else build_prompt(await pre_pass()))
     try:
         result = await backend.run(prompt, cwd=wdir, context=f"PR #{pr_number} {label}")
         if result.returncode != 0:

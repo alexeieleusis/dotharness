@@ -260,22 +260,8 @@ async def run_test_layer_pass(
     if not has_test_and_non_test_files(ctx["files"]):
         logger.info("PR #%d: test layer review skipped — changed files lack a test file or a non-test file", number)
         return None
-    prior_flagged_locations = await get_design_review_flagged_locations(ctx["host"], ctx["repo"], number, current_user)
-    diff_sections = "".join([
-        build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
-        for file in ctx["files"]
-    ])
-    prompt = build_design_review_prompt(
-        test_layer_instructions,
-        extra_knowledge,
-        diff_sections,
-        _change_request(ctx, number),
-        number,
-        config.repo.name,
-        ctx["commit_sha"],
-        ctx["pr_description"],
-        ctx["vibe_heal_context"],
-        prior_flagged_locations,
+    prompt = await build_design_pass_prompt(
+        test_layer_instructions, extra_knowledge, number, config, ctx, wdir, current_user, env
     )
     reply: dict[str, str] = {}
     try:
@@ -291,33 +277,26 @@ async def run_test_layer_pass(
     return parse_test_layer_reply(reply.get("reply", ""))
 
 
-async def _build_design_prompt(
-    design_instructions: str,
-    test_layer_instructions: str,
+async def build_design_pass_prompt(
+    instructions: str,
     extra_knowledge: str | None,
     number: int,
     config,
     ctx: dict,
-    backend: Backend,
     wdir: str,
     current_user: str,
     env: dict,
 ) -> str:
-    # test_layer_instructions is empty when [test_layer_review] is disabled: no pass, prompt unchanged.
-    test_layer_summary = (
-        await run_test_layer_pass(
-            test_layer_instructions, extra_knowledge, number, config, ctx, backend, wdir, current_user, env
-        )
-        if test_layer_instructions
-        else None
-    )
+    """Shared diff-section + prompt assembly for the design pass and the test-layer pass
+    (self_review.py and review_requested.py): same diff, metadata and already-flagged
+    locations, different instructions. Pure: no backend call."""
     diff_sections = "".join([
         build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
         for file in ctx["files"]
     ])
     prior_flagged_locations = await get_design_review_flagged_locations(ctx["host"], ctx["repo"], number, current_user)
     return build_design_review_prompt(
-        design_instructions + build_test_layer_section(bool(test_layer_instructions), test_layer_summary),
+        instructions,
         extra_knowledge,
         diff_sections,
         _change_request(ctx, number),
@@ -355,23 +334,32 @@ async def _run_design_review(
     pair, via common.run_pr_level_pass; this wrapper only adds the persisted-state
     mutation run_pr_level_pass has no reason to know about.
 
-    When test_layer_instructions is non-empty, run_test_layer_pass runs its own backend call
-    just before the design backend call (only when the design pass itself runs: it has no
-    separate completion record) and its summary is injected into the design prompt."""
+    When test_layer_instructions is non-empty, run_test_layer_pass runs as run_pr_level_pass's
+    explicit `pre_pass` step just before the design prompt is built (only when the design pass
+    itself runs: it has no separate completion record) and its summary is injected into the
+    design prompt."""
     is_done = await has_design_review_comment(ctx["host"], ctx["repo"], number, current_user)
     result = await run_pr_level_pass(
         number,
         backend,
         wdir,
         is_done=is_done,
-        build_prompt=lambda: _build_design_prompt(
-            design_instructions,
-            test_layer_instructions,
+        # test_layer_instructions is empty when [test_layer_review] is disabled: no pass, prompt unchanged.
+        pre_pass=(
+            (
+                lambda: run_test_layer_pass(
+                    test_layer_instructions, extra_knowledge, number, config, ctx, backend, wdir, current_user, env
+                )
+            )
+            if test_layer_instructions
+            else None
+        ),
+        build_prompt=lambda summary=None: build_design_pass_prompt(
+            design_instructions + build_test_layer_section(bool(test_layer_instructions), summary),
             extra_knowledge,
             number,
             config,
             ctx,
-            backend,
             wdir,
             current_user,
             env,
