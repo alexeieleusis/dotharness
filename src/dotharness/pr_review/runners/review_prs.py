@@ -13,6 +13,7 @@ from dotharness.pr_review.runners.common import (
     FatalGitError,
     env_file_args,
     env_file_error,
+    failure_summary,
     get_changed_files,
     git_clean_if_dirty,
     git_clean_working_dir,
@@ -52,22 +53,6 @@ class PrGitFailureError(BaseAnalysisError):
     def __init__(self, failed: list[int]) -> None:
         RuntimeError.__init__(self, "review-prs skipped PRs for git failures: " + ", ".join(f"#{n}" for n in failed))
         self.failed = failed
-
-
-def _failure_summary(exc: BaseException) -> str:
-    """First line of git's stderr when anything in the cause chain carries one, else the exception text."""
-    link: BaseException | None = exc
-    for _ in range(10):
-        if link is None:
-            break
-        stderr = getattr(link, "stderr", None)
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-        if stderr and stderr.strip():
-            return stderr.strip().splitlines()[0]
-        link = link.__cause__ or link.__context__
-    lines = str(exc).strip().splitlines()
-    return lines[0] if lines else repr(exc)
 
 
 async def run(config: HarnessConfig, pr_url: str | None = None) -> None:
@@ -212,7 +197,7 @@ async def _process_pr_safely(
         success = await _process_pr(pr, config, host, repo, env, current_user, wdir)
     except FatalGitError as exc:
         skipped = True
-        logger.error("PR #%d skipped: git failure: %s", pr.number, _failure_summary(exc), exc_info=True)
+        logger.error("PR #%d skipped: git failure: %s", pr.number, failure_summary(exc), exc_info=True)
         cleaned = await git_clean_working_dir(wdir, env, original_sha)
         stop = not (cleaned and await git_is_dirty(wdir, env) is False)
     except Exception:

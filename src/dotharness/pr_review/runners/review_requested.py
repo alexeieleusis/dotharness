@@ -21,11 +21,13 @@ from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
     FatalGitError,
+    IdentifiedGitFailure,
     backend_env,
     build_design_review_prompt,
     build_early_comment_context,
     build_file_review_section,
     build_traceability_review_prompt,
+    failure_summary,
     get_change_request,
     get_changed_files,
     get_design_review_flagged_locations,
@@ -70,30 +72,6 @@ logger = logging.getLogger(__name__)
 
 class ReviewRequestedError(RuntimeError):
     """The cycle skipped at least one PR because of a git failure (exit status 1)."""
-
-
-class IdentifiedGitFailure(FatalGitError):
-    """A per-PR git failure after which the cleanup succeeded and the tree probes clean.
-
-    Still a ``FatalGitError`` (so ``_process_pr`` keeps propagating it); the PR loop skips the
-    PR and continues instead of stopping the cycle.
-    """
-
-
-def _failure_summary(exc: BaseException) -> str:
-    """First line of git's stderr when anything in the cause chain carries one, else the exception text."""
-    link: BaseException | None = exc
-    for _ in range(10):
-        if link is None:
-            break
-        stderr = getattr(link, "stderr", None)
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-        if stderr and stderr.strip():
-            return stderr.strip().splitlines()[0]
-        link = link.__cause__ or link.__context__
-    lines = str(exc).strip().splitlines()
-    return lines[0] if lines else repr(exc)
 
 
 async def run(config: HarnessConfig, pr_url: str | None = None) -> None:
@@ -169,7 +147,7 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> list[int]:
             )
         except FatalGitError as exc:
             failed.append(pr_number)
-            logger.error("PR #%d skipped: git failure: %s", pr_number, _failure_summary(exc), exc_info=True)
+            logger.error("PR #%d skipped: git failure: %s", pr_number, failure_summary(exc), exc_info=True)
             if not isinstance(exc, IdentifiedGitFailure):
                 break
         except Exception:

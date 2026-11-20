@@ -56,8 +56,10 @@ from dotharness.pr_review.runners.ci_checks import text as _text
 from dotharness.pr_review.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
+    IdentifiedGitFailure,
     Site,
     call_with_policy,
+    failure_summary,
     git_clean_working_dir,
     git_detach_and_record,
     git_fetch_and_checkout,
@@ -115,26 +117,6 @@ async def run(config: HarnessConfig, *, dry_run: bool = False, pr: int | None = 
 _GATE_RE = re.compile(r"(?<![a-z0-9])gate(?![a-z0-9])|merge-reports")
 
 
-class IdentifiedGitFailure(FatalGitError):
-    """A per-PR git failure after which the cleanup succeeded and the tree probes clean (the loop continues)."""
-
-
-def _failure_summary(exc: BaseException) -> str:
-    """First line of git's stderr when anything in the cause chain carries one, else the exception text."""
-    link: BaseException | None = exc
-    for _ in range(10):
-        if link is None:
-            break
-        stderr = getattr(link, "stderr", None)
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-        if stderr and stderr.strip():
-            return stderr.strip().splitlines()[0]
-        link = link.__cause__ or link.__context__
-    lines = str(exc).strip().splitlines()
-    return lines[0] if lines else repr(exc)
-
-
 def _is_gate(check: Check) -> bool:
     """A gate only aggregates other jobs; its failure is a symptom, never fixable on its own."""
     return _GATE_RE.search(check.name.lower()) is not None
@@ -166,7 +148,7 @@ async def _process_prs(
         except UnsupportedCapabilityError:
             raise
         except FatalGitError as e:
-            logger.error("PR #%d skipped: git failure: %s", number, _failure_summary(e), exc_info=True)
+            logger.error("PR #%d skipped: git failure: %s", number, failure_summary(e), exc_info=True)
             failures.append(f"#{number}: {e}")
             if not isinstance(e, IdentifiedGitFailure):
                 break

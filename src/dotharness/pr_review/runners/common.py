@@ -130,6 +130,30 @@ class FatalGitError(Exception):
     pass
 
 
+class IdentifiedGitFailure(FatalGitError):
+    """A per-PR git failure after which the cleanup succeeded and the tree probes clean.
+
+    Still a ``FatalGitError`` (so ``_process_pr`` keeps propagating it); the PR loop skips the
+    PR and continues instead of stopping the cycle.
+    """
+
+
+def failure_summary(exc: BaseException) -> str:
+    """First line of git's stderr when anything in the cause chain carries one, else the exception text."""
+    link: BaseException | None = exc
+    for _ in range(10):
+        if link is None:
+            break
+        stderr = getattr(link, "stderr", None)
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        if stderr and stderr.strip():
+            return stderr.strip().splitlines()[0]
+        link = link.__cause__ or link.__context__
+    lines = str(exc).strip().splitlines()
+    return lines[0] if lines else repr(exc)
+
+
 def log_called_process_output(e: subprocess.CalledProcessError, log_func: Callable[..., None], label: str) -> None:
     if e.stdout:
         log_func("%s stdout: %s", label, e.stdout.decode("utf-8", errors="replace"))
