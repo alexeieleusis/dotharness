@@ -59,7 +59,19 @@ def test_has_test_and_non_test_files(files, expected):
     assert has_test_and_non_test_files(files) is expected
 
 
-@pytest.mark.parametrize("reply", ["", "  \n", "NONE", "none", "None.", "`NONE`"])
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "",
+        "  \n",
+        "NONE",
+        "none",
+        "None.",
+        "`NONE`",
+        "Reviewed 3 test files; no wrong-layer tests found.\n\nNONE",
+        "NONE\n\n",
+    ],
+)
 def test_parse_test_layer_reply_no_findings(reply):
     assert parse_test_layer_reply(reply) is None
 

@@ -263,9 +263,13 @@ def has_test_and_non_test_files(files: list[str]) -> bool:
 
 def parse_test_layer_reply(reply: str) -> str | None:
     """The test-layer backend's reply is its summary text for the Design Review comment, or
-    nothing / NONE when it has no findings (None here)."""
+    nothing / NONE when it has no findings (None here). The sentinel is matched on the last
+    non-empty line so agent preamble before a trailing NONE is not mistaken for a finding."""
     text = reply.strip()
-    if not text or text.strip(" .!`*").upper() == _TEST_LAYER_NONE_SENTINEL:
+    if not text:
+        return None
+    last_line = text.splitlines()[-1]
+    if last_line.strip(" .!`*").upper() == _TEST_LAYER_NONE_SENTINEL:
         return None
     return text
 
