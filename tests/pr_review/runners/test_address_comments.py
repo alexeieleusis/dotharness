@@ -321,14 +321,31 @@ async def test_comment_still_unresolved_true_for_non_int_id():
     assert result is True
 
 
-async def test_failed_end_push_does_not_stop_comments(tmp_xdg, tmp_path):
+def _recovering_run_cmd(push_rc):
+    """`_ahead_run_cmd` plus the git calls `git_restore` makes: the branch tip is on origin only if the push worked."""
+    base = _ahead_run_cmd(push_rc=push_rc)
+    heads = {"n": 0}
+
+    def fake(cmd, **kwargs):
+        if "rev-parse" in cmd and "HEAD" in cmd:
+            heads["n"] += 1  # every comment's backend run moves HEAD, i.e. makes a commit
+            return MagicMock(returncode=0, stdout=f"head{heads['n']}\n".encode(), stderr=b"")
+        if "rev-parse" in cmd:
+            return MagicMock(returncode=0, stdout=b"0123456789abcdef0123\n", stderr=b"")
+        if "--is-ancestor" in cmd:
+            on_origin = cmd[-1].startswith("origin/")
+            return MagicMock(returncode=1 if on_origin and push_rc else 0, stdout=b"", stderr=b"")
+        return base(cmd, **kwargs)
+
+    return fake
+
+
+async def _run_with_real_restore(tmp_path, push_rc):
+    """Run `_run_locked` over one PR with two comments and the real `git_restore`; returns (mock_run, record mocks)."""
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
-    comment_2 = {**_FAKE_COMMENT, "id": 43}
-
-    run_cmd_side_effect = _ahead_run_cmd(push_rc=1)
-
+    fake = _recovering_run_cmd(push_rc)
     with (
         patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
         patch(
@@ -337,21 +354,52 @@ async def test_failed_end_push_does_not_stop_comments(tmp_xdg, tmp_path):
         ),
         patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
         patch(
-            "dotharness.pr_review.runners.address_comments.fetch_pr_comments", return_value=[_FAKE_COMMENT, comment_2]
+            "dotharness.pr_review.runners.address_comments.fetch_pr_comments",
+            return_value=[{**_ISSUE_COMMENT, "id": 41}, {**_ISSUE_COMMENT, "id": 43}],
         ),
         patch("dotharness.pr_review.runners.address_comments.git_detach_and_record", return_value="sha"),
         patch("dotharness.pr_review.runners.address_comments.git_fetch_and_checkout"),
-        patch("dotharness.pr_review.runners.address_comments.git_restore") as mock_restore,
-        patch("dotharness.pr_review.runners.address_comments.run_cmd", side_effect=run_cmd_side_effect),
-        patch("dotharness.pr_review.runners.common.run_cmd", side_effect=run_cmd_side_effect),
+        patch("dotharness.pr_review.runners.address_comments.run_cmd", side_effect=fake) as mock_run,
+        patch("dotharness.pr_review.runners.common.run_cmd", side_effect=fake),
         patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
+        patch("dotharness.pr_review.runners.address_comments.state.record_replied_comment") as rec_replied,
+        patch("dotharness.pr_review.runners.address_comments.state.record_handled_comment") as rec_handled,
     ):
-        mock_be.return_value.run = AsyncMock()
-        mock_be.return_value.run.return_value = MagicMock(returncode=0)
+        mock_be.return_value.run = AsyncMock(return_value=MagicMock(returncode=0))
         await address_comments._run_locked(cfg)
-    # a failed end push stops nothing: both backends ran, one push was attempted (and failed)
+    return mock_run, mock_be, rec_replied, rec_handled
+
+
+async def test_failed_end_push_does_not_stop_comments(tmp_xdg, tmp_path, caplog):
+    with caplog.at_level("WARNING"):
+        mock_run, mock_be, _, _ = await _run_with_real_restore(tmp_path, push_rc=1)
+    # a failed end push stops nothing: both backends ran, one push was attempted (and failed), no retry
     assert mock_be.return_value.run.call_count == 2
-    mock_restore.assert_called()
+    assert len(_push_calls(mock_run)) == 1
+    assert not [c for c in mock_run.call_args_list if c.args and ("fetch" in c.args[0] or "rebase" in c.args[0])]
+    assert not [c for c in _push_calls(mock_run) if any("force" in a for a in c.args[0])]
+    assert len([r for r in caplog.records if "git push of branch" in r.getMessage()]) == 1
+
+
+async def test_failed_end_push_logs_recovery_ref_and_pr(tmp_xdg, tmp_path, caplog):
+    with caplog.at_level("WARNING"):
+        await _run_with_real_restore(tmp_path, push_rc=1)
+    msgs = [r.getMessage() for r in caplog.records if "refs/harness-recovery/" in r.getMessage()]
+    assert len(msgs) == 1
+    assert "PR #2" in msgs[0]
+    assert "refs/harness-recovery/my-branch-0123456789ab" in msgs[0]
+
+
+async def test_successful_end_push_logs_no_recovery_ref(tmp_xdg, tmp_path, caplog):
+    with caplog.at_level("WARNING"):
+        await _run_with_real_restore(tmp_path, push_rc=0)
+    assert "refs/harness-recovery/" not in caplog.text
+
+
+async def test_failed_end_push_does_not_roll_back_state_writes(tmp_xdg, tmp_path):
+    _, _, rec_replied, rec_handled = await _run_with_real_restore(tmp_path, push_rc=1)
+    # state was recorded per comment, before the (failed) push, and nothing undoes it
+    assert rec_replied.call_count + rec_handled.call_count == 2
 
 
 async def test_stops_processing_comments_after_history_rewrite(tmp_xdg, tmp_path, caplog):

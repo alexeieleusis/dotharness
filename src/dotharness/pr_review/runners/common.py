@@ -258,9 +258,11 @@ async def get_head_sha(wdir: str, env: dict) -> str:
     return result.stdout.decode("utf-8").strip()
 
 
-async def git_restore(original_sha: str, branch: str, cwd: str, env: dict) -> None:
-    """Restore the checkout; cancellation-safe: a CancelledError lets the restore finish, then re-raises."""
-    task = asyncio.ensure_future(_git_restore_impl(original_sha, branch, cwd, env))
+async def git_restore(original_sha: str, branch: str, cwd: str, env: dict, *, pr_number: int | None = None) -> None:
+    """Restore the checkout; cancellation-safe: a CancelledError lets the restore finish, then re-raises.
+
+    `pr_number`, when given, is named in the recovery-ref log so a human can tie the ref to its PR."""
+    task = asyncio.ensure_future(_git_restore_impl(original_sha, branch, cwd, env, pr_number))
     try:
         await asyncio.shield(task)
     except asyncio.CancelledError:
@@ -268,11 +270,11 @@ async def git_restore(original_sha: str, branch: str, cwd: str, env: dict) -> No
         raise
 
 
-async def _git_restore_impl(original_sha: str, branch: str, cwd: str, env: dict) -> None:
+async def _git_restore_impl(original_sha: str, branch: str, cwd: str, env: dict, pr_number: int | None = None) -> None:
     preserved = True
     if branch:
         try:
-            await _preserve_unpushed_commits(branch, cwd, env)
+            await _preserve_unpushed_commits(branch, cwd, env, pr_number)
         except Exception:
             # Preservation failing (timeout, OSError, ...) must not leave the checkout on the
             # PR branch: still attempt the checkout, but keep the branch so no work is lost.
@@ -375,7 +377,7 @@ async def git_clean_if_dirty(cwd: str, env: dict) -> None:
         await git_clean_working_dir(cwd, env)
 
 
-async def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:
+async def _preserve_unpushed_commits(branch: str, cwd: str, env: dict, pr_number: int | None = None) -> None:
     """Before `git_restore` force-checks-out elsewhere and deletes the local `branch`,
     save any commit(s) on it that origin/`branch` doesn't have under a recovery ref.
 
@@ -401,8 +403,10 @@ async def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:
         ["git", "update-ref", recovery_ref, branch_sha], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False
     )
     if save_result.returncode == 0:
+        pr_label = f"PR #{pr_number}: " if pr_number is not None else ""
         logger.warning(
-            "git_restore: %s (%s) is not on origin/%s; preserved it at %s before deleting the local branch",
+            "%sgit_restore: %s (%s) is not on origin/%s; preserved it at %s before deleting the local branch",
+            pr_label,
             branch,
             branch_sha,
             branch,

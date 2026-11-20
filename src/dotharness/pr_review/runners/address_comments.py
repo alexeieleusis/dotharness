@@ -218,7 +218,7 @@ async def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -
     except Exception:
         logger.exception("PR #%d: error", number)
     finally:
-        await git_restore(ctx.original_sha, branch, ctx.wdir, ctx.env)
+        await git_restore(ctx.original_sha, branch, ctx.wdir, ctx.env, pr_number=number)
 
 
 async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) -> None:
