@@ -11,6 +11,7 @@ from dotharness.pr_review.runners import prune_projects
 from dotharness.pr_review.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
+    IdentifiedGitFailure,
     env_file_args,
     env_file_error,
     failure_summary,
@@ -19,7 +20,6 @@ from dotharness.pr_review.runners.common import (
     git_clean_working_dir,
     git_detach_and_record,
     git_fetch_and_checkout,
-    git_is_dirty,
     git_restore,
     host_current_user,
     is_change_request_open,
@@ -28,6 +28,7 @@ from dotharness.pr_review.runners.common import (
     open_host,
     pr_from_url,
     preserve_reviewer_request,
+    reraise_git_failure_if_clean,
     run_cmd,
     skipped_prs_message,
 )
@@ -44,15 +45,11 @@ class BaseAnalysisError(RuntimeError):
         super().__init__(f"git {cmd_name} {reason}")
 
 
-class PrGitFailureError(BaseAnalysisError):
-    """The cycle skipped at least one PR because of a git failure.
-
-    Subclasses ``BaseAnalysisError`` so the existing CLI handlers log it and exit 1 without a
-    ``cli.py`` change; it is raised only after the PR loop ended, so it never skips PRs itself.
-    """
+class PrGitFailureError(RuntimeError):
+    """The cycle skipped at least one PR because of a git failure (exit status 1)."""
 
     def __init__(self, failed: list[int]) -> None:
-        RuntimeError.__init__(self, skipped_prs_message("review-prs", failed))
+        super().__init__(skipped_prs_message("review-prs", failed))
         self.failed = failed
 
 
@@ -164,11 +161,14 @@ async def _process_pr_loop(
     # after an identified failure (cleanup succeeded and the tree probes clean) and stops
     # otherwise; PRs processed before it keep their credit regardless.
     for pr in to_process:
-        success, skipped, stop = await _process_pr_safely(pr, config, host, repo, env, current_user, wdir, original_sha)
-        if skipped:
+        try:
+            success = await _process_pr_safely(pr, config, host, repo, env, current_user, wdir, original_sha)
+        except FatalGitError as exc:
             failed.append(pr.number)
-        if stop:
-            break
+            logger.error("PR #%d skipped: git failure: %s", pr.number, failure_summary(exc), exc_info=True)
+            if not isinstance(exc, IdentifiedGitFailure):
+                break
+            continue
 
         if pr_url is None and success:
             state.record_reviewed_sha(config.repo_slug, pr.number, pr.head_revision, time.time())
@@ -184,28 +184,23 @@ async def _process_pr_safely(
     current_user: str,
     wdir: str,
     original_sha: str,
-) -> tuple[bool, bool, bool]:
+) -> bool:
     """Run _process_pr for one PR, always restoring HEAD afterward.
 
-    Returns (success, skipped, stop): ``skipped`` when the PR was skipped for a git failure,
-    ``stop`` when the cycle must end (a git failure that is not identified).
+    A git failure is cleaned up and re-raised as :class:`IdentifiedGitFailure` (loop may continue)
+    or the original ``FatalGitError`` (loop must stop), like the other runners.
     """
     logger.info("PR #%d: starting", pr.number)
     success = False
-    skipped = False
-    stop = False
     try:
         success = await _process_pr(pr, config, host, repo, env, current_user, wdir)
     except FatalGitError as exc:
-        skipped = True
-        logger.error("PR #%d skipped: git failure: %s", pr.number, failure_summary(exc), exc_info=True)
-        cleaned = await git_clean_working_dir(wdir, env, original_sha)
-        stop = not (cleaned and await git_is_dirty(wdir, env) is False)
+        await reraise_git_failure_if_clean(exc, wdir, env, original_sha)
     except Exception:
         logger.exception("PR #%d: error", pr.number)
     finally:
         await git_restore(original_sha, pr.head_reference, wdir, env)
-    return success, skipped, stop
+    return success
 
 
 async def _process_pr(

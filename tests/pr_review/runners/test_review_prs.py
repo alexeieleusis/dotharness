@@ -22,7 +22,11 @@ from tests.pr_review.runners.runner_support import REPO, make_change_request, ma
 @pytest.fixture(autouse=True)
 def clean_mock():
     """The failure-path clean runs real git otherwise; patch it by name in the runner's namespace."""
-    with patch("dotharness.pr_review.runners.review_prs.git_clean_working_dir") as m:
+    with (
+        patch("dotharness.pr_review.runners.review_prs.git_clean_working_dir") as m,
+        # The shared failure helper calls the common-module binding; point it at the same mock.
+        patch("dotharness.pr_review.runners.common.git_clean_working_dir", m),
+    ):
         yield m
 
 
@@ -30,7 +34,7 @@ def clean_mock():
 def dirty_mock(clean_mock):
     """The failure-path probe runs real git otherwise; default to a successful clean and a clean tree."""
     clean_mock.return_value = True
-    with patch("dotharness.pr_review.runners.review_prs.git_is_dirty", return_value=False) as m:
+    with patch("dotharness.pr_review.runners.common.git_is_dirty", return_value=False) as m:
         yield m
 
 
@@ -935,7 +939,7 @@ async def test_run_raises_after_skipped_pr_with_later_success(tmp_xdg, tmp_path)
         p[4],
         p[5],
         patch("dotharness.pr_review.runners.review_prs.acquire_lock"),
-        pytest.raises(review_prs.BaseAnalysisError, match="#1"),
+        pytest.raises(review_prs.PrGitFailureError, match="#1"),
     ):
         await review_prs.run(cfg)
     assert state.get_reviewed_sha("acme-frontend", 2) == "sha2"
@@ -954,7 +958,7 @@ async def test_run_raises_in_single_pr_mode_on_skipped_pr(tmp_xdg, tmp_path):
         p[4],
         p[5],
         patch("dotharness.pr_review.runners.review_prs.acquire_lock"),
-        pytest.raises(review_prs.BaseAnalysisError),
+        pytest.raises(review_prs.PrGitFailureError),
     ):
         await review_prs.run(cfg, pr_url="https://github.com/acme/acme-frontend/pull/1")
 
