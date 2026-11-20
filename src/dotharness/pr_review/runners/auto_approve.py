@@ -61,18 +61,16 @@ from dotharness.pr_review.runners.auto_approve_size import SizeEvaluation, evalu
 from dotharness.pr_review.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
-    IdentifiedGitFailure,
     Site,
     call_with_policy,
     get_head_sha,
     git_clean_if_dirty,
-    git_clean_working_dir,
     git_detach_and_record,
-    git_is_dirty,
     git_restore,
     host_current_user,
     open_host,
     record_git_failure,
+    reraise_git_failure_if_clean,
     run_cmd,
 )
 
@@ -179,10 +177,7 @@ async def _process_pr(
         try:
             checked_out_sha = await _checkout_pr_head(pr_number, wdir, env)
         except FatalGitError as exc:
-            cleaned = await git_clean_working_dir(wdir, env, original_sha)
-            if cleaned and await git_is_dirty(wdir, env) is False:
-                raise IdentifiedGitFailure(str(exc)) from exc
-            raise
+            await reraise_git_failure_if_clean(exc, wdir, env, original_sha)
         size = await evaluate_size(pr.base_reference, wdir, env, config.auto_approve)
         await _decide_and_act(pr, size, checked_out_sha, config, host, repo, current_user, dry_run)
     finally:

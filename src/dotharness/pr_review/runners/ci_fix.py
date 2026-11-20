@@ -56,18 +56,16 @@ from dotharness.pr_review.runners.ci_checks import text as _text
 from dotharness.pr_review.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
-    IdentifiedGitFailure,
     Site,
     call_with_policy,
-    git_clean_working_dir,
     git_detach_and_record,
     git_fetch_and_checkout,
-    git_is_dirty,
     git_restore,
     host_current_user,
     open_host,
     record_git_failure,
     repo_identity_check,
+    reraise_git_failure_if_clean,
     run_cmd,
 )
 from dotharness.pr_review.state import _state_path, _update_state
@@ -593,10 +591,7 @@ async def _fix_check(
         try:
             await git_fetch_and_checkout(branch, wdir, env)
         except FatalGitError as exc:
-            cleaned = await git_clean_working_dir(wdir, env, original_sha)
-            if cleaned and await git_is_dirty(wdir, env) is False:
-                raise IdentifiedGitFailure(str(exc)) from exc
-            raise
+            await reraise_git_failure_if_clean(exc, wdir, env, original_sha)
         # Look the step up only now: the failing run's step name comes from the PR head's workflows.
         step = find_step_command(wdir, step_name, check.workflow_name or "")
         if step is None:

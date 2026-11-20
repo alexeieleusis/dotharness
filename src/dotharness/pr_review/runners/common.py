@@ -138,6 +138,18 @@ class IdentifiedGitFailure(FatalGitError):
     """
 
 
+async def reraise_git_failure_if_clean(exc: FatalGitError, wdir: str, env: dict, original_sha: str) -> None:
+    """Clean the working tree after a git failure; raise the right error for the PR loop.
+
+    Raises :class:`IdentifiedGitFailure` (loop may continue) when the cleanup succeeded and the
+    tree probes clean, otherwise re-raises ``exc`` (loop must stop). Call from an ``except`` block.
+    """
+    cleaned = await git_clean_working_dir(wdir, env, original_sha)
+    if cleaned and await git_is_dirty(wdir, env) is False:
+        raise IdentifiedGitFailure(str(exc)) from exc
+    raise exc
+
+
 def record_git_failure(pr_number: int, exc: FatalGitError, failures: list[str]) -> bool:
     """Log and record a per-PR git failure; return True when the PR loop may continue to the next PR.
 

@@ -37,10 +37,8 @@ from dotharness.pr_review.runners.common import (
     get_pr_head_sha,
     get_traceability_review_flagged_locations,
     get_vibe_heal_context,
-    git_clean_working_dir,
     git_detach_and_record,
     git_fetch_and_checkout,
-    git_is_dirty,
     git_restore,
     has_design_review_comment,
     has_inline_review_comments,
@@ -53,6 +51,7 @@ from dotharness.pr_review.runners.common import (
     pr_from_url,
     preserve_reviewer_request,
     repo_identity_check,
+    reraise_git_failure_if_clean,
     resolve_linked_tickets,
     run_pr_level_pass,
     skipped_prs_message,
@@ -305,10 +304,7 @@ async def _process_pr(
                     ctx,
                 )
     except FatalGitError as exc:
-        cleaned = await git_clean_working_dir(wdir, env, original_sha)
-        if cleaned and await git_is_dirty(wdir, env) is False:
-            raise IdentifiedGitFailure(str(exc)) from exc
-        raise
+        await reraise_git_failure_if_clean(exc, wdir, env, original_sha)
     except Exception:
         logger.exception("PR #%d: error", pr_number)
     finally:

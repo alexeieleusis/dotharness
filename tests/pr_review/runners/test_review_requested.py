@@ -93,8 +93,8 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
         patch("dotharness.pr_review.runners.review_requested.git_detach_and_record", return_value="sha") as detach,
         patch("dotharness.pr_review.runners.review_requested.git_fetch_and_checkout") as fetch_checkout,
         patch("dotharness.pr_review.runners.review_requested.git_restore") as restore,
-        patch("dotharness.pr_review.runners.review_requested.git_clean_working_dir", return_value=True) as clean,
-        patch("dotharness.pr_review.runners.review_requested.git_is_dirty", return_value=False) as dirty,
+        patch("dotharness.pr_review.runners.common.git_clean_working_dir", return_value=True) as clean,
+        patch("dotharness.pr_review.runners.common.git_is_dirty", return_value=False) as dirty,
         patch("dotharness.pr_review.runners.review_requested.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.review_requested.get_pr_head_sha", return_value="abc123"),
         patch(
