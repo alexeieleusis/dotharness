@@ -1,5 +1,5 @@
 import subprocess
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -16,6 +16,13 @@ from dotharness.pr_review import state
 from dotharness.pr_review.config import PreCommand, SubDir
 from dotharness.pr_review.runners import review_prs
 from tests.pr_review.runners.runner_support import REPO, make_change_request, make_scaffold
+
+
+@pytest.fixture(autouse=True)
+def clean_mock():
+    """The failure-path clean runs real git otherwise; patch it by name in the runner's namespace."""
+    with patch("dotharness.pr_review.runners.review_prs.git_clean_working_dir") as m:
+        yield m
 
 
 def _seed(prs=()) -> InMemoryCodeHost:
@@ -600,7 +607,7 @@ async def test_run_base_analysis_does_not_persist_sha_when_subdir_fails(tmp_xdg,
     mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
 
 
-async def test_run_base_analysis_raises_on_git_fetch_failure(tmp_xdg, tmp_path, caplog):
+async def test_run_base_analysis_raises_on_git_fetch_failure(tmp_xdg, tmp_path, caplog, clean_mock):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     with patch.object(type(cfg), "repo_slug", "acme-frontend"):
         state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
@@ -620,9 +627,10 @@ async def test_run_base_analysis_raises_on_git_fetch_failure(tmp_xdg, tmp_path, 
     assert "Base analysis: git fetch failed: fetch error" in caplog.text
     assert mock_run.call_count == 1
     assert "fetch" in str(mock_run.call_args_list[0])
+    clean_mock.assert_called_once_with(str(tmp_path), {})
 
 
-async def test_run_base_analysis_raises_on_rev_parse_failure(tmp_xdg, tmp_path, caplog):
+async def test_run_base_analysis_raises_on_rev_parse_failure(tmp_xdg, tmp_path, caplog, clean_mock):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     with patch.object(type(cfg), "repo_slug", "acme-frontend"):
         state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
@@ -643,9 +651,10 @@ async def test_run_base_analysis_raises_on_rev_parse_failure(tmp_xdg, tmp_path, 
         await review_prs._run_base_analysis(cfg, {})
     assert "Base analysis: git rev-parse failed: rev-parse error" in caplog.text
     assert mock_run.call_count == 2
+    clean_mock.assert_called_once_with(str(tmp_path), {})
 
 
-async def test_run_base_analysis_raises_on_checkout_failure(tmp_xdg, tmp_path, caplog):
+async def test_run_base_analysis_raises_on_checkout_failure(tmp_xdg, tmp_path, caplog, clean_mock):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     with patch.object(type(cfg), "repo_slug", "acme-frontend"):
         state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
@@ -670,10 +679,11 @@ async def test_run_base_analysis_raises_on_checkout_failure(tmp_xdg, tmp_path, c
         await review_prs._run_base_analysis(cfg, {})
     assert "Base analysis: git checkout failed: checkout error" in caplog.text
     mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
+    clean_mock.assert_called_once_with(str(tmp_path), {}, "original-sha")
 
 
 @pytest.mark.parametrize("step", ["fetch", "rev-parse", "checkout"])
-async def test_run_base_analysis_raises_on_git_timeout(tmp_xdg, tmp_path, caplog, step):
+async def test_run_base_analysis_raises_on_git_timeout(tmp_xdg, tmp_path, caplog, step, clean_mock):
     state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     seen = []
@@ -705,8 +715,10 @@ async def test_run_base_analysis_raises_on_git_timeout(tmp_xdg, tmp_path, caplog
     assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == "old-sha"
     if step == "checkout":
         mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
+        clean_mock.assert_called_once_with(str(tmp_path), {}, "original-sha")
     else:
         mock_restore.assert_not_called()
+        clean_mock.assert_called_once_with(str(tmp_path), {})
 
 
 async def test_run_locked_propagates_base_analysis_timeout_without_processing_prs(tmp_xdg, tmp_path):
@@ -831,7 +843,7 @@ async def test_run_locked_returns_early_when_vibe_heal_disabled(tmp_path):
     mock_run.assert_not_called()
 
 
-async def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path):
+async def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path, clean_mock):
     from dotharness.pr_review.runners.common import FatalGitError
 
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
@@ -854,6 +866,7 @@ async def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path):
     assert state.get_reviewed_sha("acme-frontend", 3) == "sha3"
     assert state.get_reviewed_sha("acme-frontend", 4) is None
     assert mock_restore.call_count == 2
+    clean_mock.assert_called_once_with(str(tmp_path), ANY, "sha")
 
 
 async def test_fatal_git_error_from_process_pr_stops_remaining_prs(tmp_xdg, tmp_path):

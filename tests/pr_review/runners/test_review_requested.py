@@ -93,6 +93,7 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
         patch("dotharness.pr_review.runners.review_requested.git_detach_and_record", return_value="sha") as detach,
         patch("dotharness.pr_review.runners.review_requested.git_fetch_and_checkout") as fetch_checkout,
         patch("dotharness.pr_review.runners.review_requested.git_restore") as restore,
+        patch("dotharness.pr_review.runners.review_requested.git_clean_working_dir") as clean,
         patch("dotharness.pr_review.runners.review_requested.get_pr_base_branch", return_value="main"),
         patch("dotharness.pr_review.runners.review_requested.get_pr_head_sha", return_value="abc123"),
         patch(
@@ -114,6 +115,7 @@ def _full_run_mocks(*, prs=None, changed_files=None, skip_pr=False):
             detach=detach,
             fetch_checkout=fetch_checkout,
             restore=restore,
+            clean=clean,
             host=host,
             os=os_mock,
             backend=backend,
@@ -718,6 +720,7 @@ async def test_fatal_git_error_stops_loop_and_restores(tmp_xdg, tmp_path):
         await review_requested._run_locked(cfg, pr_url=None)
     assert mocks.fetch_checkout.call_count == 1
     mocks.restore.assert_called_once()
+    mocks.clean.assert_called_once_with(str(tmp_path), ANY, "sha")
 
 
 async def test_process_pr_skips_summary_when_file_reviews_fail(tmp_path):

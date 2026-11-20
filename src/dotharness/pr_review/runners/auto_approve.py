@@ -64,6 +64,7 @@ from dotharness.pr_review.runners.common import (
     Site,
     call_with_policy,
     get_head_sha,
+    git_clean_working_dir,
     git_detach_and_record,
     git_restore,
     host_current_user,
@@ -172,7 +173,11 @@ async def _process_pr(
     logger.info("PR #%d: starting%s", pr_number, " (dry-run)" if dry_run else "")
     original_sha = await git_detach_and_record(wdir, env)
     try:
-        checked_out_sha = await _checkout_pr_head(pr_number, wdir, env)
+        try:
+            checked_out_sha = await _checkout_pr_head(pr_number, wdir, env)
+        except FatalGitError:
+            await git_clean_working_dir(wdir, env, original_sha)
+            raise
         size = await evaluate_size(pr.base_reference, wdir, env, config.auto_approve)
         await _decide_and_act(pr, size, checked_out_sha, config, host, repo, current_user, dry_run)
     finally:

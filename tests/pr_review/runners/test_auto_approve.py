@@ -74,6 +74,7 @@ def _mocks(prs=None, size=None, host=None):
         patch(p + "git_detach_and_record", return_value="orig"),
         patch(p + "_checkout_pr_head", return_value="sha1") as checkout,
         patch(p + "git_restore") as restore,
+        patch(p + "git_clean_working_dir") as clean,
         patch(p + "evaluate_size", return_value=size or _size()) as ev,
         patch(p + "check_timing_gate", return_value=GateResult(GateStatus.PASSED, "zero-findings")) as gate,
         patch(p + "check_approval_safety", return_value=SafetyResult(SafetyStatus.SAFE, "ok", "sha1")) as safety,
@@ -86,6 +87,7 @@ def _mocks(prs=None, size=None, host=None):
             scaffold=scaffold,
             checkout=checkout,
             restore=restore,
+            clean=clean,
             ev=ev,
             gate=gate,
             safety=safety,
@@ -399,3 +401,18 @@ async def test_fork_pr_skipped(tmp_path):
         await auto_approve.run(_cfg(tmp_path))
     m.checkout.assert_not_called()
     m.approve.assert_not_called()
+
+
+async def test_checkout_failure_cleans_working_dir_with_original_sha(tmp_path):
+    with _mocks() as m:
+        m.checkout.side_effect = FatalGitError("checkout failed")
+        with pytest.raises(auto_approve.AutoApproveError, match="checkout failed"):
+            await auto_approve.run(_cfg(tmp_path))
+    m.clean.assert_called_once_with(str(tmp_path), {}, "orig")
+    m.restore.assert_called_once()
+
+
+async def test_successful_pr_does_not_clean(tmp_path):
+    with _mocks() as m:
+        await auto_approve.run(_cfg(tmp_path))
+    m.clean.assert_not_called()

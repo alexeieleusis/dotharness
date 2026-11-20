@@ -20,6 +20,7 @@ from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
+    FatalGitError,
     LinkedTicket,
     build_design_review_prompt,
     build_early_comment_context,
@@ -38,6 +39,7 @@ from dotharness.pr_review.runners.common import (
     get_pr_head_sha,
     get_traceability_review_flagged_locations,
     get_vibe_heal_context,
+    git_clean_working_dir,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
@@ -105,7 +107,11 @@ async def _should_skip_pr(
 async def _gather_pr_context(
     pr: ChangeRequest, number: int, config, host: CodeHost, repo: RepositoryRef, wdir: str, env: dict
 ) -> dict:
-    await git_fetch_and_checkout(pr.head_reference, wdir, env)
+    try:
+        await git_fetch_and_checkout(pr.head_reference, wdir, env)
+    except FatalGitError:
+        await git_clean_working_dir(wdir, env)
+        raise
     vibe_heal_context = get_vibe_heal_context(config.repo.subdirs, wdir, pr.head_reference)
     pr_description = await get_pr_description(host, repo, number)
     base_branch = await get_pr_base_branch(host, repo, number)

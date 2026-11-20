@@ -35,6 +35,7 @@ from dotharness.pr_review.runners.common import (
     get_pr_head_sha,
     get_traceability_review_flagged_locations,
     get_vibe_heal_context,
+    git_clean_working_dir,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
@@ -268,6 +269,7 @@ async def _process_pr(
                     ctx,
                 )
     except FatalGitError:
+        await git_clean_working_dir(wdir, env, original_sha)
         raise
     except Exception:
         logger.exception("PR #%d: error", pr_number)

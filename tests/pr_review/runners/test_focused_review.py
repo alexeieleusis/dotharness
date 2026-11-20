@@ -502,12 +502,15 @@ async def test_fatal_git_error_continues_to_remaining_prs(tmp_xdg, tmp_path):
             side_effect=focused_review.FatalGitError("boom"),
         ) as mock_checkout,
         patch("dotharness.pr_review.runners.focused_review.git_restore") as mock_restore,
+        patch("dotharness.pr_review.runners.focused_review.git_clean_working_dir") as mock_clean,
         patch("dotharness.pr_review.runners.focused_review._resolve_knowledge_file", return_value="knowledge text"),
         patch("dotharness.pr_review.runners.focused_review.Backend", autospec=True) as mock_be,
     ):
         await focused_review._run_locked(cfg)
     assert mock_checkout.call_count == 2
     assert mock_restore.call_count == 2
+    # Clean only (no sha), once per PR whose checkout failed; the loop still continues.
+    assert [c.args[2:] for c in mock_clean.call_args_list] == [(), ()]
     mock_be.return_value.run.assert_not_called()
 
 

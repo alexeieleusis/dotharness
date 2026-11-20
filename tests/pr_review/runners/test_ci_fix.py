@@ -3,7 +3,7 @@ import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -21,6 +21,7 @@ from dotharness.code_host.testing import SECRET, InMemoryCodeHost
 from dotharness.pr_review.config import CiFixConfig, HarnessConfig, HarnessSection, RepoConfig
 from dotharness.pr_review.runners import ci_fix
 from dotharness.pr_review.runners.ci_fix import DIGEST_PREFIX, CiFixError, _Step
+from dotharness.pr_review.runners.common import FatalGitError
 
 P = "dotharness.pr_review.runners.ci_fix."
 SLUG = "acme-frontend"
@@ -160,6 +161,7 @@ def _mocks(
         patch(P + "git_detach_and_record", return_value="orig"),
         patch(P + "git_fetch_and_checkout") as checkout,
         patch(P + "git_restore") as restore,
+        patch(P + "git_clean_working_dir") as clean,
         patch(P + "_run_step", side_effect=step_results) as run_step,
         patch(P + "run_cmd", side_effect=fake_run_cmd),
         patch(P + "Backend", return_value=backend) as backend_cls,
@@ -168,6 +170,7 @@ def _mocks(
             host=host,
             checkout=checkout,
             restore=restore,
+            clean=clean,
             run_step=run_step,
             pushes=pushes,
             cmds=cmds,
@@ -469,6 +472,22 @@ async def test_step_is_looked_up_after_checkout_of_the_pr_branch(tmp_path, caplo
     assert m.pushes == []
     m.restore.assert_called_once()
     assert any("parse-failure" in d for d in _digests(caplog))
+
+
+async def test_checkout_failure_cleans_working_dir_with_original_sha(tmp_path):
+    with _mocks(tmp_path) as m:
+        m.checkout.side_effect = FatalGitError("checkout failed")
+        with pytest.raises(Exception, match="checkout failed"):
+            await ci_fix.run(_cfg(tmp_path))
+    m.clean.assert_called_once_with(str(tmp_path), ANY, "orig")
+    m.restore.assert_called_once()
+
+
+async def test_successful_checkout_does_not_clean(tmp_path):
+    with _mocks(tmp_path) as m:
+        await ci_fix.run(_cfg(tmp_path))
+    m.checkout.assert_called_once()
+    m.clean.assert_not_called()
 
 
 async def test_ac9_restore_runs_when_exception_mid_run(tmp_path):

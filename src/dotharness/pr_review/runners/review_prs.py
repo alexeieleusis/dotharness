@@ -14,6 +14,7 @@ from dotharness.pr_review.runners.common import (
     env_file_args,
     env_file_error,
     get_changed_files,
+    git_clean_working_dir,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
@@ -151,6 +152,7 @@ async def _process_pr_safely(
         success = await _process_pr(pr, config, host, repo, env, current_user, wdir)
     except FatalGitError:
         logger.exception("PR #%d: fatal git error", pr.number)
+        await git_clean_working_dir(wdir, env, original_sha)
         fatal = True
     except Exception:
         logger.exception("PR #%d: error", pr.number)
@@ -305,9 +307,12 @@ async def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:
     regardless of outcome. Raises BaseAnalysisError on a git timeout or non-zero exit."""
     wdir = str(config.repo.working_dir)
 
-    await _run_base_git("fetch", ["git", "fetch", "--recurse-submodules", "origin", "main"], wdir, env)
-
-    result = await _run_base_git("rev-parse", ["git", "rev-parse", "origin/main"], wdir, env)
+    try:
+        await _run_base_git("fetch", ["git", "fetch", "--recurse-submodules", "origin", "main"], wdir, env)
+        result = await _run_base_git("rev-parse", ["git", "rev-parse", "origin/main"], wdir, env)
+    except BaseAnalysisError:
+        await git_clean_working_dir(wdir, env)
+        raise
     main_sha = result.stdout.decode("utf-8").strip()
 
     vh_state = state.read_vibe_heal_state(config.repo_slug)
@@ -328,6 +333,9 @@ async def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:
                 break
         if success:
             state.write_vibe_heal_state(config.repo_slug, last_main_sha=main_sha)
+    except BaseAnalysisError:
+        await git_clean_working_dir(wdir, env, original_sha)
+        raise
     except FatalGitError:
         logger.exception("Base analysis: fatal git error")
         return False

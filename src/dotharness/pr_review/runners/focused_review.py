@@ -22,6 +22,7 @@ from dotharness.pr_review.runners.common import (
     fetch_pr_comments,
     fetch_review_threads,
     find_reply_with_marker,
+    git_clean_working_dir,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
@@ -105,6 +106,7 @@ async def _run_locked(config: HarnessConfig) -> None:
                 await _process_matches(matches, config, instructions_template, backend, number, wdir, env)
         except FatalGitError:
             logger.exception("PR #%d: fatal git error", number)
+            await git_clean_working_dir(wdir, env)
             continue
         except Exception:
             logger.exception("PR #%d: error", number)

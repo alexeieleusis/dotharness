@@ -58,6 +58,7 @@ from dotharness.pr_review.runners.common import (
     FatalGitError,
     Site,
     call_with_policy,
+    git_clean_working_dir,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
@@ -587,7 +588,11 @@ async def _fix_check(
 
     original_sha = await git_detach_and_record(wdir, env)
     try:
-        await git_fetch_and_checkout(branch, wdir, env)
+        try:
+            await git_fetch_and_checkout(branch, wdir, env)
+        except FatalGitError:
+            await git_clean_working_dir(wdir, env, original_sha)
+            raise
         # Look the step up only now: the failing run's step name comes from the PR head's workflows.
         step = find_step_command(wdir, step_name, check.workflow_name or "")
         if step is None:
