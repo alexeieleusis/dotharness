@@ -148,6 +148,11 @@ def record_git_failure(pr_number: int, exc: FatalGitError, failures: list[str]) 
     return isinstance(exc, IdentifiedGitFailure)
 
 
+def skipped_prs_message(runner: str, failed: list[int]) -> str:
+    """The error text a runner raises when PRs were skipped for git failures."""
+    return f"{runner} skipped PRs for git failures: " + ", ".join(f"#{n}" for n in failed)
+
+
 def failure_summary(exc: BaseException) -> str:
     """First line of git's stderr when anything in the cause chain carries one, else the exception text."""
     link: BaseException | None = exc

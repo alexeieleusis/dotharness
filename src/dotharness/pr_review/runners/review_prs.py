@@ -29,6 +29,7 @@ from dotharness.pr_review.runners.common import (
     pr_from_url,
     preserve_reviewer_request,
     run_cmd,
+    skipped_prs_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ class PrGitFailureError(BaseAnalysisError):
     """
 
     def __init__(self, failed: list[int]) -> None:
-        RuntimeError.__init__(self, "review-prs skipped PRs for git failures: " + ", ".join(f"#{n}" for n in failed))
+        RuntimeError.__init__(self, skipped_prs_message("review-prs", failed))
         self.failed = failed
 
 

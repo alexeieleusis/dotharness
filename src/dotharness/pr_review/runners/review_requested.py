@@ -55,6 +55,7 @@ from dotharness.pr_review.runners.common import (
     repo_identity_check,
     resolve_linked_tickets,
     run_pr_level_pass,
+    skipped_prs_message,
 )
 from dotharness.pr_review.runners.regret_review import (
     RecordingBackend,
@@ -80,9 +81,7 @@ async def run(config: HarnessConfig, pr_url: str | None = None) -> None:
     if failed:
         # Raised after the lock is released; an Exception subclass (not SystemExit) so
         # `run all` records the runner as failed and carries on, like AutoApproveError.
-        raise ReviewRequestedError(
-            "review-requested skipped PRs for git failures: " + ", ".join(f"#{n}" for n in failed)
-        )
+        raise ReviewRequestedError(skipped_prs_message("review-requested", failed))
 
 
 async def _run_locked(config: HarnessConfig, pr_url: str | None) -> list[int]:
