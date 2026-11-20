@@ -29,7 +29,6 @@ from dotharness.pr_review.runners.common import (
     check_design_review_comment_status,
     check_regret_review_comment_status,
     check_review_summary_comment_status,
-    check_test_layer_review_comment_status,
     check_traceability_review_comment_status,
     get_change_request,
     get_changed_files,
@@ -46,7 +45,6 @@ from dotharness.pr_review.runners.common import (
     git_restore,
     has_design_review_comment,
     has_regret_review_comment,
-    has_test_layer_review_comment,
     has_traceability_review_comment,
     host_current_user,
     open_host,
@@ -237,76 +235,9 @@ async def _review_files(
     return any_failure, partial_files
 
 
-async def _build_design_prompt(
-    design_instructions: str,
-    extra_knowledge: str | None,
-    number: int,
-    config,
-    ctx: dict,
-    wdir: str,
-    current_user: str,
-    env: dict,
-) -> str:
-    diff_sections = "".join([
-        build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
-        for file in ctx["files"]
-    ])
-    prior_flagged_locations = await get_design_review_flagged_locations(ctx["host"], ctx["repo"], number, current_user)
-    return build_design_review_prompt(
-        design_instructions,
-        extra_knowledge,
-        diff_sections,
-        _change_request(ctx, number),
-        number,
-        config.repo.name,
-        ctx["commit_sha"],
-        ctx["pr_description"],
-        ctx["vibe_heal_context"],
-        prior_flagged_locations,
-    )
-
-
-async def _run_design_review(
-    design_instructions: str,
-    extra_knowledge: str | None,
-    number: int,
-    config,
-    ctx: dict,
-    backend: Backend,
-    wdir: str,
-    current_user: str,
-    env: dict,
-) -> None:
-    """Tracked independently of reviewed_prs/partial_reviews (state.design_reviewed_prs)
-    so this pass's own retry never forces, or is forced by, the per-file review's
-    retry-from-scratch behavior. The upfront comment check is an optimization to skip a
-    redundant backend run; the comment check after the backend run is the one that
-    actually gates state.add_design_reviewed_pr, since a returncode of 0 only means the
-    backend exited cleanly, not that it actually posted — review_requested.py, which has
-    no persisted state at all, relies on the equivalent check as its *only* signal.
-
-    Orchestration itself (noop check → build prompt → run backend → re-verify marker) is
-    shared with _run_traceability_review below, and with review_requested.py's equivalent
-    pair, via common.run_pr_level_pass; this wrapper only adds the persisted-state
-    mutation run_pr_level_pass has no reason to know about."""
-    is_done = await has_design_review_comment(ctx["host"], ctx["repo"], number, current_user)
-    result = await run_pr_level_pass(
-        number,
-        backend,
-        wdir,
-        is_done=is_done,
-        build_prompt=lambda: _build_design_prompt(
-            design_instructions, extra_knowledge, number, config, ctx, wdir, current_user, env
-        ),
-        has_comment_fn=lambda: check_design_review_comment_status(ctx["host"], ctx["repo"], number, current_user),
-        label="design review",
-    )
-    if result:
-        state.add_design_reviewed_pr(config.repo_slug, number)
-
-
 _TEST_FILE_SEGMENTS = frozenset({"test", "tests"})
 _TEST_FILE_SUFFIXES = ("_test.py", ".test.ts", ".test.tsx", ".test.js", ".spec.ts", ".spec.js")
+_TEST_LAYER_NONE_SENTINEL = "NONE"
 
 
 def is_test_file_path(path: str) -> bool:
@@ -330,31 +261,63 @@ def has_test_and_non_test_files(files: list[str]) -> bool:
     return kinds == {True, False}
 
 
-async def _test_layer_short_circuit(number: int, ctx: dict) -> bool | None:
-    """False (not done, nothing persisted) when the PR lacks a test file or a non-test file, so a
-    later push that adds the missing kind is evaluated afresh; None to proceed to the backend."""
-    if has_test_and_non_test_files(ctx["files"]):
+def parse_test_layer_reply(reply: str) -> str | None:
+    """The test-layer backend's reply is its summary text for the Design Review comment, or
+    nothing / NONE when it has no findings (None here)."""
+    text = reply.strip()
+    if not text or text.strip(" .!`*").upper() == _TEST_LAYER_NONE_SENTINEL:
         return None
-    logger.info("PR #%d: test layer review skipped — changed files lack a test file or a non-test file", number)
-    return False
+    return text
 
 
-async def _build_test_layer_prompt(
+def build_test_layer_section(enabled: bool, summary: str | None) -> str:
+    """Appended to the design instructions so the design backend's single PR-level comment is the
+    record that the test-layer pass ran. Empty when the pass is disabled (prompt unchanged)."""
+    if not enabled:
+        return ""
+    if summary is None:
+        return (
+            "\n\n## Test Layers\n"
+            "The separate test-layer pass found nothing to report. Omit the `## Test Layers` "
+            "subsection from your PR-level comment entirely."
+        )
+    return (
+        "\n\n## Test Layers\n"
+        "A separate test-layer pass has already run and posted its own inline comments. Include the "
+        "text between the lines below verbatim in your single `# Design Review` PR-level comment, "
+        "under a `## Test Layers` subheading placed after your design summary and before the "
+        "marker. Do not re-post those inline findings.\n\n"
+        f"---\n{summary}\n---"
+    )
+
+
+async def run_test_layer_pass(
     test_layer_instructions: str,
     extra_knowledge: str | None,
     number: int,
     config,
     ctx: dict,
+    backend: Backend,
     wdir: str,
+    current_user: str,
     env: dict,
-) -> str:
-    # The whole changed-file set is the context, exactly as for the design pass. Inline findings carry the
-    # shared inline marker, so no per-pass prior-findings list exists to pass.
+) -> str | None:
+    """Own backend pass, run right before the design backend call inside the design review step
+    (shared by self_review.py and review_requested.py). It has no marker, state or PR-level comment
+    of its own: its inline findings carry the design marker and its reply (the summary text, or
+    NONE) is captured and handed to the design prompt, whose single '# Design Review' comment is the
+    record that the pass executed. Best effort: no backend call when the changed files lack a test
+    file or a non-test file, and a backend failure is logged and yields None so the design pass
+    still runs."""
+    if not has_test_and_non_test_files(ctx["files"]):
+        logger.info("PR #%d: test layer review skipped — changed files lack a test file or a non-test file", number)
+        return None
+    prior_flagged_locations = await get_design_review_flagged_locations(ctx["host"], ctx["repo"], number, current_user)
     diff_sections = "".join([
         build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
         for file in ctx["files"]
     ])
-    return build_design_review_prompt(
+    prompt = build_design_review_prompt(
         test_layer_instructions,
         extra_knowledge,
         diff_sections,
@@ -364,11 +327,63 @@ async def _build_test_layer_prompt(
         ctx["commit_sha"],
         ctx["pr_description"],
         ctx["vibe_heal_context"],
-        [],
+        prior_flagged_locations,
+    )
+    reply: dict[str, str] = {}
+    try:
+        result = await cast(Backend, RecordingBackend(backend, reply)).run(
+            prompt, cwd=wdir, context=f"PR #{number} test layer review"
+        )
+    except subprocess.TimeoutExpired:
+        logger.exception("PR #%d: test layer review backend timed out — continuing without it", number)
+        return None
+    if result.returncode != 0:
+        logger.error("PR #%d: test layer review backend exited %d — continuing without it", number, result.returncode)
+        return None
+    return parse_test_layer_reply(reply.get("reply", ""))
+
+
+async def _build_design_prompt(
+    design_instructions: str,
+    test_layer_instructions: str,
+    extra_knowledge: str | None,
+    number: int,
+    config,
+    ctx: dict,
+    backend: Backend,
+    wdir: str,
+    current_user: str,
+    env: dict,
+) -> str:
+    # test_layer_instructions is empty when [test_layer_review] is disabled: no pass, prompt unchanged.
+    test_layer_summary = (
+        await run_test_layer_pass(
+            test_layer_instructions, extra_knowledge, number, config, ctx, backend, wdir, current_user, env
+        )
+        if test_layer_instructions
+        else None
+    )
+    diff_sections = "".join([
+        build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
+        for file in ctx["files"]
+    ])
+    prior_flagged_locations = await get_design_review_flagged_locations(ctx["host"], ctx["repo"], number, current_user)
+    return build_design_review_prompt(
+        design_instructions + build_test_layer_section(bool(test_layer_instructions), test_layer_summary),
+        extra_knowledge,
+        diff_sections,
+        _change_request(ctx, number),
+        number,
+        config.repo.name,
+        ctx["commit_sha"],
+        ctx["pr_description"],
+        ctx["vibe_heal_context"],
+        prior_flagged_locations,
     )
 
 
-async def _run_test_layer_review(
+async def _run_design_review(
+    design_instructions: str,
     test_layer_instructions: str,
     extra_knowledge: str | None,
     number: int,
@@ -379,24 +394,45 @@ async def _run_test_layer_review(
     current_user: str,
     env: dict,
 ) -> None:
-    """Tracked independently of every other pass (state.test_layer_reviewed_prs), mirroring
-    _run_design_review: this pass's retry never forces, or is forced by, another pass's retry. A PR
-    with no test file or no non-test file makes no backend call and is left unmarked."""
-    is_done = await has_test_layer_review_comment(ctx["host"], ctx["repo"], number, current_user)
+    """Tracked independently of reviewed_prs/partial_reviews (state.design_reviewed_prs)
+    so this pass's own retry never forces, or is forced by, the per-file review's
+    retry-from-scratch behavior. The upfront comment check is an optimization to skip a
+    redundant backend run; the comment check after the backend run is the one that
+    actually gates state.add_design_reviewed_pr, since a returncode of 0 only means the
+    backend exited cleanly, not that it actually posted — review_requested.py, which has
+    no persisted state at all, relies on the equivalent check as its *only* signal.
+
+    Orchestration itself (noop check → build prompt → run backend → re-verify marker) is
+    shared with _run_traceability_review below, and with review_requested.py's equivalent
+    pair, via common.run_pr_level_pass; this wrapper only adds the persisted-state
+    mutation run_pr_level_pass has no reason to know about.
+
+    When test_layer_instructions is non-empty, run_test_layer_pass runs its own backend call
+    just before the design backend call (only when the design pass itself runs: it has no
+    separate completion record) and its summary is injected into the design prompt."""
+    is_done = await has_design_review_comment(ctx["host"], ctx["repo"], number, current_user)
     result = await run_pr_level_pass(
         number,
         backend,
         wdir,
         is_done=is_done,
-        build_prompt=lambda: _build_test_layer_prompt(
-            test_layer_instructions, extra_knowledge, number, config, ctx, wdir, env
+        build_prompt=lambda: _build_design_prompt(
+            design_instructions,
+            test_layer_instructions,
+            extra_knowledge,
+            number,
+            config,
+            ctx,
+            backend,
+            wdir,
+            current_user,
+            env,
         ),
-        has_comment_fn=lambda: check_test_layer_review_comment_status(ctx["host"], ctx["repo"], number, current_user),
-        label="test layer review",
-        short_circuit=lambda: _test_layer_short_circuit(number, ctx),
+        has_comment_fn=lambda: check_design_review_comment_status(ctx["host"], ctx["repo"], number, current_user),
+        label="design review",
     )
     if result:
-        state.add_test_layer_reviewed_pr(config.repo_slug, number)
+        state.add_design_reviewed_pr(config.repo_slug, number)
 
 
 async def _build_traceability_prompt(
@@ -675,9 +711,9 @@ class _CycleContext:
     file_instructions: str
     summary_instructions: str
     design_instructions: str
+    test_layer_instructions: str
     traceability_instructions: str
     regret_instructions: str
-    test_layer_instructions: str
     extra_knowledge: str | None
     reviewed: set
     original_sha: str
@@ -694,7 +730,6 @@ class _PassFlags:
     design: bool
     traceability: bool
     regret: bool
-    run_test_layers: bool
 
 
 async def _process_single_pr(
@@ -761,6 +796,7 @@ async def _process_single_pr(
             if flags.design:
                 await _run_design_review(
                     cycle.design_instructions,
+                    cycle.test_layer_instructions,
                     extra_knowledge,
                     number,
                     config,
@@ -794,18 +830,6 @@ async def _process_single_pr(
                     current_user,
                     env,
                 )
-            if flags.run_test_layers:
-                await _run_test_layer_review(
-                    cycle.test_layer_instructions,
-                    extra_knowledge,
-                    number,
-                    config,
-                    ctx,
-                    backend,
-                    wdir,
-                    current_user,
-                    env,
-                )
     except Exception:
         logger.exception("PR #%d: error", number)
     finally:
@@ -826,7 +850,6 @@ async def _run_locked(config: HarnessConfig) -> None:
     design_reviewed = set(pruned_state["design_reviewed_prs"])
     traceability_reviewed = set(pruned_state["traceability_reviewed_prs"])
     regret_reviewed = set(pruned_state["regret_reviewed_prs"])
-    test_layer_reviewed = set(pruned_state["test_layer_reviewed_prs"])
 
     knowledge_dir = Path(config.harness.knowledge_dir) / "pr-review"
     variables = await host.discussion.prompt_variables()
@@ -836,14 +859,14 @@ async def _run_locked(config: HarnessConfig) -> None:
     traceability_instructions = render_prompt(
         (knowledge_dir / "review-traceability.md").read_text(encoding="utf-8"), variables
     )
-    regret_instructions = (
-        render_prompt((knowledge_dir / "review-regret.md").read_text(encoding="utf-8"), variables)
-        if config.regret_review.enabled
-        else ""
-    )
     test_layer_instructions = (
         render_prompt((knowledge_dir / "review-test-layers.md").read_text(encoding="utf-8"), variables)
         if config.test_layer_review.enabled
+        else ""
+    )
+    regret_instructions = (
+        render_prompt((knowledge_dir / "review-regret.md").read_text(encoding="utf-8"), variables)
+        if config.regret_review.enabled
         else ""
     )
     extra_knowledge = _get_extra_knowledge(config)
@@ -858,9 +881,9 @@ async def _run_locked(config: HarnessConfig) -> None:
         file_instructions=file_instructions,
         summary_instructions=summary_instructions,
         design_instructions=design_instructions,
+        test_layer_instructions=test_layer_instructions,
         traceability_instructions=traceability_instructions,
         regret_instructions=regret_instructions,
-        test_layer_instructions=test_layer_instructions,
         extra_knowledge=extra_knowledge,
         reviewed=reviewed,
         original_sha=original_sha,
@@ -874,7 +897,6 @@ async def _run_locked(config: HarnessConfig) -> None:
         run_design = number not in design_reviewed
         run_traceability = number not in traceability_reviewed
         run_regret = config.regret_review.enabled and number not in regret_reviewed
-        run_test_layers = config.test_layer_review.enabled and number not in test_layer_reviewed
         skip = await _should_skip_pr(number, host, repo, current_user, reviewed)
         run_files_summary = skip is False
         if skip is None:
@@ -889,7 +911,7 @@ async def _run_locked(config: HarnessConfig) -> None:
             sr_state["partial_reviews"].pop(str(number), None)
             state.write_self_review_state(config.repo_slug, list(reviewed), sr_state["partial_reviews"])
 
-        if not (run_files_summary or run_design or run_traceability or run_regret or run_test_layers):
+        if not run_files_summary and not run_design and not run_traceability and not run_regret:
             continue
 
         logger.info("PR #%d: starting", number)
@@ -899,7 +921,7 @@ async def _run_locked(config: HarnessConfig) -> None:
             number,
             cycle,
             partial_files,
-            _PassFlags(run_files_summary, run_design, run_traceability, run_regret, run_test_layers),
+            _PassFlags(run_files_summary, run_design, run_traceability, run_regret),
         )
 
 

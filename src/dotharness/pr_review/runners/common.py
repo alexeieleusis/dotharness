@@ -84,7 +84,6 @@ INLINE_REVIEW_MARKER = "<!-- dotharness-review-inline -->"
 DESIGN_REVIEW_MARKER = "<!-- dotharness-review-design -->"
 TRACEABILITY_REVIEW_MARKER = "<!-- dotharness-review-traceability -->"
 REGRET_REVIEW_MARKER = "<!-- dotharness-review-regret -->"
-TEST_LAYER_REVIEW_MARKER = "<!-- dotharness-review-test-layers -->"
 
 # Every PR-level pass marker shares the `dotharness-review` prefix that
 # is_review_summary_comment's substring check looks for, so a comment carrying one of
@@ -96,7 +95,6 @@ _PR_LEVEL_PASS_MARKERS = (
     DESIGN_REVIEW_MARKER,
     TRACEABILITY_REVIEW_MARKER,
     REGRET_REVIEW_MARKER,
-    TEST_LAYER_REVIEW_MARKER,
 )
 
 # requirement-traceability-requirements.md §7.2/§11.2: the early-comment window is a
@@ -882,19 +880,6 @@ async def check_regret_review_comment_status(
     """Tri-state version of has_regret_review_comment: None means the check itself was
     inconclusive (API failure), as opposed to a confirmed absence of the comment."""
     return await check_pr_level_pass_comment_status(host, repo, REGRET_REVIEW_MARKER, pr_number, current_user)
-
-
-async def has_test_layer_review_comment(host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str) -> bool:
-    """True when the current user already posted the test-layer pass's comment on this PR."""
-    return await has_pr_level_pass_comment(host, repo, TEST_LAYER_REVIEW_MARKER, pr_number, current_user)
-
-
-async def check_test_layer_review_comment_status(
-    host: CodeHost, repo: RepositoryRef, pr_number: int, current_user: str
-) -> bool | None:
-    """Tri-state version of has_test_layer_review_comment: None means the check itself was
-    inconclusive (API failure), as opposed to a confirmed absence of the comment."""
-    return await check_pr_level_pass_comment_status(host, repo, TEST_LAYER_REVIEW_MARKER, pr_number, current_user)
 
 
 async def get_pr_level_flagged_locations(

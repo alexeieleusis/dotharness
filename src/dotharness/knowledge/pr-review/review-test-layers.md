@@ -42,18 +42,21 @@ layer. There is no P0, P2 or P3 here. Each finding must name:
 - the redundant test, by file path and test name.
 
 Cite paths and test names, never line numbers. Anchor the inline comment on the
-redundant test (fall back to line 1 of its file if the exact line is unavailable), and
-end the body with the literal marker `<!-- dotharness-review-inline -->`:
+redundant test (fall back to line 1 of its file if the exact line is unavailable). Append
+the literal marker `<!-- dotharness-review-design -->` to the end of the body: it is
+invisible when rendered and is how this tool recognizes (and does not repeat) these
+comments on a later run, so it must be present on every comment you post here:
 
-    <host-post-inline-comment-cmd>"...<!-- dotharness-review-inline -->"
+    <host-post-inline-comment-cmd>"...<!-- dotharness-review-design -->"
 
-### PR-level comment
-If there is at least one finding, post exactly one PR-level comment briefly summarizing
-the findings, ending with the literal marker `<!-- dotharness-review-test-layers -->`:
+If an `## Already-flagged design findings` section lists locations already commented on,
+do not post another inline comment at those locations.
 
-    <host-post-comment-cmd> $'# Test Layer Review\n...<!-- dotharness-review-test-layers -->'
-
-If there are no findings, post nothing at all: no inline comment and no PR-level comment.
+### Reply (no PR-level comment)
+Do NOT post a PR-level comment: another review step includes your summary in its own
+comment. End your reply with a short plain-text summary of your findings, one sentence per
+finding, naming the same paths and test names. If there are no findings, post nothing and end
+your reply with exactly `NONE`.
 
 ## Static Analysis
 If a `## Static Analysis` section is present in the input, ignore it unless it points at

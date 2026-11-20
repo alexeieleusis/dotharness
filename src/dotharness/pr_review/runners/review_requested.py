@@ -44,7 +44,6 @@ from dotharness.pr_review.runners.common import (
     has_inline_review_comments,
     has_regret_review_comment,
     has_review_summary_comment,
-    has_test_layer_review_comment,
     has_traceability_review_comment,
     host_current_user,
     open_host,
@@ -67,7 +66,7 @@ from dotharness.pr_review.runners.regret_review import (
     parse_regret_judgment,
     post_regret_comment,
 )
-from dotharness.pr_review.runners.self_review import has_test_and_non_test_files
+from dotharness.pr_review.runners.self_review import build_test_layer_section, run_test_layer_pass
 
 logger = logging.getLogger(__name__)
 
@@ -193,11 +192,10 @@ class PrLevelPassesDone:
     design: bool
     traceability: bool
     regret: bool
-    test_layer: bool
 
     @property
     def all_done(self) -> bool:
-        return self.design and self.traceability and self.regret and self.test_layer
+        return self.design and self.traceability and self.regret
 
 
 async def _select_prs(
@@ -230,14 +228,7 @@ async def _passes_done(
     regret_done = (
         await has_regret_review_comment(host, repo, pr_number, current_user) if config.regret_review.enabled else True
     )
-    test_layer_done = (
-        await has_test_layer_review_comment(host, repo, pr_number, current_user)
-        if config.test_layer_review.enabled
-        else True
-    )
-    return files_summary_done, PrLevelPassesDone(
-        design=design_done, traceability=traceability_done, regret=regret_done, test_layer=test_layer_done
-    )
+    return files_summary_done, PrLevelPassesDone(design=design_done, traceability=traceability_done, regret=regret_done)
 
 
 async def _process_pr(
@@ -311,19 +302,6 @@ async def _process_pr(
                     env,
                     current_user,
                     pr_level_done.regret,
-                    ctx,
-                )
-            if config.test_layer_review.enabled:
-                await _run_test_layer_review(
-                    pr,
-                    config,
-                    knowledge_dir,
-                    extra_knowledge,
-                    backend,
-                    wdir,
-                    env,
-                    current_user,
-                    pr_level_done.test_layer,
                     ctx,
                 )
     except FatalGitError as exc:
@@ -475,9 +453,25 @@ async def _run_design_review(
     repo_name = config.repo.name
 
     async def build_prompt() -> str:
-        design_instructions = render_prompt(
-            (knowledge_dir / "review-design.md").read_text(encoding="utf-8"),
-            await ctx["host"].discussion.prompt_variables(),
+        variables = await ctx["host"].discussion.prompt_variables()
+        design_instructions = render_prompt((knowledge_dir / "review-design.md").read_text(encoding="utf-8"), variables)
+        # Own backend pass right before the design call (best effort; no marker/state/comment of its
+        # own: the design comment below is the record that it ran). Disabled -> prompt unchanged.
+        test_layer_enabled = config.test_layer_review.enabled
+        test_layer_summary = (
+            await run_test_layer_pass(
+                render_prompt((knowledge_dir / "review-test-layers.md").read_text(encoding="utf-8"), variables),
+                extra_knowledge,
+                pr_number,
+                config,
+                ctx,
+                backend,
+                wdir,
+                current_user,
+                env,
+            )
+            if test_layer_enabled
+            else None
         )
         diff_sections = "".join([
             build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
@@ -487,7 +481,7 @@ async def _run_design_review(
             ctx["host"], ctx["repo"], pr_number, current_user
         )
         return build_design_review_prompt(
-            design_instructions,
+            design_instructions + build_test_layer_section(test_layer_enabled, test_layer_summary),
             extra_knowledge,
             diff_sections,
             _change_request(ctx, pr_number),
@@ -508,65 +502,6 @@ async def _run_design_review(
             build_prompt=build_prompt,
             has_comment_fn=lambda: has_design_review_comment(ctx["host"], ctx["repo"], pr_number, current_user),
             label="design review",
-        )
-    )
-
-
-async def _run_test_layer_review(
-    pr: ChangeRequest,
-    config: HarnessConfig,
-    knowledge_dir: Path,
-    extra_knowledge: str | None,
-    backend: Backend,
-    wdir: str,
-    env: dict,
-    current_user: str,
-    test_layer_done: bool,
-    ctx: dict,
-) -> bool:
-    """Mirrors _run_design_review: no persisted state, so the marker comment (checked once by the
-    caller as test_layer_done) is the only idempotency signal. A PR whose changed files lack a test
-    file or a non-test file makes no backend call."""
-    pr_number = pr.number
-
-    async def short_circuit() -> bool | None:
-        if has_test_and_non_test_files(ctx["files"]):
-            return None
-        logger.info("PR #%d: test layer review skipped — changed files lack a test file or a non-test file", pr_number)
-        return False
-
-    async def build_prompt() -> str:
-        test_layer_instructions = render_prompt(
-            (knowledge_dir / "review-test-layers.md").read_text(encoding="utf-8"),
-            await ctx["host"].discussion.prompt_variables(),
-        )
-        diff_sections = "".join([
-            build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
-            for file in ctx["files"]
-        ])
-        return build_design_review_prompt(
-            test_layer_instructions,
-            extra_knowledge,
-            diff_sections,
-            _change_request(ctx, pr_number),
-            pr_number,
-            config.repo.name,
-            ctx["commit_sha"],
-            ctx["pr_description"],
-            ctx["vibe_heal_context"],
-            [],
-        )
-
-    return bool(
-        await run_pr_level_pass(
-            pr_number,
-            backend,
-            wdir,
-            is_done=test_layer_done,
-            build_prompt=build_prompt,
-            has_comment_fn=lambda: has_test_layer_review_comment(ctx["host"], ctx["repo"], pr_number, current_user),
-            label="test layer review",
-            short_circuit=short_circuit,
         )
     )
 

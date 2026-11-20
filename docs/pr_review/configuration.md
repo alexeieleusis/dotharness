@@ -223,7 +223,7 @@ Optional. Used only by `pr_review run local-review`. All other commands ignore i
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `enabled` | boolean | `true` | Runs the PR-level test-layer pass. Setting it to `false` stops the PR-level pass and its backend call. A non-boolean value raises `ConfigError`. |
+| `enabled` | boolean | `true` | Runs the test-layer pass inside the design review step, as its own backend call just before the design backend call. It looks for integration-layer tests that re-assert cases a logic-layer test already covers, and makes no backend call when the changed files lack a test file or a non-test file. Its inline findings carry the design-review marker, and its summary appears in the `# Design Review` PR-level comment under a `## Test Layers` subheading (omitted when there is nothing to report). The pass has no marker or state of its own. Setting it to `false` skips the pass and its backend call. A non-boolean value raises `ConfigError`. |
 
 ```toml
 [test_layer_review]

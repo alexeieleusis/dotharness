@@ -1,4 +1,5 @@
 import contextlib
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -876,7 +877,7 @@ async def test_process_pr_skips_summary_when_file_reviews_fail(tmp_path):
             {},
             "me",
             True,
-            review_requested.PrLevelPassesDone(design=True, traceability=True, regret=True, test_layer=True),
+            review_requested.PrLevelPassesDone(design=True, traceability=True, regret=True),
         )
     summary.assert_not_called()
 
@@ -884,58 +885,101 @@ async def test_process_pr_skips_summary_when_file_reviews_fail(tmp_path):
 _TEST_LAYER_FILES = ["src/foo.py", "tests/test_foo.py"]
 
 
-async def test_test_layer_review_not_run_when_disabled(tmp_xdg, tmp_path):
-    _setup_knowledge(tmp_path)
-    cfg = _cfg(tmp_path)
-    cfg.test_layer_review.enabled = False
-    with (
-        _full_run_mocks(changed_files=_TEST_LAYER_FILES) as mocks,
-        patch("dotharness.pr_review.runners.review_requested.has_test_layer_review_comment") as mock_has,
-        patch("dotharness.pr_review.runners.review_requested._run_test_layer_review") as mock_pass,
-    ):
-        await review_requested._run_locked(cfg, pr_url=None)
-    mock_has.assert_not_called()
-    mock_pass.assert_not_called()
-    # 2 file reviews + 1 summary; no test-layer call.
-    assert mocks.backend.return_value.run.call_count == 3
+def _contexts(mocks):
+    return [c.kwargs["context"] for c in mocks.backend.return_value.run.call_args_list]
 
 
-async def test_test_layer_review_invoked_when_enabled_and_both_file_kinds_present(tmp_xdg, tmp_path):
+def _prompt_for(mocks, context):
+    return next(c.args[0] for c in mocks.backend.return_value.run.call_args_list if c.kwargs["context"] == context)
+
+
+def _route_backend(mocks, *, test_layer_reply=b"", test_layer_rc=0):
+    async def run(prompt, cwd=None, opencode_dir=None, context=None):
+        if context.endswith("test layer review"):
+            return MagicMock(returncode=test_layer_rc, stdout=test_layer_reply)
+        return MagicMock(returncode=0, stdout=b"")
+
+    mocks.backend.return_value.run = AsyncMock(side_effect=run)
+
+
+async def _run_design(tmp_path, *, files=_TEST_LAYER_FILES, enabled=True, **backend_kwargs):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
+    cfg.test_layer_review.enabled = enabled
     with (
-        _full_run_mocks(changed_files=_TEST_LAYER_FILES) as mocks,
-        patch("dotharness.pr_review.runners.review_requested.has_test_layer_review_comment", side_effect=[False, True]),
+        _full_run_mocks(changed_files=files) as mocks,
+        patch("dotharness.pr_review.runners.review_requested.has_design_review_comment", return_value=False),
     ):
+        _route_backend(mocks, **backend_kwargs)
         await review_requested._run_locked(cfg, pr_url=None)
-    # 2 file reviews + 1 summary + 1 test layer
-    assert mocks.backend.return_value.run.call_count == 4
-    assert mocks.backend.return_value.run.call_args_list[-1].kwargs["context"] == "PR #1 test layer review"
+    return mocks
+
+
+async def test_test_layer_pass_runs_before_design_and_reply_is_injected(tmp_xdg, tmp_path):
+    mocks = await _run_design(tmp_path, test_layer_reply=b"Moved? tests/test_foo.py::test_a covers it.\n")
+    contexts = _contexts(mocks)
+    assert contexts[-2:] == ["PR #1 test layer review", "PR #1 design review"]
+    design_prompt = _prompt_for(mocks, "PR #1 design review")
+    assert "## Test Layers" in design_prompt
+    assert "Moved? tests/test_foo.py::test_a covers it." in design_prompt
+    assert "verbatim" in design_prompt
+    assert "Omit" not in design_prompt
+
+
+@pytest.mark.parametrize("reply", [b"", b"  \n", b"NONE", b"none.\n"])
+async def test_test_layer_no_findings_tells_design_to_omit_subsection(tmp_xdg, tmp_path, reply):
+    mocks = await _run_design(tmp_path, test_layer_reply=reply)
+    assert "PR #1 test layer review" in _contexts(mocks)
+    design_prompt = _prompt_for(mocks, "PR #1 design review")
+    assert "Omit the `## Test Layers` subsection" in design_prompt
+
+
+async def test_test_layer_not_run_when_disabled(tmp_xdg, tmp_path):
+    mocks = await _run_design(tmp_path, enabled=False)
+    assert not any("test layer" in c for c in _contexts(mocks))
+    assert "Test Layers" not in _prompt_for(mocks, "PR #1 design review")
 
 
 @pytest.mark.parametrize("files", [["tests/test_foo.py"], ["src/foo.py", "src/bar.py"]])
-async def test_test_layer_review_makes_no_backend_call_when_only_one_file_kind(tmp_xdg, tmp_path, files):
+async def test_test_layer_no_backend_call_when_only_one_file_kind(tmp_xdg, tmp_path, files):
+    mocks = await _run_design(tmp_path, files=files)
+    contexts = _contexts(mocks)
+    assert not any("test layer" in c for c in contexts)
+    assert contexts[-1] == "PR #1 design review"
+    assert "Omit the `## Test Layers` subsection" in _prompt_for(mocks, "PR #1 design review")
+
+
+async def test_test_layer_backend_failure_does_not_block_design(tmp_xdg, tmp_path):
+    mocks = await _run_design(tmp_path, test_layer_rc=1, test_layer_reply=b"garbage findings")
+    assert _contexts(mocks)[-2:] == ["PR #1 test layer review", "PR #1 design review"]
+    design_prompt = _prompt_for(mocks, "PR #1 design review")
+    assert "garbage findings" not in design_prompt
+    assert "Omit the `## Test Layers` subsection" in design_prompt
+
+
+async def test_test_layer_timeout_does_not_block_design(tmp_xdg, tmp_path):
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
     with (
-        _full_run_mocks(changed_files=files) as mocks,
-        patch("dotharness.pr_review.runners.review_requested.has_test_layer_review_comment", return_value=False),
+        _full_run_mocks(changed_files=_TEST_LAYER_FILES) as mocks,
+        patch("dotharness.pr_review.runners.review_requested.has_design_review_comment", return_value=False),
     ):
+
+        async def run(prompt, cwd=None, opencode_dir=None, context=None):
+            if context.endswith("test layer review"):
+                raise subprocess.TimeoutExpired("cmd", 1)
+            return MagicMock(returncode=0, stdout=b"")
+
+        mocks.backend.return_value.run = AsyncMock(side_effect=run)
         await review_requested._run_locked(cfg, pr_url=None)
-    # Only the per-file reviews and the summary; the test-layer pass is short-circuited.
-    assert mocks.backend.return_value.run.call_count == len(files) + 1
-    contexts = [c.kwargs["context"] for c in mocks.backend.return_value.run.call_args_list]
-    assert "PR #1 test layer review" not in contexts
+    assert _contexts(mocks)[-1] == "PR #1 design review"
 
 
-async def test_test_layer_review_noop_when_marker_already_present(tmp_xdg, tmp_path):
+async def test_test_layer_not_run_when_design_already_done(tmp_xdg, tmp_path):
+    """The pass has no completion record of its own: with the design comment present it never runs."""
     _setup_knowledge(tmp_path)
     cfg = _cfg(tmp_path)
-    with (
-        _full_run_mocks(changed_files=_TEST_LAYER_FILES, skip_pr=True) as mocks,
-        patch("dotharness.pr_review.runners.review_requested.has_test_layer_review_comment", return_value=True),
-    ):
+    with _full_run_mocks(changed_files=_TEST_LAYER_FILES) as mocks:
+        _route_backend(mocks)
         await review_requested._run_locked(cfg, pr_url=None)
-    # Everything already done: the all-done short-circuit means no backend call and no checkout.
-    mocks.backend.return_value.run.assert_not_called()
-    mocks.fetch_checkout.assert_not_called()
+    assert not any("test layer" in c for c in _contexts(mocks))

@@ -11,13 +11,11 @@ from dotharness.pr_review.runners.common import (
     FOCUSED_REVIEW_MARKER,
     INLINE_REVIEW_MARKER,
     REGRET_REVIEW_MARKER,
-    TEST_LAYER_REVIEW_MARKER,
     TRACEABILITY_REVIEW_MARKER,
     check_design_review_comment_status,
     check_pr_level_pass_comment_status,
     check_regret_review_comment_status,
     check_review_summary_comment_status,
-    check_test_layer_review_comment_status,
     check_traceability_review_comment_status,
     fetch_pr_comments,
     fetch_review_threads,
@@ -30,7 +28,6 @@ from dotharness.pr_review.runners.common import (
     has_pr_level_pass_comment,
     has_regret_review_comment,
     has_review_summary_comment,
-    has_test_layer_review_comment,
     has_traceability_review_comment,
     merge_thread_state,
 )
@@ -125,7 +122,6 @@ async def test_has_pr_level_pass_comment_uses_the_given_marker():
         (DESIGN_REVIEW_MARKER, has_design_review_comment, check_design_review_comment_status),
         (TRACEABILITY_REVIEW_MARKER, has_traceability_review_comment, check_traceability_review_comment_status),
         (REGRET_REVIEW_MARKER, has_regret_review_comment, check_regret_review_comment_status),
-        (TEST_LAYER_REVIEW_MARKER, has_test_layer_review_comment, check_test_layer_review_comment_status),
     ],
 )
 async def test_pass_comment_readers_match_marker_and_user(marker, has, check):
@@ -145,7 +141,6 @@ async def test_pass_comment_readers_match_marker_and_user(marker, has, check):
         (check_design_review_comment_status, has_design_review_comment),
         (check_traceability_review_comment_status, has_traceability_review_comment),
         (check_regret_review_comment_status, has_regret_review_comment),
-        (check_test_layer_review_comment_status, has_test_layer_review_comment),
     ],
 )
 async def test_pass_comment_readers_distinguish_failed_read_from_absence(check, has):
