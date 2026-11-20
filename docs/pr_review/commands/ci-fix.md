@@ -121,3 +121,11 @@ a digest entry instead of a fix attempt.
 If any PR fails (a read failed, a git error, a push failed), the command logs
 it. It continues with the other PRs. At the end, it exits non-zero with the
 list of failures.
+
+A git failure while checking out a PR branch (for example a timeout) skips that
+PR and is logged at ERROR as `PR #N skipped: git failure: <first line of git's
+stderr>`. The working directory is then cleaned and probed with
+`git status --porcelain`. If the cleanup succeeded and the tree is clean, the
+failure is identified and the command continues with the next PR. Otherwise the
+loop stops. Either way, a cycle that skipped a PR for a git failure never exits
+0, and the aggregate error lists the skipped PR numbers.

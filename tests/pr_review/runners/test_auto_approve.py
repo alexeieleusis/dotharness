@@ -1,5 +1,6 @@
 import contextlib
 import logging
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -74,7 +75,8 @@ def _mocks(prs=None, size=None, host=None):
         patch(p + "git_detach_and_record", return_value="orig"),
         patch(p + "_checkout_pr_head", return_value="sha1") as checkout,
         patch(p + "git_restore") as restore,
-        patch(p + "git_clean_working_dir") as clean,
+        patch(p + "git_clean_working_dir", return_value=True) as clean,
+        patch(p + "git_is_dirty", return_value=False) as dirty,
         patch(p + "evaluate_size", return_value=size or _size()) as ev,
         patch(p + "check_timing_gate", return_value=GateResult(GateStatus.PASSED, "zero-findings")) as gate,
         patch(p + "check_approval_safety", return_value=SafetyResult(SafetyStatus.SAFE, "ok", "sha1")) as safety,
@@ -88,6 +90,7 @@ def _mocks(prs=None, size=None, host=None):
             checkout=checkout,
             restore=restore,
             clean=clean,
+            dirty=dirty,
             ev=ev,
             gate=gate,
             safety=safety,
@@ -252,6 +255,56 @@ async def test_one_pr_failing_does_not_stop_others_and_raises(tmp_path):
     assert "git exploded" in str(exc.value)
     assert [c.args[2] for c in m.approve.call_args_list] == [2, 3]
     assert m.restore.call_count == 3
+
+
+def _checkout_fails_on(*numbers):
+    async def checkout(pr_number, wdir, env):
+        if pr_number in numbers:
+            raise FatalGitError(f"git checkout of PR #{pr_number} head failed")  # noqa: TRY003
+        return "sha1"
+
+    return checkout
+
+
+async def test_identified_git_failure_skips_pr_continues_and_raises(tmp_path, caplog):
+    prs = [{**PR, "number": 1}, {**PR, "number": 2}, {**PR, "number": 3}]
+    with _mocks(prs=prs) as m, caplog.at_level(logging.INFO):
+        m.checkout.side_effect = _checkout_fails_on(2)
+        with pytest.raises(auto_approve.AutoApproveError) as exc:
+            await auto_approve.run(_cfg(tmp_path))
+    assert "#2" in str(exc.value)
+    assert "#1" not in str(exc.value)
+    assert "#3" not in str(exc.value)
+    assert [c.args[2] for c in m.approve.call_args_list] == [1, 3]
+    assert m.restore.call_count == 3
+    assert m.clean.call_args.args == (str(tmp_path), {}, "orig")
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR and "skipped: git failure" in r.getMessage()]
+    assert [r.getMessage() for r in errors] == ["PR #2 skipped: git failure: git checkout of PR #2 head failed"]
+
+
+async def test_skip_log_uses_first_stderr_line(tmp_path, caplog):
+    err = subprocess.CalledProcessError(1, ["git", "checkout"], stderr=b"fatal: bad object\nsecond line\n")
+    with _mocks() as m, caplog.at_level(logging.ERROR):
+        m.checkout.side_effect = FatalGitError("checkout failed")
+        m.checkout.side_effect.__cause__ = err
+        with pytest.raises(auto_approve.AutoApproveError):
+            await auto_approve.run(_cfg(tmp_path))
+    messages = [r.getMessage() for r in caplog.records if "skipped: git failure" in r.getMessage()]
+    assert messages == ["PR #1 skipped: git failure: fatal: bad object"]
+
+
+@pytest.mark.parametrize(("cleaned", "probe"), [(False, False), (True, True), (True, None)])
+async def test_unidentified_git_failure_stops_loop(tmp_path, cleaned, probe):
+    prs = [{**PR, "number": 1}, {**PR, "number": 2}, {**PR, "number": 3}]
+    with _mocks(prs=prs) as m:
+        m.checkout.side_effect = _checkout_fails_on(2)
+        m.clean.return_value = cleaned
+        m.dirty.return_value = probe
+        with pytest.raises(auto_approve.AutoApproveError) as exc:
+            await auto_approve.run(_cfg(tmp_path))
+    assert "#2" in str(exc.value)
+    assert [c.args[2] for c in m.approve.call_args_list] == [1]
+    assert m.checkout.call_count == 2
 
 
 async def test_fatal_git_error_stops_loop_and_skips_remaining_prs(tmp_path):

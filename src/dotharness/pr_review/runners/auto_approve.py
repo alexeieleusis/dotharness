@@ -67,6 +67,7 @@ from dotharness.pr_review.runners.common import (
     git_clean_if_dirty,
     git_clean_working_dir,
     git_detach_and_record,
+    git_is_dirty,
     git_restore,
     host_current_user,
     open_host,
@@ -78,6 +79,26 @@ logger = logging.getLogger(__name__)
 
 class AutoApproveError(RuntimeError):
     """Raised by run() after the loop when one or more PRs failed."""
+
+
+class IdentifiedGitFailure(FatalGitError):
+    """A per-PR git failure after which the cleanup succeeded and the tree probes clean (the loop continues)."""
+
+
+def _failure_summary(exc: BaseException) -> str:
+    """First line of git's stderr when anything in the cause chain carries one, else the exception text."""
+    link: BaseException | None = exc
+    for _ in range(10):
+        if link is None:
+            break
+        stderr = getattr(link, "stderr", None)
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        if stderr and stderr.strip():
+            return stderr.strip().splitlines()[0]
+        link = link.__cause__ or link.__context__
+    lines = str(exc).strip().splitlines()
+    return lines[0] if lines else repr(exc)
 
 
 async def run(config: HarnessConfig, *, dry_run: bool = False) -> None:
@@ -109,9 +130,10 @@ async def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
         try:
             await _process_pr(pr, config, wdir, env, host, repo, current_user, dry_run)
         except FatalGitError as e:
-            logger.exception("PR #%d: fatal git error", pr_number)
+            logger.error("PR #%d skipped: git failure: %s", pr_number, _failure_summary(e), exc_info=True)
             failures.append(f"#{pr_number}: {e}")
-            break
+            if not isinstance(e, IdentifiedGitFailure):
+                break
         except Exception as e:
             logger.exception("PR #%d: error", pr_number)
             failures.append(f"#{pr_number}: {e}")
@@ -176,8 +198,10 @@ async def _process_pr(
     try:
         try:
             checked_out_sha = await _checkout_pr_head(pr_number, wdir, env)
-        except FatalGitError:
-            await git_clean_working_dir(wdir, env, original_sha)
+        except FatalGitError as exc:
+            cleaned = await git_clean_working_dir(wdir, env, original_sha)
+            if cleaned and await git_is_dirty(wdir, env) is False:
+                raise IdentifiedGitFailure(str(exc)) from exc
             raise
         size = await evaluate_size(pr.base_reference, wdir, env, config.auto_approve)
         await _decide_and_act(pr, size, checked_out_sha, config, host, repo, current_user, dry_run)
