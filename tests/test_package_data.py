@@ -36,10 +36,10 @@ KNOWLEDGE_SHA256 = {
     "pr-review/focused-review.md": "4e9fe8f1eb55b8aa4304434cdbe7909ff824d2ad55931dbabcf5579f02238985",
     "pr-review/local-address-finding.md": "5bc748e734c7fdf8e3b6d52286c87b5b82dc5615f28ca5a7b6faf33aacda3838",
     "pr-review/local-review-design.md": "ea4e46e550e2ea4aef8c93704bcaa97ec06ffbc127064b9d85f02fe0eeedb764",
-    "pr-review/local-review-file.md": "218b969e6ad698081c687c8c4117138b1c06689bc19ac850b1e548beeb023361",
+    "pr-review/local-review-file.md": "5ef3c954bfb5a2632263958774b089ff70fdada25e61f365274b0126f1214464",
     "pr-review/local-review-summary.md": "92bfeef0fbf88337d992858120ddd181be8c29503c59f36006c1602eccf78a2f",
     "pr-review/review-design.md": "05b6c3b7912251fd90b32d6fc49aebdb7d80b4ccc9ec1494f56428554846921d",
-    "pr-review/review-file.md": "ebe822b7228ff78850e5afc14116e5916a06b5aeb7bb71f9d59562e23b6b4a13",
+    "pr-review/review-file.md": "1d5c70380fa04ac524786cd5e52478822e48d1121301fb313ae355929245095c",
     "pr-review/review-prs.md": "1bfa0785e2d22f077fbd253cf664f081bfa9233c6ebbf4c0fc88024c1c31e9c5",
     "pr-review/review-regret.md": "3537507b7e614d1b301782447ecc7cc3da4d010d2c99f4ed73ae290348ef52c7",
     "pr-review/review-summary.md": "751c2cb9f080688b0b722cde80ce4eaeedfc59b3f7d0f5118074547207293640",
@@ -56,7 +56,11 @@ KNOWLEDGE_SHA256 = {
 
 
 # Files added after the byte-identical port; covered by their own tests, so no digest is pinned.
-NEW_KNOWLEDGE_FILES = {"sisyphus/refactor-prompt.md", "pr-review/review-test-layers.md"}
+NEW_KNOWLEDGE_FILES = {
+    "sisyphus/refactor-prompt.md",
+    "pr-review/review-test-layers.md",
+    "pr-review/local-review-test-layers.md",
+}
 
 
 def _sha256(path: Path) -> str:

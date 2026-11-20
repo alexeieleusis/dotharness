@@ -290,7 +290,12 @@ from dotharness.pr_review.config import load_config  # noqa: E402
 def _lr_config(tmp_path: Path, repo: Path, extra: str = "") -> Path:
     kd = tmp_path / "knowledge"
     (kd / "pr-review").mkdir(parents=True, exist_ok=True)
-    for name in ("local-review-file.md", "local-review-summary.md", "local-review-design.md"):
+    for name in (
+        "local-review-file.md",
+        "local-review-summary.md",
+        "local-review-design.md",
+        "local-review-test-layers.md",
+    ):
         (kd / "pr-review" / name).write_text("T {OUTPUT_FILE}", encoding="utf-8")
     cfg = tmp_path / "lr.toml"
     cfg.write_text(

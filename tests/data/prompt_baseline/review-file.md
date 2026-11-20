@@ -27,6 +27,7 @@ Analyze across these four dimensions:
 4. **Security** — hardcoded secrets, injection vulnerabilities, missing input validation.
 
 For test files: focus on missing edge cases and error conditions.
+For test files: flag a test only when the file under review is clearly a component or integration test that re-asserts logic-level cases visible in the same diff and the layer is unambiguous; report it as P1, never flag a wiring check, and if unsure post nothing.
 For application code: when identifying a bug, include a concrete input/state that
 would reproduce it — something that could directly become a unit test case.
 

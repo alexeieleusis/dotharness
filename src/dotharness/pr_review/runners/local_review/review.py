@@ -31,7 +31,7 @@ from dotharness.pr_review.runners.local_review.address import (
     run_address_phase,
     select_review_dir,
 )
-from dotharness.pr_review.runners.local_review.findings import stamp_findings_file
+from dotharness.pr_review.runners.local_review.findings import parse_findings, stamp_findings_file
 from dotharness.pr_review.runners.local_review.git import (
     _NO_UNTRACKED_FLAG,
     check_output_dir_outside_repo,
@@ -45,11 +45,13 @@ from dotharness.pr_review.runners.local_review.prompts import (
     FILE_TEMPLATE,
     REVIEW_TEMPLATES,
     SUMMARY_TEMPLATE,
+    TEST_LAYERS_TEMPLATE,
     build_change_context,
     build_change_description,
     build_design_prompt,
     build_file_prompt,
     build_summary_prompt,
+    build_test_layers_prompt,
 )
 from dotharness.pr_review.runners.local_review.store import (
     DESIGN_NAME,
@@ -72,9 +74,12 @@ from dotharness.pr_review.runners.local_review.types import (
     NothingToReviewError,
     RepoMutatedError,
 )
+from dotharness.pr_review.runners.self_review import has_test_and_non_test_files
 from dotharness.repo_guard import RepoIdentityError
 
 logger = logging.getLogger(__name__)
+
+TEST_LAYERS_NAME = "test-layers.md"  # transient: merged into design.md, never indexed
 
 
 @dataclass
@@ -147,6 +152,22 @@ def _single_pass_output_ok(name: str, out: Path, files_all_done: bool) -> bool:
     return True
 
 
+def _merge_test_layers(design_out: Path, test_layers_out: Path) -> None:
+    """Append the test-layer pass's P1 finding blocks to the design output under `## Test Layers`.
+
+    Nothing is appended when there is no such block, so an empty pass leaves no trace.
+    """
+    try:
+        text = test_layers_out.read_text(encoding="utf-8")
+    except OSError:
+        return
+    blocks = [b.text for b in parse_findings(text) if b.valid and b.severity == "P1"]
+    if not blocks:
+        return
+    body = design_out.read_text(encoding="utf-8").rstrip("\n")
+    design_out.write_text(body + "\n\n## Test Layers\n\n" + "\n\n".join(blocks) + "\n", encoding="utf-8")
+
+
 class _ReviewPasses:
     """State and per-pass steps of one review-phase run (extracted from `run` to keep it flat)."""
 
@@ -177,6 +198,11 @@ class _ReviewPasses:
         self.file_instr = render_prompt((knowledge / FILE_TEMPLATE).read_text(encoding="utf-8"), prompt_variables)
         self.summary_instr = render_prompt((knowledge / SUMMARY_TEMPLATE).read_text(encoding="utf-8"), prompt_variables)
         self.design_instr = render_prompt((knowledge / DESIGN_TEMPLATE).read_text(encoding="utf-8"), prompt_variables)
+        self.test_layers_instr = (
+            render_prompt((knowledge / TEST_LAYERS_TEMPLATE).read_text(encoding="utf-8"), prompt_variables)
+            if config.test_layer_review.enabled
+            else None
+        )
         self.context = build_change_context(config.repo.name, self.wdir, target, description)
         self.vibe = get_vibe_heal_context(config.repo.subdirs, self.wdir_s, target.branch) or None
         self.result = ReviewResult(review_dir=review_dir, manifest=manifest)
@@ -243,6 +269,7 @@ class _ReviewPasses:
         build: Callable[[Path], str | Awaitable[str]],
         stamp: str | None,
         files_all_done: bool,
+        after_output: Callable[[Path], None] | None = None,
     ) -> None:
         if self.guard_errors:
             return
@@ -257,9 +284,36 @@ class _ReviewPasses:
             prompt = await prompt
         ok = await self.call_backend(prompt, f"local-review {name}")
         ok = ok and _single_pass_output_ok(name, out, files_all_done)
+        if ok and after_output:
+            after_output(out)
         if ok and stamp:
             stamp_findings_file(out, stamp)
         self.record(name, ok, lambda st: self.manifest.__setitem__(name, st))
+
+    async def run_test_layers_pass(self) -> Path | None:
+        """Best-effort own backend call before the design pass; not recorded in the manifest.
+
+        Returns the output file when the pass left P1 finding blocks, else None. Skipped (no
+        backend call) when disabled or when the changed files lack a test file or a non-test file;
+        a failed call is logged and never blocks the design pass.
+        """
+        if self.test_layers_instr is None or self.guard_errors:
+            return None
+        if not has_test_and_non_test_files(self.files):
+            logger.info("local-review test layers skipped: changed files lack a test file or a non-test file")
+            return None
+        out = self.review_dir / TEST_LAYERS_NAME
+        out.unlink(missing_ok=True)
+        sections = "".join([await self.section_for(f) for f in self.files])
+        prompt = build_test_layers_prompt(
+            self.test_layers_instr, out, sections, self.context, self.extra_knowledge, self.vibe
+        )
+        self.result.ran.append("test-layers")
+        if not await self.call_backend(prompt, "local-review test-layers"):
+            logger.warning("local-review test-layers failed; continuing with the design pass without it")
+            out.unlink(missing_ok=True)
+            return None
+        return out
 
     async def run_summary_and_design(self) -> None:
         files_all_done = all(self.manifest["files"].get(f) == STATUS_DONE for f in self.files)
@@ -280,13 +334,19 @@ class _ReviewPasses:
             None,
             files_all_done,
         )
+        test_layers_out: Path | None = None
+        if self.manifest.get("design") != STATUS_DONE:
+            test_layers_out = await self.run_test_layers_pass()
         await self.single_pass(
             "design",
             DESIGN_NAME,
             build_design,
             "design",
             files_all_done,
+            (lambda out: _merge_test_layers(out, test_layers_out)) if test_layers_out else None,
         )
+        if test_layers_out:
+            test_layers_out.unlink(missing_ok=True)
 
 
 async def run(

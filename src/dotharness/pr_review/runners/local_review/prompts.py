@@ -16,7 +16,8 @@ OUTPUT_FILE_PLACEHOLDER = "{OUTPUT_FILE}"
 FILE_TEMPLATE = "local-review-file.md"
 SUMMARY_TEMPLATE = "local-review-summary.md"
 DESIGN_TEMPLATE = "local-review-design.md"
-REVIEW_TEMPLATES = (FILE_TEMPLATE, SUMMARY_TEMPLATE, DESIGN_TEMPLATE)
+TEST_LAYERS_TEMPLATE = "local-review-test-layers.md"
+REVIEW_TEMPLATES = (FILE_TEMPLATE, SUMMARY_TEMPLATE, DESIGN_TEMPLATE, TEST_LAYERS_TEMPLATE)
 ADDRESS_TEMPLATE = "local-address-finding.md"
 ADDRESS_HEADING = "**Finding to address**"
 MAX_DIFF_CHARS = 40_000
@@ -126,6 +127,20 @@ def build_design_prompt(
         + diff_sections
         + change_context
         + _static(vibe_heal_context)
+    )
+
+
+def build_test_layers_prompt(
+    instructions: str,
+    output_file: Path,
+    diff_sections: str,
+    change_context: str,
+    extra_knowledge: str | None = None,
+    vibe_heal_context: str | None = None,
+) -> str:
+    """Test-layer pass (runs before the design pass); same shape as `build_design_prompt`."""
+    return build_design_prompt(
+        instructions, output_file, diff_sections, change_context, extra_knowledge, vibe_heal_context
     )
 
 
