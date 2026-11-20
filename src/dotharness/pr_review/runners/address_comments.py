@@ -255,60 +255,66 @@ async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrCon
     logger.info("PR #%d: found %d comment(s) to address", number, len(comments))
     head_sha = await get_head_sha(ctx.wdir, ctx.env)
     addressed = 0
-    for comment in comments:
-        thread_state = (
-            await _comment_thread_state(comment, ctx.host, ctx.repo_ref, number)
-            if comment.get("type") == "inline"
-            else True
-        )
-        if thread_state is None and comment.get("focused_review_original") is not None:
-            logger.warning(
-                "PR #%d: thread-state lookup failed; skipping re-pointed focused-review comment %s",
-                number,
-                comment.get("id", "?"),
+    skip_push = False
+    try:
+        for comment in comments:
+            thread_state = (
+                await _comment_thread_state(comment, ctx.host, ctx.repo_ref, number)
+                if comment.get("type") == "inline"
+                else True
             )
-            continue
-        if thread_state is False:
-            logger.info(
-                "PR #%d: comment %s's thread was resolved since this run started, skipping",
+            if thread_state is None and comment.get("focused_review_original") is not None:
+                logger.warning(
+                    "PR #%d: thread-state lookup failed; skipping re-pointed focused-review comment %s",
+                    number,
+                    comment.get("id", "?"),
+                )
+                continue
+            if thread_state is False:
+                logger.info(
+                    "PR #%d: comment %s's thread was resolved since this run started, skipping",
+                    number,
+                    comment.get("id", "?"),
+                )
+                continue
+            signal = signals.by_script_id.get(comment["id"]) if comment.get("rocket_signal") else None
+            addressed += 1
+            head_sha, rewritten = await _address_single_comment(
+                comment,
                 number,
-                comment.get("id", "?"),
+                ctx.instructions_template,
+                ctx.backend,
+                ctx.wdir,
+                ctx.repo,
+                ctx.env,
+                ctx.host,
+                ctx.repo_ref,
+                head_sha,
+                ctx.opencode_dir,
+                ctx.our_login,
+                ctx.repo_slug,
+                handled_version=signal.updated_at if signal else None,
+                rocket_at=signal.rocket_at if signal else None,
             )
-            continue
-        signal = signals.by_script_id.get(comment["id"]) if comment.get("rocket_signal") else None
-        addressed += 1
-        head_sha, rewritten = await _address_single_comment(
-            comment,
-            number,
-            ctx.instructions_template,
-            ctx.backend,
-            ctx.wdir,
-            ctx.repo,
-            ctx.env,
-            ctx.host,
-            ctx.repo_ref,
-            head_sha,
-            ctx.opencode_dir,
-            ctx.our_login,
-            ctx.repo_slug,
-            handled_version=signal.updated_at if signal else None,
-            rocket_at=signal.rocket_at if signal else None,
-        )
-        if rewritten:
-            logger.warning(
-                "PR #%d: skipping remaining comments this run — comment %s's backend run rewrote "
-                "branch history, so pushing it could silently discard or corrupt already-pushed commits",
-                number,
-                comment.get("id", "?"),
-            )
-            break
-        if not await _push_branch(number, branch, ctx.wdir, ctx.env, comment_count=addressed):
-            logger.warning(
-                "PR #%d: skipping remaining comments this run after comment %s's push failed",
-                number,
-                comment.get("id", "?"),
-            )
-            break
+            if rewritten:
+                # Local branches are deleted after each iteration and this runner never rewrites history, so a
+                # rewrite happened remotely (possibly by a human): push nothing and retry next iteration.
+                skip_push = True
+                logger.warning(
+                    "PR #%d: skipping remaining comments this run — comment %s's backend run rewrote branch "
+                    "history, so nothing is pushed; commits from earlier comments in this iteration stay local "
+                    "and git_restore preserves the local branch tip under a recovery ref",
+                    number,
+                    comment.get("id", "?"),
+                )
+                break
+    except asyncio.CancelledError:
+        # The shielded git_restore in _process_single_pr preserves unpushed commits under a recovery ref.
+        skip_push = True
+        raise
+    finally:
+        if not skip_push:
+            await _push_branch(number, branch, ctx.wdir, ctx.env, comment_count=addressed)
 
 
 def _as_focused_review_comment(parent: dict, marker_reply: dict) -> dict:

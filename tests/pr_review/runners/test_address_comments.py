@@ -1,3 +1,4 @@
+import asyncio
 import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -216,7 +217,7 @@ async def test_pushes_branch_after_backend(tmp_xdg, tmp_path):
     assert any("my-branch" in str(c) for c in push_calls)
 
 
-async def test_pushes_after_each_comment_not_once_at_end(tmp_xdg, tmp_path):
+async def test_pushes_once_after_all_comments(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
@@ -240,11 +241,22 @@ async def test_pushes_after_each_comment_not_once_at_end(tmp_xdg, tmp_path):
     ):
         mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        mock_run.side_effect = _ahead_run_cmd()
+        ahead = _ahead_run_cmd()
+
+        def ordered(cmd, **kwargs):
+            if "push" in cmd:
+                manager.push()
+            return ahead(cmd, **kwargs)
+
+        manager = MagicMock()
+        mock_be.return_value.run.side_effect = lambda *a, **k: manager.be() or MagicMock(returncode=0)
+        mock_run.side_effect = ordered
         await address_comments._run_locked(cfg)
     push_calls = [c for c in mock_run.call_args_list if c.args and "push" in c.args[0]]
-    assert len(push_calls) == 2  # one push per comment, not a single push after the loop
+    assert len(push_calls) == 1  # a single end push, not one per comment
     assert mock_be.return_value.run.call_count == 2  # both comments' backends ran
+    # the push comes after both backend runs
+    assert [c[0] for c in manager.mock_calls if c[0] in ("be", "push")] == ["be", "be", "push"]
 
 
 async def test_skips_comment_whose_thread_resolves_mid_run(tmp_xdg, tmp_path):
@@ -309,7 +321,7 @@ async def test_comment_still_unresolved_true_for_non_int_id():
     assert result is True
 
 
-async def test_stops_processing_comments_after_push_failure(tmp_xdg, tmp_path):
+async def test_failed_end_push_does_not_stop_comments(tmp_xdg, tmp_path):
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
@@ -337,13 +349,12 @@ async def test_stops_processing_comments_after_push_failure(tmp_xdg, tmp_path):
         mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
         await address_comments._run_locked(cfg)
-    # the first comment's backend ran and its push was attempted (and failed); the second
-    # comment's backend must never run, since its predecessor's push already failed
-    assert mock_be.return_value.run.call_count == 1
+    # a failed end push stops nothing: both backends ran, one push was attempted (and failed)
+    assert mock_be.return_value.run.call_count == 2
     mock_restore.assert_called()
 
 
-async def test_stops_processing_comments_after_history_rewrite(tmp_xdg, tmp_path):
+async def test_stops_processing_comments_after_history_rewrite(tmp_xdg, tmp_path, caplog):
     cfg = _cfg(tmp_path)
     (tmp_path / "k" / "pr-review").mkdir(parents=True)
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
@@ -381,13 +392,98 @@ async def test_stops_processing_comments_after_history_rewrite(tmp_xdg, tmp_path
     ):
         mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        await address_comments._run_locked(cfg)
+        with caplog.at_level("WARNING"):
+            await address_comments._run_locked(cfg)
     # the first comment's backend ran; the fast-forward check must have caught the
     # rewrite and skipped both the push and the second comment entirely
     assert mock_be.return_value.run.call_count == 1
     push_calls = [c for c in mock_run.call_args_list if c.args and "push" in c.args[0]]
     assert push_calls == []
+    assert "already-pushed commits" not in caplog.text
+    assert "stay local" in caplog.text
+    assert "recovery ref" in caplog.text
     mock_restore.assert_called()
+
+
+async def _run_loop_with(tmp_path, *, backend_side_effect, run_cmd_fake, comments=None):
+    """Run `_run_locked` over one PR; returns (mock_run, exception raised or None)."""
+    cfg = _cfg(tmp_path)
+    (tmp_path / "k" / "pr-review").mkdir(parents=True)
+    (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
+    comments = comments or [_FAKE_COMMENT, {**_FAKE_COMMENT, "id": 43}]
+    with (
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
+        patch(
+            "dotharness.pr_review.runners.address_comments._list_prs_to_check",
+            return_value=[make_change_request(2, head_reference="my-branch")],
+        ),
+        patch("dotharness.pr_review.runners.address_comments._has_pending_feedback", return_value=True),
+        patch("dotharness.pr_review.runners.address_comments.fetch_pr_comments", return_value=comments),
+        patch("dotharness.pr_review.runners.address_comments.git_detach_and_record", return_value="sha"),
+        patch("dotharness.pr_review.runners.address_comments.git_fetch_and_checkout"),
+        patch("dotharness.pr_review.runners.address_comments.git_restore"),
+        patch("dotharness.pr_review.runners.address_comments.run_cmd") as mock_run,
+        patch("dotharness.pr_review.runners.common.run_cmd", mock_run),
+        patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
+    ):
+        mock_run.side_effect = run_cmd_fake
+        mock_be.return_value.run = AsyncMock(side_effect=backend_side_effect)
+        raised = None
+        try:
+            await address_comments._run_locked(cfg)
+        except BaseException as e:
+            raised = e
+    return mock_run, raised
+
+
+def _push_calls(mock_run):
+    return [c for c in mock_run.call_args_list if c.args and "push" in c.args[0]]
+
+
+async def test_exception_in_second_comment_still_pushes_first_commit_and_reaches_handler(tmp_xdg, tmp_path, caplog):
+    """R3: an exception escaping the loop body still gets the end push, then reaches `_process_single_pr`."""
+    n = {"c": 0}
+
+    async def fake_single(*args, **kwargs):
+        n["c"] += 1
+        if n["c"] == 2:
+            msg = "escapes the loop"
+            raise RuntimeError(msg)
+        return "sha-1", False
+
+    with (
+        patch("dotharness.pr_review.runners.address_comments._address_single_comment", side_effect=fake_single),
+        caplog.at_level("ERROR"),
+    ):
+        mock_run, raised = await _run_loop_with(tmp_path, backend_side_effect=None, run_cmd_fake=_ahead_run_cmd())
+    assert raised is None  # handled by _process_single_pr's `except Exception`
+    assert len(_push_calls(mock_run)) == 1
+    assert "PR #2: error" in caplog.text
+
+
+async def test_cancellation_in_loop_runs_no_push(tmp_xdg, tmp_path):
+    """R3a: `asyncio.CancelledError` skips the end push and re-raises."""
+
+    async def fake_single(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    with patch("dotharness.pr_review.runners.address_comments._address_single_comment", side_effect=fake_single):
+        mock_run, raised = await _run_loop_with(tmp_path, backend_side_effect=None, run_cmd_fake=_ahead_run_cmd())
+    assert isinstance(raised, asyncio.CancelledError)
+    assert _push_calls(mock_run) == []
+
+
+async def test_no_commit_made_means_no_git_push_at_loop_level(tmp_xdg, tmp_path):
+    """G2: nothing ahead of origin -> the end push is skipped by `_push_branch`."""
+
+    def nothing_ahead(cmd, **kwargs):
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    mock_run, raised = await _run_loop_with(
+        tmp_path, backend_side_effect=[MagicMock(returncode=0)] * 2, run_cmd_fake=nothing_ahead
+    )
+    assert raised is None
+    assert _push_calls(mock_run) == []
 
 
 async def test_list_prs_to_check_merges_author_and_assignee_deduped():
@@ -1190,7 +1286,7 @@ async def test_backend_failure_is_swallowed_and_loop_continues_and_pushes(failur
         mock_be.return_value.run.side_effect = failure
         await address_comments._run_locked(cfg)
     assert mock_be.return_value.run.call_count == 2  # next comment still processed
-    assert mock_push.call_count == 2  # partial commit from the failed run is pushed
+    assert mock_push.call_count == 1  # partial commits from the failed runs are pushed once, at the end
     mock_restore.assert_called()
 
 
