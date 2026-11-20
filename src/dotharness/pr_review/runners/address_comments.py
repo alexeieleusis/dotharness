@@ -279,6 +279,7 @@ async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrCon
                 continue
             signal = signals.by_script_id.get(comment["id"]) if comment.get("rocket_signal") else None
             addressed += 1
+            pre_comment_sha = head_sha
             head_sha, rewritten = await _address_single_comment(
                 comment,
                 number,
@@ -297,15 +298,19 @@ async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrCon
                 rocket_at=signal.rocket_at if signal else None,
             )
             if rewritten:
-                # Local branches are deleted after each iteration and this runner never rewrites history, so a
-                # rewrite happened remotely (possibly by a human): push nothing and retry next iteration.
+                # Earlier comments in this iteration were already recorded as handled (and the backend may have
+                # replied with links to their commits), so they are NOT retried next iteration. Their commits
+                # live only on the local branch, and git_restore preserves only the (now rewritten) tip, so pin
+                # the last known-good head under a recovery ref before the branch is deleted.
                 skip_push = True
+                recovery_ref = await _save_recovery_ref(branch, pre_comment_sha, ctx.wdir, ctx.env)
                 logger.warning(
                     "PR #%d: skipping remaining comments this run — comment %s's backend run rewrote branch "
-                    "history, so nothing is pushed; commits from earlier comments in this iteration stay local "
-                    "and git_restore preserves the local branch tip under a recovery ref",
+                    "history, so nothing is pushed. Commits from earlier comments in this iteration are already "
+                    "recorded as handled and will NOT be retried; they are preserved at %s for manual recovery",
                     number,
                     comment.get("id", "?"),
+                    recovery_ref or "(recovery ref could not be written — see reflog)",
                 )
                 break
     except asyncio.CancelledError:
@@ -315,6 +320,19 @@ async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrCon
     finally:
         if not skip_push:
             await _push_branch(number, branch, ctx.wdir, ctx.env, comment_count=addressed)
+
+
+async def _save_recovery_ref(branch: str, sha: str | None, wdir: str, env: dict) -> str | None:
+    """Pin `sha` under refs/harness-recovery/ so it survives the local branch's deletion; returns the ref or None."""
+    if not sha:
+        return None
+    ref = f"refs/harness-recovery/{branch}-{sha[:12]}"
+    try:
+        result = await run_cmd(["git", "update-ref", ref, sha], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
+    except Exception:
+        logger.exception("could not write recovery ref %s", ref)
+        return None
+    return ref if result.returncode == 0 else None
 
 
 def _as_focused_review_comment(parent: dict, marker_reply: dict) -> dict:
