@@ -240,6 +240,74 @@ async def _git_restore_impl(original_sha: str, branch: str, cwd: str, env: dict)
         logger.exception("git restore failed")
 
 
+async def git_clean_working_dir(cwd: str, env: dict, sha: str | None = None) -> bool:
+    """Failure-path clean: remove untracked, non-ignored debris from ``cwd``; cancellation-safe.
+
+    With ``sha``, first ``git checkout --recurse-submodules -f <sha>``. Then a ``git clean -fdn`` dry run (its
+    listing is logged at WARNING) and the real ``git clean -fd``. Never raises; returns True only when the real
+    clean exited 0. Callers decide when to run it; ``_git_restore_impl`` does not.
+    """
+    task = asyncio.ensure_future(_git_clean_working_dir_impl(cwd, env, sha))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.wait([task])
+        raise
+
+
+def _first_line(data: bytes | None) -> str:
+    text = (data or b"").decode("utf-8", errors="replace").strip()
+    return text.splitlines()[0] if text else ""
+
+
+async def _git_clean_working_dir_impl(cwd: str, env: dict, sha: str | None) -> bool:
+    if sha:
+        try:
+            result = await run_cmd(
+                ["git", "checkout", "--recurse-submodules", "-f", sha],
+                cwd=cwd,
+                env=env,
+                timeout=TIMEOUT_GIT,
+                check=False,
+            )
+            if result.returncode != 0:
+                logger.warning("git_clean: checkout -f %s failed: %s", sha, _first_line(result.stderr))
+        except Exception:
+            logger.exception("git_clean: checkout -f %s failed", sha)
+    try:
+        dry = await run_cmd(["git", "clean", "-fdn"], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
+        if dry.returncode != 0:
+            logger.warning("git_clean: dry run failed: %s", _first_line(dry.stderr))
+        else:
+            listing = dry.stdout.decode("utf-8", errors="replace").strip()
+            if listing:
+                logger.warning("git_clean: removing untracked paths from %s: %s", cwd, "; ".join(listing.splitlines()))
+    except Exception:
+        logger.exception("git_clean: dry run failed")
+    try:
+        result = await run_cmd(["git", "clean", "-fd"], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
+    except Exception:
+        logger.exception("git_clean: git clean -fd failed")
+        return False
+    if result.returncode != 0:
+        logger.warning("git_clean: git clean -fd failed: %s", _first_line(result.stderr))
+        return False
+    return True
+
+
+async def git_is_dirty(cwd: str, env: dict) -> bool | None:
+    """True when ``git status --porcelain`` lists anything, False when empty, None when the probe failed."""
+    try:
+        result = await run_cmd(["git", "status", "--porcelain"], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
+    except Exception:
+        logger.exception("git_is_dirty: git status failed")
+        return None
+    if result.returncode != 0:
+        logger.warning("git_is_dirty: git status failed: %s", _first_line(result.stderr))
+        return None
+    return bool(result.stdout.strip())
+
+
 async def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:
     """Before `git_restore` force-checks-out elsewhere and deletes the local `branch`,
     save any commit(s) on it that origin/`branch` doesn't have under a recovery ref.
