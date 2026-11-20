@@ -25,6 +25,13 @@ def clean_mock():
         yield m
 
 
+@pytest.fixture(autouse=True)
+def pre_checkout_clean_mock():
+    """The pre-checkout probe runs real git otherwise; patch it by name in the runner's namespace."""
+    with patch("dotharness.pr_review.runners.review_prs.git_clean_if_dirty") as m:
+        yield m
+
+
 def _seed(prs=()) -> InMemoryCodeHost:
     """An in-memory host holding ``prs`` (ChangeRequests) as open change requests authored by alice."""
     host = InMemoryCodeHost(repository="acme/frontend", user="alice")
@@ -1177,3 +1184,26 @@ async def test_process_pr_skips_when_the_state_read_fails(tmp_path):
         result = await review_prs._process_pr(pr, cfg, host.code_host(), REPO, {}, "alice", str(tmp_path))
     assert result is False
     mock_fetch.assert_not_called()
+
+
+async def test_base_analysis_checkout_runs_pre_checkout_clean_before_checkout(
+    tmp_xdg, tmp_path, pre_checkout_clean_mock
+):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    state.write_vibe_heal_state("acme-frontend", last_main_sha="old-sha")
+    seen = []
+
+    def fake_run_cmd(cmd, **kwargs):
+        seen.append(cmd[1])
+        return MagicMock(returncode=0, stdout=b"new-sha\n", stderr=b"")
+
+    pre_checkout_clean_mock.side_effect = lambda *a: seen.append("pre-clean")
+    with (
+        patch("dotharness.pr_review.runners.review_prs.run_cmd", side_effect=fake_run_cmd),
+        patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="original-sha"),
+        patch("dotharness.pr_review.runners.review_prs.git_restore"),
+        patch("dotharness.pr_review.runners.review_prs._run_base_subdir", return_value=True),
+    ):
+        await review_prs._run_base_analysis(cfg, {})
+    pre_checkout_clean_mock.assert_called_once_with(str(tmp_path), {})
+    assert seen.index("pre-clean") < seen.index("checkout")

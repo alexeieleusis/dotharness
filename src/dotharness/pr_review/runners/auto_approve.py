@@ -64,6 +64,7 @@ from dotharness.pr_review.runners.common import (
     Site,
     call_with_policy,
     get_head_sha,
+    git_clean_if_dirty,
     git_clean_working_dir,
     git_detach_and_record,
     git_restore,
@@ -193,6 +194,7 @@ async def _checkout_pr_head(pr_number: int, wdir: str, env: dict) -> str:
     """
     try:
         await run_cmd(["git", "fetch", "origin", f"refs/pull/{pr_number}/head"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
+        await git_clean_if_dirty(wdir, env)
         await run_cmd(
             ["git", "checkout", "--recurse-submodules", "--detach", "FETCH_HEAD"],
             cwd=wdir,

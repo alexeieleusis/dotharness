@@ -126,7 +126,10 @@ async def test_git_detach_records_sha(tmp_path):
 
 
 async def test_git_fetch_and_checkout_calls(tmp_path):
-    with patch("dotharness.pr_review.runners.common.run_cmd") as mock_run:
+    with (
+        patch("dotharness.pr_review.runners.common.git_clean_if_dirty"),
+        patch("dotharness.pr_review.runners.common.run_cmd") as mock_run,
+    ):
         await git_fetch_and_checkout("feature-branch", str(tmp_path), {})
     calls = [str(c) for c in mock_run.call_args_list]
     assert any("fetch" in c for c in calls)
@@ -247,3 +250,55 @@ def test_repo_identity_check_is_built_for_the_configured_repository():
     with patch("dotharness.pr_review.runners.common.reference_identity_check") as build:
         assert repo_identity_check(config) is build.return_value
     build.assert_called_once_with("acme/web")
+
+
+COMMON = "dotharness.pr_review.runners.common"
+
+
+def _order_recorder(seen, dirty):
+    async def probe(cwd, env):
+        seen.append("probe")
+        return dirty
+
+    async def clean(*args, **kwargs):
+        seen.append(("clean", args, kwargs))
+        return True
+
+    async def run(cmd, **kwargs):
+        seen.append(cmd[1])
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    return probe, clean, run
+
+
+@pytest.mark.parametrize(("dirty", "cleaned"), [(True, True), (False, False), (None, False)])
+async def test_git_fetch_and_checkout_probes_before_checkout(tmp_path, caplog, dirty, cleaned):
+    seen = []
+    probe, clean, run = _order_recorder(seen, dirty)
+    with (
+        patch(f"{COMMON}.git_is_dirty", probe),
+        patch(f"{COMMON}.git_clean_working_dir", clean),
+        patch(f"{COMMON}.run_cmd", run),
+        caplog.at_level("WARNING"),
+    ):
+        await git_fetch_and_checkout("feature-branch", str(tmp_path), {})
+    clean_calls = [c for c in seen if isinstance(c, tuple)]
+    assert (len(clean_calls) == 1) is cleaned
+    if cleaned:
+        assert clean_calls[0][1:] == ((str(tmp_path), {}), {})  # no sha: clean only
+    assert seen.index("probe") < seen.index("checkout")
+    if cleaned:
+        assert seen.index(clean_calls[0]) < seen.index("checkout")
+    assert ("could not probe" in caplog.text) is (dirty is None)
+
+
+async def test_git_clean_if_dirty_never_calls_reset(tmp_path):
+    seen = []
+    probe, clean, run = _order_recorder(seen, True)
+    with (
+        patch(f"{COMMON}.git_is_dirty", probe),
+        patch(f"{COMMON}.git_clean_working_dir", clean),
+        patch(f"{COMMON}.run_cmd", run),
+    ):
+        await git_fetch_and_checkout("b", str(tmp_path), {})
+    assert "reset" not in seen

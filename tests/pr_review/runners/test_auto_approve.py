@@ -1,7 +1,7 @@
 import contextlib
 import logging
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -416,3 +416,34 @@ async def test_successful_pr_does_not_clean(tmp_path):
     with _mocks() as m:
         await auto_approve.run(_cfg(tmp_path))
     m.clean.assert_not_called()
+
+
+@pytest.mark.parametrize(("dirty", "cleaned"), [(True, True), (False, False), (None, False)])
+async def test_checkout_pr_head_probes_before_checkout(tmp_path, dirty, cleaned):
+    seen = []
+    p = "dotharness.pr_review.runners.auto_approve."
+
+    async def probe(cwd, env):
+        seen.append("probe")
+        return dirty
+
+    async def clean(*args, **kwargs):
+        seen.append(("clean", args, kwargs))
+        return True
+
+    async def run(cmd, **kwargs):
+        seen.append(cmd[1])
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    with (
+        patch("dotharness.pr_review.runners.common.git_is_dirty", probe),
+        patch("dotharness.pr_review.runners.common.git_clean_working_dir", clean),
+        patch(p + "run_cmd", run),
+        patch(p + "get_head_sha", return_value="head"),
+    ):
+        assert await auto_approve._checkout_pr_head(7, str(tmp_path), {}) == "head"
+    clean_calls = [c for c in seen if isinstance(c, tuple)]
+    assert (len(clean_calls) == 1) is cleaned
+    if cleaned:
+        assert clean_calls[0][1:] == ((str(tmp_path), {}), {})
+    assert seen.index("probe") < seen.index("checkout")

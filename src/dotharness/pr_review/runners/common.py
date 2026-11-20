@@ -185,6 +185,7 @@ async def git_detach_and_record(cwd: str, env: dict) -> str:
 async def git_fetch_and_checkout(branch: str, cwd: str, env: dict) -> None:
     try:
         await run_cmd(["git", "fetch", "origin"], cwd=cwd, env=env, timeout=TIMEOUT_GIT)
+        await git_clean_if_dirty(cwd, env)
         await run_cmd(
             ["git", "checkout", "--recurse-submodules", "-B", branch, f"origin/{branch}"],
             cwd=cwd,
@@ -306,6 +307,18 @@ async def git_is_dirty(cwd: str, env: dict) -> bool | None:
         logger.warning("git_is_dirty: git status failed: %s", _first_line(result.stderr))
         return None
     return bool(result.stdout.strip())
+
+
+async def git_clean_if_dirty(cwd: str, env: dict) -> None:
+    """Pre-checkout step: clean untracked files only when the tree is dirty. Never raises.
+
+    A failed probe is logged and the checkout proceeds; its own error path handles real failures.
+    """
+    dirty = await git_is_dirty(cwd, env)
+    if dirty is None:
+        logger.warning("git_clean_if_dirty: could not probe %s; proceeding to checkout", cwd)
+    elif dirty:
+        await git_clean_working_dir(cwd, env)
 
 
 async def _preserve_unpushed_commits(branch: str, cwd: str, env: dict) -> None:

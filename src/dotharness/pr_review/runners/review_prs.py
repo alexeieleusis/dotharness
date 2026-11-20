@@ -14,6 +14,7 @@ from dotharness.pr_review.runners.common import (
     env_file_args,
     env_file_error,
     get_changed_files,
+    git_clean_if_dirty,
     git_clean_working_dir,
     git_detach_and_record,
     git_fetch_and_checkout,
@@ -324,6 +325,7 @@ async def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:
     try:
         original_sha = await git_detach_and_record(wdir, env)
 
+        await git_clean_if_dirty(wdir, env)
         await _run_base_git("checkout", ["git", "checkout", "--recurse-submodules", "--detach", main_sha], wdir, env)
 
         success = True
