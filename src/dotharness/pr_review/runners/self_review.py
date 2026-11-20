@@ -238,6 +238,9 @@ async def _review_files(
 _TEST_FILE_SEGMENTS = frozenset({"test", "tests"})
 _TEST_FILE_SUFFIXES = ("_test.py", ".test.ts", ".test.tsx", ".test.js", ".spec.ts", ".spec.js")
 _TEST_LAYER_NONE_SENTINEL = "NONE"
+# Returned by run_test_layer_pass when the backend timed out or exited non-zero, so a failed pass
+# is distinguishable from a pass that found nothing (None).
+TEST_LAYER_FAILED = "\0test-layer-pass-failed\0"
 
 
 def is_test_file_path(path: str) -> bool:
@@ -285,6 +288,13 @@ def build_test_layer_section(enabled: bool, summary: str | None) -> str:
             "The separate test-layer pass found nothing to report. Omit the `## Test Layers` "
             "subsection from your PR-level comment entirely."
         )
+    if summary == TEST_LAYER_FAILED:
+        return (
+            "\n\n## Test Layers\n"
+            "The separate test-layer pass could NOT run (backend failure or timeout), so its result is "
+            "unknown. Do not say it found no issues. Include a `## Test Layers` subsection in your "
+            "PR-level comment stating that the test-layer review did not complete and needs a re-run."
+        )
     return (
         "\n\n## Test Layers\n"
         "A separate test-layer pass has already run and posted its own inline comments. Include the "
@@ -311,8 +321,8 @@ async def run_test_layer_pass(
     of its own: its inline findings carry the design marker and its reply (the summary text, or
     NONE) is captured and handed to the design prompt, whose single '# Design Review' comment is the
     record that the pass executed. Best effort: no backend call when the changed files lack a test
-    file or a non-test file, and a backend failure is logged and yields None so the design pass
-    still runs."""
+    file or a non-test file, and a backend failure is logged and yields TEST_LAYER_FAILED so the design pass
+    still runs, told via TEST_LAYER_FAILED that the pass could not run (not that it found nothing)."""
     if not has_test_and_non_test_files(ctx["files"]):
         logger.info("PR #%d: test layer review skipped — changed files lack a test file or a non-test file", number)
         return None
@@ -340,10 +350,10 @@ async def run_test_layer_pass(
         )
     except subprocess.TimeoutExpired:
         logger.exception("PR #%d: test layer review backend timed out — continuing without it", number)
-        return None
+        return TEST_LAYER_FAILED
     if result.returncode != 0:
         logger.error("PR #%d: test layer review backend exited %d — continuing without it", number, result.returncode)
-        return None
+        return TEST_LAYER_FAILED
     return parse_test_layer_reply(reply.get("reply", ""))
 
 

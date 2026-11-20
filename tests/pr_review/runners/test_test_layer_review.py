@@ -1,6 +1,7 @@
 import pytest
 
 from dotharness.pr_review.runners.self_review import (
+    TEST_LAYER_FAILED,
     build_test_layer_section,
     has_test_and_non_test_files,
     is_test_file_path,
@@ -86,3 +87,9 @@ def test_build_test_layer_section():
     with_findings = build_test_layer_section(True, "SUMMARY")
     assert "SUMMARY" in with_findings
     assert "verbatim" in with_findings
+
+
+def test_build_test_layer_section_failed_pass_is_not_reported_as_no_findings():
+    section = build_test_layer_section(True, TEST_LAYER_FAILED)
+    assert "could NOT run" in section
+    assert "Omit the `## Test Layers` subsection" not in section

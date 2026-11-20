@@ -1705,7 +1705,8 @@ async def test_test_layer_failure_does_not_block_design(tmp_xdg, tmp_path, kwarg
     assert run.contexts() == ["PR #74 test layer review", "PR #74 design review"]
     design_prompt = run.prompt("PR #74 design review")
     assert "junk" not in design_prompt
-    assert "Omit the `## Test Layers` subsection" in design_prompt
+    assert "could NOT run" in design_prompt
+    assert "Omit the `## Test Layers` subsection" not in design_prompt
     assert 74 in state.get_design_reviewed_prs("acme-frontend")
 
 

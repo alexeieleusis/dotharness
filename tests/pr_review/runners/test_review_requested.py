@@ -954,7 +954,8 @@ async def test_test_layer_backend_failure_does_not_block_design(tmp_xdg, tmp_pat
     assert _contexts(mocks)[-2:] == ["PR #1 test layer review", "PR #1 design review"]
     design_prompt = _prompt_for(mocks, "PR #1 design review")
     assert "garbage findings" not in design_prompt
-    assert "Omit the `## Test Layers` subsection" in design_prompt
+    assert "could NOT run" in design_prompt
+    assert "Omit the `## Test Layers` subsection" not in design_prompt
 
 
 async def test_test_layer_timeout_does_not_block_design(tmp_xdg, tmp_path):
