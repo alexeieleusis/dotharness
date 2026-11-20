@@ -138,6 +138,16 @@ class IdentifiedGitFailure(FatalGitError):
     """
 
 
+def record_git_failure(pr_number: int, exc: FatalGitError, failures: list[str]) -> bool:
+    """Log and record a per-PR git failure; return True when the PR loop may continue to the next PR.
+
+    The loop continues only for an :class:`IdentifiedGitFailure` (cleanup left a clean tree).
+    """
+    logger.error("PR #%d skipped: git failure: %s", pr_number, failure_summary(exc), exc_info=True)
+    failures.append(f"#{pr_number}: {exc}")
+    return isinstance(exc, IdentifiedGitFailure)
+
+
 def failure_summary(exc: BaseException) -> str:
     """First line of git's stderr when anything in the cause chain carries one, else the exception text."""
     link: BaseException | None = exc

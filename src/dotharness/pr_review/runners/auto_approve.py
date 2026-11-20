@@ -64,7 +64,6 @@ from dotharness.pr_review.runners.common import (
     IdentifiedGitFailure,
     Site,
     call_with_policy,
-    failure_summary,
     get_head_sha,
     git_clean_if_dirty,
     git_clean_working_dir,
@@ -73,6 +72,7 @@ from dotharness.pr_review.runners.common import (
     git_restore,
     host_current_user,
     open_host,
+    record_git_failure,
     run_cmd,
 )
 
@@ -112,9 +112,7 @@ async def _run_locked(config: HarnessConfig, dry_run: bool) -> None:
         try:
             await _process_pr(pr, config, wdir, env, host, repo, current_user, dry_run)
         except FatalGitError as e:
-            logger.error("PR #%d skipped: git failure: %s", pr_number, failure_summary(e), exc_info=True)
-            failures.append(f"#{pr_number}: {e}")
-            if not isinstance(e, IdentifiedGitFailure):
+            if not record_git_failure(pr_number, e, failures):
                 break
         except Exception as e:
             logger.exception("PR #%d: error", pr_number)

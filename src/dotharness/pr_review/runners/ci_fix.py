@@ -59,7 +59,6 @@ from dotharness.pr_review.runners.common import (
     IdentifiedGitFailure,
     Site,
     call_with_policy,
-    failure_summary,
     git_clean_working_dir,
     git_detach_and_record,
     git_fetch_and_checkout,
@@ -67,6 +66,7 @@ from dotharness.pr_review.runners.common import (
     git_restore,
     host_current_user,
     open_host,
+    record_git_failure,
     repo_identity_check,
     run_cmd,
 )
@@ -148,9 +148,7 @@ async def _process_prs(
         except UnsupportedCapabilityError:
             raise
         except FatalGitError as e:
-            logger.error("PR #%d skipped: git failure: %s", number, failure_summary(e), exc_info=True)
-            failures.append(f"#{number}: {e}")
-            if not isinstance(e, IdentifiedGitFailure):
+            if not record_git_failure(number, e, failures):
                 break
         except Exception as e:
             logger.exception("PR #%d: error", number)
