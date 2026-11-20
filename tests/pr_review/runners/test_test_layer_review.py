@@ -1,6 +1,6 @@
 import pytest
 
-from dotharness.pr_review.runners.self_review import (
+from dotharness.pr_review.runners.common import (
     TEST_LAYER_FAILED,
     build_test_layer_section,
     has_test_and_non_test_files,

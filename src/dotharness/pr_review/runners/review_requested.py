@@ -26,6 +26,7 @@ from dotharness.pr_review.runners.common import (
     build_design_review_prompt,
     build_early_comment_context,
     build_file_review_section,
+    build_test_layer_section,
     build_traceability_review_prompt,
     failure_summary,
     get_change_request,
@@ -66,7 +67,7 @@ from dotharness.pr_review.runners.regret_review import (
     parse_regret_judgment,
     post_regret_comment,
 )
-from dotharness.pr_review.runners.self_review import build_test_layer_section, run_test_layer_pass
+from dotharness.pr_review.runners.self_review import run_test_layer_pass
 
 logger = logging.getLogger(__name__)
 

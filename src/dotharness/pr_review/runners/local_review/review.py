@@ -22,6 +22,7 @@ from dotharness.pr_review.runners.common import (
     get_changed_files,
     get_file_diff,
     get_vibe_heal_context,
+    has_test_and_non_test_files,
     host_prompt_variables,
 )
 from dotharness.pr_review.runners.local_review.address import (
@@ -74,7 +75,6 @@ from dotharness.pr_review.runners.local_review.types import (
     NothingToReviewError,
     RepoMutatedError,
 )
-from dotharness.pr_review.runners.self_review import has_test_and_non_test_files
 from dotharness.repo_guard import RepoIdentityError
 
 logger = logging.getLogger(__name__)
