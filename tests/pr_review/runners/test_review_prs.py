@@ -1,3 +1,4 @@
+import logging
 import subprocess
 from unittest.mock import ANY, MagicMock, patch
 
@@ -22,6 +23,14 @@ from tests.pr_review.runners.runner_support import REPO, make_change_request, ma
 def clean_mock():
     """The failure-path clean runs real git otherwise; patch it by name in the runner's namespace."""
     with patch("dotharness.pr_review.runners.review_prs.git_clean_working_dir") as m:
+        yield m
+
+
+@pytest.fixture(autouse=True)
+def dirty_mock(clean_mock):
+    """The failure-path probe runs real git otherwise; default to a successful clean and a clean tree."""
+    clean_mock.return_value = True
+    with patch("dotharness.pr_review.runners.review_prs.git_is_dirty", return_value=False) as m:
         yield m
 
 
@@ -850,14 +859,135 @@ async def test_run_locked_returns_early_when_vibe_heal_disabled(tmp_path):
     mock_run.assert_not_called()
 
 
-async def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path, clean_mock):
+def _loop_patches(prs, process_side_effect):
+    return (
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
+        patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
+        patch("dotharness.pr_review.runners.review_prs._process_pr", side_effect=process_side_effect),
+        patch("dotharness.pr_review.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")),
+        patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
+        patch("dotharness.pr_review.runners.review_prs.git_restore"),
+    )
+
+
+async def test_identified_git_failure_skips_pr_and_continues(tmp_xdg, tmp_path, clean_mock, dirty_mock, caplog):
     from dotharness.pr_review.runners.common import FatalGitError
 
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
-    prs = [
-        _pr(3, "pr3", "sha3"),
-        _pr(4, "pr4", "sha4"),
-    ]
+    prs = [_pr(1, "pr1", "sha1"), _pr(2, "pr2", "sha2"), _pr(3, "pr3", "sha3")]
+    cause = subprocess.CalledProcessError(128, ["git", "checkout"], stderr=b"fatal: bad ref\nsecond line")
+    exc = FatalGitError("git checkout pr2 failed")
+    exc.__cause__ = cause
+    p = _loop_patches(prs, [True, exc, True])
+    with p[0], p[1], p[2] as mock_process, p[3], p[4], p[5] as mock_restore, caplog.at_level(logging.ERROR):
+        failed = await review_prs._run_locked(cfg)
+    assert failed == [2]
+    assert mock_process.call_count == 3
+    assert mock_restore.call_count == 3
+    clean_mock.assert_called_once_with(str(tmp_path), ANY, "sha")
+    dirty_mock.assert_called_once_with(str(tmp_path), ANY)
+    assert "PR #2 skipped: git failure: fatal: bad ref" in caplog.text
+    assert "second line" not in caplog.text.split("PR #2 skipped: git failure:")[1].splitlines()[0]
+    assert state.get_reviewed_sha("acme-frontend", 1) == "sha1"
+    assert state.get_reviewed_sha("acme-frontend", 2) is None
+    assert state.get_reviewed_sha("acme-frontend", 3) == "sha3"
+
+
+async def test_git_failure_log_uses_exception_text_when_stderr_empty(tmp_xdg, tmp_path, caplog):
+    from dotharness.pr_review.runners.common import FatalGitError
+
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    p = _loop_patches([_pr(1, "pr1", "sha1")], [FatalGitError("git checkout timed out")])
+    with p[0], p[1], p[2], p[3], p[4], p[5], caplog.at_level(logging.ERROR):
+        await review_prs._run_locked(cfg)
+    assert "PR #1 skipped: git failure: git checkout timed out" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("cleaned", "dirty"),
+    [(False, False), (True, True), (True, None)],
+    ids=["helper-false", "probe-dirty", "probe-failed"],
+)
+async def test_unidentified_git_failure_stops_cycle(tmp_xdg, tmp_path, clean_mock, dirty_mock, cleaned, dirty, caplog):
+    from dotharness.pr_review.runners.common import FatalGitError
+
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    clean_mock.return_value = cleaned
+    dirty_mock.return_value = dirty
+    p = _loop_patches([_pr(5, "pr5", "sha5"), _pr(6, "pr6", "sha6")], [FatalGitError("git broke"), True])
+    with p[0], p[1], p[2] as mock_process, p[3], p[4], p[5], caplog.at_level(logging.ERROR):
+        failed = await review_prs._run_locked(cfg)
+    assert mock_process.call_count == 1
+    assert failed == [5]
+    assert "PR #5 skipped: git failure: git broke" in caplog.text
+
+
+async def test_run_raises_after_skipped_pr_with_later_success(tmp_xdg, tmp_path):
+    from dotharness.pr_review.runners.common import FatalGitError
+
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    p = _loop_patches([_pr(1, "pr1", "sha1"), _pr(2, "pr2", "sha2")], [FatalGitError("x"), True])
+    with (
+        p[0],
+        p[1],
+        p[2],
+        p[3],
+        p[4],
+        p[5],
+        patch("dotharness.pr_review.runners.review_prs.acquire_lock"),
+        pytest.raises(review_prs.BaseAnalysisError, match="#1"),
+    ):
+        await review_prs.run(cfg)
+    assert state.get_reviewed_sha("acme-frontend", 2) == "sha2"
+
+
+async def test_run_raises_in_single_pr_mode_on_skipped_pr(tmp_xdg, tmp_path):
+    from dotharness.pr_review.runners.common import FatalGitError
+
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    p = _loop_patches([_pr(1, "pr1", "sha1")], [FatalGitError("x")])
+    with (
+        p[0],
+        p[1],
+        p[2],
+        p[3],
+        p[4],
+        p[5],
+        patch("dotharness.pr_review.runners.review_prs.acquire_lock"),
+        pytest.raises(review_prs.BaseAnalysisError),
+    ):
+        await review_prs.run(cfg, pr_url="https://github.com/acme/acme-frontend/pull/1")
+
+
+async def test_run_returns_normally_when_no_pr_skipped(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    p = _loop_patches([_pr(1, "pr1", "sha1")], [True])
+    with p[0], p[1], p[2], p[3], p[4], p[5], patch("dotharness.pr_review.runners.review_prs.acquire_lock"):
+        await review_prs.run(cfg)
+
+
+async def test_base_analysis_failure_skips_no_prs_and_is_not_per_pr(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    host = _seed([_pr(1)])
+    with (
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(host)),
+        patch("dotharness.pr_review.runners.review_prs.prune_projects.run"),
+        patch(
+            "dotharness.pr_review.runners.review_prs._run_base_analysis",
+            side_effect=review_prs.BaseAnalysisError("fetch", "failed"),
+        ),
+        patch("dotharness.pr_review.runners.review_prs._process_pr") as mock_process,
+        pytest.raises(review_prs.BaseAnalysisError, match="git fetch failed"),
+    ):
+        await review_prs._run_locked(cfg)
+    mock_process.assert_not_called()
+
+
+async def test_fatal_git_error_from_fetch_runs_clean_then_probe_and_continues(tmp_xdg, tmp_path, clean_mock):
+    from dotharness.pr_review.runners.common import FatalGitError
+
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    prs = [_pr(3, "pr3", "sha3"), _pr(4, "pr4", "sha4"), _pr(7, "pr7", "sha7")]
     with (
         patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
@@ -866,38 +996,15 @@ async def test_fatal_git_error_breaks_pr_processing_loop(tmp_xdg, tmp_path, clea
         patch("dotharness.pr_review.runners.review_prs.git_restore") as mock_restore,
         patch("dotharness.pr_review.runners.review_prs.git_fetch_and_checkout") as mock_fetch,
     ):
-        mock_fetch.side_effect = [None, FatalGitError("corrupted ref")]
-        await review_prs._run_locked(cfg)
-    # PR 3 completed successfully; FatalGitError on PR 4's fetch broke the loop before PR 4 could finish.
-    assert mock_fetch.call_count == 2
+        mock_fetch.side_effect = [None, FatalGitError("corrupted ref"), None]
+        failed = await review_prs._run_locked(cfg)
+    assert failed == [4]
+    assert mock_fetch.call_count == 3
     assert state.get_reviewed_sha("acme-frontend", 3) == "sha3"
     assert state.get_reviewed_sha("acme-frontend", 4) is None
-    assert mock_restore.call_count == 2
+    assert state.get_reviewed_sha("acme-frontend", 7) == "sha7"
+    assert mock_restore.call_count == 3
     clean_mock.assert_called_once_with(str(tmp_path), ANY, "sha")
-
-
-async def test_fatal_git_error_from_process_pr_stops_remaining_prs(tmp_xdg, tmp_path):
-    from dotharness.pr_review.runners.common import FatalGitError
-
-    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
-    prs = [
-        _pr(5, "pr5", "sha5"),
-        _pr(6, "pr6", "sha6"),
-    ]
-    with (
-        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed(prs))),
-        patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=True),
-        patch(
-            "dotharness.pr_review.runners.review_prs._process_pr",
-            side_effect=[FatalGitError("git broke"), True],
-        ) as mock_process,
-        patch("dotharness.pr_review.runners.review_prs.run_cmd", return_value=MagicMock(returncode=0, stdout=b"[]")),
-        patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="sha"),
-        patch("dotharness.pr_review.runners.review_prs.git_restore"),
-    ):
-        await review_prs._run_locked(cfg)
-    # _process_pr was called exactly once — PR 6 was never attempted after PR 5's fatal error.
-    assert mock_process.call_count == 1
 
 
 async def test_generic_exception_does_not_block_credit_for_other_prs(tmp_xdg, tmp_path):
