@@ -173,6 +173,16 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
       `address-comments` use (see [Shared behavior](index.md#shared-behavior)).
     - Any other exception while processing a PR is caught and logged. The
       runner proceeds to the next PR rather than aborting the whole run.
+    - A git failure (timeout or non-zero exit) while checking out or reading a PR
+      triggers a cleanup of the working directory (`git checkout -f` of the recorded
+      commit, then `git clean -fd`; ignored files are kept). If the cleanup succeeded
+      and `git status --porcelain` is then clean, the failure is "identified": the
+      runner logs `PR #N skipped: git failure: <first line of git's stderr>` at ERROR,
+      skips that PR, and continues with the next one. Otherwise (cleanup failed, tree
+      still dirty, or the probe failed) it logs the same line and stops the cycle. A
+      failed `git checkout --detach HEAD` before processing a PR also stops the cycle.
+    - A cycle that skipped at least one PR for a git failure exits with code 1 after
+      the lock is released, listing the PR numbers.
     - Regardless of outcome, the runner restores the repo to the commit
       recorded in step 5 before moving to the next PR (or exiting).
 

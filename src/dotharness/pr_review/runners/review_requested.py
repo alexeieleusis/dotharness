@@ -38,6 +38,7 @@ from dotharness.pr_review.runners.common import (
     git_clean_working_dir,
     git_detach_and_record,
     git_fetch_and_checkout,
+    git_is_dirty,
     git_restore,
     has_design_review_comment,
     has_inline_review_comments,
@@ -67,12 +68,48 @@ from dotharness.pr_review.runners.regret_review import (
 logger = logging.getLogger(__name__)
 
 
+class ReviewRequestedError(RuntimeError):
+    """The cycle skipped at least one PR because of a git failure (exit status 1)."""
+
+
+class IdentifiedGitFailure(FatalGitError):
+    """A per-PR git failure after which the cleanup succeeded and the tree probes clean.
+
+    Still a ``FatalGitError`` (so ``_process_pr`` keeps propagating it); the PR loop skips the
+    PR and continues instead of stopping the cycle.
+    """
+
+
+def _failure_summary(exc: BaseException) -> str:
+    """First line of git's stderr when anything in the cause chain carries one, else the exception text."""
+    link: BaseException | None = exc
+    for _ in range(10):
+        if link is None:
+            break
+        stderr = getattr(link, "stderr", None)
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        if stderr and stderr.strip():
+            return stderr.strip().splitlines()[0]
+        link = link.__cause__ or link.__context__
+    lines = str(exc).strip().splitlines()
+    return lines[0] if lines else repr(exc)
+
+
 async def run(config: HarnessConfig, pr_url: str | None = None) -> None:
     with acquire_lock(config.lock_key):
-        await _run_locked(config, pr_url)
+        failed = await _run_locked(config, pr_url)
+    if failed:
+        # Raised after the lock is released; an Exception subclass (not SystemExit) so
+        # `run all` records the runner as failed and carries on, like AutoApproveError.
+        raise ReviewRequestedError(
+            "review-requested skipped PRs for git failures: " + ", ".join(f"#{n}" for n in failed)
+        )
 
 
-async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
+async def _run_locked(config: HarnessConfig, pr_url: str | None) -> list[int]:
+    """Process the PRs; return the numbers of PRs skipped because of a git failure."""
+    failed: list[int] = []
     scaffold = await open_host(config)
     host, repo, env = scaffold.host, scaffold.repo, scaffold.env
     current_user = await host_current_user(host)
@@ -130,11 +167,14 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None) -> None:
                 not files_summary_done,
                 PrLevelPassesDone(design=design_done, traceability=traceability_done, regret=regret_done),
             )
-        except FatalGitError:
-            logger.exception("PR #%d: fatal git error", pr_number)
-            break
+        except FatalGitError as exc:
+            failed.append(pr_number)
+            logger.error("PR #%d skipped: git failure: %s", pr_number, _failure_summary(exc), exc_info=True)
+            if not isinstance(exc, IdentifiedGitFailure):
+                break
         except Exception:
             logger.exception("PR #%d: error", pr_number)
+    return failed
 
 
 async def _get_prs(host: CodeHost, repo: RepositoryRef, login: str) -> list[ChangeRequest]:
@@ -268,8 +308,10 @@ async def _process_pr(
                     pr_level_done.regret,
                     ctx,
                 )
-    except FatalGitError:
-        await git_clean_working_dir(wdir, env, original_sha)
+    except FatalGitError as exc:
+        cleaned = await git_clean_working_dir(wdir, env, original_sha)
+        if cleaned and await git_is_dirty(wdir, env) is False:
+            raise IdentifiedGitFailure(str(exc)) from exc
         raise
     except Exception:
         logger.exception("PR #%d: error", pr_number)
