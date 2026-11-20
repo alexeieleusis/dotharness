@@ -53,6 +53,19 @@ def _scaffold(comment_ids=(42, 43), *, number=None):
     return make_scaffold(host)
 
 
+def _ahead_run_cmd(push_rc=0):
+    """Fake `run_cmd`: `git log origin/<b>..HEAD` reports one commit ahead; `git push` exits `push_rc`."""
+
+    def fake(cmd, **kwargs):
+        if "push" in cmd:
+            return MagicMock(returncode=push_rc, stdout=b"", stderr=b"" if push_rc == 0 else b"! [rejected]")
+        if "log" in cmd:
+            return MagicMock(returncode=0, stdout=b"abc123 fix\n", stderr=b"")
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    return fake
+
+
 def _hr() -> tuple[CodeHost, RepositoryRef]:
     return make_host().code_host(), REPO
 
@@ -197,7 +210,7 @@ async def test_pushes_branch_after_backend(tmp_xdg, tmp_path):
     ):
         mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        mock_run.side_effect = _ahead_run_cmd()
         await address_comments._run_locked(cfg)
     push_calls = [c for c in mock_run.call_args_list if "push" in str(c)]
     assert any("my-branch" in str(c) for c in push_calls)
@@ -227,7 +240,7 @@ async def test_pushes_after_each_comment_not_once_at_end(tmp_xdg, tmp_path):
     ):
         mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        mock_run.side_effect = _ahead_run_cmd()
         await address_comments._run_locked(cfg)
     push_calls = [c for c in mock_run.call_args_list if c.args and "push" in c.args[0]]
     assert len(push_calls) == 2  # one push per comment, not a single push after the loop
@@ -273,7 +286,7 @@ async def test_skips_comment_whose_thread_resolves_mid_run(tmp_xdg, tmp_path):
     ):
         mock_be.return_value.run = AsyncMock()
         mock_be.return_value.run.return_value = MagicMock(returncode=0)
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        mock_run.side_effect = _ahead_run_cmd()
         await address_comments._run_locked(cfg)
     # comment 43 passed the upfront filter but its thread resolved before its turn —
     # its backend must never run, and only one push (for comment 42) happens
@@ -302,10 +315,7 @@ async def test_stops_processing_comments_after_push_failure(tmp_xdg, tmp_path):
     (tmp_path / "k" / "pr-review" / "address-comment.md").write_text("instructions")
     comment_2 = {**_FAKE_COMMENT, "id": 43}
 
-    def run_cmd_side_effect(cmd, **kwargs):
-        if "push" in cmd:
-            return MagicMock(returncode=1, stdout=b"", stderr=b"! [rejected]")
-        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+    run_cmd_side_effect = _ahead_run_cmd(push_rc=1)
 
     with (
         patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
@@ -1776,3 +1786,59 @@ async def test_checkout_failure_cleans_working_dir_without_sha_and_reraises():
     ):
         await address_comments._address_pending_comments(1, "b", ctx)
     clean.assert_called_once_with("w", {})
+
+
+def _fake_git(log_rc, log_out, push_rc=0):
+    calls = []
+
+    async def fake(cmd, **kwargs):
+        calls.append(cmd)
+        if "log" in cmd:
+            return MagicMock(returncode=log_rc, stdout=log_out, stderr=b"")
+        return MagicMock(returncode=push_rc, stdout=b"", stderr=b"! [rejected]" if push_rc else b"")
+
+    return calls, fake
+
+
+def _push_cmds(calls):
+    return [c for c in calls if "push" in c]
+
+
+async def test_push_branch_skips_when_nothing_ahead(caplog):
+    calls, fake = _fake_git(0, b"\n")
+    caplog.set_level("INFO")
+    with patch("dotharness.pr_review.runners.address_comments.run_cmd", fake):
+        assert await address_comments._push_branch(7, "br", "/w", {}, comment_count=2) is True
+    assert _push_cmds(calls) == []
+    assert "pushed" not in caplog.text
+
+
+async def test_push_branch_pushes_when_git_log_fails(caplog):
+    calls, fake = _fake_git(128, b"")
+    caplog.set_level("INFO")
+    with patch("dotharness.pr_review.runners.address_comments.run_cmd", fake):
+        assert await address_comments._push_branch(7, "br", "/w", {}, comment_count=1) is True
+    assert _push_cmds(calls) == [["git", "push", "origin", "br"]]
+    assert "PR #7: pushed 0 commit(s) for 1 comment(s)" in caplog.text
+
+
+async def test_push_branch_logs_counts_once_on_success(caplog):
+    calls, fake = _fake_git(0, b"a one\nb two\nc three\n")
+    caplog.set_level("INFO")
+    with patch("dotharness.pr_review.runners.address_comments.run_cmd", fake):
+        assert await address_comments._push_branch(7, "br", "/w", {}, comment_count=2) is True
+    assert len(_push_cmds(calls)) == 1
+    assert caplog.text.count("PR #7: pushed 3 commit(s) for 2 comment(s)") == 1
+    assert caplog.text.count("pushed ") == 1
+
+
+async def test_push_branch_failure_warns_with_pr_and_branch(caplog):
+    calls, fake = _fake_git(0, b"a one\n", push_rc=1)
+    caplog.set_level("INFO")
+    with patch("dotharness.pr_review.runners.address_comments.run_cmd", fake):
+        assert await address_comments._push_branch(7, "br", "/w", {}, comment_count=1) is False
+    assert len(_push_cmds(calls)) == 1
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "PR #7" in warnings[0].getMessage() and "br" in warnings[0].getMessage()
+    assert "pushed " not in caplog.text
