@@ -722,6 +722,16 @@ async def _resolve_stopped_rebase(
         if not recorded:
             _record_attempt(config.repo_slug, number)
             recorded = True
+        leftover = await _leftover_conflict_markers(wdir, env)
+        if leftover:
+            await _abort_rebase(wdir, env)
+            _digest(
+                OUTCOME_REBASE_CONFLICT_UNRESOLVED,
+                number,
+                NO_CHECK,
+                f"conflict markers left in: {', '.join(leftover[:10])}",
+            )
+            return None
         result = await run_cmd(
             ["git", "rebase", "--continue"], cwd=wdir, env=continue_env, timeout=TIMEOUT_GIT, check=False
         )
@@ -730,14 +740,51 @@ async def _resolve_stopped_rebase(
         next_sha = await _rebase_head(wdir, env)
         if next_sha is None or next_sha == stopped_sha:
             await _abort_rebase(wdir, env)
-            _digest(OUTCOME_REBASE_CONFLICT_UNRESOLVED, number, NO_CHECK, "git rebase --continue did not advance")
+            reason = _text(result.stderr).strip().splitlines()
+            detail = "git rebase --continue did not advance" + (f": {reason[-1][:200]}" if reason else "")
+            _digest(OUTCOME_REBASE_CONFLICT_UNRESOLVED, number, NO_CHECK, detail)
             return None
         stopped_sha = next_sha
 
 
+# A real conflict marker: ``<<<<<<<`` / ``>>>>>>>`` at line start (alone or followed by a label), and a line that is
+# exactly ``=======`` (so a longer run of ``=`` or text after it, e.g. a Markdown underline or a banner, is not one).
+_CONFLICT_MARKER_RE = r"^(<<<<<<<|>>>>>>>)([[:space:]]|$)|^=======[[:space:]]*$"
+
+
+async def _leftover_conflict_markers(wdir: str, env: dict) -> list[str]:
+    """Tracked files that still hold conflict markers after a backend run; fails safe (everything) on a git error.
+
+    Only tracked files the rebase touched are searched: the files git reports as changed against ``HEAD`` (every
+    unmerged path is among them, resolved or not), so content elsewhere in the repository that merely looks like a
+    marker never blocks a rebase. ``git grep`` exits 1 for "no match"; any other failure cannot prove the tree is
+    clean, so it counts as a leftover and the caller gives up.
+    """
+    changed = await _git_paths(wdir, env, ["diff", "-z", "--name-only", "--diff-filter=ACMRTU", "HEAD"])
+    if not changed:
+        return []
+    result = await run_cmd(
+        ["git", "grep", "-l", "-z", "-I", "-E", "-e", _CONFLICT_MARKER_RE, "--", *(f":(literal){f}" for f in changed)],
+        cwd=wdir,
+        env=env,
+        timeout=TIMEOUT_GIT,
+        check=False,
+    )
+    if result.returncode == 1:
+        return []
+    if result.returncode == 0:
+        return [p for p in _text(result.stdout).split("\0") if p] or changed
+    logger.warning("git grep for conflict markers failed (rc=%s), giving up on the rebase", result.returncode)
+    return changed
+
+
 async def _abort_rebase(wdir: str, env: dict) -> None:
-    """``git rebase --abort``; tolerated when no rebase is in progress (it already finished)."""
-    result = await run_cmd(["git", "rebase", "--abort"], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
+    """``git rebase --abort``; tolerated when no rebase is in progress or when the abort itself errors."""
+    try:
+        result = await run_cmd(["git", "rebase", "--abort"], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
+    except Exception as exc:
+        logger.warning("git rebase --abort failed: %s", exc)
+        return
     if result.returncode != 0:
         logger.info("git rebase --abort did not apply (no rebase in progress): %s", _text(result.stderr).strip())
 

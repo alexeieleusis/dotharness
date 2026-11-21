@@ -103,7 +103,7 @@ def _seeded_host(prs, green, failing, log, failed_step):
 
 
 @contextlib.contextmanager
-def _mocks(
+def _mocks(  # noqa: C901
     tmp_path,
     prs=None,
     green=False,
@@ -141,6 +141,8 @@ def _mocks(
         if cmd[:2] == ["git", "push"]:
             pushes.append(cmd)
             return _proc(push_rc, b"", push_stderr if push_rc else b"")
+        if cmd[:2] == ["git", "grep"]:
+            return _proc(1)  # no conflict markers
         return _proc(0)
 
     def backend_run(*args, **kwargs):
@@ -588,11 +590,14 @@ async def test_stopped_rebase_is_aborted_with_no_push(tmp_path, caplog):
 
 
 @contextlib.contextmanager
-def _patched_run_cmd(m, *, rebase_rc=0, diff_out=b"", abort_rc=0, stops=0, stuck=False):
+def _patched_run_cmd(  # noqa: C901
+    m, *, rebase_rc=0, diff_out=b"", abort_rc=0, stops=0, stuck=False, grep=None
+):
     """Wrap the mocked ``run_cmd`` so ``git rebase``/``--abort``/``diff`` answer as given.
 
     ``stops`` simulates a rebase that stops on that many commits (REBASE_HEAD ``stop-1``, ``stop-2``, ...), each
     ``git rebase --continue`` advancing to the next; ``stuck`` makes ``--continue`` fail on the same commit.
+    ``grep`` is the ``(returncode, stdout)`` the conflict-marker ``git grep`` answers (default: no match).
     """
     inner = ci_fix.run_cmd
     left = [stops]
@@ -616,6 +621,9 @@ def _patched_run_cmd(m, *, rebase_rc=0, diff_out=b"", abort_rc=0, stops=0, stuck
             return _proc(1 if stops else rebase_rc)
         if cmd[:3] == ["git", "rev-parse", "--verify"]:
             return _proc(0, stop_sha()) if stops and left[0] > 0 else _proc(1)
+        if cmd[:2] == ["git", "grep"] and grep is not None:
+            m.cmds.append(cmd)
+            return _proc(*grep)
         if cmd[:2] == ["git", "diff"] and "--diff-filter=U" in cmd:
             return _proc(0, b"a.py\0b.py\0")
         if cmd[:2] == ["git", "diff"]:
@@ -744,6 +752,176 @@ async def test_unsafe_resolution_is_vetted_after_the_loop_and_not_pushed(tmp_pat
     assert m.pushes == []
     assert any("rebase-unsafe" in d for d in _digests(caplog))
     assert ci_fix.get_attempts(SLUG, 1) == 1
+
+
+def _assert_gave_up(m, caplog, outcome="rebase-conflict-unresolved"):
+    assert ["git", "rebase", "--abort"] in m.cmds
+    assert m.pushes == []
+    assert not any(c[:2] == ["git", "update-ref"] for c in m.cmds)
+    digests = _digests(caplog)
+    assert len([d for d in digests if outcome in d]) == 1
+    assert not any("outcome=rebased" in d or "rebased " in d for d in digests)
+    m.restore.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "grep",
+    [(0, b"a.py\0"), (0, b""), (2, b"")],
+    ids=["markers-found", "markers-empty-output", "grep-error-fails-safe"],
+)
+async def test_backend_leaving_conflict_markers_aborts_with_no_push(tmp_path, caplog, grep):
+    # T-2: markers after a backend run -> abort, no --continue, no push, digest, one attempt.
+    with (
+        _mocks(tmp_path, green=True, get_override=_CONFLICTING) as m,
+        caplog.at_level(logging.INFO),
+        _patched_run_cmd(m, stops=2, grep=grep, diff_out=b"a.py\0"),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    assert m.backend.run.await_count == 1
+    assert ["git", "rebase", "--continue"] not in m.cmds
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+    _assert_gave_up(m, caplog)
+    if grep[0] == 0 and grep[1]:
+        assert any("conflict markers left in: a.py" in d for d in _digests(caplog))
+
+
+async def test_markers_are_checked_after_each_backend_run(tmp_path, caplog):
+    # The first commit is resolved cleanly; the second run leaves markers.
+    results = iter([(1, b""), (0, b"b.py\0")])
+    with (
+        _mocks(tmp_path, green=True, get_override=_CONFLICTING) as m,
+        caplog.at_level(logging.INFO),
+        _patched_run_cmd(m, stops=2, diff_out=b"a.py\0"),
+    ):
+        inner = ci_fix.run_cmd
+
+        async def fake(cmd, cwd, env, timeout, check=True, shell=False):
+            if cmd[:2] == ["git", "grep"]:
+                return _proc(*next(results))
+            return await inner(cmd, cwd=cwd, env=env, timeout=timeout, check=check, shell=shell)
+
+        with patch(P + "run_cmd", side_effect=fake):
+            await ci_fix.run(_cfg(tmp_path))
+    assert m.backend.run.await_count == 2
+    assert [c for c in m.cmds if c[:3] == ["git", "rebase", "--continue"]] == [["git", "rebase", "--continue"]]
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+    _assert_gave_up(m, caplog)
+
+
+async def test_marker_check_searches_only_changed_tracked_files(tmp_path):
+    with (
+        _mocks(tmp_path, green=True, get_override=_CONFLICTING) as m,
+        _patched_run_cmd(m, stops=1, diff_out=b"a.py\0", grep=(1, b"")),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    (grep,) = [c for c in m.cmds if c[:2] == ["git", "grep"]]
+    assert grep[-2:] == ["--", ":(literal)a.py"]
+    assert "-I" in grep
+    assert ci_fix._CONFLICT_MARKER_RE in grep
+
+
+async def test_no_changed_files_means_no_marker_search(tmp_path):
+    with _mocks(tmp_path, green=True, get_override=_CONFLICTING) as m, _patched_run_cmd(m, stops=1, grep=(0, b"x\0")):
+        await ci_fix.run(_cfg(tmp_path))
+    # diff_out is empty, so there is nothing to search and the rebase continues to a push.
+    assert not any(c[:2] == ["git", "grep"] for c in m.cmds)
+    assert len(m.pushes) == 1
+
+
+@pytest.mark.parametrize(
+    "line,expected",
+    [
+        (b"<<<<<<< HEAD\n", True),
+        (b"<<<<<<<\n", True),
+        (b"=======\n", True),
+        (b"=======\r\n", True),
+        (b">>>>>>> abc123 (msg)\n", True),
+        (b"=========\n", False),
+        (b"======= banner\n", False),
+        (b"<<<<<<<<< heredoc\n", False),
+        (b"x = '<<<<<<< HEAD'\n", False),
+    ],
+)
+def test_conflict_marker_pattern_against_real_git_grep(tmp_path, line, expected):
+    repo = tmp_path / "r"
+    repo.mkdir()
+    (repo / "f.txt").write_bytes(b"ok\n" + line)
+    for args in (["init", "-q"], ["add", "f.txt"]):
+        subprocess.run(["git", *args], cwd=repo, capture_output=True, check=True)  # noqa: S607
+    result = subprocess.run(
+        ["git", "grep", "-l", "-z", "-I", "-E", "-e", ci_fix._CONFLICT_MARKER_RE, "--", ":(literal)f.txt"],  # noqa: S607
+        cwd=repo,
+        capture_output=True,
+    )
+    assert (result.returncode == 0) is expected
+
+
+async def test_continue_failure_for_a_non_conflict_reason_gives_up_cleanly(tmp_path, caplog):
+    # D-3: --continue fails and no next conflict is pending (REBASE_HEAD gone).
+    with (
+        _mocks(tmp_path, green=True, get_override=_CONFLICTING) as m,
+        caplog.at_level(logging.INFO),
+        _patched_run_cmd(m, stops=1),
+    ):
+        inner = ci_fix.run_cmd
+        continued = []
+
+        async def fake(cmd, cwd, env, timeout, check=True, shell=False):
+            if cmd[:3] == ["git", "rebase", "--continue"]:
+                m.cmds.append(cmd)
+                continued.append(1)
+                return _proc(1, b"", b"error: could not apply\nfatal: hook failed")
+            if cmd[:3] == ["git", "rev-parse", "--verify"] and continued:
+                return _proc(1)
+            return await inner(cmd, cwd=cwd, env=env, timeout=timeout, check=check, shell=shell)
+
+        with patch(P + "run_cmd", side_effect=fake):
+            await ci_fix.run(_cfg(tmp_path))
+    _assert_gave_up(m, caplog)
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+    assert any("hook failed" in d for d in _digests(caplog))
+
+
+async def test_abort_is_attempted_and_tolerated_when_no_rebase_is_in_progress(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, green=True, get_override=_CONFLICTING, backend_raises=RuntimeError("boom")) as m,
+        caplog.at_level(logging.INFO),
+        _patched_run_cmd(m, stops=1, abort_rc=128),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    _assert_gave_up(m, caplog)
+
+
+async def test_abort_raising_still_writes_the_digest_and_pushes_nothing(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, green=True, get_override=_CONFLICTING, backend_raises=TimeoutError("slow")) as m,
+        caplog.at_level(logging.INFO),
+        _patched_run_cmd(m, stops=1),
+    ):
+        inner = ci_fix.run_cmd
+
+        async def fake(cmd, cwd, env, timeout, check=True, shell=False):
+            if cmd[:3] == ["git", "rebase", "--abort"]:
+                m.cmds.append(cmd)
+                raise TimeoutError("git hung")  # noqa: TRY003
+            return await inner(cmd, cwd=cwd, env=env, timeout=timeout, check=check, shell=shell)
+
+        with patch(P + "run_cmd", side_effect=fake):
+            await ci_fix.run(_cfg(tmp_path))
+    _assert_gave_up(m, caplog)
+    assert any("backend failed" in d for d in _digests(caplog))
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+
+
+async def test_vetting_failure_after_resolution_aborts_and_is_rebase_unsafe_with_the_path(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, green=True, get_override=_CONFLICTING) as m,
+        caplog.at_level(logging.INFO),
+        _patched_run_cmd(m, stops=1, diff_out=b".github/workflows/ci.yml\0", abort_rc=128, grep=(1, b"")),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    _assert_gave_up(m, caplog, "rebase-unsafe")
+    assert any(".github/workflows/ci.yml" in d for d in _digests(caplog))
 
 
 async def test_rebase_prompt_is_read_as_utf8_only_when_prs_exist(tmp_path):
