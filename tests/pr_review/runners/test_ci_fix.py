@@ -444,12 +444,108 @@ async def test_push_failure_other_than_rejection_raises_and_still_restores(tmp_p
     m.restore.assert_called_once()
 
 
-async def test_conflicting_pr_is_rebase_needed_digest(tmp_path, caplog):
-    with _mocks(tmp_path, get_override={"mergeable": MergeableState.CONFLICTING}) as m, caplog.at_level(logging.INFO):
-        await ci_fix.run(_cfg(tmp_path))
+@pytest.mark.parametrize("green", [False, True], ids=["failing-ci", "green-ci"])
+async def test_conflicting_pr_is_detected_and_hits_the_attempt_gate_not_rebase_needed(tmp_path, caplog, green):
+    ci_fix._record_attempt(SLUG, 1)
+    with (
+        _mocks(tmp_path, green=green, get_override={"mergeable": MergeableState.CONFLICTING}) as m,
+        caplog.at_level(logging.INFO),
+    ):
+        await ci_fix.run(_cfg(tmp_path, max_attempts=1))
+    assert "ChangeRequests.get" in _ops(m)
     assert m.pushes == []
     m.checkout.assert_not_called()
-    assert any("rebase-needed" in d for d in _digests(caplog))
+    m.backend.run.assert_not_called()
+    digests = _digests(caplog)
+    assert not any("rebase-needed" in d for d in digests)
+    assert len(digests) == 1
+    assert "cap-reached" in digests[0]
+    assert "attempts=1 max=1" in digests[0]
+
+
+async def test_conflicting_green_pr_is_examined_and_its_counter_is_not_reset(tmp_path):
+    ci_fix._record_attempt(SLUG, 1)
+    with _mocks(tmp_path, green=True, get_override={"mergeable": MergeableState.CONFLICTING}) as m:
+        await ci_fix.run(_cfg(tmp_path))
+    assert "ChangeRequests.get" in _ops(m)
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+    assert m.pushes == []
+    m.checkout.assert_not_called()
+
+
+async def test_non_conflicting_green_pr_resets_its_counter_with_no_git_call(tmp_path, caplog):
+    ci_fix._record_attempt(SLUG, 1)
+    with _mocks(tmp_path, green=True) as m, caplog.at_level(logging.INFO):
+        await ci_fix.run(_cfg(tmp_path))
+    assert "ChangeRequests.get" in _ops(m)
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+    assert any("CI is green, nothing to fix" in r.getMessage() for r in caplog.records)
+    assert m.cmds == []
+    m.checkout.assert_not_called()
+    assert _digests(caplog) == []
+
+
+@pytest.mark.parametrize("green", [True, False], ids=["green-ci", "failing-ci"])
+async def test_unknown_mergeable_has_no_rebase_path_call_or_digest(tmp_path, caplog, green):
+    ci_fix._record_attempt(SLUG, 1)
+    with (
+        _mocks(tmp_path, green=green, get_override={"mergeable": MergeableState.UNKNOWN}) as m,
+        caplog.at_level(logging.INFO),
+    ):
+        m.run_step.side_effect = [_proc(0)]  # failing CI: check-fix runs as before and does not reproduce
+        await ci_fix.run(_cfg(tmp_path))
+    assert not any("rebase" in d or "cap-reached" in d for d in _digests(caplog))
+    assert not any(c[:2] == ["git", "rebase"] for c in m.cmds)
+    assert m.pushes == []
+    m.backend.run.assert_not_called()
+    assert ci_fix.get_attempts(SLUG, 1) == (0 if green else 1)  # green resets; failing is untouched
+
+
+@pytest.mark.parametrize("green", [False, True], ids=["failing-ci", "green-ci"])
+async def test_conflicting_dry_run_logs_and_does_nothing_else(tmp_path, caplog, green):
+    ci_fix._record_attempt(SLUG, 1)
+    with (
+        _mocks(tmp_path, green=green, get_override={"mergeable": MergeableState.CONFLICTING}) as m,
+        caplog.at_level(logging.INFO),
+    ):
+        await ci_fix.run(_cfg(tmp_path, max_attempts=1), dry_run=True)
+    assert any("PR #1" in r.getMessage() and "rebase would run" in r.getMessage() for r in caplog.records)
+    assert _digests(caplog) == []
+    m.checkout.assert_not_called()
+    assert m.cmds == []
+    m.run_step.assert_not_called()
+    m.backend.run.assert_not_called()
+    assert m.pushes == []
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+
+
+async def test_conflicting_pr_under_the_cap_writes_no_digest_and_no_checkout(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, green=True, get_override={"mergeable": MergeableState.CONFLICTING}) as m,
+        caplog.at_level(logging.INFO),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    assert _digests(caplog) == []
+    m.checkout.assert_not_called()
+    assert m.pushes == []
+
+
+async def test_green_ci_rebase_path_digest_uses_the_no_check_sentinel(tmp_path, caplog):
+    ci_fix._record_attempt(SLUG, 1)
+    with (
+        _mocks(tmp_path, green=True, get_override={"mergeable": MergeableState.CONFLICTING}),
+        caplog.at_level(logging.INFO),
+    ):
+        await ci_fix.run(_cfg(tmp_path, max_attempts=1))
+    assert [d for d in _digests(caplog) if "check='-'" in d and "cap-reached" in d]
+
+
+def test_rebase_outcome_names():
+    assert ci_fix.OUTCOME_REBASED == "rebased"
+    assert ci_fix.OUTCOME_REBASE_CONFLICT_UNRESOLVED == "rebase-conflict-unresolved"
+    assert ci_fix.OUTCOME_REBASE_UNSAFE == "rebase-unsafe"
+    assert ci_fix.OUTCOME_REBASE_STILL_FAILING == "rebase-still-failing"
+    assert ci_fix.OUTCOME_REBASE_NEEDED == "rebase-needed"
 
 
 async def test_unreadable_check_output_is_parse_failure_digest(tmp_path, caplog):

@@ -16,6 +16,8 @@ Public entry point (takes the shared working-directory lock itself, like the sib
   CI green (not in dry-run), so a later unrelated failure gets a full budget.
 * ``dry_run=True`` fetches, checks out and reproduces, but never commits, pushes, runs the agent or
   changes a counter.
+* A conflicting PR (any CI state) enters a rebase path; so far it only detects the conflict (dry-run logs it),
+  applies the shared attempt gate and reports ``cap-reached``.
 * Never force-pushes, rebases, pushes another ref, approves or merges.
 * Non-push outcomes are logged as digest entries: a log line starting with ``DIGEST_PREFIX``.
 * Raises :class:`CiFixError` after the loop if any PR failed, so the CLI exits non-zero.
@@ -75,6 +77,7 @@ logger = logging.getLogger(__name__)
 DIGEST_PREFIX = "ci-fix digest:"
 CI_FIX_STATE_FILE = "ci_fix_state.json"
 PROMPT_FILE = "ci-fix-prompt.md"
+NO_CHECK = "-"  # check column of a digest line that has no failing check (the rebase path on green CI)
 UNKNOWN_STEP = "UNKNOWN STEP"  # step column a failed-job log shows when it cannot map a line to a step
 
 OUTCOME_NOT_REPRODUCED = "did-not-reproduce"
@@ -82,7 +85,11 @@ OUTCOME_NOOP_REPEAT = "noop-repeat"
 OUTCOME_CAP_REACHED = "cap-reached"
 OUTCOME_GATE_ONLY = "gate-only"
 OUTCOME_PARSE_FAILURE = "parse-failure"
-OUTCOME_REBASE_NEEDED = "rebase-needed"
+OUTCOME_REBASE_NEEDED = "rebase-needed"  # only a push rejected because the branch moved on the remote
+OUTCOME_REBASED = "rebased"
+OUTCOME_REBASE_CONFLICT_UNRESOLVED = "rebase-conflict-unresolved"
+OUTCOME_REBASE_UNSAFE = "rebase-unsafe"
+OUTCOME_REBASE_STILL_FAILING = "rebase-still-failing"
 OUTCOME_STILL_FAILING = "still-failing"
 OUTCOME_UNSAFE_CHANGE = "unsafe-change"
 
@@ -505,19 +512,19 @@ async def _process_pr(
     number = pr.number
     logger.info("PR #%d: starting%s", number, " (dry-run)" if dry_run else "")
 
-    blocked = await ci_blocker(host, repo, number, pr.base_reference)
-    if blocked is None:
-        logger.info("PR #%d: CI is green, nothing to fix", number)
-        if not dry_run:
-            _reset_attempts(config.repo_slug, number)
-        return
     fresh = await read_change_request(host, repo, number, _SITE)
     skip = change_request_skip_reason(fresh) if fresh else None
     if skip in (REASON_NOT_OPEN, REASON_DRAFT):
         logger.info("PR #%d: %s, skipping", number, skip)
         return
     if skip == REASON_CONFLICTING:
-        _digest(OUTCOME_REBASE_NEEDED, number, detail="PR has merge conflicts with its base")
+        await _rebase_conflicting(pr, config, dry_run)
+        return
+    blocked = await ci_blocker(host, repo, number, pr.base_reference)
+    if blocked is None:
+        logger.info("PR #%d: CI is green, nothing to fix", number)
+        if not dry_run:
+            _reset_attempts(config.repo_slug, number)
         return
     failing = await _read_failing_checks(host, repo, number)
     if failing is None:
@@ -528,6 +535,24 @@ async def _process_pr(
         return
 
     await _fix_first_candidate(pr, failing, config, host, repo, wdir, env, prompt, dry_run)
+
+
+async def _rebase_conflicting(pr: ChangeRequest, config: HarnessConfig, dry_run: bool) -> None:
+    """Rebase path for a conflicting PR, whatever its CI state; a dry run only reports it.
+
+    Only detection, the dry-run line and the shared attempt gate exist so far; the rebase itself is added at the
+    hand-off point below. The counter is not reset here: a conflicting green PR keeps its attempts.
+    """
+    number = pr.number
+    if dry_run:
+        logger.info("PR #%d: has merge conflicts with %s, a rebase would run (dry-run)", number, pr.base_reference)
+        return
+    max_attempts = config.ci_fix.max_fix_attempts
+    attempts = get_attempts(config.repo_slug, number)
+    if attempts >= max_attempts:
+        _digest(OUTCOME_CAP_REACHED, number, NO_CHECK, f"attempts={attempts} max={max_attempts}")
+        return
+    # Hand-off point: fetch-and-checkout, rebase, backend, verify and lease push are added by later slices.
 
 
 async def _fix_first_candidate(
@@ -690,7 +715,7 @@ async def _agent_fix_and_push(
     if await _head(wdir, env) == pre_sha:
         _digest(OUTCOME_NOT_REPRODUCED, number, check.name, "command passes with no change to the branch")
         return False
-    return await _push(number, check, branch, wdir, env)
+    return await _push(number, check.name, branch, wdir, env)
 
 
 async def _head(wdir: str, env: dict) -> str:
@@ -733,16 +758,16 @@ async def _commit_if_dirty(check: Check, wdir: str, env: dict) -> None:
     await run_cmd(["git", "commit", "-m", f"ci-fix: {check.name}"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
 
 
-async def _push(number: int, check: Check, branch: str, wdir: str, env: dict) -> bool:
+async def _push(number: int, check_name: str, branch: str, wdir: str, env: dict) -> bool:
     """Plain ``git push origin <branch>`` (never force, never another ref)."""
     result = await run_cmd(["git", "push", "origin", branch], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
     if result.returncode != 0:
         stderr = _text(result.stderr)
         if _PUSH_REJECTED_RE.search(stderr):
-            _digest(OUTCOME_REBASE_NEEDED, number, check.name, "push rejected, the branch moved on the remote")
+            _digest(OUTCOME_REBASE_NEEDED, number, check_name, "push rejected, the branch moved on the remote")
             return False
         raise CiFixError(f"git push to {branch} failed (exit {result.returncode}): {stderr.strip()}")  # noqa: TRY003
-    logger.info("PR #%d: pushed a fix for %r to %s", number, check.name, branch)
+    logger.info("PR #%d: pushed a fix for %r to %s", number, check_name, branch)
     return True
 
 
