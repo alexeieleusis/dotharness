@@ -11,6 +11,8 @@ sisyphus resume <work-item-ref> --config <file> [--base <branch>]
 sisyphus archive --config <file>
 ```
 
+`resume` also continues an item that finished `intake` cleanly (see "`sisyphus intake`").
+
 ## `sisyphus run`
 
 1. Loads the config (`.sisyphus.toml`, see [configuration](configuration.md)).
@@ -109,6 +111,16 @@ only. They have not been exercised against the real services.
 Runs only the intake stage for one work item reference: the agent drafts the brief at the path from
 `brief_path_template`. Prints `brief: <path>` and any open decisions (checkpoint C1). Needs
 `[project].repo_dir`, `workspace_dir` and `brief_path_template`. Takes the same lock. Exits 0 quietly if held.
+
+A clean finish (zero open decisions) leaves a parked record: a run record that is not abandoned, with stage `intake`,
+`stage_status` `complete`, no checkpoint and no stop record. Intake then prints `next: sisyphus resume REF --config F`
+after the `brief: <path>` line. With open decisions (checkpoint C1) it prints no `next:` line.
+
+`sisyphus resume REF --config F` continues a parked record from the `plan` stage using the existing brief. It does not
+re-run the intake agent and does not re-draft the brief, and completed stages are skipped. It does re-parse the brief
+for blocking open decisions first: if any remain, the item stops at C1 as usual, otherwise it continues to `plan`.
+`--reset-retries` is accepted on a parked record. A parked record also stays "waiting" until you continue or abandon
+it: every `run` lists it under "Needs you" (see "Stopped items and resume").
 
 ### File names and case
 
@@ -224,8 +236,13 @@ brief.
 needed to decide: C1 when the brief no longer has blocking open decisions, C2..C4 when the answer file is
 non-empty, C8 after 30 minutes since the stop, at most 3 automatic retries. Everything else (C5, C6, C7, errors)
 needs `sisyphus resume`. `sisyphus resume REF --config F [--base B]` also works for any stopped item at any time
-(for a not yet answered one it simply stops again with the same question). It errors (exit 1) when there is no
-run record or the item is not stopped, and exits 0 quietly if another invocation holds the lock.
+(for a not yet answered one it simply stops again with the same question). It also continues a parked record (see "`sisyphus intake`"). It errors (exit 1) when there is no
+run record or the item is neither stopped, abandoned (with `--again`) nor a parked record, with the message
+`<item> is not stopped (stage <stage>, <status>); nothing to resume`, and exits 0 quietly if another invocation holds the lock.
+
+A parked record is listed in the digest's "Needs you" section as ``ITEM: Waiting to be continued after a clean intake. Resume: `sisyphus resume ITEM --config F` ``
+(no `[checkpoint]` prefix and no `Action:`). The line repeats on every `run` that gets the lock, until the item is
+continued or abandoned. A workspace holding only a parked item still writes a digest and prints `digest: <path>`.
 
 | stop | what stopped | what you do | clears | what resume does |
 |---|---|---|---|---|
@@ -390,7 +407,7 @@ exists.
 ## `sisyphus status`
 
 `sisyphus status [REF] --config F` is read-only (no lock, no agent). For each item (all items without REF) it
-prints stage, stage_status, checkpoint (`state: abandoned` plus `abandoned_at` and `re-enable` for an abandoned item), `awaiting` (`you` for a checkpoint, `error`, `none` otherwise (including an abandoned item). `status` needs no network), and for a stopped item the question, action, resume command and auto-resume rule (with whether it is
+prints stage, stage_status, checkpoint (`state: abandoned` plus `abandoned_at` and `re-enable` for an abandoned item), `awaiting` (`you` for a checkpoint, `error`, `none` otherwise (including an abandoned item and a parked record). `status` needs no network), for a parked record a line `  next: sisyphus resume REF --config F` after the `awaiting:` line, and for a stopped item the question, action, resume command and auto-resume rule (with whether it is
 cleared now) and every recorded `Retry reset:` line. When `<enc>.stopped.md` exists, `status` prints it (indented under `question:`) instead of the raw detail; without it the raw text shows as before. Output order is unchanged (file-name order), and `status` stays read-only: no lock, no agent. Without `--check-prs` it makes no network call and no PR lookup.
 
 By default `sisyphus status` hides settled items: abandoned items, and finished items (stage `open-pr` with `stage_status` `complete`, i.e. a draft PR is open and the item is handed to the human) that have no checkpoint and no non-abandoned stop record. A recorded gate failure does not keep an item visible: a finished item whose gate failed is hidden too, and its failure stays visible in the digest and the PR. Records with the legacy stage `ci-fix` (no longer a stage since #129, but still loaded from old run records), `stage_status` `complete`, no checkpoint and no non-abandoned stop record are hidden too. These are never hidden by default: any item with a checkpoint set (`awaiting: you`) or a non-abandoned stop record (`awaiting: error`), and any item with `stage_status: in_progress`, no checkpoint and no stop record, because it may be running now or be a hard crash. `in_progress` is a per-stage status, not an item state: a stage stopped at a checkpoint or on a runner error stays `in_progress`.
@@ -408,7 +425,7 @@ When records exist but every one is hidden, `status` prints `no items needing at
 | code | meaning |
 |---|---|
 | 0 | success, nothing to do (including `archive` with nothing to archive), lock held, or a run stopped at a checkpoint (C1..C8) after its digest was written (the checkpoint is in the digest's "Needs you" section) |
-| 1 | an unhandled error, a config error (including an `[archive] dir` equal to or containing the workspace), `resume`/`status` of an item that has no record (or `resume` of one that is not stopped), a digest that cannot be written (message on stderr), or `archive` refusing at least one item |
+| 1 | an unhandled error, a config error (including an `[archive] dir` equal to or containing the workspace), `resume`/`status` of an item that has no record (or `resume` of one that is neither stopped nor a parked record after a clean intake), a digest that cannot be written (message on stderr), or `archive` refusing at least one item |
 
 The digest is always attempted when anything ran, even if the run failed early. The failure is recorded in
 its Deviations section.
