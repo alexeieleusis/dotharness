@@ -26,6 +26,7 @@ from dotharness.sisyphus.resume import (
     build_answer_log_record,
     cleared,
     consume_answer,
+    is_parked,
     iter_records,
     list_waiting,
 )
@@ -343,6 +344,94 @@ def test_resume_run_error_exits_one(tmp_path: Path, fake_run_item: dict[str, Any
     result = env.invoke("resume", "OLD-1", "--config", str(env.config))
     assert result.exit_code == 1
     assert "boom" in result.output
+
+
+# ---------------------------------------------------------------- parked record
+
+
+def _abandoned_stop(item: str):
+    stop = build_stop_record(
+        item, checkpoint=None, stage="intake", stage_status="complete", detail="x", resume_command="r"
+    )
+    return dataclasses.replace(stop, kind="abandoned")
+
+
+def _parked(env: Any, item: str = "PARK-1") -> RunRecord:
+    rec = RunRecord.open(env.root / "ws", item)
+    rec.mark_stage("intake", "complete")
+    return rec
+
+
+def test_is_parked_truth_table(tmp_path: Path) -> None:
+    rec = RunRecord.open(tmp_path / "ws", "T-1")
+    rec.mark_stage("intake", "complete")
+    assert is_parked(rec, None)
+    stop = build_stop_record(
+        "T-1", checkpoint=None, stage="intake", stage_status="complete", detail="x", resume_command="r"
+    )
+    assert not is_parked(rec, stop)
+    assert not is_parked(rec, _abandoned_stop("T-1"))
+    rec.set_checkpoint("C1")
+    assert not is_parked(rec, None)
+    rec.set_checkpoint(None)
+    rec.mark_stage("intake", "in_progress")
+    assert not is_parked(rec, None)
+    for stage in ("plan", "build", "open-pr"):
+        rec.mark_stage(stage, "complete")
+        assert not is_parked(rec, None)
+
+
+def test_resume_continues_a_parked_record_after_a_clean_intake(
+    tmp_path: Path, fake_run_item: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dotharness.sisyphus.intake import IntakeResult
+
+    env = make_env(tmp_path)
+    brief = resolve_brief_path(load(env), "PARK-1")
+    brief.parent.mkdir(parents=True, exist_ok=True)
+
+    async def fake_intake(item, config, runner, record=None, **_kw):
+        brief.write_text(CLEAR)
+        assert record is not None
+        record.mark_stage("intake", "complete")
+        return IntakeResult(brief, False, ())
+
+    monkeypatch.setattr(cli, "run_intake", fake_intake)
+    assert env.invoke("intake", "PARK-1", "--config", str(env.config)).exit_code == 0
+    before = brief.read_bytes()
+    result = env.invoke("resume", "PARK-1", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    assert items(fake_run_item) == ["PARK-1"]
+    assert brief.read_bytes() == before
+
+
+def test_resume_of_a_parked_record_under_a_held_lock_exits_zero_quietly(
+    tmp_path: Path, fake_run_item: dict[str, Any]
+) -> None:
+    env = make_env(tmp_path)
+    _parked(env)
+    with clone_lock(tmp_path / "repo", tmp_path / "locks"):
+        result = env.invoke("resume", "PARK-1", "--config", str(env.config))
+    assert (result.exit_code, result.output) == (0, "")
+    assert fake_run_item["calls"] == []
+
+
+def test_resume_again_on_a_parked_record_keeps_its_error(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+    env = make_env(tmp_path)
+    _parked(env)
+    result = env.invoke("resume", "PARK-1", "--config", str(env.config), "--again")
+    assert result.exit_code == 1
+    assert "is not abandoned; --again only re-enables an abandoned item" in result.output
+    assert fake_run_item["calls"] == []
+
+
+def test_resume_of_plan_complete_without_a_stop_is_refused(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+    env = make_env(tmp_path)
+    RunRecord.open(tmp_path / "ws", "PLAN-1").mark_stage("plan", "complete")
+    result = env.invoke("resume", "PLAN-1", "--config", str(env.config))
+    assert result.exit_code == 1
+    assert "PLAN-1 is not stopped (stage plan, complete); nothing to resume" in result.output
+    assert fake_run_item["calls"] == []
 
 
 # ------------------------------------------------------------------------ status

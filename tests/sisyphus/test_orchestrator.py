@@ -827,6 +827,20 @@ async def test_resume_after_c3_relaunches_build_without_replanning(world: World)
     assert RunRecord.open(world.tmp / "ws", ITEM).checkpoint is None
 
 
+async def test_parked_intake_complete_record_continues_from_plan_without_touching_the_brief(world: World) -> None:
+    brief = resolve_brief_path(world.config(), ITEM)
+    brief.parent.mkdir(parents=True, exist_ok=True)
+    brief.write_text(BRIEF_NONE)
+    RunRecord.open(world.tmp / "ws", ITEM).mark_stage("intake", "complete")
+    result = await world.run()
+    assert result.completed
+    assert "intake" in result.stages_skipped
+    assert result.stages_run[0] == "plan"
+    assert "agent:intake" not in world.events
+    assert world.events.count("agent:plan") == 1
+    assert brief.read_text() == BRIEF_NONE
+
+
 async def test_build_not_relaunched_after_retry_cycles_exhausted(world: World) -> None:
     world.build_stops = [{"checkpoint": "C5", "detail": "again"}] * 3
     for _ in range(3):

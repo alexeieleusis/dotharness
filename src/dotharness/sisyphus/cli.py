@@ -80,6 +80,7 @@ from dotharness.sisyphus.rails import LimitTracker
 from dotharness.sisyphus.resume import (
     AUTO_RETRY_KEY,
     cleared,
+    is_parked,
     is_stopped,
     iter_records,
     list_waiting,
@@ -690,7 +691,7 @@ def intake_command(ctx: typer.Context, work_item_ref: RefArgument, config_path: 
 
 
 def _check_resumable(rec: RunRecord, again: bool) -> None:
-    """Exit 1 unless ``rec`` is stopped (or, with ``--again``, abandoned; the abandoned mark is then cleared)."""
+    """Exit 1 unless ``rec`` is stopped, parked after a clean intake, or (with ``--again``) abandoned; the abandoned mark is then cleared."""
     stop = read_stop_record(rec.path)
     if is_abandoned(stop):
         if not again:
@@ -701,7 +702,7 @@ def _check_resumable(rec: RunRecord, again: bool) -> None:
         clear_stop_record(rec.path)
     elif again:
         fail(f"{rec.item} is not abandoned; --again only re-enables an abandoned item")
-    elif not is_stopped(rec, stop):
+    elif not is_stopped(rec, stop) and not is_parked(rec, stop):
         fail(f"{rec.item} is not stopped (stage {rec.stage}, {rec.stage_status}); nothing to resume")
 
 
