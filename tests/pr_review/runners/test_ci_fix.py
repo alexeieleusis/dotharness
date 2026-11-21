@@ -469,7 +469,7 @@ async def test_conflicting_green_pr_is_examined_and_its_counter_is_not_reset(tmp
         await ci_fix.run(_cfg(tmp_path))
     assert "ChangeRequests.get" in _ops(m)
     assert ci_fix.get_attempts(SLUG, 1) == 1  # the clean rebase is not an attempt either
-    assert m.pushes == []
+    assert len(m.pushes) == 1
 
 
 async def test_non_conflicting_green_pr_resets_its_counter_with_no_git_call(tmp_path, caplog):
@@ -530,8 +530,8 @@ async def test_conflicting_green_pr_is_rebased_onto_the_base_and_not_counted(tmp
         await ci_fix.run(_cfg(tmp_path))
     m.checkout.assert_called_once_with("feat", ANY, ANY)
     assert _rebase_cmds(m) == [["git", "rebase", "origin/main"]]
-    assert _digests(caplog) == []
-    assert m.pushes == []  # the push belongs to a later slice
+    assert [d for d in _digests(caplog) if "rebased" not in d] == []
+    assert m.pushes == [["git", "push", "--force-with-lease=feat:sha0", "origin", "feat"]]
     m.backend.run.assert_not_called()
     m.run_step.assert_not_called()
     assert ci_fix.get_attempts(SLUG, 1) == 0
@@ -558,7 +558,8 @@ async def test_conflicting_pr_with_only_gate_checks_failing_is_treated_as_green(
         await ci_fix.run(_cfg(tmp_path))
     assert _rebase_cmds(m) == [["git", "rebase", "origin/main"]]
     assert any("only gate checks are failing" in r.getMessage() for r in caplog.records)
-    assert _digests(caplog) == []
+    assert [d for d in _digests(caplog) if "rebased" not in d] == []
+    assert len(m.pushes) == 1
     m.run_step.assert_not_called()
 
 
@@ -660,6 +661,155 @@ async def test_green_ci_rebase_path_digest_uses_the_no_check_sentinel(tmp_path, 
     ):
         await ci_fix.run(_cfg(tmp_path, max_attempts=1))
     assert [d for d in _digests(caplog) if "check='-'" in d and "cap-reached" in d]
+
+
+async def test_clean_rebase_is_one_lease_push_and_a_rebased_digest_with_no_attempt(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, green=True, get_override={"mergeable": MergeableState.CONFLICTING}) as m,
+        caplog.at_level(logging.INFO),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    m.backend.run.assert_not_called()
+    assert len(m.pushes) == 1
+    digests = _digests(caplog)
+    assert len(digests) == 1
+    assert "rebased" in digests[0]
+    assert "refs/harness-recovery/feat-sha0" in digests[0]
+    assert "stopped_commits=0" in digests[0]
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+    m.restore.assert_called_once()
+
+
+async def test_recovery_ref_is_written_before_the_lease_push_and_kept(tmp_path):
+    ref_cmd = ["git", "update-ref", "refs/harness-recovery/feat-sha0", "sha0"]
+    with _mocks(tmp_path, green=True, get_override={"mergeable": MergeableState.CONFLICTING}) as m:
+        seen: list[bool] = []
+        inner = ci_fix.run_cmd
+
+        async def spy(cmd, **kw):
+            if cmd[:2] == ["git", "push"]:
+                seen.append(ref_cmd in m.cmds)  # recorded by the mock before this push
+            return await inner(cmd, **kw)
+
+        with patch(P + "run_cmd", side_effect=spy):
+            await ci_fix.run(_cfg(tmp_path))
+    assert seen == [True]
+    assert m.cmds.count(ref_cmd) == 1
+    assert not any(c[:2] == ["git", "update-ref"] and "-d" in c for c in m.cmds)
+
+
+async def test_rebase_path_push_is_the_lease_push_and_other_pushes_stay_plain(tmp_path):
+    with _mocks(tmp_path, green=True, get_override={"mergeable": MergeableState.CONFLICTING}) as m:
+        await ci_fix.run(_cfg(tmp_path))
+    assert m.pushes == [["git", "push", "--force-with-lease=feat:sha0", "origin", "feat"]]
+    with _mocks(tmp_path, prs=[_pr(branch="my-branch")]) as m2:
+        await ci_fix.run(_cfg(tmp_path))
+    assert m2.pushes == [["git", "push", "origin", "my-branch"]]
+
+
+async def test_stale_lease_rejection_is_rebase_needed_with_no_raise_and_the_ref_kept(tmp_path, caplog):
+    stderr = b" ! [rejected]        feat -> feat (stale info)\nerror: failed to push some refs to 'origin'\n"
+    with (
+        _mocks(
+            tmp_path, green=True, push_rc=1, push_stderr=stderr, get_override={"mergeable": MergeableState.CONFLICTING}
+        ) as m,
+        caplog.at_level(logging.INFO),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    assert len(m.pushes) == 1
+    digests = _digests(caplog)
+    assert len(digests) == 1
+    assert "rebase-needed" in digests[0]
+    assert ["git", "update-ref", "refs/harness-recovery/feat-sha0", "sha0"] in m.cmds
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+
+
+async def test_other_lease_push_failure_still_raises(tmp_path):
+    with (
+        _mocks(
+            tmp_path,
+            green=True,
+            push_rc=128,
+            push_stderr=b"fatal: Authentication failed",
+            get_override={"mergeable": MergeableState.CONFLICTING},
+        ),
+        pytest.raises(CiFixError, match="push to feat failed"),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+
+
+async def test_failed_recovery_ref_write_means_no_push_and_a_parse_failure_digest(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, green=True, get_override={"mergeable": MergeableState.CONFLICTING}) as m,
+        caplog.at_level(logging.INFO),
+    ):
+        inner = ci_fix.run_cmd
+
+        async def failing(cmd, **kw):
+            if cmd[:2] == ["git", "update-ref"]:
+                return _proc(128, b"", b"fatal: cannot lock ref")
+            return await inner(cmd, **kw)
+
+        with patch(P + "run_cmd", side_effect=failing):
+            await ci_fix.run(_cfg(tmp_path))
+    assert m.pushes == []
+    digests = _digests(caplog)
+    assert len(digests) == 1
+    assert "parse-failure" in digests[0]
+    assert "could not write the recovery ref" in digests[0]
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+    m.restore.assert_called_once()
+
+
+def _origin_and_clone(tmp_path):
+    import subprocess
+
+    def git(cwd, *args):
+        return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()  # noqa: S607
+
+    origin = tmp_path / "origin.git"
+    work = tmp_path / "work"
+    other = tmp_path / "other"
+    git(tmp_path, "init", "-q", "--bare", str(origin))
+    for d in (work, other):
+        git(tmp_path, "clone", "-q", str(origin), str(d))
+        git(d, "config", "user.email", "t@example.com")
+        git(d, "config", "user.name", "t")
+    git(work, "checkout", "-q", "-b", "feat")
+    (work / "a.txt").write_text("1\n", encoding="utf-8")
+    git(work, "add", "-A")
+    git(work, "commit", "-qm", "one")
+    git(work, "push", "-q", "origin", "feat")
+    return git, work, other
+
+
+async def test_lease_push_against_real_git_succeeds_and_keeps_the_recovery_ref(tmp_path, caplog):
+    git, work, _ = _origin_and_clone(tmp_path)
+    pre = git(work, "rev-parse", "HEAD")
+    git(work, "commit", "-q", "--amend", "-m", "rewritten")  # what a rebase does to the head
+    with caplog.at_level(logging.INFO):
+        assert await ci_fix._publish_rebase(1, "feat", pre, 0, str(work), {})
+    assert git(work, "rev-parse", f"refs/harness-recovery/feat-{pre[:12]}") == pre
+    assert git(work, "ls-remote", "origin", "feat").split()[0] == git(work, "rev-parse", "HEAD")
+    assert any("rebased pr=1" in d for d in _digests(caplog))
+
+
+async def test_stale_lease_against_real_git_is_rebase_needed_and_keeps_the_recovery_ref(tmp_path, caplog):
+    git, work, other = _origin_and_clone(tmp_path)
+    pre = git(work, "rev-parse", "HEAD")
+    git(other, "fetch", "-q", "origin")
+    git(other, "checkout", "-q", "feat")
+    (other / "b.txt").write_text("2\n", encoding="utf-8")
+    git(other, "add", "-A")
+    git(other, "commit", "-qm", "someone else")
+    git(other, "push", "-q", "origin", "feat")
+    moved = git(work, "ls-remote", "origin", "feat").split()[0]
+    git(work, "commit", "-q", "--amend", "-m", "rewritten")
+    with caplog.at_level(logging.INFO):
+        assert not await ci_fix._publish_rebase(1, "feat", pre, 0, str(work), {})
+    assert any("rebase-needed" in d for d in _digests(caplog))
+    assert git(work, "ls-remote", "origin", "feat").split()[0] == moved  # nothing was overwritten
+    assert git(work, "rev-parse", f"refs/harness-recovery/feat-{pre[:12]}") == pre
 
 
 def test_rebase_outcome_names():

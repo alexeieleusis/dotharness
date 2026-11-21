@@ -548,8 +548,8 @@ async def _rebase_conflicting(
 ) -> None:
     """Rebase path for a conflicting PR, whatever its CI state; a dry run only reports it.
 
-    Runs the rebase and vets the result; it ends at a vetted tree that needs no verification (green CI, or only
-    gate checks failing), which is where the push is added by a later slice. The counter is not reset here: a
+    Runs the rebase and vets the result; a vetted tree that needs no verification (green CI, or only gate checks
+    failing) is published with a recovery ref and a lease push (``_publish_rebase``). The counter is not reset here: a
     conflicting green PR keeps its attempts, and a clean rebase is not an attempt.
     """
     number = pr.number
@@ -569,6 +569,7 @@ async def _rebase_conflicting(
             await git_fetch_and_checkout(branch, wdir, env)
         except FatalGitError as exc:
             await reraise_git_failure_if_clean(exc, wdir, env, original_sha)
+        pre_rebase_sha = await _head(wdir, env)
         to_verify = await _rebase_and_vet(pr, host, repo, wdir, env)
         if to_verify is None:
             return
@@ -577,7 +578,7 @@ async def _rebase_conflicting(
             # later slice; nothing is pushed until it passes.
             return
         await _commit_if_dirty(None, wdir, env, f"ci-fix: rebase onto {pr.base_reference}")
-        # Hand-off point: the vetted rebased tree is ready to push; recovery ref and lease push come later.
+        await _publish_rebase(number, branch, pre_rebase_sha, 0, wdir, env)
     finally:
         await git_restore(original_sha, branch, wdir, env)
 
@@ -833,16 +834,45 @@ async def _commit_if_dirty(check: Check | None, wdir: str, env: dict, message: s
     await run_cmd(["git", "commit", "-m", subject], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
 
 
-async def _push(number: int, check_name: str, branch: str, wdir: str, env: dict) -> bool:
-    """Plain ``git push origin <branch>`` (never force, never another ref)."""
-    result = await run_cmd(["git", "push", "origin", branch], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
+async def _publish_rebase(number: int, branch: str, pre_rebase_sha: str, stopped: int, wdir: str, env: dict) -> bool:
+    """Preserve the pre-rebase head, then push the rebased branch with a lease pinned to it.
+
+    The recovery ref is written first and never removed, so the old head stays recoverable whatever the push does;
+    if it cannot be written, nothing is pushed. A rejected lease is ``rebase-needed`` (``_push``). Returns True when
+    pushed; a clean rebase is not an attempt, and the PR is done for this run either way.
+    """
+    ref = f"refs/harness-recovery/{branch}-{pre_rebase_sha[:12]}"
+    result = await run_cmd(
+        ["git", "update-ref", ref, pre_rebase_sha], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False
+    )
+    if result.returncode != 0:
+        logger.warning("PR #%d: git update-ref %s failed: %s", number, ref, _text(result.stderr).strip())
+        _digest(OUTCOME_PARSE_FAILURE, number, NO_CHECK, "could not write the recovery ref")
+        return False
+    if not await _push(number, NO_CHECK, branch, wdir, env, lease_sha=pre_rebase_sha):
+        return False
+    _digest(OUTCOME_REBASED, number, NO_CHECK, f"recovery_ref={ref} stopped_commits={stopped}")
+    return True
+
+
+async def _push(number: int, check_name: str, branch: str, wdir: str, env: dict, lease_sha: str | None = None) -> bool:
+    """Plain ``git push origin <branch>`` (never force, never another ref).
+
+    The one exception is the rebase path, which passes ``lease_sha``: ``--force-with-lease=<branch>:<lease_sha>``,
+    so the push only goes through while the remote branch is still at the pre-rebase head.
+    """
+    cmd = ["git", "push", "origin", branch]
+    if lease_sha is not None:
+        cmd = ["git", "push", f"--force-with-lease={branch}:{lease_sha}", "origin", branch]
+    result = await run_cmd(cmd, cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
     if result.returncode != 0:
         stderr = _text(result.stderr)
         if _PUSH_REJECTED_RE.search(stderr):
             _digest(OUTCOME_REBASE_NEEDED, number, check_name, "push rejected, the branch moved on the remote")
             return False
         raise CiFixError(f"git push to {branch} failed (exit {result.returncode}): {stderr.strip()}")  # noqa: TRY003
-    logger.info("PR #%d: pushed a fix for %r to %s", number, check_name, branch)
+    what = "the rebased branch" if lease_sha is not None else f"a fix for {check_name!r}"
+    logger.info("PR #%d: pushed %s to %s", number, what, branch)
     return True
 
 
