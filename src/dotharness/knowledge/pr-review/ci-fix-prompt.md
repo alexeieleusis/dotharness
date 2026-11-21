@@ -23,7 +23,7 @@ Read the check name and the log excerpt. Read the files the log points at. Deter
 2. Do **not** make unrelated changes: no incidental fixes, no refactors, no formatting of code you did not need to touch.
 3. Do **not** touch CI configuration (workflow files, CI settings) unless the failure itself is in that configuration.
 
-**If the failure needs a rebase, or cannot be fixed by a small change, stop.** Change no files and report that instead.
+**If the failure cannot be fixed by a small change, stop.** Change no files and report that instead.
 
 ---
 

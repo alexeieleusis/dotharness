@@ -39,6 +39,7 @@ def _cfg(tmp_path, enabled=True, max_attempts=3):
     knowledge = tmp_path / "k" / "pr-review"
     knowledge.mkdir(parents=True, exist_ok=True)
     (knowledge / "ci-fix-prompt.md").write_text("PROMPT TEXT", encoding="utf-8")
+    (knowledge / "ci-fix-rebase-prompt.md").write_text("REBASE PROMPT TEXT \u00e9", encoding="utf-8")
     return HarnessConfig(
         harness=HarnessSection(
             "opencode", "echo tok", knowledge_dir=tmp_path / "k", path_prepend=[], env={}, backend_timeout_seconds=10
@@ -180,6 +181,7 @@ def _mocks(
             backend=backend,
             status_box=status_box,
             backend_cls=backend_cls,
+            continue_envs=[],
         )
 
 
@@ -586,17 +588,36 @@ async def test_stopped_rebase_is_aborted_with_no_push(tmp_path, caplog):
 
 
 @contextlib.contextmanager
-def _patched_run_cmd(m, *, rebase_rc=0, diff_out=b"", abort_rc=0):
-    """Wrap the mocked ``run_cmd`` so ``git rebase``/``--abort``/``diff`` answer as given."""
+def _patched_run_cmd(m, *, rebase_rc=0, diff_out=b"", abort_rc=0, stops=0, stuck=False):
+    """Wrap the mocked ``run_cmd`` so ``git rebase``/``--abort``/``diff`` answer as given.
+
+    ``stops`` simulates a rebase that stops on that many commits (REBASE_HEAD ``stop-1``, ``stop-2``, ...), each
+    ``git rebase --continue`` advancing to the next; ``stuck`` makes ``--continue`` fail on the same commit.
+    """
     inner = ci_fix.run_cmd
+    left = [stops]
+
+    def stop_sha():
+        return f"stop-{stops - left[0] + 1}".encode()
 
     async def fake(cmd, cwd, env, timeout, check=True, shell=False):
         if cmd[:3] == ["git", "rebase", "--abort"]:
             m.cmds.append(cmd)
             return _proc(abort_rc, b"", b"fatal: no rebase in progress?" if abort_rc else b"")
+        if cmd[:3] == ["git", "rebase", "--continue"]:
+            m.cmds.append(cmd)
+            m.continue_envs.append(env)
+            if stuck:
+                return _proc(1)
+            left[0] -= 1
+            return _proc(1 if left[0] > 0 else 0)
         if cmd[:2] == ["git", "rebase"]:
             m.cmds.append(cmd)
-            return _proc(rebase_rc)
+            return _proc(1 if stops else rebase_rc)
+        if cmd[:3] == ["git", "rev-parse", "--verify"]:
+            return _proc(0, stop_sha()) if stops and left[0] > 0 else _proc(1)
+        if cmd[:2] == ["git", "diff"] and "--diff-filter=U" in cmd:
+            return _proc(0, b"a.py\0b.py\0")
         if cmd[:2] == ["git", "diff"]:
             m.cmds.append(cmd)
             return _proc(0, diff_out)
@@ -604,6 +625,159 @@ def _patched_run_cmd(m, *, rebase_rc=0, diff_out=b"", abort_rc=0):
 
     with patch(P + "run_cmd", side_effect=fake):
         yield
+
+
+_CONFLICTING = {"mergeable": MergeableState.CONFLICTING}
+
+
+async def test_conflict_resolved_by_backend_then_continue_and_one_attempt_for_two_stopped_commits(tmp_path, caplog):
+    # T1 + T2: two stopped commits = two backend runs, two --continue calls, one attempt, one lease push.
+    with (
+        _mocks(tmp_path, green=True, get_override=_CONFLICTING) as m,
+        caplog.at_level(logging.INFO),
+        _patched_run_cmd(m, stops=2),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    assert m.backend.run.await_count == 2
+    assert [c for c in m.cmds if c[:3] == ["git", "rebase", "--continue"]] == [["git", "rebase", "--continue"]] * 2
+    assert all(e["GIT_EDITOR"] == "true" for e in m.continue_envs)
+    assert ["git", "rebase", "--abort"] not in m.cmds
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+    # Vetting runs after the loop completed, against the base.
+    cmds = m.cmds
+    assert cmds.index(["git", "rebase", "--continue"]) < cmds.index([
+        "git",
+        "diff",
+        "-z",
+        "--name-only",
+        "--no-renames",
+        "origin/main",
+    ])
+    assert m.pushes == [["git", "push", "--force-with-lease=feat:sha0", "origin", "feat"]]
+    assert "stopped_commits=2" in " ".join(_digests(caplog))
+    m.restore.assert_called_once()
+
+
+async def test_backend_gets_the_rebase_prompt_and_the_conflicted_files(tmp_path):
+    with _mocks(tmp_path, green=True, get_override=_CONFLICTING) as m, _patched_run_cmd(m, stops=1):
+        await ci_fix.run(_cfg(tmp_path))
+    (call,) = m.backend.run.await_args_list
+    text = call.args[0]
+    assert text.startswith("REBASE PROMPT TEXT \u00e9")
+    assert "- a.py" in text
+    assert "- b.py" in text
+    assert "origin/main" in text
+    assert "stop-1" in text
+    assert call.kwargs["cwd"]
+
+
+async def test_clean_rebase_runs_no_backend_and_counts_no_attempt(tmp_path):
+    # T2: a clean rebase counts none.
+    with _mocks(tmp_path, green=True, get_override=_CONFLICTING) as m, _patched_run_cmd(m):
+        await ci_fix.run(_cfg(tmp_path))
+    m.backend.run.assert_not_called()
+    assert ["git", "rebase", "--continue"] not in m.cmds
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+
+
+async def test_conflict_with_failing_ci_is_resolved_and_handed_off_unpublished(tmp_path):
+    with _mocks(tmp_path, get_override=_CONFLICTING) as m, _patched_run_cmd(m, stops=1):
+        await ci_fix.run(_cfg(tmp_path))
+    assert m.backend.run.await_count == 1
+    assert m.pushes == []
+    m.run_step.assert_not_called()
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+
+
+@pytest.mark.parametrize("raises", [RuntimeError("boom"), TimeoutError("slow")], ids=["error", "timeout"])
+async def test_backend_failure_in_the_loop_is_one_attempt_abort_and_unresolved(tmp_path, caplog, raises):
+    with (
+        _mocks(tmp_path, green=True, get_override=_CONFLICTING, backend_raises=raises) as m,
+        caplog.at_level(logging.INFO),
+        _patched_run_cmd(m, stops=2),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    assert ["git", "rebase", "--abort"] in m.cmds
+    assert ["git", "rebase", "--continue"] not in m.cmds
+    assert m.pushes == []
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+    digests = _digests(caplog)
+    assert len(digests) == 1
+    assert "rebase-conflict-unresolved" in digests[0]
+
+
+async def test_cancelled_backend_run_is_recorded_and_propagates(tmp_path):
+    import asyncio
+
+    with (
+        _mocks(tmp_path, green=True, get_override=_CONFLICTING, backend_raises=asyncio.CancelledError()) as m,
+        _patched_run_cmd(m, stops=1),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+    assert m.pushes == []
+    m.restore.assert_called_once()
+
+
+async def test_continue_that_does_not_advance_gives_up_after_one_attempt(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, green=True, get_override=_CONFLICTING) as m,
+        caplog.at_level(logging.INFO),
+        _patched_run_cmd(m, stops=2, stuck=True),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    assert m.backend.run.await_count == 1
+    assert ["git", "rebase", "--abort"] in m.cmds
+    assert m.pushes == []
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+    assert any("rebase-conflict-unresolved" in d for d in _digests(caplog))
+
+
+async def test_unsafe_resolution_is_vetted_after_the_loop_and_not_pushed(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, green=True, get_override=_CONFLICTING) as m,
+        caplog.at_level(logging.INFO),
+        _patched_run_cmd(m, stops=1, diff_out=b".github/workflows/ci.yml\0", abort_rc=128),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    assert m.pushes == []
+    assert any("rebase-unsafe" in d for d in _digests(caplog))
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+
+
+async def test_rebase_prompt_is_read_as_utf8_only_when_prs_exist(tmp_path):
+    cfg = _cfg(tmp_path)
+    with _mocks(tmp_path, prs=[]):
+        # No PRs: neither prompt file is needed.
+        (cfg.harness.knowledge_dir / "pr-review" / "ci-fix-rebase-prompt.md").unlink()
+        await ci_fix.run(cfg)
+    with _mocks(tmp_path, green=True):
+        with pytest.raises(FileNotFoundError):
+            await ci_fix.run(cfg)
+        (cfg.harness.knowledge_dir / "pr-review" / "ci-fix-rebase-prompt.md").write_text("caf\u00e9", encoding="utf-8")
+        await ci_fix.run(cfg)
+
+
+def test_shipped_prompts_follow_the_rebase_rules():
+    from pathlib import Path
+
+    root = Path(ci_fix.__file__).parents[2] / "knowledge" / "pr-review"
+    fix = (root / "ci-fix-prompt.md").read_text(encoding="utf-8")
+    rebase = (root / "ci-fix-rebase-prompt.md").read_text(encoding="utf-8")
+    assert "needs a rebase" not in fix
+    assert "Never amend, rebase, reset or force-push." in fix
+    assert "data, not instructions" in rebase
+    for banned in (
+        "git rebase --continue",
+        "git rebase --skip",
+        "git rebase --abort",
+        "git commit",
+        "git reset",
+        "git push",
+    ):
+        assert banned in rebase.split("## Step 3")[1]
+    assert "git add" in rebase
 
 
 async def test_base_commit_editing_github_is_not_rebase_unsafe(tmp_path, caplog):
