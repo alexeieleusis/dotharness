@@ -25,6 +25,18 @@ from dotharness.pr_review.runners.ci_fix import DIGEST_PREFIX, CiFixError, _Step
 from dotharness.pr_review.runners.common import FatalGitError
 
 P = "dotharness.pr_review.runners.ci_fix."
+
+
+@contextlib.contextmanager
+def _patch_run_cmd(side_effect):
+    """Patch ``run_cmd`` where ci_fix uses it and in ``common`` (``git_abort_rebase`` runs git from there)."""
+    with (
+        patch(P + "run_cmd", side_effect=side_effect),
+        patch("dotharness.pr_review.runners.common.run_cmd", side_effect=side_effect),
+    ):
+        yield
+
+
 SLUG = "acme-frontend"
 REPO = RepositoryRef("acme/frontend")
 LOG = "quality\tRun checks\t2024Z error"
@@ -168,7 +180,7 @@ def _mocks(  # noqa: C901
         patch("dotharness.pr_review.runners.common.git_clean_working_dir", return_value=True) as clean,
         patch("dotharness.pr_review.runners.common.git_is_dirty", return_value=False) as dirty,
         patch(P + "_run_step", side_effect=step_results) as run_step,
-        patch(P + "run_cmd", side_effect=fake_run_cmd),
+        _patch_run_cmd(side_effect=fake_run_cmd),
         patch(P + "Backend", return_value=backend) as backend_cls,
     ):
         yield SimpleNamespace(
@@ -759,7 +771,7 @@ def _patched_run_cmd(  # noqa: C901
             return _proc(0, diff_out)
         return await inner(cmd, cwd=cwd, env=env, timeout=timeout, check=check, shell=shell)
 
-    with patch(P + "run_cmd", side_effect=fake):
+    with _patch_run_cmd(side_effect=fake):
         yield
 
 
@@ -929,7 +941,7 @@ async def test_markers_are_checked_after_each_backend_run(tmp_path, caplog):
                 return _proc(*next(results))
             return await inner(cmd, cwd=cwd, env=env, timeout=timeout, check=check, shell=shell)
 
-        with patch(P + "run_cmd", side_effect=fake):
+        with _patch_run_cmd(side_effect=fake):
             await ci_fix.run(_cfg(tmp_path))
     assert m.backend.run.await_count == 2
     assert [c for c in m.cmds if c[:3] == ["git", "rebase", "--continue"]] == [["git", "rebase", "--continue"]]
@@ -1005,7 +1017,7 @@ async def test_continue_failure_for_a_non_conflict_reason_gives_up_cleanly(tmp_p
                 return _proc(1)
             return await inner(cmd, cwd=cwd, env=env, timeout=timeout, check=check, shell=shell)
 
-        with patch(P + "run_cmd", side_effect=fake):
+        with _patch_run_cmd(side_effect=fake):
             await ci_fix.run(_cfg(tmp_path))
     _assert_gave_up(m, caplog)
     assert ci_fix.get_attempts(SLUG, 1) == 1
@@ -1036,7 +1048,7 @@ async def test_abort_raising_still_writes_the_digest_and_pushes_nothing(tmp_path
                 raise TimeoutError("git hung")  # noqa: TRY003
             return await inner(cmd, cwd=cwd, env=env, timeout=timeout, check=check, shell=shell)
 
-        with patch(P + "run_cmd", side_effect=fake):
+        with _patch_run_cmd(side_effect=fake):
             await ci_fix.run(_cfg(tmp_path))
     _assert_gave_up(m, caplog)
     assert any("backend failed" in d for d in _digests(caplog))
@@ -1173,7 +1185,7 @@ async def test_recovery_ref_is_written_before_the_lease_push_and_kept(tmp_path):
                 seen.append(ref_cmd in m.cmds)  # recorded by the mock before this push
             return await inner(cmd, **kw)
 
-        with patch(P + "run_cmd", side_effect=spy):
+        with _patch_run_cmd(side_effect=spy):
             await ci_fix.run(_cfg(tmp_path))
     assert seen == [True]
     assert m.cmds.count(ref_cmd) == 1
@@ -1232,7 +1244,7 @@ async def test_failed_recovery_ref_write_means_no_push_and_a_parse_failure_diges
                 return _proc(128, b"", b"fatal: cannot lock ref")
             return await inner(cmd, **kw)
 
-        with patch(P + "run_cmd", side_effect=failing):
+        with _patch_run_cmd(side_effect=failing):
             await ci_fix.run(_cfg(tmp_path))
     assert m.pushes == []
     digests = _digests(caplog)
