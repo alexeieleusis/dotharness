@@ -20,8 +20,8 @@ from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
-    FatalGitError,
     TEST_LAYER_FAILED,
+    FatalGitError,
     LinkedTicket,
     build_design_review_prompt,
     build_early_comment_context,
