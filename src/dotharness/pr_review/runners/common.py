@@ -284,25 +284,29 @@ async def _rebase_in_progress(cwd: str, env: dict) -> bool:
     return False
 
 
-async def _abort_rebase_if_in_progress(cwd: str, env: dict) -> None:
-    """Abort a rebase a cancelled or failed run left behind; never raises (the restore must carry on)."""
+async def git_abort_rebase(cwd: str, env: dict, *, only_if_in_progress: bool = False) -> None:
+    """``git rebase --abort``; never raises (callers carry on whether or not the abort applied).
+
+    With ``only_if_in_progress`` the abort is skipped unless a rebase is actually underway.
+    """
     try:
-        if not await _rebase_in_progress(cwd, env):
-            return
-        logger.warning("git_restore: a rebase is in progress in %s; aborting it", cwd)
+        if only_if_in_progress:
+            if not await _rebase_in_progress(cwd, env):
+                return
+            logger.warning("a rebase is in progress in %s; aborting it", cwd)
         result = await run_cmd(["git", "rebase", "--abort"], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
         if result.returncode != 0:
             logger.warning(
-                "git_restore: git rebase --abort failed (exit %s): %s",
+                "git rebase --abort failed (exit %s): %s",
                 result.returncode,
                 result.stderr.decode("utf-8", errors="replace").strip(),
             )
     except Exception:
-        logger.exception("git_restore: could not check for or abort a rebase in progress")
+        logger.exception("could not check for or abort a rebase in progress")
 
 
 async def _git_restore_impl(original_sha: str, branch: str, cwd: str, env: dict, pr_number: int | None = None) -> None:
-    await _abort_rebase_if_in_progress(cwd, env)
+    await git_abort_rebase(cwd, env, only_if_in_progress=True)
     preserved = True
     if branch:
         try:

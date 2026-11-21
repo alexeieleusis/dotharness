@@ -69,6 +69,7 @@ from dotharness.pr_review.runners.common import (
     FatalGitError,
     Site,
     call_with_policy,
+    git_abort_rebase,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
@@ -594,7 +595,7 @@ async def _rebase_conflicting(
             return
         to_verify, stopped = vetted
         if to_verify and not await _verify_rebased(number, to_verify, host, repo, wdir, env):
-            await _abort_rebase(wdir, env)
+            await git_abort_rebase(wdir, env)
             return
         await _commit_if_dirty(None, wdir, env, f"ci-fix: rebase onto {pr.base_reference}")
         await _publish_rebase(number, branch, pre_rebase_sha, stopped, wdir, env)
@@ -635,7 +636,7 @@ async def _rebase_and_vet(
     if result.returncode != 0:
         stopped_sha = await _rebase_head(wdir, env)
         if stopped_sha is None:
-            await _abort_rebase(wdir, env)
+            await git_abort_rebase(wdir, env)
             _digest(OUTCOME_REBASE_CONFLICT_UNRESOLVED, number, NO_CHECK, f"git rebase {base_ref} failed")
             return None
         resolved = await _resolve_stopped_rebase(pr, config, host, wdir, env, rebase_prompt, stopped_sha)
@@ -645,7 +646,7 @@ async def _rebase_and_vet(
     # Vet against the new merge base: against the pre-rebase head, every file the base changed would count.
     unsafe = await _unsafe_change(wdir, env, base_ref)
     if unsafe:
-        await _abort_rebase(wdir, env)
+        await git_abort_rebase(wdir, env)
         _digest(OUTCOME_REBASE_UNSAFE, number, NO_CHECK, unsafe)
         return None
     if await ci_blocker(host, repo, number, pr.base_reference) is None:
@@ -731,7 +732,7 @@ async def _resolve_stopped_rebase(
                 _record_attempt(config.repo_slug, number)
             if not isinstance(exc, Exception):
                 raise  # cancellation: git_restore aborts the stopped rebase
-            await _abort_rebase(wdir, env)
+            await git_abort_rebase(wdir, env)
             _digest(OUTCOME_REBASE_CONFLICT_UNRESOLVED, number, NO_CHECK, f"backend failed: {exc}")
             return None
         if not recorded:
@@ -739,7 +740,7 @@ async def _resolve_stopped_rebase(
             recorded = True
         leftover = await _leftover_conflict_markers(wdir, env)
         if leftover:
-            await _abort_rebase(wdir, env)
+            await git_abort_rebase(wdir, env)
             _digest(
                 OUTCOME_REBASE_CONFLICT_UNRESOLVED,
                 number,
@@ -754,7 +755,7 @@ async def _resolve_stopped_rebase(
             return stopped
         next_sha = await _rebase_head(wdir, env)
         if next_sha is None or next_sha == stopped_sha:
-            await _abort_rebase(wdir, env)
+            await git_abort_rebase(wdir, env)
             reason = _text(result.stderr).strip().splitlines()
             detail = "git rebase --continue did not advance" + (f": {reason[-1][:200]}" if reason else "")
             _digest(OUTCOME_REBASE_CONFLICT_UNRESOLVED, number, NO_CHECK, detail)
@@ -839,17 +840,6 @@ async def _verify_rebased(
         return True
     _digest(OUTCOME_PARSE_FAILURE, number, candidates[0].name, first_reason)
     return False
-
-
-async def _abort_rebase(wdir: str, env: dict) -> None:
-    """``git rebase --abort``; tolerated when no rebase is in progress or when the abort itself errors."""
-    try:
-        result = await run_cmd(["git", "rebase", "--abort"], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
-    except Exception as exc:
-        logger.warning("git rebase --abort failed: %s", exc)
-        return
-    if result.returncode != 0:
-        logger.info("git rebase --abort did not apply (no rebase in progress): %s", _text(result.stderr).strip())
 
 
 async def _fix_first_candidate(
