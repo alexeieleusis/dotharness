@@ -3,7 +3,8 @@
 `ci-fix` fixes CI overnight on your own open pull requests. For each PR you
 authored whose required checks have failed, it reproduces the failure locally.
 It makes the smallest fix. It then pushes the fix to the PR's own branch to
-make CI green.
+make CI green. A PR with merge conflicts against its base is rebased onto
+the base branch instead (see [What it does](#what-it-does)).
 It is off until you set `[ci_fix].enabled = true`
 (`enabled = false` by default).
 
@@ -23,8 +24,10 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
   `ci-fix`.
 - `--verbose` — Enables DEBUG-level logging. Mirrors log output to stdout.
   Logs always go to `~/.local/share/dotharness/logs/ci-fix/<date>.log`.
-- `--dry-run` — Does every read and runs the commands locally. Makes no commit
-  and no push. Attempt counters are unchanged.
+- `--dry-run` — Does every read and runs the failing-check commands locally.
+  Makes no commit and no push. Attempt counters are unchanged. For a PR with
+  merge conflicts it only logs that a rebase would run. It does not check out
+  or rebase, and writes no digest line for it.
 - `--pr N` — Processes only PR number `N`. This is how Sisyphus calls it.
 
 When `[ci_fix].enabled` is `false` (the default), the command does nothing and
@@ -52,6 +55,36 @@ exits 0. It does not even take the lock.
 10. Pushes to the PR's own branch only if the command passes locally.
 11. Restores state with `git_restore`.
 
+A PR with merge conflicts against its base (CI failing or green) takes the
+rebase path instead of steps 3 to 10. A PR that is only behind its base, with
+no conflict, is not rebased. A PR whose mergeable state is unknown is not
+rebased either. It is retried on the next run.
+
+1. Checks the attempt cap. At the cap it records `cap-reached` before any
+   checkout.
+2. Fetches `origin`, checks out the PR branch and records its head SHA.
+3. Runs `git rebase origin/<base>`.
+4. If git stops on a conflict, runs the backend once per stopped commit. The
+   agent only edits and stages the conflicted files, using the rebase prompt
+   (`knowledge/pr-review/ci-fix-rebase-prompt.md`). The runner runs
+   `git rebase --continue` itself. This repeats until the rebase completes.
+   If the agent fails, leaves conflict markers or `--continue` does not
+   advance, the runner aborts the rebase and pushes nothing.
+5. Vets the rebased tree against `origin/<base>` with the same unsafe-change
+   check as a fix. Then it reads the CI status:
+    - CI failing: runs the failing step command on the rebased tree. It must
+      exit 0.
+    - CI green, or only gate checks failing: runs no command. A clean rebase is
+      pushed as is. For gate-only it logs that the clean rebase has no step to
+      verify.
+6. Writes the recovery ref `refs/harness-recovery/<branch>-<sha12>` (the old
+   head) and pushes with
+   `git push --force-with-lease=<branch>:<pre-rebase-sha> origin <branch>`.
+   This push ends the PR for the run. A failing check that remains is fixed on
+   a later run.
+7. Restores state with `git_restore`. It also aborts a rebase left in
+   progress.
+
 The target is "make it green". There is no fixed table mapping CI jobs to
 commands. The command comes from the workflow file each time.
 
@@ -66,8 +99,21 @@ commands. The command comes from the workflow file each time.
   unrelated failure gets a full budget again. Dry runs never reset it.
 - A failure that does not reproduce locally, or that still fails once the cap
   is reached, becomes a digest entry. Nothing more is pushed for it.
-- Pushes are plain pushes to the PR's own branch. There is no rebase and no
-  force-push.
+- A run of the rebase path that ran the backend counts as exactly one attempt
+  in the same `max_fix_attempts` counter, however many commits stopped. A clean
+  rebase counts none. The cap is checked before the checkout and yields
+  `cap-reached`.
+- There is no limit on stopped commits or conflicted files. Each backend run is
+  bound only by the backend timeout.
+- The green-CI counter reset is skipped while the PR has merge conflicts.
+- A rebase push ends the processing of that PR for the run. If CI was failing,
+  the command was verified on the rebased tree before the push.
+- Pushes are plain `git push origin <branch>` to the PR's own branch. The only
+  exception is the rebase path: `git push
+  --force-with-lease=<branch>:<pre-rebase-sha> origin <branch>`, after the
+  recovery ref `refs/harness-recovery/<branch>-<sha12>` is written. The
+  recovery ref is never deleted. ci-fix rebases only in-scope PRs onto
+  `origin/<base>` and pushes no other ref.
 
 ## Config
 
@@ -86,8 +132,13 @@ Settings live in the `[ci_fix]` section of `.harness.toml` (see
 - It always restores state, including after an error.
 - It never approves or merges a PR.
 - It skips PRs not authored by the acting user, draft PRs and closed PRs.
-- It pushes only after the command passes locally, and only to the PR's own
-  branch.
+- It pushes a fix only after the command passes locally. It pushes a rebase
+  only after the rebased tree is vetted and, if CI is failing, the failing
+  step command passes locally. A green or gate-only PR gets a clean rebase
+  pushed with no command run. It pushes only to the PR's own branch.
+- The only force-push is
+  `git push --force-with-lease=<branch>:<pre-rebase-sha> origin <branch>` on
+  the rebase path, after the recovery ref exists. All other pushes are plain.
 - It never tries a gate check (a name containing `gate` as a whole word, or `merge-reports`,
   case-insensitive). Gates never reach the agent and never use an attempt. It
   tries the other failing checks on the PR.
@@ -95,9 +146,38 @@ Settings live in the `[ci_fix]` section of `.harness.toml` (see
     - the failure did not reproduce
     - the attempt cap was reached
     - the check output could not be parsed
-    - a rebase is needed
+    - a push was rejected because the branch moved on the remote (`rebase-needed`)
     - the check is still failing after a fix
     - only gate checks are failing (`gate-only`)
+    - the PR was rebased and pushed (`rebased`)
+    - the rebase conflict was not resolved (`rebase-conflict-unresolved`)
+    - the rebased tree failed the safety vetting (`rebase-unsafe`)
+    - the check still fails on the rebased tree (`rebase-still-failing`)
+
+Each digest is a log line
+`ci-fix digest: <outcome> pr=<n> check=<name> <detail>`. The four rebase
+outcomes below have this content. A rebase digest with no failing check shows
+`check='-'`. That is the no-check sentinel.
+
+- `rebased`: `check='-'`, detail `recovery_ref=<ref> stopped_commits=<n>`.
+- `rebase-conflict-unresolved`: `check='-'`, detail one of
+  `backend failed: <error>`, `conflict markers left in: <files>`,
+  `git rebase --continue did not advance: <git's last stderr line>`, or
+  `git rebase origin/<base> failed` (git failed with no conflict to resolve).
+  The rebase is aborted and nothing is pushed.
+- `rebase-unsafe`: `check='-'`, detail names the unsafe change (the path).
+  The rebase is aborted and nothing is pushed.
+- `rebase-still-failing`: `check=<failing check name>`, detail
+  `step <name!r> still fails (exit N)`. The rebase is aborted and nothing is
+  pushed.
+
+Two existing outcomes also appear on the rebase path with `check='-'`:
+`cap-reached` (detail `attempts=<n> max=<m>`) and `parse-failure` (detail
+`could not read the check status`, or `could not write the recovery ref`, in
+which case nothing is pushed). A failing check that has no runnable command on
+the rebased tree gives `parse-failure` with that check's name. `rebase-needed`
+here has `check='-'` and detail `push rejected, the branch moved on the remote`.
+The recovery ref is kept. A dry run writes no digest line.
 
 The runner writes attempt counters and digest entries. This page only
 describes them.
