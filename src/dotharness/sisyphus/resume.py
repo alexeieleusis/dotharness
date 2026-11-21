@@ -17,7 +17,7 @@ from typing import Any
 
 from dotharness.sisyphus.config import SisyphusConfig
 from dotharness.sisyphus.intake import IntakeError, parse_open_decisions, resolve_brief_path
-from dotharness.sisyphus.runrecord import RunRecord, record_path
+from dotharness.sisyphus.runrecord import STAGE_COMPLETE, RunRecord, record_path
 from dotharness.sisyphus.stages import (
     AUTO_RETRY_KEY,
     BUILD_RETRY_KEY,
@@ -196,6 +196,20 @@ def is_stopped(rec: RunRecord, stop: StopRecord | None) -> bool:
     if is_abandoned(stop):
         return False
     return rec.checkpoint is not None or stop is not None
+
+
+def is_parked(rec: RunRecord, stop: StopRecord | None) -> bool:
+    """A clean intake left this record: intake complete, no checkpoint, no stop record, not abandoned.
+
+    ``resume`` continues it from the plan stage. A hard-killed record (stage in progress) is not parked.
+    """
+    return (
+        not is_abandoned(stop)
+        and rec.stage == INTAKE_STAGE
+        and rec.stage_status == STAGE_COMPLETE
+        and rec.checkpoint is None
+        and stop is None
+    )
 
 
 def _stopped_at(rec: RunRecord, stop: StopRecord | None) -> datetime:

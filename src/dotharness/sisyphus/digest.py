@@ -157,10 +157,16 @@ def needs_from_record(rec: RunRecord, text: str = "") -> NeedsYou | None:
     return NeedsYou(rec.item, rec.checkpoint, f"{question} Stage reached: {_stage_desc(rec)}.")
 
 
+def _needs_head(n: NeedsYou) -> str:
+    """``[CHECKPOINT] ITEM: question``; an entry with no checkpoint (a parked record) omits the brackets."""
+    prefix = f"[{n.checkpoint}] " if n.checkpoint else ""
+    return f"{prefix}{n.item}: {n.question}"
+
+
 def _needs_line(n: NeedsYou) -> str:
     """One entry; with a restructured text it spans several lines (joined by ``\\n``, indented by ``_numbered``)."""
     if n.text.strip():
-        parts = [f"[{n.checkpoint}] {n.item}: {n.question}", *n.text.strip("\n").splitlines()]
+        parts = [_needs_head(n), *n.text.strip("\n").splitlines()]
         if n.action:
             parts.append(f"Action: {n.action}")
         if n.resume:
@@ -168,7 +174,7 @@ def _needs_line(n: NeedsYou) -> str:
         if n.record:
             parts.append(f"Stop record: `{n.record}`")
         return "\n".join(parts)
-    line = f"[{n.checkpoint}] {n.item}: {n.question}"
+    line = _needs_head(n)
     if n.action:
         line += f" Action: {n.action}"
     if n.resume:

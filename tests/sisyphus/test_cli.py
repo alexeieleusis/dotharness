@@ -7,6 +7,7 @@ No test runs an agent, the harness, gh, spec-prism-flow or ``git push``.
 from __future__ import annotations
 
 import ast
+import shlex
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -51,6 +52,7 @@ from dotharness.sisyphus.pick import (
     LinkedPr,
 )
 from dotharness.sisyphus.rails import Checkpoint
+from dotharness.sisyphus.resume import is_parked
 from dotharness.sisyphus.runrecord import RunRecord, record_path
 from dotharness.sisyphus.stoprecord import build_abandoned_record, build_stop_record, write_stop_record
 
@@ -720,6 +722,57 @@ def test_intake_runs_intake_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert "Which tracker?" in result.output
 
 
+def test_intake_clean_prints_next_resume_hint_after_brief(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = make_env(tmp_path)
+
+    async def fake_intake(item, config, runner, record=None, **_kw):
+        assert record is not None
+        record.mark_stage("intake", "complete")
+        return IntakeResult(tmp_path / "b.md", False, ())
+
+    monkeypatch.setattr(cli, "run_intake", fake_intake)
+    result = env.invoke("intake", "ENG-9", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    lines = result.stdout.splitlines()
+    assert lines[0] == f"brief: {tmp_path / 'b.md'}"
+    assert lines[1] == f"next: sisyphus resume ENG-9 --config {shlex.quote(str(env.config.resolve()))}"
+    assert len(lines) == 2
+
+
+def test_intake_blocked_prints_no_next_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = make_env(tmp_path)
+
+    async def fake_intake(item, config, runner, record=None, **_kw):
+        assert record is not None
+        record.mark_stage("intake", "complete")
+        return IntakeResult(tmp_path / "b.md", True, (OpenDecision(1, "Which tracker?"),))
+
+    monkeypatch.setattr(cli, "run_intake", fake_intake)
+    result = env.invoke("intake", "ENG-9", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    assert "open decision (C1)" in result.output
+    assert "next:" not in result.output
+
+
+def test_status_shows_next_line_only_for_a_parked_record(tmp_path: Path) -> None:
+    env = _status_workspace(tmp_path)
+    ws = tmp_path / "ws"
+    RunRecord.open(ws, "PARK-1").mark_stage("intake", "complete")
+    result = env.invoke("status", "--all", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    blocks: dict[str, list[str]] = {}
+    item = ""
+    for line in result.output.splitlines():
+        if line and not line.startswith(" "):
+            item = line
+        blocks.setdefault(item, []).append(line)
+    with_next = [i for i, b in blocks.items() if any(line.strip().startswith("next:") for line in b)]
+    assert with_next == ["PARK-1"]
+    park = blocks["PARK-1"]
+    expected = f"  next: sisyphus resume PARK-1 --config {shlex.quote(str(env.config.resolve()))}"
+    assert park[park.index("  awaiting: none") + 1] == expected
+
+
 def test_intake_lock_held_and_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env = make_env(tmp_path)
 
@@ -1331,3 +1384,34 @@ def test_run_and_resume_set_present_on_state(
     assert env.invoke("run", "--config", str(env.config), *args).exit_code == 0
     assert env.invoke("resume", "#1", "--config", str(env.config), *args).exit_code == 0
     assert seen == [expected, expected]
+
+
+# ------------------------------------------------------ parked record in the run digest
+
+
+def test_run_digest_lists_a_parked_record_once_without_empty_brackets(
+    tmp_path: Path, fake_run_item: dict[str, Any]
+) -> None:
+    env = make_env(tmp_path)
+    RunRecord.open(tmp_path / "ws", "PARK-1").mark_stage("intake", "complete")
+    result = env.invoke("run", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    assert fake_run_item["calls"] == []
+    assert "digest:" in result.output
+    digest = env.digest
+    needs = digest.split("## Needs you", 1)[1].split("\n## ", 1)[0]
+    resume = f"sisyphus resume PARK-1 --config {shlex.quote(str(env.config.resolve()))}"
+    assert needs.count(": Waiting to be continued") == 1
+    assert f"PARK-1: Waiting to be continued after a clean intake. Resume: `{resume}`" in needs
+    assert "[]" not in digest
+    assert is_parked(RunRecord.open(tmp_path / "ws", "PARK-1"), None)
+
+
+def test_run_digest_has_no_parked_line_without_a_parked_record(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+    env = make_env(tmp_path, ["ENG-1"])
+    rec = RunRecord.open(tmp_path / "ws", "DONE-1")
+    rec.mark_stage("intake", "complete")
+    rec.mark_stage("plan", "complete")
+    assert env.invoke("run", "--config", str(env.config)).exit_code == 0
+    assert "Waiting to be continued" not in env.digest
+    assert "DONE-1" not in env.digest.split("## Needs you", 1)[1].split("\n## ", 1)[0]
