@@ -6,20 +6,28 @@ Public entry point (takes the shared working-directory lock itself, like the sib
 
 * ``config.ci_fix.enabled`` false: returns immediately, no lock, no host/git call.
 * Otherwise processes every open, non-draft PR authored by the acting user (or only ``pr``).
-* A green PR is skipped without a checkout. For a failing required check the runner reads the
+* A green, non-conflicting PR is skipped without a checkout. For a failing required check the runner reads the
   failing job log, finds the step command in ``.github/workflows/``, reproduces it locally,
   lets the backend agent make the smallest fix (instructions: ``knowledge/pr-review/ci-fix-prompt.md``,
-  read-only), re-runs the command and, only if it passes, commits and plain-pushes to the PR's own
-  branch. One agent run that changes the branch (or crashes) is one attempt; a run that leaves HEAD and the
-  tree unchanged is not counted, but is remembered per (head SHA, check) so it is not retried until the head moves. At most ``max_fix_attempts`` counted runs per PR, counted across runs in
-  ``ci_fix_state.json``. At most one push per PR per run. The counter of a PR is reset when ci-fix finds its
-  CI green (not in dry-run), so a later unrelated failure gets a full budget.
-* ``dry_run=True`` fetches, checks out and reproduces, but never commits, pushes, runs the agent or
-  changes a counter.
-* A conflicting PR (any CI state) enters a rebase path: detect (dry-run logs it), apply the shared attempt gate,
-  rebase onto ``origin/<base>`` and, when git stops on a conflict, let the backend resolve one stopped commit at a
-  time (``knowledge/pr-review/ci-fix-rebase-prompt.md``) while the runner runs ``git rebase --continue``.
-* Never force-pushes (the rebase path pushes with a lease), rebases, pushes another ref, approves or merges.
+  read-only), re-runs the command and, only if it passes, commits and pushes with a plain ``git push origin <branch>``
+  to the PR's own branch. One agent run that changes the branch (or crashes) is one attempt; a run that leaves HEAD and
+  the tree unchanged is not counted, but is remembered per (head SHA, check) so it is not retried until the head moves.
+  At most ``max_fix_attempts`` counted runs per PR, counted across runs in ``ci_fix_state.json``. At most one push per
+  PR per run. The counter of a PR is reset when ci-fix finds its CI green and the PR is not conflicting (not in
+  dry-run), so a later unrelated failure gets a full budget.
+* ``dry_run=True`` fetches, checks out and reproduces a failing check, but never commits, pushes, runs the agent or
+  changes a counter. For a conflicting PR it only logs that a rebase would run and writes no digest line.
+* A conflicting, in-scope PR (any CI state; a PR merely behind its base, or with an unknown mergeable state, is not
+  touched) enters the rebase path: apply the shared attempt gate (``cap-reached`` before any checkout), rebase onto
+  ``origin/<base>`` and, when git stops on a conflict, let the backend resolve one stopped commit at a time
+  (``knowledge/pr-review/ci-fix-rebase-prompt.md``, it only edits and stages conflicted files) while the runner runs
+  ``git rebase --continue``. A rebase that ran the backend is one attempt however many commits stop; a clean rebase
+  is none. The result is vetted like a fix; with CI failing the failing step command must also exit 0 on the rebased
+  tree, while green CI or only gate checks failing needs no command. Then the old head is kept as
+  ``refs/harness-recovery/<branch>-<sha12>`` and the branch is pushed with
+  ``git push --force-with-lease=<branch>:<pre-rebase-sha> origin <branch>``. That push ends the PR for this run.
+* Force-pushes only on the rebase path, with that lease and after the recovery ref exists; rebases only in-scope PRs onto
+  ``origin/<base>``; pushes no other ref than that branch (the recovery ref stays local); never approves or merges.
 * Non-push outcomes are logged as digest entries: a log line starting with ``DIGEST_PREFIX``.
 * Raises :class:`CiFixError` after the loop if any PR failed, so the CLI exits non-zero.
 """
