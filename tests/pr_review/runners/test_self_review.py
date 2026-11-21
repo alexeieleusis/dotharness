@@ -1623,7 +1623,7 @@ def _design_run(tmp_path, number, files, *, enabled=True, test_layer_reply=b"", 
     cfg.test_layer_review.enabled = enabled
     base = "dotharness.pr_review.runners.self_review."
 
-    async def run(prompt, cwd=None, opencode_dir=None, context=None):
+    async def run(prompt, cwd=None, opencode_dir=None, context=""):
         if context.endswith("test layer review"):
             if timeout:
                 raise subprocess.TimeoutExpired("cmd", 1)

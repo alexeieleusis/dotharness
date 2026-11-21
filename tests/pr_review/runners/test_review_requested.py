@@ -894,7 +894,7 @@ def _prompt_for(mocks, context):
 
 
 def _route_backend(mocks, *, test_layer_reply=b"", test_layer_rc=0):
-    async def run(prompt, cwd=None, opencode_dir=None, context=None):
+    async def run(prompt, cwd=None, opencode_dir=None, context=""):
         if context.endswith("test layer review"):
             return MagicMock(returncode=test_layer_rc, stdout=test_layer_reply)
         return MagicMock(returncode=0, stdout=b"")
@@ -966,7 +966,7 @@ async def test_test_layer_timeout_does_not_block_design(tmp_xdg, tmp_path):
         patch("dotharness.pr_review.runners.review_requested.has_design_review_comment", return_value=False),
     ):
 
-        async def run(prompt, cwd=None, opencode_dir=None, context=None):
+        async def run(prompt, cwd=None, opencode_dir=None, context=""):
             if context.endswith("test layer review"):
                 raise subprocess.TimeoutExpired("cmd", 1)
             return MagicMock(returncode=0, stdout=b"")
