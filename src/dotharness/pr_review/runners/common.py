@@ -270,7 +270,39 @@ async def git_restore(original_sha: str, branch: str, cwd: str, env: dict, *, pr
         raise
 
 
+async def _rebase_in_progress(cwd: str, env: dict) -> bool:
+    """True when ``rebase-merge`` or ``rebase-apply`` exists in the git dir (worktree-aware via ``--git-path``)."""
+    for name in ("rebase-merge", "rebase-apply"):
+        result = await run_cmd(
+            ["git", "rev-parse", "--git-path", name], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False
+        )
+        if result.returncode != 0:
+            continue
+        path = result.stdout.decode("utf-8").strip()
+        if path and os.path.exists(os.path.join(cwd, path)):  # an absolute ``path`` wins the join
+            return True
+    return False
+
+
+async def _abort_rebase_if_in_progress(cwd: str, env: dict) -> None:
+    """Abort a rebase a cancelled or failed run left behind; never raises (the restore must carry on)."""
+    try:
+        if not await _rebase_in_progress(cwd, env):
+            return
+        logger.warning("git_restore: a rebase is in progress in %s; aborting it", cwd)
+        result = await run_cmd(["git", "rebase", "--abort"], cwd=cwd, env=env, timeout=TIMEOUT_GIT, check=False)
+        if result.returncode != 0:
+            logger.warning(
+                "git_restore: git rebase --abort failed (exit %s): %s",
+                result.returncode,
+                result.stderr.decode("utf-8", errors="replace").strip(),
+            )
+    except Exception:
+        logger.exception("git_restore: could not check for or abort a rebase in progress")
+
+
 async def _git_restore_impl(original_sha: str, branch: str, cwd: str, env: dict, pr_number: int | None = None) -> None:
+    await _abort_rebase_if_in_progress(cwd, env)
     preserved = True
     if branch:
         try:

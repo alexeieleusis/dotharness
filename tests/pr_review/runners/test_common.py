@@ -201,9 +201,10 @@ async def test_git_restore_skips_preserve_check_when_branch_empty(tmp_path):
     mock_run = AsyncMock(return_value=MagicMock(returncode=0, stdout=b"", stderr=b""))
     with patch("dotharness.pr_review.runners.common.run_cmd", mock_run):
         await git_restore("orig-sha", "", str(tmp_path), {})
-    # no branch name means nothing to preserve or delete: only the checkout happens
-    assert mock_run.call_count == 1
-    assert mock_run.call_args_list[0].args[0][:2] == ["git", "checkout"]
+    # no branch name means nothing to preserve or delete: only the rebase detection and the checkout happen
+    cmds = [c.args[0] for c in mock_run.call_args_list]
+    assert [c for c in cmds if c[:2] != ["git", "rev-parse"]] == [cmds[-1]]
+    assert cmds[-1][:2] == ["git", "checkout"]
 
 
 async def test_git_restore_logs_error_when_recovery_ref_cannot_be_saved(tmp_path, caplog):
@@ -240,6 +241,125 @@ async def test_git_restore_completes_when_cancelled(tmp_path):
         with pytest.raises(asyncio.CancelledError):
             await task
     assert any("checkout" in c for c in calls)
+
+
+def _rebase_side_effect(*, in_progress, abort_returncode=0):
+    """run_cmd fake: ``--git-path`` answers point at a real marker dir only when ``in_progress``."""
+
+    def side_effect(cmd, **kwargs):
+        if cmd[:3] == ["git", "rev-parse", "--git-path"]:
+            return MagicMock(returncode=0, stdout=f"{cmd[3]}\n".encode(), stderr=b"")
+        if "rev-parse" in cmd:
+            return MagicMock(returncode=0, stdout=b"deadbeef1234\n", stderr=b"")
+        if cmd[:3] == ["git", "rebase", "--abort"]:
+            return MagicMock(returncode=abort_returncode, stdout=b"", stderr=b"abort failed")
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    return side_effect
+
+
+async def test_git_restore_aborts_a_rebase_in_progress_before_the_force_checkout(tmp_path):
+    (tmp_path / "rebase-merge").mkdir()
+    mock_run = AsyncMock(side_effect=_rebase_side_effect(in_progress=True))
+    with patch("dotharness.pr_review.runners.common.run_cmd", mock_run):
+        await git_restore("orig-sha", "", str(tmp_path), {})
+    cmds = [c.args[0] for c in mock_run.call_args_list]
+    abort = cmds.index(["git", "rebase", "--abort"])
+    checkout = next(i for i, c in enumerate(cmds) if c[:2] == ["git", "checkout"])
+    assert abort < checkout
+    assert all(c.kwargs["timeout"] == 60 for c in mock_run.call_args_list)
+
+
+async def test_git_restore_does_not_abort_when_no_rebase_is_in_progress(tmp_path):
+    mock_run = AsyncMock(side_effect=_rebase_side_effect(in_progress=False))
+    with patch("dotharness.pr_review.runners.common.run_cmd", mock_run):
+        await git_restore("orig-sha", "", str(tmp_path), {})
+    cmds = [c.args[0] for c in mock_run.call_args_list]
+    assert ["git", "rebase", "--abort"] not in cmds
+    assert sum(c[:3] == ["git", "rev-parse", "--git-path"] for c in cmds) == 2
+
+
+async def test_git_restore_still_force_checks_out_when_the_abort_fails(tmp_path, caplog):
+    (tmp_path / "rebase-apply").mkdir()
+    mock_run = AsyncMock(side_effect=_rebase_side_effect(in_progress=True, abort_returncode=1))
+    with patch("dotharness.pr_review.runners.common.run_cmd", mock_run), caplog.at_level("WARNING"):
+        await git_restore("orig-sha", "my-branch", str(tmp_path), {})
+    cmds = [c.args[0] for c in mock_run.call_args_list]
+    assert ["git", "checkout", "--recurse-submodules", "-f", "orig-sha"] in cmds
+    assert ["git", "branch", "-D", "my-branch"] in cmds
+    assert any("rebase --abort failed" in r.message for r in caplog.records)
+
+
+async def test_git_restore_still_force_checks_out_when_rebase_detection_raises(tmp_path, caplog):
+    def side_effect(cmd, **kwargs):
+        if cmd[:3] == ["git", "rev-parse", "--git-path"]:
+            raise OSError("boom")
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    mock_run = AsyncMock(side_effect=side_effect)
+    with patch("dotharness.pr_review.runners.common.run_cmd", mock_run), caplog.at_level("WARNING"):
+        await git_restore("orig-sha", "", str(tmp_path), {})
+    assert ["git", "checkout", "--recurse-submodules", "-f", "orig-sha"] in [c.args[0] for c in mock_run.call_args_list]
+    assert any("could not check for or abort a rebase" in r.message for r in caplog.records)
+
+
+def _git(repo, *args):
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+    return subprocess.run(["git", *args], cwd=repo, env=env, capture_output=True, text=True)  # noqa: S607
+
+
+def _conflicted_rebase_repo(tmp_path):
+    """A repo whose ``feature`` branch is mid-rebase, stopped on a conflict that also added a new file."""
+    repo = str(tmp_path)
+    _git(repo, "init", "-b", "main")
+    (tmp_path / "f.txt").write_text("base\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "base")
+    original = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "checkout", "-b", "feature")
+    (tmp_path / "f.txt").write_text("feature\n")
+    (tmp_path / "added_on_feature.txt").write_text("new\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feature")
+    _git(repo, "checkout", "main")
+    (tmp_path / "f.txt").write_text("main\n")
+    (tmp_path / "added_on_main.txt").write_text("new\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "main change")
+    _git(repo, "checkout", "feature")
+    assert _git(repo, "rebase", "main").returncode != 0
+    return repo, original
+
+
+def _marker_exists(repo, name):
+    path = _git(repo, "rev-parse", "--git-path", name).stdout.strip()
+    return os.path.exists(os.path.join(repo, path))
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_git_restore_clears_a_real_stopped_rebase_and_leaves_a_clean_tree(tmp_path, cancel):
+    import asyncio
+
+    repo, original = _conflicted_rebase_repo(tmp_path)
+    assert _marker_exists(repo, "rebase-merge") or _marker_exists(repo, "rebase-apply")
+    task = asyncio.ensure_future(git_restore(original, "feature", repo, os.environ.copy()))
+    if cancel:
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        await task
+    assert not _marker_exists(repo, "rebase-merge")
+    assert not _marker_exists(repo, "rebase-apply")
+    assert _git(repo, "status", "--porcelain").stdout == ""
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == original
 
 
 def test_repo_identity_check_is_built_for_the_configured_repository():
