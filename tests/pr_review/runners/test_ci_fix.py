@@ -716,7 +716,7 @@ async def test_stopped_rebase_is_aborted_with_no_push(tmp_path, caplog):
 
 @contextlib.contextmanager
 def _patched_run_cmd(  # noqa: C901
-    m, *, rebase_rc=0, diff_out=b"", abort_rc=0, stops=0, stuck=False, grep=None
+    m, *, rebase_rc=0, diff_out=b"", abort_rc=0, stops=0, stuck=False, grep=None, merges=b""
 ):
     """Wrap the mocked ``run_cmd`` so ``git rebase``/``--abort``/``diff`` answer as given.
 
@@ -731,6 +731,9 @@ def _patched_run_cmd(  # noqa: C901
         return f"stop-{stops - left[0] + 1}".encode()
 
     async def fake(cmd, cwd, env, timeout, check=True, shell=False):
+        if cmd[:3] == ["git", "rev-list", "--merges"]:
+            m.cmds.append(cmd)
+            return _proc(0, merges)
         if cmd[:3] == ["git", "rebase", "--abort"]:
             m.cmds.append(cmd)
             return _proc(abort_rc, b"", b"fatal: no rebase in progress?" if abort_rc else b"")
@@ -1822,3 +1825,17 @@ async def test_unsafe_change_runs_before_the_post_fix_step(tmp_path, caplog):
     assert m.run_step.call_count == 1  # only the reproduction run; the agent's tree was never executed
     assert m.pushes == []
     assert any("unsafe-change" in d for d in _digests(caplog))
+
+
+async def test_branch_with_a_merge_commit_is_not_rebased(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, green=True, get_override=_CONFLICTING) as m,
+        caplog.at_level(logging.INFO),
+        _patched_run_cmd(m, merges=b"abc123\n"),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    assert ["git", "rev-list", "--merges", "origin/main..HEAD"] in m.cmds
+    assert _rebase_cmds(m) == []
+    assert m.pushes == []
+    m.backend.run.assert_not_called()
+    assert len([d for d in _digests(caplog) if "rebase-has-merges" in d]) == 1

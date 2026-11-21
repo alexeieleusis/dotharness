@@ -99,6 +99,7 @@ OUTCOME_REBASE_NEEDED = "rebase-needed"  # only a push rejected because the bran
 OUTCOME_REBASED = "rebased"
 OUTCOME_REBASE_CONFLICT_UNRESOLVED = "rebase-conflict-unresolved"
 OUTCOME_REBASE_UNSAFE = "rebase-unsafe"
+OUTCOME_REBASE_HAS_MERGES = "rebase-has-merges"
 OUTCOME_REBASE_STILL_FAILING = "rebase-still-failing"
 OUTCOME_STILL_FAILING = "still-failing"
 OUTCOME_UNSAFE_CHANGE = "unsafe-change"
@@ -620,6 +621,14 @@ async def _rebase_and_vet(
     """
     number = pr.number
     base_ref = f"origin/{pr.base_reference}"
+    # A plain rebase drops merge commits and their hand-resolved content, and --rebase-merges does not keep manual
+    # amendments either, so a branch with merge commits is not rebased.
+    merges = await run_cmd(
+        ["git", "rev-list", "--merges", f"{base_ref}..HEAD"], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False
+    )
+    if merges.returncode != 0 or _text(merges.stdout).strip():
+        _digest(OUTCOME_REBASE_HAS_MERGES, number, NO_CHECK, f"{base_ref}..HEAD contains merge commits")
+        return None
     # A clean rebase is not an attempt; a stopped one is exactly one, however many commits stop.
     result = await run_cmd(["git", "rebase", base_ref], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
     stopped = 0
