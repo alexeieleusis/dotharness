@@ -52,6 +52,7 @@ from dotharness.sisyphus.pick import (
     LinkedPr,
 )
 from dotharness.sisyphus.rails import Checkpoint
+from dotharness.sisyphus.resume import is_parked
 from dotharness.sisyphus.runrecord import RunRecord, record_path
 from dotharness.sisyphus.stoprecord import build_abandoned_record, build_stop_record, write_stop_record
 
@@ -1383,3 +1384,34 @@ def test_run_and_resume_set_present_on_state(
     assert env.invoke("run", "--config", str(env.config), *args).exit_code == 0
     assert env.invoke("resume", "#1", "--config", str(env.config), *args).exit_code == 0
     assert seen == [expected, expected]
+
+
+# ------------------------------------------------------ parked record in the run digest
+
+
+def test_run_digest_lists_a_parked_record_once_without_empty_brackets(
+    tmp_path: Path, fake_run_item: dict[str, Any]
+) -> None:
+    env = make_env(tmp_path)
+    RunRecord.open(tmp_path / "ws", "PARK-1").mark_stage("intake", "complete")
+    result = env.invoke("run", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    assert fake_run_item["calls"] == []
+    assert "digest:" in result.output
+    digest = env.digest
+    needs = digest.split("## Needs you", 1)[1].split("\n## ", 1)[0]
+    resume = f"sisyphus resume PARK-1 --config {shlex.quote(str(env.config.resolve()))}"
+    assert needs.count(": Waiting to be continued") == 1
+    assert f"PARK-1: Waiting to be continued after a clean intake. Resume: `{resume}`" in needs
+    assert "[]" not in digest
+    assert is_parked(RunRecord.open(tmp_path / "ws", "PARK-1"), None)
+
+
+def test_run_digest_has_no_parked_line_without_a_parked_record(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+    env = make_env(tmp_path, ["ENG-1"])
+    rec = RunRecord.open(tmp_path / "ws", "DONE-1")
+    rec.mark_stage("intake", "complete")
+    rec.mark_stage("plan", "complete")
+    assert env.invoke("run", "--config", str(env.config)).exit_code == 0
+    assert "Waiting to be continued" not in env.digest
+    assert "DONE-1" not in env.digest.split("## Needs you", 1)[1].split("\n## ", 1)[0]

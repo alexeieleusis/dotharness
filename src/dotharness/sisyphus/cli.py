@@ -389,6 +389,22 @@ def _waiting_need(rec: RunRecord) -> NeedsYou | None:
     )
 
 
+def _parked_needs(config: SisyphusConfig, state: _RunState, config_path: str | Path) -> None:
+    """Add one 'Needs you' entry per parked record (clean intake, never continued); reads only, mutates nothing."""
+    assert config.project.workspace_dir  # noqa: S101
+    workspace = Path(config.project.workspace_dir).expanduser()
+    for rec in iter_records(workspace):
+        if is_parked(rec, read_stop_record(rec.path)):
+            state.needs.append(
+                NeedsYou(
+                    rec.item,
+                    "",
+                    "Waiting to be continued after a clean intake.",
+                    resume=_resume_command(config_path, rec.item),
+                )
+            )
+
+
 def _resume_phase(config: SisyphusConfig, services: Services, state: _RunState, limit: int) -> list[Candidate]:
     """Stopped items whose blocker is cleared, oldest first, up to ``limit``; the rest are listed as awaiting you."""
     assert config.project.workspace_dir  # noqa: S101
@@ -642,6 +658,7 @@ def run_command(ctx: typer.Context, config_path: ConfigOption, base: BaseOption 
     state = _RunState(present=present_enabled(config, raw))
 
     async def phase() -> None:
+        _parked_needs(config, state, config_path)  # before picking: listed even if the pick fails
         picked = await _pick_phase(config, services, state)
         await _run_phase(picked, config, services, base, state, config_path)
 
