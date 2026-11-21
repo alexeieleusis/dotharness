@@ -542,16 +542,141 @@ async def test_conflicting_green_pr_is_rebased_onto_the_base_and_not_counted(tmp
     m.restore.assert_called_once()
 
 
-async def test_conflicting_pr_with_failing_ci_is_rebased_then_awaits_verification(tmp_path, caplog):
+async def test_conflicting_pr_with_failing_ci_verifies_the_step_then_publishes(tmp_path, caplog):
     with (
         _mocks(tmp_path, get_override={"mergeable": MergeableState.CONFLICTING}) as m,
         caplog.at_level(logging.INFO),
     ):
+        m.run_step.side_effect = [_proc(0)]
         await ci_fix.run(_cfg(tmp_path))
     assert _rebase_cmds(m) == [["git", "rebase", "origin/main"]]
+    m.run_step.assert_called_once()
+    assert m.run_step.call_args.args[0].command == "make check"
+    assert len(m.pushes) == 1
+    assert "--force-with-lease=feat:sha0" in m.pushes[0]
+    digests = _digests(caplog)
+    assert len(digests) == 1
+    assert "rebased" in digests[0]
+    assert "still-failing" not in digests[0]
+    assert ci_fix.get_attempts(SLUG, 1) == 0  # a clean rebase is not an attempt
+
+
+async def test_verified_rebase_commits_tracked_leftovers_before_the_push(tmp_path):
+    with _mocks(tmp_path, get_override=_CONFLICTING) as m:
+        m.run_step.side_effect = [_proc(0)]
+        m.status_box[0] = b" M a.py\n"
+        await ci_fix.run(_cfg(tmp_path))
+    commit = m.cmds.index(["git", "commit", "-m", "ci-fix: rebase onto main"])
+    assert m.cmds.index(["git", "add", "-u"]) < commit < m.cmds.index(m.pushes[0])
+
+
+async def test_rebase_verification_failure_is_still_failing_with_abort_and_no_push(tmp_path, caplog):
+    # T4: the step command exits nonzero.
+    with (
+        _mocks(tmp_path, get_override=_CONFLICTING) as m,
+        caplog.at_level(logging.INFO),
+    ):
+        m.run_step.side_effect = [_proc(3, b"boom")]
+        await ci_fix.run(_cfg(tmp_path))
     assert m.pushes == []
-    m.run_step.assert_not_called()  # the step command is the sibling slice's
-    assert _digests(caplog) == []
+    assert ["git", "rebase", "--abort"] in m.cmds
+    assert not any(c[:2] == ["git", "update-ref"] for c in m.cmds)
+    digests = _digests(caplog)
+    assert len(digests) == 1
+    assert "rebase-still-failing" in digests[0]
+    assert "check='Run checks'" in digests[0]
+    assert "step 'Run checks' still fails (exit 3)" in digests[0]
+    m.restore.assert_called_once()
+    m.backend.run.assert_not_called()
+
+
+async def test_resolved_conflict_with_failing_step_is_aborted_and_not_pushed(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, get_override=_CONFLICTING) as m,
+        _patched_run_cmd(m, stops=1),
+        caplog.at_level(logging.INFO),
+    ):
+        m.run_step.side_effect = [_proc(1)]
+        await ci_fix.run(_cfg(tmp_path))
+    assert m.pushes == []
+    assert ["git", "rebase", "--abort"] in m.cmds
+    assert len([d for d in _digests(caplog) if "rebase-still-failing" in d]) == 1
+    assert ci_fix.get_attempts(SLUG, 1) == 1
+
+
+async def test_rebase_with_no_runnable_command_is_a_parse_failure_with_abort(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, get_override=_CONFLICTING) as m,
+        patch(P + "find_step_command", return_value=None),
+        caplog.at_level(logging.INFO),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    m.run_step.assert_not_called()
+    assert m.pushes == []
+    assert ["git", "rebase", "--abort"] in m.cmds
+    digests = _digests(caplog)
+    assert len(digests) == 1
+    assert "parse-failure" in digests[0]
+    assert "no runnable command for step 'Run checks' in workflows" in digests[0]
+    assert "check='Run checks'" in digests[0]
+
+
+async def test_rebase_with_unreadable_failing_log_is_a_parse_failure_with_abort(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, get_override=_CONFLICTING, log="") as m,
+        caplog.at_level(logging.INFO),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    m.run_step.assert_not_called()
+    assert m.pushes == []
+    assert ["git", "rebase", "--abort"] in m.cmds
+    assert any("parse-failure" in d and "could not read the failing job log or its step" in d for d in _digests(caplog))
+
+
+async def test_rebase_parse_failure_names_the_first_failing_check(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, get_override=_CONFLICTING, failing=["alpha", "beta"]) as m,
+        patch(P + "find_step_command", return_value=None),
+        caplog.at_level(logging.INFO),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    assert m.pushes == []
+    digests = _digests(caplog)
+    assert len(digests) == 1
+    assert "parse-failure" in digests[0]
+    assert "check='alpha'" in digests[0]
+
+
+async def test_rebase_verification_uses_the_second_candidate_when_the_first_has_no_command(tmp_path, caplog):
+    step = _Step("Second step", "make second", "")
+    with (
+        _mocks(tmp_path, get_override=_CONFLICTING, failing=["alpha", "beta"]) as m,
+        patch(P + "find_step_command", side_effect=[None, step]) as find,
+        caplog.at_level(logging.INFO),
+    ):
+        m.run_step.side_effect = [_proc(0)]
+        await ci_fix.run(_cfg(tmp_path))
+    assert find.call_count == 2
+    m.run_step.assert_called_once()
+    assert m.run_step.call_args.args[0] is step
+    assert len(m.pushes) == 1
+    assert ["git", "rebase", "--abort"] not in m.cmds
+    assert not any("parse-failure" in d for d in _digests(caplog))
+
+
+async def test_rebase_verification_stops_at_the_first_runnable_candidate(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, get_override=_CONFLICTING, failing=["alpha", "beta"]) as m,
+        caplog.at_level(logging.INFO),
+    ):
+        m.run_step.side_effect = [_proc(1)]
+        await ci_fix.run(_cfg(tmp_path))
+    m.run_step.assert_called_once()
+    assert m.pushes == []
+    digests = _digests(caplog)
+    assert len(digests) == 1
+    assert "rebase-still-failing" in digests[0]
+    assert "check='alpha'" in digests[0]
 
 
 async def test_conflicting_pr_with_only_gate_checks_failing_is_treated_as_green(tmp_path, caplog):
@@ -688,12 +813,13 @@ async def test_clean_rebase_runs_no_backend_and_counts_no_attempt(tmp_path):
     assert ci_fix.get_attempts(SLUG, 1) == 0
 
 
-async def test_conflict_with_failing_ci_is_resolved_and_handed_off_unpublished(tmp_path):
+async def test_conflict_with_failing_ci_is_resolved_verified_and_published(tmp_path):
     with _mocks(tmp_path, get_override=_CONFLICTING) as m, _patched_run_cmd(m, stops=1):
+        m.run_step.side_effect = [_proc(0)]
         await ci_fix.run(_cfg(tmp_path))
     assert m.backend.run.await_count == 1
-    assert m.pushes == []
-    m.run_step.assert_not_called()
+    m.run_step.assert_called_once()
+    assert len(m.pushes) == 1
     assert ci_fix.get_attempts(SLUG, 1) == 1
 
 

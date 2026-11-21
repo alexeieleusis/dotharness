@@ -584,10 +584,8 @@ async def _rebase_conflicting(
         if vetted is None:
             return
         to_verify, stopped = vetted
-        if to_verify:
-            # Hand-off point for the failing-CI step verification (a later slice): the rebase is complete (every
-            # stopped commit resolved) and vetted; nothing is pushed until the step passes. On success it calls
-            # ``_publish_rebase(number, branch, pre_rebase_sha, stopped, wdir, env)``.
+        if to_verify and not await _verify_rebased(number, to_verify, host, repo, wdir, env):
+            await _abort_rebase(wdir, env)
             return
         await _commit_if_dirty(None, wdir, env, f"ci-fix: rebase onto {pr.base_reference}")
         await _publish_rebase(number, branch, pre_rebase_sha, stopped, wdir, env)
@@ -776,6 +774,53 @@ async def _leftover_conflict_markers(wdir: str, env: dict) -> list[str]:
         return [p for p in _text(result.stdout).split("\0") if p] or changed
     logger.warning("git grep for conflict markers failed (rc=%s), giving up on the rebase", result.returncode)
     return changed
+
+
+async def _lookup_step(
+    check: Check, host: CodeHost, repo: RepositoryRef, wdir: str, env: dict
+) -> tuple[_Step | None, str]:
+    """The runnable step of a failing check in the checked-out tree, or None and why it was not found."""
+    try:
+        log = await _read_failed_log(host, repo, check)
+        step_name = (_failed_step_name(log) or await _failed_step_from_api(host, repo, check)) if log else None
+    except CiFixError as e:
+        return None, str(e)
+    if step_name is None:
+        return None, "could not read the failing job log or its step"
+    step = find_step_command(wdir, step_name, check.workflow_name or "")
+    if step is None:
+        return None, f"no runnable command for step {step_name!r} in workflows"
+    return step, ""
+
+
+async def _verify_rebased(
+    number: int, candidates: list[Check], host: CodeHost, repo: RepositoryRef, wdir: str, env: dict
+) -> bool:
+    """Run the first failing check's step command on the rebased tree; True means the push may go ahead.
+
+    ``candidates`` are the non-gate failing checks in ``_fix_first_candidate`` order. A check whose step cannot be
+    found is skipped for the next one; when none has a runnable command the first one is reported as a parse failure.
+    A failing command writes ``rebase-still-failing``. A passing one leaves no digest and does not push.
+    """
+    first_reason = ""
+    for index, check in enumerate(candidates):
+        step, reason = await _lookup_step(check, host, repo, wdir, env)
+        if step is None:
+            if index == 0:
+                first_reason = reason
+            continue
+        result = await _run_step(step, wdir, env)
+        if result.returncode != 0:
+            _digest(
+                OUTCOME_REBASE_STILL_FAILING,
+                number,
+                check.name,
+                f"step {step.name!r} still fails (exit {result.returncode})",
+            )
+            return False
+        return True
+    _digest(OUTCOME_PARSE_FAILURE, number, candidates[0].name, first_reason)
+    return False
 
 
 async def _abort_rebase(wdir: str, env: dict) -> None:
