@@ -218,7 +218,7 @@ async def _process_single_pr(number: int, branch: str, ctx: _ProcessPrContext) -
     except Exception:
         logger.exception("PR #%d: error", number)
     finally:
-        await git_restore(ctx.original_sha, branch, ctx.wdir, ctx.env)
+        await git_restore(ctx.original_sha, branch, ctx.wdir, ctx.env, pr_number=number)
 
 
 async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrContext) -> None:
@@ -254,27 +254,71 @@ async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrCon
         return
     logger.info("PR #%d: found %d comment(s) to address", number, len(comments))
     head_sha = await get_head_sha(ctx.wdir, ctx.env)
-    for comment in comments:
-        thread_state = (
-            await _comment_thread_state(comment, ctx.host, ctx.repo_ref, number)
-            if comment.get("type") == "inline"
-            else True
+    progress = _LoopProgress()
+    # Push policy, in one place: a cancelled run never pushes (the shielded git_restore in _process_single_pr
+    # preserves local commits under a recovery ref); a run whose history was rewritten never pushes either;
+    # any other outcome, including an unexpected error mid-loop, pushes whatever was committed so far.
+    try:
+        await _address_comments_loop(comments, number, branch, ctx, signals, head_sha, progress)
+    except asyncio.CancelledError:
+        raise
+    except BaseException:
+        await _push_branch(number, branch, ctx.wdir, ctx.env, comment_count=progress.addressed)
+        raise
+    else:
+        if not progress.rewritten:
+            await _push_branch(number, branch, ctx.wdir, ctx.env, comment_count=progress.addressed)
+
+
+@dataclass
+class _LoopProgress:
+    """Outcome of `_address_comments_loop`, mutated in place so a partial count survives an exception."""
+
+    addressed: int = 0
+    rewritten: bool = False
+
+
+async def _should_skip_comment(comment: dict, number: int, ctx: _ProcessPrContext) -> bool:
+    """True when the comment's thread was resolved since the run started, or its state is unknown for a
+    re-pointed focused-review comment."""
+    thread_state = (
+        await _comment_thread_state(comment, ctx.host, ctx.repo_ref, number)
+        if comment.get("type") == "inline"
+        else True
+    )
+    if thread_state is None and comment.get("focused_review_original") is not None:
+        logger.warning(
+            "PR #%d: thread-state lookup failed; skipping re-pointed focused-review comment %s",
+            number,
+            comment.get("id", "?"),
         )
-        if thread_state is None and comment.get("focused_review_original") is not None:
-            logger.warning(
-                "PR #%d: thread-state lookup failed; skipping re-pointed focused-review comment %s",
-                number,
-                comment.get("id", "?"),
-            )
-            continue
-        if thread_state is False:
-            logger.info(
-                "PR #%d: comment %s's thread was resolved since this run started, skipping",
-                number,
-                comment.get("id", "?"),
-            )
+        return True
+    if thread_state is False:
+        logger.info(
+            "PR #%d: comment %s's thread was resolved since this run started, skipping",
+            number,
+            comment.get("id", "?"),
+        )
+        return True
+    return False
+
+
+async def _address_comments_loop(
+    comments: list[dict],
+    number: int,
+    branch: str,
+    ctx: _ProcessPrContext,
+    signals: "_SignalSnapshot",
+    head_sha: str | None,
+    progress: _LoopProgress,
+) -> None:
+    """Address each comment in turn; stops early and sets `progress.rewritten` if a backend run rewrote history."""
+    for comment in comments:
+        if await _should_skip_comment(comment, number, ctx):
             continue
         signal = signals.by_script_id.get(comment["id"]) if comment.get("rocket_signal") else None
+        progress.addressed += 1
+        pre_comment_sha = head_sha
         head_sha, rewritten = await _address_single_comment(
             comment,
             number,
@@ -293,20 +337,34 @@ async def _address_pending_comments(number: int, branch: str, ctx: _ProcessPrCon
             rocket_at=signal.rocket_at if signal else None,
         )
         if rewritten:
+            # Earlier comments in this iteration were already recorded as handled (and the backend may have
+            # replied with links to their commits), so they are NOT retried next iteration. Their commits
+            # live only on the local branch, and git_restore preserves only the (now rewritten) tip, so pin
+            # the last known-good head under a recovery ref before the branch is deleted.
+            progress.rewritten = True
+            recovery_ref = await _save_recovery_ref(branch, pre_comment_sha, ctx.wdir, ctx.env)
             logger.warning(
-                "PR #%d: skipping remaining comments this run — comment %s's backend run rewrote "
-                "branch history, so pushing it could silently discard or corrupt already-pushed commits",
+                "PR #%d: skipping remaining comments this run — comment %s's backend run rewrote branch "
+                "history, so nothing is pushed. Commits from earlier comments in this iteration are already "
+                "recorded as handled and will NOT be retried; they are preserved at %s for manual recovery",
                 number,
                 comment.get("id", "?"),
+                recovery_ref or "(recovery ref could not be written — see reflog)",
             )
-            break
-        if not await _push_branch(number, branch, ctx.wdir, ctx.env):
-            logger.warning(
-                "PR #%d: skipping remaining comments this run after comment %s's push failed",
-                number,
-                comment.get("id", "?"),
-            )
-            break
+            return
+
+
+async def _save_recovery_ref(branch: str, sha: str | None, wdir: str, env: dict) -> str | None:
+    """Pin `sha` under refs/harness-recovery/ so it survives the local branch's deletion; returns the ref or None."""
+    if not sha:
+        return None
+    ref = f"refs/harness-recovery/{branch}-{sha[:12]}"
+    try:
+        result = await run_cmd(["git", "update-ref", ref, sha], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
+    except Exception:
+        logger.exception("could not write recovery ref %s", ref)
+        return None
+    return ref if result.returncode == 0 else None
 
 
 def _as_focused_review_comment(parent: dict, marker_reply: dict) -> dict:
@@ -655,19 +713,19 @@ async def _address_single_comment(
     env: dict,
     host: CodeHost,
     repo_ref: RepositoryRef,
-    pre_sha: str,
+    pre_sha: str | None,
     opencode_dir: str | None = None,
     our_login: str | None = None,
     repo_slug: str | None = None,
     handled_version: datetime | None = None,
     rocket_at: datetime | None = None,
-) -> tuple[str, bool]:
+) -> tuple[str | None, bool]:
     """Run the backend for `comment`, then return the resulting HEAD sha (or `pre_sha`
     unchanged if HEAD didn't move / couldn't be read) so the caller can pass it as the
     next comment's `pre_sha` without re-deriving it, plus whether the backend rewrote
     branch history (moved HEAD to a commit that isn't a descendant of `pre_sha`) — the
     caller must not push in that case, since it could silently discard or corrupt
-    already-pushed commits."""
+    commits already on origin."""
     cid = comment.get("id", "?")
     ctype = comment.get("type", "?")
     author = comment.get("author", "?")
@@ -696,7 +754,7 @@ async def _address_single_comment(
         logger.exception("PR #%d comment %s: error", pr_number, cid)
     finally:
         post_sha = await get_head_sha(wdir, env) or pre_sha
-        if pre_sha and post_sha != pre_sha and not await _is_ancestor(pre_sha, post_sha, wdir, env):
+        if pre_sha and post_sha and post_sha != pre_sha and not await _is_ancestor(pre_sha, post_sha, wdir, env):
             rewritten = True
             logger.error(
                 "PR #%d comment %s: HEAD %s..%s is not a fast-forward — branch history was "
@@ -723,10 +781,12 @@ async def _address_single_comment(
     return post_sha, rewritten
 
 
-async def _push_branch(number: int, branch: str, wdir: str, env: dict) -> bool:
-    """Push `branch` to origin. Called after every comment (not once at the end of the
-    PR) so each addressed comment is safely on GitHub before the next comment's backend
-    session starts — bounding the damage if a later session rewrites local history."""
+async def _push_branch(number: int, branch: str, wdir: str, env: dict, comment_count: int = 0) -> bool:
+    """Push `branch` to origin, once per PR after the last comment has been addressed.
+    Skipped (returns True, no `git push`) when `git log origin/<branch>..HEAD` succeeds and
+    shows nothing ahead; if that `git log` fails the push is still attempted. Returns True
+    for skip and success, False for a failed push (one attempt, no retry). `comment_count`
+    is only used for the "pushed" log line."""
     log_result = await run_cmd(
         ["git", "log", "--oneline", f"origin/{branch}..HEAD"],
         cwd=wdir,
@@ -734,13 +794,17 @@ async def _push_branch(number: int, branch: str, wdir: str, env: dict) -> bool:
         timeout=TIMEOUT_GIT,
         check=False,
     )
+    commit_count = 0
     if log_result.returncode == 0:
         commits = log_result.stdout.decode("utf-8", errors="replace").strip()
+        if not commits:
+            return True
+        commit_count = len(commits.splitlines())
         logger.info(
             "PR #%d: about to push branch %s; commits ahead of origin:\n%s",
             number,
             branch,
-            commits or "(none)",
+            commits,
         )
     push_result = await run_cmd(
         ["git", "push", "origin", branch],
@@ -750,11 +814,12 @@ async def _push_branch(number: int, branch: str, wdir: str, env: dict) -> bool:
         check=False,
     )
     if push_result.returncode == 0:
-        logger.info("PR #%d: pushed branch %s", number, branch)
+        logger.info("PR #%d: pushed %d commit(s) for %d comment(s)", number, commit_count, comment_count)
         return True
     logger.warning(
-        "PR #%d: git push failed (rc=%d): %s",
+        "PR #%d: git push of branch %s failed (rc=%d): %s",
         number,
+        branch,
         push_result.returncode,
         push_result.stderr.decode("utf-8", errors="replace")[:300],
     )

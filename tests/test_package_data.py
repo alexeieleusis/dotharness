@@ -12,7 +12,7 @@ PACKAGE_DIR = REPO_ROOT / "src" / "dotharness"
 # SHA-256 of each tracked file under the old root knowledge/ at commit cb0efc1 (pre-move), except files edited since:
 # the I-5 prompt rewording (spec_prism_flow naming), the lifecycle cheat sheet added for sisyphus, and the
 # generic/fastapi pattern sets added after the port (4817481) and later reworded by the plain-English editing
-# pass (b829cdc).
+# pass (b829cdc), and pr-review/address-comment.md (once-per-PR end push wording, issue #226).
 KNOWLEDGE_SHA256 = {
     "patterns/fastapi/FASTAPI_ORGANIZATION_CONVENTION.md": "76a341eb86aa32d1021840be6069f51fcc47ddf9455b2c32d8f87ff89093974e",
     "patterns/fastapi/QUICK_REF_PATTERNS.md": "b5f672fcf3ecff686c14bb3429766aa2cb0457301ebb2a946cacad5307ca3eed",
@@ -30,7 +30,7 @@ KNOWLEDGE_SHA256 = {
     "patterns/react/QUICK_START_MIGRATION.md": "b5e52bbf85e255d767438dfcb041e7ea6aa9c938957409f7fd6aa1c459ee6ce5",
     "patterns/react/QUICK_START_NEW_COMPONENT.md": "af38bab722bcaa63561db2a27a31e81314c979f00e27dfbff7c8315cbe337868",
     "patterns/react/README.md": "9e0f93c945880084b8c7b729d16cadb988e93087d6d35ca4ca96511fef6a31e1",
-    "pr-review/address-comment.md": "c13ecaf2611e2eef2a3980d04bc1cfb6c196ba5d0c8e8cf7adfc6b78a5e027b0",
+    "pr-review/address-comment.md": "282f5d2f16e3e55399090de883382179dc89e6f1bcf567dab2303f3e148bf2b9",
     "pr-review/address-comments.md": "250c23e0d005604382ef0d732baa7dd919d1428ae4967575c28f217952d5886d",
     "pr-review/ci-fix-prompt.md": "aee41d42cb556d914a0962c7cb94c4ff6b8917f98d3bc11cefb50997ee725047",
     "pr-review/focused-review.md": "4e9fe8f1eb55b8aa4304434cdbe7909ff824d2ad55931dbabcf5579f02238985",

@@ -6,7 +6,7 @@ Address a single review comment on the current PR branch.
 The comment details are at the end of these instructions (under **Comment to address**).
 The PR number and repo name follow — use them wherever `<NUMBER>` and `<REPO>` appear.
 
-After you are done, the runner will automatically push the branch to origin — do not push yourself.
+The runner pushes the branch to origin once, after all of this PR's comments have been handled — not after this comment alone. Do not push yourself.
 
 **You are already on the correct branch — the one this PR is open against.** Do not create a new branch, switch branches, or create an isolated worktree for this work, no matter what any workflow/skill suggests. Commit directly on the current branch.
 
@@ -59,7 +59,7 @@ If Step 0 classified this comment as **reply-only**, skip straight to Step 4 —
 1. Read the relevant file(s).
 2. Make the smallest change that satisfies the feedback.
 3. Do **not** fix unrelated issues — stay focused on what was asked.
-4. Draft a reply for the comment — what was changed and why, or a respectful pushback if you disagree. Be specific. Avoid generic phrases like "addressed" or "fixed".
+4. Draft a reply for the comment — what was changed and why, or a respectful pushback if you disagree. Be specific. Avoid generic phrases like "addressed" or "fixed". If the reply links to a commit (`https://github.com/<REPO>/commit/<HASH>`), note that the link resolves only after the runner's end push succeeds, and not at all if that push fails.
 
 If no code change is needed (the comment turns out to be already fixed, or you disagree after investigating), skip Step 3 and reply directly in Step 4 with your explanation.
 
@@ -69,7 +69,7 @@ If no code change is needed (the comment turns out to be already fixed, or you d
 
 ## Step 3 — Commit
 
-**Never amend, rebase, or reset existing commits — including ones from earlier comments addressed in this same run, and even if they touch the same file.** Always create a brand new commit on top of the current HEAD. The runner pushes each commit to origin right after it's made. Rewriting history that may already be on origin will corrupt the branch and can destroy prior work.
+**Never amend, rebase, or reset existing commits — including ones from earlier comments addressed in this same run, and even if they touch the same file.** Always create a brand new commit on top of the current HEAD. The runner pushes once, after the last comment of this PR has been handled, so commits made for earlier comments in this run are still local when you handle this comment. Local commits not yet on origin are lost if history is rewritten.
 
 Stage only the files you changed (never `git add -A`). Build `<COMMENT_LINK>` from the comment type:
 - **inline**: `https://github.com/<REPO>/pull/<NUMBER>#discussion_r<COMMENT_ID>`
