@@ -959,8 +959,9 @@ async def test_no_changed_files_means_no_marker_search(tmp_path):
     [
         (b"<<<<<<< HEAD\n", True),
         (b"<<<<<<<\n", True),
-        (b"=======\n", True),
-        (b"=======\r\n", True),
+        (b"=======\n", False),  # Setext heading underline, not a marker on its own
+        (b"Changes\n=======\n", False),
+        (b"<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> b\n", True),
         (b">>>>>>> abc123 (msg)\n", True),
         (b"=========\n", False),
         (b"======= banner\n", False),

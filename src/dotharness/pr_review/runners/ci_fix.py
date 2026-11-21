@@ -753,9 +753,10 @@ async def _resolve_stopped_rebase(
         stopped_sha = next_sha
 
 
-# A real conflict marker: ``<<<<<<<`` / ``>>>>>>>`` at line start (alone or followed by a label), and a line that is
-# exactly ``=======`` (so a longer run of ``=`` or text after it, e.g. a Markdown underline or a banner, is not one).
-_CONFLICT_MARKER_RE = r"^(<<<<<<<|>>>>>>>)([[:space:]]|$)|^=======[[:space:]]*$"
+# A real conflict marker: ``<<<<<<<`` / ``>>>>>>>`` at line start (alone or followed by a label). A bare ``=======`` is
+# deliberately not matched: it is also a valid Setext heading underline (Markdown, RST), and every real conflict has
+# the other two markers anyway.
+_CONFLICT_MARKER_RE = r"^(<<<<<<<|>>>>>>>)([[:space:]]|$)"
 
 
 async def _leftover_conflict_markers(wdir: str, env: dict) -> list[str]:
