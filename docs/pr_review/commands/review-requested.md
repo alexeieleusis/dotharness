@@ -114,6 +114,22 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
       invokes the backend once. Per `review-design.md` this posts inline
       comments for file-specific P0/P1 design findings plus exactly one
       PR-level `# Design Review` comment. The runner likewise catches and logs a timeout here.
+      **Test layers:** Just before the design backend call, the runner runs
+      a separate test-layer pass as its own backend call (prompt
+      `review-test-layers.md`). It flags an integration-layer test that
+      re-asserts a case a logic-layer test already covers, never suggests
+      deleting a wiring check, and reports P1 findings only, each naming the
+      covering logic-layer test by file path and test name. Its inline comments
+      carry the design marker. Its summary is handed to the design prompt, so
+      the single `# Design Review` comment gets a `## Test Layers` subsection
+      (omitted when there is nothing to report). The pass has no marker,
+      comment or state of its own. It makes no backend call when
+      `[test_layer_review].enabled` is `false`, or when the changed files lack
+      a test file or a non-test file. A path is a test file when a directory
+      segment is `test` or `tests`, or the file name starts with `test_` or
+      ends with `_test.py`, `.test.ts`, `.test.tsx`, `.test.js`, `.spec.ts` or
+      `.spec.js`. A failure is logged and the design pass still runs. It
+      only runs when the design pass runs, so the design marker also governs it.
     - **Traceability pass:** Before invoking the backend, the runner checks
       GitHub directly for an existing
       `<!-- dotharness-review-traceability -->`-marked comment on the PR. This
@@ -195,9 +211,10 @@ Only these `.harness.toml` fields affect this runner (full schema in
 | `harness.backend` | Which AI backend (`opencode`/`claude`) runs the reviews |
 | `harness.backend_timeout_seconds` | Per-invocation timeout for each backend call (per file, for the summary, and for the design/traceability passes when they have not already succeeded) |
 | `harness.host_token_cmd` | Command used to fetch the `GITHUB_TOKEN` passed to host calls and the backend. `gh_token_cmd` was removed; a config that still has it fails to load |
-| `harness.knowledge_dir` | Where `pr-review/review-file.md`, `pr-review/review-summary.md`, `pr-review/review-design.md`, `pr-review/review-traceability.md`, and — only when `[regret_review].enabled` is `true` — `pr-review/review-regret.md` prompt templates live |
+| `harness.knowledge_dir` | Where `pr-review/review-file.md`, `pr-review/review-summary.md`, `pr-review/review-design.md`, `pr-review/review-traceability.md`, and — only when `[test_layer_review].enabled` is `true` — `pr-review/review-test-layers.md`, and — only when `[regret_review].enabled` is `true` — `pr-review/review-regret.md` prompt templates live |
 | `harness.path_prepend` | Extra `PATH` entries for subprocesses (git/gh/backend) |
 | `harness.env` | Extra environment variables merged into the subprocess/backend env |
+| `[test_layer_review].enabled` | Turns the test-layer pass inside the design step on or off (default `true`). Off means no test-layer backend call. See [configuration](../configuration.md#test_layer_review) |
 | `harness.review_knowledge_file` | Optional extra instructions appended to the file, summary, design, and traceability prompts, and — only when `[regret_review].enabled` is `true` — to the regret-judgment prompt |
 | `repo.name` | GitHub repo slug used for all code-host calls |
 | `repo.working_dir` | Local git checkout where the runner detaches, fetches, and checks out branches. Its resolved path is also the basis of the lock key (see [Shared behavior](index.md#shared-behavior)) |

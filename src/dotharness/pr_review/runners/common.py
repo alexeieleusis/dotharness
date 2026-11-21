@@ -1243,10 +1243,11 @@ async def run_pr_level_pass(
     backend: Backend,
     wdir: str,
     is_done: bool,
-    build_prompt: Callable[[], Awaitable[str]],
+    build_prompt: Callable[..., Awaitable[str]],
     has_comment_fn: Callable[[], Awaitable[bool | None]],
     label: str,
     short_circuit: Callable[[], Awaitable[bool | None]] | None = None,
+    pre_pass: Callable[[], Awaitable[str | None]] | None = None,
 ) -> bool | None:
     """Shared orchestration skeleton for every PR-level pass (design review, requirement-
     traceability review, ...): noop-if-already-done → optional short-circuit (e.g.
@@ -1265,6 +1266,11 @@ async def run_pr_level_pass(
     return None (no persisted state to protect there), so that branch is simply never hit
     for its callers.
 
+    `pre_pass` is an optional explicit step that runs after the noop/short-circuit checks and
+    before `build_prompt` (e.g. the design review's test-layer backend pass). Its result is
+    passed to `build_prompt` as the single positional argument; without it `build_prompt` is
+    called with no arguments, so `build_prompt` itself stays a pure prompt assembler.
+
     Returns True if the pass is confirmed complete (already done, short-circuited to
     success, or backend ran and the marker was confirmed), False if it's confirmed not
     complete, or None if a post-backend completion check was inconclusive.
@@ -1276,7 +1282,7 @@ async def run_pr_level_pass(
         outcome = await short_circuit()
         if outcome is not None:
             return outcome
-    prompt = await build_prompt()
+    prompt = await (build_prompt() if pre_pass is None else build_prompt(await pre_pass()))
     try:
         result = await backend.run(prompt, cwd=wdir, context=f"PR #{pr_number} {label}")
         if result.returncode != 0:
@@ -1727,3 +1733,73 @@ def find_last_reply_if_marked(comment: dict, marker: str = FOCUSED_REVIEW_MARKER
     if replies and marker in replies[-1].get("body", ""):
         return replies[-1]
     return None
+
+
+_TEST_FILE_SEGMENTS = frozenset({"test", "tests"})
+_TEST_FILE_SUFFIXES = ("_test.py", ".test.ts", ".test.tsx", ".test.js", ".spec.ts", ".spec.js")
+_TEST_LAYER_NONE_SENTINEL = "NONE"
+# Returned by run_test_layer_pass when the backend timed out or exited non-zero, so a failed pass
+# is distinguishable from a pass that found nothing (None).
+TEST_LAYER_FAILED = "\0test-layer-pass-failed\0"
+
+
+def is_test_file_path(path: str) -> bool:
+    """Path-convention heuristic that only gates the test-layer pass's backend call (the
+    prompt, not this function, decides layers): any directory segment named test/tests, or a
+    filename starting with test_ or ending in a common test suffix."""
+    parts = path.split("/")
+    name = parts[-1]
+    return (
+        any(segment in _TEST_FILE_SEGMENTS for segment in parts[:-1])
+        or name in _TEST_FILE_SEGMENTS
+        or name.startswith("test_")
+        or name.endswith(_TEST_FILE_SUFFIXES)
+    )
+
+
+def has_test_and_non_test_files(files: list[str]) -> bool:
+    """True when the changed files include both a test file and a non-test file; otherwise the
+    test-layer pass has nothing to compare and needs no backend call."""
+    kinds = {is_test_file_path(f) for f in files}
+    return kinds == {True, False}
+
+
+def parse_test_layer_reply(reply: str) -> str | None:
+    """The test-layer backend's reply is its summary text for the Design Review comment, or
+    nothing / NONE when it has no findings (None here). The sentinel is matched on the last
+    non-empty line so agent preamble before a trailing NONE is not mistaken for a finding."""
+    text = reply.strip()
+    if not text:
+        return None
+    last_line = text.splitlines()[-1]
+    if last_line.strip(" .!`*").upper() == _TEST_LAYER_NONE_SENTINEL:
+        return None
+    return text
+
+
+def build_test_layer_section(enabled: bool, summary: str | None) -> str:
+    """Appended to the design instructions so the design backend's single PR-level comment is the
+    record that the test-layer pass ran. Empty when the pass is disabled (prompt unchanged)."""
+    if not enabled:
+        return ""
+    if summary is None:
+        return (
+            "\n\n## Test Layers\n"
+            "The separate test-layer pass found nothing to report. Omit the `## Test Layers` "
+            "subsection from your PR-level comment entirely."
+        )
+    if summary == TEST_LAYER_FAILED:
+        return (
+            "\n\n## Test Layers\n"
+            "The separate test-layer pass could NOT run (backend failure or timeout), so its result is "
+            "unknown. Do not say it found no issues. Include a `## Test Layers` subsection in your "
+            "PR-level comment stating that the test-layer review did not complete and needs a re-run."
+        )
+    return (
+        "\n\n## Test Layers\n"
+        "A separate test-layer pass has already run and posted its own inline comments. Include the "
+        "text between the lines below verbatim in your single `# Design Review` PR-level comment, "
+        "under a `## Test Layers` subheading placed after your design summary and before the "
+        "marker. Do not re-post those inline findings.\n\n"
+        f"---\n{summary}\n---"
+    )

@@ -715,3 +715,19 @@ def test_gh_token_cmd_is_removed_and_names_host_token_cmd(tmp_path, extra):
 def test_host_keys_type_validated(tmp_path, body, key):
     with pytest.raises(ConfigError, match=key):
         load_config(_write(tmp_path, body))
+
+
+def test_test_layer_review_defaults(minimal_toml):
+    cfg = load_config(minimal_toml)
+    assert cfg.test_layer_review.enabled is True
+
+
+def test_test_layer_review_explicit_false(tmp_path):
+    cfg = load_config(_section_toml(tmp_path, "test_layer_review", "enabled = false"))
+    assert cfg.test_layer_review.enabled is False
+
+
+@pytest.mark.parametrize("bad", ['"no"', "0"])
+def test_test_layer_review_enabled_non_bool_rejected(tmp_path, bad):
+    with pytest.raises(ConfigError, match=r"test_layer_review\.enabled"):
+        load_config(_section_toml(tmp_path, "test_layer_review", f"enabled = {bad}"))

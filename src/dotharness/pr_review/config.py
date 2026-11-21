@@ -86,6 +86,11 @@ class RegretReviewConfig:
 
 
 @dataclass
+class LayerReviewConfig:
+    enabled: bool = True
+
+
+@dataclass
 class AutoApproveConfig:
     enabled: bool = False
     viewed_max_lines: int = 75
@@ -141,6 +146,7 @@ class HarnessConfig:
     focused_review: FocusedReviewConfig = field(default_factory=FocusedReviewConfig)
     address_comments: AddressCommentsConfig = field(default_factory=AddressCommentsConfig)
     regret_review: RegretReviewConfig = field(default_factory=RegretReviewConfig)
+    test_layer_review: LayerReviewConfig = field(default_factory=LayerReviewConfig)
     local_review: LocalReviewConfig = field(default_factory=LocalReviewConfig)
     auto_approve: AutoApproveConfig = field(default_factory=AutoApproveConfig)
     ci_fix: CiFixConfig = field(default_factory=CiFixConfig)
@@ -295,6 +301,18 @@ def _parse_merge(section: dict) -> MergeConfig:
     )
 
 
+def _parse_test_layer_review(section: dict) -> LayerReviewConfig:
+    return LayerReviewConfig(
+        **_parse_strict_section(
+            "test_layer_review",
+            section,
+            bool_keys=("enabled",),
+            int_keys=(),
+            defaults=LayerReviewConfig(),
+        )
+    )
+
+
 def _parse_host_keys(h: dict) -> tuple[str | None, dict[str, Any], str | None]:
     """Validate ``[harness] host``, ``[harness.host_options]`` and ``host_token_cmd`` types. Reads no environment."""
     if "gh_token_cmd" in h:
@@ -381,6 +399,8 @@ def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
         regret_review_timeout=rr.get("regret_review_timeout", 300),
     )
 
+    test_layer_review = _parse_test_layer_review(data.get("test_layer_review", {}))
+
     auto_approve = _parse_auto_approve(data.get("auto_approve", {}))
 
     ci_fix = _parse_ci_fix(data.get("ci_fix", {}))
@@ -399,6 +419,7 @@ def load_config(path: Path, *, require_repo_name: bool = True) -> HarnessConfig:
         focused_review=focused_review,
         address_comments=address_comments,
         regret_review=regret_review,
+        test_layer_review=test_layer_review,
         local_review=local_review,
         auto_approve=auto_approve,
         ci_fix=ci_fix,

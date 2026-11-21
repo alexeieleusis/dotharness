@@ -20,11 +20,13 @@ from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.common import (
+    TEST_LAYER_FAILED,
     FatalGitError,
     LinkedTicket,
     build_design_review_prompt,
     build_early_comment_context,
     build_file_review_section,
+    build_test_layer_section,
     build_traceability_review_prompt,
     check_design_review_comment_status,
     check_regret_review_comment_status,
@@ -45,9 +47,11 @@ from dotharness.pr_review.runners.common import (
     git_restore,
     has_design_review_comment,
     has_regret_review_comment,
+    has_test_and_non_test_files,
     has_traceability_review_comment,
     host_current_user,
     open_host,
+    parse_test_layer_reply,
     post_no_linked_ticket_comment,
     preserve_reviewer_request,
     repo_identity_check,
@@ -235,8 +239,46 @@ async def _review_files(
     return any_failure, partial_files
 
 
-async def _build_design_prompt(
-    design_instructions: str,
+async def run_test_layer_pass(
+    test_layer_instructions: str,
+    extra_knowledge: str | None,
+    number: int,
+    config,
+    ctx: dict,
+    backend: Backend,
+    wdir: str,
+    current_user: str,
+    env: dict,
+) -> str | None:
+    """Own backend pass, run right before the design backend call inside the design review step
+    (shared by self_review.py and review_requested.py). It has no marker, state or PR-level comment
+    of its own: its inline findings carry the design marker and its reply (the summary text, or
+    NONE) is captured and handed to the design prompt, whose single '# Design Review' comment is the
+    record that the pass executed. Best effort: no backend call when the changed files lack a test
+    file or a non-test file, and a backend failure is logged and yields TEST_LAYER_FAILED so the design pass
+    still runs, told via TEST_LAYER_FAILED that the pass could not run (not that it found nothing)."""
+    if not has_test_and_non_test_files(ctx["files"]):
+        logger.info("PR #%d: test layer review skipped — changed files lack a test file or a non-test file", number)
+        return None
+    prompt = await build_design_pass_prompt(
+        test_layer_instructions, extra_knowledge, number, config, ctx, wdir, current_user, env
+    )
+    reply: dict[str, str] = {}
+    try:
+        result = await cast(Backend, RecordingBackend(backend, reply)).run(
+            prompt, cwd=wdir, context=f"PR #{number} test layer review"
+        )
+    except subprocess.TimeoutExpired:
+        logger.exception("PR #%d: test layer review backend timed out — continuing without it", number)
+        return TEST_LAYER_FAILED
+    if result.returncode != 0:
+        logger.error("PR #%d: test layer review backend exited %d — continuing without it", number, result.returncode)
+        return TEST_LAYER_FAILED
+    return parse_test_layer_reply(reply.get("reply", ""))
+
+
+async def build_design_pass_prompt(
+    instructions: str,
     extra_knowledge: str | None,
     number: int,
     config,
@@ -245,13 +287,16 @@ async def _build_design_prompt(
     current_user: str,
     env: dict,
 ) -> str:
+    """Shared diff-section + prompt assembly for the design pass and the test-layer pass
+    (self_review.py and review_requested.py): same diff, metadata and already-flagged
+    locations, different instructions. Pure: no backend call."""
     diff_sections = "".join([
         build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
         for file in ctx["files"]
     ])
     prior_flagged_locations = await get_design_review_flagged_locations(ctx["host"], ctx["repo"], number, current_user)
     return build_design_review_prompt(
-        design_instructions,
+        instructions,
         extra_knowledge,
         diff_sections,
         _change_request(ctx, number),
@@ -266,6 +311,7 @@ async def _build_design_prompt(
 
 async def _run_design_review(
     design_instructions: str,
+    test_layer_instructions: str,
     extra_knowledge: str | None,
     number: int,
     config,
@@ -286,15 +332,37 @@ async def _run_design_review(
     Orchestration itself (noop check → build prompt → run backend → re-verify marker) is
     shared with _run_traceability_review below, and with review_requested.py's equivalent
     pair, via common.run_pr_level_pass; this wrapper only adds the persisted-state
-    mutation run_pr_level_pass has no reason to know about."""
+    mutation run_pr_level_pass has no reason to know about.
+
+    When test_layer_instructions is non-empty, run_test_layer_pass runs as run_pr_level_pass's
+    explicit `pre_pass` step just before the design prompt is built (only when the design pass
+    itself runs: it has no separate completion record) and its summary is injected into the
+    design prompt."""
     is_done = await has_design_review_comment(ctx["host"], ctx["repo"], number, current_user)
     result = await run_pr_level_pass(
         number,
         backend,
         wdir,
         is_done=is_done,
-        build_prompt=lambda: _build_design_prompt(
-            design_instructions, extra_knowledge, number, config, ctx, wdir, current_user, env
+        # test_layer_instructions is empty when [test_layer_review] is disabled: no pass, prompt unchanged.
+        pre_pass=(
+            (
+                lambda: run_test_layer_pass(
+                    test_layer_instructions, extra_knowledge, number, config, ctx, backend, wdir, current_user, env
+                )
+            )
+            if test_layer_instructions
+            else None
+        ),
+        build_prompt=lambda summary=None: build_design_pass_prompt(
+            design_instructions + build_test_layer_section(bool(test_layer_instructions), summary),
+            extra_knowledge,
+            number,
+            config,
+            ctx,
+            wdir,
+            current_user,
+            env,
         ),
         has_comment_fn=lambda: check_design_review_comment_status(ctx["host"], ctx["repo"], number, current_user),
         label="design review",
@@ -579,6 +647,7 @@ class _CycleContext:
     file_instructions: str
     summary_instructions: str
     design_instructions: str
+    test_layer_instructions: str
     traceability_instructions: str
     regret_instructions: str
     extra_knowledge: str | None
@@ -663,6 +732,7 @@ async def _process_single_pr(
             if flags.design:
                 await _run_design_review(
                     cycle.design_instructions,
+                    cycle.test_layer_instructions,
                     extra_knowledge,
                     number,
                     config,
@@ -725,6 +795,11 @@ async def _run_locked(config: HarnessConfig) -> None:
     traceability_instructions = render_prompt(
         (knowledge_dir / "review-traceability.md").read_text(encoding="utf-8"), variables
     )
+    test_layer_instructions = (
+        render_prompt((knowledge_dir / "review-test-layers.md").read_text(encoding="utf-8"), variables)
+        if config.test_layer_review.enabled
+        else ""
+    )
     regret_instructions = (
         render_prompt((knowledge_dir / "review-regret.md").read_text(encoding="utf-8"), variables)
         if config.regret_review.enabled
@@ -742,6 +817,7 @@ async def _run_locked(config: HarnessConfig) -> None:
         file_instructions=file_instructions,
         summary_instructions=summary_instructions,
         design_instructions=design_instructions,
+        test_layer_instructions=test_layer_instructions,
         traceability_instructions=traceability_instructions,
         regret_instructions=regret_instructions,
         extra_knowledge=extra_knowledge,

@@ -23,14 +23,13 @@ from dotharness.pr_review.runners.common import (
     FatalGitError,
     IdentifiedGitFailure,
     backend_env,
-    build_design_review_prompt,
     build_early_comment_context,
     build_file_review_section,
+    build_test_layer_section,
     build_traceability_review_prompt,
     failure_summary,
     get_change_request,
     get_changed_files,
-    get_design_review_flagged_locations,
     get_file_diff,
     get_pr_base_branch,
     get_pr_description,
@@ -66,6 +65,7 @@ from dotharness.pr_review.runners.regret_review import (
     parse_regret_judgment,
     post_regret_comment,
 )
+from dotharness.pr_review.runners.self_review import build_design_pass_prompt, run_test_layer_pass
 
 logger = logging.getLogger(__name__)
 
@@ -449,31 +449,37 @@ async def _run_design_review(
     via common.run_pr_level_pass; only the pieces below (instructions file, flagged-
     locations getter, prompt builder) are specific to the design pass."""
     pr_number = pr.number
-    repo_name = config.repo.name
 
-    async def build_prompt() -> str:
-        design_instructions = render_prompt(
-            (knowledge_dir / "review-design.md").read_text(encoding="utf-8"),
-            await ctx["host"].discussion.prompt_variables(),
-        )
-        diff_sections = "".join([
-            build_file_review_section(file, await _cached_file_diff(ctx, file, wdir, env), os.path.join(wdir, file))
-            for file in ctx["files"]
-        ])
-        prior_flagged_locations = await get_design_review_flagged_locations(
-            ctx["host"], ctx["repo"], pr_number, current_user
-        )
-        return build_design_review_prompt(
-            design_instructions,
+    test_layer_enabled = config.test_layer_review.enabled
+
+    async def test_layer_pre_pass() -> str | None:
+        # Own backend pass right before the design prompt is built (best effort; no marker/state/
+        # comment of its own: the design comment is the record that it ran).
+        variables = await ctx["host"].discussion.prompt_variables()
+        return await run_test_layer_pass(
+            render_prompt((knowledge_dir / "review-test-layers.md").read_text(encoding="utf-8"), variables),
             extra_knowledge,
-            diff_sections,
-            _change_request(ctx, pr_number),
             pr_number,
-            repo_name,
-            ctx["commit_sha"],
-            ctx["pr_description"],
-            ctx["vibe_heal_context"],
-            prior_flagged_locations,
+            config,
+            ctx,
+            backend,
+            wdir,
+            current_user,
+            env,
+        )
+
+    async def build_prompt(test_layer_summary: str | None = None) -> str:
+        variables = await ctx["host"].discussion.prompt_variables()
+        design_instructions = render_prompt((knowledge_dir / "review-design.md").read_text(encoding="utf-8"), variables)
+        return await build_design_pass_prompt(
+            design_instructions + build_test_layer_section(test_layer_enabled, test_layer_summary),
+            extra_knowledge,
+            pr_number,
+            config,
+            ctx,
+            wdir,
+            current_user,
+            env,
         )
 
     return bool(
@@ -482,6 +488,7 @@ async def _run_design_review(
             backend,
             wdir,
             is_done=design_done,
+            pre_pass=test_layer_pre_pass if test_layer_enabled else None,
             build_prompt=build_prompt,
             has_comment_fn=lambda: has_design_review_comment(ctx["host"], ctx["repo"], pr_number, current_user),
             label="design review",

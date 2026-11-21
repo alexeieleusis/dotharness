@@ -14,7 +14,13 @@ from typing import cast
 import pytest
 
 from dotharness.pr_review.backend import Backend
-from dotharness.pr_review.config import HarnessConfig, HarnessSection, LocalReviewConfig, RepoConfig
+from dotharness.pr_review.config import (
+    HarnessConfig,
+    HarnessSection,
+    LayerReviewConfig,
+    LocalReviewConfig,
+    RepoConfig,
+)
 from dotharness.pr_review.runners import local_review as lr
 from dotharness.pr_review.runners.local_review import (
     LocalReviewError,
@@ -607,3 +613,135 @@ async def test_backend_patch_on_address_module_reaches_review_run(env, monkeypat
     result = await lr.run(cfg, target, output_root=root)
     assert created, "patching address.Backend did not reach the backend factory used by review.run"
     assert result.ok
+
+
+# ---------------------------------------------------------------------------
+# Test-layer pass (own backend call before design; findings merged into design.md)
+# ---------------------------------------------------------------------------
+
+TL_FINDING = (
+    "## Finding: Redundant integration test\n- severity: P1\n- file: tests/test_a.py\n- line: 3\n"
+    "- status: open\n\nBody naming tests/test_logic.py::test_x."
+)
+
+
+class TestLayerBackend(FakeBackend):
+    """FakeBackend whose test-layers call writes `tl_text` (when not None) to test-layers.md."""
+
+    __test__ = False
+
+    def __init__(self, review_dir_fn, script=None, tl_text: str | None = TL_FINDING + "\n") -> None:
+        super().__init__(review_dir_fn, script)
+        self.tl_text = tl_text
+
+    async def run(self, prompt, cwd, opencode_dir=None, context=None):
+        if context == "local-review test-layers":
+            self.labels.append(context)
+            if self.script:
+                res = self.script(context, cwd)
+                if res is not None:
+                    return res
+            if self.tl_text is not None:
+                (self.review_dir_fn() / "test-layers.md").write_text(self.tl_text, encoding="utf-8")
+            return subprocess.CompletedProcess([], 0, "", "")
+        return await super().run(prompt, cwd, opencode_dir, context)
+
+
+async def _env_with_test_file(env, enabled: bool = True, with_test: bool = True):
+    cfg, _target, root, _rdir, repo = env
+    if with_test:
+        (repo / "tests").mkdir()
+        (repo / "tests" / "test_a.py").write_text("def test_a(): pass\n")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-m", "tests")
+    cfg.test_layer_review = LayerReviewConfig(enabled=enabled)
+    target = await lr.check_preconditions(repo, output_root=root)
+    rdir = review_dir_for(root, cfg.repo_slug, target.branch, target.head_sha)
+    return cfg, target, root, rdir, repo
+
+
+async def test_test_layers_pass_runs_before_design_and_merges_under_test_layers(env) -> None:
+    env = await _env_with_test_file(env)
+    backend, res = await _run(env, TestLayerBackend(lambda: env[3]))
+    assert res.ok
+    assert backend.labels[-3:] == ["local-review summary", "local-review test-layers", "local-review design"]
+    design = (env[3] / "design.md").read_text()
+    assert "## Test Layers\n\n## Finding: Redundant integration test" in design
+    assert design.index("## Summary") < design.index("## Test Layers")
+    assert "- id: design-" in design.split("## Test Layers")[1]
+    assert not (env[3] / "test-layers.md").exists()
+    assert "test-layers" not in _m(env[3])
+    assert "test-layers" not in (env[3] / "index.md").read_text()
+
+
+async def test_test_layers_empty_output_is_omitted_from_design(env) -> None:
+    env = await _env_with_test_file(env)
+    backend, _ = await _run(env, TestLayerBackend(lambda: env[3], tl_text=None))
+    assert "local-review test-layers" in backend.labels
+    assert "Test Layers" not in (env[3] / "design.md").read_text()
+
+
+async def test_test_layers_non_p1_or_invalid_blocks_are_dropped(env) -> None:
+    text = TL_FINDING.replace("P1", "P0") + "\n\n## Finding: Broken\n- severity: P1\n"
+    env = await _env_with_test_file(env)
+    await _run(env, TestLayerBackend(lambda: env[3], tl_text=text))
+    assert "Test Layers" not in (env[3] / "design.md").read_text()
+
+
+@pytest.mark.parametrize(("enabled", "with_test"), [(False, True), (True, False)])
+async def test_test_layers_skipped_without_backend_call(env, enabled: bool, with_test: bool) -> None:
+    env = await _env_with_test_file(env, enabled=enabled, with_test=with_test)
+    backend, res = await _run(env, TestLayerBackend(lambda: env[3]))
+    assert res.ok
+    assert "local-review test-layers" not in backend.labels
+    assert "local-review design" in backend.labels
+    assert "Test Layers" not in (env[3] / "design.md").read_text()
+
+
+@pytest.mark.parametrize("failure", ["exit", "timeout"])
+async def test_test_layers_failure_does_not_block_design(env, failure: str) -> None:
+    def script(label, cwd):
+        if label != "local-review test-layers":
+            return None
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired("x", 1)
+        return subprocess.CompletedProcess([], 1, "", "boom")
+
+    env = await _env_with_test_file(env)
+    backend, res = await _run(env, TestLayerBackend(lambda: env[3], script))
+    assert res.ok
+    assert res.failed == []
+    assert backend.labels[-1] == "local-review design"
+    assert _m(env[3])["design"] == "done"
+    assert "Test Layers" not in (env[3] / "design.md").read_text()
+
+
+async def test_test_layers_not_rerun_when_design_done(env) -> None:
+    env = await _env_with_test_file(env)
+    await _run(env, TestLayerBackend(lambda: env[3]))
+    backend, _ = await _run(env, TestLayerBackend(lambda: env[3]))
+    assert backend.labels == []
+
+
+async def test_old_manifest_without_test_layers_loads_and_resumes(env) -> None:
+    env = await _env_with_test_file(env)
+    await _run(env, TestLayerBackend(lambda: env[3]))
+    m = _m(env[3])
+    assert set(m) == {"version", "branch", "base_ref", "base_sha", "head_sha", "files", "summary", "design"}
+    m.pop("design")
+    write_manifest(env[3], m)
+    backend, res = await _run(env, TestLayerBackend(lambda: env[3]))
+    assert res.ok
+    assert backend.labels == ["local-review test-layers", "local-review design"]
+
+
+def test_test_layers_prompt_assembles_and_template_is_p1_only(tmp_path: Path) -> None:
+    out = tmp_path / "o.md"
+    p = lr_prompts.build_test_layers_prompt("T {OUTPUT_FILE}", out, "\n\nDIFFS", "\n\nRepo: r", "GUIDE", "SONAR")
+    assert str(out.resolve()) in p
+    assert "DIFFS" in p
+    assert "## Additional Review Guide\nGUIDE" in p
+    assert lr_prompts.TEST_LAYERS_TEMPLATE in lr_prompts.REVIEW_TEMPLATES
+    text = (KNOWLEDGE / lr_prompts.TEST_LAYERS_TEMPLATE).read_text(encoding="utf-8")
+    assert "- severity: P1\n" in text
+    assert "P0" not in text.split("### Findings")[1].split("```")[1]

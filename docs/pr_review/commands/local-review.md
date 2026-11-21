@@ -35,9 +35,9 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
     - There are no uncommitted changes to tracked files. Untracked files are ignored. Uncommitted changes are not reviewed, so commit or stash them first.
     - The base ref resolves (see [Base ref and diff](#base-ref-and-diff)).
 4. If the branch has no commits beyond the base, it prints `Nothing to review: <branch> has no commits beyond <base ref>` and exits 0.
-5. Loads the prompt templates `local-review-file.md`, `local-review-summary.md` and `local-review-design.md` from `harness.knowledge_dir/pr-review/`. It also loads the optional `harness.review_knowledge_file`, which is added to every prompt as an "Additional Review Guide" section.
+5. Loads the prompt templates `local-review-file.md`, `local-review-summary.md`, `local-review-design.md` and `local-review-test-layers.md` from `harness.knowledge_dir/pr-review/`. It also loads the optional `harness.review_knowledge_file`, which is added to every prompt as an "Additional Review Guide" section.
 6. For each changed file that is not yet `done`, builds a prompt from the file diff. If the file is new or the diff touches 75% or more of it, uses the whole file instead. The prompt also holds a description of the change (the branch commits) and any matching vibe-heal static-analysis context. It runs the backend once. The backend writes its findings to `files/<changed file path>.md`.
-7. Runs one summary pass, then one design pass, unless each is already `done`. The design pass gets the diffs of all changed files in one prompt. The summary pass runs even if some file passes failed. It is then recorded as `failed`, so it runs again next time together with the failed files.
+7. Runs one summary pass, then one design pass, unless each is already `done`. The design pass gets the diffs of all changed files in one prompt. Just before the design pass, a test-layer pass runs as its own backend call (see [Test Layers](#test-layers-within-the-design-review)). The summary pass runs even if some file passes failed. It is then recorded as `failed`, so it runs again next time together with the failed files.
 8. After each pass, it rewrites `manifest.json`. After the last pass, it writes `index.md`.
 9. Checks, after every backend call, that the backend did not change the repository (see [Security](#security)).
 10. With `--address`, runs the address phase after the review phase (or instead of it, with `--skip-review`). See [Address phase and finding curation](#address-phase-and-finding-curation).
@@ -82,8 +82,17 @@ The review directory contains:
 | `files/<changed file path>.md` | Findings for one changed file. The file reads `No P0/P1 findings.` when there are none. |
 | `summary.md` | Overall summary of the change. |
 | `design.md` | Design and architecture review of the whole change. |
+| `test-layers.md` | Transient. Written by the test-layer pass and deleted after its findings are merged into `design.md`. |
 | `manifest.json` | Base ref, merge base, head commit, and the status of each pass (`done` or `failed`). |
 | `index.md` | Human-readable overview with links to the other files. |
+
+## Test Layers within the design review
+
+Local review also checks whether a test at a higher layer (component or integration) re-asserts a case that a logic-layer test already covers. The check is one extra backend call that runs immediately before the design pass. It uses `local-review-test-layers.md` and reports P1 findings only. The per-file prompt (`local-review-file.md`) also has one line that catches obvious cases in a single file.
+
+- The findings are appended to `design.md` under a `## Test Layers` subsection, in the same finding-block format as the design findings, and get `design-` IDs. They appear in the address phase with the design findings. When there is nothing to report, the subsection is omitted.
+- The pass runs only when `[test_layer_review].enabled` is true (the default) and the changed files include both a test file and a non-test file. Otherwise there is no backend call.
+- It is best effort. A failed or timed-out test-layer call is logged and the design pass runs anyway. The pass has no entry of its own in `manifest.json`, so older manifests keep working, and it runs again only when the design pass runs again.
 
 ## Finding format
 
@@ -147,7 +156,8 @@ Only these `.harness.toml` fields affect this command. See [Configuration](../co
 | `[local_review].output_dir` | Default output root |
 | `harness.backend` | Which AI backend (`opencode` or `claude`) runs the passes |
 | `harness.backend_timeout_seconds` | Timeout for each backend invocation |
-| `harness.knowledge_dir` | Must contain `pr-review/local-review-file.md`, `pr-review/local-review-summary.md` and `pr-review/local-review-design.md`. With `--address` it must also contain `pr-review/local-address-finding.md`. With `--skip-review` the three review templates are not needed |
+| `harness.knowledge_dir` | Must contain `pr-review/local-review-file.md`, `pr-review/local-review-summary.md`, `pr-review/local-review-design.md` and `pr-review/local-review-test-layers.md`. With `--address` it must also contain `pr-review/local-address-finding.md`. With `--skip-review` the review templates are not needed |
+| `[test_layer_review].enabled` | Turns the test-layer pass on or off (default on). Off means no extra backend call |
 | `harness.review_knowledge_file` | Optional extra guidance added to every prompt, if the path exists |
 | `harness.path_prepend` / `harness.env` | Extra `PATH` entries and env vars for git and the backend |
 | `repo.working_dir` | The git checkout to review. Its resolved path is also the basis of the lock key |
@@ -162,6 +172,7 @@ Backend invocations per run:
 
 - One per changed file that is not yet `done`.
 - One for the summary, if it is not `done`.
+- One for the test-layer pass, if the design review is not `done`, `[test_layer_review].enabled` is true, and the changes include both a test file and a non-test file.
 - One for the design review, if it is not `done`.
 
 With `--address`, add one backend call for each `open` finding. There are no other backend calls. A re-run for the same head commit only repeats failed passes. A file that keeps failing makes every re-run send that file again, plus the summary, which always re-runs after a file failure. With an expensive backend, a large change, and a file that keeps failing, this can approach twice the normal cost. Set `harness.backend_timeout_seconds` conservatively. Check `~/.local/share/dotharness/logs/local-review/` for timeout patterns.

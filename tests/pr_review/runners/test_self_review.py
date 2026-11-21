@@ -1,4 +1,6 @@
+import contextlib
 import subprocess
+from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
@@ -45,6 +47,7 @@ def _setup_knowledge(tmp_path, content="instructions"):
     (kdir / "review-design.md").write_text(content)
     (kdir / "review-traceability.md").write_text(content)
     (kdir / "review-regret.md").write_text(content)
+    (kdir / "review-test-layers.md").write_text(content)
 
 
 async def test_skips_already_reviewed_pr(tmp_xdg, tmp_path):
@@ -1608,3 +1611,115 @@ async def test_gather_pr_context_checkout_failure_cleans_working_dir_without_sha
             make_change_request(1, head_reference="b"), 1, None, MagicMock(), REPO, "w", {}
         )
     clean.assert_called_once_with("w", {})
+
+
+@contextlib.contextmanager
+def _design_run(tmp_path, number, files, *, enabled=True, test_layer_reply=b"", test_layer_rc=0, timeout=False):
+    """Drive _run_locked so only the design pass (and, when enabled, the test-layer pass inside it) runs."""
+    state.write_self_review_state("acme-frontend", [number])
+    state.add_traceability_reviewed_pr("acme-frontend", number)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    cfg = _cfg(tmp_path)
+    cfg.test_layer_review.enabled = enabled
+    base = "dotharness.pr_review.runners.self_review."
+
+    async def run(prompt, cwd=None, opencode_dir=None, context=""):
+        if context.endswith("test layer review"):
+            if timeout:
+                raise subprocess.TimeoutExpired("cmd", 1)
+            return MagicMock(returncode=test_layer_rc, stdout=test_layer_reply)
+        return MagicMock(returncode=0, stdout=b"")
+
+    with (
+        patch(base + "open_host", return_value=make_scaffold()),
+        patch(base + "host_current_user", return_value="alice"),
+        patch(base + "_list_my_prs", return_value=[make_change_request(number, url="u", head_reference="b")]),
+        patch(base + "has_design_review_comment", return_value=False),
+        patch(base + "check_design_review_comment_status", return_value=True),
+        patch(base + "has_traceability_review_comment", return_value=True),
+        patch(base + "git_detach_and_record", return_value="sha"),
+        patch(base + "git_fetch_and_checkout"),
+        patch(base + "git_restore"),
+        patch(base + "get_pr_base_branch", return_value="main"),
+        patch(base + "get_pr_head_sha", return_value="abc123"),
+        patch(base + "get_change_request", return_value=make_change_request()),
+        patch(base + "get_changed_files", return_value=files),
+        patch(base + "get_file_diff", return_value="@@diff"),
+        patch(base + "Backend") as mock_be,
+    ):
+        mock_be.return_value.run = AsyncMock(side_effect=run)
+        calls = mock_be.return_value.run.call_args_list
+        yield SimpleNamespace(
+            cfg=cfg,
+            contexts=lambda: [c.kwargs["context"] for c in calls],
+            prompt=lambda ctx: next(c.args[0] for c in calls if c.kwargs["context"] == ctx),
+        )
+
+
+_TL_FILES = ["src/foo.py", "tests/test_foo.py"]
+
+
+async def test_test_layer_runs_before_design_and_reply_is_injected(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path, content="INSTRUCTIONS")
+    with _design_run(tmp_path, 70, _TL_FILES, test_layer_reply=b"tests/test_foo.py::test_a is redundant\n") as run:
+        await self_review._run_locked(run.cfg)
+    assert run.contexts() == ["PR #70 test layer review", "PR #70 design review"]
+    assert run.prompt("PR #70 test layer review").startswith("INSTRUCTIONS")
+    design_prompt = run.prompt("PR #70 design review")
+    assert "## Test Layers" in design_prompt
+    assert "tests/test_foo.py::test_a is redundant" in design_prompt
+    assert "verbatim" in design_prompt
+    assert 70 in state.get_design_reviewed_prs("acme-frontend")
+
+
+@pytest.mark.parametrize("reply", [b"", b"NONE"])
+async def test_test_layer_no_findings_tells_design_to_omit(tmp_xdg, tmp_path, reply):
+    _setup_knowledge(tmp_path)
+    with _design_run(tmp_path, 71, _TL_FILES, test_layer_reply=reply) as run:
+        await self_review._run_locked(run.cfg)
+    assert "Omit the `## Test Layers` subsection" in run.prompt("PR #71 design review")
+
+
+async def test_test_layer_disabled_makes_no_backend_call(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path)
+    with _design_run(tmp_path, 72, _TL_FILES, enabled=False) as run:
+        await self_review._run_locked(run.cfg)
+    assert run.contexts() == ["PR #72 design review"]
+    assert "Test Layers" not in run.prompt("PR #72 design review")
+
+
+@pytest.mark.parametrize("files", [["tests/test_foo.py"], ["src/foo.py", "src/bar.py"], []])
+async def test_test_layer_no_backend_call_when_only_one_file_kind(tmp_xdg, tmp_path, files):
+    _setup_knowledge(tmp_path)
+    with _design_run(tmp_path, 73, files) as run:
+        await self_review._run_locked(run.cfg)
+    assert run.contexts() == ["PR #73 design review"]
+    assert "Omit the `## Test Layers` subsection" in run.prompt("PR #73 design review")
+
+
+@pytest.mark.parametrize("kwargs", [{"test_layer_rc": 1, "test_layer_reply": b"junk"}, {"timeout": True}])
+async def test_test_layer_failure_does_not_block_design(tmp_xdg, tmp_path, kwargs):
+    _setup_knowledge(tmp_path)
+    with _design_run(tmp_path, 74, _TL_FILES, **kwargs) as run:
+        await self_review._run_locked(run.cfg)
+    assert run.contexts() == ["PR #74 test layer review", "PR #74 design review"]
+    design_prompt = run.prompt("PR #74 design review")
+    assert "junk" not in design_prompt
+    assert "could NOT run" in design_prompt
+    assert "Omit the `## Test Layers` subsection" not in design_prompt
+    assert 74 in state.get_design_reviewed_prs("acme-frontend")
+
+
+async def test_test_layer_has_no_state_of_its_own(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path)
+    with _design_run(tmp_path, 75, _TL_FILES) as run:
+        await self_review._run_locked(run.cfg)
+    assert "test_layer_reviewed_prs" not in state.read_self_review_state("acme-frontend")
+
+
+async def test_test_layer_not_run_when_design_already_done(tmp_xdg, tmp_path):
+    _setup_knowledge(tmp_path)
+    with _design_run(tmp_path, 76, _TL_FILES) as run:
+        state.add_design_reviewed_pr("acme-frontend", 76)
+        await self_review._run_locked(run.cfg)
+    assert run.contexts() == []
