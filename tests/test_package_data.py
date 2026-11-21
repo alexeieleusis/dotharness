@@ -32,7 +32,7 @@ KNOWLEDGE_SHA256 = {
     "patterns/react/README.md": "9e0f93c945880084b8c7b729d16cadb988e93087d6d35ca4ca96511fef6a31e1",
     "pr-review/address-comment.md": "282f5d2f16e3e55399090de883382179dc89e6f1bcf567dab2303f3e148bf2b9",
     "pr-review/address-comments.md": "250c23e0d005604382ef0d732baa7dd919d1428ae4967575c28f217952d5886d",
-    "pr-review/ci-fix-prompt.md": "aee41d42cb556d914a0962c7cb94c4ff6b8917f98d3bc11cefb50997ee725047",
+    "pr-review/ci-fix-prompt.md": "05428e6615b0cdccb218805de33e59611024373ab957d4694571913e6a350f96",
     "pr-review/focused-review.md": "4e9fe8f1eb55b8aa4304434cdbe7909ff824d2ad55931dbabcf5579f02238985",
     "pr-review/local-address-finding.md": "5bc748e734c7fdf8e3b6d52286c87b5b82dc5615f28ca5a7b6faf33aacda3838",
     "pr-review/local-review-design.md": "ea4e46e550e2ea4aef8c93704bcaa97ec06ffbc127064b9d85f02fe0eeedb764",
@@ -60,6 +60,7 @@ NEW_KNOWLEDGE_FILES = {
     "sisyphus/refactor-prompt.md",
     "pr-review/review-test-layers.md",
     "pr-review/local-review-test-layers.md",
+    "pr-review/ci-fix-rebase-prompt.md",
 }
 
 

@@ -2199,8 +2199,13 @@ class TestChecks:
         with pytest.raises(CodeHostError):
             await _host().checks.list_checks(REPO, 1)
 
-    async def test_no_checks_text_does_not_hide_a_required_read_failure(self, mocker) -> None:
-        _recorder(mocker, (1, "", "no checks reported"))
+    async def test_no_checks_text_is_empty_for_a_required_read_too(self, mocker) -> None:
+        # A PR with no checks at all (e.g. conflicting, so its workflows never ran) gets this text even with --required.
+        _recorder(mocker, (1, "", "no checks reported on the 'sisyphus/233-bc4da7fd' branch"))
+        assert await _host().checks.list_checks(REPO, 1, required_only=True) == []
+
+    async def test_other_exit_1_still_raises_for_a_required_read(self, mocker) -> None:
+        _recorder(mocker, (1, "", "boom"))
         with pytest.raises(CodeHostError):
             await _host().checks.list_checks(REPO, 1, required_only=True)
 

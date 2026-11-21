@@ -1290,6 +1290,9 @@ _CHECK_FIELDS = "name,bucket,link,workflow,startedAt,completedAt"
 _ZERO_YEAR = 1  # gh reports an unset completedAt as 0001-01-01T00:00:00Z
 _NO_CHECKS_TEXT = "no checks reported"
 _NO_REQUIRED_CHECKS_TEXT = "no required checks reported"
+# ``gh pr checks --required`` says "no required checks reported" when checks exist but none is required, and plain
+# "no checks reported" when the change request has no checks at all (e.g. a conflicting PR, whose workflows never ran).
+_EMPTY_REQUIRED_TEXTS = (_NO_REQUIRED_CHECKS_TEXT, _NO_CHECKS_TEXT)
 _PENDING_EXIT = 8  # ``gh pr checks`` exits 8 while checks are pending and still prints the JSON
 _JOB_ID_RE = re.compile(r"/job/(\d+)")
 _RUN_ID_RE = re.compile(r"/actions/runs/(\d+)")
@@ -1344,7 +1347,8 @@ class _Checks:
             args.append("--required")
         outcome = await self._gh.run(args, "Checks.list_checks")
         stderr = outcome.stderr.lower()
-        if outcome.returncode == 1 and (_NO_REQUIRED_CHECKS_TEXT if required_only else _NO_CHECKS_TEXT) in stderr:
+        empty_texts = _EMPTY_REQUIRED_TEXTS if required_only else (_NO_CHECKS_TEXT,)
+        if outcome.returncode == 1 and any(text in stderr for text in empty_texts):
             return []
         if outcome.returncode not in (0, _PENDING_EXIT) or (
             outcome.returncode == _PENDING_EXIT and not outcome.stdout.strip()
