@@ -688,6 +688,10 @@ def intake_command(ctx: typer.Context, work_item_ref: RefArgument, config_path: 
     typer.echo(f"brief: {result.brief_path}")
     for decision in result.open_decisions:
         typer.echo(f"open decision (C1): {decision}")
+    if not result.blocked:
+        parked = RunRecord.open(Path(config.project.workspace_dir).expanduser(), work_item_ref)
+        if is_parked(parked, read_stop_record(rec_path)):
+            typer.echo(f"next: {_resume_command(config_path, work_item_ref)}")
 
 
 def _check_resumable(rec: RunRecord, again: bool) -> None:
@@ -906,6 +910,8 @@ def _status_block(rec: RunRecord, awaiting: str, config: SisyphusConfig, config_
         f"  checkpoint: {rec.checkpoint or 'none'}",
         f"  awaiting: {awaiting}",
     ]
+    if is_parked(rec, stop):
+        lines.append(f"  next: {_resume_command(config_path, rec.item)}")
     if stop is not None and stop.abandoned:
         lines.insert(1, "  state: abandoned")
         lines.append(f"  abandoned_at: {stop.stopped_at}")

@@ -7,6 +7,7 @@ No test runs an agent, the harness, gh, spec-prism-flow or ``git push``.
 from __future__ import annotations
 
 import ast
+import shlex
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -718,6 +719,57 @@ def test_intake_runs_intake_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert seen["record"].item == "ENG-9"
     assert f"brief: {tmp_path / 'b.md'}" in result.output
     assert "Which tracker?" in result.output
+
+
+def test_intake_clean_prints_next_resume_hint_after_brief(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = make_env(tmp_path)
+
+    async def fake_intake(item, config, runner, record=None, **_kw):
+        assert record is not None
+        record.mark_stage("intake", "complete")
+        return IntakeResult(tmp_path / "b.md", False, ())
+
+    monkeypatch.setattr(cli, "run_intake", fake_intake)
+    result = env.invoke("intake", "ENG-9", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    lines = result.stdout.splitlines()
+    assert lines[0] == f"brief: {tmp_path / 'b.md'}"
+    assert lines[1] == f"next: sisyphus resume ENG-9 --config {shlex.quote(str(env.config.resolve()))}"
+    assert len(lines) == 2
+
+
+def test_intake_blocked_prints_no_next_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = make_env(tmp_path)
+
+    async def fake_intake(item, config, runner, record=None, **_kw):
+        assert record is not None
+        record.mark_stage("intake", "complete")
+        return IntakeResult(tmp_path / "b.md", True, (OpenDecision(1, "Which tracker?"),))
+
+    monkeypatch.setattr(cli, "run_intake", fake_intake)
+    result = env.invoke("intake", "ENG-9", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    assert "open decision (C1)" in result.output
+    assert "next:" not in result.output
+
+
+def test_status_shows_next_line_only_for_a_parked_record(tmp_path: Path) -> None:
+    env = _status_workspace(tmp_path)
+    ws = tmp_path / "ws"
+    RunRecord.open(ws, "PARK-1").mark_stage("intake", "complete")
+    result = env.invoke("status", "--all", "--config", str(env.config))
+    assert result.exit_code == 0, result.output
+    blocks: dict[str, list[str]] = {}
+    item = ""
+    for line in result.output.splitlines():
+        if line and not line.startswith(" "):
+            item = line
+        blocks.setdefault(item, []).append(line)
+    with_next = [i for i, b in blocks.items() if any(line.strip().startswith("next:") for line in b)]
+    assert with_next == ["PARK-1"]
+    park = blocks["PARK-1"]
+    expected = f"  next: sisyphus resume PARK-1 --config {shlex.quote(str(env.config.resolve()))}"
+    assert park[park.index("  awaiting: none") + 1] == expected
 
 
 def test_intake_lock_held_and_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
