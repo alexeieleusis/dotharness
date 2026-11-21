@@ -834,11 +834,25 @@ async def test_parked_intake_complete_record_continues_from_plan_without_touchin
     RunRecord.open(world.tmp / "ws", ITEM).mark_stage("intake", "complete")
     result = await world.run()
     assert result.completed
-    assert "intake" in result.stages_skipped
-    assert result.stages_run[0] == "plan"
+    assert result.stages_run[:2] == ("intake", "plan")  # intake is re-entered only to re-parse the brief
     assert "agent:intake" not in world.events
     assert world.events.count("agent:plan") == 1
     assert brief.read_text() == BRIEF_NONE
+
+
+async def test_parked_record_with_blocking_brief_stops_at_c1_and_does_not_plan(world: World) -> None:
+    brief = resolve_brief_path(world.config(), ITEM)
+    brief.parent.mkdir(parents=True, exist_ok=True)
+    brief.write_text(BRIEF_OPEN)
+    RunRecord.open(world.tmp / "ws", ITEM).mark_stage("intake", "complete")
+    result = await world.run()
+    _assert_stop(world, result, Checkpoint.C1)
+    assert "agent:intake" not in world.events
+    assert "agent:plan" not in world.events
+    assert brief.read_text() == BRIEF_OPEN
+    stop = read_stop_record(RunRecord.open(world.tmp / "ws", ITEM).path)
+    assert stop is not None and stop.checkpoint == "C1"
+    assert stop.questions == ("1. Which tracker?",)
 
 
 async def test_build_not_relaunched_after_retry_cycles_exhausted(world: World) -> None:

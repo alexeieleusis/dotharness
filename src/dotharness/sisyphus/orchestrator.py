@@ -55,7 +55,7 @@ from dotharness.sisyphus.rails import (
     push_guard,
 )
 from dotharness.sisyphus.refactor_handoff import parse_listed_edits, scope_violations
-from dotharness.sisyphus.resume import answer_path, consume_answer, read_answer
+from dotharness.sisyphus.resume import answer_path, consume_answer, is_parked, read_answer
 from dotharness.sisyphus.runrecord import STAGE_COMPLETE, RunRecord, fold_item
 from dotharness.sisyphus.settled import is_settled
 from dotharness.sisyphus.stack import StackGroup, classify_paths, group_added_files, is_heavily_modified
@@ -491,6 +491,7 @@ class _Run:
         self.tracker = LimitTracker(config.limits, clock)
         self.rec = RunRecord.open(self.workspace, item)
         self.prior_cp = self.rec.checkpoint
+        self.parked = is_parked(self.rec, read_stop_record(self.rec.path))  # clean intake, nothing stopped
         self.pr: PullRequest | None = None
         self.gated = False
         self.gate_failure: GateFailure | None = None
@@ -654,8 +655,9 @@ class _Run:
         if self.rec.stage_status != STAGE_COMPLETE:
             return idx
         # A complete stage is finished, whether the run stopped after it (limit checked between stages)
-        # or cleanly. The one exception is intake stopped at C1: it is re-entered to re-parse the brief.
-        if self.prior_cp == Checkpoint.C1.value and stage == INTAKE_STAGE:
+        # or cleanly. The exceptions are intake stopped at C1 and a parked record (clean intake, nothing
+        # stopped): it is re-entered to re-parse the brief, so blocking decisions stop at C1.
+        if (self.prior_cp == Checkpoint.C1.value or self.parked) and stage == INTAKE_STAGE:
             return idx
         return idx + 1
 
@@ -873,7 +875,7 @@ class _Run:
 
     async def stage_intake(self) -> None:
         reparse = (
-            self.prior_cp == Checkpoint.C1.value
+            (self.prior_cp == Checkpoint.C1.value or self.parked)
             and self.rec.stage == INTAKE_STAGE
             and self.rec.stage_status == STAGE_COMPLETE
         )

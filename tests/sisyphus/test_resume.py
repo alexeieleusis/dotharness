@@ -405,6 +405,15 @@ def test_resume_continues_a_parked_record_after_a_clean_intake(
     assert brief.read_bytes() == before
 
 
+def test_resume_reset_retries_is_accepted_on_a_parked_record(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+    env = make_env(tmp_path)
+    _parked(env)
+    result = env.invoke("resume", "PARK-1", "--config", str(env.config), "--reset-retries")
+    assert result.exit_code == 0, result.output
+    assert "PARK-1: reset retries at stage intake: nothing to reset" in result.output
+    assert items(fake_run_item) == ["PARK-1"]
+
+
 def test_resume_of_a_parked_record_under_a_held_lock_exits_zero_quietly(
     tmp_path: Path, fake_run_item: dict[str, Any]
 ) -> None:
