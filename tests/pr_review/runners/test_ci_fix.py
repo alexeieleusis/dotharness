@@ -468,9 +468,8 @@ async def test_conflicting_green_pr_is_examined_and_its_counter_is_not_reset(tmp
     with _mocks(tmp_path, green=True, get_override={"mergeable": MergeableState.CONFLICTING}) as m:
         await ci_fix.run(_cfg(tmp_path))
     assert "ChangeRequests.get" in _ops(m)
-    assert ci_fix.get_attempts(SLUG, 1) == 1
+    assert ci_fix.get_attempts(SLUG, 1) == 1  # the clean rebase is not an attempt either
     assert m.pushes == []
-    m.checkout.assert_not_called()
 
 
 async def test_non_conflicting_green_pr_resets_its_counter_with_no_git_call(tmp_path, caplog):
@@ -519,15 +518,138 @@ async def test_conflicting_dry_run_logs_and_does_nothing_else(tmp_path, caplog, 
     assert ci_fix.get_attempts(SLUG, 1) == 1
 
 
-async def test_conflicting_pr_under_the_cap_writes_no_digest_and_no_checkout(tmp_path, caplog):
+def _rebase_cmds(m):
+    return [c for c in m.cmds if c[:2] == ["git", "rebase"]]
+
+
+async def test_conflicting_green_pr_is_rebased_onto_the_base_and_not_counted(tmp_path, caplog):
     with (
         _mocks(tmp_path, green=True, get_override={"mergeable": MergeableState.CONFLICTING}) as m,
         caplog.at_level(logging.INFO),
     ):
         await ci_fix.run(_cfg(tmp_path))
+    m.checkout.assert_called_once_with("feat", ANY, ANY)
+    assert _rebase_cmds(m) == [["git", "rebase", "origin/main"]]
     assert _digests(caplog) == []
-    m.checkout.assert_not_called()
+    assert m.pushes == []  # the push belongs to a later slice
+    m.backend.run.assert_not_called()
+    m.run_step.assert_not_called()
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+    m.restore.assert_called_once()
+
+
+async def test_conflicting_pr_with_failing_ci_is_rebased_then_awaits_verification(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, get_override={"mergeable": MergeableState.CONFLICTING}) as m,
+        caplog.at_level(logging.INFO),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    assert _rebase_cmds(m) == [["git", "rebase", "origin/main"]]
     assert m.pushes == []
+    m.run_step.assert_not_called()  # the step command is the sibling slice's
+    assert _digests(caplog) == []
+
+
+async def test_conflicting_pr_with_only_gate_checks_failing_is_treated_as_green(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, failing=["merge gate"], get_override={"mergeable": MergeableState.CONFLICTING}) as m,
+        caplog.at_level(logging.INFO),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    assert _rebase_cmds(m) == [["git", "rebase", "origin/main"]]
+    assert any("only gate checks are failing" in r.getMessage() for r in caplog.records)
+    assert _digests(caplog) == []
+    m.run_step.assert_not_called()
+
+
+async def test_clean_rebase_commits_tracked_leftovers_with_a_rebase_message(tmp_path):
+    with _mocks(tmp_path, green=True, get_override={"mergeable": MergeableState.CONFLICTING}) as m:
+        m.status_box[0] = b" M a.py\n"
+        await ci_fix.run(_cfg(tmp_path))
+    assert ["git", "commit", "-m", "ci-fix: rebase onto main"] in m.cmds
+    assert ["git", "add", "-u"] in m.cmds
+
+
+async def test_stopped_rebase_is_aborted_with_no_push(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, green=True, get_override={"mergeable": MergeableState.CONFLICTING}) as m,
+        caplog.at_level(logging.INFO),
+        _patched_run_cmd(m, rebase_rc=1),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    assert ["git", "rebase", "--abort"] in m.cmds
+    assert m.pushes == []
+    assert any("rebase-conflict-unresolved" in d for d in _digests(caplog))
+    assert ci_fix.get_attempts(SLUG, 1) == 0
+    m.restore.assert_called_once()
+
+
+@contextlib.contextmanager
+def _patched_run_cmd(m, *, rebase_rc=0, diff_out=b"", abort_rc=0):
+    """Wrap the mocked ``run_cmd`` so ``git rebase``/``--abort``/``diff`` answer as given."""
+    inner = ci_fix.run_cmd
+
+    async def fake(cmd, cwd, env, timeout, check=True, shell=False):
+        if cmd[:3] == ["git", "rebase", "--abort"]:
+            m.cmds.append(cmd)
+            return _proc(abort_rc, b"", b"fatal: no rebase in progress?" if abort_rc else b"")
+        if cmd[:2] == ["git", "rebase"]:
+            m.cmds.append(cmd)
+            return _proc(rebase_rc)
+        if cmd[:2] == ["git", "diff"]:
+            m.cmds.append(cmd)
+            return _proc(0, diff_out)
+        return await inner(cmd, cwd=cwd, env=env, timeout=timeout, check=check, shell=shell)
+
+    with patch(P + "run_cmd", side_effect=fake):
+        yield
+
+
+async def test_base_commit_editing_github_is_not_rebase_unsafe(tmp_path, caplog):
+    # Vetting diffs against origin/<base>: a base-only .github change is not in that diff, though it would be
+    # in a diff against the pre-rebase head.
+    with (
+        _mocks(tmp_path, green=True, get_override={"mergeable": MergeableState.CONFLICTING}) as m,
+        caplog.at_level(logging.INFO),
+        _patched_run_cmd(m, diff_out=b"src/a.py\0"),
+    ):
+        await ci_fix.run(_cfg(tmp_path))
+    diffs = [c for c in m.cmds if c[:2] == ["git", "diff"]]
+    assert diffs == [["git", "diff", "-z", "--name-only", "--no-renames", "origin/main"]]
+    assert not any("rebase-unsafe" in d for d in _digests(caplog))
+    assert ["git", "rebase", "--abort"] not in m.cmds
+
+
+async def test_pr_change_under_github_on_the_rebase_path_is_rebase_unsafe(tmp_path, caplog):
+    with (
+        _mocks(tmp_path, green=True, get_override={"mergeable": MergeableState.CONFLICTING}) as m,
+        caplog.at_level(logging.INFO),
+        _patched_run_cmd(m, diff_out=b".github/workflows/ci.yml\0", abort_rc=128),
+    ):  # rebase already finished
+        await ci_fix.run(_cfg(tmp_path))
+    assert ["git", "rebase", "--abort"] in m.cmds
+    assert m.pushes == []
+    digests = _digests(caplog)
+    assert len(digests) == 1
+    assert "rebase-unsafe" in digests[0]
+    assert ".github/workflows/ci.yml" in digests[0]
+    m.restore.assert_called_once()
+
+
+async def test_unsafe_change_is_measured_against_the_given_base(tmp_path):
+    git, sha = _git_repo(tmp_path)
+    git("branch", "base")
+    git("checkout", "-q", "-b", "feat")
+    (tmp_path / "docs" / "a.md").write_text("x\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "pr")
+    git("checkout", "-q", "base")
+    (tmp_path / ".github" / "workflows" / "ci.yml").write_text("name: other\n", encoding="utf-8")
+    git("commit", "-qam", "base touches .github")
+    git("checkout", "-q", "feat")
+    git("rebase", "base")
+    assert await ci_fix._unsafe_change(str(tmp_path), {}, "base") is None
+    assert ".github/workflows/ci.yml" in (await ci_fix._unsafe_change(str(tmp_path), {}, sha) or "")
 
 
 async def test_green_ci_rebase_path_digest_uses_the_no_check_sentinel(tmp_path, caplog):

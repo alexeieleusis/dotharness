@@ -518,7 +518,7 @@ async def _process_pr(
         logger.info("PR #%d: %s, skipping", number, skip)
         return
     if skip == REASON_CONFLICTING:
-        await _rebase_conflicting(pr, config, dry_run)
+        await _rebase_conflicting(pr, config, host, repo, wdir, env, dry_run)
         return
     blocked = await ci_blocker(host, repo, number, pr.base_reference)
     if blocked is None:
@@ -537,11 +537,20 @@ async def _process_pr(
     await _fix_first_candidate(pr, failing, config, host, repo, wdir, env, prompt, dry_run)
 
 
-async def _rebase_conflicting(pr: ChangeRequest, config: HarnessConfig, dry_run: bool) -> None:
+async def _rebase_conflicting(
+    pr: ChangeRequest,
+    config: HarnessConfig,
+    host: CodeHost,
+    repo: RepositoryRef,
+    wdir: str,
+    env: dict,
+    dry_run: bool,
+) -> None:
     """Rebase path for a conflicting PR, whatever its CI state; a dry run only reports it.
 
-    Only detection, the dry-run line and the shared attempt gate exist so far; the rebase itself is added at the
-    hand-off point below. The counter is not reset here: a conflicting green PR keeps its attempts.
+    Runs the rebase and vets the result; it ends at a vetted tree that needs no verification (green CI, or only
+    gate checks failing), which is where the push is added by a later slice. The counter is not reset here: a
+    conflicting green PR keeps its attempts, and a clean rebase is not an attempt.
     """
     number = pr.number
     if dry_run:
@@ -552,7 +561,67 @@ async def _rebase_conflicting(pr: ChangeRequest, config: HarnessConfig, dry_run:
     if attempts >= max_attempts:
         _digest(OUTCOME_CAP_REACHED, number, NO_CHECK, f"attempts={attempts} max={max_attempts}")
         return
-    # Hand-off point: fetch-and-checkout, rebase, backend, verify and lease push are added by later slices.
+
+    branch = pr.head_reference
+    original_sha = await git_detach_and_record(wdir, env)
+    try:
+        try:
+            await git_fetch_and_checkout(branch, wdir, env)
+        except FatalGitError as exc:
+            await reraise_git_failure_if_clean(exc, wdir, env, original_sha)
+        to_verify = await _rebase_and_vet(pr, host, repo, wdir, env)
+        if to_verify is None:
+            return
+        if to_verify:
+            # Hand-off point: verifying the failing-CI step (and the backend for a stopped rebase) is added by a
+            # later slice; nothing is pushed until it passes.
+            return
+        await _commit_if_dirty(None, wdir, env, f"ci-fix: rebase onto {pr.base_reference}")
+        # Hand-off point: the vetted rebased tree is ready to push; recovery ref and lease push come later.
+    finally:
+        await git_restore(original_sha, branch, wdir, env)
+
+
+async def _rebase_and_vet(
+    pr: ChangeRequest, host: CodeHost, repo: RepositoryRef, wdir: str, env: dict
+) -> list[Check] | None:
+    """Rebase the checked-out head onto ``origin/<base>`` and vet the result.
+
+    Returns None when the rebase must not go on (a digest was written and a stopped rebase aborted), else the
+    failing non-gate checks the rebased tree still has to pass: empty means a green or gate-only PR, whose clean
+    rebase needs no verification. Nothing from the rebased tree is run here, and nothing is pushed.
+    """
+    number = pr.number
+    base_ref = f"origin/{pr.base_reference}"
+    # The rebase is not an attempt (the clean case costs nothing); only the backend run of a later slice is.
+    result = await run_cmd(["git", "rebase", base_ref], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
+    if result.returncode != 0:
+        await _abort_rebase(wdir, env)
+        _digest(OUTCOME_REBASE_CONFLICT_UNRESOLVED, number, NO_CHECK, f"git rebase {base_ref} stopped")
+        return None
+    # Vet against the new merge base: against the pre-rebase head, every file the base changed would count.
+    unsafe = await _unsafe_change(wdir, env, base_ref)
+    if unsafe:
+        await _abort_rebase(wdir, env)
+        _digest(OUTCOME_REBASE_UNSAFE, number, NO_CHECK, unsafe)
+        return None
+    if await ci_blocker(host, repo, number, pr.base_reference) is None:
+        return []
+    failing = await _read_failing_checks(host, repo, number)
+    if failing is None:
+        _digest(OUTCOME_PARSE_FAILURE, number, NO_CHECK, "could not read the check status")
+        return None
+    candidates = [c for c in failing if not _is_gate(c)]
+    if failing and not candidates:
+        logger.info("PR #%d: only gate checks are failing, the clean rebase has no step to verify", number)
+    return candidates
+
+
+async def _abort_rebase(wdir: str, env: dict) -> None:
+    """``git rebase --abort``; tolerated when no rebase is in progress (it already finished)."""
+    result = await run_cmd(["git", "rebase", "--abort"], cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
+    if result.returncode != 0:
+        logger.info("git rebase --abort did not apply (no rebase in progress): %s", _text(result.stderr).strip())
 
 
 async def _fix_first_candidate(
@@ -734,8 +803,10 @@ async def _git_paths(wdir: str, env: dict, args: list[str]) -> list[str]:
     return [p for p in _text(result.stdout).split("\0") if p]
 
 
-async def _unsafe_change(wdir: str, env: dict, pre_sha: str) -> str | None:
+async def _unsafe_change(wdir: str, env: dict, base_ref: str) -> str | None:
     """Why the result must not be pushed: untracked files, or a change under ``.github/``; else None.
+
+    ``base_ref`` is what the change is measured against: the pre-fix head for check-fix, ``origin/<base>`` for a rebase.
 
     ``-z`` keeps non-ASCII paths unquoted, and ``--no-renames`` lists both sides of a move, so a file moved
     out of ``.github/`` is still reported under its old path.
@@ -743,19 +814,23 @@ async def _unsafe_change(wdir: str, env: dict, pre_sha: str) -> str | None:
     files = await _git_paths(wdir, env, ["ls-files", "-z", "--others", "--exclude-standard"])
     if files:
         return f"untracked files left in the tree: {', '.join(files[:10])}"
-    changed = await _git_paths(wdir, env, ["diff", "-z", "--name-only", "--no-renames", pre_sha])
+    changed = await _git_paths(wdir, env, ["diff", "-z", "--name-only", "--no-renames", base_ref])
     protected = [f for f in changed if PurePosixPath(f).parts[:1] == (".github",)]
     if protected:
         return f"change touches .github/: {', '.join(protected[:10])}"
     return None
 
 
-async def _commit_if_dirty(check: Check, wdir: str, env: dict) -> None:
-    """Commit tracked changes the agent left uncommitted (never untracked files); a no-op when clean."""
+async def _commit_if_dirty(check: Check | None, wdir: str, env: dict, message: str = "") -> None:
+    """Commit tracked changes the agent left uncommitted (never untracked files); a no-op when clean.
+
+    The message is ``ci-fix: <check name>`` unless ``message`` is given (a rebase has no failing check).
+    """
     if not (await _status(wdir, env)).strip():
         return
     await run_cmd(["git", "add", "-u"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
-    await run_cmd(["git", "commit", "-m", f"ci-fix: {check.name}"], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
+    subject = message or f"ci-fix: {check.name if check else NO_CHECK}"
+    await run_cmd(["git", "commit", "-m", subject], cwd=wdir, env=env, timeout=TIMEOUT_GIT)
 
 
 async def _push(number: int, check_name: str, branch: str, wdir: str, env: dict) -> bool:
