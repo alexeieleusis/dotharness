@@ -537,6 +537,23 @@ async def open_host(config: HarnessConfig) -> HostScaffold:
     return HostScaffold(host=host, repo=repo, env=await agent_env(host, config))
 
 
+async def local_identity_check(config: HarnessConfig) -> IdentityCheck | None:
+    """The identity check for a flow that has no open host (local review); None unless the repository name was given.
+
+    Creates the host and resolves the repository like ``open_host`` (a ``ConfigurationError`` prints its message to
+    stderr and exits with code 1; credential failures propagate), then builds the host-aware check.
+    """
+    if not config.repo.name_provided:
+        return None
+    try:
+        host = create_code_host(host_selection(config))
+        repo = await host.repository.resolve(config.repo.name)
+    except ConfigurationError as e:
+        sys.stderr.write(f"{e}\n")
+        sys.exit(1)
+    return repo_identity_check(config, host, repo)
+
+
 async def host_prompt_variables(config: HarnessConfig) -> Mapping[str, str]:
     """The prompt variables of the selected host, for a flow that has no open host (it runs no host command)."""
     try:

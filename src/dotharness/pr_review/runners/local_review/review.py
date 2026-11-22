@@ -24,6 +24,7 @@ from dotharness.pr_review.runners.common import (
     get_vibe_heal_context,
     has_test_and_non_test_files,
     host_prompt_variables,
+    local_identity_check,
 )
 from dotharness.pr_review.runners.local_review.address import (
     _make_backend,
@@ -373,7 +374,7 @@ async def run(
     # keep user git config (color.diff=always) out of the diff text sent to the model
     env.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "color.diff", "GIT_CONFIG_VALUE_0": "never"})
     if backend is None:
-        backend = _make_backend(config)
+        backend = _make_backend(config, identity_check=await local_identity_check(config))
 
     previous = None if force else read_manifest(review_dir)
     if force:

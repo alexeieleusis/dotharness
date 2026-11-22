@@ -5,13 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dotharness.code_host import RepositoryRef
+from dotharness.code_host import ConfigurationError, RepositoryRef
 from dotharness.code_host.testing import InMemoryCodeHost
 from dotharness.pr_review.runners.common import (
     FatalGitError,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
+    local_identity_check,
     repo_identity_check,
     run_cmd,
 )
@@ -426,6 +427,44 @@ async def test_repo_identity_check_fails_closed_when_the_host_matcher_raises(tmp
 
 
 COMMON = "dotharness.pr_review.runners.common"
+
+
+def _local_config(working_dir, *, provided=True):
+    config = _identity_config(working_dir)
+    config.repo.name_provided = provided
+    return config
+
+
+async def test_local_identity_check_is_none_and_builds_no_host_when_name_not_provided(tmp_path):
+    with patch(f"{COMMON}.create_code_host") as create, patch(f"{COMMON}.host_selection"):
+        assert await local_identity_check(_local_config(tmp_path, provided=False)) is None
+    create.assert_not_called()
+
+
+async def test_local_identity_check_uses_the_host_matcher(tmp_path):
+    clone = _clone_with_origin(tmp_path / "c", _AZURE_ORIGIN)
+    other = _clone_with_origin(tmp_path / "o", "https://example.invalid/team/proj/_git/other")
+    with patch(f"{COMMON}.create_code_host", return_value=_non_github_host()), patch(f"{COMMON}.host_selection"):
+        check = await local_identity_check(_local_config(clone))
+    assert check is not None
+    await check(clone)
+    with pytest.raises(RepoIdentityError):
+        await check(other)
+
+
+@pytest.mark.parametrize("where", ["create", "resolve"])
+async def test_local_identity_check_configuration_error_exits_1(tmp_path, capsys, where):
+    host = MagicMock()
+    host.repository.resolve = AsyncMock(side_effect=ConfigurationError("bad setting") if where == "resolve" else None)
+    create = (
+        patch(f"{COMMON}.create_code_host", side_effect=ConfigurationError("bad setting"))
+        if where == "create"
+        else patch(f"{COMMON}.create_code_host", return_value=host)
+    )
+    with create, patch(f"{COMMON}.host_selection"), pytest.raises(SystemExit) as exc:
+        await local_identity_check(_local_config(tmp_path))
+    assert exc.value.code == 1
+    assert "bad setting" in capsys.readouterr().err
 
 
 def _order_recorder(seen, dirty):

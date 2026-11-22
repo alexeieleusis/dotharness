@@ -18,7 +18,7 @@ from dotharness.pr_review.runners.common import (
     get_vibe_heal_context,
     host_prompt_variables,
     is_ancestor,
-    repo_identity_check,
+    local_identity_check,
 )
 from dotharness.pr_review.runners.local_review.findings import AddressFinding, parse_findings
 from dotharness.pr_review.runners.local_review.git import (
@@ -42,6 +42,7 @@ from dotharness.pr_review.runners.local_review.store import (
     write_finding_status,
 )
 from dotharness.pr_review.runners.local_review.types import LocalReviewError, LocalReviewTarget
+from dotharness.repo_guard import IdentityCheck
 
 logger = logging.getLogger(__name__)
 
@@ -227,13 +228,13 @@ def _resolution_decision(path: Path) -> str | None:
     return None
 
 
-def _make_backend(config: HarnessConfig, max_retries: int = 1) -> Backend:
+def _make_backend(config: HarnessConfig, max_retries: int = 1, identity_check: IdentityCheck | None = None) -> Backend:
     return Backend(
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
         dict(config.harness.env),
-        identity_check=repo_identity_check(config) if config.repo.name_provided else None,
+        identity_check=identity_check,
         max_retries=max_retries,
     )
 
@@ -382,6 +383,7 @@ def _build_address_context(
     review_dir: Path,
     backend: Backend | None,
     prompt_variables: Mapping[str, str],
+    identity_check: IdentityCheck | None = None,
 ) -> _AddressContext:
     wdir = Path(config.repo.working_dir).expanduser().resolve()
     env = build_agent_base_env(config.harness.path_prepend, config.harness.env)
@@ -395,7 +397,7 @@ def _build_address_context(
         wdir=wdir,
         env=env,
         # the backend edits and commits, so a retry is not idempotent; the loop handles failures itself
-        backend=backend or _make_backend(config, max_retries=0),
+        backend=backend or _make_backend(config, max_retries=0, identity_check=identity_check),
         instructions=render_prompt(
             (Path(config.harness.knowledge_dir) / "pr-review" / ADDRESS_TEMPLATE).read_text(encoding="utf-8"),
             prompt_variables,
@@ -428,7 +430,11 @@ async def address_findings(
     otherwise it is `failed` and keeps `status: open`. Stops (no repair, no further backend calls)
     when history was rewritten, tracked files are dirty, or the branch changed (7.4).
     """
-    ctx = _build_address_context(config, target, review_dir, backend, await host_prompt_variables(config))
+    # a host is built only when no backend is injected
+    identity_check = await local_identity_check(config) if backend is None else None
+    ctx = _build_address_context(
+        config, target, review_dir, backend, await host_prompt_variables(config), identity_check
+    )
     result = AddressResult()
     pending = list(collection.open)
     ctx.res_dir.mkdir(parents=True, exist_ok=True)

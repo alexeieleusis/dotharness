@@ -895,3 +895,14 @@ def test_address_backend_is_built_without_retries(env: Env) -> None:
     ctx = lr_address._build_address_context(env.cfg, env.target, rdir, None, PROMPT_VARIABLES)
     assert ctx.backend.max_retries == 0
     assert lr_address._make_backend(env.cfg).max_retries == 1  # read-only review pass keeps the default
+
+
+def test_make_backend_forwards_identity_check(env: Env) -> None:
+    async def check(_directory) -> None:
+        return None
+
+    assert lr_address._make_backend(env.cfg).identity_check is None
+    assert lr_address._make_backend(env.cfg, identity_check=check).identity_check is check
+    rdir = env.write_review(files={"a.py": stamped(block("one"))})
+    ctx = lr_address._build_address_context(env.cfg, env.target, rdir, None, PROMPT_VARIABLES, check)
+    assert ctx.backend.identity_check is check
