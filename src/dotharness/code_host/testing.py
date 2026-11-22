@@ -232,6 +232,9 @@ class ConformanceTarget:
     # Operations (``Interface.method``) the host declares but does not implement. The suite asserts that each one
     # raises UnsupportedCapabilityError instead of running its behavior: nothing is skipped silently.
     unsupported: frozenset[str] = frozenset()
+    # B-REP-4: URLs the host must accept as naming ``repository``, and URLs of other repositories it must reject.
+    origin_urls: tuple[str, ...] = ()
+    foreign_origin_urls: tuple[str, ...] = ()
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -352,6 +355,7 @@ class InMemoryCodeHost:
         self._user = user
         self._token = token
         self._default_branch = "main"
+        self._origins: dict[RepositoryRef, set[str]] = {}
         self._available = True
         self._current_change_request: int | None = None
         self._failure = _Failure()
@@ -418,6 +422,10 @@ class InMemoryCodeHost:
 
     def set_repository(self, identity: str) -> None:
         self._repository = RepositoryRef(identity)
+
+    def add_origin(self, repo: RepositoryRef, url: str) -> None:
+        """Seed a remote URL that ``Repository.origin_matches`` accepts for ``repo``."""
+        self._origins.setdefault(repo, set()).add(_normalize_origin(url))
 
     def set_user(self, login: str) -> None:
         self._user = login
@@ -833,11 +841,27 @@ class InMemoryCodeHost:
         )
 
     def target(self) -> ConformanceTarget:
-        return ConformanceTarget(host=self.code_host(), seeder=self, repository=self._repository, secret=self._token)
+        own = f"https://example.invalid/{self._repository.value}.git"
+        foreign = "https://example.invalid/someone/else.git"
+        self.add_origin(self._repository, own)
+        self.add_origin(RepositoryRef("someone/else"), foreign)
+        return ConformanceTarget(
+            host=self.code_host(),
+            seeder=self,
+            repository=self._repository,
+            secret=self._token,
+            origin_urls=(own,),
+            foreign_origin_urls=(foreign,),
+        )
 
     def _bound(self, operation: str) -> int | None:
         bounds = self.declaration.limits.list_bounds
         return bounds.per_operation.get(operation, bounds.default)
+
+
+def _normalize_origin(url: str) -> str:
+    """Trim whitespace, one trailing ``/`` and one ``.git``."""
+    return url.strip().removesuffix("/").removesuffix(".git")
 
 
 def _view(store: _PerChangeRequest[_T]) -> Mapping[RepositoryRef, Mapping[int, tuple[_T, ...]]]:
@@ -910,6 +934,18 @@ class _FakeRepository(_Facet):
 
     async def display_name(self, repo: RepositoryRef) -> str:  # NOSONAR python:S7503 - implements an async protocol
         return self._do("Repository.display_name", lambda: repo.value, repo)
+
+    async def origin_matches(  # NOSONAR python:S7503 - implements an async protocol
+        self, repo: RepositoryRef, origin_url: str
+    ) -> bool:
+        # "Never raises": an injected failure does not apply to it.
+        return self._do(
+            "Repository.origin_matches",
+            lambda: _normalize_origin(origin_url) in self._host._origins.get(repo, ()),
+            repo,
+            origin_url,
+            injectable=False,
+        )
 
 
 class _FakeChangeRequests(_Facet):
@@ -1623,6 +1659,22 @@ class CodeHostConformance:
         assert isinstance(credential, Credential)
         assert credential.token
         assert credential.token not in repr(credential)
+
+    async def test_origin_matches(self) -> None:
+        """B-REP-4: a seeded URL of the target repository matches; another repository, an empty string, garbage and
+        another host's URL do not; none of them raises."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.REPOSITORY):
+            return
+        repository = target.host.repository
+        assert target.origin_urls, "host must supply origin_urls for B-REP-4"
+        assert target.foreign_origin_urls, "host must supply foreign_origin_urls for B-REP-4"
+        for url in target.origin_urls:
+            assert await repository.origin_matches(target.repository, url) is True
+        for url in target.foreign_origin_urls:
+            assert await repository.origin_matches(target.repository, url) is False
+        for url in ("", "not a url", "https://other-host.invalid/example/repo.git"):
+            assert await repository.origin_matches(target.repository, url) is False
 
     async def test_repository_current_default_branch_display_name(self) -> None:
         """B-REP-3: current() is the target repository, default_branch() the seeded name, display_name() a str."""

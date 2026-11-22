@@ -1,6 +1,6 @@
 # Code host: capability interfaces and direct gh user inventory
 
-Status: Phase 4 (#196) is implemented. The package `src/dotharness/code_host/` holds the interfaces, the reference host (`reference.py`, `reference_gh.py`), the in-memory fake and the conformance suite. Vibe-heal (Phase 1, #193), sisyphus (Phase 2, #194) and pr-review (Phase 3, #195) call only the capability interfaces. The interface version is 3: Phase 4 added `Discussion.comments_script()` (see "Phase 4 outcome" below). `gh` and `GITHUB_TOKEN`/`GH_TOKEN` occur in `src/` only inside the reference implementation (`code_host/reference.py`, `code_host/reference_gh.py`, `code_host/scripts/pr-comments.py`) and its test double. All `GitHub*` rename aliases and the `gh_token_cmd` key are removed. The Inventory and Decision log below describe the code as audited before each phase and are kept as the record.
+Status: Phase 4 (#196) is implemented. The package `src/dotharness/code_host/` holds the interfaces, the reference host (`reference.py`, `reference_gh.py`), the in-memory fake and the conformance suite. Vibe-heal (Phase 1, #193), sisyphus (Phase 2, #194) and pr-review (Phase 3, #195) call only the capability interfaces. The interface version is 4: Phase 4 added `Discussion.comments_script()` (version 3, see "Phase 4 outcome" below) and #242 added the required `Repository.origin_matches` (version 4). `gh` and `GITHUB_TOKEN`/`GH_TOKEN` occur in `src/` only inside the reference implementation (`code_host/reference.py`, `code_host/reference_gh.py`, `code_host/scripts/pr-comments.py`) and its test double. All `GitHub*` rename aliases and the `gh_token_cmd` key are removed. The Inventory and Decision log below describe the code as audited before each phase and are kept as the record.
 
 This page is the contract for Phases 1 to 4 (#193 to #196). Sections: Inventory, Phase split, Rename plan, Interfaces,
 Models, Error model, Declarations, Factory and selection, Conformance suite and in-memory fake, and the Decision log
@@ -274,8 +274,9 @@ and INV-SY-05.
 
 ### Not inventoried
 
-- Git code that stays OUT of the interface: the origin URL check in `repo_guard.py` (`git remote get-url origin`), and
-  `git fetch origin refs/pull/{n}/head` in `pr_review/runners/auto_approve.py`.
+- Git code that stays OUT of the interface: `git fetch origin refs/pull/{n}/head` in `pr_review/runners/auto_approve.py`.
+  (The git part of the origin check, `git remote get-url origin` in `repo_guard.py`, stays git code. Deciding whether the URL
+  names the configured repository is `Repository.origin_matches`.)
 - Not code-host calls: crontab/launchctl in `pr_review/scheduler.py`, `sisyphus/intake.py` `_git`, and claude/opencode launches (`ai_backend.py`).
 - `sisyphus/config.py` states it "never executes token_cmd and never reads the environment". It is kept only as INV-SY-12.
 - Linear (`LINEAR_API_URL` in `sisyphus/pick.py`, `LinearTracker`, `LINEAR_API_KEY` read in `sisyphus/cli.py`
@@ -350,7 +351,7 @@ and the in-memory fake (`code_host/testing.py`). `repo_guard.py` is git-only: th
 reference host (`identity_check`). The knowledge prompt files carry `<host-...>` placeholders that the host fills (`render_prompt`).
 `INV-LO-06` was never migrated and is deleted. The rename aliases were removed in Phase 4 (R3). `tests/test_gh_isolation.py` guards the reference-only rule.
 
-Git code (`repo_guard.py` origin check, `git fetch origin refs/pull/{n}/head` in `auto_approve.py`) is in no list.
+Git code (`git fetch origin refs/pull/{n}/head` in `auto_approve.py`) is in no list. The origin URL decision of `repo_guard.py` is `Repository.origin_matches` (interface version 4).
 
 Not users, named so nobody adds them: `sisyphus/orchestrator.py` `PullRequestClient` (existing seam, a Consumer contract; Phase 2 kept it and the CLI adapter `HostPullRequestClient` implements it over the interface), `sisyphus/cleanup.py` (consumes `PrInfo`), and `vibe_heal/review/orchestrator.py`
 and `vibe_heal/cli.py` (consume `GitHubReviewClient`, updated in Phase 1 with the client).
@@ -684,6 +685,10 @@ class Repository(Protocol):
     async def display_name(self, repo: RepositoryRef) -> str:
         """Human-readable identity for logs and messages only. Consumers must not parse it."""
         ...
+
+    async def origin_matches(self, repo: RepositoryRef, origin_url: str) -> bool:
+        """True only when `origin_url` names `repo` on this host. Another host, another repository or an unparsable URL is False. Never raises for those. Runs no network call."""
+        ...
 ```
 
 | Method | Replaces | Rows |
@@ -691,6 +696,7 @@ class Repository(Protocol):
 | `current` | `_get_owner_repo` with `git remote get-url origin` fallback and `_parse_remote_url` | INV-VH-05, INV-VH-06 |
 | `resolve` | explicit `--repo` string plus `repo.split("/")` | INV-VH-05 |
 | `default_branch` | `repo view --json defaultBranchRef` | INV-SY-10, INV-PR-23 |
+| `origin_matches` | the GitHub-only origin comparison in `repo_guard.py` callers (added in interface version 4, #242) | none (added after the inventory) |
 
 ### ChangeRequests
 
@@ -971,6 +977,7 @@ repository. No consumer reads, splits or builds it (the three forms observed tod
 - Creation is host-defined: consumers receive a ref from `Repository.current()` or `Repository.resolve(identity)` (Interfaces,
   "Repository resolution"). How each of the three identity forms is turned into a ref is the Session and Repository
   sections' business, not this one.
+- Origin matching is host-owned. `Repository.origin_matches(repo, origin_url)` decides whether a remote URL names `repo`; consumers (the identity guard in `repo_guard.py`) never parse a URL or `value` themselves. The guard owns only the git steps (toplevel, `origin` present) and fails closed with `RepoIdentityError` when the matcher says no or raises.
 - There is no `Repository` model: the default branch is `Repository.default_branch(repo)` (DEC-15), so `defaultBranchRef` does not map to a field.
 
 ### Models
@@ -1874,7 +1881,7 @@ placeholder `examplehost`.
 - **What counts as breaking** (the constant is incremented):
   - Removing or renaming a Protocol, a method, a model field, an enum member, or a `Capability` value
   - Adding a required parameter to a method
-  - Adding a method to an existing Protocol (a plugin that does not have it would fail)
+  - Adding a method to an existing Protocol (a plugin that does not have it would fail). Precedent: `Discussion.comments_script()` bumped the version to 3 and `Repository.origin_matches` bumped it to 4, while the defaulted options `page_attempts` and `page_retry_delay_seconds` (added in A-1, with defaults) did not.
   - Changing a parameter or return type incompatibly
   - Changing which `CodeHostError` subclass a method raises for a documented condition, or the meaning of a declared limit
   - Moving an error type out of the `CodeHostError` hierarchy
@@ -2030,6 +2037,7 @@ model says consumers must not retry after `write=True` and defines no idempotenc
 | B-REP-1 | `resolve(identity)` for a seeded identity returns a `RepositoryRef`. For an unknown identity it raises `ConfigurationError`. |
 | B-REP-2 | A `RepositoryRef` is opaque: passing the ref from `resolve()` to another method works without the test parsing it, and two `resolve()` calls for one identity return equal refs. |
 | B-REP-3 | `current()` returns a ref for the repository the target was created for (`ConfigurationError` when the target has none). `default_branch(ref)` returns the seeded name. `display_name(ref)` returns a non-empty `str`. |
+| B-REP-4 | `origin_matches(ref, url)` is true for each seeded URL of the target repository and false for a different repository's URL, for `""`, for `"not a url"` and for a URL of another host. It never raises for those and runs no network call. |
 | B-CR-1 | `get(repo, n)` returns the seeded `ChangeRequest`. For a missing number it raises `CodeHostError`. |
 | B-CR-2 | `find_by_branch` returns the change requests whose `head_reference` equals the branch, honoring `state` (default open). |
 | B-CR-3 | `list` returns seeded change requests, filtered by `state`, `author` and `requested_reviewer` when given. The order is the host's (the fake: insertion order), so the suite compares sets. A host that has no assignee data matches nothing for a non-empty `assignee`. |

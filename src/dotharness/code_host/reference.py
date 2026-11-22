@@ -573,6 +573,10 @@ class _Repository:
             raise ConfigurationError(msg)
         return RepositoryRef(value)
 
+    async def origin_matches(self, repo: RepositoryRef, origin_url: str) -> bool:
+        """True only when ``origin_url`` is a github.com URL (or an SSH alias of it) naming ``repo``."""
+        return await origin_repository(origin_url) == repo
+
     async def default_branch(self, repo: RepositoryRef) -> str:
         """Name of the default branch (``gh repo view --json defaultBranchRef``). Raises CodeHostError."""
         data = await self._gh.json(

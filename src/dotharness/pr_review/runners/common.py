@@ -30,10 +30,9 @@ from dotharness.code_host import (
     create_code_host,
 )
 from dotharness.code_host.reference import PR_COMMENTS_SCRIPT
-from dotharness.code_host.reference import identity_check as reference_identity_check
 from dotharness.pr_review.backend import Backend
 from dotharness.pr_review.config import HarnessConfig, RepoConfig, SubDir
-from dotharness.repo_guard import IdentityCheck
+from dotharness.repo_guard import IdentityCheck, assert_repo_identity
 from dotharness.subprocess_runner import run
 
 logger = logging.getLogger(__name__)
@@ -74,9 +73,19 @@ PR_COMMENTS_SCRIPT_PATH = PR_COMMENTS_SCRIPT
 """The reference host's script. Runners ask the active host (``host.discussion.comments_script()``); this is the default."""
 
 
-def repo_identity_check(config: HarnessConfig) -> IdentityCheck:
-    """The host's check that a backend's working directory is the clone of ``config.repo.name`` (R-GUARD-2)."""
-    return reference_identity_check(config.repo.name)
+def repo_identity_check(config: HarnessConfig, host: CodeHost, repo: RepositoryRef) -> IdentityCheck:
+    """The check that a backend's working directory is the clone of ``config.repo.name`` (R-GUARD-2).
+
+    The decision "does this origin URL name ``repo``" is the active host's (``Repository.origin_matches``).
+    """
+
+    async def matcher(origin_url: str) -> bool:
+        return await host.repository.origin_matches(repo, origin_url)
+
+    async def check(working_dir: str | Path) -> None:
+        await assert_repo_identity(working_dir, matcher, config.repo.name)
+
+    return check
 
 
 FOCUSED_REVIEW_MARKER = "[focused-review-bot]"
@@ -526,6 +535,23 @@ async def open_host(config: HarnessConfig) -> HostScaffold:
         sys.stderr.write(f"{e}\n")
         sys.exit(1)
     return HostScaffold(host=host, repo=repo, env=await agent_env(host, config))
+
+
+async def local_identity_check(config: HarnessConfig) -> IdentityCheck | None:
+    """The identity check for a flow that has no open host (local review); None unless the repository name was given.
+
+    Creates the host and resolves the repository like ``open_host`` (a ``ConfigurationError`` prints its message to
+    stderr and exits with code 1; credential failures propagate), then builds the host-aware check.
+    """
+    if not config.repo.name_provided:
+        return None
+    try:
+        host = create_code_host(host_selection(config))
+        repo = await host.repository.resolve(config.repo.name)
+    except ConfigurationError as e:
+        sys.stderr.write(f"{e}\n")
+        sys.exit(1)
+    return repo_identity_check(config, host, repo)
 
 
 async def host_prompt_variables(config: HarnessConfig) -> Mapping[str, str]:

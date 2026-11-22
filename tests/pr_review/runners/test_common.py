@@ -5,13 +5,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from dotharness.code_host import ConfigurationError, RepositoryRef
+from dotharness.code_host.testing import InMemoryCodeHost
 from dotharness.pr_review.runners.common import (
     FatalGitError,
     git_detach_and_record,
     git_fetch_and_checkout,
     git_restore,
+    local_identity_check,
+    repo_identity_check,
     run_cmd,
 )
+from dotharness.repo_guard import RepoIdentityError
 
 
 async def _run(cmd, tmp_path, **kw):
@@ -362,17 +367,104 @@ async def test_git_restore_clears_a_real_stopped_rebase_and_leaves_a_clean_tree(
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == original
 
 
-def test_repo_identity_check_is_built_for_the_configured_repository():
-    from dotharness.pr_review.runners.common import repo_identity_check
+_MULTI = RepositoryRef("team/proj/repo")
+_AZURE_ORIGIN = "https://example.invalid/team/proj/_git/repo"
 
+
+def _non_github_host():
+    host = InMemoryCodeHost(repository="team/proj/repo")
+    host.add_origin(_MULTI, _AZURE_ORIGIN)
+    return host.code_host()
+
+
+def _identity_config(working_dir):
     config = MagicMock()
-    config.repo.name = "acme/web"
-    with patch("dotharness.pr_review.runners.common.reference_identity_check") as build:
-        assert repo_identity_check(config) is build.return_value
-    build.assert_called_once_with("acme/web")
+    config.repo.name = "team/proj/repo"
+    config.repo.working_dir = working_dir
+    return config
+
+
+def _clone_with_origin(path, url):
+    subprocess.run(["git", "init", "-q", str(path)], check=True)  # noqa: S607
+    if url is not None:
+        subprocess.run(["git", "-C", str(path), "remote", "add", "origin", url], check=True)  # noqa: S607
+    return path
+
+
+async def test_repo_identity_check_passes_on_non_github_host_for_correct_clone(tmp_path):
+    clone = _clone_with_origin(tmp_path / "c", _AZURE_ORIGIN)
+    check = repo_identity_check(_identity_config(clone), _non_github_host(), _MULTI)
+    await check(clone)
+
+
+async def test_repo_identity_check_rejects_another_repository_on_the_same_host(tmp_path):
+    clone = _clone_with_origin(tmp_path / "c", "https://example.invalid/team/proj/_git/other")
+    check = repo_identity_check(_identity_config(clone), _non_github_host(), _MULTI)
+    with pytest.raises(RepoIdentityError, match="does not match the expected repo 'team/proj/repo'"):
+        await check(clone)
+
+
+async def test_repo_identity_check_rejects_missing_origin_and_non_toplevel(tmp_path):
+    no_origin = _clone_with_origin(tmp_path / "n", None)
+    check = repo_identity_check(_identity_config(no_origin), _non_github_host(), _MULTI)
+    with pytest.raises(RepoIdentityError, match="no 'origin' remote"):
+        await check(no_origin)
+    clone = _clone_with_origin(tmp_path / "c", _AZURE_ORIGIN)
+    (clone / "sub").mkdir()
+    with pytest.raises(RepoIdentityError, match="not itself the toplevel"):
+        await check(clone / "sub")
+
+
+async def test_repo_identity_check_fails_closed_when_the_host_matcher_raises(tmp_path):
+    clone = _clone_with_origin(tmp_path / "c", _AZURE_ORIGIN)
+    host = MagicMock()
+    host.repository.origin_matches = AsyncMock(side_effect=RuntimeError("boom https://user:tok@example.invalid"))
+    check = repo_identity_check(_identity_config(clone), host, _MULTI)
+    with pytest.raises(RepoIdentityError) as exc:
+        await check(clone)
+    assert "tok" not in str(exc.value)
+    host.repository.origin_matches.assert_awaited_once_with(_MULTI, _AZURE_ORIGIN)
 
 
 COMMON = "dotharness.pr_review.runners.common"
+
+
+def _local_config(working_dir, *, provided=True):
+    config = _identity_config(working_dir)
+    config.repo.name_provided = provided
+    return config
+
+
+async def test_local_identity_check_is_none_and_builds_no_host_when_name_not_provided(tmp_path):
+    with patch(f"{COMMON}.create_code_host") as create, patch(f"{COMMON}.host_selection"):
+        assert await local_identity_check(_local_config(tmp_path, provided=False)) is None
+    create.assert_not_called()
+
+
+async def test_local_identity_check_uses_the_host_matcher(tmp_path):
+    clone = _clone_with_origin(tmp_path / "c", _AZURE_ORIGIN)
+    other = _clone_with_origin(tmp_path / "o", "https://example.invalid/team/proj/_git/other")
+    with patch(f"{COMMON}.create_code_host", return_value=_non_github_host()), patch(f"{COMMON}.host_selection"):
+        check = await local_identity_check(_local_config(clone))
+    assert check is not None
+    await check(clone)
+    with pytest.raises(RepoIdentityError):
+        await check(other)
+
+
+@pytest.mark.parametrize("where", ["create", "resolve"])
+async def test_local_identity_check_configuration_error_exits_1(tmp_path, capsys, where):
+    host = MagicMock()
+    host.repository.resolve = AsyncMock(side_effect=ConfigurationError("bad setting") if where == "resolve" else None)
+    create = (
+        patch(f"{COMMON}.create_code_host", side_effect=ConfigurationError("bad setting"))
+        if where == "create"
+        else patch(f"{COMMON}.create_code_host", return_value=host)
+    )
+    with create, patch(f"{COMMON}.host_selection"), pytest.raises(SystemExit) as exc:
+        await local_identity_check(_local_config(tmp_path))
+    assert exc.value.code == 1
+    assert "bad setting" in capsys.readouterr().err
 
 
 def _order_recorder(seen, dirty):

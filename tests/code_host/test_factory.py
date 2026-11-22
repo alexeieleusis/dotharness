@@ -57,6 +57,7 @@ class Holder:
 NOT_REG = object()
 BAD_VERSION = reg(version="1")
 OLD_VERSION = reg(version=CODE_HOST_INTERFACE_VERSION + 1)
+V3_HOST = reg(version=3)
 STRICT = reg(model=StrictOpts)
 
 
@@ -276,3 +277,14 @@ def test_working_directory_reaches_registration_factory(monkeypatch: pytest.Monk
     selection = HostSelection("[harness] host", "mine", {}, None, Path("clone-dir"))
     assert create_code_host(selection) is SENTINEL
     assert CALLS[-1][3] == Path("clone-dir")
+
+
+def test_version_3_registration_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A host built for version 3 lacks ``Repository.origin_matches`` and fails the version check (no fallback)."""
+    assert CODE_HOST_INTERFACE_VERSION == 4
+    fake_eps(monkeypatch, FakeEP("v3", V3_HOST))
+    message = str(fail(sel("v3")))
+    assert (
+        f"implementation targets interface version 3, this dotharness provides {CODE_HOST_INTERFACE_VERSION}" in message
+    )
+    assert CALLS == []
