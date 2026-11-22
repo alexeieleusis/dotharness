@@ -1,4 +1,4 @@
-<!-- host-variables: host-post-inline-comment-cmd, host-post-comment-cmd -->
+<!-- host-variables: host-post-inline-comment-cmd -->
 
 # Test Layer Review Instructions
 
