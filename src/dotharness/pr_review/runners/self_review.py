@@ -84,7 +84,7 @@ def _get_extra_knowledge(config) -> str | None:
     return None
 
 
-async def _build_backend(config, host: CodeHost, env: dict) -> Backend:
+async def _build_backend(config, host: CodeHost, repo: RepositoryRef, env: dict) -> Backend:
     names = await host.session.agent_environment_names()
     credentials = {name: env[name] for name in names if env.get(name)}
     if names and not credentials:
@@ -94,7 +94,7 @@ async def _build_backend(config, host: CodeHost, env: dict) -> Backend:
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
         {**config.harness.env, **credentials},
-        identity_check=repo_identity_check(config),
+        identity_check=repo_identity_check(config, host, repo),
     )
 
 
@@ -806,7 +806,7 @@ async def _run_locked(config: HarnessConfig) -> None:
         else ""
     )
     extra_knowledge = _get_extra_knowledge(config)
-    backend = await _build_backend(config, host, env)
+    backend = await _build_backend(config, host, repo, env)
     wdir = str(config.repo.working_dir)
     original_sha = await git_detach_and_record(wdir, env)
     cycle = _CycleContext(

@@ -639,7 +639,7 @@ async def _rebase_and_vet(
             await git_abort_rebase(wdir, env)
             _digest(OUTCOME_REBASE_CONFLICT_UNRESOLVED, number, NO_CHECK, f"git rebase {base_ref} failed")
             return None
-        resolved = await _resolve_stopped_rebase(pr, config, host, wdir, env, rebase_prompt, stopped_sha)
+        resolved = await _resolve_stopped_rebase(pr, config, host, repo, wdir, env, rebase_prompt, stopped_sha)
         if resolved is None:
             return None
         stopped = resolved
@@ -669,13 +669,13 @@ async def _rebase_head(wdir: str, env: dict) -> str | None:
     return (_text(result.stdout).strip() or None) if result.returncode == 0 else None
 
 
-async def _new_backend(config: HarnessConfig, host: CodeHost) -> Backend:
+async def _new_backend(config: HarnessConfig, host: CodeHost, repo: RepositoryRef) -> Backend:
     return Backend(
         config.harness.backend,
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
         dict(await host.session.agent_environment(config.harness.env)),
-        identity_check=repo_identity_check(config),
+        identity_check=repo_identity_check(config, host, repo),
     )
 
 
@@ -697,6 +697,7 @@ async def _resolve_stopped_rebase(
     pr: ChangeRequest,
     config: HarnessConfig,
     host: CodeHost,
+    repo: RepositoryRef,
     wdir: str,
     env: dict,
     rebase_prompt: str,
@@ -712,7 +713,7 @@ async def _resolve_stopped_rebase(
     """
     number = pr.number
     base_ref = f"origin/{pr.base_reference}"
-    backend = await _new_backend(config, host)
+    backend = await _new_backend(config, host, repo)
     opencode_dir = str(config.repo.opencode_dir) if config.repo.opencode_dir else None
     continue_env = {**env, "GIT_EDITOR": "true"}  # --continue must not open an editor for the commit message
     stopped = 0
@@ -924,7 +925,7 @@ async def _fix_check(
                 branch,
             )
             return False
-        return await _agent_fix_and_push(pr, check, step, before, config, host, wdir, env, prompt, log)
+        return await _agent_fix_and_push(pr, check, step, before, config, host, repo, wdir, env, prompt, log)
     finally:
         await git_restore(original_sha, branch, wdir, env)
 
@@ -950,6 +951,7 @@ async def _agent_fix_and_push(
     before: subprocess.CompletedProcess,
     config: HarnessConfig,
     host: CodeHost,
+    repo: RepositoryRef,
     wdir: str,
     env: dict,
     prompt: str,
@@ -957,7 +959,7 @@ async def _agent_fix_and_push(
 ) -> bool:
     number = pr.number
     branch = pr.head_reference
-    backend = await _new_backend(config, host)
+    backend = await _new_backend(config, host, repo)
     opencode_dir = str(config.repo.opencode_dir) if config.repo.opencode_dir else None
     pre_sha = await _head(wdir, env)
     pre_status = await _status(wdir, env)

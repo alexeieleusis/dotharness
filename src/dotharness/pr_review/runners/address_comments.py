@@ -112,6 +112,10 @@ async def _run_locked(config: HarnessConfig) -> None:
     scaffold = await open_host(config)
     host, repo_ref, env = scaffold.host, scaffold.repo, scaffold.env
 
+    # Fail a misconfigured clone before any work (no PR listing, no git operation); a RepoIdentityError propagates.
+    identity_check = repo_identity_check(config, host, repo_ref)
+    await identity_check(str(config.repo.working_dir))
+
     our_login = await host_current_user(host)
     prs = await _list_prs_to_check(host, repo_ref, our_login)
     script_path = await host.discussion.comments_script()
@@ -124,7 +128,7 @@ async def _run_locked(config: HarnessConfig) -> None:
         config.harness.backend_timeout_seconds,
         config.harness.path_prepend,
         await backend_env(config, host, env),
-        identity_check=repo_identity_check(config),
+        identity_check=identity_check,
     )
 
     wdir = str(config.repo.working_dir)

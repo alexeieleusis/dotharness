@@ -33,6 +33,14 @@ from tests.pr_review.runners.approve_support import T, make_host, put_comment
 from tests.pr_review.runners.runner_support import REPO, make_change_request, make_scaffold
 
 
+@pytest.fixture(autouse=True)
+def _identity_check_passes():
+    """`_run_locked` awaits the identity check up front; these tests run in a directory that is not a clone."""
+    with patch("dotharness.pr_review.runners.address_comments.repo_identity_check") as build:
+        build.return_value = AsyncMock()
+        yield build
+
+
 def _seed_thread(host, comment_id, *, resolved=False, minimized=False, replies=(), number=1):
     """A review thread whose root comment has host id ``comment_id`` (the id the comments cache carries)."""
     root = Comment(id=str(comment_id), author=User("bob"), body="fix this", created_at=T, url=None, is_hidden=minimized)
@@ -105,6 +113,50 @@ async def test_disabled_skips_everything(tmp_path):
     with patch("dotharness.pr_review.runners.address_comments.open_host") as mock_token:
         await address_comments._run_locked(cfg)
     mock_token.assert_not_called()
+
+
+async def test_identity_check_runs_once_before_any_pr_is_listed(tmp_xdg, tmp_path, _identity_check_passes):
+    _setup_knowledge(tmp_path, "address-comment.md")
+    cfg = _cfg(tmp_path)
+    scaffold = _scaffold()
+    order = []
+    check = AsyncMock(side_effect=lambda wdir: order.append(("check", wdir)))
+    _identity_check_passes.return_value = check
+
+    async def list_prs(*a, **k):
+        order.append("list")
+        return []
+
+    with (
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=scaffold),
+        patch("dotharness.pr_review.runners.address_comments._list_prs_to_check", side_effect=list_prs),
+        patch("dotharness.pr_review.runners.address_comments._list_all_open_pr_numbers", return_value=None),
+        patch("dotharness.pr_review.runners.address_comments.git_detach_and_record", return_value="sha"),
+        patch("dotharness.pr_review.runners.address_comments.git_restore"),
+        patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
+    ):
+        await address_comments._run_locked(cfg)
+    _identity_check_passes.assert_called_once_with(cfg, scaffold.host, scaffold.repo)
+    check.assert_awaited_once_with(str(tmp_path))
+    assert order == [("check", str(tmp_path)), "list"]
+    assert mock_be.call_args.kwargs["identity_check"] is check
+
+
+async def test_failing_identity_check_stops_the_run_before_any_work(tmp_xdg, tmp_path, _identity_check_passes):
+    _setup_knowledge(tmp_path, "address-comment.md")
+    cfg = _cfg(tmp_path)
+    _identity_check_passes.return_value = AsyncMock(side_effect=RepoIdentityError("wrong clone"))
+    with (
+        patch("dotharness.pr_review.runners.address_comments.open_host", return_value=_scaffold()),
+        patch("dotharness.pr_review.runners.address_comments._list_prs_to_check") as listed,
+        patch("dotharness.pr_review.runners.address_comments.git_detach_and_record") as detach,
+        patch("dotharness.pr_review.runners.address_comments.Backend") as mock_be,
+        pytest.raises(RepoIdentityError, match="wrong clone"),
+    ):
+        await address_comments._run_locked(cfg)
+    listed.assert_not_called()
+    detach.assert_not_called()
+    mock_be.return_value.run.assert_not_called()
 
 
 async def test_skips_pr_with_no_pending_feedback(tmp_xdg, tmp_path):
