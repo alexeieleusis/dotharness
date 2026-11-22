@@ -398,12 +398,18 @@ def _as_focused_review_comment(parent: dict, marker_reply: dict) -> dict:
 
 @dataclass(frozen=True)
 class ThreadState:
-    """Result of the single review-thread lookup: `unresolved_ids` are the REST databaseIds
-    of inline comments in unresolved threads; `minimized_ids` are the databaseIds of
-    unresolved threads' root comments that are minimised."""
+    """Result of the single review-thread lookup: `unresolved_ids` are the host comment ids
+    (strings, compared as strings) of comments in unresolved threads; `minimized_ids` are the
+    ids of unresolved threads' root comments that are minimised."""
 
-    unresolved_ids: frozenset[int] = frozenset()
-    minimized_ids: frozenset[int] = frozenset()
+    unresolved_ids: frozenset[str] = frozenset()
+    minimized_ids: frozenset[str] = frozenset()
+
+
+def _inline_id(comment: dict) -> str | None:
+    """The comment's id as a string for matching against `ThreadState`; None when it has no id."""
+    cid = comment.get("id")
+    return None if cid is None else str(cid)
 
 
 def _select_focused_review_comments(
@@ -448,7 +454,7 @@ def _select_focused_review_comments(
             untrusted += 1
         elif thread_state is None:
             skipped += 1
-        elif c.get("id") in thread_state.unresolved_ids and c.get("id") not in thread_state.minimized_ids:
+        elif (cid := _inline_id(c)) in thread_state.unresolved_ids and cid not in thread_state.minimized_ids:
             selected.append(_as_focused_review_comment(c, marker_reply))
     if untrusted:
         logger.warning(
@@ -528,7 +534,16 @@ def _filter_by_unresolved(comments: list[dict], pr_number: int, thread_state: Th
     if thread_state is None:
         return comments
     before = len(comments)
-    comments = [c for c in comments if c["type"] != "inline" or c.get("id") in thread_state.unresolved_ids]
+    inline_count = sum(1 for c in comments if c["type"] == "inline")
+    comments = [c for c in comments if c["type"] != "inline" or _inline_id(c) in thread_state.unresolved_ids]
+    if thread_state.unresolved_ids and inline_count and len(comments) == before - inline_count:
+        logger.warning(
+            "PR #%d: %d unresolved thread comment id(s) but none of %d inline comment id(s) matched; "
+            "check that the host's comment ids agree with its thread comment ids",
+            pr_number,
+            len(thread_state.unresolved_ids),
+            inline_count,
+        )
     if len(comments) < before:
         logger.info(
             "PR #%d: filtered to %d unresolved comment(s) (was %d)",
@@ -958,22 +973,16 @@ async def _get_unresolved_comment_ids(host: CodeHost, repo: RepositoryRef, pr_nu
     threads = await fetch_review_threads(host, repo, pr_number)
     if threads is None:
         return None
-    ids: set[int] = set()
-    minimized_ids: set[int] = set()
+    ids: set[str] = set()
+    minimized_ids: set[str] = set()
     for thread in threads:
         if thread.is_resolved:
             continue
-        comments = [(_comment_database_id(c), c) for c in thread.comments]
-        if comments and comments[0][1].is_hidden and comments[0][0]:
-            minimized_ids.add(comments[0][0])
-        ids.update(db_id for db_id, _c in comments if db_id)
+        if thread.comments and thread.comments[0].is_hidden:
+            minimized_ids.add(thread.comments[0].id)
+        ids.update(c.id for c in thread.comments)
     logger.debug("PR #%d: %d unresolved inline comment id(s)", pr_number, len(ids))
     return ThreadState(frozenset(ids), frozenset(minimized_ids))
-
-
-def _comment_database_id(comment: Comment) -> int:
-    """The integer id the comments cache uses for an inline comment; 0 when the host id is not numeric."""
-    return int(comment.id) if comment.id.isdigit() else 0
 
 
 async def _count_threads(host: CodeHost, repo: RepositoryRef, pr_number: int) -> tuple[int, int, bool]:

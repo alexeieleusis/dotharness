@@ -19,6 +19,7 @@ from dotharness.code_host import (
     UnsupportedCapabilityError,
     User,
 )
+from dotharness.code_host.testing import InMemoryCodeHost
 from dotharness.opencode_guards import BackendCwdDivergedError, OpencodePluginError
 from dotharness.pr_review import state
 from dotharness.pr_review.backend import Backend
@@ -80,7 +81,7 @@ def _hr() -> tuple[CodeHost, RepositoryRef]:
 
 
 def _state(*unresolved, minimized=()):
-    return ThreadState(frozenset(unresolved), frozenset(minimized))
+    return ThreadState(frozenset(str(x) for x in unresolved), frozenset(str(x) for x in minimized))
 
 
 def _cfg(tmp_path, *, enabled=True):
@@ -1051,7 +1052,7 @@ async def test_get_unresolved_comment_ids_reads_every_comment_and_minimized_root
     _seed_thread(host, 7, minimized=True, replies=(Comment("8", User("bob"), "r", T, None),))
     _seed_thread(host, 9, replies=(Comment("not-numeric", User("bob"), "r", T, None),))
     ids = await address_comments._get_unresolved_comment_ids(host.code_host(), REPO, 1)
-    assert ids == _state(7, 8, 9, minimized=[7])
+    assert ids == _state(7, 8, 9, "not-numeric", minimized=[7])
 
 
 async def test_get_unresolved_comment_ids_is_none_on_a_failed_read_and_empty_state_when_no_threads():
@@ -2038,3 +2039,116 @@ async def test_push_branch_failure_warns_with_pr_and_branch(caplog):
     assert len(warnings) == 1
     assert "PR #7" in warnings[0].getMessage() and "br" in warnings[0].getMessage()
     assert "pushed " not in caplog.text
+
+
+# --- string-keyed thread state (issue #242, Phase 04) ---
+
+_MULTI = RepositoryRef("team/proj/repo")
+
+
+def _multi_host_with_thread(comment_ids, *, resolved=False, hidden_root=False):
+    host = InMemoryCodeHost(repository="team/proj/repo", user="alexei")
+    host.add_change_request(_MULTI, number=1, head_reference="feat", head_revision="sha1")
+    comments = [
+        Comment(cid, User("bob"), "fix", T, None, is_hidden=hidden_root and i == 0) for i, cid in enumerate(comment_ids)
+    ]
+    host.add_thread(_MULTI, 1, anchor=Anchor("a.py", 1, "RIGHT"), comments=comments, is_resolved=resolved)
+    return host
+
+
+async def test_t1_string_comment_ids_reach_the_thread_state_and_survive_the_filter():
+    host = _multi_host_with_thread(["12/1", "12/2"])
+    ids = await address_comments._get_unresolved_comment_ids(host.code_host(), _MULTI, 1)
+    assert ids == ThreadState(frozenset({"12/1", "12/2"}), frozenset())
+    inline = {"type": "inline", "id": "12/1", "author": "bob", "replies": []}
+    assert address_comments._filter_by_unresolved([inline], 1, ids) == [inline]
+
+
+async def test_string_ids_of_a_resolved_thread_are_dropped_and_minimised_root_recorded():
+    host = _multi_host_with_thread(["9/1"], resolved=True)
+    assert await address_comments._get_unresolved_comment_ids(host.code_host(), _MULTI, 1) == _state()
+    hidden = _multi_host_with_thread(["8/1", "8/2"], hidden_root=True)
+    ids = await address_comments._get_unresolved_comment_ids(hidden.code_host(), _MULTI, 1)
+    assert ids == _state("8/1", "8/2", minimized=["8/1"])
+
+
+def _inline(cid, **extra):
+    return {"type": "inline", "id": cid, "author": "bob", "body": "b", "replies": [], **extra}
+
+
+def test_filter_keeps_string_and_int_ids_matching_state_and_drops_resolved():
+    kept_s, kept_i = _inline("12/1"), _inline(42)
+    dropped = _inline("13/1")
+    out = address_comments._filter_by_unresolved([kept_s, kept_i, dropped], 1, _state("12/1", 42))
+    assert out == [kept_s, kept_i]
+
+
+def test_filter_never_compares_non_inline_and_drops_inline_without_id():
+    review = {"type": "review", "id": "review-5", "author": "bob"}
+    no_id = _inline(None)
+    out = address_comments._filter_by_unresolved([review, no_id, {"type": "inline", "author": "bob"}], 1, _state("x"))
+    assert out == [review]
+
+
+def test_inline_id_helper():
+    assert address_comments._inline_id({"id": 42}) == "42"
+    assert address_comments._inline_id({"id": "a/1"}) == "a/1"
+    assert address_comments._inline_id({"id": None}) is None
+    assert address_comments._inline_id({}) is None
+
+
+def test_g5_warning_logged_once_with_counts_only_and_filtering_unchanged(caplog):
+    comments = [_inline("secret-a"), _inline("secret-b"), {"type": "issue", "id": "i1", "author": "bob"}]
+    with caplog.at_level("WARNING"):
+        out = address_comments._filter_by_unresolved(comments, 7, _state("other-1", "other-2", "other-3"))
+    assert out == [comments[2]]
+    msgs = [r.getMessage() for r in caplog.records if "none of" in r.getMessage()]
+    assert msgs == [
+        "PR #7: 3 unresolved thread comment id(s) but none of 2 inline comment id(s) matched; "
+        "check that the host's comment ids agree with its thread comment ids"
+    ]
+    assert not any(x in msgs[0] for x in ("secret", "other-"))
+
+
+@pytest.mark.parametrize(
+    ("comments", "state_"),
+    [
+        ([_inline("a"), _inline("zzz")], _state("a")),
+        ([_inline("a")], _state()),
+        ([{"type": "issue", "id": "i1", "author": "bob"}], _state("a")),
+    ],
+)
+def test_g5_warning_not_logged_when_some_match_or_no_state_or_no_inline(caplog, comments, state_):
+    with caplog.at_level("WARNING"):
+        address_comments._filter_by_unresolved(comments, 1, state_)
+    assert not [r for r in caplog.records if "none of" in r.getMessage()]
+
+
+def test_select_focused_string_ids_follow_the_same_rule():
+    marked = {**_MARKED_COMMENT, "id": "12/1"}
+    sel, _ = address_comments._select_focused_review_comments(
+        [marked], 1, thread_state=_state("12/1"), our_login="alexei"
+    )
+    assert len(sel) == 1
+    sel, _ = address_comments._select_focused_review_comments(
+        [marked], 1, thread_state=_state("12/1", minimized=["12/1"]), our_login="alexei"
+    )
+    assert sel == []
+    sel, _ = address_comments._select_focused_review_comments(
+        [marked], 1, thread_state=_state("13/1"), our_login="alexei"
+    )
+    assert sel == []
+    no_id = {k: v for k, v in _MARKED_COMMENT.items() if k != "id"}
+    sel, _ = address_comments._select_focused_review_comments(
+        [no_id], 1, thread_state=_state("None", ""), our_login="alexei"
+    )
+    assert sel == []
+
+
+def test_d2_already_replied_rules_unchanged():
+    own_inline_unreplied = _inline(1, author="alexei")
+    own_issue = {"type": "issue", "id": "issue-comment-1", "author": "alexei"}
+    replied = _inline(2, replies=[{"id": 9, "author": "alexei", "body": "done"}])
+    assert address_comments._filter_already_replied([own_inline_unreplied, own_issue, replied], 1, "alexei") == [
+        own_inline_unreplied
+    ]
