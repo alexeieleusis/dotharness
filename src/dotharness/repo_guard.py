@@ -51,7 +51,12 @@ async def assert_repo_identity(
     if origin.returncode != 0:
         msg = f"{directory} has no 'origin' remote ({origin.stderr.strip()})"
         raise RepoIdentityError(msg)
-    if not await origin_matches(origin.stdout.strip()):
+    try:
+        matched = await origin_matches(origin.stdout.strip())
+    except Exception as exc:  # fail closed; the message names neither the URL nor the exception text
+        msg = f"{directory}'s origin could not be checked against the expected repo {expected!r}"
+        raise RepoIdentityError(msg) from exc
+    if not matched:
         msg = f"{directory}'s origin does not match the expected repo {expected!r}"
         raise RepoIdentityError(msg)
 

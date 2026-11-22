@@ -64,6 +64,10 @@ class Repository(Protocol):
         """Human-readable identity for logs and messages only. Consumers must not parse it."""
         ...
 
+    async def origin_matches(self, repo: RepositoryRef, origin_url: str) -> bool:
+        """True only when `origin_url` names `repo` on this host. Another host, another repository or an unparsable URL is False. Never raises for those. Runs no network call."""
+        ...
+
 
 class ChangeRequests(Protocol):
     async def get(self, repo: RepositoryRef, number: int) -> ChangeRequest:

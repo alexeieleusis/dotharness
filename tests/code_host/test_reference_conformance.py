@@ -730,7 +730,13 @@ class TestReferenceHostConformance(CodeHostConformance):
         host = create_code_host(
             HostSelection(setting="code_host", name="reference", options={}, token_cmd=["echo", SECRET])
         )
-        return ConformanceTarget(host=host, seeder=self.stub, secret=SECRET)
+        return ConformanceTarget(
+            host=host,
+            seeder=self.stub,
+            secret=SECRET,
+            origin_urls=("https://github.com/example/repo.git", "git@github.com:example/repo"),
+            foreign_origin_urls=("https://github.com/example/other.git",),
+        )
 
     async def test_token_reaches_gh_only_as_gh_token_in_the_environment(self) -> None:
         """The token command runs once. Its token is ``GH_TOKEN`` in the gh environment, never in argv or GITHUB_TOKEN."""

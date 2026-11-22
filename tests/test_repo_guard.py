@@ -10,7 +10,9 @@ import pytest
 
 from dotharness import repo_guard
 from dotharness.code_host import reference
+from dotharness.code_host.models import RepositoryRef
 from dotharness.code_host.reference import identity_check
+from dotharness.code_host.testing import InMemoryCodeHost
 from dotharness.repo_guard import (
     RepoIdentityError,
     assert_harness_unchanged,
@@ -208,3 +210,87 @@ async def test_ssh_alias_failure_is_not_cached(monkeypatch):
 
 async def test_origin_repository_strips_port():
     assert await reference.origin_repository("ssh://git@github.com:22/o/r") == reference.RepositoryRef("o/r")
+
+
+# -- a host that is not GitHub: the matcher comes from the host (``Repository.origin_matches``) ---------------------
+
+_AZURE_ORIGIN = "https://example.invalid/team/proj/_git/repo"
+_AZURE_REPO = RepositoryRef("team/proj/repo")
+
+
+def _host_matcher(host: InMemoryCodeHost, repo: RepositoryRef):
+    async def matches(url: str) -> bool:
+        return await host.code_host().repository.origin_matches(repo, url)
+
+    return matches
+
+
+def _non_github_host() -> InMemoryCodeHost:
+    host = InMemoryCodeHost(repository=_AZURE_REPO.value)
+    host.add_origin(_AZURE_REPO, _AZURE_ORIGIN)
+    return host
+
+
+async def test_non_github_host_passes_from_the_correct_clone(tmp_path):
+    _init_repo(tmp_path, _AZURE_ORIGIN)
+    await assert_repo_identity(tmp_path, _host_matcher(_non_github_host(), _AZURE_REPO), _AZURE_REPO.value)
+
+
+async def test_reference_matcher_rejects_the_non_github_clone(tmp_path):
+    """Regression (W1): the GitHub-only matcher fails closed in the correct clone of a non-GitHub host."""
+    _init_repo(tmp_path, _AZURE_ORIGIN)
+    with pytest.raises(RepoIdentityError, match="does not match"):
+        await identity_check(_AZURE_REPO.value)(tmp_path)
+
+
+async def test_non_github_host_rejects_another_repository_on_the_same_host(tmp_path):
+    _init_repo(tmp_path, "https://example.invalid/team/proj/_git/other")
+    with pytest.raises(RepoIdentityError, match="does not match"):
+        await assert_repo_identity(tmp_path, _host_matcher(_non_github_host(), _AZURE_REPO), _AZURE_REPO.value)
+
+
+async def test_non_github_host_rejects_a_github_url(tmp_path):
+    _init_repo(tmp_path, "https://github.com/team/proj/repo.git")
+    with pytest.raises(RepoIdentityError, match="does not match"):
+        await assert_repo_identity(tmp_path, _host_matcher(_non_github_host(), _AZURE_REPO), _AZURE_REPO.value)
+
+
+async def test_non_github_host_rejects_a_directory_that_is_not_a_toplevel(tmp_path):
+    _init_repo(tmp_path, _AZURE_ORIGIN)
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    with pytest.raises(RepoIdentityError):
+        await assert_repo_identity(sub, _host_matcher(_non_github_host(), _AZURE_REPO), _AZURE_REPO.value)
+
+
+async def test_non_github_host_rejects_a_missing_origin(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)  # noqa: S607
+    with pytest.raises(RepoIdentityError, match="no 'origin' remote"):
+        await assert_repo_identity(tmp_path, _host_matcher(_non_github_host(), _AZURE_REPO), _AZURE_REPO.value)
+
+
+async def test_a_raising_matcher_fails_closed_without_leaking_the_cause(tmp_path):
+    _init_repo(tmp_path, "https://user:s3cret@example.invalid/team/proj/_git/repo")
+
+    async def boom(url: str) -> bool:
+        msg = "token s3cret leaked"
+        raise ValueError(msg)
+
+    with pytest.raises(RepoIdentityError) as info:
+        await assert_repo_identity(tmp_path, boom, _AZURE_REPO.value)
+    assert isinstance(info.value.__cause__, ValueError)
+    assert "s3cret" not in str(info.value)
+    assert "example.invalid" not in str(info.value)
+    assert _AZURE_REPO.value in str(info.value)
+
+
+async def test_cancellation_propagates_from_the_matcher(tmp_path):
+    import asyncio
+
+    _init_repo(tmp_path, _AZURE_ORIGIN)
+
+    async def cancelled(url: str) -> bool:
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await assert_repo_identity(tmp_path, cancelled, _AZURE_REPO.value)
