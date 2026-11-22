@@ -1667,6 +1667,8 @@ class CodeHostConformance:
         if not self._declares(target, Capability.REPOSITORY):
             return
         repository = target.host.repository
+        assert target.origin_urls, "host must supply origin_urls for B-REP-4"
+        assert target.foreign_origin_urls, "host must supply foreign_origin_urls for B-REP-4"
         for url in target.origin_urls:
             assert await repository.origin_matches(target.repository, url) is True
         for url in target.foreign_origin_urls:
