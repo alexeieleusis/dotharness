@@ -557,16 +557,17 @@ def _filter_by_unresolved(comments: list[dict], pr_number: int, thread_state: Th
 async def _comment_thread_state(comment: dict, host: CodeHost, repo: RepositoryRef, pr_number: int) -> bool | None:
     """Tri-state thread check: True (unresolved), False (resolved), None (lookup failed).
 
-    Makes exactly one `_get_unresolved_comment_ids` call; a non-int id returns True without
-    a lookup. Callers decide whether None fails open or closed.
+    Makes exactly one `_get_unresolved_comment_ids` call. The id is compared as a string
+    (`_inline_id`), so int and string ids behave alike; a comment with no id returns False.
+    Callers decide whether None fails open or closed.
     """
-    comment_id = comment.get("id")
-    if not isinstance(comment_id, int):
-        return True
     thread_state = await _get_unresolved_comment_ids(host, repo, pr_number)
     if thread_state is None:
         return None
-    return comment_id in thread_state.unresolved_ids
+    inline_id = _inline_id(comment)
+    if inline_id is None:
+        return False
+    return inline_id in thread_state.unresolved_ids
 
 
 async def _comment_still_unresolved(comment: dict, host: CodeHost, repo: RepositoryRef, pr_number: int) -> bool:

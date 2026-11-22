@@ -366,12 +366,42 @@ async def test_comment_still_unresolved_fails_open_when_check_returns_none():
     assert result is True
 
 
-async def test_comment_still_unresolved_true_for_non_int_id():
-    comment = {**_FAKE_COMMENT, "id": "not-an-int"}
-    with patch("dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids") as mock_ids:
+async def test_comment_still_unresolved_looks_up_string_id():
+    """G7: a string id is looked up like any other (no early True without a lookup)."""
+    comment = {**_FAKE_COMMENT, "id": "12/1"}
+    with patch(
+        "dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids",
+        return_value=_state("99"),
+    ) as mock_ids:
         result = await address_comments._comment_still_unresolved(comment, *_hr(), 2)
-    mock_ids.assert_not_called()
-    assert result is True
+    mock_ids.assert_called_once()
+    assert result is False
+
+
+async def test_comment_thread_state_string_ids_unresolved_resolved_and_failed():
+    comment = {**_FAKE_COMMENT, "id": "12/1"}
+    target = "dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids"
+    for thread_state, expected in ((_state("12/1"), True), (_state("12/2"), False), (None, None)):
+        with patch(target, return_value=thread_state) as mock_ids:
+            result = await address_comments._comment_thread_state(comment, *_hr(), 2)
+        mock_ids.assert_called_once()
+        assert result is expected
+
+
+async def test_comment_thread_state_int_id_matches_string_state():
+    target = "dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids"
+    with patch(target, return_value=_state("42")) as mock_ids:
+        assert await address_comments._comment_thread_state({"id": 42}, *_hr(), 2) is True
+        assert await address_comments._comment_thread_state({"id": 43}, *_hr(), 2) is False
+    assert mock_ids.call_count == 2
+
+
+async def test_comment_thread_state_no_id_is_false_after_one_lookup():
+    target = "dotharness.pr_review.runners.address_comments._get_unresolved_comment_ids"
+    with patch(target, return_value=_state("42")) as mock_ids:
+        assert await address_comments._comment_thread_state({"body": "x"}, *_hr(), 2) is False
+        assert await address_comments._comment_still_unresolved({"id": None}, *_hr(), 2) is False
+    assert mock_ids.call_count == 2
 
 
 def _recovering_run_cmd(push_rc):
