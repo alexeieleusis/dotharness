@@ -228,7 +228,7 @@ def _resolution_decision(path: Path) -> str | None:
     return None
 
 
-def _make_backend(config: HarnessConfig, max_retries: int = 1, identity_check: IdentityCheck | None = None) -> Backend:
+def _make_backend(config: HarnessConfig, max_retries: int = 1, *, identity_check: IdentityCheck | None) -> Backend:
     return Backend(
         config.harness.backend,
         config.harness.backend_timeout_seconds,
@@ -383,7 +383,8 @@ def _build_address_context(
     review_dir: Path,
     backend: Backend | None,
     prompt_variables: Mapping[str, str],
-    identity_check: IdentityCheck | None = None,
+    *,
+    identity_check: IdentityCheck | None,
 ) -> _AddressContext:
     wdir = Path(config.repo.working_dir).expanduser().resolve()
     env = build_agent_base_env(config.harness.path_prepend, config.harness.env)
@@ -433,7 +434,7 @@ async def address_findings(
     # a host is built only when no backend is injected
     identity_check = await local_identity_check(config) if backend is None else None
     ctx = _build_address_context(
-        config, target, review_dir, backend, await host_prompt_variables(config), identity_check
+        config, target, review_dir, backend, await host_prompt_variables(config), identity_check=identity_check
     )
     result = AddressResult()
     pending = list(collection.open)
