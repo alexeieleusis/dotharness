@@ -3,7 +3,7 @@ import shlex
 import subprocess
 import time
 
-from dotharness.code_host import ChangeRequest, CodeHost, RepositoryRef
+from dotharness.code_host import ChangeRequest, CodeHost, CodeHostError, RepositoryRef
 from dotharness.pr_review import state
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
@@ -11,6 +11,7 @@ from dotharness.pr_review.runners import prune_projects
 from dotharness.pr_review.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
+    HostScaffold,
     IdentifiedGitFailure,
     env_file_args,
     env_file_error,
@@ -341,6 +342,62 @@ async def _run_base_git(cmd_name: str, cmd: list[str], wdir: str, env: dict) -> 
         logger.warning("Base analysis: git %s failed: %s", cmd_name, result.stderr.decode("utf-8", errors="replace"))
         raise BaseAnalysisError(cmd_name, "failed")
     return result
+
+
+FINAL_FALLBACK_BASE = "main"
+BASE_SOURCE_CONFIG = "config"
+BASE_SOURCE_HOST = "host default"
+BASE_SOURCE_LOCAL = "local branch"
+BASE_SOURCE_FALLBACK = "final fallback"
+
+
+async def _git_ok(cmd: list[str], wdir: str, env: dict) -> str | None:
+    """Stripped stdout of a read-only local git probe; None on non-zero exit, timeout or missing git."""
+    try:
+        result = await run_cmd(cmd, cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.decode("utf-8", errors="replace").strip()
+
+
+async def _local_base_branch(wdir: str, env: dict) -> str | None:
+    """A candidate (the `origin/HEAD` target, then `main`) present as `origin/<name>` or local `<name>`."""
+    candidates: list[str] = []
+    head = await _git_ok(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], wdir, env)
+    if head:
+        candidates.append(head.removeprefix("origin/"))
+    if FINAL_FALLBACK_BASE not in candidates:
+        candidates.append(FINAL_FALLBACK_BASE)
+    for name in candidates:
+        for ref in (f"origin/{name}", name):
+            if await _git_ok(["git", "rev-parse", "--verify", "--quiet", ref], wdir, env) is not None:
+                return name
+    return None
+
+
+async def resolve_base_branch(config: HarnessConfig, scaffold: HostScaffold, env: dict) -> tuple[str, str]:
+    """Resolve the base branch once per run: ``(short name, source)``.
+
+    Chain: ``[repo].base_branch`` (config) > ``Repository.default_branch`` (host default; any ``CodeHostError``,
+    including an unsupported capability, or a blank answer degrades) > local-repo check (`origin/HEAD` target, then
+    `main`) > `main` (final fallback). The host answer and the configured value are trusted, never probed.
+    """
+    if config.repo.base_branch:
+        return config.repo.base_branch, BASE_SOURCE_CONFIG
+    try:
+        default = await scaffold.host.repository.default_branch(scaffold.repo)
+    except CodeHostError:
+        logger.warning("Base analysis: host default branch unavailable; trying the local repository", exc_info=True)
+        default = ""
+    default = (default or "").strip()
+    if default:
+        return default, BASE_SOURCE_HOST
+    local = await _local_base_branch(str(config.repo.working_dir), env)
+    if local:
+        return local, BASE_SOURCE_LOCAL
+    return FINAL_FALLBACK_BASE, BASE_SOURCE_FALLBACK
 
 
 async def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:

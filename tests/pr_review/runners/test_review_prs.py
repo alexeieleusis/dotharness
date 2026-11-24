@@ -1,5 +1,6 @@
 import logging
 import subprocess
+from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
@@ -1318,3 +1319,92 @@ async def test_base_analysis_checkout_runs_pre_checkout_clean_before_checkout(
         await review_prs._run_base_analysis(cfg, {})
     pre_checkout_clean_mock.assert_called_once_with(str(tmp_path), {})
     assert seen.index("pre-clean") < seen.index("checkout")
+
+
+# --- resolve_base_branch (precedence chain) ---
+
+
+class _StubRepository:
+    def __init__(self, result=None, error=None):
+        self.result, self.error, self.calls = result, error, 0
+
+    async def default_branch(self, repo):
+        self.calls += 1
+        if self.error:
+            raise self.error
+        return self.result
+
+
+def _stub_scaffold(repository):
+    return SimpleNamespace(host=SimpleNamespace(repository=repository), repo=REPO)
+
+
+def _base_config(tmp_path, base_branch=None):
+    return SimpleNamespace(repo=SimpleNamespace(base_branch=base_branch, working_dir=tmp_path))
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)  # noqa: S607
+
+
+@pytest.fixture
+def git_repo(tmp_path):
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i")
+    return tmp_path
+
+
+async def test_resolve_config_wins_without_host_or_git(tmp_path):
+    repository = _StubRepository(error=AssertionError("host must not be called"))
+    with patch("dotharness.pr_review.runners.review_prs.run_cmd", side_effect=AssertionError("no git")):
+        result = await review_prs.resolve_base_branch(_base_config(tmp_path, "develop"), _stub_scaffold(repository), {})
+    assert result == ("develop", "config")
+    assert repository.calls == 0
+
+
+async def test_resolve_host_default_read_once(tmp_path):
+    repository = _StubRepository("trunk")
+    result = await review_prs.resolve_base_branch(_base_config(tmp_path), _stub_scaffold(repository), {})
+    assert result == ("trunk", "host default")
+    assert repository.calls == 1
+
+
+async def test_resolve_host_default_main_is_main(tmp_path):
+    result = await review_prs.resolve_base_branch(_base_config(tmp_path), _stub_scaffold(_StubRepository("main")), {})
+    assert result == ("main", "host default")
+
+
+@pytest.mark.parametrize(
+    "repository",
+    [
+        _StubRepository(error=CodeHostError("boom")),
+        _StubRepository(error=UnsupportedCapabilityError("no", capability="Repository")),
+        _StubRepository(""),
+        _StubRepository("   "),
+    ],
+)
+async def test_resolve_host_failure_falls_to_local(git_repo, repository):
+    _git(git_repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
+    _git(git_repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
+    result = await review_prs.resolve_base_branch(_base_config(git_repo), _stub_scaffold(repository), {})
+    assert result == ("develop", "local branch")
+    assert repository.calls == 1
+
+
+async def test_resolve_local_main_only(git_repo):
+    _git(git_repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    result = await review_prs.resolve_base_branch(_base_config(git_repo), _stub_scaffold(_StubRepository("")), {})
+    assert result == ("main", "local branch")
+
+
+async def test_resolve_local_branch_without_origin(git_repo):
+    _git(git_repo, "branch", "-M", "main")
+    result = await review_prs.resolve_base_branch(_base_config(git_repo), _stub_scaffold(_StubRepository("")), {})
+    assert result == ("main", "local branch")
+
+
+async def test_resolve_final_fallback(git_repo):
+    _git(git_repo, "branch", "-M", "other")
+    repository = _StubRepository(error=CodeHostError("down"))
+    result = await review_prs.resolve_base_branch(_base_config(git_repo), _stub_scaffold(repository), {})
+    assert result == ("main", "final fallback")

@@ -731,3 +731,34 @@ def test_test_layer_review_explicit_false(tmp_path):
 def test_test_layer_review_enabled_non_bool_rejected(tmp_path, bad):
     with pytest.raises(ConfigError, match=r"test_layer_review\.enabled"):
         load_config(_section_toml(tmp_path, "test_layer_review", f"enabled = {bad}"))
+
+
+def _toml_with_base(minimal_toml, value_line: str):
+    minimal_toml.write_text(minimal_toml.read_text() + value_line + "\n")
+    return minimal_toml
+
+
+def test_base_branch_parsed(minimal_toml):
+    cfg = load_config(_toml_with_base(minimal_toml, 'base_branch = "develop"'))
+    assert cfg.repo.base_branch == "develop"
+
+
+@pytest.mark.parametrize("line", ["", 'base_branch = ""', 'base_branch = "   "'])
+def test_base_branch_unset_is_none(minimal_toml, line):
+    assert load_config(_toml_with_base(minimal_toml, line)).repo.base_branch is None
+
+
+def test_base_branch_is_stripped(minimal_toml):
+    cfg = load_config(_toml_with_base(minimal_toml, 'base_branch = "  develop "'))
+    assert cfg.repo.base_branch == "develop"
+
+
+@pytest.mark.parametrize("value", ["origin/develop", "refs/heads/develop"])
+def test_base_branch_non_short_name_rejected(minimal_toml, value):
+    with pytest.raises(ConfigError, match=r"repo\.base_branch.*" + re.escape(value)):
+        load_config(_toml_with_base(minimal_toml, f'base_branch = "{value}"'))
+
+
+def test_base_branch_non_string_rejected(minimal_toml):
+    with pytest.raises(ConfigError, match=r"repo\.base_branch"):
+        load_config(_toml_with_base(minimal_toml, "base_branch = 5"))
