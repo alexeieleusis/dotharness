@@ -62,6 +62,10 @@ The effective token command is `host_token_cmd`, else the default of the selecte
 | `name` | string | **required** (optional for `local-review`) | Repo identifier, typically `"org/repo"`. Loading fails with `ConfigError: repo.name is required` if missing or empty, except for `pr_review run local-review`, which does not need a GitHub repo and loads the config with `repo.name` optional (the loaded `repo.name` is then `""` and `repo.name_provided` is `false`). Also used to derive `repo_slug` (`name` with `/` replaced by `-`) for state files and schedule labels. When `name` is absent (`local-review` only), `repo_slug` is the `working_dir` basename (characters outside `[a-zA-Z0-9._-]` replaced by `-`), then `-`, then the first 8 hex characters of the SHA-256 of the resolved `working_dir` path. |
 | `working_dir` | path | **required** | Local filesystem checkout of the repo. Loading fails with `ConfigError: repo.working_dir is required` if missing or empty. `~` is expanded. |
 | `opencode_dir` | path or unset | `None` | Optional directory passed to the `opencode` backend as `--dir` instead of the repo root. If set, it **must be inside `working_dir`**. The loader calls `opencode_dir.relative_to(working_dir)` and raises `ConfigError: repo.opencode_dir '<path>' must be inside repo.working_dir '<path>'` if `opencode_dir` is not a subpath. `~` is expanded before the check. |
+| `base_branch` | string or unset | unset | A short branch name such as `base_branch = "develop"`, not `origin/develop` or `refs/heads/develop`. A value starting with `origin/` or `refs/` is a `ConfigError`. An empty value is the same as unset. When unset, the resolution chain applies. This is **the configured base branch**: the branch the harness treats as trunk for its own clone, baseline and intake work. See [Base branch resolution](commands/review-prs.md#base-branch-resolution) for the chain. Per-tool knobs are separate: this key is read by `pr_review` only (see [Per-tool knobs](#base-branch-per-tool)). |
+
+<a id="base-branch-per-tool"></a>
+**`base_branch` is a per-tool knob.** `[repo].base_branch` is not shared with sisyphus or vibe_heal. See the [equivalence rule](commands/review-prs.md#base-branch-per-tool-knobs) in the `review-prs` page: for a repo used by several tools, set the same short name in each.
 
 ### `[[repo.subdir]]`
 
@@ -336,6 +340,7 @@ name = "org/repo"
 working_dir = "/path/to/repo"
 # opencode_dir must live inside working_dir if set
 # opencode_dir = "/path/to/repo/apps/backend"
+# base_branch = "develop"  # short name; unset uses the resolution chain
 
 [vibe_heal]
 enabled = false
