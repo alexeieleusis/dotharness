@@ -1318,25 +1318,63 @@ def test_missing_config_exact_stderr_prefix(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("flag", "config_base", "default", "base", "intake"),
+    ("flag", "config_base", "default", "base", "source"),
     [
-        (None, None, "trunk", "main", "trunk"),  # no base given: PR base unchanged, intake uses the default branch
-        (None, None, None, "main", "main"),
-        ("rel", "cfg", "trunk", "rel", "rel"),
-        (None, "cfg", "trunk", "cfg", "cfg"),
+        ("rel", "cfg", "trunk", "rel", cli.BASE_SOURCE_FLAG),
+        (None, "cfg", "trunk", "cfg", cli.BASE_SOURCE_CONFIG),
+        (None, None, "trunk", "trunk", cli.BASE_SOURCE_HOST),
+        (None, None, None, "main", cli.BASE_SOURCE_FALLBACK),
+        (None, None, "main", "main", cli.BASE_SOURCE_HOST),
     ],
 )
-async def test_resolve_options_intake_base(
-    tmp_path: Path, flag: str | None, config_base: str | None, default: str | None, base: str, intake: str
+async def test_resolve_options_base_chain(
+    tmp_path: Path, flag: str | None, config_base: str | None, default: str | None, base: str, source: str
 ) -> None:
+    calls: list[int] = []
+
     async def repo_info() -> str | None:
+        calls.append(1)
         return default
 
     env = make_env(tmp_path, [])
     cfg = load_config(env.config)
     cfg = replace(cfg, project=replace(cfg.project, base_branch=config_base))
-    options = await cli._resolve_options(cfg, replace(env.services, repo_info=repo_info), flag)
-    assert (options.base_branch, options.intake_base) == (base, intake)
+    options = await cli._resolve_options(cfg, replace(env.services, repo_info=repo_info), flag, env.config)
+    assert (options.base_branch, options.base_source, options.default_branch) == (base, source, default)
+    assert len(calls) == 1  # one default-branch read per run
+    assert options.resume_command is not None
+    assert f"--base {base}" in options.resume_command
+
+
+async def test_resolve_options_host_error_degrades_to_main(tmp_path: Path) -> None:
+    env = make_env(tmp_path, [])
+    cfg = load_config(env.config)
+
+    # Services.repo_info (built by the CLI) turns CodeHostError into None; the chain then reaches the fallback
+    async def repo_info() -> str | None:
+        return None
+
+    options = await cli._resolve_options(cfg, replace(env.services, repo_info=repo_info), None)
+    assert (options.base_branch, options.base_source) == ("main", cli.BASE_SOURCE_FALLBACK)
+
+
+async def test_resolve_options_no_repo_info_uses_fallback(tmp_path: Path) -> None:
+    env = make_env(tmp_path, [])
+    cfg = load_config(env.config)
+    options = await cli._resolve_options(cfg, replace(env.services, repo_info=None), None)
+    assert (options.base_branch, options.default_branch) == ("main", None)
+
+
+def test_resume_template_embeds_host_default_base() -> None:
+    assert "--base develop" in cli._resume_template("/x/.sisyphus.toml", "develop")
+
+
+@pytest.mark.parametrize("command", ["run", "resume"])
+def test_base_help_states_the_chain(command: str) -> None:
+    out = " ".join(CliRunner().invoke(app, [command, "--help"]).output.split())
+    assert "[project].base_branch" in out
+    assert "repository default branch" in out
+    assert "'main'" in out
 
 
 def test_raw_flag_in_run_and_resume_help() -> None:

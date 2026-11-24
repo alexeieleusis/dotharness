@@ -320,17 +320,35 @@ def _resume_command(config_path: str | Path, item: str, base: str | None = None,
     return fill_resume_template(_resume_template(config_path, base), item, again=again)
 
 
+BASE_SOURCE_FLAG = "--base flag"
+BASE_SOURCE_CONFIG = "[project].base_branch"
+BASE_SOURCE_HOST = "host default branch"
+BASE_SOURCE_FALLBACK = "final fallback"
+
+
+def _resolve_base(flag: str | None, configured: str | None, default_branch: str | None) -> tuple[str, str]:
+    """The one resolver of the PR base: ``--base`` > ``[project].base_branch`` > host default > ``main``.
+
+    Returns the base and the name of the link that produced it.
+    """
+    if flag:
+        return flag, BASE_SOURCE_FLAG
+    if configured:
+        return configured, BASE_SOURCE_CONFIG
+    if default_branch:
+        return default_branch, BASE_SOURCE_HOST
+    return DEFAULT_BASE_BRANCH, BASE_SOURCE_FALLBACK
+
+
 async def _resolve_options(
     config: SisyphusConfig, services: Services, base: str | None, config_path: str | Path = ""
 ) -> OrchestratorOptions:
-    given = base or config.project.base_branch
-    base = given or DEFAULT_BASE_BRANCH
     default_branch = await services.repo_info() if services.repo_info else None
+    base, source = _resolve_base(base, config.project.base_branch, default_branch)
     return OrchestratorOptions(
         base_branch=base,
         default_branch=default_branch,
-        # The PR base stays `base`; only the intake clone prefers the repository default branch over "main".
-        intake_base=given or default_branch or DEFAULT_BASE_BRANCH,
+        base_source=source,
         lock_dir=services.lock_dir,
         resume_command=_resume_template(config_path, base) if config_path else None,
     )
@@ -352,7 +370,13 @@ cli = app  # alias kept for dotharness.cli (``from dotharness.sisyphus.cli impor
 ConfigOption = Annotated[Path, typer.Option("--config", dir_okay=False, help=".sisyphus.toml path.")]
 BaseOption = Annotated[
     str | None,
-    typer.Option("--base", help=f"PR base branch (default: [project].base_branch, else {DEFAULT_BASE_BRANCH!r})."),
+    typer.Option(
+        "--base",
+        help=(
+            "PR base branch (default: [project].base_branch, else the repository default branch "
+            f"from the code host, else {DEFAULT_BASE_BRANCH!r})."
+        ),
+    ),
 ]
 RefArgument = Annotated[str, typer.Argument(metavar="WORK_ITEM_REF")]
 

@@ -36,11 +36,21 @@ default is listed.
 | `repo_dir` | string | none |
 | `workspace_dir` | string | none |
 | `brief_path_template` | string | none |
-| `base_branch` | string | none (the CLI falls back to `main`) |
+| `base_branch` | string | none (the repository default branch, else `main`) |
 
-`base_branch` is the PR base branch. Precedence: `sisyphus run --base <branch>`, then `[project].base_branch`,
-then `main`. `main` is the correct base for normal use. You need `--base` or this key only if you work on your own stacked branch (a branch whose PR targets
-another unmerged branch). Set it to point at that parent branch.
+`base_branch` is the PR base branch, also the branch the intake clone starts from. Precedence: `sisyphus run --base <branch>`,
+then `[project].base_branch`, then the repository default branch as the code host declares it, then `main` (the
+final fallback, used when the host cannot be read). A repository whose default branch is `main` and that sets
+no key behaves as before. A repository whose default is `develop` now gets `develop` with no configuration.
+
+Set the key explicitly when the host default may not be your integration branch. The hazard is a stale
+legacy `main` that is still the host default while the team works on another branch: Sisyphus would
+target `main`. Set `base_branch` to the real branch. Also set it if you work on your own stacked branch (a branch whose PR targets
+another unmerged branch).
+
+The key is per tool. `pr_review` has `[repo].base_branch` and `vibe_heal` has `DOTHARNESS_BASE_BRANCH`; they are
+not shared. For a repository that uses several tools, set the same short name (for example `develop`, not
+`origin/develop`) in each. A mismatch is not detected.
 
 In `brief_path_template`, `<item-id>` is the folded stem of the work-item reference: the reference is
 ASCII-lower-cased and escaped, substituted as `template.replace("<item-id>", encode_item(item))`. For example
