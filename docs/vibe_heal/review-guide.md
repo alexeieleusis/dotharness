@@ -84,7 +84,7 @@ For the temporary SonarQube project created during `review`, vibe_heal patches `
 ### Analyze changed lines
 
 ```bash
-# Auto-detects the current PR's base branch via gh (falls back to origin/main if no open PR is found)
+# Auto-detects the current PR's base branch via gh (if no open PR is found, uses the configured chain: DOTHARNESS_BASE_BRANCH, host default branch, then origin/main)
 vibe_heal review
 
 # Compare against a different base branch
@@ -103,7 +103,7 @@ vibe_heal review --report-file /tmp/my-review.json
 ### Refresh SonarQube's baseline (CI only)
 
 ```bash
-# Run this on a checkout of main to refresh the real project's SonarQube analysis
+# Run this on a checkout of the base branch to refresh the real project's SonarQube analysis
 vibe_heal review --baseline
 ```
 
@@ -129,7 +129,7 @@ vibe_heal review --post --report-file /tmp/my-review.json
 
 | Flag | Default | Description |
 |---|---|---|
-| `--base-branch` / `-b` | auto-detect via `gh`, else `origin/main` | Base branch to compare against. When omitted, auto-detects the current branch's open PR base via `gh pr view` and diffs against `origin/<that>`. Falls back to `origin/main` if no open PR is found or `gh` is unavailable. Passing an explicit value skips detection. |
+| `--base-branch` / `-b` | auto (see chain) | Base branch to compare against. When omitted, auto-detects the current branch's open PR base via `gh pr view` and diffs against `origin/<that>`. If no open PR is found or `gh` is unavailable, it uses `DOTHARNESS_BASE_BRANCH`, then the repository default branch, then `origin/main`. Full chain: explicit `--base-branch` > PR base of the current branch (auto-detected via `gh pr view`) > `DOTHARNESS_BASE_BRANCH` > repository default branch > `origin/main`; see [Resolution chains](branch-cleanup-guide.md#resolution-chains) for the terms and the [`DOTHARNESS_BASE_BRANCH`](branch-cleanup-guide.md#dotharness_base_branch) semantics. Passing an explicit value skips detection. |
 | `--pattern` / `-p` | (all files) | Glob pattern to filter files (repeatable) |
 | `--report-file` | auto | Override report output path |
 | `--env-file` | `.env.vibeheal` | Path to custom config file |
@@ -142,11 +142,13 @@ vibe_heal review --post --report-file /tmp/my-review.json
 
 ### Stacked PRs
 
-If your branch's PR targets another branch instead of `main` (a "stacked" PR), `review` diffs against that real base automatically — no flag needed. This avoids re-reporting issues that belong to the branch below yours in the stack. Those issues would otherwise appear twice (once on each branch's review) and increase the odds of merge conflicts as both branches "fix" the same lines independently.
+If your branch's PR targets another branch instead of the base branch (a "stacked" PR), `review` diffs against that real base automatically — no flag needed. This avoids re-reporting issues that belong to the branch below yours in the stack. Those issues would otherwise appear twice (once on each branch's review) and increase the odds of merge conflicts as both branches "fix" the same lines independently.
 
-This requires an open PR (so `gh pr view` can report its base) and a local `origin/<base>` remote-tracking ref. If the base branch hasn't been fetched locally, the diff will fail with a "branch not found" error rather than silently falling back to `origin/main`. Run `git fetch origin <base-branch>` first if you hit this.
+This requires an open PR (so `gh pr view` can report its base) and a local `origin/<base>` remote-tracking ref. If the base branch hasn't been fetched locally, the diff will fail with a "branch not found" error rather than silently falling back to the setting, the host default branch or `origin/main`. Run `git fetch origin <base-branch>` first if you hit this.
 
 Pass `--base-branch` explicitly to skip auto-detection entirely (e.g. in CI, or before a PR exists).
+
+vibe_heal's `DOTHARNESS_BASE_BRANCH` is its own knob, separate from pr_review `[repo].base_branch` (see its [definition](../pr_review/configuration.md) and [Base branch resolution](../pr_review/commands/review-prs.md#base-branch-resolution)). The [equivalence rule](branch-cleanup-guide.md#separate-knobs-per-tool) is stated once in the Branch Cleanup Guide.
 
 ## How It Works
 
@@ -189,7 +191,7 @@ The two phases are decoupled — you can run `review` in CI and `review --post` 
 Without `--coverage`:
 ```
 Review Summary:
-  Branch: feature/new-api (base: origin/main)
+  Branch: feature/new-api (base: origin/main)   # default-main example
   Files checked: 4
   Total issues: 7
   Duplication findings: 1
@@ -278,20 +280,20 @@ The review command reports two types of duplication findings:
 
 ## Baseline Mode
 
-`vibe_heal review --baseline` refreshes the real SonarQube project's analysis directly. It exists for CI harnesses that need SonarQube's baseline for `main` to stay current between PR review cycles, so later PR reviews get accurate duplicate-code comparisons. The "resolved duplications" check queries the real project's most recent analysis, not a temp project (see [Duplication Findings](#duplication-findings)).
+`vibe_heal review --baseline` refreshes the real SonarQube project's analysis directly. It exists for CI harnesses that need SonarQube's baseline for the base branch to stay current (see the [glossary](branch-cleanup-guide.md#glossary); `--baseline` takes no ref, and "main" in the vibe_heal names is explained in [Main means the configured base branch](branch-cleanup-guide.md#main-means-the-configured-base-branch)) between PR review cycles, so later PR reviews get accurate duplicate-code comparisons. The "resolved duplications" check queries the real project's most recent analysis, not a temp project (see [Duplication Findings](#duplication-findings)).
 
 ### Why it's a separate mode
 
-The normal `review` analyze phase (see [How It Works](#how-it-works)) always scans a **temporary, disposable SonarQube project** and deletes it afterward — it never re-analyzes the real project. If you run `review` on a checkout of `main` with no diff against the base branch, it short-circuits with "No modified files to review" and no scan runs at all, so the real project's SonarQube analysis goes stale.
+The normal `review` analyze phase (see [How It Works](#how-it-works)) always scans a **temporary, disposable SonarQube project** and deletes it afterward — it never re-analyzes the real project. If you run `review` on a checkout of the base branch with no diff against the base branch, it short-circuits with "No modified files to review" and no scan runs at all, so the real project's SonarQube analysis goes stale.
 
-`--baseline` bypasses all of that: it computes no diff, creates no temporary project, and writes no report. It runs `sonar-scanner` directly against `config.sonarqube_project_key` — the same thing a normal CI build of `main` would do.
+`--baseline` bypasses all of that: it computes no diff, creates no temporary project, and writes no report. It runs `sonar-scanner` directly against `config.sonarqube_project_key` — the same thing a normal CI build of the base branch would do.
 
 `--baseline` is **explicit-only**. It does not trigger automatically when a diff happens to be empty. That would risk overwriting the real project's SonarQube baseline with a developer's local working-tree state during ordinary interactive use (e.g. running `vibe_heal review` on a feature branch with no committed diff yet, but uncommitted local edits).
 
 ### Usage
 
 ```bash
-# On a clean checkout of main
+# On a clean checkout of the base branch (here: main)
 git checkout main && git pull
 
 vibe_heal review --baseline

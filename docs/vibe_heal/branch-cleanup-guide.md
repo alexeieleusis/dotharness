@@ -17,7 +17,7 @@ Use `vibe_heal cleanup` when:
 
 ## How It Works
 
-1. **Analyzes branch**: Compares current branch against base branch (default: `origin/main`)
+1. **Analyzes branch**: Compares current branch against the [base branch](#base-branch) (resolved as described in [Resolution chains](#resolution-chains); `origin/main` is the final fallback)
 2. **Creates temporary project**: Creates a unique SonarQube project for analysis
    - Project naming format: `{base_key}_{sanitized_email}_{sanitized_branch}_{timestamp}`
    - Timestamp format: `yymmdd-hhmm` (e.g., `251024-1630` for October 24, 2025 at 4:30 PM UTC)
@@ -72,6 +72,63 @@ AI_TOOL=claude-code  # or "opencode"
 # PRE_COMMIT_COMMAND=            # empty string = disabled
 # PRE_COMMIT_COMMAND=pre-commit run --files  # explicit command
 ```
+
+## Base branch
+
+vibe_heal does not assume that `main` is trunk. The base branch is configurable, and this section is the one place where the terms, the resolution chains and the settings are defined. The [review guide](review-guide.md) and the [API reference](api.md) link here.
+
+### Glossary
+
+- **Base branch**: the ref the harness treats as trunk for its own clone, baseline and intake work. Configured as a short name.
+- **Repository default branch**: what the code host declares as default (`Repository.default_branch`). It may differ from the base branch.
+- **PR base branch**: the per-PR target from the host (`ChangeRequest.base_reference`).
+- **Short name vs full ref**: `develop` is a short name and `origin/develop` is a full ref. Configured values are short names, and the code prefixes `origin/`.
+- **Baseline**: `vibe_heal review --baseline`, a full scan of the current working directory. It takes no ref. Its only coupling to the base branch is which checkout pr_review leaves it on.
+
+### Resolution chains
+
+`cleanup`, `cleanup-pr` and `dedupe-branch` resolve the base branch in this order, and the first source that yields a value wins:
+
+1. an explicit `--base-branch` / `-b`
+2. the `DOTHARNESS_BASE_BRANCH` setting
+3. the repository default branch from the code host
+4. `origin/main` (the final fallback)
+
+`review` adds the PR base of the current branch, which it auto-detects with `gh pr view` as before: explicit `--base-branch` > PR base of the current branch (auto-detected via `gh pr view`) > `DOTHARNESS_BASE_BRANCH` > repository default branch > `origin/main`.
+
+The cleanup family reads the repository default branch from the code host only when neither `-b` nor `DOTHARNESS_BASE_BRANCH` is set. If that read fails, it degrades silently to `origin/main`: there is no warning and no error. The `review` command reports the failure with a warning or verbose message and then also uses `origin/main`.
+
+Repositories whose base branch is `main` behave as before.
+
+### `-b` / `--base-branch`
+
+The `--base-branch` / `-b` option is passed to git as given, with no `origin/` prefix added and no `gh` auto-detection (`review` is the exception, see the [review guide](review-guide.md#stacked-prs)). Pass a full ref such as `origin/develop`. A short name such as `develop` is read by git as the local branch `develop`. The option shows its default as "auto" in the option tables, because the default is resolved at run time. This is the only place that states what `-b` accepts. The `DOTHARNESS_BASE_BRANCH` setting follows different rules, below.
+
+### `DOTHARNESS_BASE_BRANCH`
+
+Set it in `.env.vibeheal`, `.env` or the environment:
+
+```bash
+DOTHARNESS_BASE_BRANCH=develop
+```
+
+- The value is a short name such as `develop`. Use `develop`, not `origin/develop`.
+- An empty value means unset.
+- The code prefixes `origin/`, so `develop` resolves to `origin/develop`.
+- If `origin/<B>` is not found, it falls back to the local branch `<B>`.
+
+### Separate knobs per tool
+
+vibe_heal uses its own knob, `DOTHARNESS_BASE_BRANCH`. It is not shared with pr_review `[repo].base_branch` (see the [configuration page](../pr_review/configuration.md) and [Base branch resolution](../pr_review/commands/review-prs.md#base-branch-resolution)) or with sisyphus `[project].base_branch`. For a repo that uses several tools, set the same short name in each; a mismatch is not detected. vibe_heal does not read `.harness.toml` or `.sisyphus.toml`.
+
+### Worked example
+
+An Azure DevOps repository whose integration branch is `develop`:
+
+1. `DOTHARNESS_BASE_BRANCH=develop`: `cleanup-pr` diffs against `origin/develop` (the local `develop` if the remote ref is absent), regardless of any `main`.
+2. Variable unset: the repository default branch is used, prefixed with `origin/`. If the host declares `develop` as default, the result is `origin/develop`.
+3. Variable unset and the host read fails: `origin/main`, silently.
+4. `-b origin/release-1.0` on the command line beats all of the above.
 
 ## sonar-project.properties Support
 
@@ -133,12 +190,14 @@ vibe_heal cleanup
 ```
 
 This will:
-- Compare against `origin/main`
+- Compare against the resolved base branch (see [Resolution chains](#resolution-chains))
 - Fix all modified files
 - Run up to 10 iterations per file
 - Create git commits for each fix
 
 ### Specify base branch
+
+When you omit the option, the base branch is resolved as described in [Resolution chains](#resolution-chains).
 
 ```bash
 # Compare against develop branch
@@ -211,7 +270,7 @@ vibe_heal cleanup
 
 # Output:
 # Branch Cleanup
-#   Base branch: origin/main
+#   Base branch: origin/main   (default-main example)
 #   Max iterations per file: 10
 #
 # Auto-detected AI tool: Claude Code
@@ -250,7 +309,7 @@ vibe_heal cleanup --base-branch origin/develop --max-iterations 15
 
 ```
 Branch Cleanup
-  Base branch: origin/main
+  Base branch: origin/main   (default-main example)
   Max iterations per file: 10
 
 Using configured AI tool: Claude Code
@@ -271,7 +330,7 @@ Per-File Results:
 
 ```
 Branch Cleanup
-  Base branch: origin/main
+  Base branch: origin/main   (default-main example)
   Max iterations per file: 10
 
 Using configured AI tool: Claude Code
@@ -326,7 +385,7 @@ vibe_heal cleanup-pr --dry-run
 # Compare against another base, only Python files, only MAJOR and above issues
 vibe_heal cleanup-pr --base-branch origin/develop --pattern "*.py" --min-severity MAJOR
 
-# Also refactor duplications that existed in main (see the warning below)
+# Also refactor duplications that existed in the base branch (see the warning below)
 vibe_heal cleanup-pr --include-main-duplications
 ```
 
@@ -334,7 +393,7 @@ vibe_heal cleanup-pr --include-main-duplications
 
 | Flag | Default | Behavior |
 |---|---|---|
-| `--base-branch`, `-b` | `origin/main` | Base to diff against. Plain `origin/main`, no `gh` auto-detection |
+| `--base-branch`, `-b` | auto | Base to diff against, resolved at run time when omitted (see [Resolution chains](#resolution-chains)). Passed to git as given, with no `gh` auto-detection (see [`-b`](#-b-base-branch)) |
 | `--max-iterations`, `-i` | `10` | Maximum analyze -> fix rounds for the whole branch |
 | `--pattern`, `-p` | none | Glob filters (repeatable), same as `cleanup` (matched with `Path.match`) |
 | `--min-severity` | none | Minimum severity (`BLOCKER`, `CRITICAL`, `MAJOR`, `MINOR`, `INFO`). Applies to issues only |
@@ -342,7 +401,7 @@ vibe_heal cleanup-pr --include-main-duplications
 | `--ai-tool` | auto-detect | Same as `cleanup` |
 | `--env-file` | `.env.vibeheal` / `.env` | Same as `cleanup` |
 | `--verbose`, `-v` | off | Same as `cleanup` |
-| `--include-main-duplications` | off | Also handle duplications that existed in main (runs a baseline scan) |
+| `--include-main-duplications` | off | Also handle duplications that existed in the base branch (runs a baseline scan). "main" in the flag name means [the configured base branch](#main-means-the-configured-base-branch) |
 
 `--pattern` uses `Path.match` (like `cleanup` and `review`), whereas `dedupe-branch` uses `fnmatch`, so the same pattern can behave differently between the commands.
 
@@ -359,7 +418,7 @@ vibe_heal cleanup-pr --include-main-duplications
    - An AI tool is available, even with `--dry-run`. The in-scope fixers invoke it. Only the main-duplication counts are reported without an AI call.
    - The working tree has no modified or staged files (untracked files are fine).
    - The base ref's remote is fetched, also in `--dry-run`. If the fetch fails, it refuses to run. There is no fallback to the local ref.
-   - The base tip is an ancestor of `HEAD`. Otherwise it stops with `Branch is not up to date with origin/main; rebase or merge origin/main first`. A branch that merged the base in also passes. The rule applies to any `--base-branch`.
+   - The base tip is an ancestor of `HEAD`. Otherwise it stops with `Branch is not up to date with <base>; rebase or merge <base> first`, where `<base>` is the resolved base ref (for example `origin/develop`). A branch that merged the base in also passes. The rule applies to any `--base-branch`.
 2. **File selection**: modified files versus the base, then the `--pattern` filter. An empty selection is a success with zero counts.
 3. **Baseline scan** (only with `--include-main-duplications`, see below).
 4. **Temporary project**: the command creates a temporary SonarQube project for the analysis.
@@ -370,7 +429,11 @@ vibe_heal cleanup-pr --include-main-duplications
 
 > **Warning:** this flag runs a baseline scan of the base ref, in a temporary detached `git worktree`, against your **real** SonarQube project key. This **overwrites the real project's analysis on the SonarQube server, including with `--dry-run`**. With the flag, a run performs two full-repository analyses. The scan is skipped when no files are selected. If it fails, the run stops with `Baseline scan failed: ...`.
 
-A *main duplication* is a duplication that existed in main, was modified or removed by your branch, and is no longer active. For each one, the command asks the AI tool to extract the shared code into a helper, update all other locations, and then re-apply your branch's change on top, with no behavior change beyond your diff. Each one gets its own commit. With `--dry-run` they are only counted as would-fix.
+A *main duplication* is a duplication that existed in the base branch, was modified or removed by your branch, and is no longer active. For each one, the command asks the AI tool to extract the shared code into a helper, update all other locations, and then re-apply your branch's change on top, with no behavior change beyond your diff. Each one gets its own commit. With `--dry-run` they are only counted as would-fix.
+
+### Main means the configured base branch
+
+"main" in "main duplication", in `--include-main-duplications`, and in the `main_*` result fields (`total_main_duplications_fixed`, `main_duplications_fixed`, `main_duplications_skipped`) means "the configured base branch". The names are intentionally kept. The [API reference](api.md#pr-scoped-cleanup) and the [review guide](review-guide.md#baseline-mode) link here and do not redefine it.
 
 These mechanics are the least proven part of the command. Review those commits carefully.
 
@@ -388,7 +451,7 @@ One commit per fix, with no extra trailer:
 
 ```
 Branch Cleanup (PR scope)
-  Base branch: origin/main
+  Base branch: origin/main   (default-main example)
   Max analysis rounds (whole branch): 10
 
 Cleanup Summary (PR scope):
@@ -555,7 +618,7 @@ curl -u "your_token:" -X POST "https://sonar.example.com/api/projects/delete?pro
 
 ```bash
 # Check what git sees as modified
-git diff --name-only origin/main...HEAD
+git diff --name-only origin/<base>...HEAD
 
 # Add files to git
 git add <files>
@@ -621,7 +684,7 @@ git log --oneline -20
 git diff HEAD~10..HEAD
 
 # If needed, squash cleanup commits
-git rebase -i origin/main
+git rebase -i origin/<base>
 ```
 
 ### 4. Test after cleanup
@@ -670,14 +733,14 @@ There's no dry-run for the `cleanup` command, but you can:
 2. Check what would be cleaned:
    ```bash
    # See modified files
-   git diff --name-only origin/main...HEAD
+   git diff --name-only origin/<base>...HEAD
    ```
 
 ### Cleanup after rebase
 
 ```bash
 # After rebasing
-git rebase origin/main
+git rebase origin/<base>
 
 # Fix any new issues introduced
 vibe_heal cleanup
