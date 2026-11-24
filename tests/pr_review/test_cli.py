@@ -508,3 +508,23 @@ def test_template_shows_host_token_cmd_and_not_the_removed_key():
 
     assert "gh_token_cmd" not in TEMPLATE
     assert "host_token_cmd" in TEMPLATE
+
+
+def test_state_reset_clears_last_main_sha(minimal_toml, tmp_xdg):
+    from dotharness.pr_review import state
+
+    state.write_vibe_heal_state("acme-frontend", last_main_sha="develop@" + "a" * 40)
+    CliRunner().invoke(cli, ["state", "reset", "review-prs", "--config", str(minimal_toml), "--yes"])
+    assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == ""
+
+
+def test_run_all_absent_base_ref_error_names_ref_and_source(minimal_toml, tmp_xdg, caplog):
+    caplog.set_level(logging.ERROR)
+    error = BaseAnalysisError("fetch", "failed", "origin/develop", "config")
+    result, _ = _invoke_all_with_review_prs_error(minimal_toml, error)
+
+    assert result.exit_code == 1
+    messages = [r.getMessage() for r in _failure_records(caplog)]
+    assert len(messages) == 1
+    assert "origin/develop" in messages[0]
+    assert "config" in messages[0]
