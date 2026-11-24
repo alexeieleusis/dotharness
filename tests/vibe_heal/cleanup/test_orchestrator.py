@@ -82,7 +82,7 @@ class TestCleanupBranch:
             "get_modified_files",
             return_value=[],
         ):
-            result = await orchestrator.cleanup_branch()
+            result = await orchestrator.cleanup_branch("origin/main")
 
         assert result.success is True
         assert result.files_processed == []
@@ -97,7 +97,7 @@ class TestCleanupBranch:
             "get_modified_files",
             return_value=[Path("test.txt"), Path("data.json")],
         ):
-            result = await orchestrator.cleanup_branch(file_patterns=["*.py"])
+            result = await orchestrator.cleanup_branch("origin/main", file_patterns=["*.py"])
 
         assert result.success is True
         assert result.files_processed == []
@@ -146,7 +146,7 @@ class TestCleanupBranch:
                 new_callable=AsyncMock,
             ) as mock_delete,
         ):
-            result = await orchestrator.cleanup_branch()
+            result = await orchestrator.cleanup_branch("origin/main")
 
         assert result.success is False
         assert "Analysis failed at iteration 1" in (result.error_message or "")
@@ -166,7 +166,7 @@ class TestCleanupBranch:
                 side_effect=Exception("Git error"),
             ),
         ):
-            result = await orchestrator.cleanup_branch()
+            result = await orchestrator.cleanup_branch("origin/main")
 
         assert result.success is False
         assert "Cleanup failed: Git error" in (result.error_message or "")
@@ -210,7 +210,7 @@ class TestCleanupBranch:
                 new_callable=AsyncMock,
             ) as mock_delete,
         ):
-            result = await orchestrator.cleanup_branch()
+            result = await orchestrator.cleanup_branch("origin/main")
 
         assert result.success is False
         # Project should still be deleted

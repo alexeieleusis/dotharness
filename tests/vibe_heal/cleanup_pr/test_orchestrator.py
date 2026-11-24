@@ -148,7 +148,7 @@ class TestCleanupPrPreconditions:
     ) -> None:
         """A failed fetch refuses the run with a domain error, before SonarQube work."""
         with _preconditions_pass(orchestrator, fetch_rc=1), pytest.raises(GitOperationError, match="fetch"):
-            await orchestrator.cleanup_pr()
+            await orchestrator.cleanup_pr("origin/main")
 
         # No SonarQube client call happened.
         assert mock_client.method_calls == []
@@ -237,7 +237,7 @@ class TestCleanupPrPreconditions:
     ) -> None:
         """A non-ancestor (not up to date) base refuses the run, before SonarQube work."""
         with _preconditions_pass(orchestrator, ancestor_rc=1), pytest.raises(GitOperationError, match="not up to date"):
-            await orchestrator.cleanup_pr()
+            await orchestrator.cleanup_pr("origin/main")
 
         # No SonarQube client call happened.
         assert mock_client.method_calls == []
@@ -250,7 +250,7 @@ class TestCleanupPrPreconditions:
     ) -> None:
         """A dirty working tree raises DirtyWorkingDirectoryError, before SonarQube work."""
         with _preconditions_pass(orchestrator, dirty=True), pytest.raises(DirtyWorkingDirectoryError):
-            await orchestrator.cleanup_pr()
+            await orchestrator.cleanup_pr("origin/main")
 
         # No SonarQube client call happened.
         assert mock_client.method_calls == []
@@ -279,7 +279,7 @@ class TestCleanupPrFileSelection:
                 new_callable=AsyncMock,
             ) as mock_create,
         ):
-            result = await orchestrator.cleanup_pr()
+            result = await orchestrator.cleanup_pr("origin/main")
 
         assert result.success is True
         assert result.files_processed == []
@@ -312,7 +312,7 @@ class TestCleanupPrFileSelection:
                 new_callable=AsyncMock,
             ) as mock_create,
         ):
-            result = await orchestrator.cleanup_pr(file_patterns=["*.ts"])
+            result = await orchestrator.cleanup_pr("origin/main", file_patterns=["*.ts"])
 
         assert result.success is True
         assert result.files_processed == []
@@ -358,7 +358,7 @@ class TestCleanupPrTempProjectLifecycle:
             ),
             patch.object(orchestrator.project_manager, "delete_project", new_callable=AsyncMock),
         ):
-            result = await orchestrator.cleanup_pr()
+            result = await orchestrator.cleanup_pr("origin/main")
 
         assert result.success is False
         assert "boom" in (result.error_message or "")
@@ -398,7 +398,7 @@ class TestCleanupPrTempProjectLifecycle:
                 new_callable=AsyncMock,
             ) as mock_delete,
         ):
-            result = await orchestrator.cleanup_pr()
+            result = await orchestrator.cleanup_pr("origin/main")
 
         assert result.success is False
         assert "Analysis failed" in (result.error_message or "")
@@ -437,7 +437,7 @@ class TestCleanupPrTempProjectLifecycle:
                 side_effect=Exception("delete failed"),
             ),
         ):
-            result = await orchestrator.cleanup_pr()
+            result = await orchestrator.cleanup_pr("origin/main")
 
         # Deletion is a warning, not an error, so the run still succeeds.
         assert result.success is True
@@ -809,7 +809,7 @@ class TestIterationLoopControl:
             patch.object(orchestrator.project_manager, "delete_project", new_callable=AsyncMock) as mock_delete,
             _loop_env(orchestrator, mock_client, temp_project, [], analysis_ok=False),
         ):
-            result = await orchestrator.cleanup_pr(max_iterations=2)
+            result = await orchestrator.cleanup_pr("origin/main", max_iterations=2)
 
         assert result.success is False
         assert "Analysis failed at iteration 1" in (result.error_message or "")
@@ -842,7 +842,7 @@ class TestIterationLoopControl:
             ) as env,
         ):
             env.sleep.side_effect = RuntimeError("dirty tree")
-            result = await orchestrator.cleanup_pr(max_iterations=2)
+            result = await orchestrator.cleanup_pr("origin/main", max_iterations=2)
 
         assert result.success is False
         assert "Cleanup failed: dirty tree" in (result.error_message or "")
@@ -923,7 +923,7 @@ class TestIterationLoopControl:
             mock_client.get_issues_for_file = AsyncMock(side_effect=issues_side_effect)
             h.dup_client.get_duplications_for_file = AsyncMock(side_effect=dup_query_side_effect)
             with patch(f"{_MODULE}.DuplicationClient", side_effect=dup_client_factory):
-                result = await orchestrator.cleanup_pr(include_main_duplications=False)
+                result = await orchestrator.cleanup_pr("origin/main", include_main_duplications=False)
 
         assert result.success is True
         temp_key = temp_project.project_key

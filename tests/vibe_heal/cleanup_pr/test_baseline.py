@@ -167,7 +167,7 @@ class TestBaselineScan:
     ) -> None:
         env, _, _ = _setup(orchestrator, temp_project, _ok())
         with _preconditions_pass(orchestrator), _patch_subprocess(env):
-            result = await orchestrator.cleanup_pr(include_main_duplications=True, dry_run=True)
+            result = await orchestrator.cleanup_pr("origin/main", include_main_duplications=True, dry_run=True)
 
         assert result.success is True
         assert cast("AsyncMock", orchestrator.analysis_runner.run_analysis).await_count == 1
@@ -178,7 +178,7 @@ class TestBaselineScan:
     ) -> None:
         env, _, _ = _setup(orchestrator, temp_project, _ok())
         with _preconditions_pass(orchestrator), _patch_subprocess(env):
-            result = await orchestrator.cleanup_pr(include_main_duplications=False)
+            result = await orchestrator.cleanup_pr("origin/main", include_main_duplications=False)
 
         assert result.success is True
         assert env.worktree_cmds == []
@@ -195,7 +195,7 @@ class TestBaselineScan:
     ) -> None:
         env, create, delete = _setup(orchestrator, temp_project, _fail())
         with _preconditions_pass(orchestrator), _patch_subprocess(env):
-            result = await orchestrator.cleanup_pr(include_main_duplications=True)
+            result = await orchestrator.cleanup_pr("origin/main", include_main_duplications=True)
 
         assert result.success is False
         assert "Baseline scan failed: scan broke" in (result.error_message or "")
@@ -212,7 +212,7 @@ class TestBaselineScan:
     ) -> None:
         env, create, _ = _setup(orchestrator, temp_project, RuntimeError("kaboom"))
         with _preconditions_pass(orchestrator), _patch_subprocess(env):
-            result = await orchestrator.cleanup_pr(include_main_duplications=True)
+            result = await orchestrator.cleanup_pr("origin/main", include_main_duplications=True)
 
         assert result.success is False
         assert "kaboom" in (result.error_message or "")
@@ -231,7 +231,7 @@ class TestBaselineScan:
             _patch_subprocess(env, worktree_add_rc=128),
             patch("dotharness.vibe_heal.git.branch_analyzer.tempfile.mkdtemp", return_value=str(leaked_dir)),
         ):
-            result = await orchestrator.cleanup_pr(include_main_duplications=True)
+            result = await orchestrator.cleanup_pr("origin/main", include_main_duplications=True)
 
         assert result.success is False
         assert "bad ref" in (result.error_message or "")
@@ -254,7 +254,7 @@ class TestBaselineScan:
             patch("dotharness.vibe_heal.git.branch_analyzer.warn") as warn,
             patch("dotharness.vibe_heal.git.branch_analyzer.shutil.rmtree", side_effect=shutil.rmtree) as rmtree,
         ):
-            result = await orchestrator.cleanup_pr(include_main_duplications=True)
+            result = await orchestrator.cleanup_pr("origin/main", include_main_duplications=True)
 
         assert result.success is True
         assert env.events == ["worktree_add", "baseline", "worktree_remove", "create_temp"]
@@ -277,7 +277,7 @@ class TestBaselineScan:
             patch("dotharness.vibe_heal.git.branch_analyzer.warn") as warn,
             patch("dotharness.vibe_heal.git.branch_analyzer.shutil.rmtree", side_effect=shutil.rmtree) as rmtree,
         ):
-            result = await orchestrator.cleanup_pr(include_main_duplications=True)
+            result = await orchestrator.cleanup_pr("origin/main", include_main_duplications=True)
 
         assert result.success is True
         assert env.events == ["worktree_add", "baseline", "worktree_remove", "create_temp"]
@@ -295,7 +295,7 @@ class TestBaselineScan:
     ) -> None:
         env, _, _ = _setup(orchestrator, temp_project, _ok(), files=[])
         with _preconditions_pass(orchestrator), _patch_subprocess(env):
-            result = await orchestrator.cleanup_pr(include_main_duplications=True)
+            result = await orchestrator.cleanup_pr("origin/main", include_main_duplications=True)
 
         assert result.success is True
         assert env.events == []
@@ -307,7 +307,7 @@ class TestBaselineScan:
         env, _, delete = _setup(orchestrator, temp_project, _ok())
         orchestrator._run_iteration_loop = AsyncMock(side_effect=Exception("boom"))  # type: ignore[method-assign]
         with _preconditions_pass(orchestrator), _patch_subprocess(env):
-            result = await orchestrator.cleanup_pr(include_main_duplications=True)
+            result = await orchestrator.cleanup_pr("origin/main", include_main_duplications=True)
 
         assert result.success is False
         delete.assert_awaited_once()

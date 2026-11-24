@@ -6,14 +6,14 @@ import logging
 import sys
 from importlib.metadata import version as _package_version
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any, cast
 
 import typer
 from rich.logging import RichHandler
 from rich.markup import escape as rich_escape
 from rich.table import Table
 
-from dotharness.code_host import CodeHost, HostSelection, NoChangeRequestError, create_code_host
+from dotharness.code_host import CodeHost, CodeHostError, HostSelection, NoChangeRequestError, create_code_host
 from dotharness.code_host import ConfigurationError as CodeHostConfigurationError
 from dotharness.vibe_heal.ai_tools.base import AITool, AIToolType
 from dotharness.vibe_heal.ai_tools.factory import AIToolFactory
@@ -30,12 +30,13 @@ from dotharness.vibe_heal.deduplication.orchestrator import (
     DedupeBranchResult,
     DeduplicationOrchestrator,
 )
+from dotharness.vibe_heal.git.base_branch import resolve_default_base
+from dotharness.vibe_heal.git.branch_analyzer import BranchAnalyzer
 from dotharness.vibe_heal.orchestrator import VibeHealOrchestrator
 from dotharness.vibe_heal.output import bold, bold_cyan, console, cyan, dim, error, info, success, warn
 from dotharness.vibe_heal.review import ReviewOrchestrator
 from dotharness.vibe_heal.review.models import ReviewIssue
 from dotharness.vibe_heal.review.orchestrator import (
-    DEFAULT_BASE_BRANCH,
     BaselineScanResult,
     ReviewAnalysisResult,
     post_report,
@@ -58,7 +59,10 @@ DRY_RUN_HELP = "Preview fixes without committing"
 ENV_FILE_HELP = "Path to custom environment file (default: .env.vibeheal or .env)"
 AI_TOOL_OVERRIDE_HELP = "AI tool to use (overrides config)"
 FILE_PATTERN_HELP = "File patterns to filter (e.g., '*.py', 'src/**/*.ts')"
-BASE_BRANCH_HELP = "Base branch to compare against"
+BASE_BRANCH_HELP = (
+    "Base branch to compare against. If omitted: DOTHARNESS_BASE_BRANCH, then the repository's "
+    "default branch on the code host, then origin/main."
+)
 
 # Display constants
 GITHUB_FOOTER_LINE = "\n[dim]GitHub: https://github.com/alexeieleusis/dotharness[/dim]"
@@ -95,6 +99,46 @@ def _start_code_host(config: CodeHostSettings) -> CodeHost:
             token_cmd=None,
         )
     )
+
+
+class _UnavailableRepository:
+    """Repository stand-in whose reads fail, so the resolver degrades to its final fallback."""
+
+    async def current(self) -> Any:
+        raise CodeHostError
+
+
+class _UnavailableCodeHost:
+    """Code host stand-in used when the configured host cannot be created."""
+
+    repository = _UnavailableRepository()
+
+
+def _resolve_cleanup_base(config: VibeHealConfig, base_branch: str | None) -> str:
+    """Resolve the base ref once for a cleanup-family command.
+
+    An explicit flag wins and is returned unchanged. Otherwise the shared resolver applies the setting, then
+    the host default branch, then origin/main. Host failures degrade silently: the resolver's warning log is
+    suppressed here, so output and exit status do not change.
+    """
+    if base_branch is not None:
+        return base_branch
+
+    async def _resolve() -> str:
+        try:
+            code_host: CodeHost = _start_code_host(config)
+        except CodeHostError:
+            code_host = cast(CodeHost, _UnavailableCodeHost())
+        resolution = await resolve_default_base(config, code_host, BranchAnalyzer(Path.cwd()))
+        return resolution.ref
+
+    resolver_logger = logging.getLogger("dotharness.vibe_heal.git.base_branch")
+    previously_disabled = resolver_logger.disabled
+    resolver_logger.disabled = True
+    try:
+        return asyncio.run(_resolve())
+    finally:
+        resolver_logger.disabled = previously_disabled
 
 
 def setup_logging(verbose: bool) -> None:
@@ -392,8 +436,8 @@ async def _run_cleanup(
 
 @app.command()
 def cleanup(
-    base_branch: str = typer.Option(
-        DEFAULT_BASE_BRANCH,
+    base_branch: str | None = typer.Option(
+        None,
         "--base-branch",
         "-b",
         help=BASE_BRANCH_HELP,
@@ -424,10 +468,12 @@ def cleanup(
         if ai_tool:
             config.ai_tool = ai_tool
 
+        resolved_base = _resolve_cleanup_base(config, base_branch)
+
         # Display what we're doing
         _display_branch_operation_header(
             operation_name="Branch Cleanup",
-            base_branch=base_branch,
+            base_branch=resolved_base,
             max_iterations=max_iterations,
             file_patterns=file_patterns,
         )
@@ -440,7 +486,7 @@ def cleanup(
             _run_cleanup(
                 config=config,
                 ai_tool_instance=ai_tool_instance,
-                base_branch=base_branch,
+                base_branch=resolved_base,
                 max_iterations=max_iterations,
                 file_patterns=file_patterns,
                 verbose=verbose,
@@ -555,8 +601,8 @@ async def _run_cleanup_pr(
 
 @app.command()
 def cleanup_pr(
-    base_branch: str = typer.Option(
-        DEFAULT_BASE_BRANCH,
+    base_branch: str | None = typer.Option(
+        None,
         "--base-branch",
         "-b",
         help=BASE_BRANCH_HELP,
@@ -626,9 +672,11 @@ def cleanup_pr(
         if ai_tool:
             config.ai_tool = ai_tool
 
+        resolved_base = _resolve_cleanup_base(config, base_branch)
+
         _display_branch_operation_header(
             operation_name="Branch Cleanup (PR scope)",
-            base_branch=base_branch,
+            base_branch=resolved_base,
             max_iterations=max_iterations,
             file_patterns=file_patterns,
             iterations_label="Max analysis rounds (whole branch)",
@@ -640,7 +688,7 @@ def cleanup_pr(
             _run_cleanup_pr(
                 config=config,
                 ai_tool_instance=ai_tool_instance,
-                base_branch=base_branch,
+                base_branch=resolved_base,
                 max_iterations=max_iterations,
                 file_patterns=file_patterns,
                 min_severity=min_severity,
@@ -722,8 +770,8 @@ async def _run_dedupe_branch(
 
 @app.command()
 def dedupe_branch(
-    base_branch: str = typer.Option(
-        DEFAULT_BASE_BRANCH,
+    base_branch: str | None = typer.Option(
+        None,
         "--base-branch",
         "-b",
         help=BASE_BRANCH_HELP,
@@ -754,10 +802,12 @@ def dedupe_branch(
         if ai_tool:
             config.ai_tool = ai_tool
 
+        resolved_base = _resolve_cleanup_base(config, base_branch)
+
         # Display what we're doing
         _display_branch_operation_header(
             operation_name="Branch Deduplication",
-            base_branch=base_branch,
+            base_branch=resolved_base,
             max_iterations=max_iterations,
             file_patterns=file_patterns,
         )
@@ -770,7 +820,7 @@ def dedupe_branch(
             _run_dedupe_branch(
                 config=config,
                 ai_tool_instance=ai_tool_instance,
-                base_branch=base_branch,
+                base_branch=resolved_base,
                 max_iterations=max_iterations,
                 file_patterns=file_patterns,
                 verbose=verbose,
@@ -1074,8 +1124,6 @@ def _review_post_mode(
     try:
         code_host = _start_code_host_for_post(env_file)
         if report_file is None:
-            from dotharness.vibe_heal.git.branch_analyzer import BranchAnalyzer
-
             branch = BranchAnalyzer(Path.cwd()).get_current_branch()
             try:
                 _cfg = VibeHealConfig(env_file=env_file)
@@ -1185,8 +1233,8 @@ def review(
         "-b",
         help=(
             "Base branch to compare against. If omitted, auto-detects the "
-            "current PR's actual base branch via gh, falling back to "
-            "origin/main when no open PR is found."
+            "current PR's actual base branch, then uses DOTHARNESS_BASE_BRANCH, then the "
+            "repository's default branch on the code host, then origin/main."
         ),
     ),
     file_patterns: Annotated[

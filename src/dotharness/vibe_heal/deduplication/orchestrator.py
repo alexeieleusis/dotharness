@@ -553,7 +553,7 @@ class DedupeBranchOrchestrator:
 
     async def dedupe_branch(
         self,
-        base_branch: str = "origin/main",
+        base_branch: str,
         max_iterations: int = 10,
         file_patterns: list[str] | None = None,
         verbose: bool = False,
@@ -568,7 +568,7 @@ class DedupeBranchOrchestrator:
         5. Delete temporary project
 
         Args:
-            base_branch: Base branch to compare against (default: origin/main)
+            base_branch: Base branch to compare against (required; the CLI resolves it)
             max_iterations: Maximum dedup iterations per file (default: 10)
             file_patterns: Optional list of glob patterns to filter files
             verbose: Enable verbose output

@@ -709,7 +709,7 @@ class TestCleanupPrPassesThrough:
             patch.object(orchestrator, "_run_iteration_loop", loop),
         ):
             baseline.return_value = MagicMock(success=True)
-            result = await orchestrator.cleanup_pr(include_main_duplications=True)
+            result = await orchestrator.cleanup_pr("origin/main", include_main_duplications=True)
 
         assert result.success is True
         assert loop.call_args.kwargs["include_main_duplications"] is True

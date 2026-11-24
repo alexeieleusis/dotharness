@@ -70,8 +70,8 @@ class TestBranchAnalyzerInit:
 class TestGetModifiedFiles:
     """Tests for get_modified_files method."""
 
-    def test_get_modified_files_default_base_branch(self, branch_analyzer: BranchAnalyzer, tmp_path: Path) -> None:
-        """Test get_modified_files uses origin/main as default."""
+    def test_get_modified_files_requires_base_branch(self, branch_analyzer: BranchAnalyzer, tmp_path: Path) -> None:
+        """get_modified_files takes the base ref explicitly; it has no default."""
         # Create test files
         file1 = tmp_path / "file1.py"
         file1.write_text("content")
@@ -80,11 +80,13 @@ class TestGetModifiedFiles:
 
         # Mock branch validation
         with patch.object(branch_analyzer, "validate_branch_exists", return_value=True):
-            files = branch_analyzer.get_modified_files()
+            files = branch_analyzer.get_modified_files("origin/main")
 
-        # Verify default base branch is used
         branch_analyzer.repo.git.diff.assert_called_once_with("--name-only", "-z", "origin/main...HEAD")
         assert files == [Path("file1.py")]
+
+        with pytest.raises(TypeError):
+            branch_analyzer.get_modified_files()  # ty: ignore[missing-argument]
 
     def test_get_modified_files_custom_base_branch(self, branch_analyzer: BranchAnalyzer, tmp_path: Path) -> None:
         """Test get_modified_files with custom base branch."""
@@ -110,7 +112,7 @@ class TestGetModifiedFiles:
         branch_analyzer.repo.git.diff.return_value = "file1.py\0file2.py"
 
         with patch.object(branch_analyzer, "validate_branch_exists", return_value=True):
-            files = branch_analyzer.get_modified_files()
+            files = branch_analyzer.get_modified_files("origin/main")
 
         assert len(files) == 2
         assert Path("file1.py") in files
@@ -126,7 +128,7 @@ class TestGetModifiedFiles:
         branch_analyzer.repo.git.diff.return_value = "file1.py\0file2.py"
 
         with patch.object(branch_analyzer, "validate_branch_exists", return_value=True):
-            files = branch_analyzer.get_modified_files()
+            files = branch_analyzer.get_modified_files("origin/main")
 
         # Only existing file should be returned
         assert files == [Path("file1.py")]
@@ -142,7 +144,7 @@ class TestGetModifiedFiles:
         branch_analyzer.repo.git.diff.return_value = "src/modules/file1.py"
 
         with patch.object(branch_analyzer, "validate_branch_exists", return_value=True):
-            files = branch_analyzer.get_modified_files()
+            files = branch_analyzer.get_modified_files("origin/main")
 
         assert files == [Path("src/modules/file1.py")]
 
@@ -151,7 +153,7 @@ class TestGetModifiedFiles:
         branch_analyzer.repo.git.diff.return_value = ""
 
         with patch.object(branch_analyzer, "validate_branch_exists", return_value=True):
-            files = branch_analyzer.get_modified_files()
+            files = branch_analyzer.get_modified_files("origin/main")
 
         assert files == []
 
@@ -164,7 +166,7 @@ class TestGetModifiedFiles:
         branch_analyzer.repo.git.diff.return_value = "\0file1.py\0\0"
 
         with patch.object(branch_analyzer, "validate_branch_exists", return_value=True):
-            files = branch_analyzer.get_modified_files()
+            files = branch_analyzer.get_modified_files("origin/main")
 
         assert files == [Path("file1.py")]
 
@@ -176,7 +178,7 @@ class TestGetModifiedFiles:
         branch_analyzer.repo.git.diff.return_value = "café.py\0my file.py\0"
 
         with patch.object(branch_analyzer, "validate_branch_exists", return_value=True):
-            files = branch_analyzer.get_modified_files()
+            files = branch_analyzer.get_modified_files("origin/main")
 
         assert files == [Path("café.py"), Path("my file.py")]
 
@@ -196,7 +198,7 @@ class TestGetModifiedFiles:
             patch.object(branch_analyzer, "validate_branch_exists", return_value=True),
             pytest.raises(BranchAnalyzerError, match="Git diff command failed"),
         ):
-            branch_analyzer.get_modified_files()
+            branch_analyzer.get_modified_files("origin/main")
 
     def test_get_modified_files_filters_directories(self, branch_analyzer: BranchAnalyzer, tmp_path: Path) -> None:
         """Test that directories are filtered out, only files are returned."""
@@ -210,7 +212,7 @@ class TestGetModifiedFiles:
         branch_analyzer.repo.git.diff.return_value = "dir1\0file1.py"
 
         with patch.object(branch_analyzer, "validate_branch_exists", return_value=True):
-            files = branch_analyzer.get_modified_files()
+            files = branch_analyzer.get_modified_files("origin/main")
 
         # Only file should be returned
         assert files == [Path("file1.py")]
@@ -229,7 +231,7 @@ class TestGetModifiedFiles:
             patch.object(branch_analyzer, "validate_branch_exists", return_value=True),
             patch("dotharness.vibe_heal.git.branch_analyzer.Path.cwd", return_value=tmp_path),
         ):
-            files = branch_analyzer.get_modified_files()
+            files = branch_analyzer.get_modified_files("origin/main")
 
         assert files == [Path("src/main.py")]
 
@@ -250,7 +252,7 @@ class TestGetModifiedFiles:
             patch.object(branch_analyzer, "validate_branch_exists", return_value=True),
             patch("dotharness.vibe_heal.git.branch_analyzer.Path.cwd", return_value=subdir),
         ):
-            files = branch_analyzer.get_modified_files()
+            files = branch_analyzer.get_modified_files("origin/main")
 
         # Should be relative to CWD (foo/), not repo root
         assert files == [Path("src/main.py")]
@@ -277,7 +279,7 @@ class TestGetModifiedFiles:
             patch.object(branch_analyzer, "validate_branch_exists", return_value=True),
             patch("dotharness.vibe_heal.git.branch_analyzer.Path.cwd", return_value=subdir),
         ):
-            files = branch_analyzer.get_modified_files()
+            files = branch_analyzer.get_modified_files("origin/main")
 
         # Only foo/main.py should be returned, as bar/ is outside CWD
         assert files == [Path("main.py")]
@@ -298,7 +300,7 @@ class TestGetModifiedFiles:
             patch.object(branch_analyzer, "validate_branch_exists", return_value=True),
             patch("dotharness.vibe_heal.git.branch_analyzer.Path.cwd", return_value=subdir),
         ):
-            files = branch_analyzer.get_modified_files()
+            files = branch_analyzer.get_modified_files("origin/main")
 
         assert files == [Path("main.py")]
 
