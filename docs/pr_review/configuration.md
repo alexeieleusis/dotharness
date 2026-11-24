@@ -205,7 +205,7 @@ Optional. Used only by `pr_review run local-review`. All other commands ignore i
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `base` | string | unset | Default base ref for the review. |
+| `base` | string | unset | Default base ref for the review. Local-review base order: `--base` > `[local_review].base` > `[repo].base_branch` > `origin/HEAD` target > `main` (the final fallback). A `[repo].base_branch` value `<B>` is tried as `origin/<B>` first, then `<B>`; if neither resolves the command fails and does not fall through. Local-review stays offline: it never asks the code host for the default branch. See [Base branch resolution](commands/review-prs.md#base-branch-resolution). |
 | `output_dir` | path | unset | Default output root. The built-in default is `~/.local/share/dotharness/reviews`. The `--output-dir` flag overrides this. The value is stored as written (`~` is not expanded at load time). |
 
 ```toml
