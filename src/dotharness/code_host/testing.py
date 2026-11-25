@@ -20,7 +20,7 @@ from types import MappingProxyType
 from typing import Any, Protocol, TypeVar
 
 from dotharness.code_host import interfaces
-from dotharness.code_host.declarations import Anchor, Capability, HostDeclaration
+from dotharness.code_host.declarations import Anchor, Capability, HostDeclaration, supports_operation
 from dotharness.code_host.errors import (
     AuthenticationError,
     CodeHostError,
@@ -223,6 +223,10 @@ class HostSeeder(Protocol):
         ...
 
 
+# Operations whose support is read from ``HostDeclaration.unsupported_operations``.
+_DECLARATION_GOVERNED = frozenset({"WorkItems.remove_label"})
+
+
 @dataclass(frozen=True)
 class ConformanceTarget:
     host: CodeHost
@@ -235,6 +239,20 @@ class ConformanceTarget:
     # B-REP-4: URLs the host must accept as naming ``repository``, and URLs of other repositories it must reject.
     origin_urls: tuple[str, ...] = ()
     foreign_origin_urls: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Check ``unsupported`` against the host's declaration for the operations the declaration governs.
+
+        The declaration is the source of truth for ``WorkItems.remove_label``: a target that lists it while the host
+        declares it supported (or the reverse) is inconsistent, and fails here instead of passing silently.
+        """
+        declaration = self.host.declaration
+        for operation in sorted(_DECLARATION_GOVERNED | declaration.unsupported_operations):
+            declared_gap = not supports_operation(declaration, operation)
+            if declared_gap != (operation in self.unsupported):
+                state = "unsupported" if declared_gap else "supported"
+                msg = f"{operation}: the declaration says {state}, but ConformanceTarget.unsupported disagrees"
+                raise AssertionError(msg)
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -384,7 +402,10 @@ class InMemoryCodeHost:
         self._writes: list[Call] = []
         base = declaration or DECLARATION
         self.declaration: HostDeclaration = HostDeclaration(
-            capabilities=declared, limits=base.limits, anchors=base.anchors
+            capabilities=declared,
+            limits=base.limits,
+            anchors=base.anchors,
+            unsupported_operations=base.unsupported_operations,
         )
 
     # -- state views ---------------------------------------------------------------------------------------------
@@ -850,6 +871,7 @@ class InMemoryCodeHost:
             seeder=self,
             repository=self._repository,
             secret=self._token,
+            unsupported=self.declaration.unsupported_operations,
             origin_urls=(own,),
             foreign_origin_urls=(foreign,),
         )
@@ -1178,6 +1200,9 @@ class _FakeWorkItems(_Facet):
         self, repo: RepositoryRef, number: int, label: str
     ) -> None:
         def action() -> None:
+            if not supports_operation(self._host.declaration, "WorkItems.remove_label"):
+                msg = "WorkItems.remove_label is not supported by this host"
+                raise UnsupportedCapabilityError(msg, capability="WorkItems")
             items = self._host._work_items.get(repo, [])
             index = next((i for i, w in enumerate(items) if w.number == number), None)
             if index is None:
@@ -1840,6 +1865,10 @@ class CodeHostConformance:
             return
         repo, items = target.repository, target.host.work_items
         first = target.seeder.add_work_item(repo, title="one", labels=["x", "z"])
+        if await self._unsupported_op(
+            target, "WorkItems.remove_label", lambda: items.remove_label(repo, first.number, "x")
+        ):
+            return
         second = target.seeder.add_work_item(repo, title="two", labels=["y"])
 
         async def labels() -> dict[int, tuple[str, ...]]:
@@ -2183,10 +2212,13 @@ class CodeHostConformance:
 
     # -- empty, failed, timed out: one table for every method added after the review flow -------------------------
 
-    def _calls(self, target: ConformanceTarget) -> dict[str, tuple[bool, Callable[[], Awaitable[Any]]]]:
+    def _calls(
+        self, target: ConformanceTarget, *, include_unsupported: bool = False
+    ) -> dict[str, tuple[bool, Callable[[], Awaitable[Any]]]]:
         """Seed one change request with everything on it. Return ``operation -> (is a write, call)``.
 
-        Only operations of declared capabilities that the target does not list as unsupported are returned.
+        Only operations of declared capabilities that the target does not list as unsupported are returned, unless
+        ``include_unsupported`` is set.
         """
         repo, seeder, host = target.repository, target.seeder, target.host
         cr = seeder.add_change_request(repo, head_reference="feature/ops", head_revision="rev-ops", author="ann")
@@ -2200,7 +2232,7 @@ class CodeHostConformance:
         seeder.add_job(repo, job_id="900", failed_step="Run tests", log="log text")
         seeder.add_check(repo, n, name="build", status=CheckStatus.FAIL, job_id="900")
         seeder.add_workflow(repo, name="ci")
-        item = seeder.add_work_item(repo, title="an item")
+        item = seeder.add_work_item(repo, title="an item", labels=["tag"])
         seeder.link_closing(repo, work_item=item.number, change_request=n)
         check = Check("build", CheckStatus.FAIL, "https://example.test/runs/1/job/900", None, None, None, "900")
         crs, discussion, checks, items = host.change_requests, host.discussion, host.checks, host.work_items
@@ -2226,11 +2258,13 @@ class CodeHostConformance:
             "Checks.get_job": (False, lambda: checks.get_job(repo, "900")),
             "WorkItems.get": (False, lambda: items.get(repo, item.number)),
             "WorkItems.linked_work_items": (False, lambda: items.linked_work_items(repo, n)),
+            "WorkItems.remove_label": (True, lambda: items.remove_label(repo, item.number, "tag")),
         }
         return {
             operation: entry
             for operation, entry in table.items()
-            if self._declares(target, Capability(operation.split(".")[0])) and operation not in target.unsupported
+            if self._declares(target, Capability(operation.split(".")[0]))
+            and (include_unsupported or operation not in target.unsupported)
         }
 
     async def test_empty_result_is_not_a_failure(self) -> None:
@@ -2294,10 +2328,7 @@ class CodeHostConformance:
         target = await self.make_target()
         if not target.unsupported:
             return
-        full_target = ConformanceTarget(
-            host=target.host, seeder=target.seeder, repository=target.repository, secret=target.secret
-        )
-        everything = self._calls(full_target)
+        everything = self._calls(target, include_unsupported=True)
         for operation in target.unsupported & everything.keys():
             _, call = everything[operation]
             assert await self._unsupported_op(target, operation, call)

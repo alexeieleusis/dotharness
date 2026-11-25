@@ -11,8 +11,13 @@ from typing import Any, cast
 import pytest
 
 from dotharness.code_host import HostSelection, create_code_host, reference
-from dotharness.code_host.declarations import Anchor
-from dotharness.code_host.errors import AuthenticationError, CodeHostError, CodeHostTimeoutError
+from dotharness.code_host.declarations import Anchor, Capability, supports_operation
+from dotharness.code_host.errors import (
+    AuthenticationError,
+    CodeHostError,
+    CodeHostTimeoutError,
+    UnsupportedCapabilityError,
+)
 from dotharness.code_host.models import (
     ChangeRequest,
     ChangeRequestState,
@@ -30,7 +35,7 @@ from dotharness.code_host.models import (
     WorkItem,
     WorkItemState,
 )
-from dotharness.code_host.testing import SECRET, CodeHostConformance, ConformanceTarget, PostedItem
+from dotharness.code_host.testing import SECRET, CodeHostConformance, ConformanceTarget, InMemoryCodeHost, PostedItem
 from dotharness.subprocess_runner import RunResult
 
 
@@ -755,3 +760,67 @@ class TestReferenceHostConformance(CodeHostConformance):
             assert env is not None
             assert env["GH_TOKEN"] == SECRET
             assert env.get("GITHUB_TOKEN") != SECRET
+
+
+class _NoRemoveLabel:
+    """A WorkItems facet that lacks ``remove_label`` and delegates the rest."""
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+        self.remove_label_calls = 0
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._inner, name)
+
+    async def remove_label(self, repo: object, number: int, label: str) -> None:
+        self.remove_label_calls += 1
+        msg = "no label removal"
+        raise UnsupportedCapabilityError(msg, capability="WorkItems")
+
+
+class TestReferenceHostWithoutRemoveLabel(TestReferenceHostConformance):
+    """A host that declares WorkItems but not ``remove_label`` passes the whole suite (B-WI-3, B-ERR-4)."""
+
+    async def make_target(self) -> ConformanceTarget:
+        target = await super().make_target()
+        gap = frozenset({"WorkItems.remove_label"})
+        declaration = replace(target.host.declaration, unsupported_operations=gap)
+        host = replace(target.host, work_items=_NoRemoveLabel(target.host.work_items), declaration=declaration)
+        return replace(target, host=host, unsupported=gap)
+
+    async def test_gap_is_declared_and_b_wi_3_takes_the_unsupported_branch(self) -> None:
+        target = await self.make_target()
+        assert Capability.WORK_ITEMS in target.host.declaration.capabilities
+        assert not supports_operation(target.host.declaration, "WorkItems.remove_label")
+        await self.test_remove_label()
+
+    async def test_b_err_4_covers_remove_label(self) -> None:
+        target = await self.make_target()
+        calls = self._calls(target, include_unsupported=True)
+        assert "WorkItems.remove_label" in calls
+        assert "WorkItems.remove_label" not in self._calls(target)
+        await self.test_unsupported_operations_raise()
+
+
+class TestReferenceHostRemoveLabelStillRuns(TestReferenceHostConformance):
+    async def test_b_wi_3_assertions_run_for_a_supporting_host(self) -> None:
+        target = await self.make_target()
+        assert supports_operation(target.host.declaration, "WorkItems.remove_label")
+        assert "WorkItems.remove_label" in self._calls(target)
+        seeded = target.seeder.add_work_item(target.repository, title="one", labels=["x"])
+        await target.host.work_items.remove_label(target.repository, seeded.number, "x")
+        remaining = {w.number: w.labels for w in await target.host.work_items.list_open(target.repository)}
+        assert remaining[seeded.number] == ()
+
+
+class TestRemoveLabelDeclarationCheck:
+    def test_target_listing_a_supported_operation_fails_loudly(self) -> None:
+        target = InMemoryCodeHost().target()
+        with pytest.raises(AssertionError, match=r"WorkItems\.remove_label"):
+            replace(target, unsupported=frozenset({"WorkItems.remove_label"}))
+
+    def test_declared_gap_missing_from_the_target_fails_loudly(self) -> None:
+        target = InMemoryCodeHost().target()
+        declaration = replace(target.host.declaration, unsupported_operations=frozenset({"WorkItems.remove_label"}))
+        with pytest.raises(AssertionError, match=r"WorkItems\.remove_label"):
+            replace(target, host=replace(target.host, declaration=declaration))
