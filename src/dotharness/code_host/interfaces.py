@@ -119,7 +119,11 @@ class ChangeRequests(Protocol):
         ...
 
     async def create_draft(self, repo: RepositoryRef, *, head: str, base: str, title: str, body: str) -> ChangeRequest:
-        """Raises CodeHostError (including a conflicting existing change request)."""
+        """Raises CodeHostError (including a conflicting existing change request).
+
+        A `body` longer than `limits.max_change_request_body_chars` (counted in Unicode code points, Python `len`)
+        is rejected with CodeHostError, not truncated: the caller shortens it.
+        """
         ...
 
     async def squash_merge(self, repo: RepositoryRef, number: int, *, expected_head: str) -> None:

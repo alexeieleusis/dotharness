@@ -1598,7 +1598,7 @@ class ListBounds:
 class HostLimits:
     max_inline_comments_per_review: int
     max_review_body_chars: int
-    max_change_request_body_chars: int
+    max_change_request_body_chars: int  # Unicode code points (Python `len(str)`)
     timeouts: OperationTimeouts
     list_bounds: ListBounds
     page_attempts: int = 3  # tries for each page of a paged read
@@ -1611,10 +1611,20 @@ class HostLimits:
 - Readers:
   - `max_inline_comments_per_review` and `max_review_body_chars`: the review-posting consumer (the vibe-heal review path).
     It moves the overflow beyond the inline limit into the review body, and truncates the body with a notice.
-  - `max_change_request_body_chars`: the consumer that builds a change request description (`sisyphus/prbody.py`).
+  - `max_change_request_body_chars`: the consumer that builds a change request description (`sisyphus/prbody.py`). Sisyphus
+    reads it through `PullRequestClient` via the optional `max_body_chars` member (declared on the sub-Protocol
+    `BodyLimitedPullRequestClient` and read with a `getattr` fallback to its default). Sisyphus is the only party that
+    truncates a change request body.
   - `timeouts`: the host implementation, which applies them to its own calls. A consumer never passes a timeout.
   - `list_bounds`: the host implementation of every list-returning operation, which returns at most that many items. A bound of `None` means the host returns every item. A host never
     truncates silently: if it cannot return the whole result under the bound that applies, it raises `CodeHostError` instead.
+- Unit of `max_change_request_body_chars`: Unicode code points, that is Python `len(str)`, with no new field. A host that counts
+  UTF-16 units or bytes declares a limit that is safe under its own rule.
+- Review bodies and change request bodies follow opposite rules on purpose. A review body over `max_review_body_chars` is
+  truncated by the host with a notice (B-LIM-3), because the review is better posted shortened than lost. A change request
+  body over `max_change_request_body_chars` is rejected by `create_draft` with `CodeHostError` (B-CR-9). The host never
+  truncates it, so the caller (sisyphus) cuts the body with its own note before the call and a silent host cut cannot hide
+  the note. The reference host rejects before it runs `gh`, so an over-limit body never reaches the network.
 - `page_attempts` and `page_retry_delay_seconds` (added in A-1, with defaults, so the interface version did not change): a host that
   reads a list page by page tries each page `page_attempts` times and pauses `page_retry_delay_seconds` times the attempt
   number between tries. A timeout or an authentication error is not retried. The page loops of `common.py` and
@@ -2046,6 +2056,7 @@ model says consumers must not retry after `write=True` and defines no idempotenc
 | B-CR-6 | `squash_merge(expected_head=...)` with the current head revision makes the state merged. With a different revision it raises `CodeHostError` and changes nothing. |
 | B-CR-7 | `request_reviewer` adds the login to `requested_reviewers`. `approve(head_revision=...)` appears in `reviews()` with an approved state. |
 | B-CR-8 | `mark_viewed` is reflected in `viewed_files` for that path. Marking twice leaves it viewed. |
+| B-CR-9 | `create_draft` with a body of `max_change_request_body_chars` + 1 code points raises a plain `CodeHostError` (not `UnsupportedCapabilityError`) and creates nothing. A body of exactly the limit is accepted and `get` returns it unchanged (a host whose `get` normalizes the body declares a safe limit). |
 | B-DIS-1 | `post_comment` returns the new `Comment` and it appears in `comments()`. Order is posting order. |
 | B-DIS-2 | `review_threads` returns seeded threads with `is_resolved` and `anchor`. A thread whose anchor no longer maps to the diff is returned with `anchor=None`, not dropped. `comments` and `review_threads` return every seeded item even above the default list bound (declared `None`). |
 | B-DIS-3 | `reply(thread_id, body)` appends a `Comment` to that thread. An unknown `thread_id` raises `CodeHostError`. |
@@ -2067,6 +2078,11 @@ B-DIS-3, B-CHK-1 to B-CHK-3, B-ERR-7 to B-ERR-9 and B-LIM-4, and extends B-CR-1 
 `GhStub` in `tests/code_host/test_reference_conformance.py`, which plays `gh` for the REST, GraphQL and command-line calls
 of the new methods. The fake run is `TestInMemoryCodeHost`. `ConformanceTarget.unsupported` lists a declared operation a host
 does not implement. The suite asserts that each one raises.
+
+B-CR-9 (A-3) is a change to the suite every host shares: a host that passed before must now reject an over-limit change request
+body in `create_draft`. It is not a version bump. The version stays `CODE_HOST_INTERFACE_VERSION = 4`, following the `HostLimits`
+precedent (a field added with a default did not change the version). The reference run needs no network for it, since the host
+rejects before `gh` runs.
 
 `HostSeeder` gains `set_user`, `add_commit`, `add_review`, `add_comment`, `add_thread`, `add_check`, `add_workflow`,
 `add_job` and `fail_next(operation, error)`. A host's seeder maps `fail_next` onto its transport: a timeout, a rejected

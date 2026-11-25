@@ -53,6 +53,7 @@ class ListBounds:
 class HostLimits:
     max_inline_comments_per_review: int
     max_review_body_chars: int
+    # Unicode code points (Python `len(str)`). A host that counts UTF-16 units or bytes declares a limit safe under its own rule.
     max_change_request_body_chars: int
     timeouts: OperationTimeouts
     list_bounds: ListBounds
