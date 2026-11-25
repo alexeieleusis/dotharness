@@ -71,7 +71,10 @@ class Repository(Protocol):
 
 class ChangeRequests(Protocol):
     async def get(self, repo: RepositoryRef, number: int) -> ChangeRequest:
-        """Raises CodeHostError when the change request does not exist."""
+        """Raises CodeHostError when the change request does not exist.
+
+        ``body`` is the full description.
+        """
         ...
 
     async def state(self, repo: RepositoryRef, number: int) -> ChangeRequestState:
@@ -243,7 +246,12 @@ class WorkItems(Protocol):
         ...
 
     async def open_change_request_bodies(self, repo: RepositoryRef) -> Sequence[ChangeRequest]:
-        """Open change requests with their descriptions, for a consumer-side scan. Bounded by a declared limit."""
+        """Open change requests with their descriptions, for a consumer-side scan. Bounded by a declared limit.
+
+        Each returned ``ChangeRequest.body`` is the whole description, as ``ChangeRequests.get`` returns it,
+        never a prefix, summary or excerpt; a host that cannot return whole bodies must not implement this
+        operation as a shortened read.
+        """
         ...
 
     async def linked_work_items(self, repo: RepositoryRef, number: int) -> Sequence[WorkItem]:

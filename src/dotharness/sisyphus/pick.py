@@ -86,7 +86,10 @@ class PullRequestLookup(Protocol):
         ...
 
     async def open_pr_bodies(self) -> Sequence[str]:
-        """Bodies of every open pull request in the repository."""
+        """Bodies of every open pull request in the repository.
+
+        ``pick_items`` reads this at most once per call, so implementations must not assume one call per candidate.
+        """
         ...
 
 
