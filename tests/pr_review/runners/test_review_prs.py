@@ -1383,24 +1383,10 @@ async def test_resolve_host_default_main_is_main(tmp_path):
         _StubRepository("   "),
     ],
 )
-async def test_resolve_host_failure_falls_to_local(git_repo, repository):
-    _git(git_repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
-    _git(git_repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
-    result = await review_prs.resolve_base_branch(_base_config(git_repo), _stub_scaffold(repository), {})
-    assert result == ("develop", "local branch")
+async def test_resolve_host_failure_falls_to_final_fallback(tmp_path, repository):
+    result = await review_prs.resolve_base_branch(_base_config(tmp_path), _stub_scaffold(repository), {})
+    assert result == ("main", "final fallback")
     assert repository.calls == 1
-
-
-async def test_resolve_local_main_only(git_repo):
-    _git(git_repo, "update-ref", "refs/remotes/origin/main", "HEAD")
-    result = await review_prs.resolve_base_branch(_base_config(git_repo), _stub_scaffold(_StubRepository("")), {})
-    assert result == ("main", "local branch")
-
-
-async def test_resolve_local_branch_without_origin(git_repo):
-    _git(git_repo, "branch", "-M", "main")
-    result = await review_prs.resolve_base_branch(_base_config(git_repo), _stub_scaffold(_StubRepository("")), {})
-    assert result == ("main", "local branch")
 
 
 async def test_resolve_final_fallback(git_repo):
