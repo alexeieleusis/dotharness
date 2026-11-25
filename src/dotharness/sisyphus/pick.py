@@ -241,7 +241,8 @@ class HostLabelRemover:
 
     Policy (WorkItems unsupported): warn. The ``UnsupportedCapabilityError`` propagates; the orchestrator records a
     digest note and ``abandon`` prints one stderr line. Removing a label the item does not carry is a no-op; a label
-    that does not exist in the repository raises (a configuration error the human must fix).
+    that does not exist in the repository raises (a configuration error the human must fix). The gate
+    (:func:`label_removal_number`) treats an absent ``remove_label_when_settled`` as on.
     """
 
     def __init__(self, repo: HostRepository) -> None:
@@ -258,9 +259,10 @@ def label_removal_number(config: SisyphusConfig, ref: str) -> int | None:
     """Issue number to remove the pick label from, or ``None`` when no call may be made.
 
     Only for ``kind = "github"`` with ``pick_label`` set and ``remove_label_when_settled`` on, and a ``#N`` ref.
+    "On" includes an absent key (``None``); only an explicit ``false`` turns removal off.
     """
     wi = config.source.work_item
-    if wi is None or wi.kind != "github" or not wi.pick_label or not wi.remove_label_when_settled:
+    if wi is None or wi.kind != "github" or not wi.pick_label or wi.remove_label_when_settled is False:
         return None
     match = _HASH_REF.fullmatch(ref)
     return int(match.group(1)) if match else None

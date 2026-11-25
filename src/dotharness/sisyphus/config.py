@@ -188,8 +188,6 @@ def _parse_work_item(raw: Any) -> WorkItemSource:
             f"[{section}] remove_label_when_settled is a github key"
             ' and cannot be used with kind = "linear" (mixed tracker)'
         )
-    if kind == "github" and remove_label is None:
-        remove_label = True
     dir_ = _str(t, section, "dir")
     if kind == "file" and dir_ is None:
         raise ConfigError(f'[{section}] dir is required when kind = "file"')
