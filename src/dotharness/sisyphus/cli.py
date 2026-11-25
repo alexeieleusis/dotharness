@@ -158,6 +158,11 @@ class HostPullRequestClient:
     def __init__(self, repo: HostRepository) -> None:
         self.repo = repo
 
+    @property
+    def max_body_chars(self) -> int:
+        """The host's declared change-request body limit, as is (no validation, clamping or cap)."""
+        return self.repo.host.declaration.limits.max_change_request_body_chars
+
     async def find_pr(self, branch: str) -> PullRequest | None:
         found = await self.repo.host.change_requests.find_by_branch(await self.repo.ref(), branch)
         return PullRequest(found[0].number, found[0].url) if found else None

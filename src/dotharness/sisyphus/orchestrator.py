@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
 import shlex
@@ -119,6 +120,9 @@ class PullRequest:
     url: str = ""
 
 
+logger = logging.getLogger(__name__)
+
+
 class PullRequestClient(Protocol):
     """Code-host access for the open-PR stage. Raise :class:`CodeHostError` on unrecoverable failures.
 
@@ -137,6 +141,18 @@ class PullRequestClient(Protocol):
     async def pr_state(self, ref: str) -> PrInfo | None:
         """The PR's state and head SHA for a number or a branch (any state), or ``None`` if none."""
         ...
+
+
+class BodyLimitedPullRequestClient(PullRequestClient, Protocol):
+    """A :class:`PullRequestClient` that declares the largest PR body its host stores unchanged.
+
+    The limit is optional on a client: it is a defaulted attribute (a pure declaration, no I/O, so an implementation
+    can be a read-only property) kept out of :class:`PullRequestClient` itself, because a Protocol member is
+    structurally required and clients such as test fakes do not declare it. Such a client does not inherit the
+    default either, so the orchestrator reads it with ``getattr`` and falls back to :data:`prbody.MAX_BODY_CHARS`.
+    """
+
+    max_body_chars: int = prbody.MAX_BODY_CHARS
 
 
 @dataclass(frozen=True)
@@ -1236,6 +1252,13 @@ class _Run:
                 return None
             return res.stdout if res.returncode == 0 else None
 
+        max_chars = getattr(self.gh, "max_body_chars", prbody.MAX_BODY_CHARS)
+        header = prbody.work_item_header(self.item)
+        if max_chars < len(header) + 2 + len(prbody.TRUNCATED_NOTE):
+            logger.warning(
+                "PR body limit %d is smaller than the header plus truncation note; the host may reject the body",
+                max_chars,
+            )
         return await prbody.build_body(
             self.item,
             brief_path=resolve_brief_path(self.config, self.item),
@@ -1246,6 +1269,7 @@ class _Run:
             run_git=run_git,
             refactor_records=_read_refactor_records(self.handoff_dir / REFACTOR_INPUT_FILE),
             refactor_handoff_dir=self.handoff_dir,
+            max_chars=max_chars,
         )
 
     def note(self, text: str) -> None:
