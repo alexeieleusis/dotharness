@@ -1929,6 +1929,23 @@ class CodeHostConformance:
         found = await target.host.work_items.open_change_request_bodies(repo)
         assert sorted(c.body for c in found) == ["Closes #1", "second"]  # the order is the host's
 
+    async def test_open_change_request_bodies_are_whole(self) -> None:
+        """B-WI-5: open_change_request_bodies returns each body whole, not a prefix."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.WORK_ITEMS):
+            return
+        repo, seeder = target.repository, target.seeder
+        marker = "END-OF-BODY-MARKER"
+        filler_line = "filler line of the long body\n"
+        tail = "\n" + marker
+        long_body = (filler_line * 70_000)[: 70_000 - len(tail)] + tail
+        assert len(long_body) == 70_000
+        seeder.add_change_request(repo, head_reference="feature/long", body=long_body)
+        found = list(await target.host.work_items.open_change_request_bodies(repo))
+        assert len(found) == 1
+        assert found[0].body.endswith(marker), f"body of {len(found[0].body)} chars lost its last line"
+        assert found[0].body == long_body, f"body is {len(found[0].body)} chars, expected {len(long_body)}"
+
     # -- Session, Repository and ChangeRequests: the methods added after the review flow ---------------------------
 
     async def test_current_user_and_agent_environment(self) -> None:
