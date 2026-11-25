@@ -89,3 +89,15 @@ async def test_setting_set_means_host_failure_is_irrelevant(fake: InMemoryCodeHo
     fake.fail_always("Repository.default_branch", CodeHostError("boom"))
     result = await resolve_default_base(_config("develop"), fake.code_host(), _analyzer({"origin/develop"}))
     assert result.host_read_failed is False
+
+
+async def test_no_code_host_falls_back_without_logging(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("DEBUG"):
+        result = await resolve_default_base(_config(), None, _analyzer(set()))
+    assert result == BaseResolution("origin/main", "fallback", True)
+    assert caplog.text == ""
+
+
+async def test_no_code_host_is_irrelevant_when_setting_set() -> None:
+    result = await resolve_default_base(_config("develop"), None, _analyzer({"origin/develop"}))
+    assert result == BaseResolution("origin/develop", "setting", False)

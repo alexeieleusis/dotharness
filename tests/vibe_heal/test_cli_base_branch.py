@@ -141,7 +141,7 @@ def test_host_failure_falls_back_with_warning(
         out = runner.invoke(app, [command])
     assert out.exit_code == 0
     assert _passed_base(env, method) == "origin/main"
-    assert "could not read the host default branch" in caplog.text.lower()
+    assert "could not read the host default branch" not in caplog.text.lower()
     assert "could not determine the default branch" in out.output.lower()
 
 

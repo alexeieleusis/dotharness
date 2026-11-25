@@ -194,6 +194,8 @@ class ReviewOrchestrator:
             return resolved
 
         resolution = await resolve_default_base(self.config, self.code_host, self.branch_analyzer)
+        if resolution.host_read_failed:
+            logger.warning("Could not read the host default branch; using %s", resolution.ref)
         if verbose:
             if resolution.host_read_failed:
                 dim(f"No open PR found and the default branch could not be read; using base branch: {resolution.ref}")

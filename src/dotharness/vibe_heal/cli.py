@@ -6,7 +6,7 @@ import logging
 import sys
 from importlib.metadata import version as _package_version
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Annotated
 
 import typer
 from rich.logging import RichHandler
@@ -101,35 +101,22 @@ def _start_code_host(config: CodeHostSettings) -> CodeHost:
     )
 
 
-class _UnavailableRepository:
-    """Repository stand-in whose reads fail, so the resolver degrades to its final fallback."""
-
-    async def current(self) -> Any:
-        raise CodeHostError
-
-
-class _UnavailableCodeHost:
-    """Code host stand-in used when the configured host cannot be created."""
-
-    repository = _UnavailableRepository()
-
-
 def _resolve_cleanup_base(config: VibeHealConfig, base_branch: str | None) -> str:
     """Resolve the base ref once for a cleanup-family command.
 
     An explicit flag wins and is returned unchanged. Otherwise the shared resolver applies the setting, then
-    the host default branch, then origin/main. When the host default branch cannot be read the resolver's
-    warning is shown (it is not suppressed) and a header-level warning names the guessed base, because the
-    fallback may differ from the repository's real default branch.
+    the host default branch, then origin/main. When the host default branch cannot be read a warning names the
+    guessed base, because the fallback may differ from the repository's real default branch.
     """
     if base_branch is not None:
         return base_branch
 
     async def _resolve() -> BaseResolution:
+        code_host: CodeHost | None
         try:
-            code_host: CodeHost = _start_code_host(config)
+            code_host = _start_code_host(config)
         except CodeHostError:
-            code_host = cast(CodeHost, _UnavailableCodeHost())
+            code_host = None
         return await resolve_default_base(config, code_host, BranchAnalyzer(Path.cwd()))
 
     resolution = asyncio.run(_resolve())

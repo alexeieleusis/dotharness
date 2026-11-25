@@ -1,14 +1,11 @@
 """Shared resolution of the default base branch: setting, then host default branch, then ``origin/main``."""
 
-import logging
 from dataclasses import dataclass
 from typing import Literal
 
 from dotharness.code_host import CodeHost, CodeHostError
 from dotharness.vibe_heal.config import VibeHealConfig
 from dotharness.vibe_heal.git.branch_analyzer import BranchAnalyzer
-
-logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_BRANCH = "origin/main"
 REMOTE_PREFIX = "origin/"
@@ -47,24 +44,27 @@ def _resolve_setting(name: str, branch_analyzer: BranchAnalyzer) -> str:
 
 
 async def resolve_default_base(
-    config: VibeHealConfig, code_host: CodeHost, branch_analyzer: BranchAnalyzer
+    config: VibeHealConfig, code_host: CodeHost | None, branch_analyzer: BranchAnalyzer
 ) -> BaseResolution:
     """Resolve the default base: the setting, then the host default branch, then ``origin/main``.
 
     Callers apply an explicit flag (and any per-PR base) first and call this only when still needed. The host is
-    read only when the setting is unset. Never raises for host failures.
+    read only when the setting is unset. ``code_host=None`` means no host is available, which is reported as a
+    host read failure. Never raises for host failures and never logs: callers decide whether to warn, based on
+    ``BaseResolution.host_read_failed``.
     """
     if config.base_branch:
         return BaseResolution(_resolve_setting(_short_name(config.base_branch), branch_analyzer), "setting")
 
+    if code_host is None:
+        return BaseResolution(DEFAULT_BASE_BRANCH, "fallback", host_read_failed=True)
+
     try:
         repo = await code_host.repository.current()
         default = await code_host.repository.default_branch(repo)
-    except (CodeHostError, OSError) as exc:
-        logger.warning("Could not read the host default branch (%s); using %s", exc, DEFAULT_BASE_BRANCH)
+    except (CodeHostError, OSError):
         return BaseResolution(DEFAULT_BASE_BRANCH, "fallback", host_read_failed=True)
 
     if not default or not default.strip():
-        logger.warning("The host default branch is empty; using %s", DEFAULT_BASE_BRANCH)
         return BaseResolution(DEFAULT_BASE_BRANCH, "fallback", host_read_failed=True)
     return BaseResolution(f"{REMOTE_PREFIX}{default.strip()}", "host")
