@@ -7,6 +7,7 @@ No test runs an agent, the harness, gh, spec-prism-flow or ``git push``.
 from __future__ import annotations
 
 import ast
+import re
 import shlex
 import sys
 from collections.abc import Sequence
@@ -1574,3 +1575,10 @@ def test_default_services_stop_message_names_written_spelling(
     with pytest.raises(ConfigurationError, match=f'kind = "{kind}"'):
         cli.default_services(cfg)
     assert fake.calls == []
+
+
+def test_status_help_is_host_neutral() -> None:
+    result = CliRunner().invoke(app, ["status", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "GitHub" not in result.output
+    assert re.search(r"\bgh\b", result.output) is None

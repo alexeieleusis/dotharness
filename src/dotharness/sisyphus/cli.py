@@ -1030,14 +1030,14 @@ def status_command(
         bool,
         typer.Option(
             "--check-prs",
-            help="Query GitHub for each shown item's recorded PR and hide items whose PR is merged or closed.",
+            help="Ask the code host for each shown item's recorded PR and hide items whose PR is merged or closed.",
         ),
     ] = False,
 ) -> None:
     """Show stage, checkpoint, question, action and resume command per item (read-only; no lock, no agent).
 
     Settled items (abandoned, or finished with no stop) are hidden unless --all or a WORK_ITEM_REF is given.
-    With --check-prs, items whose recorded PR is merged or closed are hidden too (one gh lookup each, 10 s timeout).
+    With --check-prs, items whose recorded PR is merged or closed are hidden too (one code host lookup each, 10 s timeout).
     """
     factory: ServicesFactory | None = ctx.obj
     config = _load(config_path)
