@@ -44,7 +44,7 @@ KNOWLEDGE_SHA256 = {
     "pr-review/review-regret.md": "3537507b7e614d1b301782447ecc7cc3da4d010d2c99f4ed73ae290348ef52c7",
     "pr-review/review-summary.md": "751c2cb9f080688b0b722cde80ce4eaeedfc59b3f7d0f5118074547207293640",
     "pr-review/review-traceability.md": "8e6aff876b134440a2396b32304ba72865bd3b2852084c4e15c4bfd576d69c94",
-    "sisyphus/intake-prompt.md": "77f69497f895ac2137743f5533daa1444e30e70cea20d77d58089d7650159d87",
+    "sisyphus/intake-prompt.md": "5147f54fdd7ae9970201762ba1d5e6bfc5fe14deb5c1215e40f94129f958ceb4",
     "sisyphus/linear-feed-prompt.md": "e76652507f9fdb9aaafc933dadb1c9c76eef4597791203dcade167e70fb3eddc",
     "sisyphus/orchestration-prompt.md": "2f4a05e64a71ee94f1e45ee51faa3f700716fce9b05e101e1ec3e5b9562ae821",
     "sisyphus/sizing-rules.md": "953ed3e744d39f8fbe7196303fd3dcad4eae70f98d49adbccb5530532260cc36",

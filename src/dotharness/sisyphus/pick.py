@@ -198,7 +198,7 @@ async def pick_items(
     candidates = [c for c in await tracker.list_candidates(src) if _eligible(c, src)]
     if uses_host_items(src):
         if lookup is None:
-            raise PickError("a pull-request lookup is required for GitHub issues")
+            raise PickError("a pull-request lookup is required for host-tracker issues")
         candidates.sort(key=lambda c: (c.created_at, c.number if c.number is not None else 0))
         lookup = _MemoLookup(lookup)
     return await _take_unstarted(candidates, workspace_dir, limit, src, lookup, open_pr_check, archive_dir)
