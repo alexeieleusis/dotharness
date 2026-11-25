@@ -167,3 +167,12 @@ def test_needs_entry_with_text_indents_continuation_under_number() -> None:
     ten = lines.index("10. [C3] I-10: Q.")
     assert lines[ten + 1] == "    Line one."  # width of "10. "
     assert "Detail:" not in "\n".join(lines)
+
+
+def test_c8_question_names_code_host_not_github() -> None:
+    from dotharness.sisyphus.rails import Checkpoint
+
+    question = digest.CHECKPOINT_QUESTIONS[Checkpoint.C8.value]
+    assert "code host" in question
+    assert "Linear" in question
+    assert "GitHub" not in question
