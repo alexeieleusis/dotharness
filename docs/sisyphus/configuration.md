@@ -58,7 +58,7 @@ Declares the single tracker. Exactly one tracker is allowed.
 | `assignee` | string | none |
 | `pick_state` | string (linear, or the producer for `file`) | none |
 | `pick_label` | string (github, or the producer for `file`). For github Sisyphus reads it to pick and writes it: it removes the label when the item settles | `sisyphus` when `kind = "github"`, else none |
-| `remove_label_when_settled` | bool (github only, needs `pick_label`; rejected for `linear`, ignored for `file`) | `true` when `kind = "github"`, else none |
+| `remove_label_when_settled` | bool (github only, needs `pick_label`; rejected for `linear`, ignored for `file`) | depends on the host: on for `kind = "github"` when the host can remove a label, off when it cannot, else none |
 | `dir` | string (file only, required for `file`) | none |
 
 A `[source.linear]` or `[source.github]` table is rejected (as "two trackers" when `[source.work_item]` is
@@ -71,11 +71,12 @@ expands `~` in it. Sisyphus itself ignores `assignee`, `pick_state` and `pick_la
 `assignee` and `pick_state` are required by the producer. `pick_label` is optional. `dir` is rejected for any other kind.
 
 For `kind = "github"`, Sisyphus both reads and writes `pick_label`. With `remove_label_when_settled` on (the
-default), it removes the label from the issue when the item settles. The item settles when the finish trigger has opened the
+default when the host can remove a label), it removes the label from the issue when the item settles. The item settles when the finish trigger has opened the
 draft PR, or when you run `sisyphus abandon #<number>`. The label is removed even if the draft PR gate failed.
 That gate failure stays in the digest and the PR. A removal failure is a digest note (finish) or one stderr
 line (abandon), never a stop and never a changed exit code. Re-queuing is a manual relabel. `resume --again` does not restore the label, and items settled earlier are not back-filled. Set `remove_label_when_settled = false` to
-keep the label. Merged or closed PRs still do not exclude an issue from the pick.
+keep the label. If the code host cannot remove a label from a work item, an absent key means off and nothing is
+attempted or reported. An explicit `true` there prints one startup warning and is treated as `false`. Merged or closed PRs still do not exclude an issue from the pick.
 
 ### `[source.host]`
 

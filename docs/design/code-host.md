@@ -1508,7 +1508,7 @@ unchanged. Initial policies [inferred; DEC-22]:
 | `vibe_heal` review | change-request lookup for the branch | ChangeRequests | stop |
 | `pr_review` runners | merge, auto-approve, ci-fix | ChangeRequests / Checks | stop |
 | `pr_review` runners | current-user lookup | Session | warn (keeps the blank-user fail-open result) |
-| `sisyphus` | issue picking and label removal | WorkItems | stop for picking, warn for label removal |
+| `sisyphus` | issue picking and label removal | WorkItems | stop for picking. Label removal: skipped when the host declares `WorkItems.remove_label` unsupported (`default_services` sets `label_remover = None`, one startup warning if `remove_label_when_settled = true` is written), else warn on failure |
 | `pr_review` `auto_approve` | approve (`approve`, `reviews`, `commits`) | ChangeRequests | stop |
 | `pr_review` `auto_approve` | viewed state (`viewed_files`, `mark_viewed`) | ChangeRequests | degrade [inferred, DS-8] |
 | `pr_review` regret review | commit lookup (`find_by_commit`) | ChangeRequests | stop |

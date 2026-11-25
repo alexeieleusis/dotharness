@@ -32,6 +32,7 @@ import typer
 from dotharness.ai_backend import launch
 from dotharness.cli_common import fail
 from dotharness.code_host import Capability, CodeHost, ConfigurationError
+from dotharness.code_host.declarations import supports_operation
 from dotharness.code_host.errors import AuthenticationError, CodeHostError, CodeHostTimeoutError, TokenCommandError
 from dotharness.code_host.factory import HostSelection, create_code_host
 from dotharness.sisyphus.agent import Launcher, make_agent_runner
@@ -227,6 +228,29 @@ def _require_work_items(host: CodeHost, work_item: WorkItemSource | None) -> Non
         )
 
 
+def _resolve_label_remover(
+    host: CodeHost, work_item: WorkItemSource | None, repo: HostRepository
+) -> LabelRemover | None:
+    """The pick-label remover, or ``None`` when the host declares ``WorkItems.remove_label`` unsupported.
+
+    ``None`` makes both removal call sites (finish and ``abandon``) skip silently. An absent
+    ``remove_label_when_settled`` is then simply off; an explicit ``true`` is off too, with one startup warning.
+    """
+    if (
+        work_item is not None
+        and work_item.kind == "github"
+        and not supports_operation(host.declaration, "WorkItems.remove_label")
+    ):
+        if work_item.remove_label_when_settled is True:
+            typer.echo(
+                "warning: remove_label_when_settled = true has no effect: the configured code host cannot remove "
+                "a label from a work item, so the key is treated as false and pick labels are left in place",
+                err=True,
+            )
+        return None
+    return HostLabelRemover(repo)
+
+
 def default_services(config: SisyphusConfig) -> Services:
     """Real services for ``config``: the code host, Linear, the configured agent backend and ``git``."""
     repo_dir = Path(config.project.repo_dir or ".").expanduser()
@@ -234,6 +258,7 @@ def default_services(config: SisyphusConfig) -> Services:
     work_item = config.source.work_item
     _require_work_items(host, work_item)
     repo = HostRepository(host)
+    label_remover = _resolve_label_remover(host, work_item, repo)
     if work_item is not None and work_item.kind == "linear":
         tracker: TrackerClient = LinearTracker(os.environ.get("LINEAR_API_KEY", ""))
     elif work_item is not None and work_item.kind == "file":
@@ -264,7 +289,7 @@ def default_services(config: SisyphusConfig) -> Services:
         agent_runner=runner,
         repo_info=repo_info,
         pr_state=pr_state,
-        label_remover=HostLabelRemover(repo),
+        label_remover=label_remover,
     )
 
 
@@ -789,8 +814,9 @@ def abandon_command(ctx: typer.Context, work_item_ref: RefArgument, config_path:
 
     Marks the item abandoned and removes its waiting state so it no longer blocks auto-resume or picking.
     Touches only Sisyphus's own state files, plus one remote effect: for a GitHub issue ref (``#N``) with a
-    ``pick_label`` and ``remove_label_when_settled`` on, the pick label is now removed from the issue (a failure
-    is reported on stderr and never changes the exit code). Never the remote branch, any PR, the local branch,
+    ``pick_label`` and removal enabled (``remove_label_when_settled`` not false, and a host that can remove labels),
+    the pick label is now removed from the issue (a failure is reported on stderr and never changes the exit code).
+    When removal is off, including because the host cannot remove a label, ``abandon`` says nothing about it. Never the remote branch, any PR, the local branch,
     the run record or the digest, and never rewrites history.
     """
     factory: ServicesFactory | None = ctx.obj
@@ -826,7 +852,7 @@ def abandon_command(ctx: typer.Context, work_item_ref: RefArgument, config_path:
         return
     typer.echo(
         f"{work_item_ref}: abandoned (branch, any PR and the run record left as they are; "
-        "the issue's pick label is removed for a GitHub item when remove_label_when_settled is on)"
+        "the issue's pick label is removed for a GitHub item when label removal is enabled and the host supports it)"
     )
 
 

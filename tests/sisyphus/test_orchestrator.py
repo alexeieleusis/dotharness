@@ -147,6 +147,7 @@ class World:
         self.source: WorkItemSource | None = None
         self.label_calls: list[tuple[int, str]] = []
         self.label_error: Exception | None = None
+        self.no_label_remover = False  # pass label_remover=None (host cannot remove a label)
         # config
         self.limits = LimitsConfig()
         self.refactor_enabled = True
@@ -334,7 +335,7 @@ class World:
             agent_runner=self.agent,
             subprocess_runner=self.shell,
             pr_client=self,
-            label_remover=self,
+            label_remover=None if self.no_label_remover else self,
             clock=self.clock,
             today=TODAY,
         )
@@ -2117,7 +2118,7 @@ async def test_existing_pr_does_not_open_or_retitle(world: World, monkeypatch: p
 # ------------------------------------------------------------ pick-label removal when settled
 
 
-def _github(world: World, remove: bool = True) -> None:
+def _github(world: World, remove: bool | None = True) -> None:
     world.item = "#7"
     world.source = WorkItemSource(kind="github", pick_label="bot-pick", remove_label_when_settled=remove)
 
@@ -2142,6 +2143,21 @@ async def test_no_call_when_removal_is_off(world: World) -> None:
     _github(world, remove=False)
     assert (await world.run()).completed
     assert world.label_calls == []
+
+
+async def test_absent_key_on_a_host_that_cannot_remove_makes_no_call_and_no_note(world: World) -> None:
+    _github(world, remove=None)
+    world.no_label_remover = True
+    world.label_error = CodeHostError("would fail if called")
+    assert (await world.run()).completed
+    assert world.label_calls == []
+    assert "Label kept" not in world.digest_text()
+
+
+async def test_absent_key_on_a_capable_host_removes_the_label(world: World) -> None:
+    _github(world, remove=None)
+    assert (await world.run()).completed
+    assert world.label_calls == [(7, "bot-pick")]
 
 
 async def test_label_removed_once_when_gate_failed(world: World) -> None:

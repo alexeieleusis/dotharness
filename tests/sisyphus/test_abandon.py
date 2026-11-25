@@ -294,3 +294,15 @@ def test_abandon_label_gating_makes_no_call(tmp_path: Path) -> None:
         result = abandon(env, ref)
         assert result.exit_code == 0, (name, result.output)
         assert remover.calls == [], name
+
+
+def test_abandon_on_a_host_that_cannot_remove_labels_is_silent(tmp_path: Path) -> None:
+    """Absent key + incapable host: default_services gives label_remover None; abandon makes no call, prints no line."""
+    env, remover = github_env(tmp_path)
+    env.services.label_remover = None
+    rec = stopped(env, "#7", "C7", brief=None)
+    result = abandon(env, "#7")
+    assert result.exit_code == 0, result.output
+    assert remover.calls == []
+    assert "not removed" not in result.output and "warning" not in result.output
+    assert is_abandoned(rec.path)

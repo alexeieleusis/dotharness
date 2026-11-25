@@ -1034,6 +1034,67 @@ def test_services_turns_configuration_error_into_config_error_exit(tmp_path: Pat
     assert exc.value.exit_code == 1
 
 
+def _no_remove_label_host() -> InMemoryCodeHost:
+    base = InMemoryCodeHost().declaration
+    return InMemoryCodeHost(declaration=replace(base, unsupported_operations=frozenset({"WorkItems.remove_label"})))
+
+
+def _github_services(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host_fake: InMemoryCodeHost, key: str | None
+) -> cli.Services:
+    cfg = _github_config(tmp_path)
+    flag = None if key is None else key == "true"
+    assert cfg.source.work_item is not None
+    cfg = replace(
+        cfg, source=replace(cfg.source, work_item=replace(cfg.source.work_item, remove_label_when_settled=flag))
+    )
+    monkeypatch.setattr(cli, "create_host", lambda _config, _repo_dir: (host_fake.code_host(), None))
+    return cli.default_services(cfg)
+
+
+@pytest.mark.parametrize(
+    ("key", "capable", "removes", "warns"),
+    [
+        (None, True, True, False),
+        (None, False, False, False),
+        ("false", True, False, False),  # off through the gate; the remover itself stays wired
+        ("false", False, False, False),
+        ("true", True, True, False),
+        ("true", False, False, True),
+    ],
+)
+def test_default_services_label_remover_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    key: str | None,
+    capable: bool,
+    removes: bool,
+    warns: bool,
+) -> None:
+    fake = InMemoryCodeHost() if capable else _no_remove_label_host()
+    services = _github_services(tmp_path, monkeypatch, fake, key)
+    err = capsys.readouterr().err
+    if capable:
+        assert isinstance(services.label_remover, HostLabelRemover)
+    else:
+        assert services.label_remover is None
+    assert (services.label_remover is not None and key != "false") is removes
+    if warns:
+        assert err.count("warning:") == 1
+        assert "remove_label_when_settled" in err and "cannot remove a label" in err
+    else:
+        assert err == ""
+
+
+def test_default_services_non_github_kinds_keep_the_remover_without_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    services = _fake_host_services(tmp_path, monkeypatch, _no_remove_label_host())  # linear source
+    assert isinstance(services.label_remover, HostLabelRemover)
+    assert capsys.readouterr().err == ""
+
+
 def test_default_services_file_kind_builds_file_tracker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LINEAR_API_KEY", raising=False)
     env = make_env(tmp_path)
