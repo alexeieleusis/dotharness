@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pytest
 
 from dotharness.code_host import HostSelection, create_code_host
-from dotharness.code_host.declarations import Anchor, Capability
+from dotharness.code_host.declarations import Anchor, Capability, supports_operation
 from dotharness.code_host.errors import (
     AuthenticationError,
     CodeHostError,
@@ -85,6 +85,11 @@ class TestInMemorySpecifics:
         host = InMemoryCodeHost().code_host()
         assert host.declaration.capabilities == frozenset(Capability)
         assert len(host.declaration.capabilities) == 6
+
+    async def test_default_declaration_supports_remove_label(self) -> None:
+        host = InMemoryCodeHost().code_host()
+        assert host.declaration.unsupported_operations == frozenset()
+        assert supports_operation(host.declaration, "WorkItems.remove_label")
 
     async def test_capabilities_argument_selects_the_declared_subset(self) -> None:
         subset = frozenset({Capability.SESSION, Capability.REPOSITORY})

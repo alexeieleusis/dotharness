@@ -65,3 +65,10 @@ class HostDeclaration:
     capabilities: frozenset[Capability]
     limits: HostLimits
     anchors: AnchorRules
+    # Operations ("Interface.method") the host declares but does not implement.
+    unsupported_operations: frozenset[str] = frozenset()
+
+
+def supports_operation(declaration: HostDeclaration, operation: str) -> bool:
+    """Whether ``declaration`` supports ``operation`` (an ``Interface.method`` key); reads the declaration only."""
+    return operation not in declaration.unsupported_operations
