@@ -40,6 +40,7 @@ from dotharness.code_host.errors import (
 )
 from dotharness.code_host.factory import HostRegistration, TokenCmd
 from dotharness.code_host.interfaces import CodeHost
+from dotharness.code_host.limits import DEFAULT_MAX_CHANGE_REQUEST_BODY_CHARS
 from dotharness.code_host.models import (
     ChangeRequest,
     ChangeRequestState,
@@ -1587,7 +1588,7 @@ DECLARATION = HostDeclaration(
     limits=HostLimits(
         max_inline_comments_per_review=_MAX_INLINE_COMMENTS,
         max_review_body_chars=_MAX_REVIEW_BODY_CHARS,
-        max_change_request_body_chars=60_000,
+        max_change_request_body_chars=DEFAULT_MAX_CHANGE_REQUEST_BODY_CHARS,
         timeouts=OperationTimeouts(
             default_seconds=30,
             per_operation={

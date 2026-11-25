@@ -130,7 +130,7 @@ capability interfaces. The "Today's gh call" and "File and function" cells descr
 
 Context, not rows: the `sisyphus/orchestrator.py` `PullRequestClient` protocol is an existing seam, not itself a gh caller.
 Its error surface (INV-SY-06..08) is `CodeHostError` (`GitHubError = CodeHostError`, REN-14). `cleanup.py` consumes `PrInfo` (number, state, headRefOid).
-`prbody.py` `MAX_BODY_CHARS = 60000` is a host limit the contract must expose, not a gh call.
+`prbody.MAX_BODY_CHARS` is a re-export of `DEFAULT_MAX_CHANGE_REQUEST_BODY_CHARS` in `code_host/limits.py`. It is a host limit the contract must expose, not a gh call.
 
 ### Group `vibe-heal` (Phase 1, migrated), `vibe_heal/review/github.py` class `GitHubReviewClient`
 
@@ -604,6 +604,13 @@ checked, and does not restate the assignment.
    not-found type exists, DEC-20). A consumer that needs exactly one change request for a branch (INV-VH-02)
    raises `NoChangeRequestError` when `find_by_branch` returns an empty sequence, or calls `for_current_branch`, which raises it itself.
 6. Naming: new names use "change request". Existing code keeps "PR" until the phase that migrates it (Rename plan).
+7. Import direction: `sisyphus` may import `code_host`; `code_host` must not import `sisyphus`. A shared value that both
+   sides need lives in `code_host` and the consumer re-exports it (the change-request body limit is
+   `DEFAULT_MAX_CHANGE_REQUEST_BODY_CHARS` in `code_host/limits.py`, re-exported as `sisyphus.prbody.MAX_BODY_CHARS`).
+   Trade-offs (D-6): constant in `code_host` (chosen: lower layer, no cycle, the consumer re-exports for compatibility);
+   constant in `sisyphus` (rejected: `code_host` would import its consumer, a cycle risk since `orchestrator` imports
+   `code_host.errors`); a third shared module (rejected: a new module for one integer). A test scans `code_host` for
+   `sisyphus` imports.
 
 ### Repository resolution: explicit and cwd-based
 
@@ -1647,7 +1654,7 @@ means the default applies).
 | --- | --- | --- | --- |
 | `max_inline_comments_per_review` | 50 | | `_MAX_INLINE_COMMENTS` in `vibe_heal/review/github.py` |
 | `max_review_body_chars` | 60 000 | | `_MAX_REVIEW_BODY_CHARS` in the same file (the host's real limit is about 65 536. Headroom kept) |
-| `max_change_request_body_chars` | 60 000 | | `MAX_BODY_CHARS` in `sisyphus/prbody.py` |
+| `max_change_request_body_chars` | 60 000 | | `DEFAULT_MAX_CHANGE_REQUEST_BODY_CHARS` in `code_host/limits.py` (`sisyphus/prbody.py` re-exports it as `MAX_BODY_CHARS`) |
 | `timeouts.default_seconds` | 30 | | `TIMEOUT_GH` in `pr_review/runners/common.py` |
 | timeout, CR state lookup (INV-SY-09) | 10.0 | `ChangeRequests.state` | `PR_STATE_TIMEOUT` in `sisyphus/cli.py` (removed in Phase 2) |
 | timeout, label removal (INV-SY-02) | 10.0 | `WorkItems.remove_label` | `GhTimeboundLabelRemover` in `sisyphus/cli.py` (removed in Phase 2). A timeout is `CodeHostTimeoutError(write=True)` |

@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from dotharness.code_host.limits import DEFAULT_MAX_CHANGE_REQUEST_BODY_CHARS
 from dotharness.sisyphus.intake import parse_resolved_decisions, split_resolved_decision
 from dotharness.sisyphus.modified import format_percent, parse_modified
 from dotharness.sisyphus.plan import leaf_stems as _plan_leaf_stems
@@ -344,7 +345,7 @@ def extract_decisions(brief_path: Path) -> str:
 
 # ------------------------------------------------- sanitise, redact, compose
 
-MAX_BODY_CHARS = 60000
+MAX_BODY_CHARS = DEFAULT_MAX_CHANGE_REQUEST_BODY_CHARS
 ZWSP = "​"
 FULL_FILE_NOTE = (
     "Note: the full requirements are in `requirements.md` in the plan directory "
