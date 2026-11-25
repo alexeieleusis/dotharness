@@ -30,7 +30,7 @@ from dotharness.vibe_heal.deduplication.orchestrator import (
     DedupeBranchResult,
     DeduplicationOrchestrator,
 )
-from dotharness.vibe_heal.git.base_branch import resolve_default_base
+from dotharness.vibe_heal.git.base_branch import BaseResolution, resolve_default_base
 from dotharness.vibe_heal.git.branch_analyzer import BranchAnalyzer
 from dotharness.vibe_heal.orchestrator import VibeHealOrchestrator
 from dotharness.vibe_heal.output import bold, bold_cyan, console, cyan, dim, error, info, success, warn
@@ -118,27 +118,27 @@ def _resolve_cleanup_base(config: VibeHealConfig, base_branch: str | None) -> st
     """Resolve the base ref once for a cleanup-family command.
 
     An explicit flag wins and is returned unchanged. Otherwise the shared resolver applies the setting, then
-    the host default branch, then origin/main. Host failures degrade silently: the resolver's warning log is
-    suppressed here, so output and exit status do not change.
+    the host default branch, then origin/main. When the host default branch cannot be read the resolver's
+    warning is shown (it is not suppressed) and a header-level warning names the guessed base, because the
+    fallback may differ from the repository's real default branch.
     """
     if base_branch is not None:
         return base_branch
 
-    async def _resolve() -> str:
+    async def _resolve() -> BaseResolution:
         try:
             code_host: CodeHost = _start_code_host(config)
         except CodeHostError:
             code_host = cast(CodeHost, _UnavailableCodeHost())
-        resolution = await resolve_default_base(config, code_host, BranchAnalyzer(Path.cwd()))
-        return resolution.ref
+        return await resolve_default_base(config, code_host, BranchAnalyzer(Path.cwd()))
 
-    resolver_logger = logging.getLogger("dotharness.vibe_heal.git.base_branch")
-    previously_disabled = resolver_logger.disabled
-    resolver_logger.disabled = True
-    try:
-        return asyncio.run(_resolve())
-    finally:
-        resolver_logger.disabled = previously_disabled
+    resolution = asyncio.run(_resolve())
+    if resolution.host_read_failed:
+        warn(
+            f"Could not determine the default branch from the code host; falling back to {resolution.ref}. "
+            "Pass --base-branch or set DOTHARNESS_BASE_BRANCH if that is not your default branch."
+        )
+    return resolution.ref
 
 
 def setup_logging(verbose: bool) -> None:

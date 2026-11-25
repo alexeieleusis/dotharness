@@ -124,7 +124,7 @@ def test_main_default_repo_is_unchanged(env: Env, command: str, orchestrator_nam
 
 @pytest.mark.parametrize("error", [CodeHostError("boom"), OSError("gh missing")], ids=["CodeHostError", "OSError"])
 @command_param
-def test_host_failure_degrades_silently(
+def test_host_failure_falls_back_with_warning(
     env: Env,
     monkeypatch: pytest.MonkeyPatch,
     error: Exception,
@@ -141,15 +141,12 @@ def test_host_failure_degrades_silently(
         out = runner.invoke(app, [command])
     assert out.exit_code == 0
     assert _passed_base(env, method) == "origin/main"
-    combined = out.output.lower() + caplog.text.lower()
-    assert "boom" not in combined
-    assert "gh missing" not in combined
-    assert "could not read" not in combined
-    assert "error" not in out.output.lower()
+    assert "could not read the host default branch" in caplog.text.lower()
+    assert "falling back to origin/main" in out.output.lower()
 
 
 @command_param
-def test_host_creation_failure_degrades_silently(
+def test_host_creation_failure_falls_back_with_warning(
     env: Env, monkeypatch: pytest.MonkeyPatch, command: str, orchestrator_name: str, method: str, result: object
 ):
     def broken(_config: object) -> None:
