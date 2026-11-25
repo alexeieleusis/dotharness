@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from datetime import time as dtime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from dotharness.code_host.errors import CodeHostError
 from dotharness.fileio import TOMLDecodeError, atomic_write_json
@@ -143,16 +143,18 @@ class PullRequestClient(Protocol):
         ...
 
 
+@runtime_checkable
 class BodyLimitedPullRequestClient(PullRequestClient, Protocol):
-    """A :class:`PullRequestClient` that declares the largest PR body its host stores unchanged.
+    """A :class:`PullRequestClient` that also declares the largest PR body its host stores unchanged.
 
-    The limit is optional on a client: it is a defaulted attribute (a pure declaration, no I/O, so an implementation
-    can be a read-only property) kept out of :class:`PullRequestClient` itself, because a Protocol member is
-    structurally required and clients such as test fakes do not declare it. Such a client does not inherit the
-    default either, so the orchestrator reads it with ``getattr`` and falls back to :data:`prbody.MAX_BODY_CHARS`.
+    An optional capability, kept out of :class:`PullRequestClient` itself because a Protocol member is structurally
+    required and clients such as test fakes do not declare it. The orchestrator detects it with ``isinstance`` (the
+    Protocol is runtime-checkable), so the read is visible to the type checker; a client without it gets
+    :data:`prbody.MAX_BODY_CHARS`. The member is a read-only property: a pure declaration, no I/O.
     """
 
-    max_body_chars: int = prbody.MAX_BODY_CHARS
+    @property
+    def max_body_chars(self) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -1252,7 +1254,9 @@ class _Run:
                 return None
             return res.stdout if res.returncode == 0 else None
 
-        max_chars = getattr(self.gh, "max_body_chars", prbody.MAX_BODY_CHARS)
+        max_chars = (
+            self.gh.max_body_chars if isinstance(self.gh, BodyLimitedPullRequestClient) else prbody.MAX_BODY_CHARS
+        )
         header = prbody.work_item_header(self.item)
         if max_chars < len(header) + 2 + len(prbody.TRUNCATED_NOTE):
             logger.warning(
