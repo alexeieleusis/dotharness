@@ -434,11 +434,13 @@ def compose_body(
     workspace: Path,
     plan_dir: Path | None = None,
     home: Path | None = None,
+    max_chars: int = MAX_BODY_CHARS,
 ) -> str:
     """Assemble the pull-request body from already-extracted section strings (FR-1, G2, FR-9, FR-12).
 
     Never raises for missing content: empty sections are omitted, ``requirements=None`` becomes a one-line note.
-    ``len(result) <= MAX_BODY_CHARS`` always holds; the header is never truncated.
+    ``len(result) <= max_chars`` holds whenever ``len(header) <= max_chars``; the header is never truncated,
+    so a smaller ``max_chars`` yields the header alone.
     """
     header = work_item_header(item)
 
@@ -466,17 +468,17 @@ def compose_body(
         return "\n\n".join([header, *parts, *extra])
 
     body = assemble([details] if details else [])
-    if len(body) <= MAX_BODY_CHARS:
+    if len(body) <= max_chars:
         return body
     if details:
         body = assemble([FULL_FILE_NOTE])
-        if len(body) <= MAX_BODY_CHARS:
+        if len(body) <= max_chars:
             return body
     rest = "\n\n".join(parts)
     tail = "\n\n" + TRUNCATED_NOTE
-    budget = MAX_BODY_CHARS - len(header) - 2 - len(tail)
+    budget = max_chars - len(header) - 2 - len(tail)
     body = f"{header}\n\n{_truncate(rest, budget)}{tail}"
-    return body[:MAX_BODY_CHARS]
+    return body[: max(max_chars, len(header))]
 
 
 # ------------------------------------------------------------------ assembly
@@ -534,6 +536,7 @@ async def build_body(
     run_git: Callable[[Sequence[str]], Awaitable[str | None]],
     refactor_records: Sequence[Mapping[str, object]] = (),
     refactor_handoff_dir: Path | None = None,
+    max_chars: int = MAX_BODY_CHARS,
 ) -> str:
     """Locate the artifacts, check plan ownership, degrade per section and compose the body (FR-12, D-6).
 
@@ -571,6 +574,7 @@ async def build_body(
         requirements=requirements,
         workspace=workspace,
         plan_dir=plan_dir,
+        max_chars=max_chars,
     )
 
 
