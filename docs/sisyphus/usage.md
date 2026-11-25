@@ -25,7 +25,7 @@ sisyphus archive --config <file>
    items share it) that the tracker offers and Sisyphus has not started (no run record):
    - Linear: assigned to `assignee`, in `pick_state`, in Linear's priority order (urgent first, no priority
      last).
-   - GitHub: open, assigned to `assignee`, labeled `pick_label` (default `sisyphus`), oldest first. An issue
+   - Host (`kind = "host"`, alias `github`): open, assigned to `assignee`, labeled `pick_label` (default `sisyphus`), oldest first. An issue
      with an open linked PR, or one mentioned as `#N` in an open PR body, is skipped. Merged or closed PRs do
      not exclude an issue. Archived items (see "`sisyphus archive`") are excluded by the archive record check, not
      by PR state. Sisyphus removes `pick_label` from the issue when the item settles (the draft PR is
@@ -272,7 +272,7 @@ detail. The same text appears in these places:
   stop.
 - Branch cleanup: the keep-reason in "Local branch cleanup" above.
 - `sisyphus status --check-prs`: the `warning:` line (see "`sisyphus status`").
-- With `kind = "github"`, a host without the `WorkItems` capability stops the command at startup, before any host
+- With `kind = "host"` (or its alias `github`), a host without the `WorkItems` capability stops the command at startup, before any host
   call, with exit code 1 and a `config error:` line (see the policy table in
   [Configuration](configuration.md#unsupported-capability-policy)).
 
@@ -351,7 +351,7 @@ message otherwise) and then:
 - marks the item abandoned: the stop record becomes `kind: "abandoned"` with the time in `stopped_at`, and the
   run record's checkpoint is cleared. The run record, the local branch, the digest and the answer/brief files stay.
 - removes the waiting state: the item is no longer "awaiting you", and is never auto-resumed. It is never re-picked either (any run record makes an item non-pickable).
-- for a GitHub item, removes the issue's pick label after the abandoned stop record is written. This runs only
+- for a host work item, removes the issue's pick label or tag after the abandoned stop record is written. This runs only
   when `pick_label` is set, `remove_label_when_settled` is on (the default when the host can remove a label) and `REF` has the form `#<number>`. Any
   other ref form, `kind = "linear"` or `"file"`, the key off, or a host that cannot remove a label makes no call and prints nothing. If the removal fails, `abandon`
   prints one stderr line, `<ref>: pick label '<label>' not removed: <ExcType>: <message>`, and still exits 0 (`<ExcType>` is the class name of a

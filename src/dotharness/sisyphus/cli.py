@@ -39,6 +39,7 @@ from dotharness.sisyphus.agent import Launcher, make_agent_runner
 from dotharness.sisyphus.archive import archive_item, check_archive_dir, resolve_archive_dir
 from dotharness.sisyphus.cleanup import PrInfo
 from dotharness.sisyphus.config import ConfigError, SisyphusConfig, WorkItemSource, load_config
+from dotharness.sisyphus.config import uses_host_items as _uses_host_items
 from dotharness.sisyphus.digest import (
     DigestReport,
     DigestWriteError,
@@ -196,7 +197,7 @@ class Services:
     repo_info: Callable[[], Awaitable[str | None]] | None = field(default=None)
     # `status --check-prs`: PR number -> state (OPEN, MERGED, CLOSED); raises CodeHostError when it cannot be read.
     pr_state: Callable[[int], Awaitable[str]] | None = None
-    # Removes the pick label from a settled GitHub issue; `None` means no removal is available.
+    # Removes the pick label from a settled work item; `None` means no removal is available.
     label_remover: LabelRemover | None = None
     # Launcher for the stop-text presentation call (returns the RunResult, unlike `agent_runner`); tests pass a fake.
     present_launcher: Launcher = launch
@@ -209,19 +210,13 @@ async def _no_backend(_prompt: str) -> None:
     raise ConfigError("[agent] backend is not set")
 
 
-def _uses_host_items(work_item: WorkItemSource | None) -> bool:
-    """True when the host issue tracker serves work items (no ``[source.work_item]`` or ``kind = "github"``)."""
-    return work_item is None or work_item.kind == "github"
-
-
 def _require_work_items(host: CodeHost, work_item: WorkItemSource | None) -> None:
     """Policy (WorkItems unsupported, host-backed items): stop at startup, before any host call."""
     if _uses_host_items(work_item) and Capability.WORK_ITEMS not in host.declaration.capabilities:
-        kind = "github" if work_item is None else work_item.kind
         origin = (
             "no [source.work_item] (defaults to the host tracker)"
             if work_item is None
-            else f'[source.work_item] kind = "{kind}"'
+            else f'[source.work_item] kind = "{work_item.spelling}"'
         )
         raise ConfigurationError(
             f"{origin} needs a code host with the WorkItems capability, which the configured host does not declare"
@@ -236,7 +231,7 @@ def _resolve_label_remover(
     ``None`` makes both removal call sites (finish and ``abandon``) skip silently. An absent
     ``remove_label_when_settled`` is then simply off; an explicit ``true`` is off too, with one startup warning.
     """
-    if work_item is not None and work_item.kind == "github" and not host.declaration.supports_operation(REMOVE_LABEL):
+    if work_item is not None and _uses_host_items(work_item) and not host.declaration.supports_operation(REMOVE_LABEL):
         if work_item.remove_label_when_settled is True:
             typer.echo(
                 "warning: remove_label_when_settled = true has no effect: the configured code host cannot remove "
@@ -833,7 +828,7 @@ def abandon_command(ctx: typer.Context, work_item_ref: RefArgument, config_path:
     """Abandon WORK_ITEM_REF: the explicit way out of a dead end (C7 and others).
 
     Marks the item abandoned and removes its waiting state so it no longer blocks auto-resume or picking.
-    Touches only Sisyphus's own state files, plus one remote effect: for a GitHub issue ref (``#N``) with a
+    Touches only Sisyphus's own state files, plus one remote effect: for a host work-item ref (``#N``) with a
     ``pick_label`` and removal enabled (``remove_label_when_settled`` not false, and a host that can remove labels),
     the pick label is now removed from the issue (a failure is reported on stderr and never changes the exit code).
     When removal is off, including because the host cannot remove a label, ``abandon`` says nothing about it. Never the remote branch, any PR, the local branch,
@@ -872,12 +867,12 @@ def abandon_command(ctx: typer.Context, work_item_ref: RefArgument, config_path:
         return
     typer.echo(
         f"{work_item_ref}: abandoned (branch, any PR and the run record left as they are; "
-        "the issue's pick label is removed for a GitHub item when label removal is enabled and the host supports it)"
+        "the issue's pick label is removed for a host item when label removal is enabled and the host supports it)"
     )
 
 
 async def _remove_pick_label(config: SisyphusConfig, services: Services, ref: str) -> None:
-    """Remove the pick label from a settled GitHub issue; any failure is one stderr line, never an exit code."""
+    """Remove the pick label from a settled host work item; any failure is one stderr line, never an exit code."""
     number = label_removal_number(config, ref)
     wi = config.source.work_item
     if number is None or wi is None or not wi.pick_label or services.label_remover is None:
@@ -1030,7 +1025,7 @@ def status_command(
         bool,
         typer.Option(
             "--check-prs",
-            help="Query GitHub for each shown item's recorded PR and hide items whose PR is merged or closed.",
+            help="Query the code host for each shown item's recorded PR and hide items whose PR is merged or closed.",
         ),
     ] = False,
 ) -> None:

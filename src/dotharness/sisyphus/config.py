@@ -22,7 +22,10 @@ from dotharness.sisyphus import stack
 
 DEFAULT_CONFIG_FILE = ".sisyphus.toml"
 
-TRACKER_KINDS = ("linear", "github", "file")
+TRACKER_KINDS = ("linear", "github", "host", "file")
+HOST_KINDS = ("host", "github")
+# Kind names rejected as `[source.<kind>]` tables; `[source.host]` is the host options table, so `host` is absent.
+_NON_TABLE_KINDS = ("linear", "github", "file")
 AGENT_BACKENDS: tuple[str, ...] = BACKEND_NAMES
 DEFAULT_PICK_LABEL = "sisyphus"
 _HOST_SECTION = "source.host"
@@ -49,6 +52,18 @@ class WorkItemSource:
     pick_label: str | None = None
     dir: str | None = None
     remove_label_when_settled: bool | None = None
+    # The spelling the user wrote (`host` or `github`); `kind` holds the canonical value. Not part of equality.
+    written_kind: str | None = field(default=None, compare=False)
+
+    @property
+    def spelling(self) -> str | None:
+        """The kind as the user wrote it, falling back to ``kind`` for a directly built source."""
+        return self.written_kind or self.kind
+
+
+def uses_host_items(work_item: WorkItemSource | None) -> bool:
+    """True when the host issue tracker serves work items: no ``[source.work_item]``, or ``kind`` is ``host``/``github``."""
+    return work_item is None or work_item.kind in HOST_KINDS
 
 
 @dataclass(frozen=True)
@@ -171,12 +186,13 @@ def _parse_work_item(raw: Any) -> WorkItemSource:
         section,
         ("kind", "instruction", "assignee", "pick_state", "pick_label", "dir", "remove_label_when_settled"),
     )
-    kind = _choice(_str(t, section, "kind"), section, "kind", TRACKER_KINDS)
+    written = _choice(_str(t, section, "kind"), section, "kind", TRACKER_KINDS)
+    kind = "host" if written in HOST_KINDS else written
     pick_state = _str(t, section, "pick_state")
     pick_label = _str(t, section, "pick_label")
-    if kind == "github" and pick_state is not None:
+    if kind == "host" and pick_state is not None:
         raise ConfigError(
-            f'[{section}] pick_state is a linear key and cannot be used with kind = "github" (mixed tracker)'
+            f'[{section}] pick_state is a linear key and cannot be used with kind = "{written}" (mixed tracker)'
         )
     if kind == "linear" and pick_label is not None:
         raise ConfigError(
@@ -193,7 +209,7 @@ def _parse_work_item(raw: Any) -> WorkItemSource:
         raise ConfigError(f'[{section}] dir is required when kind = "file"')
     if kind != "file" and dir_ is not None:
         raise ConfigError(f'[{section}] dir is a file-tracker key and requires kind = "file"')
-    if kind == "github" and pick_label is None:
+    if kind == "host" and pick_label is None:
         pick_label = DEFAULT_PICK_LABEL
     return WorkItemSource(
         kind=kind,
@@ -203,6 +219,7 @@ def _parse_work_item(raw: Any) -> WorkItemSource:
         pick_label=pick_label,
         dir=dir_,
         remove_label_when_settled=remove_label,
+        written_kind=written,
     )
 
 
@@ -210,7 +227,7 @@ def _parse_source(raw: Any) -> SourceConfig:
     if not isinstance(raw, dict):
         raise ConfigError(f"[source] must be a table, got {type(raw).__name__}")
     for key in raw:
-        if key in TRACKER_KINDS:
+        if key in _NON_TABLE_KINDS:
             if "work_item" in raw:
                 raise ConfigError(
                     f"two trackers: [source.{key}] alongside [source.work_item]; exactly one tracker is allowed"

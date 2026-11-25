@@ -63,16 +63,16 @@ Declares the single tracker. Exactly one tracker is allowed.
 
 | Key | Type | Default |
 |---|---|---|
-| `kind` | string, `linear`, `github` or `file` | none |
+| `kind` | string, `linear`, `host` (the host-backed tracker), `github` (alias of `host`) or `file` | none |
 | `instruction` | string | none |
 | `assignee` | string | none |
 | `pick_state` | string (linear, or the producer for `file`) | none |
-| `pick_label` | string (github, or the producer for `file`). For github Sisyphus reads it to pick and writes it: it removes the label when the item settles | `sisyphus` when `kind = "github"`, else none |
-| `remove_label_when_settled` | bool (github only, needs `pick_label`; rejected for `linear`, ignored for `file`) | depends on the host: on for `kind = "github"` when the host can remove a label, off when it cannot, else none |
+| `pick_label` | string, a label or tag (host, or the producer for `file`). For host Sisyphus reads it to pick and writes it: it removes the label or tag when the item settles | `sisyphus` when `kind = "host"` (or `"github"`), else none |
+| `remove_label_when_settled` | bool, removes the label or tag when the item settles (host only, needs `pick_label`; rejected for `linear`, ignored for `file`) | depends on the host: on for `kind = "host"` (or `"github"`) when the host can remove a label, off when it cannot, else none |
 | `dir` | string (file only, required for `file`) | none |
 
-A `[source.linear]` or `[source.github]` table is rejected (as "two trackers" when `[source.work_item]` is
-also present). `pick_state` with `kind = "github"` and `pick_label` with `kind = "linear"` are rejected as
+A `[source.linear]`, `[source.github]` or `[source.file]` table is rejected (as "two trackers" when `[source.work_item]` is
+also present). `[source.host]` is not a tracker table: it is the host options table and stays valid next to `[source.work_item]`. `pick_state` with `kind = "host"` (or `"github"`) and `pick_label` with `kind = "linear"` are rejected as
 mixed-tracker keys. `kind = "file"` accepts both, because the producer prompt reads them.
 
 For `kind = "file"`, `dir` is required and names the directory of ticket files (`<dir>/<ref>.md`). Sisyphus
@@ -80,7 +80,7 @@ expands `~` in it. Sisyphus itself ignores `assignee`, `pick_state` and `pick_la
 (`knowledge/sisyphus/linear-feed-prompt.md`). The prompt reads them from this table to choose the Linear ticket to export.
 `assignee` and `pick_state` are required by the producer. `pick_label` is optional. `dir` is rejected for any other kind.
 
-For `kind = "github"`, Sisyphus both reads and writes `pick_label`. With `remove_label_when_settled` on (the
+For `kind = "host"` (or its alias `"github"`), Sisyphus both reads and writes `pick_label`. With `remove_label_when_settled` on (the
 default when the host can remove a label), it removes the label from the issue when the item settles. The item settles when the finish trigger has opened the
 draft PR, or when you run `sisyphus abandon #<number>`. The label is removed even if the draft PR gate failed.
 That gate failure stays in the digest and the PR. A removal failure is a digest note (finish) or one stderr
@@ -112,16 +112,16 @@ declare one of them. The table shows what Sisyphus does at each call site.
 
 | Call site | Capability | Policy | Basis |
 |---|---|---|---|
-| `pick_items` candidate listing and linked/open-PR check (`github` kind) | WorkItems | stop | design (DEC-22) |
+| `pick_items` candidate listing and linked/open-PR check (`host` kind, or its alias `github`) | WorkItems | stop | design (DEC-22) |
 | Label removal (finish and `abandon`) | WorkItems | warn (digest note or one stderr line, never a stop) | design (DEC-22) |
 | `find_pr`, `open_pr` in the open-PR stage | ChangeRequests | stop (a host error is a C8 stop) | inferred |
 | `pr_state` in branch cleanup | ChangeRequests | degrade (a failed lookup keeps the branch with a note) | inferred |
 | `status --check-prs` state lookup | ChangeRequests | warn (one `warning:` line to stderr, item shown) | inferred |
 | default-branch lookup for intake | Repository | degrade (any failure returns `None`) | inferred |
 
-For the first row, Sisyphus checks the capability at startup. With `kind = "github"` and no `WorkItems` capability,
-the command stops before any host call with exit code 1 and this message: `config error: [source.work_item] kind =
-"github" needs a code host with the WorkItems capability, which the configured host does not declare`.
+For the first row, Sisyphus checks the capability at startup. With `kind = "host"` (or `"github"`) and no `WorkItems` capability,
+the command stops before any host call with exit code 1 and this message, which names the spelling you wrote: `config error: [source.work_item] kind =
+"host" needs a code host with the WorkItems capability, which the configured host does not declare`.
 
 #### Timeouts
 

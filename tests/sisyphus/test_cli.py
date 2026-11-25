@@ -1514,3 +1514,29 @@ def test_run_digest_has_no_parked_line_without_a_parked_record(tmp_path: Path, f
     assert env.invoke("run", "--config", str(env.config)).exit_code == 0
     assert "Waiting to be continued" not in env.digest
     assert "DONE-1" not in env.digest.split("## Needs you", 1)[1].split("\n## ", 1)[0]
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected"), [(None, True), ("host", True), ("github", True), ("linear", False), ("file", False)]
+)
+def test_uses_host_items_predicate(kind: str | None, expected: bool) -> None:
+    work_item = None if kind is None else WorkItemSource(kind=kind)
+    assert cli._uses_host_items(work_item) is expected
+
+
+@pytest.mark.parametrize("kind", ["host", "github"])
+def test_default_services_stop_message_names_written_spelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    env = make_env(tmp_path)
+    env.config.write_text(
+        env.config.read_text().replace(
+            'kind = "linear"\nassignee = "me@x.io"\npick_state = "Todo"', f'kind = "{kind}"\nassignee = "me"'
+        )
+    )
+    cfg = load_config(env.config)
+    fake = InMemoryCodeHost(capabilities=frozenset(Capability) - {Capability.CHECKS, Capability.WORK_ITEMS})
+    monkeypatch.setattr(cli, "create_host", lambda _config, _repo_dir: (fake.code_host(), None))
+    with pytest.raises(ConfigurationError, match=f'kind = "{kind}"'):
+        cli.default_services(cfg)
+    assert fake.calls == []

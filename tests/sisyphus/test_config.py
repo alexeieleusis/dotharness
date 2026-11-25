@@ -501,3 +501,39 @@ def test_host_name_must_be_nonempty_string(tmp_path: Path) -> None:
 def test_host_options_must_be_table(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="options must be a table"):
         load_config(write(tmp_path, MIN + "[source.host]\noptions = 3\n"))
+
+
+def _wi(tmp_path: Path, extra: str, kind: str):
+    cfg = load_config(write(tmp_path, MIN + f'[source.work_item]\nkind = "{kind}"\n{extra}'))
+    assert cfg.source.work_item is not None
+    return cfg.source.work_item
+
+
+def test_host_and_github_kinds_parse_equal(tmp_path: Path) -> None:
+    host, github = _wi(tmp_path, "", "host"), _wi(tmp_path, "", "github")
+    assert host == github
+    assert host.kind == github.kind == "host"
+    assert (host.written_kind, github.written_kind) == ("host", "github")
+    assert host.pick_label == github.pick_label == "sisyphus"
+    assert host.remove_label_when_settled is True and github.remove_label_when_settled is True
+
+
+@pytest.mark.parametrize("kind", ["host", "github"])
+def test_host_kinds_reject_pick_state_and_dir(tmp_path: Path, kind: str) -> None:
+    with pytest.raises(ConfigError, match=f'pick_state is a linear key and cannot be used with kind = "{kind}"'):
+        _wi(tmp_path, 'pick_state = "Todo"\n', kind)
+    with pytest.raises(ConfigError, match="dir is a file-tracker key"):
+        _wi(tmp_path, 'dir = "x"\n', kind)
+
+
+def test_host_options_table_with_work_item_parses(tmp_path: Path) -> None:
+    text = MIN + '[source.work_item]\nkind = "host"\n[source.host]\nname = "gitea"\n'
+    cfg = load_config(write(tmp_path, text))
+    assert cfg.source.host is not None and cfg.source.host.name == "gitea"
+    assert cfg.source.work_item is not None and cfg.source.work_item.kind == "host"
+    assert load_config(write(tmp_path, MIN + "[source.host]\nname = 'gitea'\n")).source.host is not None
+
+
+def test_unknown_kind_lists_accepted_values(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="must be one of linear, github, host, file, got 'jira'"):
+        _wi(tmp_path, "", "jira")
