@@ -423,6 +423,15 @@ def work_item_header(item: str) -> str:
     return f"Closes {item}"
 
 
+_TRUNCATED_TAIL = "\n\n" + TRUNCATED_NOTE
+_HEADER_SEP = "\n\n"
+
+
+def min_viable_chars(item: str) -> int:
+    """Smallest ``max_chars`` that fits the header plus the truncation note without clipping either."""
+    return len(work_item_header(item)) + len(_HEADER_SEP) + len(_TRUNCATED_TAIL)
+
+
 def compose_body(
     item: str,
     *,
@@ -476,9 +485,8 @@ def compose_body(
         if len(body) <= max_chars:
             return body
     rest = "\n\n".join(parts)
-    tail = "\n\n" + TRUNCATED_NOTE
-    budget = max_chars - len(header) - 2 - len(tail)
-    body = f"{header}\n\n{_truncate(rest, budget)}{tail}"
+    budget = max_chars - min_viable_chars(item)
+    body = f"{header}{_HEADER_SEP}{_truncate(rest, budget)}{_TRUNCATED_TAIL}"
     return body[: max(max_chars, len(header))]
 
 

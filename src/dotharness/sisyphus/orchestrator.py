@@ -1257,8 +1257,7 @@ class _Run:
         max_chars = (
             self.gh.max_body_chars if isinstance(self.gh, BodyLimitedPullRequestClient) else prbody.MAX_BODY_CHARS
         )
-        header = prbody.work_item_header(self.item)
-        if max_chars < len(header) + 2 + len(prbody.TRUNCATED_NOTE):
+        if max_chars < prbody.min_viable_chars(self.item):
             logger.warning(
                 "PR body limit %d is smaller than the header plus truncation note; the host may reject the body",
                 max_chars,
