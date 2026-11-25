@@ -35,7 +35,7 @@ from dotharness.code_host.models import (
     WorkItem,
     WorkItemState,
 )
-from dotharness.code_host.testing import SECRET, CodeHostConformance, ConformanceTarget, InMemoryCodeHost, PostedItem
+from dotharness.code_host.testing import SECRET, CodeHostConformance, ConformanceTarget, PostedItem
 from dotharness.subprocess_runner import RunResult
 
 
@@ -786,7 +786,7 @@ class TestReferenceHostWithoutRemoveLabel(TestReferenceHostConformance):
         gap = frozenset({"WorkItems.remove_label"})
         declaration = replace(target.host.declaration, unsupported_operations=gap)
         host = replace(target.host, work_items=_NoRemoveLabel(target.host.work_items), declaration=declaration)
-        return replace(target, host=host, unsupported=gap)
+        return replace(target, host=host)
 
     async def test_gap_is_declared_and_b_wi_3_takes_the_unsupported_branch(self) -> None:
         target = await self.make_target()
@@ -811,16 +811,3 @@ class TestReferenceHostRemoveLabelStillRuns(TestReferenceHostConformance):
         await target.host.work_items.remove_label(target.repository, seeded.number, "x")
         remaining = {w.number: w.labels for w in await target.host.work_items.list_open(target.repository)}
         assert remaining[seeded.number] == ()
-
-
-class TestRemoveLabelDeclarationCheck:
-    def test_target_listing_a_supported_operation_fails_loudly(self) -> None:
-        target = InMemoryCodeHost().target()
-        with pytest.raises(AssertionError, match=r"WorkItems\.remove_label"):
-            replace(target, unsupported=frozenset({"WorkItems.remove_label"}))
-
-    def test_declared_gap_missing_from_the_target_fails_loudly(self) -> None:
-        target = InMemoryCodeHost().target()
-        declaration = replace(target.host.declaration, unsupported_operations=frozenset({"WorkItems.remove_label"}))
-        with pytest.raises(AssertionError, match=r"WorkItems\.remove_label"):
-            replace(target, host=replace(target.host, declaration=declaration))

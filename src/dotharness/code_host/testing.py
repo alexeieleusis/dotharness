@@ -223,36 +223,24 @@ class HostSeeder(Protocol):
         ...
 
 
-# Operations whose support is read from ``HostDeclaration.unsupported_operations``.
-_DECLARATION_GOVERNED = frozenset({"WorkItems.remove_label"})
-
-
 @dataclass(frozen=True)
 class ConformanceTarget:
     host: CodeHost
     seeder: HostSeeder
     repository: RepositoryRef = field(default_factory=lambda: RepositoryRef("example/repo"))
     secret: str = ""  # the credential the host was built with. B-SEC-1 requires it to be SECRET.
-    # Operations (``Interface.method``) the host declares but does not implement. The suite asserts that each one
-    # raises UnsupportedCapabilityError instead of running its behavior: nothing is skipped silently.
-    unsupported: frozenset[str] = frozenset()
     # B-REP-4: URLs the host must accept as naming ``repository``, and URLs of other repositories it must reject.
     origin_urls: tuple[str, ...] = ()
     foreign_origin_urls: tuple[str, ...] = ()
 
-    def __post_init__(self) -> None:
-        """Check ``unsupported`` against the host's declaration for the operations the declaration governs.
+    @property
+    def unsupported(self) -> frozenset[str]:
+        """Operations (``Interface.method``) the host declares but does not implement.
 
-        The declaration is the source of truth for ``WorkItems.remove_label``: a target that lists it while the host
-        declares it supported (or the reverse) is inconsistent, and fails here instead of passing silently.
+        Derived from ``HostDeclaration.unsupported_operations``, the single source of truth. The suite asserts that each
+        one raises UnsupportedCapabilityError instead of running its behavior: nothing is skipped silently.
         """
-        declaration = self.host.declaration
-        for operation in sorted(_DECLARATION_GOVERNED | declaration.unsupported_operations):
-            declared_gap = not supports_operation(declaration, operation)
-            if declared_gap != (operation in self.unsupported):
-                state = "unsupported" if declared_gap else "supported"
-                msg = f"{operation}: the declaration says {state}, but ConformanceTarget.unsupported disagrees"
-                raise AssertionError(msg)
+        return self.host.declaration.unsupported_operations
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -871,7 +859,6 @@ class InMemoryCodeHost:
             seeder=self,
             repository=self._repository,
             secret=self._token,
-            unsupported=self.declaration.unsupported_operations,
             origin_urls=(own,),
             foreign_origin_urls=(foreign,),
         )
@@ -1478,7 +1465,7 @@ class CodeHostConformance:
     Subclass it and override ``make_target``. Behavior ids B-NCR, B-REV, B-LIM, B-ERR, B-SEC, B-SES-3, B-REP-3,
     B-CR-1, B-CR-2, B-CR-5 and B-WI-1..5 are listed in docs/design/code-host.md, "Behaviors asserted". A group runs
     only for a declared capability (B-ERR-4 covers an undeclared one). A declared operation the host does not
-    implement goes in ``ConformanceTarget.unsupported``: the suite then asserts that it raises.
+    implement goes in ``HostDeclaration.unsupported_operations``: the suite then asserts that it raises.
     """
 
     async def make_target(self) -> ConformanceTarget:  # NOSONAR python:S7503 - subclasses await their host setup

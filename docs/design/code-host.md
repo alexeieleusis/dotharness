@@ -2081,10 +2081,9 @@ Conformance groups built in Phase 2: B-SES-3, B-REP-3, B-CR-1, B-CR-2, B-CR-5 an
 host (with a stubbed `gh`) and the fake. A-1 adds B-SES-2, B-SES-4, B-REP-1, B-CR-3, B-CR-4, B-CR-6 to B-CR-8, B-DIS-1 to
 B-DIS-3, B-CHK-1 to B-CHK-3, B-ERR-7 to B-ERR-9 and B-LIM-4, and extends B-CR-1 to the full field set. The reference run uses
 `GhStub` in `tests/code_host/test_reference_conformance.py`, which plays `gh` for the REST, GraphQL and command-line calls
-of the new methods. The fake run is `TestInMemoryCodeHost`. `ConformanceTarget.unsupported` lists a declared operation a host
-does not implement. The suite asserts that each one raises. For `WorkItems.remove_label`, `ConformanceTarget` checks `unsupported`
-against `HostDeclaration.unsupported_operations` when it is built, and a disagreement fails with an `AssertionError` naming the key. B-ERR-4 also
-covers each key in `unsupported`, in addition to the undeclared capabilities.
+of the new methods. The fake run is `TestInMemoryCodeHost`. `HostDeclaration.unsupported_operations` lists a declared operation a host
+does not implement, and `ConformanceTarget.unsupported` is derived from it (a read-only property, so there is one source of truth).
+The suite asserts that each one raises. B-ERR-4 also covers each key in `unsupported`, in addition to the undeclared capabilities.
 
 `HostSeeder` gains `set_user`, `add_commit`, `add_review`, `add_comment`, `add_thread`, `add_check`, `add_workflow`,
 `add_job` and `fail_next(operation, error)`. A host's seeder maps `fail_next` onto its transport: a timeout, a rejected

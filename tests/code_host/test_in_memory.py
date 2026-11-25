@@ -62,12 +62,13 @@ class _NoJobChecks:
 
 
 class TestInMemoryWithAnUnsupportedOperation(CodeHostConformance):
-    """An operation listed in ``ConformanceTarget.unsupported`` must raise, and the rest of the suite still runs."""
+    """An operation listed in ``HostDeclaration.unsupported_operations`` must raise, and the rest of the suite still runs."""
 
     async def make_target(self) -> ConformanceTarget:
         target = InMemoryCodeHost().target()
-        host = replace(target.host, checks=_NoJobChecks(target.host.checks))
-        return replace(target, host=host, unsupported=frozenset({"Checks.get_job"}))
+        declaration = replace(target.host.declaration, unsupported_operations=frozenset({"Checks.get_job"}))
+        host = replace(target.host, checks=_NoJobChecks(target.host.checks), declaration=declaration)
+        return replace(target, host=host)
 
     async def test_failed_log_and_get_job(self) -> None:
         """The inherited group reads ``get_job``. This target lists it as unsupported, so only ``failed_log`` runs."""

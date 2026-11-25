@@ -107,7 +107,7 @@ names", which lists the names you must not use.
    and records posts (`HostSeeder` in `dotharness.code_host.testing`). It seeds commits, reviews, comments, threads, checks,
    workflows and jobs, sets the acting user, and implements `fail_next(operation, error)`: the next call of `operation` makes
    your transport fail (a timeout, a rejected call), and your host maps that to the error type. A declared operation that
-   `examplehost` does not implement goes in `ConformanceTarget.unsupported`, and the suite then asserts that it raises.
+   `examplehost` does not implement goes in `HostDeclaration.unsupported_operations` (`ConformanceTarget.unsupported` reads it), and the suite then asserts that it raises.
 5. Consumer tests that need a host without a network can use the in-memory fake instead.
 
 Worked example. The file below is the test module for `examplehost`. `ExampleTransport` is the stub of the host's
