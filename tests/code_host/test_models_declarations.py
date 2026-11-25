@@ -225,3 +225,18 @@ def test_supports_operation_reports_listed_key_unsupported() -> None:
 
 def test_supports_operation_takes_only_a_declaration_and_a_key() -> None:
     assert list(inspect.signature(supports_operation).parameters) == ["declaration", "operation"]
+
+
+@pytest.mark.parametrize("bad", ["Nope.remove_label", "remove_label", "WorkItems."])
+def test_unsupported_operations_rejects_malformed_or_unknown_interface_keys(bad: str) -> None:
+    with pytest.raises(ValueError, match="unsupported_operations"):
+        _declaration(unsupported_operations=frozenset({bad}))
+
+
+def test_supports_operation_method_and_remove_label_constant() -> None:
+    from dotharness.code_host.declarations import REMOVE_LABEL
+
+    d = _declaration(unsupported_operations=frozenset({REMOVE_LABEL}))
+    assert REMOVE_LABEL == "WorkItems.remove_label"
+    assert not d.supports_operation(REMOVE_LABEL)
+    assert d.supports_operation("WorkItems.get")

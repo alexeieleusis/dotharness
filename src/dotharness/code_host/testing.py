@@ -20,7 +20,7 @@ from types import MappingProxyType
 from typing import Any, Protocol, TypeVar
 
 from dotharness.code_host import interfaces
-from dotharness.code_host.declarations import Anchor, Capability, HostDeclaration, supports_operation
+from dotharness.code_host.declarations import REMOVE_LABEL, Anchor, Capability, HostDeclaration
 from dotharness.code_host.errors import (
     AuthenticationError,
     CodeHostError,
@@ -312,7 +312,7 @@ _WRITES = frozenset({
     "Discussion.post_comment",
     "Discussion.post_review",
     "Discussion.reply",
-    "WorkItems.remove_label",
+    REMOVE_LABEL,
 })
 _EPOCH = datetime.fromisoformat(_BASE_DATE)
 _COMMENTS_SCRIPT = Path(__file__).resolve().parent / "scripts" / "pr-comments.py"
@@ -1187,7 +1187,7 @@ class _FakeWorkItems(_Facet):
         self, repo: RepositoryRef, number: int, label: str
     ) -> None:
         def action() -> None:
-            if not supports_operation(self._host.declaration, "WorkItems.remove_label"):
+            if not self._host.declaration.supports_operation(REMOVE_LABEL):
                 msg = "WorkItems.remove_label is not supported by this host"
                 raise UnsupportedCapabilityError(msg, capability="WorkItems")
             items = self._host._work_items.get(repo, [])
@@ -1203,7 +1203,7 @@ class _FakeWorkItems(_Facet):
                 items[index] = replace(item, labels=tuple(x for x in item.labels if x != label))
                 self._host._version += 1
 
-        self._do("WorkItems.remove_label", action, repo, number, label)
+        self._do(REMOVE_LABEL, action, repo, number, label)
 
     async def closing_change_requests(  # NOSONAR python:S7503 - implements an async protocol
         self, repo: RepositoryRef, number: int
@@ -1852,9 +1852,7 @@ class CodeHostConformance:
             return
         repo, items = target.repository, target.host.work_items
         first = target.seeder.add_work_item(repo, title="one", labels=["x", "z"])
-        if await self._unsupported_op(
-            target, "WorkItems.remove_label", lambda: items.remove_label(repo, first.number, "x")
-        ):
+        if await self._unsupported_op(target, REMOVE_LABEL, lambda: items.remove_label(repo, first.number, "x")):
             return
         second = target.seeder.add_work_item(repo, title="two", labels=["y"])
 
@@ -2245,7 +2243,7 @@ class CodeHostConformance:
             "Checks.get_job": (False, lambda: checks.get_job(repo, "900")),
             "WorkItems.get": (False, lambda: items.get(repo, item.number)),
             "WorkItems.linked_work_items": (False, lambda: items.linked_work_items(repo, n)),
-            "WorkItems.remove_label": (True, lambda: items.remove_label(repo, item.number, "tag")),
+            REMOVE_LABEL: (True, lambda: items.remove_label(repo, item.number, "tag")),
         }
         return {
             operation: entry

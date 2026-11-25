@@ -32,7 +32,7 @@ import typer
 from dotharness.ai_backend import launch
 from dotharness.cli_common import fail
 from dotharness.code_host import Capability, CodeHost, ConfigurationError
-from dotharness.code_host.declarations import supports_operation
+from dotharness.code_host.declarations import REMOVE_LABEL
 from dotharness.code_host.errors import AuthenticationError, CodeHostError, CodeHostTimeoutError, TokenCommandError
 from dotharness.code_host.factory import HostSelection, create_code_host
 from dotharness.sisyphus.agent import Launcher, make_agent_runner
@@ -236,11 +236,7 @@ def _resolve_label_remover(
     ``None`` makes both removal call sites (finish and ``abandon``) skip silently. An absent
     ``remove_label_when_settled`` is then simply off; an explicit ``true`` is off too, with one startup warning.
     """
-    if (
-        work_item is not None
-        and work_item.kind == "github"
-        and not supports_operation(host.declaration, "WorkItems.remove_label")
-    ):
+    if work_item is not None and work_item.kind == "github" and not host.declaration.supports_operation(REMOVE_LABEL):
         if work_item.remove_label_when_settled is True:
             typer.echo(
                 "warning: remove_label_when_settled = true has no effect: the configured code host cannot remove "
