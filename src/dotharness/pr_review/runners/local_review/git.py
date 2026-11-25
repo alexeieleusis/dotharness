@@ -77,30 +77,16 @@ async def resolve_base_ref(
     if neither resolves it is an error and never falls through. The origin/HEAD and `main`
     rules fall through quietly. Offline: no host call, no fetch.
     """
-    for label, value in (("--base", base), ("[local_review].base", config_base)):
-        if value:
-            if await _ref_exists(working_dir, value):
-                return value
-            raise LocalReviewError(f"base ref {value!r} (from {label}) does not resolve to a commit")  # noqa: TRY003
-
+    explicit = await _resolve_explicit_base(working_dir, base, config_base)
+    if explicit:
+        return explicit
     if repo_base:
-        for candidate in (f"origin/{repo_base}", repo_base):
-            if await _ref_exists(working_dir, candidate):
-                return candidate
-        raise LocalReviewError(  # noqa: TRY003
-            f"base ref {repo_base!r} (from [repo].base_branch) does not resolve to a commit "
-            f"(tried origin/{repo_base} and {repo_base})"
-        )
+        return await _resolve_repo_base(working_dir, repo_base)
 
     tried: list[str] = []
-    origin_head = await git(working_dir, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
-    target = origin_head.stdout.strip() if origin_head.returncode == 0 else ""
-    if target:
-        if await _ref_exists(working_dir, target):
-            return target
-        tried.append(f"{target} (origin/HEAD)")
-    else:
-        tried.append("origin/HEAD (not set)")
+    resolved = await _resolve_origin_head(working_dir, tried)
+    if resolved:
+        return resolved
     if await _ref_exists(working_dir, DEFAULT_BASE_FALLBACK):
         return DEFAULT_BASE_FALLBACK
     tried.append(DEFAULT_BASE_FALLBACK)
@@ -108,6 +94,37 @@ async def resolve_base_ref(
         "could not resolve a base ref; tried: --base (not given), [local_review].base (not set), "
         "[repo].base_branch (not set), " + ", ".join(tried) + ". Pass --base REF."
     )
+
+
+async def _resolve_explicit_base(working_dir: Path, base: str | None, config_base: str | None) -> str | None:
+    for label, value in (("--base", base), ("[local_review].base", config_base)):
+        if value:
+            if await _ref_exists(working_dir, value):
+                return value
+            raise LocalReviewError(f"base ref {value!r} (from {label}) does not resolve to a commit")  # noqa: TRY003
+    return None
+
+
+async def _resolve_repo_base(working_dir: Path, repo_base: str) -> str:
+    for candidate in (f"origin/{repo_base}", repo_base):
+        if await _ref_exists(working_dir, candidate):
+            return candidate
+    raise LocalReviewError(  # noqa: TRY003
+        f"base ref {repo_base!r} (from [repo].base_branch) does not resolve to a commit "
+        f"(tried origin/{repo_base} and {repo_base})"
+    )
+
+
+async def _resolve_origin_head(working_dir: Path, tried: list[str]) -> str | None:
+    origin_head = await git(working_dir, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+    target = origin_head.stdout.strip() if origin_head.returncode == 0 else ""
+    if not target:
+        tried.append("origin/HEAD (not set)")
+        return None
+    if await _ref_exists(working_dir, target):
+        return target
+    tried.append(f"{target} (origin/HEAD)")
+    return None
 
 
 async def compute_merge_base(working_dir: Path, base_ref: str) -> str:
