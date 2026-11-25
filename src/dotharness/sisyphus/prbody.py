@@ -1,6 +1,6 @@
 """Extractors for the pull-request description (work item #109).
 
-Pure functions over paths and strings; no ``gh``, no harness, no spec-prism-flow imports. Git output is passed
+Pure functions over paths and strings; no code host CLI (for example ``gh``), no harness, no spec-prism-flow imports. Git output is passed
 in as text by the caller. Each extractor returns a plain string: either the section text or a one-line note
 saying why it is missing (degradation). Sanitising, size limits and composition live elsewhere.
 """

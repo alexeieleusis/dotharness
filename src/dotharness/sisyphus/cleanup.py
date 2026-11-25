@@ -160,7 +160,7 @@ async def _delete_squash_merged(git: GitFn, item: str, branch: str, detail: str,
     A squash-merged head is neither reachable from the checked-out base nor from any upstream, so plain ``-d``
     refuses; the proof is what makes ``-D`` safe. This is the ONLY place ``-D`` is issued. No recovery ref and no
     helper refs: the reflog is the last-resort recovery, and ``detail`` (full head SHA, PR number and the
-    ``git fetch origin pull/<N>/head`` hint) goes to the digest so the commit can be fetched from GitHub.
+    ``git fetch origin pull/<N>/head`` hint) goes to the digest so the commit can be fetched from the code host.
     """
     deleted = await git(["branch", "-D", branch])
     if deleted.returncode == 0:
