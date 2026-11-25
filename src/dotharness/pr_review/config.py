@@ -208,6 +208,9 @@ def _parse_opencode_dir(raw_odir: str | None, working_dir: Path) -> Path | None:
     return opencode_dir
 
 
+_BASE_BRANCH_RE = re.compile(r"[A-Za-z0-9._][A-Za-z0-9._/-]*")
+
+
 def _parse_base_branch(value: object) -> str | None:
     if value is None:
         return None
@@ -219,6 +222,11 @@ def _parse_base_branch(value: object) -> str | None:
     if name.startswith(("origin/", "refs/")):
         raise ConfigError(  # noqa: TRY003
             f"repo.base_branch must be a short branch name such as 'develop', got {value!r}"
+        )
+    if not _BASE_BRANCH_RE.fullmatch(name) or ".." in name or name.endswith((".lock", "/", ".")) or "//" in name:
+        raise ConfigError(  # noqa: TRY003
+            f"repo.base_branch {value!r} is not a valid git branch name "
+            "(must not start with '-', and may contain only letters, digits, '.', '_', '-' and '/')"
         )
     return name
 

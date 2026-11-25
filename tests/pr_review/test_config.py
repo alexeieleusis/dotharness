@@ -762,3 +762,14 @@ def test_base_branch_non_short_name_rejected(minimal_toml, value):
 def test_base_branch_non_string_rejected(minimal_toml):
     with pytest.raises(ConfigError, match=r"repo\.base_branch"):
         load_config(_toml_with_base(minimal_toml, "base_branch = 5"))
+
+
+@pytest.mark.parametrize("bad", ["-f", "--upload-pack=x", "a b", "a..b", "x:y", "a\\tb", "a/", "x.lock"])
+def test_base_branch_invalid_ref_rejected(minimal_toml, bad):
+    with pytest.raises(ConfigError, match=r"repo\.base_branch"):
+        load_config(_toml_with_base(minimal_toml, f'base_branch = "{bad}"'))
+
+
+def test_base_branch_with_slash_accepted(minimal_toml):
+    cfg = load_config(_toml_with_base(minimal_toml, 'base_branch = "release/1.2_x"'))
+    assert cfg.repo.base_branch == "release/1.2_x"

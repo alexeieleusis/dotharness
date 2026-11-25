@@ -419,7 +419,9 @@ async def _run_base_analysis(config: HarnessConfig, env: dict, base: str, source
     logger.info("Base analysis: base branch %s (source: %s)", ref, source)
 
     try:
-        await _run_base_git("fetch", ["git", "fetch", "--recurse-submodules", "origin", base], wdir, env, ref, source)
+        await _run_base_git(
+            "fetch", ["git", "fetch", "--recurse-submodules", "--", "origin", base], wdir, env, ref, source
+        )
         result = await _run_base_git("rev-parse", ["git", "rev-parse", ref], wdir, env, ref, source)
     except BaseAnalysisError:
         await git_clean_working_dir(wdir, env)

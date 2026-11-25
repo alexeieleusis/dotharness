@@ -1449,7 +1449,7 @@ async def test_base_analysis_uses_resolved_ref_in_git_calls(tmp_xdg, tmp_path):
     seen, fake = _base_cmds(SHA1)
     result, _ = await _run_base(cfg, "develop", "config", fake)
     assert result is True
-    assert seen[0] == ["git", "fetch", "--recurse-submodules", "origin", "develop"]
+    assert seen[0] == ["git", "fetch", "--recurse-submodules", "--", "origin", "develop"]
     assert seen[1] == ["git", "rev-parse", "origin/develop"]
     assert seen[2] == ["git", "checkout", "--recurse-submodules", "--detach", SHA1]
     assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == f"develop@{SHA1}"
@@ -1459,7 +1459,7 @@ async def test_base_analysis_default_main_commands_unchanged(tmp_xdg, tmp_path):
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     seen, fake = _base_cmds(SHA1)
     await _run_base(cfg, "main", "host default", fake)
-    assert seen[0] == ["git", "fetch", "--recurse-submodules", "origin", "main"]
+    assert seen[0] == ["git", "fetch", "--recurse-submodules", "--", "origin", "main"]
     assert seen[1] == ["git", "rev-parse", "origin/main"]
 
 
