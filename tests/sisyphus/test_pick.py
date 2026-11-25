@@ -113,8 +113,14 @@ async def test_hash_n_in_open_pr_body_only_excludes(tmp_path: Path) -> None:
 
 
 class CountingLookup(FakeLookup):
-    def __init__(self, *args: object, fail_first: bool = False, **kwargs: object) -> None:
-        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+    def __init__(
+        self,
+        linked: Mapping[int, Sequence[LinkedPr]] | None = None,
+        bodies: Sequence[str] = (),
+        *,
+        fail_first: bool = False,
+    ) -> None:
+        super().__init__(linked, bodies)
         self.body_calls = 0
         self.linked_calls = 0
         self.fail_first = fail_first
