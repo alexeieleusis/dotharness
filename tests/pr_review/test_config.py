@@ -773,3 +773,18 @@ def test_base_branch_invalid_ref_rejected(minimal_toml, bad):
 def test_base_branch_with_slash_accepted(minimal_toml):
     cfg = load_config(_toml_with_base(minimal_toml, 'base_branch = "release/1.2_x"'))
     assert cfg.repo.base_branch == "release/1.2_x"
+
+
+@pytest.mark.parametrize("value", ["release/1.0", "feature/x"])
+def test_base_branch_common_slashed_names_returned_verbatim(minimal_toml, value):
+    cfg = load_config(_toml_with_base(minimal_toml, f'base_branch = "{value}"'))
+    assert cfg.repo.base_branch == value
+
+
+@pytest.mark.parametrize("value", ["upstream/develop", "heads/develop"])
+def test_base_branch_other_remote_like_prefix_is_treated_as_branch_name(minimal_toml, value):
+    # Intentional: only `origin/` and `refs/` are rejected. `upstream/develop` or
+    # `heads/develop` cannot be told apart from a legitimate slashed branch name
+    # (e.g. `feature/x`), so they are accepted as short names and returned verbatim.
+    cfg = load_config(_toml_with_base(minimal_toml, f'base_branch = "{value}"'))
+    assert cfg.repo.base_branch == value
