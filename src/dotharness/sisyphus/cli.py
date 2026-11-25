@@ -1025,7 +1025,7 @@ def status_command(
         bool,
         typer.Option(
             "--check-prs",
-            help="Query the code host for each shown item's recorded PR and hide items whose PR is merged or closed.",
+            help="Query GitHub for each shown item's recorded PR and hide items whose PR is merged or closed.",
         ),
     ] = False,
 ) -> None:
