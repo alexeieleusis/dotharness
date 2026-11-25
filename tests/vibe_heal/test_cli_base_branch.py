@@ -142,7 +142,7 @@ def test_host_failure_falls_back_with_warning(
     assert out.exit_code == 0
     assert _passed_base(env, method) == "origin/main"
     assert "could not read the host default branch" in caplog.text.lower()
-    assert "falling back to origin/main" in out.output.lower()
+    assert "could not determine the default branch" in out.output.lower()
 
 
 @command_param
