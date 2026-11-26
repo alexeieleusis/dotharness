@@ -1,7 +1,6 @@
 import copy
 import json
 import logging
-import re
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -9,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from dotharness.fileio import atomic_write_text, file_lock
-from dotharness.paths import data_dir
+from dotharness.paths import data_dir, validate_repo_slug
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +26,8 @@ _COMMAND_FILES = {
 }
 
 
-def _validate_repo_slug(slug: str) -> str:
-    # HarnessConfig.repo_slug hyphenates "owner/repo" into a single path segment
-    # (e.g. "Oscilar-backend") before it reaches here, so no "/" is expected.
-    if slug in {".", ".."} or not re.fullmatch(r"[a-zA-Z0-9._-]+", slug):
-        raise ValueError(f"Invalid repo slug: {slug!r}")  # noqa: TRY003
-    return slug
+# One slug rule shared with the merge-gate reader: a divergent copy would put records where `merge` doesn't look.
+_validate_repo_slug = validate_repo_slug
 
 
 def _state_path(repo_slug: str, filename: str) -> Path:
