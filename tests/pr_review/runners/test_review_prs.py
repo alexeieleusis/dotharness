@@ -1357,14 +1357,14 @@ def git_repo(tmp_path):
 async def test_resolve_config_wins_without_host_or_git(tmp_path):
     repository = _StubRepository(error=AssertionError("host must not be called"))
     with patch("dotharness.pr_review.runners.review_prs.run_cmd", side_effect=AssertionError("no git")):
-        result = await review_prs.resolve_base_branch(_base_config(tmp_path, "develop"), _stub_scaffold(repository), {})
+        result = await review_prs.resolve_base_branch(_base_config(tmp_path, "develop"), _stub_scaffold(repository))
     assert result == ("develop", "config")
     assert repository.calls == 0
 
 
 async def test_resolve_host_default_read_once(tmp_path):
     repository = _StubRepository("trunk")
-    result = await review_prs.resolve_base_branch(_base_config(tmp_path), _stub_scaffold(repository), {})
+    result = await review_prs.resolve_base_branch(_base_config(tmp_path), _stub_scaffold(repository))
     assert result == ("trunk", "host default")
     assert repository.calls == 1
 
@@ -1384,7 +1384,7 @@ async def test_resolve_host_default_main_is_main(tmp_path):
     ],
 )
 async def test_resolve_host_failure_falls_to_final_fallback(tmp_path, repository):
-    result = await review_prs.resolve_base_branch(_base_config(tmp_path), _stub_scaffold(repository), {})
+    result = await review_prs.resolve_base_branch(_base_config(tmp_path), _stub_scaffold(repository))
     assert result == ("main", "final fallback")
     assert repository.calls == 1
 
@@ -1392,7 +1392,7 @@ async def test_resolve_host_failure_falls_to_final_fallback(tmp_path, repository
 async def test_resolve_final_fallback(git_repo):
     _git(git_repo, "branch", "-M", "other")
     repository = _StubRepository(error=CodeHostError("down"))
-    result = await review_prs.resolve_base_branch(_base_config(git_repo), _stub_scaffold(repository), {})
+    result = await review_prs.resolve_base_branch(_base_config(git_repo), _stub_scaffold(repository))
     assert result == ("main", "final fallback")
 
 
