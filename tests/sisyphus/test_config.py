@@ -515,7 +515,7 @@ def test_host_and_github_kinds_parse_equal(tmp_path: Path) -> None:
     assert host.kind == github.kind == "host"
     assert (host.written_kind, github.written_kind) == ("host", "github")
     assert host.pick_label == github.pick_label == "sisyphus"
-    assert host.remove_label_when_settled is True and github.remove_label_when_settled is True
+    assert host.remove_label_when_settled is None and github.remove_label_when_settled is None  # host-aware default
 
 
 @pytest.mark.parametrize("kind", ["host", "github"])
