@@ -6,7 +6,8 @@ caller. One record file lives under the caller-supplied workspace directory for
 each item reference; references that differ only in ASCII case share one record. Writes are atomic (temp file in the same directory, then
 rename). There is no file locking. Retry counters are never reset on load or by any automatic path; the only
 way to zero them is the explicit :meth:`RunRecord.reset_retries`, which also appends an event to the optional
-``resets`` list (additive field, absent from records that never had a reset).
+``resets`` list (additive field, absent from records that never had a reset). ``base_branch`` is a second
+additive optional field: the effective base branch the item was started against, absent until set.
 """
 
 # ruff: noqa: TRY003
@@ -91,6 +92,7 @@ class RunRecord:
         updated_at: str,
         retries: dict[str, int],
         resets: list[dict[str, Any]] | None = None,
+        base_branch: str | None = None,
     ) -> None:
         self.path = path
         self.item = item
@@ -101,6 +103,7 @@ class RunRecord:
         self.updated_at = updated_at
         self.retries = retries
         self.resets: list[dict[str, Any]] = resets if resets is not None else []
+        self.base_branch = base_branch
 
     @classmethod
     def open(cls, workspace_dir: str | os.PathLike[str], item: str) -> RunRecord:
@@ -132,6 +135,7 @@ class RunRecord:
             data["updated_at"],
             dict(data["retries"]),
             [dict(e) for e in data.get("resets", [])],
+            data.get("base_branch"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -146,6 +150,8 @@ class RunRecord:
         }
         if self.resets:
             data["resets"] = [dict(e) for e in self.resets]
+        if self.base_branch is not None:
+            data["base_branch"] = self.base_branch
         return data
 
     def save(self) -> None:
@@ -240,6 +246,8 @@ def _validate(data: Any, item: str) -> str | None:
         return "field 'retries' must map strings to non-negative integers"
     if "resets" in data and not _valid_resets(data["resets"]):
         return "field 'resets' must be a list of reset events"
+    if "base_branch" in data and (not isinstance(data["base_branch"], str) or not data["base_branch"]):
+        return "field 'base_branch' must be a non-empty string"
     return None
 
 
