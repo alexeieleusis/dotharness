@@ -2,7 +2,7 @@
 
 Tracker access goes through the injectable :class:`TrackerClient` and :class:`PullRequestLookup`
 protocols; :func:`pick_items` takes both as parameters, so tests use fakes. The real clients here
-(the configured code host's ``WorkItems`` and ``ChangeRequests`` for GitHub issues, the Linear GraphQL API) read
+(the configured code host's ``WorkItems`` and ``ChangeRequests`` for host work items, the Linear GraphQL API) read
 credentials only from the inherited environment or a ``token_cmd`` the caller already resolved.
 Nothing in this module mutates a tracker (D-8).
 
@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Protocol
 
 from dotharness.code_host import CodeHost, RepositoryRef
-from dotharness.sisyphus.config import SisyphusConfig, WorkItemSource
+from dotharness.sisyphus.config import SisyphusConfig, WorkItemSource, uses_host_items
 from dotharness.sisyphus.runrecord import fold_item, record_path
 from dotharness.sisyphus.ticketfile import (
     TICKET_SUFFIX,
@@ -50,9 +50,9 @@ class Candidate:
     """One work item offered by a tracker.
 
     ``ref`` is the item reference handed to the orchestrator (a Linear identifier such as ``ENG-12``,
-    or ``#<number>`` for a GitHub issue). ``assignees`` holds every identifier the tracker knows for
+    or ``#<number>`` for a host work item). ``assignees`` holds every identifier the tracker knows for
     the assignee (login, e-mail, display name) and ``labels`` the label names; ``state`` is the
-    tracker state name for Linear and ``open`` for an open GitHub issue.
+    tracker state name for Linear and ``open`` for an open host work item.
     """
 
     ref: str
@@ -132,7 +132,7 @@ def _eligible(candidate: Candidate, source: WorkItemSource) -> bool:
     assert source.assignee is not None  # noqa: S101
     if not any(_same(a, source.assignee) for a in candidate.assignees):
         return False
-    if source.kind == "github":
+    if uses_host_items(source):
         label = source.pick_label or ""
         return _same(candidate.state or "open", "open") and any(_same(lbl, label) for lbl in candidate.labels)
     return source.pick_state is not None and _same(candidate.state, source.pick_state)
@@ -164,37 +164,37 @@ async def pick_items(
 ) -> list[Candidate]:
     """Return up to ``limit`` unstarted candidates in pick order (FR-9 step 1).
 
-    Linear and file trackers keep their own order. GitHub issues sort oldest first, then by number ascending (P4)
+    Linear and file trackers keep their own order. Host work items sort oldest first, then by number ascending (P4)
     and those with an open PR (see :func:`default_open_pr_check`) are skipped; ``lookup`` is required
-    for GitHub. Items with a run record are skipped for both trackers, including those whose record sits in ``archive_dir``.
+    for host items. Items with a run record are skipped for both trackers, including those whose record sits in ``archive_dir``.
     """
     src = _validate(source)
     if limit <= 0:
         return []
     candidates = [c for c in await tracker.list_candidates(src) if _eligible(c, src)]
-    if src.kind == "github":
+    if uses_host_items(src):
         if lookup is None:
             raise PickError("a pull-request lookup is required for GitHub issues")
         candidates.sort(key=lambda c: (c.created_at, c.number if c.number is not None else 0))
-    return await _take_unstarted(candidates, workspace_dir, limit, src.kind, lookup, open_pr_check, archive_dir)
+    return await _take_unstarted(candidates, workspace_dir, limit, src, lookup, open_pr_check, archive_dir)
 
 
 async def _take_unstarted(
     candidates: Sequence[Candidate],
     workspace_dir: str | Path,
     limit: int,
-    kind: str | None,
+    source: WorkItemSource,
     lookup: PullRequestLookup | None,
     open_pr_check: OpenPrCheck,
     archive_dir: str | Path | None = None,
 ) -> list[Candidate]:
-    """First ``limit`` candidates with no run record (and, for GitHub, no open PR), de-duplicated by ASCII-folded ref."""
+    """First ``limit`` candidates with no run record (and, for host items, no open PR), de-duplicated by ASCII-folded ref."""
     picked: list[Candidate] = []
     seen: set[str] = set()
     for cand in candidates:
         if fold_item(cand.ref) in seen or is_started(workspace_dir, cand.ref, archive_dir):
             continue
-        if lookup is not None and kind == "github" and await open_pr_check(cand, lookup):
+        if lookup is not None and uses_host_items(source) and await open_pr_check(cand, lookup):
             continue
         seen.add(fold_item(cand.ref))
         picked.append(cand)
@@ -258,11 +258,11 @@ _HASH_REF = re.compile(r"#(\d+)")
 def label_removal_number(config: SisyphusConfig, ref: str) -> int | None:
     """Issue number to remove the pick label from, or ``None`` when no call may be made.
 
-    Only for ``kind = "github"`` with ``pick_label`` set and ``remove_label_when_settled`` on, and a ``#N`` ref.
+    Only for a host-backed kind (``host`` or ``github``) with ``pick_label`` set and ``remove_label_when_settled`` on, and a ``#N`` ref.
     "On" includes an absent key (``None``); only an explicit ``false`` turns removal off.
     """
     wi = config.source.work_item
-    if wi is None or wi.kind != "github" or not wi.pick_label or wi.remove_label_when_settled is False:
+    if wi is None or not uses_host_items(wi) or not wi.pick_label or wi.remove_label_when_settled is False:
         return None
     match = _HASH_REF.fullmatch(ref)
     return int(match.group(1)) if match else None
@@ -271,7 +271,7 @@ def label_removal_number(config: SisyphusConfig, ref: str) -> int | None:
 class HostIssueTracker:
     """Open issues assigned to ``assignee`` with ``pick_label`` (D-18), read through ``WorkItems.list_open``.
 
-    Policy (WorkItems unsupported): stop. ``default_services`` refuses to start for ``kind = "github"`` on a host
+    Policy (WorkItems unsupported): stop. ``default_services`` refuses to start for ``kind = "host"`` (or ``"github"``) on a host
     without WorkItems, so this never runs there. The host's declared list bound replaces the old fixed 100.
     """
 

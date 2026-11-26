@@ -554,3 +554,15 @@ async def test_work_item_adapters_raise_when_work_items_unsupported() -> None:
 
 def test_pick_imports_no_gh_module() -> None:
     assert "dotharness.gh" not in Path(pick.__file__).read_text()
+
+
+@pytest.mark.parametrize("kind", ["host", "github"])
+async def test_host_spellings_pick_and_remove_alike(tmp_path: Path, kind: str) -> None:
+    src = WorkItemSource(kind=kind, assignee="me", pick_label="sisyphus")
+    cands = [issue(5, "2026-02-01"), issue(9, "2026-01-01"), issue(3, "2026-01-01"), issue(4, label="bug")]
+    assert refs(await run(src, cands, tmp_path)) == ["#3", "#9", "#5"]
+    assert refs(await run(src, [issue(1)], tmp_path, lookup=FakeLookup({1: [LinkedPr(7, "OPEN")]}))) == []
+    assert label_removal_number(_cfg(kind=kind), "#12") == 12
+    assert label_removal_number(_cfg(kind=kind, remove=False), "#12") is None
+    with pytest.raises(PickError):
+        await pick_items(src, FakeTracker([issue(1)]), None, workspace_dir=tmp_path, limit=1)
