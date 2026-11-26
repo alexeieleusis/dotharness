@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from dotharness.paths import data_dir
 from dotharness.sisyphus import orchestrator
 from dotharness.sisyphus.orchestrator import GATE_FAILED_KEY, REFACTOR_RETRY_KEY, OrchestratorError, _Stop
 from dotharness.sisyphus.rails import Checkpoint
@@ -160,6 +161,7 @@ async def test_t3_passing_gate(env: Env) -> None:
     assert env.retries() == 0
     assert GATE_FAILED_KEY not in env.run.rec.retries
     assert not env.run.gated
+    assert not list(data_dir().rglob("build_gate_*.json"))  # the refactor gate writes no gate record
     assert ("git", "rev-list", "--count", "h0..HEAD") in env.fake.calls
 
 

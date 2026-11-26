@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from dotharness.code_host.errors import CodeHostError
+from dotharness.paths import data_dir
 from dotharness.sisyphus import orchestrator, pick
 from dotharness.sisyphus.cleanup import PrInfo
 from dotharness.sisyphus.config import (
@@ -404,6 +405,14 @@ async def test_stage_order_and_record_writes(world: World, monkeypatch: pytest.M
     ]
 
 
+def _gate_record_paths() -> list[Path]:
+    return sorted(data_dir().rglob("build_gate_*.json"))
+
+
+def _gate_records(world: World) -> list[dict]:
+    return [json.loads(p.read_text()) for p in _gate_record_paths()]
+
+
 async def test_happy_path_pr_gate_and_digest(world: World) -> None:
     result = await world.run()
     assert world.opened == [(branch_name(ITEM), "base-branch", "Brief", world.opened[0][3])]  # no owned plan: brief H1
@@ -411,8 +420,10 @@ async def test_happy_path_pr_gate_and_digest(world: World) -> None:
     digest = world.digest_text()
     assert "draft PR #42 opened" in digest
     assert "gate passed" in digest
-    assert "gate record" not in digest
-    assert not list(world.tmp.rglob("build_gate_*.json"))
+    assert "gate record" not in digest  # no digest note on a successful write (O-1 default)
+    assert _gate_records(world) == [{"head_sha": SHA1}]
+    assert _gate_record_paths()[0].name == "build_gate_42.json"
+    assert _gate_record_paths()[0].parent.name == world.config().project.repo_slug
     assert any(c[0] == ("git", "checkout", "-b", branch_name(ITEM), "origin/base-branch") for c in world.shell_calls)
     # The fake never reports the branch as existing, so the refactor stage's prepare_branch creates it again.
     assert RunRecord.open(world.tmp / "ws", ITEM).retries.get("branch-created", 0) >= 1
@@ -557,6 +568,51 @@ async def test_gate_command_failure_completes_and_reports_in_digest(world: World
     assert "(exit 2): gate failed" in digest
     assert digest.split("## Needs you")[1].lstrip().startswith("None")  # no Needs you entry
     assert world.events.count("gate:make check@pkg") == 1  # stopped at the first failure
+
+
+async def test_gate_failure_writes_no_gate_record(world: World) -> None:
+    world.gate_rc = 2
+    await world.run()
+    assert _gate_record_paths() == []
+
+
+async def test_gate_record_holds_the_sha_read_before_the_gate_ran(world: World) -> None:
+    world.head = SHA2
+    await world.run()
+    assert _gate_records(world) == [{"head_sha": SHA2}]
+    rev_parse = [i for i, c in enumerate(world.shell_calls) if c[0] == ("git", "rev-parse", "HEAD")]
+    gate_cmd = [i for i, c in enumerate(world.shell_calls) if c[0][0] == "make"]
+    assert any(i < gate_cmd[0] for i in rev_parse)
+
+
+async def test_gate_record_write_oserror_is_noted_and_does_not_change_the_gate(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(slug: str, number: int, sha: str) -> Path:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(orchestrator, "write_gate_record", boom)
+    result = await world.run()
+    assert result.completed
+    digest = world.digest_text()
+    assert "gate passed" in digest  # self.gated stays true
+    assert "gate record not written for PR #42: disk full" in digest
+    assert _gate_record_paths() == []
+
+
+async def test_resumed_open_pr_leaves_exactly_one_valid_gate_record(world: World) -> None:
+    await world.run()
+    rec = RunRecord.open(world.tmp / "ws", ITEM)
+    rec.mark_stage("push", "complete")  # resume at open-pr
+    world.existing_pr = PullRequest(42, "https://example.test/pr/42")
+    await world.run()
+    assert _gate_records(world) == [{"head_sha": SHA1}]
+
+
+async def test_gate_not_run_writes_no_gate_record(world: World) -> None:
+    (world.repo / ".spec-prism-flow.toml").write_text("[build]\n")
+    await world.run()
+    assert _gate_record_paths() == []
 
 
 async def test_c5_intake_boundary_violation(world: World) -> None:
