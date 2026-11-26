@@ -43,7 +43,7 @@ The build sub-agent launches one sub-agent per leaf, strictly one after the othe
 parallel. For each leaf:
 
 - require a handoff summary in the template the build prompt gives.
-- save it as `NN-<leaf name>.md` directly inside the handoff directory (the directory already is the `handoffs` folder, so add no `handoffs/` prefix).
+- save it as `NN-<phase file name without .md>.md`, keeping the `-leaf` suffix (phase file `05-c-docs-wording-leaf.md` gives `05-c-docs-wording-leaf.md`), directly inside the handoff directory (the directory already is the `handoffs` folder, so add no `handoffs/` prefix).
 - give the paths of every earlier summary to the next leaf's sub-agent.
 
 Run every sub-agent in the foreground and wait for its report. Never use `run_in_background`, and never

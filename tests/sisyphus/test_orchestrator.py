@@ -1405,12 +1405,12 @@ PARAMS = [
 
 def test_prompt_has_exactly_the_documented_placeholders() -> None:
     found = set(re.findall(r"<([^<>\n]+)>", PROMPT.read_text()))
-    assert found == {*PARAMS, "leaf name"}  # "<leaf name>" is the handoffs/NN-<leaf name>.md convention
+    assert found == {*PARAMS, "phase file name without .md"}  # the NN-<phase file name without .md>.md convention
 
 
 def test_prompt_substitution_leaves_no_parameter() -> None:
     text = build_orchestration_prompt(PROMPT.read_text(), {p: f"VALUE[{p}]" for p in PARAMS})
-    assert set(re.findall(r"<([^<>\n]+)>", text)) == {"leaf name"}
+    assert set(re.findall(r"<([^<>\n]+)>", text)) == {"phase file name without .md"}
     assert all(f"VALUE[{p}]" in text for p in PARAMS)
 
 
@@ -1453,7 +1453,7 @@ def test_prompt_references_but_does_not_restate() -> None:
 def test_prompt_states_the_required_behaviours() -> None:
     text = " ".join(PROMPT.read_text().split())
     for needle in (
-        "`NN-<leaf name>.md` directly inside the handoff directory",
+        "`NN-<phase file name without .md>.md`, keeping the `-leaf` suffix",
         "one after the other",
         "never in parallel",
         "C3",
@@ -1469,6 +1469,14 @@ def test_prompt_does_not_nest_handoffs_inside_the_handoff_dir() -> None:
     # where prbody.select_handoffs (top level only) would miss the summaries
     text = " ".join(PROMPT.read_text().split())
     assert "`handoffs/NN-" not in text
+
+
+def test_prompts_ask_for_the_long_handoff_name_with_leaf_suffix() -> None:
+    build = PROMPT.parents[2] / "knowledge" / "spec-prism-flow" / "build-execution-prompt.md"
+    for path in (PROMPT, build):
+        text = " ".join(path.read_text().split())
+        assert "NN-<phase file name without .md>.md" in text, path
+        assert "keeping the `-leaf` suffix" in text, path
 
 
 # ------------------------------------------------- follow-up 18: stop record and resume
