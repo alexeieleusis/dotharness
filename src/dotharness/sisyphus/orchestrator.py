@@ -69,6 +69,7 @@ from dotharness.sisyphus.stages import (
     LEAF_LIMIT_KEY,
     OPEN_PR_STAGE,
     PLAN_STAGE,
+    PREWORK_STAGE,
     PUSH_STAGE,
     REFACTOR_RETRY_KEY,
     REFACTOR_STAGE,
@@ -100,7 +101,12 @@ PACKAGE_MARKERS = ("Makefile", "pyproject.toml", "package.json", "Cargo.toml", "
 BRANCH_CREATED_KEY = "branch-created"
 PR_NUMBER_KEY = "pr-number"  # additive: the PR number, so the branch cleanup can ask the code host about it by number
 
-_STOP_CHECKPOINTS = {PLAN_STAGE: {"C2"}, BUILD_STAGE: {"C3", "C4", "C5"}, REFACTOR_STAGE: {"C3", "C4", "C5"}}
+_STOP_CHECKPOINTS = {
+    PLAN_STAGE: {"C2"},
+    PREWORK_STAGE: {"C3", "C4", "C5"},
+    BUILD_STAGE: {"C3", "C4", "C5"},
+    REFACTOR_STAGE: {"C3", "C4", "C5"},
+}
 
 
 _MAX_UNMATCHED_HANDOFFS = 20  # names listed in the C5 "not matched to any leaf" clause
@@ -665,7 +671,18 @@ class _Run:
     # -- stage driver
 
     def stages(self) -> list[str]:
-        return [INTAKE_STAGE, PLAN_STAGE, BUILD_STAGE, REFACTOR_STAGE, PUSH_STAGE, OPEN_PR_STAGE]
+        return [INTAKE_STAGE, PLAN_STAGE, PREWORK_STAGE, BUILD_STAGE, REFACTOR_STAGE, PUSH_STAGE, OPEN_PR_STAGE]
+
+    def stage_handlers(self) -> dict[str, Callable[[], Awaitable[None]]]:
+        return {
+            INTAKE_STAGE: self.stage_intake,
+            PLAN_STAGE: self.stage_plan,
+            PREWORK_STAGE: self.stage_prework,
+            BUILD_STAGE: self.stage_build,
+            REFACTOR_STAGE: self.stage_refactor,
+            PUSH_STAGE: self.stage_push,
+            OPEN_PR_STAGE: self.stage_open_pr,
+        }
 
     def start_index(self) -> int:
         """Index into ``STAGE_ORDER`` of the first stage that must still run."""
@@ -686,14 +703,7 @@ class _Run:
         start = self.start_index()
         if self.prior_cp is not None:
             self.rec.set_checkpoint(None)
-        handlers: dict[str, Callable[[], Awaitable[None]]] = {
-            INTAKE_STAGE: self.stage_intake,
-            PLAN_STAGE: self.stage_plan,
-            BUILD_STAGE: self.stage_build,
-            REFACTOR_STAGE: self.stage_refactor,
-            PUSH_STAGE: self.stage_push,
-            OPEN_PR_STAGE: self.stage_open_pr,
-        }
+        handlers = self.stage_handlers()
         try:
             await self.prepare_clone(start)
             for stage in self.stages():
@@ -1037,6 +1047,11 @@ class _Run:
             return
         await self.git("checkout", "-b", self.branch, f"origin/{base}")
         self.rec.increment_retry(BRANCH_CREATED_KEY)
+
+    async def stage_prework(self) -> None:
+        """PLACEHOLDER, to be replaced by the prework handler work order: completes the stage as a no-op."""
+        with self.rec.stage_scope(PREWORK_STAGE):
+            pass
 
     async def stage_refactor(self) -> None:
         """Run one refactor agent per stack group; stop at C5 on an incomplete, out-of-scope or gate-breaking group."""

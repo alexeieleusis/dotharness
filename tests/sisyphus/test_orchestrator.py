@@ -388,7 +388,7 @@ async def test_stage_order_and_record_writes(world: World, monkeypatch: pytest.M
     log = world.mark_log(monkeypatch)
     result = await world.run()
     assert result.completed
-    assert result.stages_run == ("intake", "plan", "build", "refactor", "push", "open-pr")
+    assert result.stages_run == ("intake", "plan", "prework", "build", "refactor", "push", "open-pr")
     expected = []
     for stage in result.stages_run:
         expected += [(stage, "in_progress"), (stage, "complete")]
@@ -911,7 +911,7 @@ async def test_resume_after_c3_relaunches_build_without_replanning(world: World)
     result = await world.run()
     assert result.completed
     assert result.stages_run == ("build", "refactor", "push", "open-pr")
-    assert result.stages_skipped == ("intake", "plan")
+    assert result.stages_skipped == ("intake", "plan", "prework")
     assert world.events.count("agent:plan") == 1
     assert world.events.count("agent:build") == 2
     assert RunRecord.open(world.tmp / "ws", ITEM).checkpoint is None
@@ -988,7 +988,7 @@ async def test_rerun_with_unchanged_inputs_repeats_nothing(world: World) -> None
     result = await world.run()
     assert result.completed
     assert result.stages_run == ()
-    assert result.stages_skipped == ("intake", "plan", "build", "refactor", "push", "open-pr")
+    assert result.stages_skipped == ("intake", "plan", "prework", "build", "refactor", "push", "open-pr")
     agents, _shells, finds = world.counts()
     assert (agents, finds) == (before[0], before[2])
     # the only extra call is the read-only "is the local branch still there?" probe of the branch cleanup
@@ -1942,7 +1942,7 @@ async def test_resume_checks_out_the_items_own_branch(world: World) -> None:
     result = await world.run()
     assert result.completed
     assert world.checkouts[-1] == branch_name(ITEM)
-    assert result.stages_skipped == ("intake", "plan", "build", "refactor")
+    assert result.stages_skipped == ("intake", "plan", "prework", "build", "refactor")
     assert world.events.count("agent:build") == 1  # committed work not redone
 
 
@@ -2422,7 +2422,7 @@ async def test_legacy_build_complete_record_resumes_into_refactor(world: World) 
     rec.mark_stage("build", "complete")  # a record written before the refactor stage existed
     result = await world.run()
     assert result.completed
-    assert result.stages_skipped == ("intake", "plan", "build")
+    assert result.stages_skipped == ("intake", "plan", "prework", "build")
     assert result.stages_run == ("refactor", "push", "open-pr")
     assert branch_name(ITEM) in world.checkouts  # a resume at refactor returns the clone to the item branch
     assert world.events.count("agent:build") == 1
@@ -2459,7 +2459,20 @@ def test_c2_stop_in_the_refactor_stage_is_rejected(world: World) -> None:
 async def test_stages_lists_refactor_in_order(world: World) -> None:
     run = _bare_run(world)
     assert run.stages() == list(orchestrator.STAGE_ORDER)
-    assert run.stages().index("refactor") == 3
+    assert run.stages().index("refactor") == 4
+
+
+async def test_every_stage_has_a_row_in_each_stage_table(world: World) -> None:
+    from dotharness.sisyphus.resume import RESET_KEYS
+
+    run = _bare_run(world)
+    handlers = run.stage_handlers()
+    for stage in orchestrator.STAGE_ORDER:
+        assert stage in RESET_KEYS
+        assert stage in handlers
+        assert stage in run.stages()
+    assert handlers[orchestrator.PREWORK_STAGE] == run.stage_prework
+    assert orchestrator._STOP_CHECKPOINTS[orchestrator.PREWORK_STAGE] == {"C3", "C4", "C5"}
 
 
 # ------------------------------------------------------------- disabled refactor stage skip (#208)
@@ -2489,8 +2502,8 @@ async def test_disabled_refactor_is_skipped_on_a_fresh_run(world: World, monkeyp
     result = await world.run()
     assert result.completed
     assert result.stages_skipped == ("refactor",)
-    assert result.stages_run == ("intake", "plan", "build", "push", "open-pr")
-    assert calls == ["check_time"] * 5  # one per stage that ran; none for refactor, no handler call
+    assert result.stages_run == ("intake", "plan", "prework", "build", "push", "open-pr")
+    assert calls == ["check_time"] * 6  # one per stage that ran; none for refactor, no handler call
     assert "agent:refactor" not in world.events
     assert "git push origin sisyphus/eng-1-cf2640ff" in world.events
     assert "open_pr" in world.events
@@ -2515,7 +2528,7 @@ async def test_disabled_refactor_resume_after_complete_build_skips_once(world: W
     RunRecord.open(world.tmp / "ws", ITEM).mark_stage("build", "complete")
     result = await world.run()
     assert result.completed
-    assert result.stages_skipped == ("intake", "plan", "build", "refactor")
+    assert result.stages_skipped == ("intake", "plan", "prework", "build", "refactor")
     assert result.stages_run == ("push", "open-pr")
 
 
