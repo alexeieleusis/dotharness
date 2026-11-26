@@ -22,7 +22,7 @@ runner = CliRunner()
 # command -> {parameter name: (option/argument names, default, kind)}
 _ENV = ("--env-file",), None, "option"
 _VERBOSE = ("--verbose", "-v"), False, "option"
-_BASE_BRANCH = ("--base-branch", "-b"), "origin/main", "option"
+_BASE_BRANCH = ("--base-branch", "-b"), None, "option"
 _MAX_ITERATIONS = ("--max-iterations", "-i"), 10, "option"
 _PATTERN = ("--pattern", "-p"), None, "option"
 _AI_TOOL = ("--ai-tool",), None, "option"

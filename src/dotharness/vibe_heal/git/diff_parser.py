@@ -9,8 +9,6 @@ from git.exc import InvalidGitRepositoryError
 
 from dotharness.vibe_heal.git.exceptions import GitError
 
-_DEFAULT_BASE_BRANCH = "origin/main"
-
 
 class DiffParserError(GitError):
     """Base exception for DiffParser errors."""
@@ -83,7 +81,7 @@ class DiffParser:
                 )
             )
 
-    def get_diff_lines(self, base_branch: str = _DEFAULT_BASE_BRANCH) -> DiffLines:
+    def get_diff_lines(self, base_branch: str) -> DiffLines:
         """Get changed line numbers per file between base branch and HEAD.
 
         Returns both the new-side lines (added/modified in HEAD, with trailing
@@ -95,7 +93,7 @@ class DiffParser:
         produce empty output in some GitPython subprocess environments.
 
         Args:
-            base_branch: Base branch to compare against. Defaults to 'origin/main'.
+            base_branch: Base branch to compare against. Required.
 
         Returns:
             DiffLines with new_lines and old_lines per file.
@@ -115,13 +113,13 @@ class DiffParser:
 
         return self._parse_diff(diff_output)
 
-    def get_changed_lines(self, base_branch: str = _DEFAULT_BASE_BRANCH) -> dict[str, set[int]]:
+    def get_changed_lines(self, base_branch: str) -> dict[str, set[int]]:
         """Get new-side changed line numbers per file between base branch and HEAD.
 
         Thin wrapper around get_diff_lines() for backwards compatibility.
 
         Args:
-            base_branch: Base branch to compare against. Defaults to 'origin/main'.
+            base_branch: Base branch to compare against. Required.
 
         Returns:
             Mapping of file paths to sets of new-side line numbers.
@@ -131,7 +129,7 @@ class DiffParser:
         """
         return self.get_diff_lines(base_branch).new_lines
 
-    def get_raw_diff(self, base_branch: str = _DEFAULT_BASE_BRANCH) -> str:
+    def get_raw_diff(self, base_branch: str) -> str:
         """Return the raw unified diff output for diagnostic purposes.
 
         Args:

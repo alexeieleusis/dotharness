@@ -167,6 +167,13 @@ class VibeHealConfig(CodeHostSettings):
         description="AI tool to use (auto-detect if not specified)",
     )
 
+    # Base branch (the env prefix is empty, so the alias carries the full variable name)
+    base_branch: str | None = Field(
+        default=None,
+        validation_alias="DOTHARNESS_BASE_BRANCH",
+        description="Base branch short name (e.g. 'develop'); the host default branch, then origin/main, when unset",
+    )
+
     # Context enrichment settings
     code_context_lines: int = Field(
         default=5,
@@ -224,6 +231,14 @@ class VibeHealConfig(CodeHostSettings):
                 raise InvalidConfigurationError(msg) from e
         msg = f"Invalid AI tool type: {type(v)}"
         raise InvalidConfigurationError(msg)
+
+    @field_validator("base_branch", mode="before")
+    @classmethod
+    def normalize_base_branch(cls, v: Any) -> Any:
+        """Treat an empty or whitespace-only base branch as unset and strip surrounding whitespace."""
+        if isinstance(v, str):
+            return v.strip() or None
+        return v
 
     @field_validator("sonarqube_url")
     @classmethod

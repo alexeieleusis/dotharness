@@ -681,9 +681,9 @@ async def test_intake_detaches_at_origin_base_before_the_agent(world: World) -> 
     assert "git ls-remote" not in world.digest_text()
 
 
-async def test_intake_prefers_intake_base_option(world: World) -> None:
+async def test_intake_starts_from_base_branch_option(world: World) -> None:
     world.origin_heads["develop"] = SHA1
-    await world.run(intake_base="develop")
+    await world.run(base_branch="develop")
     assert world.detached == ["origin/develop"]
 
 
@@ -717,6 +717,15 @@ async def test_intake_no_candidate_stops_c8_naming_all_three(world: World) -> No
     for ref in ("origin/base-branch", "local base-branch", "origin/main"):
         assert ref in result.detail
     assert "agent:intake" not in world.events
+
+
+@pytest.mark.parametrize("source", ["--base flag", "[project].base_branch", "host default branch", "final fallback"])
+async def test_intake_c8_names_base_source(world: World, source: str) -> None:
+    world.origin_heads.clear()
+    result = await world.run(base_source=source)
+    _assert_stop(world, result, Checkpoint.C8)
+    for ref in ("origin/base-branch", "local base-branch", "origin/main", source):
+        assert ref in result.detail
 
 
 async def test_intake_probe_network_error_stops_c8_without_fallback(world: World) -> None:

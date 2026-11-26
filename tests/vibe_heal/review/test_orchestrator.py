@@ -181,8 +181,9 @@ class TestResolveBaseBranch:
 
     @pytest.mark.asyncio
     async def test_falls_back_to_default_when_no_pr_found(self, orchestrator) -> None:
-        """When there is no change request, fall back to origin/main."""
+        """When there is no change request, use the host default branch (here main)."""
         orchestrator.fake.set_current_change_request(None)
+        orchestrator.fake.set_default_branch("main")
         result = await orchestrator._resolve_base_branch(None, verbose=False)
 
         assert result == "origin/main"
@@ -191,6 +192,7 @@ class TestResolveBaseBranch:
     async def test_falls_back_to_default_when_client_unavailable(self, orchestrator) -> None:
         """The OSError of a missing client never escapes (the never-raises rule)."""
         orchestrator.fake.set_available(False)
+        orchestrator.fake.set_default_branch("main")
         result = await orchestrator._resolve_base_branch(None, verbose=False)
 
         assert result == "origin/main"
@@ -209,6 +211,41 @@ class TestResolveBaseBranch:
             result = await orchestrator._resolve_base_branch(None, verbose=False)
 
         assert result == "origin/main"
+
+    @pytest.mark.asyncio
+    async def test_no_pr_uses_host_default_branch(self, orchestrator) -> None:
+        orchestrator.fake.set_current_change_request(None)
+        orchestrator.fake.set_default_branch("develop")
+        assert await orchestrator._resolve_base_branch(None, verbose=False) == "origin/develop"
+
+    @pytest.mark.asyncio
+    async def test_no_pr_setting_beats_host_default(self, orchestrator) -> None:
+        orchestrator.config = orchestrator.config.model_copy(update={"base_branch": "release"})
+        orchestrator.fake.set_current_change_request(None)
+        orchestrator.fake.set_default_branch("develop")
+        assert await orchestrator._resolve_base_branch(None, verbose=False) == "origin/release"
+
+    @pytest.mark.asyncio
+    async def test_pr_base_beats_setting_and_host_default(self, orchestrator) -> None:
+        orchestrator.config = orchestrator.config.model_copy(update={"base_branch": "release"})
+        orchestrator.fake.set_current_change_request(3, "stack/base")
+        orchestrator.fake.set_default_branch("develop")
+        assert await orchestrator._resolve_base_branch(None, verbose=False) == "origin/stack/base"
+
+    @pytest.mark.asyncio
+    async def test_explicit_flag_beats_setting_without_host_call(self, orchestrator) -> None:
+        orchestrator.config = orchestrator.config.model_copy(update={"base_branch": "release"})
+        with patch("dotharness.vibe_heal.review.orchestrator.resolve_default_base", new_callable=AsyncMock) as resolver:
+            assert await orchestrator._resolve_base_branch("origin/x", verbose=False) == "origin/x"
+        resolver.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_host_default_read_failure_degrades_to_main(self, orchestrator) -> None:
+        from dotharness.code_host import CodeHostError
+
+        orchestrator.fake.set_current_change_request(None)
+        orchestrator.fake.fail_always("Repository.default_branch", CodeHostError("boom"))
+        assert await orchestrator._resolve_base_branch(None, verbose=True) == "origin/main"
 
     @pytest.mark.asyncio
     async def test_detected_main_resolves_like_fallback(self, orchestrator) -> None:

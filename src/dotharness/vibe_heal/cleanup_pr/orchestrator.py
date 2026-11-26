@@ -139,7 +139,7 @@ class CleanupPrOrchestrator:
 
     async def cleanup_pr(
         self,
-        base_branch: str = "origin/main",
+        base_branch: str,
         max_iterations: int = 10,
         file_patterns: list[str] | None = None,
         min_severity: str | None = None,
@@ -157,7 +157,7 @@ class CleanupPrOrchestrator:
         is created; it always runs when the flag is set, including in dry-run.
 
         Args:
-            base_branch: Base branch to fetch and compare against (default: origin/main)
+            base_branch: Base branch to fetch and compare against (required; the CLI resolves it)
             max_iterations: Maximum analysis iterations for the whole branch (default: 10)
             file_patterns: Optional list of glob patterns to filter files
             min_severity: Minimum issue severity to fix (passed through to the loop)

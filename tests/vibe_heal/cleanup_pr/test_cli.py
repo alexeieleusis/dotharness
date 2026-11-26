@@ -43,6 +43,7 @@ def mocks() -> object:
     ):
         config = MagicMock(spec=VibeHealConfig)
         config.ai_tool = None
+        config.base_branch = None
         config_class.return_value = config
 
         ai_tool = MagicMock()

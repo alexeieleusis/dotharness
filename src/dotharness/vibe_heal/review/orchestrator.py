@@ -9,6 +9,7 @@ from dotharness.code_host import CodeHost, CodeHostError
 from dotharness.vibe_heal.config import VibeHealConfig
 from dotharness.vibe_heal.deduplication.client import DuplicationClient
 from dotharness.vibe_heal.deduplication.models import DuplicationGroup, DuplicationsResponse
+from dotharness.vibe_heal.git.base_branch import DEFAULT_BASE_BRANCH, resolve_default_base
 from dotharness.vibe_heal.git.branch_analyzer import BranchAnalyzer
 from dotharness.vibe_heal.git.diff_parser import DiffParser
 from dotharness.vibe_heal.git.file_selection import filter_files_by_patterns
@@ -47,7 +48,7 @@ from dotharness.vibe_heal.sonarqube.project_manager import ProjectManager, TempP
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BASE_BRANCH = "origin/main"
+__all__ = ["DEFAULT_BASE_BRANCH"]  # re-exported: defined in git/base_branch.py to avoid an import cycle
 
 
 class ReviewAnalysisResult(BaseModel):
@@ -177,27 +178,30 @@ class ReviewOrchestrator:
     async def _resolve_base_branch(self, base_branch: str | None, verbose: bool) -> str:
         """Resolve the base branch to diff against.
 
-        Returns base_branch unchanged if the caller passed one explicitly
-        (no gh call is made in that case — explicit intent always wins).
-        Otherwise, attempts to auto-detect the real PR base via
-        the code host's ChangeRequests.for_current_branch(), prefixed with "origin/"
-        to match this codebase's remote-ref convention. Falls back to
-        DEFAULT_BASE_BRANCH when no open PR is found (or gh is unavailable),
-        preserving the pre-existing behavior for that case.
+        Chain: explicit base_branch (returned unchanged, no host call) > the current branch's
+        open PR base (prefixed with "origin/") > the DOTHARNESS_BASE_BRANCH setting > the
+        code host's default branch > DEFAULT_BASE_BRANCH ("origin/main"). The last three are
+        resolved by resolve_default_base; a host failure degrades to "origin/main".
         """
         if base_branch is not None:
             return base_branch
 
         detected = await detect_base_branch(self.code_host)
-        if detected is None:
+        if detected is not None:
+            resolved = f"origin/{detected}"
             if verbose:
-                dim(f"No open PR found; using default base branch: {DEFAULT_BASE_BRANCH}")
-            return DEFAULT_BASE_BRANCH
+                dim(f"Auto-detected PR base branch: {resolved}")
+            return resolved
 
-        resolved = f"origin/{detected}"
+        resolution = await resolve_default_base(self.config, self.code_host, self.branch_analyzer)
+        if resolution.host_read_failed:
+            logger.warning("Could not read the host default branch; using %s", resolution.ref)
         if verbose:
-            dim(f"Auto-detected PR base branch: {resolved}")
-        return resolved
+            if resolution.host_read_failed:
+                dim(f"No open PR found and the default branch could not be read; using base branch: {resolution.ref}")
+            else:
+                dim(f"No open PR found; using default base branch: {resolution.ref} (source: {resolution.source})")
+        return resolution.ref
 
     async def run_analysis(
         self,
@@ -222,8 +226,9 @@ class ReviewOrchestrator:
         Args:
             base_branch: Base branch to compare against. When None (the
                 default), auto-detects the current branch's open PR base via
-                gh and diffs against that; falls back to "origin/main" if no
-                PR is found. Passing an explicit value skips detection.
+                the code host and diffs against that; with no PR, uses the
+                DOTHARNESS_BASE_BRANCH setting, then the host default branch,
+                then "origin/main". Passing an explicit value skips detection.
             file_patterns: Optional list of glob patterns to filter files.
             report_file: Optional path to write the report JSON to.
                 If provided, the parent directory is used for report output.

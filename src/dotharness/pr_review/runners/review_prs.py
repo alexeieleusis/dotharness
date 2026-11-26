@@ -3,7 +3,7 @@ import shlex
 import subprocess
 import time
 
-from dotharness.code_host import ChangeRequest, CodeHost, RepositoryRef
+from dotharness.code_host import ChangeRequest, CodeHost, CodeHostError, RepositoryRef
 from dotharness.pr_review import state
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
@@ -11,6 +11,7 @@ from dotharness.pr_review.runners import prune_projects
 from dotharness.pr_review.runners.common import (
     TIMEOUT_GIT,
     FatalGitError,
+    HostScaffold,
     IdentifiedGitFailure,
     env_file_args,
     env_file_error,
@@ -41,8 +42,9 @@ VIBE_HEAL_MODULE = "dotharness.vibe_heal"
 class BaseAnalysisError(RuntimeError):
     """A git step of the base analysis failed or timed out; the run must skip PR review."""
 
-    def __init__(self, cmd_name: str, reason: str) -> None:
-        super().__init__(f"git {cmd_name} {reason}")
+    def __init__(self, cmd_name: str, reason: str, ref: str | None = None, source: str | None = None) -> None:
+        detail = f" for {ref} (source: {source})" if ref and source else ""
+        super().__init__(f"git {cmd_name} {reason}{detail}")
 
 
 class PrGitFailureError(RuntimeError):
@@ -108,7 +110,8 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> list[
 
     await prune_projects.run(config, env)
 
-    if not await _run_base_analysis(config, env):
+    base, base_source = await resolve_base_branch(config, scaffold)
+    if not await _run_base_analysis(config, env, base, base_source):
         logger.warning("Base analysis failed; skipping PR review for this run")
         return []
 
@@ -330,36 +333,75 @@ async def _run_base_subdir(subdir, config: HarnessConfig, env: dict) -> bool:
     )
 
 
-async def _run_base_git(cmd_name: str, cmd: list[str], wdir: str, env: dict) -> subprocess.CompletedProcess:
-    """Run one base-analysis git step; timeout or non-zero exit raises BaseAnalysisError."""
+async def _run_base_git(
+    cmd_name: str, cmd: list[str], wdir: str, env: dict, ref: str, source: str
+) -> subprocess.CompletedProcess:
+    """Run one base-analysis git step; timeout or non-zero exit raises BaseAnalysisError naming ref and source."""
     try:
         result = await run_cmd(cmd, cwd=wdir, env=env, timeout=TIMEOUT_GIT, check=False)
     except subprocess.TimeoutExpired as exc:
         logger.warning("Base analysis: git %s timed out after %ds", cmd_name, TIMEOUT_GIT)
-        raise BaseAnalysisError(cmd_name, f"timed out after {TIMEOUT_GIT}s") from exc
+        raise BaseAnalysisError(cmd_name, f"timed out after {TIMEOUT_GIT}s", ref, source) from exc
     if result.returncode != 0:
         logger.warning("Base analysis: git %s failed: %s", cmd_name, result.stderr.decode("utf-8", errors="replace"))
-        raise BaseAnalysisError(cmd_name, "failed")
+        raise BaseAnalysisError(cmd_name, "failed", ref, source)
     return result
 
 
-async def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:
-    """Analyze origin/main once per new SHA (gated on state.last_main_sha) so vibe_heal has
-    a baseline to diff PRs against. Always restores the working dir to where it started,
-    regardless of outcome. Raises BaseAnalysisError on a git timeout or non-zero exit."""
+FINAL_FALLBACK_BASE = "main"
+BASE_SOURCE_CONFIG = "config"
+BASE_SOURCE_HOST = "host default"
+BASE_SOURCE_FALLBACK = "final fallback"
+
+
+async def resolve_base_branch(config: HarnessConfig, scaffold: HostScaffold) -> tuple[str, str]:
+    """Resolve the base branch once per run: ``(short name, source)``.
+
+    Chain: ``[repo].base_branch`` (config) > ``Repository.default_branch`` (host default; any ``CodeHostError``,
+    including an unsupported capability, or a blank answer degrades) > `main` (final fallback).
+    The host answer and the configured value are trusted, never probed.
+    """
+    if config.repo.base_branch:
+        return config.repo.base_branch, BASE_SOURCE_CONFIG
+    try:
+        default = await scaffold.host.repository.default_branch(scaffold.repo)
+    except CodeHostError:
+        logger.warning("Base analysis: host default branch unavailable; using the final fallback", exc_info=True)
+        default = ""
+    default = (default or "").strip()
+    if default:
+        return default, BASE_SOURCE_HOST
+    return FINAL_FALLBACK_BASE, BASE_SOURCE_FALLBACK
+
+
+def base_state_value(base: str, sha: str) -> str:
+    """Composite gate value ``<base>@<sha>``; a bare legacy SHA never equals one, nor does another base name."""
+    return f"{base}@{sha}"
+
+
+async def _run_base_analysis(config: HarnessConfig, env: dict, base: str, source: str) -> bool:
+    """Analyze origin/<base> once per new SHA (gated on state.last_main_sha, stored as ``<base>@<sha>``) so
+    vibe_heal has a baseline to diff PRs against. ``base`` and its ``source`` come from resolve_base_branch.
+    Always restores the working dir to where it started, regardless of outcome.
+    Raises BaseAnalysisError (naming the ref and source) on a git timeout or non-zero exit."""
     wdir = str(config.repo.working_dir)
+    ref = f"origin/{base}"
+    logger.info("Base analysis: base branch %s (source: %s)", ref, source)
 
     try:
-        await _run_base_git("fetch", ["git", "fetch", "--recurse-submodules", "origin", "main"], wdir, env)
-        result = await _run_base_git("rev-parse", ["git", "rev-parse", "origin/main"], wdir, env)
+        await _run_base_git(
+            "fetch", ["git", "fetch", "--recurse-submodules", "--", "origin", base], wdir, env, ref, source
+        )
+        result = await _run_base_git("rev-parse", ["git", "rev-parse", ref], wdir, env, ref, source)
     except BaseAnalysisError:
         await git_clean_working_dir(wdir, env)
         raise
     main_sha = result.stdout.decode("utf-8").strip()
+    state_value = base_state_value(base, main_sha)
 
     vh_state = state.read_vibe_heal_state(config.repo_slug)
-    if vh_state["last_main_sha"] == main_sha:
-        logger.info("Base analysis: already current at %s", main_sha[:8])
+    if vh_state["last_main_sha"] == state_value:
+        logger.info("Base analysis: already current at %s (%s)", main_sha[:8], ref)
         return True
 
     original_sha: str | None = None
@@ -367,7 +409,14 @@ async def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:
         original_sha = await git_detach_and_record(wdir, env)
 
         await git_clean_if_dirty(wdir, env)
-        await _run_base_git("checkout", ["git", "checkout", "--recurse-submodules", "--detach", main_sha], wdir, env)
+        await _run_base_git(
+            "checkout",
+            ["git", "checkout", "--recurse-submodules", "--detach", main_sha],
+            wdir,
+            env,
+            ref,
+            source,
+        )
 
         success = True
         for s in config.repo.subdirs:  # stops at the first failing subdir, like all() did
@@ -375,7 +424,7 @@ async def _run_base_analysis(config: HarnessConfig, env: dict) -> bool:
                 success = False
                 break
         if success:
-            state.write_vibe_heal_state(config.repo_slug, last_main_sha=main_sha)
+            state.write_vibe_heal_state(config.repo_slug, last_main_sha=state_value)
     except BaseAnalysisError:
         await git_clean_working_dir(wdir, env, original_sha)
         raise

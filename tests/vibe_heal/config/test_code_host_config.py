@@ -22,11 +22,49 @@ SECRET = "s3cr3t-token-value"  # noqa: S105
 @pytest.fixture(autouse=True)
 def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
-    for name in ("DOTHARNESS_CODE_HOST", "DOTHARNESS_CODE_HOST_OPTIONS", "CODE_HOST", "CODE_HOST_OPTIONS"):
+    for name in (
+        "DOTHARNESS_BASE_BRANCH",
+        "BASE_BRANCH",
+        "DOTHARNESS_CODE_HOST",
+        "DOTHARNESS_CODE_HOST_OPTIONS",
+        "CODE_HOST",
+        "CODE_HOST_OPTIONS",
+    ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("SONARQUBE_URL", "https://sonar.example.com")
     monkeypatch.setenv("SONARQUBE_TOKEN", "tok")
     monkeypatch.setenv("SONARQUBE_PROJECT_KEY", "proj")
+
+
+class TestBaseBranchSetting:
+    def test_default_is_none(self) -> None:
+        assert VibeHealConfig().base_branch is None
+
+    def test_alias_is_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DOTHARNESS_BASE_BRANCH", "develop")
+        assert VibeHealConfig().base_branch == "develop"
+
+    def test_bare_name_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("BASE_BRANCH", "develop")
+        assert VibeHealConfig().base_branch is None
+
+    @pytest.mark.parametrize("value", ["", "   ", "\t"])
+    def test_blank_is_unset(self, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+        monkeypatch.setenv("DOTHARNESS_BASE_BRANCH", value)
+        assert VibeHealConfig().base_branch is None
+
+    def test_whitespace_is_stripped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DOTHARNESS_BASE_BRANCH", "  develop ")
+        assert VibeHealConfig().base_branch == "develop"
+
+    def test_read_from_env_file(self, tmp_path: Path) -> None:
+        env_file = tmp_path / "custom.env"
+        env_file.write_text("DOTHARNESS_BASE_BRANCH=develop\n")
+        assert VibeHealConfig(env_file=str(env_file)).base_branch == "develop"
+
+    def test_read_from_default_dotenv(self, tmp_path: Path) -> None:
+        (tmp_path / ".env.vibeheal").write_text("DOTHARNESS_BASE_BRANCH=develop\n")
+        assert VibeHealConfig().base_branch == "develop"
 
 
 class TestFields:

@@ -52,8 +52,15 @@ When there is nothing to do, the run prints nothing and exits 0. When something 
 stdout.
 
 `--base <branch>` is the PR base branch. Precedence: `--base`, then `[project].base_branch` in the config,
-then `main`. `main` is the correct base for normal use. Only if you work on your own stacked branch (a branch
-whose PR targets another unmerged branch) do you need `--base` or the config key set to that parent branch.
+then the repository default branch as the code host declares it, then `main` (the final fallback, used when the
+host cannot be read). The same base is where the intake clone starts. If none of `origin/<base>`, local `<base>`
+and `origin/main` exists, the run stops at C8 and the message names those candidates and which link
+(`--base` flag, `[project].base_branch`, host default branch, final fallback) chose `<base>`.
+
+If the host default may be a stale legacy `main` while work happens on another branch, set
+`[project].base_branch` explicitly. `sisyphus resume` embeds the resolved base. The per-tool base keys
+(`[project].base_branch`, pr_review `[repo].base_branch`, vibe_heal `DOTHARNESS_BASE_BRANCH`) are separate: set the
+same short name in each tool you use on a repository; a mismatch is not detected.
 
 The CLI takes the clone lock once, at the start of `run` and `intake`, and releases it when the invocation ends
 (including on error). It calls the orchestrator with `lock_held=True`. The orchestrator does not lock again

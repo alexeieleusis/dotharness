@@ -52,10 +52,11 @@ The base ref is the first of these that exists:
 
 1. `--base`
 2. `[local_review].base`
-3. `refs/remotes/origin/HEAD`, if it is present locally
-4. `main`
+3. `[repo].base_branch`, a short name tried as `origin/<name>` first, then `<name>`
+4. `refs/remotes/origin/HEAD`, if it is present locally
+5. `main` (the final fallback)
 
-If `--base` or `[local_review].base` is set and does not resolve, the command fails. It does not fall back to the next item.
+If `--base`, `[local_review].base` or `[repo].base_branch` is set and does not resolve, the command fails. It does not fall back to the next item.
 
 The merge base is `git merge-base <base ref> HEAD`. The review diff is `git diff <merge base> HEAD`. The command does not fetch from the network.
 
@@ -153,6 +154,7 @@ Only these `.harness.toml` fields affect this command. See [Configuration](../co
 | Field | Used for |
 |---|---|
 | `[local_review].base` | Default base ref |
+| `[repo].base_branch` | Base branch, used after `--base` and `[local_review].base` |
 | `[local_review].output_dir` | Default output root |
 | `harness.backend` | Which AI backend (`opencode` or `claude`) runs the passes |
 | `harness.backend_timeout_seconds` | Timeout for each backend invocation |

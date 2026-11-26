@@ -104,6 +104,54 @@ async def test_falls_back_to_main(repo: Path) -> None:
     assert (await resolve_base_ref(repo)) == "main"
 
 
+async def test_repo_base_prefers_origin_ref(repo: Path) -> None:
+    git(repo, "update-ref", "refs/remotes/origin/develop", "main")
+    git(repo, "branch", "develop", "main")
+    assert (await resolve_base_ref(repo, repo_base="develop")) == "origin/develop"
+
+
+async def test_repo_base_local_only(repo: Path) -> None:
+    git(repo, "branch", "develop", "main")
+    assert (await resolve_base_ref(repo, repo_base="develop")) == "develop"
+
+
+async def test_precedence_local_review_base_beats_repo_base(repo: Path) -> None:
+    git(repo, "branch", "develop", "main")
+    git(repo, "branch", "other", "main")
+    git(repo, "branch", "third", "main")
+    assert (await resolve_base_ref(repo, None, "other", "develop")) == "other"
+    assert (await resolve_base_ref(repo, "third", "other", "develop")) == "third"
+
+
+async def test_repo_base_beats_origin_head(repo: Path) -> None:
+    git(repo, "update-ref", "refs/remotes/origin/trunk", "main")
+    git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+    git(repo, "branch", "develop", "main")
+    assert (await resolve_base_ref(repo, repo_base="develop")) == "develop"
+
+
+async def test_unresolvable_repo_base_errors_even_if_main_exists(repo: Path) -> None:
+    with pytest.raises(LocalReviewError) as exc:
+        await resolve_base_ref(repo, repo_base="nope")
+    assert "nope" in str(exc.value)
+    assert "[repo].base_branch" in str(exc.value)
+
+
+async def test_check_preconditions_forwards_repo_base(repo: Path) -> None:
+    git(repo, "branch", "develop", "main")
+    target = await check_preconditions(repo, repo_base="develop")
+    assert target.base_ref == "develop"
+
+
+async def test_nothing_set_failure_lists_repo_base_not_set(tmp_path: Path) -> None:
+    r = tmp_path / "r2"
+    r.mkdir()
+    git(r, "init", "-b", "dev")
+    commit(r, "a")
+    with pytest.raises(LocalReviewError, match=r"\[repo\]\.base_branch \(not set\)"):
+        await resolve_base_ref(r)
+
+
 async def test_nothing_resolves_lists_tried(tmp_path: Path) -> None:
     r = tmp_path / "r"
     r.mkdir()

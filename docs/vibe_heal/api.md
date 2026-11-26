@@ -29,11 +29,15 @@ Reference for the `dotharness.vibe_heal` package, generated from docstrings.
 
 `vibe_heal cleanup-pr` fixes SonarQube issues and duplications that fall on lines changed relative to the base branch. It does not replace `cleanup` / `dedupe-branch`, does no GitHub interaction (run `review --post` afterwards) and does not push.
 
+### Base branch
+
+The base branch is configurable. Terms, the resolution chains for `cleanup`, `cleanup-pr`, `dedupe-branch` and `review`, the `DOTHARNESS_BASE_BRANCH` setting and its separate-knob rule are defined once in the [Branch Cleanup Guide](branch-cleanup-guide.md#base-branch). The `main_*` result fields below use "main" as defined in [Main means the configured base branch](branch-cleanup-guide.md#main-means-the-configured-base-branch). Orchestrator and git helper methods take the base ref as a required `base_branch` argument; the callers (the CLI commands) always resolve and pass it, so the methods have no default.
+
 ### CLI Flags
 
 | Flag | Default | Behavior |
 |---|---|---|
-| `--base-branch`, `-b` | `origin/main` | Base to diff against; plain ref, no `gh` auto-detection |
+| `--base-branch`, `-b` | auto | Base to diff against, resolved at run time when omitted: `DOTHARNESS_BASE_BRANCH`, then the host default branch, then `origin/main` (see [Resolution chains](branch-cleanup-guide.md#resolution-chains)); plain ref as given, no `gh` auto-detection |
 | `--max-iterations`, `-i` | `10` | Maximum analyze -> fix rounds for the whole branch |
 | `--pattern`, `-p` | none | Glob filters, same as `cleanup` (`Path.match`) |
 | `--min-severity` | none | Passed to `IssueProcessor`; applies to issues only |
@@ -41,7 +45,7 @@ Reference for the `dotharness.vibe_heal` package, generated from docstrings.
 | `--ai-tool` | none | Same as `cleanup` |
 | `--env-file` | none | Same as `cleanup` |
 | `--verbose`, `-v` | off | Same as `cleanup` |
-| `--include-main-duplications` | off | Also handle duplications from the base branch (runs a baseline scan) |
+| `--include-main-duplications` | off | Also handle duplications from the base branch (runs a baseline scan); "main" in the name means [the configured base branch](branch-cleanup-guide.md#main-means-the-configured-base-branch) |
 
 ### Workflow
 

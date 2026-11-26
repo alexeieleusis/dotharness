@@ -63,35 +63,68 @@ async def _ref_exists(working_dir: Path, ref: str) -> bool:
     return (await git(working_dir, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")).returncode == 0
 
 
-async def resolve_base_ref(working_dir: Path, base: str | None = None, config_base: str | None = None) -> str:
-    """First existing ref in order: `base` (--base), `config_base`, origin/HEAD target, `main`.
+async def resolve_base_ref(
+    working_dir: Path,
+    base: str | None = None,
+    config_base: str | None = None,
+    repo_base: str | None = None,
+) -> str:
+    """First existing ref in order: `base` (--base), `config_base` ([local_review].base),
+    `repo_base` ([repo].base_branch), origin/HEAD target, `main`.
 
     An explicit `base` or `config_base` that does not resolve is an error and never
-    falls through. The origin/HEAD and `main` rules fall through quietly.
+    falls through. `repo_base` is a short branch name tried as `origin/<name>` then `<name>`;
+    if neither resolves it is an error and never falls through. The origin/HEAD and `main`
+    rules fall through quietly. Offline: no host call, no fetch.
     """
-    for label, value in (("--base", base), ("[local_review].base", config_base)):
-        if value:
-            if await _ref_exists(working_dir, value):
-                return value
-            raise LocalReviewError(f"base ref {value!r} (from {label}) does not resolve to a commit")  # noqa: TRY003
+    explicit = await _resolve_explicit_base(working_dir, base, config_base)
+    if explicit:
+        return explicit
+    if repo_base:
+        return await _resolve_repo_base(working_dir, repo_base)
 
     tried: list[str] = []
-    origin_head = await git(working_dir, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
-    target = origin_head.stdout.strip() if origin_head.returncode == 0 else ""
-    if target:
-        if await _ref_exists(working_dir, target):
-            return target
-        tried.append(f"{target} (origin/HEAD)")
-    else:
-        tried.append("origin/HEAD (not set)")
+    resolved = await _resolve_origin_head(working_dir, tried)
+    if resolved:
+        return resolved
     if await _ref_exists(working_dir, DEFAULT_BASE_FALLBACK):
         return DEFAULT_BASE_FALLBACK
     tried.append(DEFAULT_BASE_FALLBACK)
     raise LocalReviewError(
         "could not resolve a base ref; tried: --base (not given), [local_review].base (not set), "
-        + ", ".join(tried)
-        + ". Pass --base REF."
+        "[repo].base_branch (not set), " + ", ".join(tried) + ". Pass --base REF."
     )
+
+
+async def _resolve_explicit_base(working_dir: Path, base: str | None, config_base: str | None) -> str | None:
+    for label, value in (("--base", base), ("[local_review].base", config_base)):
+        if value:
+            if await _ref_exists(working_dir, value):
+                return value
+            raise LocalReviewError(f"base ref {value!r} (from {label}) does not resolve to a commit")  # noqa: TRY003
+    return None
+
+
+async def _resolve_repo_base(working_dir: Path, repo_base: str) -> str:
+    for candidate in (f"origin/{repo_base}", repo_base):
+        if await _ref_exists(working_dir, candidate):
+            return candidate
+    raise LocalReviewError(  # noqa: TRY003
+        f"base ref {repo_base!r} (from [repo].base_branch) does not resolve to a commit "
+        f"(tried origin/{repo_base} and {repo_base})"
+    )
+
+
+async def _resolve_origin_head(working_dir: Path, tried: list[str]) -> str | None:
+    origin_head = await git(working_dir, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+    target = origin_head.stdout.strip() if origin_head.returncode == 0 else ""
+    if not target:
+        tried.append("origin/HEAD (not set)")
+        return None
+    if await _ref_exists(working_dir, target):
+        return target
+    tried.append(f"{target} (origin/HEAD)")
+    return None
 
 
 async def compute_merge_base(working_dir: Path, base_ref: str) -> str:
@@ -128,6 +161,7 @@ async def check_preconditions(
     *,
     base: str | None = None,
     config_base: str | None = None,
+    repo_base: str | None = None,
     output_root: Path | None = None,
     review_phase: bool = True,
 ) -> LocalReviewTarget:
@@ -165,7 +199,7 @@ async def check_preconditions(
             "- commit or stash them first"
         )
 
-    base_ref = await resolve_base_ref(working_dir, base, config_base)
+    base_ref = await resolve_base_ref(working_dir, base, config_base, repo_base)
     head = await git(working_dir, "rev-parse", "HEAD")
     head_sha = head.stdout.strip()
     if head.returncode != 0 or not head_sha:

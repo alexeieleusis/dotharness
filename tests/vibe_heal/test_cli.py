@@ -168,6 +168,7 @@ class TestCleanupCommand:
         # Setup config mock
         mock_config = MagicMock(spec=VibeHealConfig)
         mock_config.ai_tool = None
+        mock_config.base_branch = None
         mock_config_class.return_value = mock_config
 
         # Setup AI tool mock
@@ -226,6 +227,7 @@ class TestCleanupCommand:
         # Setup config mock
         mock_config = MagicMock(spec=VibeHealConfig)
         mock_config.ai_tool = None
+        mock_config.base_branch = None
         mock_config_class.return_value = mock_config
 
         # Setup AI tool mock
@@ -293,6 +295,7 @@ class TestCleanupCommand:
         # Setup config mock
         mock_config = MagicMock(spec=VibeHealConfig)
         mock_config.ai_tool = None
+        mock_config.base_branch = None
         mock_config_class.return_value = mock_config
 
         # Setup AI tool mock
@@ -338,6 +341,7 @@ class TestCleanupCommand:
         # Setup config mock
         mock_config = MagicMock(spec=VibeHealConfig)
         mock_config.ai_tool = None
+        mock_config.base_branch = None
         mock_config_class.return_value = mock_config
 
         # Setup AI tool mock - no tool detected
@@ -365,6 +369,7 @@ class TestCleanupCommand:
         # Setup config mock
         mock_config = MagicMock(spec=VibeHealConfig)
         mock_config.ai_tool = AIToolType.CLAUDE_CODE
+        mock_config.base_branch = None
         mock_config_class.return_value = mock_config
 
         # Setup AI tool mock

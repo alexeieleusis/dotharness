@@ -1,5 +1,6 @@
 import logging
 import subprocess
+from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
@@ -580,11 +581,11 @@ async def test_run_locked_skips_subdir_with_no_changes(tmp_xdg, tmp_path):
 
 
 async def test_run_base_analysis_skips_when_sha_unchanged(tmp_xdg, tmp_path):
-    state.write_vibe_heal_state("acme-frontend", last_main_sha="deadbeef")
+    state.write_vibe_heal_state("acme-frontend", last_main_sha="main@deadbeef")
     cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
     with patch("dotharness.pr_review.runners.review_prs.run_cmd") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=b"deadbeef\n", stderr=b"")
-        result = await review_prs._run_base_analysis(cfg, {})
+        result = await review_prs._run_base_analysis(cfg, {}, "main", "host default")
     assert result is True
     # Only fetch + rev-parse should run; no checkout, since the SHA already matches.
     assert not any("checkout" in str(c) for c in mock_run.call_args_list)
@@ -599,9 +600,9 @@ async def test_run_base_analysis_runs_subdirs_and_persists_sha_on_success(tmp_xd
         patch("dotharness.pr_review.runners.review_prs.git_restore") as mock_restore,
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"new-sha\n", stderr=b"")
-        result = await review_prs._run_base_analysis(cfg, {})
+        result = await review_prs._run_base_analysis(cfg, {}, "main", "host default")
     assert result is True
-    assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == "new-sha"
+    assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == "main@new-sha"
     vibe_calls = [c for c in mock_run.call_args_list if "--baseline" in str(c)]
     assert len(vibe_calls) == 1
     mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
@@ -621,7 +622,7 @@ async def test_run_base_analysis_does_not_persist_sha_when_subdir_fails(tmp_xdg,
         patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="original-sha"),
         patch("dotharness.pr_review.runners.review_prs.git_restore") as mock_restore,
     ):
-        result = await review_prs._run_base_analysis(cfg, {})
+        result = await review_prs._run_base_analysis(cfg, {}, "main", "host default")
     assert result is False
     assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == "old-sha"
     mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
@@ -643,7 +644,7 @@ async def test_run_base_analysis_raises_on_git_fetch_failure(tmp_xdg, tmp_path, 
         caplog.at_level("WARNING"),
         pytest.raises(review_prs.BaseAnalysisError),
     ):
-        await review_prs._run_base_analysis(cfg, {})
+        await review_prs._run_base_analysis(cfg, {}, "main", "host default")
     assert "Base analysis: git fetch failed: fetch error" in caplog.text
     assert mock_run.call_count == 1
     assert "fetch" in str(mock_run.call_args_list[0])
@@ -668,7 +669,7 @@ async def test_run_base_analysis_raises_on_rev_parse_failure(tmp_xdg, tmp_path, 
         caplog.at_level("WARNING"),
         pytest.raises(review_prs.BaseAnalysisError),
     ):
-        await review_prs._run_base_analysis(cfg, {})
+        await review_prs._run_base_analysis(cfg, {}, "main", "host default")
     assert "Base analysis: git rev-parse failed: rev-parse error" in caplog.text
     assert mock_run.call_count == 2
     clean_mock.assert_called_once_with(str(tmp_path), {})
@@ -696,7 +697,7 @@ async def test_run_base_analysis_raises_on_checkout_failure(tmp_xdg, tmp_path, c
         caplog.at_level("WARNING"),
         pytest.raises(review_prs.BaseAnalysisError),
     ):
-        await review_prs._run_base_analysis(cfg, {})
+        await review_prs._run_base_analysis(cfg, {}, "main", "host default")
     assert "Base analysis: git checkout failed: checkout error" in caplog.text
     mock_restore.assert_called_once_with("original-sha", "", str(tmp_path), {})
     clean_mock.assert_called_once_with(str(tmp_path), {}, "original-sha")
@@ -723,7 +724,7 @@ async def test_run_base_analysis_raises_on_git_timeout(tmp_xdg, tmp_path, caplog
         caplog.at_level("WARNING"),
         pytest.raises(review_prs.BaseAnalysisError) as info,
     ):
-        await review_prs._run_base_analysis(cfg, {})
+        await review_prs._run_base_analysis(cfg, {}, "main", "host default")
     assert info.value.__cause__ is raised[0]
     assert not isinstance(info.value, review_prs.FatalGitError)
     order = ["fetch", "rev-parse", "checkout"]
@@ -755,7 +756,7 @@ async def test_run_locked_propagates_base_analysis_timeout_without_processing_pr
         pytest.raises(review_prs.BaseAnalysisError),
     ):
         await review_prs._run_locked(cfg)
-    assert host.calls == []
+    assert [c.operation for c in host.calls if "default_branch" not in c.operation] == []  # base resolution reads it
 
 
 async def test_run_locked_calls_prune_projects_before_base_analysis(tmp_xdg, tmp_path):
@@ -774,7 +775,7 @@ async def test_run_locked_calls_prune_projects_before_base_analysis(tmp_xdg, tmp
     ):
         await review_prs._run_locked(cfg)
     assert calls == ["prune", "base_analysis"]
-    assert host.calls == []
+    assert [c.operation for c in host.calls if "default_branch" not in c.operation] == []  # base resolution reads it
 
 
 async def test_run_locked_does_not_prune_when_disabled(tmp_xdg, tmp_path):
@@ -806,7 +807,7 @@ async def test_run_locked_skips_pr_processing_when_base_analysis_fails(tmp_xdg, 
         patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=False),
     ):
         await review_prs._run_locked(cfg)
-    assert host.calls == []
+    assert [c.operation for c in host.calls if "default_branch" not in c.operation] == []  # base resolution reads it
 
 
 async def test_run_locked_does_not_record_reviewed_sha_on_subdir_failure(tmp_xdg, tmp_path):
@@ -1207,7 +1208,7 @@ async def test_run_base_analysis_does_not_persist_sha_on_bad_env_file(tmp_xdg, t
         patch("dotharness.pr_review.runners.review_prs.git_restore"),
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout=b"new-sha\n", stderr=b"")
-        assert (await review_prs._run_base_analysis(cfg, {})) is False
+        assert (await review_prs._run_base_analysis(cfg, {}, "main", "host default")) is False
     assert not [c for c in mock_run.call_args_list if "vibe_heal" in str(c)]
     assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == "old-sha"
 
@@ -1315,6 +1316,215 @@ async def test_base_analysis_checkout_runs_pre_checkout_clean_before_checkout(
         patch("dotharness.pr_review.runners.review_prs.git_restore"),
         patch("dotharness.pr_review.runners.review_prs._run_base_subdir", return_value=True),
     ):
-        await review_prs._run_base_analysis(cfg, {})
+        await review_prs._run_base_analysis(cfg, {}, "main", "host default")
     pre_checkout_clean_mock.assert_called_once_with(str(tmp_path), {})
     assert seen.index("pre-clean") < seen.index("checkout")
+
+
+# --- resolve_base_branch (precedence chain) ---
+
+
+class _StubRepository:
+    def __init__(self, result=None, error=None):
+        self.result, self.error, self.calls = result, error, 0
+
+    async def default_branch(self, repo):
+        self.calls += 1
+        if self.error:
+            raise self.error
+        return self.result
+
+
+def _stub_scaffold(repository):
+    return SimpleNamespace(host=SimpleNamespace(repository=repository), repo=REPO)
+
+
+def _base_config(tmp_path, base_branch=None):
+    return SimpleNamespace(repo=SimpleNamespace(base_branch=base_branch, working_dir=tmp_path))
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)  # noqa: S607
+
+
+@pytest.fixture
+def git_repo(tmp_path):
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i")
+    return tmp_path
+
+
+async def test_resolve_config_wins_without_host_or_git(tmp_path):
+    repository = _StubRepository(error=AssertionError("host must not be called"))
+    with patch("dotharness.pr_review.runners.review_prs.run_cmd", side_effect=AssertionError("no git")):
+        result = await review_prs.resolve_base_branch(_base_config(tmp_path, "develop"), _stub_scaffold(repository))
+    assert result == ("develop", "config")
+    assert repository.calls == 0
+
+
+async def test_resolve_host_default_read_once(tmp_path):
+    repository = _StubRepository("trunk")
+    result = await review_prs.resolve_base_branch(_base_config(tmp_path), _stub_scaffold(repository))
+    assert result == ("trunk", "host default")
+    assert repository.calls == 1
+
+
+async def test_resolve_host_default_main_is_main(tmp_path):
+    result = await review_prs.resolve_base_branch(_base_config(tmp_path), _stub_scaffold(_StubRepository("main")))
+    assert result == ("main", "host default")
+
+
+@pytest.mark.parametrize(
+    "repository",
+    [
+        _StubRepository(error=CodeHostError("boom")),
+        _StubRepository(error=UnsupportedCapabilityError("no", capability="Repository")),
+        _StubRepository(""),
+        _StubRepository("   "),
+    ],
+)
+async def test_resolve_host_failure_falls_to_final_fallback(tmp_path, repository):
+    result = await review_prs.resolve_base_branch(_base_config(tmp_path), _stub_scaffold(repository))
+    assert result == ("main", "final fallback")
+    assert repository.calls == 1
+
+
+async def test_resolve_final_fallback(git_repo):
+    _git(git_repo, "branch", "-M", "other")
+    repository = _StubRepository(error=CodeHostError("down"))
+    result = await review_prs.resolve_base_branch(_base_config(git_repo), _stub_scaffold(repository))
+    assert result == ("main", "final fallback")
+
+
+# --- base analysis on the resolved ref (composite gate, logging, errors) ---
+
+SHA1, SHA2 = "1" * 40, "2" * 40
+
+
+def _base_cmds(shas=SHA1, fail=None):
+    """A fake run_cmd recording git commands; ``fail`` names a git step that exits 1."""
+    seen = []
+
+    def fake(cmd, **kwargs):
+        seen.append(list(cmd))
+        if fail and cmd[1] == fail:
+            return MagicMock(returncode=1, stdout=b"", stderr=b"fatal: couldn't find remote ref")
+        return MagicMock(returncode=0, stdout=f"{shas}\n".encode(), stderr=b"")
+
+    return seen, fake
+
+
+def _patches(fake):
+    return (
+        patch("dotharness.pr_review.runners.review_prs.run_cmd", side_effect=fake),
+        patch("dotharness.pr_review.runners.review_prs.git_detach_and_record", return_value="orig"),
+        patch("dotharness.pr_review.runners.review_prs.git_restore"),
+        patch("dotharness.pr_review.runners.review_prs._run_base_subdir", return_value=True),
+    )
+
+
+async def _run_base(cfg, base, source, fake):
+    p1, p2, p3, p4 = _patches(fake)
+    with p1, p2, p3, p4 as subdir:
+        result = await review_prs._run_base_analysis(cfg, {}, base, source)
+    return result, subdir
+
+
+async def test_base_analysis_uses_resolved_ref_in_git_calls(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    seen, fake = _base_cmds(SHA1)
+    result, _ = await _run_base(cfg, "develop", "config", fake)
+    assert result is True
+    assert seen[0] == ["git", "fetch", "--recurse-submodules", "--", "origin", "develop"]
+    assert seen[1] == ["git", "rev-parse", "origin/develop"]
+    assert seen[2] == ["git", "checkout", "--recurse-submodules", "--detach", SHA1]
+    assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == f"develop@{SHA1}"
+
+
+async def test_base_analysis_default_main_commands_unchanged(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    seen, fake = _base_cmds(SHA1)
+    await _run_base(cfg, "main", "host default", fake)
+    assert seen[0] == ["git", "fetch", "--recurse-submodules", "--", "origin", "main"]
+    assert seen[1] == ["git", "rev-parse", "origin/main"]
+
+
+async def test_base_analysis_absent_ref_names_ref_and_source(tmp_xdg, tmp_path, clean_mock):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    state.write_vibe_heal_state("acme-frontend", last_main_sha=f"develop@{SHA2}")
+    _, fake = _base_cmds(fail="fetch")
+    with _patches(fake)[0], pytest.raises(review_prs.BaseAnalysisError) as info:
+        await review_prs._run_base_analysis(cfg, {}, "develop", "config")
+    assert "origin/develop" in str(info.value)
+    assert "config" in str(info.value)
+    clean_mock.assert_called_once_with(str(tmp_path), {})
+    assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == f"develop@{SHA2}"
+
+
+async def test_base_analysis_same_composite_is_a_hit(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    state.write_vibe_heal_state("acme-frontend", last_main_sha=f"develop@{SHA1}")
+    seen, fake = _base_cmds(SHA1)
+    result, subdir = await _run_base(cfg, "develop", "config", fake)
+    assert result is True
+    subdir.assert_not_called()
+    assert not any(c[1] == "checkout" for c in seen)
+
+
+async def test_base_analysis_new_sha_rebaselines(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    state.write_vibe_heal_state("acme-frontend", last_main_sha=f"develop@{SHA1}")
+    _, fake = _base_cmds(SHA2)
+    result, subdir = await _run_base(cfg, "develop", "config", fake)
+    assert result is True
+    subdir.assert_called_once()
+    assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == f"develop@{SHA2}"
+
+
+async def test_base_analysis_legacy_bare_sha_misses_once_then_hits(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    state.write_vibe_heal_state("acme-frontend", last_main_sha=SHA1)
+    _, fake = _base_cmds(SHA1)
+    _, subdir = await _run_base(cfg, "main", "host default", fake)
+    subdir.assert_called_once()
+    _, subdir = await _run_base(cfg, "main", "host default", fake)
+    subdir.assert_not_called()
+
+
+async def test_base_analysis_other_ref_name_misses_at_same_sha(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    state.write_vibe_heal_state("acme-frontend", last_main_sha=f"main@{SHA1}")
+    _, fake = _base_cmds(SHA1)
+    _, subdir = await _run_base(cfg, "develop", "config", fake)
+    subdir.assert_called_once()
+    assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == f"develop@{SHA1}"
+
+
+@pytest.mark.parametrize("hit", [False, True])
+async def test_base_analysis_logs_ref_and_source_before_git(tmp_xdg, tmp_path, caplog, hit):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    if hit:
+        state.write_vibe_heal_state("acme-frontend", last_main_sha=f"develop@{SHA1}")
+    _, base_fake = _base_cmds(SHA1)
+
+    def fake(cmd, **kwargs):
+        assert "origin/develop" in caplog.text
+        assert "host default" in caplog.text
+        return base_fake(cmd, **kwargs)
+
+    with caplog.at_level("INFO"):
+        await _run_base(cfg, "develop", "host default", fake)
+    infos = [r.getMessage() for r in caplog.records if r.levelname == "INFO" and "origin/develop" in r.getMessage()]
+    assert any("host default" in m for m in infos)
+
+
+async def test_run_locked_passes_resolved_base_to_base_analysis(tmp_xdg, tmp_path):
+    cfg = _make_config(tmp_path, subdirs=[SubDir(".", [], False, 30)])
+    cfg.repo.base_branch = "develop"
+    with (
+        patch("dotharness.pr_review.runners.review_prs.open_host", return_value=make_scaffold(_seed())),
+        patch("dotharness.pr_review.runners.review_prs.prune_projects.run"),
+        patch("dotharness.pr_review.runners.review_prs._run_base_analysis", return_value=False) as mock_base,
+    ):
+        await review_prs._run_locked(cfg)
+    mock_base.assert_called_once_with(cfg, ANY, "develop", "config")

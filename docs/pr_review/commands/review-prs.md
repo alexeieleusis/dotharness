@@ -55,9 +55,10 @@ The CLI name is `pr_review`. The config file names (`.harness*.toml`) keep the o
    default). It is also a no-op, regardless of `prune_projects_enabled`, if `vibe_heal.enabled` is `false`
    (see step 2 above) or `repo.subdirs` is empty — in either case, `_run_locked` returns before reaching
    this step.
-3b. **Baseline analysis** (`_run_base_analysis`): fetches `origin/main`, resolves its SHA, and checks the
-   stored `last_main_sha` in the `vibe_heal.json` state file. If the SHA has changed since the last run,
-   detaches HEAD, checks out `origin/main` (`--recurse-submodules`), and runs
+3b. **Baseline analysis** (`_run_base_analysis`): resolves the base branch (see
+   [Base branch resolution](#base-branch-resolution) below), fetches `origin/<B>`, resolves its SHA, and
+   compares `<ref>@<sha>` with the stored `last_main_sha` in the `vibe_heal.json` state file. If it has
+   changed since the last run, detaches HEAD, checks out `origin/<B>` (`--recurse-submodules`), and runs
    `vibe_heal review --baseline` in every `repo.subdir` (a subdir whose configured `env_file` is not an existing regular file fails fast, before its pre-commands, and the baseline step fails). On success, persists the new `last_main_sha`. A
    timeout (60 s) or non-zero exit of the fetch, rev-parse or checkout call logs a warning, skips PR review
    for the run and ends it with exit code 1 and no traceback (both `pr_review run all` and
@@ -146,6 +147,48 @@ Fields this runner does **not** read: `harness.backend`, `harness.backend_timeou
 `harness.knowledge_dir`, `harness.review_knowledge_file`, `repo.opencode_dir` — those only matter to runners
 that invoke pr_review's own AI backend directly.
 
+## Base branch resolution
+
+Step 3b analyses the configured base branch `<B>`, as defined in [Configuration](../configuration.md#repo)
+(`[repo].base_branch` in `.harness.toml`, a short name such as `develop`). Git calls use `origin/<B>`. A value
+starting with `origin/` or `refs/` is a config error, and an empty value is treated as unset. "main" in
+`last_main_sha` means this branch.
+
+The resolution chain, in order. The first link that yields a branch wins, and its label is the **source**:
+
+1. `[repo].base_branch` (source `config`).
+2. The code host's default branch, read via `Repository.default_branch` when the host supports it. A failure
+   degrades silently to the next link (source `host default`).
+3. A local-repo check in the clone: the branch `main`, or the branch `origin/HEAD` points at, if it exists as
+   `origin/<name>`. No other guessing (source `local branch`).
+4. `main`, the documented final fallback (source `final fallback`).
+
+Every base-analysis run logs at INFO:
+
+```
+Base analysis: base branch origin/<B> (source: <source>)
+```
+
+where `<source>` is one of `config`, `host default`, `local branch`, `final fallback`.
+
+**Failure mode.** If `origin/<B>` does not exist, the cycle fails: exit code 1 with
+`Runner review_prs failed: ...` naming `origin/<B>` and its source. No PR comments are posted and the clone is
+restored. An explicitly configured ref is never retried against another source.
+
+**Stale-`main` hazard.** On a repo whose host default branch is a legacy `main` far behind the real
+integration branch, the fetch of `main` succeeds and the baseline scan runs silently on dead code. For such
+repos (for example a `front-*` style repo with a legacy `main` while work happens on `develop`), set an explicit
+`[repo].base_branch`.
+
+**Backward compatibility.** A repo whose base branch is `main` and that has no `[repo].base_branch` behaves as
+before, apart from one re-baseline on the first run after upgrade, because `last_main_sha` now uses the
+`<ref>@<sha>` format.
+
+<a id="base-branch-per-tool-knobs"></a>
+**Per-tool knobs.** Per-tool knobs are separate. `[repo].base_branch` (`.harness.toml`, pr_review) is not
+shared with sisyphus or vibe_heal. For a repo using several tools, set the same short name in each. A mismatch
+is not detected.
+
 ## State and idempotency
 
 State is stored at `~/.local/share/dotharness/state/<repo_slug>/vibe_heal.json` (`repo_slug` is `repo.name`
@@ -162,13 +205,15 @@ with `/` replaced by `-`). It tracks two fields:
   read, these are transparently upgraded to `{"sha": <value>, "reviewed_at": 0}`, which makes them
   immediately eligible for re-review regardless of `min_reanalysis_interval_hours` (since their real
   last-reviewed time is unknown).
-- `last_main_sha` — the SHA of `origin/main` last processed during baseline analysis (step 3b). When the
-  current `origin/main` SHA differs from this value, the baseline analysis runs `vibe_heal review --baseline`
-  in each subdir and then persists the new SHA. Both batch and `--pr` runs read and may write this field.
+- `last_main_sha` — the `<ref>@<sha>` of the configured base branch last processed during baseline analysis
+  (step 3b). A change in either ref or SHA triggers a new baseline analysis, which runs
+  `vibe_heal review --baseline` in each subdir and then persists the new value. Legacy bare-SHA values are
+  stale and cause one re-baseline on the first run after upgrade. The key name is unchanged. Both batch and
+  `--pr` runs read and may write this field.
 
 Run `pr_review state reset review-prs` to delete this file (add `--yes` to skip the confirmation prompt). This
 clears `reviewed_shas` and `last_main_sha`. The next run re-considers every open PR from scratch and
-re-runs baseline analysis unconditionally.
+re-runs baseline analysis unconditionally, against the resolved base branch.
 
 `--pr` runs do not read or write `reviewed_shas`, but they do read and may write `last_main_sha` during the
 baseline analysis step. See the `--pr` description under [Usage](#usage) and step 3b above.

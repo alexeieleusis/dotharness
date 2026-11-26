@@ -503,6 +503,7 @@ async def _check_preconditions_or_none(
             Path(config.repo.working_dir),
             base=base,
             config_base=config.local_review.base,
+            repo_base=config.repo.base_branch,
             output_root=output_root,
             review_phase=not skip_review,
         )

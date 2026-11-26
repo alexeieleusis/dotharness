@@ -123,6 +123,7 @@ class RepoConfig:
     subdirs: list[SubDir] = field(default_factory=list)
     opencode_dir: Path | None = None
     name_provided: bool = True
+    base_branch: str | None = None  # short name (`develop`, not `origin/develop`); None = auto-detect
 
 
 @dataclass
@@ -207,6 +208,29 @@ def _parse_opencode_dir(raw_odir: str | None, working_dir: Path) -> Path | None:
     return opencode_dir
 
 
+_BASE_BRANCH_RE = re.compile(r"[A-Za-z0-9._][A-Za-z0-9._/-]*")
+
+
+def _parse_base_branch(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigError(f"repo.base_branch must be a string, got {value!r}")  # noqa: TRY003
+    name = value.strip()
+    if not name:
+        return None
+    if name.startswith(("origin/", "refs/")):
+        raise ConfigError(  # noqa: TRY003
+            f"repo.base_branch must be a short branch name such as 'develop', got {value!r}"
+        )
+    if not _BASE_BRANCH_RE.fullmatch(name) or ".." in name or name.endswith((".lock", "/", ".")) or "//" in name:
+        raise ConfigError(  # noqa: TRY003
+            f"repo.base_branch {value!r} is not a valid git branch name "
+            "(must not start with '-', and may contain only letters, digits, '.', '_', '-' and '/')"
+        )
+    return name
+
+
 def _parse_repo(r: dict, *, require_repo_name: bool) -> RepoConfig:
     if require_repo_name and not r.get("name"):
         raise ConfigError("repo.name is required")  # noqa: TRY003
@@ -230,6 +254,7 @@ def _parse_repo(r: dict, *, require_repo_name: bool) -> RepoConfig:
         subdirs=subdirs,
         opencode_dir=opencode_dir,
         name_provided=bool(r.get("name")),
+        base_branch=_parse_base_branch(r.get("base_branch")),
     )
 
 

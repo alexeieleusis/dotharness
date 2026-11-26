@@ -583,3 +583,19 @@ def test_get_comment_watermark_tolerates_malformed_entries(tmp_path, monkeypatch
     assert state.get_comment_watermark("acme-frontend", 1, "a") is None
     assert state.get_comment_watermark("acme-frontend", 1, "b") == state.Watermark(None, 0, None)
     assert state.get_comment_watermark("acme-frontend", 2, "a") is None
+
+
+def test_bare_sha_last_main_sha_loads_without_corruption_log(tmp_xdg, caplog):
+    path = tmp_xdg / "state" / "acme-frontend" / "vibe_heal.json"
+    path.parent.mkdir(parents=True)
+    legacy = "a" * 40
+    path.write_text(json.dumps({"version": 1, "reviewed_shas": {}, "last_main_sha": legacy}))
+    with caplog.at_level("WARNING"):
+        result = state.read_vibe_heal_state("acme-frontend")
+    assert result["last_main_sha"] == legacy
+    assert "Corrupted" not in caplog.text
+
+
+def test_composite_last_main_sha_round_trips(tmp_xdg):
+    state.write_vibe_heal_state("acme-frontend", last_main_sha="develop@" + "b" * 40)
+    assert state.read_vibe_heal_state("acme-frontend")["last_main_sha"] == "develop@" + "b" * 40

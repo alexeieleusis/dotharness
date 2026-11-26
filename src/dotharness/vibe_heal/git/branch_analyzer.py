@@ -60,14 +60,14 @@ class BranchAnalyzer:
 
         self.repo_path = Path(self.repo.working_dir)
 
-    def get_modified_files(self, base_branch: str = "origin/main") -> list[Path]:
+    def get_modified_files(self, base_branch: str) -> list[Path]:
         """Get list of files modified in current branch vs. base branch.
 
         Uses git diff to find files that differ between the base branch and HEAD.
         Only returns files that currently exist in the working tree (excludes deletions).
 
         Args:
-            base_branch: Name of the base branch to compare against. Defaults to 'origin/main'.
+            base_branch: Name of the base branch to compare against (required).
 
         Returns:
             List of Path objects for modified files, relative to the current working directory.

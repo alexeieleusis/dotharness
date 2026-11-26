@@ -147,21 +147,20 @@ class OrchestratorOptions:
     """Per-run inputs that are not in ``.sisyphus.toml``.
 
     ``base_branch`` is the PR base, a required parameter with no default here (the CLI resolves
-    ``--base`` > ``[project].base_branch`` > ``main`` and passes the result in). ``default_branch`` is the
+    ``--base`` > ``[project].base_branch`` > the host default branch > ``main`` and passes the result in). ``default_branch`` is the
     repository default branch when it differs from ``base_branch``; both are never pushed to.
     ``spf_config_path`` defaults to ``<repo_dir>/.spec-prism-flow.toml``: the base each item's own config
     (``<workspace_dir>/plan-<n>/.spec-prism-flow.toml``) is copied from, with ``plan.workspace_dir`` and
     ``plan.phase_dir`` set for the item. ``phase_dir`` overrides the item's ``plan.phase_dir``.
     ``resume_command`` is the exact command stored in the stop record (the CLI supplies it with the config
     path and base); the library default has a placeholder for the config path.
-    ``intake_base`` is the base the intake clone starts from; it differs from ``base_branch`` only when no
-    ``--base`` or ``[project].base_branch`` was given and the repository default branch is used instead of
-    ``main`` (the PR base is unchanged). ``None`` means ``base_branch``.
+    ``base_source`` names the chain link that produced ``base_branch`` (named in the intake-base stop
+    message); the intake clone starts from ``base_branch`` too.
     """
 
     base_branch: str
     default_branch: str | None = None
-    intake_base: str | None = None
+    base_source: str | None = None
     spf_config_path: Path | None = None
     phase_dir: Path | None = None
     lock_dir: Path | None = None
@@ -854,7 +853,7 @@ class _Run:
 
     async def prepare_intake_base(self) -> None:
         """Detach the clone at the resolved base (origin, then local, then origin/main) before intake runs."""
-        base = self.opt.intake_base or self.opt.base_branch
+        base = self.opt.base_branch
         if await self._probe_and_fetch(base):
             if await self._has_local(base):
                 local = (await self.git("rev-parse", base)).stdout.strip()
@@ -870,9 +869,11 @@ class _Run:
         elif base != FALLBACK_BASE and await self._probe_and_fetch(FALLBACK_BASE):
             ref = f"origin/{FALLBACK_BASE}"
         else:
+            source = f" (base from {self.opt.base_source})" if self.opt.base_source else ""
             raise _Stop(
                 Checkpoint.C8,
-                f"intake base not found: none of origin/{base}, local {base}, origin/{FALLBACK_BASE} exists in {self.repo}",
+                f"intake base not found: none of origin/{base}, local {base}, origin/{FALLBACK_BASE} exists in "
+                f"{self.repo}{source}",
             )
         await self.git("checkout", "--detach", ref, network=True)
 
