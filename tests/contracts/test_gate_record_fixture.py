@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from dotharness.fileio import atomic_write_json
 from dotharness.paths import build_gate_record_path, data_dir, fallback_repo_slug, validate_repo_slug
 from dotharness.pr_review.runners import merge
+from dotharness.sisyphus.gaterecord import write_gate_record
 
 _GOLDEN = json.loads(Path(__file__).with_name("gate_record_golden.json").read_text(encoding="utf-8"))
 
@@ -45,7 +45,5 @@ def test_invalid_slugs(slug):
 
 def test_reader_after_writer(home):
     record = _GOLDEN["record"]
-    path = build_gate_record_path("acme-frontend", 1)
-    path.parent.mkdir(parents=True)
-    atomic_write_json(path, record)
+    write_gate_record("acme-frontend", 1, record["head_sha"])
     assert merge.read_gate_record("acme-frontend", 1) == record["head_sha"]
