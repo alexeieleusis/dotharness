@@ -86,4 +86,8 @@ When a record is written:
 - When `repo_name` is unset, `<repo-slug>` falls back to the sanitised basename plus 8-hex hash of `project.repo_dir`.
 - When `repo_name` is set, the value has `/` replaced by `-` (so `owner/repo` becomes `owner-repo`). The result must match `[a-zA-Z0-9._-]+` and must not be `.` or `..`. An invalid value is a config error.
 
+`merge` derives its own slug from pr_review's `[repo] name` (required for `merge`; `/` becomes `-`, see [configuration](../configuration.md#repo)). The shared path function does not make the two slugs agree. The configs must. Set `[project] repo_name` to the same value as pr_review's `[repo] name` (for example `acme/frontend` in both) so that both sides resolve to `acme-frontend`.
+
+The unset fallback (basename plus 8-hex hash) can never equal a name-derived slug such as `owner-repo`. It only matches a pr_review config that has no `name` (`local-review`), so it is effectively unusable with `merge`. If the slugs differ, sisyphus writes the record but `merge` looks elsewhere and reports `gate_record_missing`.
+
 A missing, unreadable or SHA-mismatched record blocks the merge.
