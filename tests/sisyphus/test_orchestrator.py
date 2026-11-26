@@ -609,50 +609,32 @@ async def test_resumed_open_pr_leaves_exactly_one_valid_gate_record(world: World
     assert _gate_records(world) == [{"head_sha": SHA1}]
 
 
-_NOT_RUN_NOTE = "gate record written for PR #42 (gate not run: {})"
+_NOT_RUN_NOTE = "gate not run for PR #42: {}"
 
 
-async def test_gate_not_run_writes_record_and_digest_note(world: World) -> None:
+async def test_gate_not_run_writes_no_record_and_digest_note(world: World) -> None:
     (world.repo / ".spec-prism-flow.toml").write_text("[build]\n")
     result = await world.run()
     assert result.completed
-    assert _gate_records(world) == [{"head_sha": SHA1}]
-    assert [p.name for p in _gate_record_paths()] == ["build_gate_42.json"]
+    assert _gate_record_paths() == []
     digest = world.digest_text()
-    assert _NOT_RUN_NOTE.format("no build.commands in ").removesuffix(")") in digest
+    assert _NOT_RUN_NOTE.format("no build.commands in ") in digest
     assert "gate passed" not in digest
 
 
-async def test_gate_not_run_no_changed_files_writes_record(world: World) -> None:
+async def test_gate_not_run_no_changed_files_writes_no_record(world: World) -> None:
     world.changed = ""
     assert (await world.run()).completed
-    assert _gate_records(world) == [{"head_sha": SHA1}]
+    assert _gate_record_paths() == []
     assert _NOT_RUN_NOTE.format("no changed files to gate") in world.digest_text()
 
 
-async def test_gate_not_run_no_applicable_entry_writes_record(world: World) -> None:
+async def test_gate_not_run_no_applicable_entry_writes_no_record(world: World) -> None:
     _gate_world(world, '[[build.gate]]\nrun = "make scoped"\npackages = ["elsewhere"]\n')
     assert (await world.run()).completed
-    assert _gate_records(world) == [{"head_sha": SHA1}]
+    assert _gate_record_paths() == []
     reason = "no [[build.gate]] entry applies to the touched package directories"
     assert _NOT_RUN_NOTE.format(reason) in world.digest_text()
-
-
-async def test_gate_not_run_write_oserror_is_noted_and_does_not_raise(
-    world: World, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def boom(slug: str, number: int, sha: str) -> Path:
-        raise OSError("disk full")
-
-    monkeypatch.setattr(orchestrator, "write_gate_record", boom)
-    (world.repo / ".spec-prism-flow.toml").write_text("[build]\n")
-    result = await world.run()
-    assert result.completed
-    digest = world.digest_text()
-    assert "gate record not written for PR #42: disk full" in digest
-    assert "gate record written" not in digest
-    assert "gate passed" not in digest
-    assert _gate_record_paths() == []
 
 
 async def test_c5_intake_boundary_violation(world: World) -> None:

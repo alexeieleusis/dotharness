@@ -1351,7 +1351,7 @@ class _Run:
         to it, in file order. An entry with ``packages`` applies only to a touched directory equal to one of
         them; an entry without ``packages`` applies to every touched directory. When neither source exists,
         when there are no changed files, or when only entries exist and none applies, note that the gate was
-        not run, write a record for HEAD and return. The plan, and the reason there is none, come from
+        not run, write no gate record and return. The plan, and the reason there is none, come from
         :meth:`build_gate_plan`. A failing command is recorded in ``gate_failure`` and noted; the remaining commands
         are skipped and nothing is raised, so the run still completes.
         """
@@ -1359,9 +1359,6 @@ class _Run:
         plan, reason = await self.build_gate_plan()
         if reason is not None:
             self.note(f"gate not run for PR #{number}: {reason}")
-            # A record for the unchanged HEAD says "not gated" rather than "never recorded"; refactor-stage gates write none.
-            if self.write_gate_record_for(number, await self.rev_parse_head()):
-                self.note(f"gate record written for PR #{number} (gate not run: {reason})")
             return
         head_sha = await self.rev_parse_head()  # the commit the gate tests; not re-read after the commands run
         if await self.run_gate_plan(plan):

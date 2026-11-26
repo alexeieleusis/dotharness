@@ -75,7 +75,7 @@ The sisyphus gate-record writer (`write_gate_record` in `dotharness.sisyphus.gat
 When a record is written:
 
 - After the gate passes, sisyphus writes a record for the head SHA it read before the gate ran. The write is atomic, and rewriting the same PR overwrites the record.
-- When the gate does not run (no `build.commands` configured, no changed files, or no applicable build entry), sisyphus still writes a record for the current head SHA. It then adds the note `gate record written for PR #N (gate not run: <reason>)` to the digest.
+- When the gate does not run (no `build.commands` configured, no changed files, or no applicable build entry), sisyphus writes no record, so such a PR does not merge through `pr_review merge`. The digest carries the note `gate not run for PR #N: <reason>`.
 - A failed gate writes no record.
 - If the record cannot be written, sisyphus adds the note `gate record not written for PR #N: <error>` to the digest and carries on. The gate outcome is unchanged.
 
