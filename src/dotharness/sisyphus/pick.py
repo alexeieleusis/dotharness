@@ -86,7 +86,10 @@ class PullRequestLookup(Protocol):
         ...
 
     async def open_pr_bodies(self) -> Sequence[str]:
-        """Bodies of every open pull request in the repository."""
+        """Bodies of every open pull request in the repository.
+
+        ``pick_items`` reads this at most once per call, so implementations must not assume one call per candidate.
+        """
         ...
 
 
@@ -152,6 +155,27 @@ def _validate(source: WorkItemSource | None) -> WorkItemSource:
     return source  # NOSONAR python:S3516 - validator: every non-raising path returns `source` by design
 
 
+class _MemoLookup:
+    """Per-pick wrapper that reads the open-PR bodies from the host at most once.
+
+    ``linked_prs`` always delegates. ``open_pr_bodies`` is lazy: the first successful call stores its result and
+    later calls return it. A failed read stores nothing and re-raises unchanged. Built per ``pick_items`` call and
+    dropped with it, so nothing goes stale across picks. Not thread safe (the pick loop awaits sequentially).
+    """
+
+    def __init__(self, inner: PullRequestLookup) -> None:
+        self._inner = inner
+        self._bodies: Sequence[str] | None = None
+
+    async def linked_prs(self, issue_number: int) -> Sequence[LinkedPr]:
+        return await self._inner.linked_prs(issue_number)
+
+    async def open_pr_bodies(self) -> Sequence[str]:
+        if self._bodies is None:
+            self._bodies = await self._inner.open_pr_bodies()
+        return self._bodies
+
+
 async def pick_items(
     source: WorkItemSource | None,
     tracker: TrackerClient,
@@ -166,7 +190,7 @@ async def pick_items(
 
     Linear and file trackers keep their own order. Host work items sort oldest first, then by number ascending (P4)
     and those with an open PR (see :func:`default_open_pr_check`) are skipped; ``lookup`` is required
-    for host items. Items with a run record are skipped for both trackers, including those whose record sits in ``archive_dir``.
+    for host items and is wrapped so the open-PR bodies are read at most once per call. Items with a run record are skipped for both trackers, including those whose record sits in ``archive_dir``.
     """
     src = _validate(source)
     if limit <= 0:
@@ -176,6 +200,7 @@ async def pick_items(
         if lookup is None:
             raise PickError("a pull-request lookup is required for GitHub issues")
         candidates.sort(key=lambda c: (c.created_at, c.number if c.number is not None else 0))
+        lookup = _MemoLookup(lookup)
     return await _take_unstarted(candidates, workspace_dir, limit, src, lookup, open_pr_check, archive_dir)
 
 

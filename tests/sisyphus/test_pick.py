@@ -112,6 +112,66 @@ async def test_hash_n_in_open_pr_body_only_excludes(tmp_path: Path) -> None:
     ]
 
 
+class CountingLookup(FakeLookup):
+    def __init__(
+        self,
+        linked: Mapping[int, Sequence[LinkedPr]] | None = None,
+        bodies: Sequence[str] = (),
+        *,
+        fail_first: bool = False,
+    ) -> None:
+        super().__init__(linked, bodies)
+        self.body_calls = 0
+        self.linked_calls = 0
+        self.fail_first = fail_first
+
+    async def linked_prs(self, issue_number: int) -> Sequence[LinkedPr]:
+        self.linked_calls += 1
+        return await super().linked_prs(issue_number)
+
+    async def open_pr_bodies(self) -> Sequence[str]:
+        self.body_calls += 1
+        if self.fail_first and self.body_calls == 1:
+            raise CodeHostError("boom")
+        return await super().open_pr_bodies()
+
+
+async def test_open_pr_bodies_read_once_per_pick(tmp_path: Path) -> None:
+    lookup = CountingLookup()
+    got = await run(GH, [issue(1), issue(2), issue(3)], tmp_path, limit=3, lookup=lookup)
+    assert refs(got) == ["#1", "#2", "#3"]
+    assert lookup.body_calls == 1
+    assert lookup.linked_calls == 3
+
+
+async def test_open_pr_bodies_read_once_with_skip_keeps_order(tmp_path: Path) -> None:
+    lookup = CountingLookup(bodies=["x", "Fixes #2"])
+    got = await run(GH, [issue(1), issue(2), issue(3)], tmp_path, limit=3, lookup=lookup)
+    assert refs(got) == ["#1", "#3"]
+    assert lookup.body_calls == 1
+
+
+async def test_open_pr_bodies_memo_is_per_pick(tmp_path: Path) -> None:
+    lookup = CountingLookup()
+    for _ in range(2):
+        await run(GH, [issue(1), issue(2)], tmp_path, lookup=lookup)
+    assert lookup.body_calls == 2
+
+
+async def test_open_pr_bodies_failure_propagates_and_is_not_memoized(tmp_path: Path) -> None:
+    lookup = CountingLookup(fail_first=True)
+    with pytest.raises(CodeHostError, match="boom"):
+        await run(GH, [issue(1), issue(2)], tmp_path, lookup=lookup)
+    assert lookup.body_calls == 1
+    assert refs(await run(GH, [issue(1), issue(2)], tmp_path, lookup=lookup)) == ["#1", "#2"]
+
+
+async def test_no_body_read_when_every_candidate_has_open_linked_pr(tmp_path: Path) -> None:
+    lookup = CountingLookup({1: [LinkedPr(10, "OPEN")], 2: [LinkedPr(11, "OPEN")]})
+    assert await run(GH, [issue(1), issue(2)], tmp_path, lookup=lookup) == []
+    assert lookup.body_calls == 0
+
+
 def test_mentions_issue_boundaries() -> None:
     assert mentions_issue("closes #12.", 12)
     assert mentions_issue("#12", 12)

@@ -1641,6 +1641,7 @@ class HostLimits:
   - `timeouts`: the host implementation, which applies them to its own calls. A consumer never passes a timeout.
   - `list_bounds`: the host implementation of every list-returning operation, which returns at most that many items. A bound of `None` means the host returns every item. A host never
     truncates silently: if it cannot return the whole result under the bound that applies, it raises `CodeHostError` instead.
+    Known limitation, tracked in #257: the reference host reads `open_change_request_bodies` with `--limit 200` (`_OPEN_CR_BODIES_OP: 200`) and does not raise when more pull requests are open. This is accepted for now.
 - Unit of `max_change_request_body_chars`: Unicode code points, that is Python `len(str)`, with no new field. A host that counts
   UTF-16 units or bytes declares a limit that is safe under its own rule.
 - Review bodies and change request bodies follow opposite rules on purpose. A review body over `max_review_body_chars` is
@@ -2093,7 +2094,7 @@ model says consumers must not retry after `write=True` and defines no idempotenc
 | B-WI-2 | `list_open` returns open work items in insertion (tracker) order, filtered by `assignee` and `label`. Closed ones are excluded. The result respects the declared list bound. |
 | B-WI-3 | When the target lists `WorkItems.remove_label` as unsupported, the suite asserts it raises `UnsupportedCapabilityError` and returns. Otherwise `remove_label` removes the label, and removing an absent label is a no-op (DEC-42). |
 | B-WI-4 | `closing_change_requests` returns the change requests the seeder linked. `linked_work_items` is the reverse relation. With no link both are empty. |
-| B-WI-5 | `open_change_request_bodies` returns open change requests with their descriptions, separate from B-WI-4 (Interfaces: the two lookups are not merged). |
+| B-WI-5 | `open_change_request_bodies` returns open change requests with their descriptions, separate from B-WI-4 (Interfaces: the two lookups are not merged). Each returned `ChangeRequest.body` is the whole body, as `ChangeRequests.get` returns it, not a shortened list-view form. |
 
 Conformance groups built in Phase 2: B-SES-3, B-REP-3, B-CR-1, B-CR-2, B-CR-5 and B-WI-1 to B-WI-5, run against the reference
 host (with a stubbed `gh`) and the fake. A-1 adds B-SES-2, B-SES-4, B-REP-1, B-CR-3, B-CR-4, B-CR-6 to B-CR-8, B-DIS-1 to
