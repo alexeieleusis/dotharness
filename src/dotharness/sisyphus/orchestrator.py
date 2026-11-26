@@ -1332,12 +1332,17 @@ class _Run:
             return [], "no [[build.gate]] entry applies to the touched package directories"
         return plan, None
 
-    def write_gate_record_for(self, number: int, head_sha: str) -> None:
-        """Record the gated SHA for the PR; a write failure is noted and never changes the gate outcome."""
+    def write_gate_record_for(self, number: int, head_sha: str) -> bool:
+        """Record the SHA for the PR; a write failure is noted and never changes the gate outcome.
+
+        Returns whether the record was written.
+        """
         try:
             write_gate_record(self.config.project.repo_slug, number, head_sha)
         except (OSError, ValueError) as exc:
             self.note(f"gate record not written for PR #{number}: {exc}")
+            return False
+        return True
 
     async def gate(self) -> None:
         """Run the gate commands in each touched package dir at HEAD; record the first failure.
@@ -1346,13 +1351,17 @@ class _Run:
         to it, in file order. An entry with ``packages`` applies only to a touched directory equal to one of
         them; an entry without ``packages`` applies to every touched directory. When neither source exists,
         when there are no changed files, or when only entries exist and none applies, note that the gate was
-        not run and return. The plan, and the reason there is none, come from :meth:`build_gate_plan`. A failing command is recorded in ``gate_failure`` and noted; the remaining commands
+        not run, write a record for HEAD and return. The plan, and the reason there is none, come from
+        :meth:`build_gate_plan`. A failing command is recorded in ``gate_failure`` and noted; the remaining commands
         are skipped and nothing is raised, so the run still completes.
         """
         number = await self.pr_number()
         plan, reason = await self.build_gate_plan()
         if reason is not None:
             self.note(f"gate not run for PR #{number}: {reason}")
+            # A record for the unchanged HEAD says "not gated" rather than "never recorded"; refactor-stage gates write none.
+            if self.write_gate_record_for(number, await self.rev_parse_head()):
+                self.note(f"gate record written for PR #{number} (gate not run: {reason})")
             return
         head_sha = await self.rev_parse_head()  # the commit the gate tests; not re-read after the commands run
         if await self.run_gate_plan(plan):

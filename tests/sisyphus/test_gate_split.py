@@ -132,7 +132,11 @@ async def test_gate_no_config_note(world: World) -> None:
     _spf(world, None)
     run = _gate_run(world)
     await run.gate()
-    assert run.notes == [f"gate not run for PR #42: no build.commands in {run.spf}"]
+    reason = f"no build.commands in {run.spf}"
+    assert run.notes == [
+        f"gate not run for PR #42: {reason}",
+        f"gate record written for PR #42 (gate not run: {reason})",
+    ]
     assert run.gated is False
     assert _diffs(world) == []
 
@@ -141,7 +145,10 @@ async def test_gate_no_changed_files_note(world: World) -> None:
     world.changed = ""
     run = _gate_run(world)
     await run.gate()
-    assert run.notes == ["gate not run for PR #42: no changed files to gate"]
+    assert run.notes == [
+        "gate not run for PR #42: no changed files to gate",
+        "gate record written for PR #42 (gate not run: no changed files to gate)",
+    ]
     assert run.gated is False
 
 
@@ -149,7 +156,11 @@ async def test_gate_no_entry_applies_note(world: World) -> None:
     _spf(world, '[[build.gate]]\nrun = "make a"\npackages = ["elsewhere"]\n')
     run = _gate_run(world)
     await run.gate()
-    assert run.notes == ["gate not run for PR #42: no [[build.gate]] entry applies to the touched package directories"]
+    reason = "no [[build.gate]] entry applies to the touched package directories"
+    assert run.notes == [
+        f"gate not run for PR #42: {reason}",
+        f"gate record written for PR #42 (gate not run: {reason})",
+    ]
     assert run.gated is False
 
 

@@ -172,6 +172,8 @@ async def test_t4_gate_not_run(env: Env) -> None:
     await env.run.stage_refactor()
     assert "refactor gate not run: no gate configured" in env.run.notes
     assert ("make", "check") not in env.fake.calls
+    assert not list(data_dir().rglob("build_gate_*.json"))  # a not-run refactor gate writes no gate record
+    assert not any("gate record" in n for n in env.run.notes)
 
 
 async def test_t5_failing_gate(env: Env) -> None:
