@@ -29,7 +29,7 @@ sisyphus archive --config <file>
      with an open linked PR, or one mentioned as `#N` in an open PR body, is skipped. Merged or closed PRs do
      not exclude an issue. Archived items (see "`sisyphus archive`") are excluded by the archive record check, not
      by PR state. Sisyphus removes `pick_label` from the issue when the item settles (the draft PR is
-     open, or you abandon it) unless `remove_label_when_settled = false`. See "Dead ends: `sisyphus abandon`" and
+     open, or you abandon it) unless `remove_label_when_settled = false` or the code host cannot remove a label. See "Dead ends: `sisyphus abandon`" and
      the orchestrator doc. To queue the issue again, relabel it by hand: `resume --again` does not restore the
      label, and items settled before this behavior existed are not back-filled.
    - File: the `*.md` ticket files in `[source.work_item].dir`, in Linear priority order (1 to 4 first, none
@@ -352,8 +352,8 @@ message otherwise) and then:
   run record's checkpoint is cleared. The run record, the local branch, the digest and the answer/brief files stay.
 - removes the waiting state: the item is no longer "awaiting you", and is never auto-resumed. It is never re-picked either (any run record makes an item non-pickable).
 - for a GitHub item, removes the issue's pick label after the abandoned stop record is written. This runs only
-  when `pick_label` is set, `remove_label_when_settled` is on (default) and `REF` has the form `#<number>`. Any
-  other ref form, `kind = "linear"` or `"file"`, or the key off makes no call. If the removal fails, `abandon`
+  when `pick_label` is set, `remove_label_when_settled` is on (the default when the host can remove a label) and `REF` has the form `#<number>`. Any
+  other ref form, `kind = "linear"` or `"file"`, the key off, or a host that cannot remove a label makes no call and prints nothing. If the removal fails, `abandon`
   prints one stderr line, `<ref>: pick label '<label>' not removed: <ExcType>: <message>`, and still exits 0 (`<ExcType>` is the class name of a
   `CodeHostError` subclass, such as `CodeHostTimeoutError`): the
   item stays abandoned. A label the issue does not carry is not an error; a label that does not exist in the

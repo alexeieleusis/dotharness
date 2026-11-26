@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pytest
 
 from dotharness.code_host import HostSelection, create_code_host
-from dotharness.code_host.declarations import Anchor, Capability
+from dotharness.code_host.declarations import Anchor, Capability, supports_operation
 from dotharness.code_host.errors import (
     AuthenticationError,
     CodeHostError,
@@ -62,12 +62,13 @@ class _NoJobChecks:
 
 
 class TestInMemoryWithAnUnsupportedOperation(CodeHostConformance):
-    """An operation listed in ``ConformanceTarget.unsupported`` must raise, and the rest of the suite still runs."""
+    """An operation listed in ``HostDeclaration.unsupported_operations`` must raise, and the rest of the suite still runs."""
 
     async def make_target(self) -> ConformanceTarget:
         target = InMemoryCodeHost().target()
-        host = replace(target.host, checks=_NoJobChecks(target.host.checks))
-        return replace(target, host=host, unsupported=frozenset({"Checks.get_job"}))
+        declaration = replace(target.host.declaration, unsupported_operations=frozenset({"Checks.get_job"}))
+        host = replace(target.host, checks=_NoJobChecks(target.host.checks), declaration=declaration)
+        return replace(target, host=host)
 
     async def test_failed_log_and_get_job(self) -> None:
         """The inherited group reads ``get_job``. This target lists it as unsupported, so only ``failed_log`` runs."""
@@ -85,6 +86,11 @@ class TestInMemorySpecifics:
         host = InMemoryCodeHost().code_host()
         assert host.declaration.capabilities == frozenset(Capability)
         assert len(host.declaration.capabilities) == 6
+
+    async def test_default_declaration_supports_remove_label(self) -> None:
+        host = InMemoryCodeHost().code_host()
+        assert host.declaration.unsupported_operations == frozenset()
+        assert supports_operation(host.declaration, "WorkItems.remove_label")
 
     async def test_capabilities_argument_selects_the_declared_subset(self) -> None:
         subset = frozenset({Capability.SESSION, Capability.REPOSITORY})

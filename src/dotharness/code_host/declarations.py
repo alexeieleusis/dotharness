@@ -15,6 +15,9 @@ class Capability(StrEnum):
     WORK_ITEMS = "WorkItems"
 
 
+REMOVE_LABEL = "WorkItems.remove_label"  # ``Interface.method`` key of ``WorkItems.remove_label``
+
+
 @dataclass(frozen=True)
 class Anchor:
     """File and line position of an inline comment."""
@@ -65,3 +68,22 @@ class HostDeclaration:
     capabilities: frozenset[Capability]
     limits: HostLimits
     anchors: AnchorRules
+    # Operations ("Interface.method") the host declares but does not implement.
+    unsupported_operations: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        capabilities = {c.value for c in Capability}
+        for operation in self.unsupported_operations:
+            interface, dot, method = operation.partition(".")
+            if interface not in capabilities or not dot or not method:
+                msg = f"unsupported_operations entry {operation!r} is not an 'Interface.method' key of a Capability"
+                raise ValueError(msg)
+
+    def supports_operation(self, operation: str) -> bool:
+        """Whether the host supports ``operation`` (an ``Interface.method`` key); reads the declaration only."""
+        return operation not in self.unsupported_operations
+
+
+def supports_operation(declaration: HostDeclaration, operation: str) -> bool:
+    """Function form of :meth:`HostDeclaration.supports_operation`."""
+    return declaration.supports_operation(operation)

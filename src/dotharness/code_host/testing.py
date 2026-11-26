@@ -20,7 +20,7 @@ from types import MappingProxyType
 from typing import Any, Protocol, TypeVar
 
 from dotharness.code_host import interfaces
-from dotharness.code_host.declarations import Anchor, Capability, HostDeclaration
+from dotharness.code_host.declarations import REMOVE_LABEL, Anchor, Capability, HostDeclaration
 from dotharness.code_host.errors import (
     AuthenticationError,
     CodeHostError,
@@ -229,12 +229,18 @@ class ConformanceTarget:
     seeder: HostSeeder
     repository: RepositoryRef = field(default_factory=lambda: RepositoryRef("example/repo"))
     secret: str = ""  # the credential the host was built with. B-SEC-1 requires it to be SECRET.
-    # Operations (``Interface.method``) the host declares but does not implement. The suite asserts that each one
-    # raises UnsupportedCapabilityError instead of running its behavior: nothing is skipped silently.
-    unsupported: frozenset[str] = frozenset()
     # B-REP-4: URLs the host must accept as naming ``repository``, and URLs of other repositories it must reject.
     origin_urls: tuple[str, ...] = ()
     foreign_origin_urls: tuple[str, ...] = ()
+
+    @property
+    def unsupported(self) -> frozenset[str]:
+        """Operations (``Interface.method``) the host declares but does not implement.
+
+        Derived from ``HostDeclaration.unsupported_operations``, the single source of truth. The suite asserts that each
+        one raises UnsupportedCapabilityError instead of running its behavior: nothing is skipped silently.
+        """
+        return self.host.declaration.unsupported_operations
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -306,7 +312,7 @@ _WRITES = frozenset({
     "Discussion.post_comment",
     "Discussion.post_review",
     "Discussion.reply",
-    "WorkItems.remove_label",
+    REMOVE_LABEL,
 })
 _EPOCH = datetime.fromisoformat(_BASE_DATE)
 _COMMENTS_SCRIPT = Path(__file__).resolve().parent / "scripts" / "pr-comments.py"
@@ -384,7 +390,10 @@ class InMemoryCodeHost:
         self._writes: list[Call] = []
         base = declaration or DECLARATION
         self.declaration: HostDeclaration = HostDeclaration(
-            capabilities=declared, limits=base.limits, anchors=base.anchors
+            capabilities=declared,
+            limits=base.limits,
+            anchors=base.anchors,
+            unsupported_operations=base.unsupported_operations,
         )
 
     # -- state views ---------------------------------------------------------------------------------------------
@@ -1178,6 +1187,9 @@ class _FakeWorkItems(_Facet):
         self, repo: RepositoryRef, number: int, label: str
     ) -> None:
         def action() -> None:
+            if not self._host.declaration.supports_operation(REMOVE_LABEL):
+                msg = "WorkItems.remove_label is not supported by this host"
+                raise UnsupportedCapabilityError(msg, capability="WorkItems")
             items = self._host._work_items.get(repo, [])
             index = next((i for i, w in enumerate(items) if w.number == number), None)
             if index is None:
@@ -1191,7 +1203,7 @@ class _FakeWorkItems(_Facet):
                 items[index] = replace(item, labels=tuple(x for x in item.labels if x != label))
                 self._host._version += 1
 
-        self._do("WorkItems.remove_label", action, repo, number, label)
+        self._do(REMOVE_LABEL, action, repo, number, label)
 
     async def closing_change_requests(  # NOSONAR python:S7503 - implements an async protocol
         self, repo: RepositoryRef, number: int
@@ -1453,7 +1465,7 @@ class CodeHostConformance:
     Subclass it and override ``make_target``. Behavior ids B-NCR, B-REV, B-LIM, B-ERR, B-SEC, B-SES-3, B-REP-3,
     B-CR-1, B-CR-2, B-CR-5 and B-WI-1..5 are listed in docs/design/code-host.md, "Behaviors asserted". A group runs
     only for a declared capability (B-ERR-4 covers an undeclared one). A declared operation the host does not
-    implement goes in ``ConformanceTarget.unsupported``: the suite then asserts that it raises.
+    implement goes in ``HostDeclaration.unsupported_operations``: the suite then asserts that it raises.
     """
 
     async def make_target(self) -> ConformanceTarget:  # NOSONAR python:S7503 - subclasses await their host setup
@@ -1840,6 +1852,8 @@ class CodeHostConformance:
             return
         repo, items = target.repository, target.host.work_items
         first = target.seeder.add_work_item(repo, title="one", labels=["x", "z"])
+        if await self._unsupported_op(target, REMOVE_LABEL, lambda: items.remove_label(repo, first.number, "x")):
+            return
         second = target.seeder.add_work_item(repo, title="two", labels=["y"])
 
         async def labels() -> dict[int, tuple[str, ...]]:
@@ -2183,10 +2197,13 @@ class CodeHostConformance:
 
     # -- empty, failed, timed out: one table for every method added after the review flow -------------------------
 
-    def _calls(self, target: ConformanceTarget) -> dict[str, tuple[bool, Callable[[], Awaitable[Any]]]]:
+    def _calls(
+        self, target: ConformanceTarget, *, include_unsupported: bool = False
+    ) -> dict[str, tuple[bool, Callable[[], Awaitable[Any]]]]:
         """Seed one change request with everything on it. Return ``operation -> (is a write, call)``.
 
-        Only operations of declared capabilities that the target does not list as unsupported are returned.
+        Only operations of declared capabilities that the target does not list as unsupported are returned, unless
+        ``include_unsupported`` is set.
         """
         repo, seeder, host = target.repository, target.seeder, target.host
         cr = seeder.add_change_request(repo, head_reference="feature/ops", head_revision="rev-ops", author="ann")
@@ -2200,7 +2217,7 @@ class CodeHostConformance:
         seeder.add_job(repo, job_id="900", failed_step="Run tests", log="log text")
         seeder.add_check(repo, n, name="build", status=CheckStatus.FAIL, job_id="900")
         seeder.add_workflow(repo, name="ci")
-        item = seeder.add_work_item(repo, title="an item")
+        item = seeder.add_work_item(repo, title="an item", labels=["tag"])
         seeder.link_closing(repo, work_item=item.number, change_request=n)
         check = Check("build", CheckStatus.FAIL, "https://example.test/runs/1/job/900", None, None, None, "900")
         crs, discussion, checks, items = host.change_requests, host.discussion, host.checks, host.work_items
@@ -2226,11 +2243,13 @@ class CodeHostConformance:
             "Checks.get_job": (False, lambda: checks.get_job(repo, "900")),
             "WorkItems.get": (False, lambda: items.get(repo, item.number)),
             "WorkItems.linked_work_items": (False, lambda: items.linked_work_items(repo, n)),
+            REMOVE_LABEL: (True, lambda: items.remove_label(repo, item.number, "tag")),
         }
         return {
             operation: entry
             for operation, entry in table.items()
-            if self._declares(target, Capability(operation.split(".")[0])) and operation not in target.unsupported
+            if self._declares(target, Capability(operation.split(".")[0]))
+            and (include_unsupported or operation not in target.unsupported)
         }
 
     async def test_empty_result_is_not_a_failure(self) -> None:
@@ -2294,10 +2313,7 @@ class CodeHostConformance:
         target = await self.make_target()
         if not target.unsupported:
             return
-        full_target = ConformanceTarget(
-            host=target.host, seeder=target.seeder, repository=target.repository, secret=target.secret
-        )
-        everything = self._calls(full_target)
+        everything = self._calls(target, include_unsupported=True)
         for operation in target.unsupported & everything.keys():
             _, call = everything[operation]
             assert await self._unsupported_op(target, operation, call)

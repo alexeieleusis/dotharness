@@ -330,8 +330,12 @@ def test_other_tool_keys_rejected(tmp_path: Path, table: str) -> None:
         load_config(write(tmp_path, 'gh_token_cmd = "x"\n' + MIN))
 
 
-def test_remove_label_when_settled_defaults_on_for_github(tmp_path: Path) -> None:
+def test_remove_label_when_settled_absent_stays_none_for_github(tmp_path: Path) -> None:
     cfg = load_config(write(tmp_path, MIN + '[source.work_item]\nkind = "github"\n'))
+    assert cfg.source.work_item is not None
+    assert cfg.source.work_item.remove_label_when_settled is None
+    on = MIN + '[source.work_item]\nkind = "github"\nremove_label_when_settled = true\n'
+    cfg = load_config(write(tmp_path, on))
     assert cfg.source.work_item is not None
     assert cfg.source.work_item.remove_label_when_settled is True
     off = MIN + '[source.work_item]\nkind = "github"\nremove_label_when_settled = false\n'

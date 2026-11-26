@@ -18,6 +18,7 @@ from dotharness.code_host.declarations import (
     HostLimits,
     ListBounds,
     OperationTimeouts,
+    supports_operation,
 )
 from dotharness.code_host.models import (
     ChangeRequest,
@@ -190,3 +191,52 @@ def test_reference_declaration_limits() -> None:
     ):
         assert limits.list_bounds.per_operation[operation] is None
     assert (limits.page_attempts, limits.page_retry_delay_seconds) == (3, 2.0)
+
+
+def _declaration(**extra: object) -> HostDeclaration:
+    return HostDeclaration(
+        capabilities=frozenset(Capability),
+        limits=HostLimits(
+            max_inline_comments_per_review=50,
+            max_review_body_chars=60000,
+            max_change_request_body_chars=60000,
+            timeouts=OperationTimeouts(30, {}),
+            list_bounds=ListBounds(100, {}),
+        ),
+        anchors=AnchorRules(True, frozenset({"RIGHT"}), True, False),
+        **extra,  # ty: ignore[invalid-argument-type]
+    )
+
+
+def test_declaration_unsupported_operations_default_empty() -> None:
+    d = _declaration()
+    assert d.unsupported_operations == frozenset()
+    assert supports_operation(d, "WorkItems.remove_label")
+    assert supports_operation(d, "WorkItems.get")
+
+
+def test_supports_operation_reports_listed_key_unsupported() -> None:
+    d = _declaration(unsupported_operations=frozenset({"WorkItems.remove_label"}))
+    assert not supports_operation(d, "WorkItems.remove_label")
+    assert supports_operation(d, "WorkItems.get")
+    assert supports_operation(d, "WorkItems.linked_work_items")
+    hash(d.unsupported_operations)  # frozenset, so the new field adds no unhashable value
+
+
+def test_supports_operation_takes_only_a_declaration_and_a_key() -> None:
+    assert list(inspect.signature(supports_operation).parameters) == ["declaration", "operation"]
+
+
+@pytest.mark.parametrize("bad", ["Nope.remove_label", "remove_label", "WorkItems."])
+def test_unsupported_operations_rejects_malformed_or_unknown_interface_keys(bad: str) -> None:
+    with pytest.raises(ValueError, match="unsupported_operations"):
+        _declaration(unsupported_operations=frozenset({bad}))
+
+
+def test_supports_operation_method_and_remove_label_constant() -> None:
+    from dotharness.code_host.declarations import REMOVE_LABEL
+
+    d = _declaration(unsupported_operations=frozenset({REMOVE_LABEL}))
+    assert REMOVE_LABEL == "WorkItems.remove_label"
+    assert not d.supports_operation(REMOVE_LABEL)
+    assert d.supports_operation("WorkItems.get")

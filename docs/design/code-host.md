@@ -928,7 +928,7 @@ class WorkItems(Protocol):
 | --- | --- | --- |
 | `get` | `issue view` | INV-PR-08 |
 | `list_open` | `issue list --state open --assignee --label --limit 100` | INV-SY-03 |
-| `remove_label` | `issue edit --remove-label` | INV-SY-02 |
+| `remove_label` | `issue edit --remove-label`. A host may declare `WorkItems.remove_label` unsupported (Declarations, `unsupported_operations`). B-ERR-4 covers the key | INV-SY-02 |
 | `closing_change_requests` | reference lookup, R-INV-2 (a) and (b) | INV-SY-04 |
 | `open_change_request_bodies` | repo-wide body scan, R-INV-2 (c). Stays a separate operation | INV-SY-05 |
 | `linked_work_items` | closing-issue references of a change request | INV-PR-09 |
@@ -1508,7 +1508,7 @@ unchanged. Initial policies [inferred; DEC-22]:
 | `vibe_heal` review | change-request lookup for the branch | ChangeRequests | stop |
 | `pr_review` runners | merge, auto-approve, ci-fix | ChangeRequests / Checks | stop |
 | `pr_review` runners | current-user lookup | Session | warn (keeps the blank-user fail-open result) |
-| `sisyphus` | issue picking and label removal | WorkItems | stop for picking, warn for label removal |
+| `sisyphus` | issue picking and label removal | WorkItems | stop for picking. Label removal: skipped when the host declares `WorkItems.remove_label` unsupported (`default_services` sets `label_remover = None`, one startup warning if `remove_label_when_settled = true` is written), else warn on failure |
 | `pr_review` `auto_approve` | approve (`approve`, `reviews`, `commits`) | ChangeRequests | stop |
 | `pr_review` `auto_approve` | viewed state (`viewed_files`, `mark_viewed`) | ChangeRequests | degrade [inferred, DS-8] |
 | `pr_review` regret review | commit lookup (`find_by_commit`) | ChangeRequests | stop |
@@ -1569,6 +1569,10 @@ class HostDeclaration:
     capabilities: frozenset[Capability]
     limits: "HostLimits"
     anchors: "AnchorRules"
+    unsupported_operations: frozenset[str] = frozenset()
+
+
+def supports_operation(declaration: HostDeclaration, operation: str) -> bool: ...
 ```
 
 - The values of `Capability` are the interface names of the Interfaces section, verbatim (`Session`, `Repository`,
@@ -1576,8 +1580,20 @@ class HostDeclaration:
   section change together.
 - Reader: a consumer reads `capabilities` before first use of an interface. The conformance suite reads it to run only the
   declared interfaces' tests. The reference implementation declares all six.
-- The declaration is the single source of truth for support: a consumer never probes by calling and catching a failure. The
-  Error model section owns what a consumer does on an undeclared interface.
+- `unsupported_operations` lists the operations of a declared capability that the host does not implement. Each key has the
+  form `Interface.method`, as in `ListBounds.per_operation` and `OperationTimeouts.per_operation` (for example
+  `"WorkItems.remove_label"`). The default is the empty frozenset, which means every operation is supported. The field is
+  additive and defaulted, so an existing declaration is unchanged.
+- `supports_operation(declaration, operation)` returns `operation not in declaration.unsupported_operations`. It answers
+  "is operation X supported" from the declaration alone, with no host call.
+- The declaration is the single source of truth for support, for interfaces and for single operations: a consumer reads
+  `capabilities` and `unsupported_operations` (through `supports_operation`) and never probes by calling and catching a
+  failure. The Error model section owns what a consumer does on an undeclared interface.
+- `Capability` is unchanged. A finer-grained member per operation (for example one for label removal) was considered and
+  rejected (D-1): it would break the rule that `Capability` values are the interface names verbatim (DEC-26) and would grow
+  the enum for every operation. A per-operation gap is a key in `unsupported_operations` instead.
+- The shape also permits `WorkItems.get` and `WorkItems.linked_work_items` to be declared unsupported later. Sisyphus
+  consults only `WorkItems.remove_label` now (D-5); no other WorkItems operation gets per-operation handling.
 
 ### Limits
 
@@ -2057,7 +2073,7 @@ model says consumers must not retry after `write=True` and defines no idempotenc
 | B-CHK-3 | `failed_log(check)` returns the seeded log text. `get_job(job_id)` returns the `Job` with its `failed_step`. An unknown id raises `CodeHostError`. |
 | B-WI-1 | `get` returns the seeded `WorkItem`. A missing number returns `None` (confirmed absence, Error model note 5), not an error. |
 | B-WI-2 | `list_open` returns open work items in insertion (tracker) order, filtered by `assignee` and `label`. Closed ones are excluded. The result respects the declared list bound. |
-| B-WI-3 | `remove_label` removes the label. Removing an absent label is a no-op (DEC-42). |
+| B-WI-3 | When the target lists `WorkItems.remove_label` as unsupported, the suite asserts it raises `UnsupportedCapabilityError` and returns. Otherwise `remove_label` removes the label, and removing an absent label is a no-op (DEC-42). |
 | B-WI-4 | `closing_change_requests` returns the change requests the seeder linked. `linked_work_items` is the reverse relation. With no link both are empty. |
 | B-WI-5 | `open_change_request_bodies` returns open change requests with their descriptions, separate from B-WI-4 (Interfaces: the two lookups are not merged). |
 
@@ -2065,8 +2081,9 @@ Conformance groups built in Phase 2: B-SES-3, B-REP-3, B-CR-1, B-CR-2, B-CR-5 an
 host (with a stubbed `gh`) and the fake. A-1 adds B-SES-2, B-SES-4, B-REP-1, B-CR-3, B-CR-4, B-CR-6 to B-CR-8, B-DIS-1 to
 B-DIS-3, B-CHK-1 to B-CHK-3, B-ERR-7 to B-ERR-9 and B-LIM-4, and extends B-CR-1 to the full field set. The reference run uses
 `GhStub` in `tests/code_host/test_reference_conformance.py`, which plays `gh` for the REST, GraphQL and command-line calls
-of the new methods. The fake run is `TestInMemoryCodeHost`. `ConformanceTarget.unsupported` lists a declared operation a host
-does not implement. The suite asserts that each one raises.
+of the new methods. The fake run is `TestInMemoryCodeHost`. `HostDeclaration.unsupported_operations` lists a declared operation a host
+does not implement, and `ConformanceTarget.unsupported` is derived from it (a read-only property, so there is one source of truth).
+The suite asserts that each one raises. B-ERR-4 also covers each key in `unsupported`, in addition to the undeclared capabilities.
 
 `HostSeeder` gains `set_user`, `add_commit`, `add_review`, `add_comment`, `add_thread`, `add_check`, `add_workflow`,
 `add_job` and `fail_next(operation, error)`. A host's seeder maps `fail_next` onto its transport: a timeout, a rejected
@@ -2195,7 +2212,7 @@ f293b99. "Members" are interface methods (Interfaces) served by the fake.
 
 | Existing seam | Where | Today | Replaced by (capability: members) |
 | --- | --- | --- | --- |
-| `LabelRemover` | `src/dotharness/sisyphus/pick.py` (`Protocol`) | label removal | WorkItems: `remove_label`. Inspect via `calls` / `work_items` |
+| `LabelRemover` | `src/dotharness/sisyphus/pick.py` (`Protocol`) | label removal | WorkItems: `remove_label` (may be declared unsupported; B-ERR-4 covers the key). Inspect via `calls` / `work_items` |
 | `TrackerClient` | `src/dotharness/sisyphus/pick.py` (`Protocol`, `list_candidates(source)`) | candidate listing in tracker order | WorkItems: `list_open`. Seed with `add_work_item` |
 | `PullRequestLookup` | `src/dotharness/sisyphus/pick.py` (`Protocol`, `linked_prs`, `open_pr_bodies`) | linked and open PR reads | WorkItems: `closing_change_requests` (`linked_prs`), `open_change_request_bodies` (`open_pr_bodies`). Seed with `link_closing`, `add_change_request` |
 | `GhCli` | `src/dotharness/sisyphus/pick.py` (class, removed in Phase 2) | wrapped the `gh` subprocess | The whole fake (all six capabilities) |
