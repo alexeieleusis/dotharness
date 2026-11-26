@@ -101,6 +101,7 @@ class World:
         self.brief_text = BRIEF_NONE
         self.leaves = 2
         self.write_handoffs = True
+        self.short_handoff_names = False  # agents write NN-name.md without the trailing -leaf
         self.handoff_text = "done"
         self.dirty_after_build = False
         self.plan_stop: dict | None = None
@@ -218,7 +219,8 @@ class World:
             handoffs = self.tmp / "ws" / orchestrator.plan_dir_name(self.item) / "handoffs"
             handoffs.mkdir(parents=True, exist_ok=True)
             for i in range(self.leaves):
-                (handoffs / f"{i:02d}-leaf{i}-leaf.md").write_text(self.handoff_text)
+                suffix = "" if self.short_handoff_names else "-leaf"
+                (handoffs / f"{i:02d}-leaf{i}{suffix}.md").write_text(self.handoff_text)
 
     async def shell(self, argv: Sequence[str], cwd: Path | None) -> CommandResult:
         a = list(argv)
@@ -2193,6 +2195,43 @@ async def test_repeated_invocation_is_harmless(world: World) -> None:
     again = await world.run()
     assert again.completed
     assert world.label_calls == [(7, "bot-pick")] * 2  # one per invocation; removal is idempotent on the tracker
+
+
+async def test_build_with_short_handoff_names_completes(world: World) -> None:
+    world.short_handoff_names = True
+    result = await world.run()
+    assert result.completed
+    assert "no handoff for leaves" not in world.digest_text()
+
+
+async def _c5_text_with_handoff_files(world: World, names: list[str]) -> str:
+    world.write_handoffs = False
+    handoffs = world.tmp / "ws" / orchestrator.plan_dir_name(world.item) / "handoffs"
+    handoffs.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (handoffs / name).write_text("x")
+    result = await world.run()
+    assert not result.completed
+    return world.digest_text()
+
+
+async def test_c5_lists_unmatched_handoff_files(world: World) -> None:
+    text = await _c5_text_with_handoff_files(world, ["notes.md"])
+    assert "no handoff for leaves" in text
+    assert "handoff files not matched to any leaf: notes.md" in text
+
+
+async def test_c5_notes_empty_handoff_dir(world: World) -> None:
+    text = await _c5_text_with_handoff_files(world, [])
+    assert "no handoff for leaves" in text
+    assert "handoff directory has no unmatched .md files" in text
+
+
+async def test_c5_truncates_unmatched_handoff_files(world: World) -> None:
+    text = await _c5_text_with_handoff_files(world, [f"extra{i:02d}.md" for i in range(25)])
+    assert "extra19.md" in text
+    assert "extra20.md" not in text
+    assert " and 5 more" in text
 
 
 async def test_build_without_every_handoff_stops_at_c5(world: World) -> None:
