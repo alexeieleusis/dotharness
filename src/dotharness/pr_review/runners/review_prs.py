@@ -110,7 +110,7 @@ async def _run_locked(config: HarnessConfig, pr_url: str | None = None) -> list[
 
     await prune_projects.run(config, env)
 
-    base, base_source = await resolve_base_branch(config, scaffold, env)
+    base, base_source = await resolve_base_branch(config, scaffold)
     if not await _run_base_analysis(config, env, base, base_source):
         logger.warning("Base analysis failed; skipping PR review for this run")
         return []
@@ -354,7 +354,7 @@ BASE_SOURCE_HOST = "host default"
 BASE_SOURCE_FALLBACK = "final fallback"
 
 
-async def resolve_base_branch(config: HarnessConfig, scaffold: HostScaffold, env: dict) -> tuple[str, str]:
+async def resolve_base_branch(config: HarnessConfig, scaffold: HostScaffold) -> tuple[str, str]:
     """Resolve the base branch once per run: ``(short name, source)``.
 
     Chain: ``[repo].base_branch`` (config) > ``Repository.default_branch`` (host default; any ``CodeHostError``,

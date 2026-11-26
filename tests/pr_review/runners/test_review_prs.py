@@ -1370,7 +1370,7 @@ async def test_resolve_host_default_read_once(tmp_path):
 
 
 async def test_resolve_host_default_main_is_main(tmp_path):
-    result = await review_prs.resolve_base_branch(_base_config(tmp_path), _stub_scaffold(_StubRepository("main")), {})
+    result = await review_prs.resolve_base_branch(_base_config(tmp_path), _stub_scaffold(_StubRepository("main")))
     assert result == ("main", "host default")
 
 
