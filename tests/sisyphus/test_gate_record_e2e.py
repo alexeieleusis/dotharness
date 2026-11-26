@@ -5,6 +5,7 @@ Lives in ``tests/`` so it may import both sides; the import-boundary tests scan 
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
@@ -124,6 +125,31 @@ async def test_scaffold_merges_once_gate_record_matches_head(merge_world: MergeW
 
     await run_merge(world.cfg)
 
+    assert [(c.args, c.kwargs) for c in merged_calls(world.host)] == [
+        ((REPO, world.number), {"expected_head": world.head_sha})
+    ]
+
+
+async def test_sisyphus_gate_record_reaches_merge_call(
+    merge_world: MergeWorld, shared_data_dir: tuple[Path, str, int]
+) -> None:
+    """G6: a record written by the sisyphus writer lets ``pr_review merge`` reach its one merge call, no manual step."""
+    data_dir, slug, _ = shared_data_dir
+    world = merge_world
+    assert world.cfg.repo_slug == slug
+    # Gate-record condition stays live: nothing is on disk until the writer runs.
+    assert read_gate_record(slug, world.number) is None
+
+    written = write_gate_record(slug, world.number, world.head_sha)
+    await run_merge(world.cfg)
+
+    expected = data_dir / "state" / slug / f"build_gate_{world.number}.json"
+    assert written == expected
+    assert gate_record_path(world.cfg.repo_slug, world.number) == expected
+    assert expected.is_file()
+    assert json.loads(expected.read_text()) == {"head_sha": world.head_sha}
+    assert read_gate_record(world.cfg.repo_slug, world.number) == world.head_sha
+    assert [c.operation for c in world.host.writes] == ["ChangeRequests.squash_merge"]
     assert [(c.args, c.kwargs) for c in merged_calls(world.host)] == [
         ((REPO, world.number), {"expected_head": world.head_sha})
     ]
