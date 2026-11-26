@@ -130,7 +130,7 @@ capability interfaces. The "Today's gh call" and "File and function" cells descr
 
 Context, not rows: the `sisyphus/orchestrator.py` `PullRequestClient` protocol is an existing seam, not itself a gh caller.
 Its error surface (INV-SY-06..08) is `CodeHostError` (`GitHubError = CodeHostError`, REN-14). `cleanup.py` consumes `PrInfo` (number, state, headRefOid).
-`prbody.py` `MAX_BODY_CHARS = 60000` is a host limit the contract must expose, not a gh call.
+`prbody.MAX_BODY_CHARS` is a re-export of `DEFAULT_MAX_CHANGE_REQUEST_BODY_CHARS` in `code_host/limits.py`. It is a host limit the contract must expose, not a gh call.
 
 ### Group `vibe-heal` (Phase 1, migrated), `vibe_heal/review/github.py` class `GitHubReviewClient`
 
@@ -604,6 +604,13 @@ checked, and does not restate the assignment.
    not-found type exists, DEC-20). A consumer that needs exactly one change request for a branch (INV-VH-02)
    raises `NoChangeRequestError` when `find_by_branch` returns an empty sequence, or calls `for_current_branch`, which raises it itself.
 6. Naming: new names use "change request". Existing code keeps "PR" until the phase that migrates it (Rename plan).
+7. Import direction: `sisyphus` may import `code_host`; `code_host` must not import `sisyphus`. A shared value that both
+   sides need lives in `code_host` and the consumer re-exports it (the change-request body limit is
+   `DEFAULT_MAX_CHANGE_REQUEST_BODY_CHARS` in `code_host/limits.py`, re-exported as `sisyphus.prbody.MAX_BODY_CHARS`).
+   Trade-offs (D-6): constant in `code_host` (chosen: lower layer, no cycle, the consumer re-exports for compatibility);
+   constant in `sisyphus` (rejected: `code_host` would import its consumer, a cycle risk since `orchestrator` imports
+   `code_host.errors`); a third shared module (rejected: a new module for one integer). A test scans `code_host` for
+   `sisyphus` imports.
 
 ### Repository resolution: explicit and cwd-based
 
@@ -1614,7 +1621,7 @@ class ListBounds:
 class HostLimits:
     max_inline_comments_per_review: int
     max_review_body_chars: int
-    max_change_request_body_chars: int
+    max_change_request_body_chars: int  # Unicode code points (Python `len(str)`)
     timeouts: OperationTimeouts
     list_bounds: ListBounds
     page_attempts: int = 3  # tries for each page of a paged read
@@ -1627,10 +1634,20 @@ class HostLimits:
 - Readers:
   - `max_inline_comments_per_review` and `max_review_body_chars`: the review-posting consumer (the vibe-heal review path).
     It moves the overflow beyond the inline limit into the review body, and truncates the body with a notice.
-  - `max_change_request_body_chars`: the consumer that builds a change request description (`sisyphus/prbody.py`).
+  - `max_change_request_body_chars`: the consumer that builds a change request description (`sisyphus/prbody.py`). Sisyphus
+    reads it through `PullRequestClient` via the optional `max_body_chars` member (declared on the sub-Protocol
+    `BodyLimitedPullRequestClient` and read with a `getattr` fallback to its default). Sisyphus is the only party that
+    truncates a change request body.
   - `timeouts`: the host implementation, which applies them to its own calls. A consumer never passes a timeout.
   - `list_bounds`: the host implementation of every list-returning operation, which returns at most that many items. A bound of `None` means the host returns every item. A host never
     truncates silently: if it cannot return the whole result under the bound that applies, it raises `CodeHostError` instead.
+- Unit of `max_change_request_body_chars`: Unicode code points, that is Python `len(str)`, with no new field. A host that counts
+  UTF-16 units or bytes declares a limit that is safe under its own rule.
+- Review bodies and change request bodies follow opposite rules on purpose. A review body over `max_review_body_chars` is
+  truncated by the host with a notice (B-LIM-3), because the review is better posted shortened than lost. A change request
+  body over `max_change_request_body_chars` is rejected by `create_draft` with `CodeHostError` (B-CR-9). The host never
+  truncates it, so the caller (sisyphus) cuts the body with its own note before the call and a silent host cut cannot hide
+  the note. The reference host rejects before it runs `gh`, so an over-limit body never reaches the network.
 - `page_attempts` and `page_retry_delay_seconds` (added in A-1, with defaults, so the interface version did not change): a host that
   reads a list page by page tries each page `page_attempts` times and pauses `page_retry_delay_seconds` times the attempt
   number between tries. A timeout or an authentication error is not retried. The page loops of `common.py` and
@@ -1653,7 +1670,7 @@ means the default applies).
 | --- | --- | --- | --- |
 | `max_inline_comments_per_review` | 50 | | `_MAX_INLINE_COMMENTS` in `vibe_heal/review/github.py` |
 | `max_review_body_chars` | 60 000 | | `_MAX_REVIEW_BODY_CHARS` in the same file (the host's real limit is about 65 536. Headroom kept) |
-| `max_change_request_body_chars` | 60 000 | | `MAX_BODY_CHARS` in `sisyphus/prbody.py` |
+| `max_change_request_body_chars` | 60 000 | | `DEFAULT_MAX_CHANGE_REQUEST_BODY_CHARS` in `code_host/limits.py` (`sisyphus/prbody.py` re-exports it as `MAX_BODY_CHARS`) |
 | `timeouts.default_seconds` | 30 | | `TIMEOUT_GH` in `pr_review/runners/common.py` |
 | timeout, CR state lookup (INV-SY-09) | 10.0 | `ChangeRequests.state` | `PR_STATE_TIMEOUT` in `sisyphus/cli.py` (removed in Phase 2) |
 | timeout, label removal (INV-SY-02) | 10.0 | `WorkItems.remove_label` | `GhTimeboundLabelRemover` in `sisyphus/cli.py` (removed in Phase 2). A timeout is `CodeHostTimeoutError(write=True)` |
@@ -2062,6 +2079,7 @@ model says consumers must not retry after `write=True` and defines no idempotenc
 | B-CR-6 | `squash_merge(expected_head=...)` with the current head revision makes the state merged. With a different revision it raises `CodeHostError` and changes nothing. |
 | B-CR-7 | `request_reviewer` adds the login to `requested_reviewers`. `approve(head_revision=...)` appears in `reviews()` with an approved state. |
 | B-CR-8 | `mark_viewed` is reflected in `viewed_files` for that path. Marking twice leaves it viewed. |
+| B-CR-9 | `create_draft` with a body of `max_change_request_body_chars` + 1 code points raises a plain `CodeHostError` (not `UnsupportedCapabilityError`) and creates nothing. A body of exactly the limit is accepted and `get` returns it unchanged (a host whose `get` normalizes the body declares a safe limit). |
 | B-DIS-1 | `post_comment` returns the new `Comment` and it appears in `comments()`. Order is posting order. |
 | B-DIS-2 | `review_threads` returns seeded threads with `is_resolved` and `anchor`. A thread whose anchor no longer maps to the diff is returned with `anchor=None`, not dropped. `comments` and `review_threads` return every seeded item even above the default list bound (declared `None`). |
 | B-DIS-3 | `reply(thread_id, body)` appends a `Comment` to that thread. An unknown `thread_id` raises `CodeHostError`. |
@@ -2084,6 +2102,11 @@ B-DIS-3, B-CHK-1 to B-CHK-3, B-ERR-7 to B-ERR-9 and B-LIM-4, and extends B-CR-1 
 of the new methods. The fake run is `TestInMemoryCodeHost`. `HostDeclaration.unsupported_operations` lists a declared operation a host
 does not implement, and `ConformanceTarget.unsupported` is derived from it (a read-only property, so there is one source of truth).
 The suite asserts that each one raises. B-ERR-4 also covers each key in `unsupported`, in addition to the undeclared capabilities.
+
+B-CR-9 (A-3) is a change to the suite every host shares: a host that passed before must now reject an over-limit change request
+body in `create_draft`. It is not a version bump. The version stays `CODE_HOST_INTERFACE_VERSION = 4`, following the `HostLimits`
+precedent (a field added with a default did not change the version). The reference run needs no network for it, since the host
+rejects before `gh` runs.
 
 `HostSeeder` gains `set_user`, `add_commit`, `add_review`, `add_comment`, `add_thread`, `add_check`, `add_workflow`,
 `add_job` and `fail_next(operation, error)`. A host's seeder maps `fail_next` onto its transport: a timeout, a rejected

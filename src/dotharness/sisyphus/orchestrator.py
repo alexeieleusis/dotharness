@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
 import shlex
@@ -24,7 +25,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from datetime import time as dtime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from dotharness.code_host.errors import CodeHostError
 from dotharness.fileio import TOMLDecodeError, atomic_write_json
@@ -122,6 +123,9 @@ class PullRequest:
     url: str = ""
 
 
+logger = logging.getLogger(__name__)
+
+
 class PullRequestClient(Protocol):
     """Code-host access for the open-PR stage. Raise :class:`CodeHostError` on unrecoverable failures.
 
@@ -140,6 +144,20 @@ class PullRequestClient(Protocol):
     async def pr_state(self, ref: str) -> PrInfo | None:
         """The PR's state and head SHA for a number or a branch (any state), or ``None`` if none."""
         ...
+
+
+@runtime_checkable
+class BodyLimitedPullRequestClient(PullRequestClient, Protocol):
+    """A :class:`PullRequestClient` that also declares the largest PR body its host stores unchanged.
+
+    An optional capability, kept out of :class:`PullRequestClient` itself because a Protocol member is structurally
+    required and clients such as test fakes do not declare it. The orchestrator detects it with ``isinstance`` (the
+    Protocol is runtime-checkable), so the read is visible to the type checker; a client without it gets
+    :data:`prbody.MAX_BODY_CHARS`. The member is a read-only property: a pure declaration, no I/O.
+    """
+
+    @property
+    def max_body_chars(self) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -1251,6 +1269,14 @@ class _Run:
                 return None
             return res.stdout if res.returncode == 0 else None
 
+        max_chars = (
+            self.gh.max_body_chars if isinstance(self.gh, BodyLimitedPullRequestClient) else prbody.MAX_BODY_CHARS
+        )
+        if max_chars < prbody.min_viable_chars(self.item):
+            logger.warning(
+                "PR body limit %d is smaller than the header plus truncation note; the host may reject the body",
+                max_chars,
+            )
         return await prbody.build_body(
             self.item,
             brief_path=resolve_brief_path(self.config, self.item),
@@ -1261,6 +1287,7 @@ class _Run:
             run_git=run_git,
             refactor_records=_read_refactor_records(self.handoff_dir / REFACTOR_INPUT_FILE),
             refactor_handoff_dir=self.handoff_dir,
+            max_chars=max_chars,
         )
 
     def note(self, text: str) -> None:

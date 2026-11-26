@@ -310,6 +310,7 @@ def _compose(
     decisions: str = "",
     deviations: str = "",
     requirements: str | None = None,
+    max_chars: int = MAX_BODY_CHARS,
 ) -> str:
     ws = tmp_path / "ws"
     return compose_body(
@@ -322,6 +323,7 @@ def _compose(
         workspace=ws,
         plan_dir=ws / "plan",
         home=tmp_path,
+        max_chars=max_chars,
     )
 
 
@@ -361,6 +363,47 @@ def test_compose_oversize_truncates_remaining(tmp_path: Path) -> None:
     assert body.count("```") % 2 == 0
 
 
+def test_compose_max_chars_truncates_with_note_last(tmp_path: Path) -> None:
+    body = _compose(tmp_path, summary="word " * 2000, requirements="r", max_chars=4000)
+    assert len(body) <= 4000
+    assert body.startswith("Closes o/r#109\n\n")
+    assert body.endswith(prbody.TRUNCATED_NOTE)
+
+
+def test_compose_max_chars_non_bmp_counts_code_points(tmp_path: Path) -> None:
+    body = _compose(tmp_path, summary="\U0001f600" * 5000, requirements="r", max_chars=1000)
+    assert len(body) <= 1000
+    assert body.startswith("Closes o/r#109")
+    assert body.endswith(prbody.TRUNCATED_NOTE)
+
+
+def test_compose_max_chars_default_matches_explicit_60000(tmp_path: Path) -> None:
+    cases: list[dict[str, Any]] = [
+        {"summary": "short", "requirements": "x" * (MAX_BODY_CHARS + 10)},
+        {"summary": "```\n" + "y" * (MAX_BODY_CHARS * 2), "phases": "late", "requirements": "r"},
+    ]
+    for kw in cases:
+        assert _compose(tmp_path, max_chars=60000, **kw) == _compose(tmp_path, **kw)
+    full_note = _compose(tmp_path, max_chars=60000, summary="short", requirements="x" * (MAX_BODY_CHARS + 10))
+    assert prbody.FULL_FILE_NOTE in full_note and prbody.TRUNCATED_NOTE not in full_note
+    trunc = _compose(tmp_path, max_chars=60000, summary="y" * (MAX_BODY_CHARS * 2), requirements="r")
+    assert len(trunc) == MAX_BODY_CHARS and trunc.endswith(prbody.TRUNCATED_NOTE)
+
+
+def test_compose_max_chars_small_limits_keep_header(tmp_path: Path) -> None:
+    header = prbody.work_item_header("o/r#109")
+    kw: dict[str, Any] = {"summary": "s" * 500, "requirements": "r"}
+    # Limit fits the header but not the note: header plus as much as fits, no exception.
+    body = _compose(tmp_path, max_chars=len(header) + 5, **kw)
+    assert body.startswith(header) and len(body) == len(header) + 5
+    # Limit below the header, and zero or negative: the header unchanged.
+    for limit in (len(header) - 3, 0, -10):
+        assert _compose(tmp_path, max_chars=limit, **kw) == header
+    # Absurdly large limit: nothing is cut.
+    big = _compose(tmp_path, max_chars=10**9, summary="y" * (MAX_BODY_CHARS * 2), requirements="r")
+    assert prbody.TRUNCATED_NOTE not in big and len(big) > MAX_BODY_CHARS
+
+
 def test_read_requirements_degrades(tmp_path: Path) -> None:
     assert read_requirements(None) is None
     assert read_requirements(tmp_path) is None
@@ -370,7 +413,9 @@ def test_read_requirements_degrades(tmp_path: Path) -> None:
     assert read_requirements(tmp_path) == "ok"
 
 
-async def _build(tmp_path: Path, plan: Path, git_out: str | None = "abc\tPhase 01: alpha\n") -> str:
+async def _build(
+    tmp_path: Path, plan: Path, git_out: str | None = "abc\tPhase 01: alpha\n", max_chars: int = MAX_BODY_CHARS
+) -> str:
     async def run_git(_args: object) -> str | None:
         return git_out
 
@@ -382,7 +427,20 @@ async def _build(tmp_path: Path, plan: Path, git_out: str | None = "abc\tPhase 0
         base_branch="main",
         workspace=tmp_path,
         run_git=run_git,
+        max_chars=max_chars,
     )
+
+
+async def test_build_body_forwards_max_chars(tmp_path: Path) -> None:
+    (tmp_path / "phases").mkdir()
+    (tmp_path / "b.md").write_text("x")
+    plan = tmp_path / "plan"
+    plan.mkdir()
+    (plan / "requirements.md").write_text("## 1. Goal\n\n" + "Ship it. " * 500)
+    (plan / "init_manifest.json").write_text(json.dumps({"brief": str(tmp_path / "b.md")}))
+    body = await _build(tmp_path, plan, max_chars=800)
+    assert len(body) <= 800 and body.startswith("Closes w") and body.endswith(prbody.TRUNCATED_NOTE)
+    assert len(await _build(tmp_path, plan)) > 800
 
 
 async def test_build_body_full_and_degraded(tmp_path: Path) -> None:

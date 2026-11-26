@@ -2081,6 +2081,52 @@ async def test_open_pr_body_oversize_is_capped(world: World) -> None:
     assert body.startswith(_header())
 
 
+async def test_open_pr_body_default_limit_without_max_body_chars(world: World) -> None:
+    assert not hasattr(world, "max_body_chars")  # C3: the hand-written fake declares no limit
+    world.requirements = REQUIREMENTS.replace("{ws}", str(world.tmp / "ws"))
+    world.handoff_text = "### Handoff\n- Deviations from the plan: " + "word " * 5000 + "\n"
+    await world.run()
+    body = world.opened[0][3]
+    assert 20000 < len(body) <= orchestrator.prbody.MAX_BODY_CHARS
+    assert orchestrator.prbody.TRUNCATED_NOTE not in body
+
+
+async def test_open_pr_body_honours_declared_limit(world: World, caplog: pytest.LogCaptureFixture) -> None:
+    limit = len(_header()) + 2 + len(orchestrator.prbody.TRUNCATED_NOTE) + 300
+    world.max_body_chars = limit  # ty: ignore[missing-attribute]
+    world.requirements = REQUIREMENTS.replace("{ws}", str(world.tmp / "ws"))
+    world.handoff_text = "### Handoff\n- Deviations from the plan: " + "word " * 5000 + "\n"
+    with caplog.at_level("WARNING", logger=orchestrator.logger.name):
+        await world.run()
+    body = world.opened[0][3]
+    assert len(body) <= limit
+    assert body.startswith(_header())
+    assert orchestrator.prbody.TRUNCATED_NOTE in body
+    assert caplog.records == []
+
+
+async def test_open_pr_body_tiny_limit_warns_once(world: World, caplog: pytest.LogCaptureFixture) -> None:
+    below = len(_header()) + 2 + len(orchestrator.prbody.TRUNCATED_NOTE) - 1
+    world.max_body_chars = below  # ty: ignore[missing-attribute]
+    with caplog.at_level("WARNING", logger=orchestrator.logger.name):
+        result = await world.run()
+    assert result.completed
+    warnings = [r for r in caplog.records if r.name == orchestrator.logger.name and r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert world.opened[0][3].startswith(_header())
+
+
+async def test_open_pr_body_non_positive_limit_warns_and_never_raises(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    world.max_body_chars = -5  # ty: ignore[missing-attribute]
+    with caplog.at_level("WARNING", logger=orchestrator.logger.name):
+        result = await world.run()
+    assert result.completed
+    assert len([r for r in caplog.records if r.name == orchestrator.logger.name]) == 1
+    assert world.opened[0][3] == _header()
+
+
 async def test_assembly_failure_does_not_stop_the_run(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*_a: object, **_k: object) -> str:
         raise RuntimeError("boom")

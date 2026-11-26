@@ -13,7 +13,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 import typer
@@ -912,6 +913,19 @@ def _client(**kwargs: Any) -> tuple[InMemoryCodeHost, cli.HostPullRequestClient,
     fake = InMemoryCodeHost(**kwargs)
     repo = HostRepository(fake.code_host())
     return fake, cli.HostPullRequestClient(repo), repo
+
+
+@pytest.mark.parametrize("declared", [60_000, 1234, 0, -7, 10**9])
+def test_host_pull_request_client_max_body_chars_is_the_declared_limit(declared: int) -> None:
+    limits = SimpleNamespace(max_change_request_body_chars=declared)
+    repo = SimpleNamespace(host=SimpleNamespace(declaration=SimpleNamespace(limits=limits)))
+    client = cli.HostPullRequestClient(cast(HostRepository, repo))
+    assert client.max_body_chars == declared
+
+
+def test_host_pull_request_client_max_body_chars_reference_host() -> None:
+    _, client, _ = _client()
+    assert client.max_body_chars == client.repo.host.declaration.limits.max_change_request_body_chars
 
 
 async def test_host_pull_request_client_find_and_open() -> None:

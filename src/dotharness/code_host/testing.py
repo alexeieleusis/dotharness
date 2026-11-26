@@ -1005,6 +1005,10 @@ class _FakeChangeRequests(_Facet):
         self, repo: RepositoryRef, *, head: str, base: str, title: str, body: str
     ) -> ChangeRequest:
         def action() -> ChangeRequest:
+            limit = self._host.declaration.limits.max_change_request_body_chars
+            if len(body) > limit:
+                msg = f"change request body is {len(body)} characters, over the limit of {limit}"
+                raise CodeHostError(msg)
             for existing in self._host._change_requests.get(repo, []):
                 if (
                     existing.state is ChangeRequestState.OPEN
@@ -1791,6 +1795,25 @@ class CodeHostConformance:
             pass
         else:
             raise AssertionError("CodeHostError not raised")
+
+    async def test_create_draft_rejects_body_over_limit(self) -> None:
+        """B-CR-9: create_draft rejects a body over the declared limit with CodeHostError. Exactly the limit is stored."""
+        target = await self.make_target()
+        if not self._declares(target, Capability.CHANGE_REQUESTS):
+            return
+        repo, crs = target.repository, target.host.change_requests
+        limit = target.host.declaration.limits.max_change_request_body_chars
+        try:
+            await crs.create_draft(repo, head="feature/too-long", base="main", title="Too long", body="x" * (limit + 1))
+        except UnsupportedCapabilityError:
+            raise AssertionError("an over-limit body must raise a plain CodeHostError") from None
+        except CodeHostError:
+            pass
+        else:
+            raise AssertionError("CodeHostError not raised")
+        body = "y" * limit
+        created = await crs.create_draft(repo, head="feature/at-limit", base="main", title="At limit", body=body)
+        assert (await crs.get(repo, created.number)).body == body
 
     # -- work items ----------------------------------------------------------------------------------------------
 

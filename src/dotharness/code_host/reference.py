@@ -40,6 +40,7 @@ from dotharness.code_host.errors import (
 )
 from dotharness.code_host.factory import HostRegistration, TokenCmd
 from dotharness.code_host.interfaces import CodeHost
+from dotharness.code_host.limits import DEFAULT_MAX_CHANGE_REQUEST_BODY_CHARS
 from dotharness.code_host.models import (
     ChangeRequest,
     ChangeRequestState,
@@ -968,6 +969,10 @@ class _ChangeRequests:
 
     async def create_draft(self, repo: RepositoryRef, *, head: str, base: str, title: str, body: str) -> ChangeRequest:
         """Create a draft (``gh pr create --draft``). The number comes from the printed URL; no URL is an error."""
+        limit = DECLARATION.limits.max_change_request_body_chars
+        if len(body) > limit:
+            msg = f"change request body is {len(body)} characters, over the limit of {limit}"
+            raise CodeHostError(msg)
         args = ("pr", "create", "--draft", "--head", head, "--base", base, "--title", title, "--body", body)
         outcome = await self._gh.run(args, "ChangeRequests.create_draft", write=True)
         match = _PR_URL.search(outcome.stdout)
@@ -1583,7 +1588,7 @@ DECLARATION = HostDeclaration(
     limits=HostLimits(
         max_inline_comments_per_review=_MAX_INLINE_COMMENTS,
         max_review_body_chars=_MAX_REVIEW_BODY_CHARS,
-        max_change_request_body_chars=60_000,
+        max_change_request_body_chars=DEFAULT_MAX_CHANGE_REQUEST_BODY_CHARS,
         timeouts=OperationTimeouts(
             default_seconds=30,
             per_operation={
