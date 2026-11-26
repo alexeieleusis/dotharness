@@ -29,6 +29,11 @@ def validate_repo_slug(slug: str) -> str:
     return slug
 
 
+def repo_slug_from_name(name: str) -> str:
+    """The one name-to-slug derivation: `/` becomes `-`, then validated (raises `ValueError`)."""
+    return validate_repo_slug(name.replace("/", "-"))
+
+
 def build_gate_record_path(repo_slug: str, pr_number: int) -> Path:
     """`<data_dir>/state/<slug>/build_gate_<pr>.json`; pure, creates nothing, `data_dir()` read at call time."""
     validate_repo_slug(repo_slug)

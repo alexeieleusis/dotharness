@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from dotharness.paths import build_gate_record_path, data_dir, fallback_repo_slug, validate_repo_slug
+from dotharness.paths import (
+    build_gate_record_path,
+    data_dir,
+    fallback_repo_slug,
+    repo_slug_from_name,
+    validate_repo_slug,
+)
 from dotharness.pr_review.runners import merge
 from dotharness.sisyphus.gaterecord import write_gate_record
 
@@ -21,7 +27,7 @@ def home(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("case", _GOLDEN["path_cases"], ids=lambda c: c["slug"])
 def test_path_cases(case, home):
-    assert case["repo_name"].replace("/", "-") == case["slug"]
+    assert repo_slug_from_name(case["repo_name"]) == case["slug"]
     path = build_gate_record_path(case["slug"], case["pr"])
     assert path == data_dir() / case["relative_path"]
     assert path.is_relative_to(home)

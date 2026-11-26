@@ -7,7 +7,7 @@ from typing import Any
 
 from dotharness.ai_backend import BACKEND_NAMES
 from dotharness.fileio import TOMLDecodeError, load_toml
-from dotharness.paths import default_knowledge_dir, fallback_repo_slug
+from dotharness.paths import default_knowledge_dir, fallback_repo_slug, repo_slug_from_name
 from dotharness.pr_review.lock import working_dir_lock_key
 
 
@@ -142,7 +142,7 @@ class HarnessConfig:
     @property
     def repo_slug(self) -> str:
         if self.repo.name:
-            return self.repo.name.replace("/", "-")
+            return repo_slug_from_name(self.repo.name)
         return fallback_repo_slug(self.repo.working_dir)
 
     @property
@@ -221,11 +221,12 @@ def _parse_repo(r: dict, *, require_repo_name: bool) -> RepoConfig:
     if require_repo_name and not r.get("name"):
         raise ConfigError("repo.name is required")  # noqa: TRY003
     if r.get("name"):
-        slug = str(r["name"]).replace("/", "-")
-        if slug in (".", "..") or not re.fullmatch(r"[A-Za-z0-9._-]+", slug):
+        try:
+            repo_slug_from_name(str(r["name"]))
+        except ValueError:
             raise ConfigError(  # noqa: TRY003
                 f"Invalid repo.name '{r['name']}': must match [A-Za-z0-9._/-]+ and not be '.' or '..'"
-            )
+            ) from None
     if not r.get("working_dir"):
         raise ConfigError("repo.working_dir is required")  # noqa: TRY003
 

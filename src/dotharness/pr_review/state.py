@@ -26,12 +26,8 @@ _COMMAND_FILES = {
 }
 
 
-# One slug rule shared with the merge-gate reader: a divergent copy would put records where `merge` doesn't look.
-_validate_repo_slug = validate_repo_slug
-
-
 def _state_path(repo_slug: str, filename: str) -> Path:
-    _validate_repo_slug(repo_slug)
+    validate_repo_slug(repo_slug)  # shared with the merge-gate reader (dotharness.paths)
     p = XDG_DATA / "state" / repo_slug / filename
     p.parent.mkdir(parents=True, exist_ok=True)
     return p

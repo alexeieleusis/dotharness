@@ -17,8 +17,7 @@ from dotharness.code_host import (
     UnsupportedCapabilityError,
 )
 from dotharness.code_host.testing import InMemoryCodeHost
-from dotharness.paths import fallback_repo_slug
-from dotharness.pr_review import state
+from dotharness.paths import fallback_repo_slug, validate_repo_slug
 from dotharness.pr_review.config import HarnessConfig, HarnessSection, MergeConfig, RepoConfig
 from dotharness.pr_review.runners import merge
 from dotharness.pr_review.runners.merge import MergeError
@@ -402,13 +401,13 @@ def test_golden_fallback_slug(case):
 
 @pytest.mark.parametrize("slug", _GOLDEN["valid_slugs"])
 def test_golden_valid_slugs(slug):
-    assert state._validate_repo_slug(slug) == slug
+    assert validate_repo_slug(slug) == slug
 
 
 @pytest.mark.parametrize("slug", _GOLDEN["invalid_slugs"])
 def test_golden_invalid_slugs(slug):
     with pytest.raises(ValueError, match="Invalid repo slug"):
-        state._validate_repo_slug(slug)
+        validate_repo_slug(slug)
 
 
 def test_golden_record_is_read_back(tmp_path, monkeypatch):

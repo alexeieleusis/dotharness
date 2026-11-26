@@ -18,7 +18,7 @@ from typing import Any
 
 from dotharness.ai_backend import BACKEND_NAMES
 from dotharness.fileio import TOMLDecodeError, load_toml
-from dotharness.paths import fallback_repo_slug, validate_repo_slug
+from dotharness.paths import fallback_repo_slug, repo_slug_from_name
 from dotharness.sisyphus import stack
 
 DEFAULT_CONFIG_FILE = ".sisyphus.toml"
@@ -56,9 +56,8 @@ class ProjectConfig:
 
 
 def _resolve_repo_name(repo_name: str) -> str:
-    slug = repo_name.replace("/", "-")
     try:
-        return validate_repo_slug(slug)
+        return repo_slug_from_name(repo_name)
     except ValueError as exc:
         raise ConfigError(f"[project] repo_name '{repo_name}' is not a valid repo slug: {exc}") from exc
 

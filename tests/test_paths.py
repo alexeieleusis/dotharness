@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 import dotharness.paths as paths
-from dotharness.paths import build_gate_record_path, default_knowledge_dir, fallback_repo_slug, validate_repo_slug
+from dotharness.paths import (
+    build_gate_record_path,
+    default_knowledge_dir,
+    fallback_repo_slug,
+    repo_slug_from_name,
+    validate_repo_slug,
+)
 from dotharness.pr_review import config as pr_config
 
 
@@ -82,3 +88,10 @@ def test_paths_module_has_no_pr_review_import():
         elif isinstance(node, ast.ImportFrom):
             names.append(node.module or "")
     assert not [n for n in names if n.startswith("dotharness.pr_review")]
+
+
+def test_repo_slug_from_name_replaces_slash_then_validates():
+    assert repo_slug_from_name("owner/repo") == "owner-repo"
+    for bad in ("owner/re po", ".."):
+        with pytest.raises(ValueError, match="Invalid repo slug"):
+            repo_slug_from_name(bad)
