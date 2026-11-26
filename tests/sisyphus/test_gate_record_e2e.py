@@ -153,3 +153,39 @@ async def test_sisyphus_gate_record_reaches_merge_call(
     assert [(c.args, c.kwargs) for c in merged_calls(world.host)] == [
         ((REPO, world.number), {"expected_head": world.head_sha})
     ]
+
+
+async def test_stale_gate_record_skips_and_makes_no_merge_call(
+    merge_world: MergeWorld, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A record whose ``head_sha`` differs from the PR head is skipped as stale; no merge call."""
+    world = merge_world
+    stale_sha = "f" * 40
+    assert stale_sha != world.head_sha
+    written = write_gate_record(world.cfg.repo_slug, world.number, stale_sha)
+    assert written == gate_record_path(world.cfg.repo_slug, world.number)
+    assert read_gate_record(world.cfg.repo_slug, world.number) == stale_sha
+
+    with caplog.at_level(logging.INFO):
+        await run_merge(world.cfg)
+
+    assert f"PR #{world.number}: skipped: {merge.SKIP_GATE_RECORD_STALE}" in caplog.text
+    assert merge.SKIP_GATE_RECORD_MISSING not in caplog.text
+    assert merged_calls(world.host) == []
+    assert world.host.writes == []
+
+
+async def test_missing_gate_record_in_shared_dir_skips_and_makes_no_merge_call(
+    merge_world: MergeWorld, caplog: pytest.LogCaptureFixture
+) -> None:
+    """With nothing written to the shared data dir the PR is skipped as missing; no merge call."""
+    world = merge_world
+    assert read_gate_record(world.cfg.repo_slug, world.number) is None
+
+    with caplog.at_level(logging.INFO):
+        await run_merge(world.cfg)
+
+    assert f"PR #{world.number}: skipped: {merge.SKIP_GATE_RECORD_MISSING}" in caplog.text
+    assert merge.SKIP_GATE_RECORD_STALE not in caplog.text
+    assert merged_calls(world.host) == []
+    assert world.host.writes == []
