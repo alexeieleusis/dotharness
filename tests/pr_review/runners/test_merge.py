@@ -18,6 +18,7 @@ from dotharness.code_host import (
 )
 from dotharness.code_host.testing import InMemoryCodeHost
 from dotharness.paths import fallback_repo_slug
+from dotharness.pr_review import state
 from dotharness.pr_review.config import HarnessConfig, HarnessSection, MergeConfig, RepoConfig
 from dotharness.pr_review.runners import merge
 from dotharness.pr_review.runners.merge import MergeError
@@ -85,7 +86,7 @@ def host():
 @pytest.fixture(autouse=True)
 def _env(tmp_path, host):
     with (
-        patch.object(merge.state, "XDG_DATA", tmp_path / "xdg"),
+        patch.object(Path, "home", return_value=tmp_path / "xdg"),
         patch(P + "acquire_lock"),
         patch("dotharness.pr_review.runners.common.create_code_host", side_effect=lambda _selection: host.code_host()),
     ):
@@ -385,11 +386,13 @@ _GOLDEN = json.loads((Path(__file__).resolve().parents[2] / "contracts/gate_reco
 
 @pytest.mark.parametrize("case", _GOLDEN["path_cases"], ids=lambda c: c["slug"])
 def test_golden_paths_and_slugs(case, tmp_path, monkeypatch):
-    monkeypatch.setattr(merge.state, "XDG_DATA", tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     cfg = _cfg(tmp_path)
     cfg.repo = RepoConfig(case["repo_name"], tmp_path)
     assert cfg.repo_slug == case["slug"]
-    assert merge.gate_record_path(case["slug"], case["pr"]) == tmp_path / case["relative_path"]
+    assert (
+        merge.gate_record_path(case["slug"], case["pr"]) == tmp_path / ".local/share/dotharness" / case["relative_path"]
+    )
 
 
 @pytest.mark.parametrize("case", _GOLDEN["fallback_slug_cases"], ids=lambda c: c["slug"])
@@ -399,17 +402,17 @@ def test_golden_fallback_slug(case):
 
 @pytest.mark.parametrize("slug", _GOLDEN["valid_slugs"])
 def test_golden_valid_slugs(slug):
-    assert merge.state._validate_repo_slug(slug) == slug
+    assert state._validate_repo_slug(slug) == slug
 
 
 @pytest.mark.parametrize("slug", _GOLDEN["invalid_slugs"])
 def test_golden_invalid_slugs(slug):
     with pytest.raises(ValueError, match="Invalid repo slug"):
-        merge.state._validate_repo_slug(slug)
+        state._validate_repo_slug(slug)
 
 
 def test_golden_record_is_read_back(tmp_path, monkeypatch):
-    monkeypatch.setattr(merge.state, "XDG_DATA", tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     path = merge.gate_record_path("acme-frontend", 1)
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(_GOLDEN["record"]), encoding="utf-8")

@@ -18,8 +18,8 @@ Public entry point (takes the shared working-directory lock itself, like the sib
 
 Gate record: the evidence that ``build.commands`` passed on the head SHA is written by Package A
 (the sisyphus gate-record writer). The format is settled: a JSON file
-``{"head_sha": "<sha>"}`` (other keys are ignored) at ``<XDG_DATA>/state/<repo_slug>/build_gate_<pr>.json``
-(see :func:`gate_record_path`). The reader here and the gate-record writer must stay in sync. A
+``{"head_sha": "<sha>"}`` (other keys are ignored) at ``<data_dir()>/state/<repo_slug>/build_gate_<pr>.json``
+(computed by :func:`dotharness.paths.build_gate_record_path`; see :func:`gate_record_path`). The reader here and the gate-record writer must stay in sync. A
 missing, unreadable or SHA-mismatched record blocks the merge.
 """
 
@@ -34,7 +34,7 @@ from dotharness.code_host import (
     RepositoryRef,
     UnsupportedCapabilityError,
 )
-from dotharness.pr_review import state
+from dotharness.paths import build_gate_record_path
 from dotharness.pr_review.config import HarnessConfig
 from dotharness.pr_review.lock import acquire_lock
 from dotharness.pr_review.runners.ci_checks import (
@@ -101,7 +101,7 @@ async def _run_locked(config: HarnessConfig, dry_run: bool, pr: int | None) -> N
 
 def gate_record_path(repo_slug: str, pr_number: int) -> Path:
     """Location of the gate record written by Package A (sisyphus gaterecord.py). Read-only: creates no directory."""
-    return state.XDG_DATA / "state" / state._validate_repo_slug(repo_slug) / f"build_gate_{pr_number}.json"
+    return build_gate_record_path(repo_slug, pr_number)
 
 
 def read_gate_record(repo_slug: str, pr_number: int) -> str | None:
