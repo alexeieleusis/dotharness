@@ -48,8 +48,7 @@ def _written_retry_keys() -> set[str]:
 def test_every_reset_key_is_written_by_sisyphus() -> None:
     written = _written_retry_keys()
     assert {"build:retry-cycles", "auto-retry"} <= written
-    # PREWORK_RETRY_KEY is exempt until the prework handler (a later work order) writes it.
-    unused = {k for keys in RESET_KEYS.values() for k in keys} - written - {stages.PREWORK_RETRY_KEY}
+    unused = {k for keys in RESET_KEYS.values() for k in keys} - written
     assert not unused
 
 

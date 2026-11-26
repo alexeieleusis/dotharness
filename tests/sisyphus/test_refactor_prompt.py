@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 from dotharness.sisyphus import prbody
-from dotharness.sisyphus.orchestrator import build_orchestration_prompt, modified_files_text
+from dotharness.sisyphus.orchestrator import (
+    PREWORK_PROMPT_MODE,
+    REFACTOR_PROMPT_MODE,
+    build_orchestration_prompt,
+    modified_files_text,
+)
 from dotharness.sisyphus.paths import knowledge_file
 
 NAME = "sisyphus/refactor-prompt.md"
@@ -27,6 +32,7 @@ VALUES = {
     "modified_files": "src/a.py (62%)",
     "input_file": "/w/refactor-input.json",
     "patterns dir": "/k/patterns",
+    **REFACTOR_PROMPT_MODE,
 }
 
 
@@ -119,7 +125,7 @@ def test_raw_section_has_bullets_and_names() -> None:
     section = _section(raw())
     assert "\n- Deviations from the plan:" in section
     assert "\n- Edits to existing files:" in section
-    assert "refactor-<refactor_set>.md" in section
+    assert "<handoff_prefix>-<refactor_set>.md" in section
     assert "<handoff dir>" in section
     assert "none" in section
 
@@ -190,3 +196,43 @@ def test_parse_modified_rejects_malformed_and_bool() -> None:
 
     assert parse_modified([{"path": "a.py", "ratio": True}, {"path": "b.py", "ratio": 0.5}, "x"]) == [("b.py", 0.5)]
     assert parse_modified(None) == []
+
+
+PREWORK_VALUES = {**VALUES, **PREWORK_PROMPT_MODE, "stage": "prework", "modified_files": "src/a.py\nsrc/pkg/b.py"}
+
+
+def test_refactor_mode_wording_is_kept() -> None:
+    text = build_orchestration_prompt(raw(), VALUES)
+    assert text.startswith("# Prompt: Refactor the code that one build wrote, for one stack group")
+    assert "You orchestrate the refactor of one stack group" in text
+    assert (
+        "existed before this work item, with the share of each file this branch changed (`none` when there are none):"
+        in text
+    )
+    assert "`refactor-fastapi.md`" in text
+    assert "The name starts with `refactor-`." in text
+
+
+def test_prework_mode_rendering() -> None:
+    text = build_orchestration_prompt(raw(), PREWORK_VALUES)
+    assert re.findall(r"<[^<>\n]+>", text) == []
+    assert text.startswith("# Prompt: Clean up existing code")
+    assert "this branch changed" not in text
+    assert "Refactor the code that one build wrote" not in text
+    assert "share of each file" not in text
+    assert "`prework-fastapi.md`" in text
+    assert "`refactor-fastapi.md`" not in text
+    assert "The name starts with `prework-`." in text
+    assert "src/a.py" in text.splitlines()
+    assert "src/pkg/b.py" in text.splitlines()
+    assert "Commit each step to the target branch" in text
+    assert "report it as a deviation in the handoff and keep the behavior as it is" in text
+
+
+def test_prework_handoff_name_differs_from_refactor() -> None:
+    refactor = build_orchestration_prompt(raw(), VALUES)
+    prework = build_orchestration_prompt(raw(), PREWORK_VALUES)
+    assert "refactor-fastapi.md" in refactor
+    assert "prework-fastapi.md" in prework
+    assert "prework-fastapi.md" not in refactor
+    assert "refactor-fastapi.md" not in prework

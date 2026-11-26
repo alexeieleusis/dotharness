@@ -69,6 +69,7 @@ from dotharness.sisyphus.stages import (
     LEAF_LIMIT_KEY,
     OPEN_PR_STAGE,
     PLAN_STAGE,
+    PREWORK_RETRY_KEY,
     PREWORK_STAGE,
     PUSH_STAGE,
     REFACTOR_RETRY_KEY,
@@ -91,9 +92,23 @@ REFACTOR_PROMPT_FILE = "sisyphus/refactor-prompt.md"
 CHEAT_SHEET = "spec-prism-flow/lifecycle-cheat-sheet.md"
 PLAN_PROMPT_FILE = "spec-prism-flow/plan-generation-prompt.md"
 BUILD_PROMPT_FILE = "spec-prism-flow/build-execution-prompt.md"
+# Parameters of the shared refactor prompt that differ between the refactor stage and the prework pattern pass.
+REFACTOR_PROMPT_MODE = {
+    "prompt_title": "Refactor the code that one build wrote, for one stack group",
+    "stage_label": "refactor",
+    "handoff_prefix": "refactor",
+    "share_clause": ", with the share of each file this branch changed (`none` when there are none)",
+}
+PREWORK_PROMPT_MODE = {
+    "prompt_title": "Clean up existing code that a plan will modify, for one stack group",
+    "stage_label": "pre-work cleanup",
+    "handoff_prefix": "prework",
+    "share_clause": " (every file of the group is listed; no share is given)",
+}
 SPF_CONFIG_NAME = ".spec-prism-flow.toml"
 STOP_SUFFIX = ".stop.json"
 REFACTOR_INPUT_FILE = "refactor-input.json"
+PREWORK_INPUT_FILE = "prework-input.json"  # same schema as the refactor input; a refactor stage never reads it
 _REFACTOR_INPUT_KEYS = ("set", "files", "tests", "evidence", "fallback", "head_before")
 BRANCH_PREFIX = "sisyphus/"
 PACKAGE_MARKERS = ("Makefile", "pyproject.toml", "package.json", "Cargo.toml", "go.mod")
@@ -530,6 +545,9 @@ class _Run:
         self.stop_rec: StopRecord | None = None
         self.was_abandoned = False
         self.cleanup_done: str | None = None
+        # Inputs of the prework handler, set by the sibling that computes them (see stage_prework).
+        self.prework_files: tuple[str, ...] = ()
+        self.prework_vibeheal = False
 
     # -- git / process helpers
 
@@ -639,16 +657,27 @@ class _Run:
     def refactor_input_path(self) -> Path:
         return self.handoff_dir / REFACTOR_INPUT_FILE
 
-    def read_refactor_input(self) -> list[dict[str, Any]]:
-        """Entries of ``refactor-input.json`` (``[]`` if absent); malformed content raises."""
-        return _load_refactor_input(self.refactor_input_path, strict=True)
+    @property
+    def prework_input_path(self) -> Path:
+        return self.handoff_dir / PREWORK_INPUT_FILE
 
-    async def record_group_entry(self, record: StackGroup, ratios: Mapping[str, float] | None = None) -> dict[str, Any]:
+    @property
+    def prework_branch(self) -> str:
+        return f"{self.branch}-prework"
+
+    def read_refactor_input(self, path: Path | None = None) -> list[dict[str, Any]]:
+        """Entries of ``refactor-input.json`` (or of ``path``); ``[]`` if absent; malformed content raises."""
+        return _load_refactor_input(path or self.refactor_input_path, strict=True)
+
+    async def record_group_entry(
+        self, record: StackGroup, ratios: Mapping[str, float] | None = None, path: Path | None = None
+    ) -> dict[str, Any]:
         """Return the group's entry, writing it (with ``head_before``) only if its ``set`` is not recorded yet.
 
         ``modified`` lists the group's files found in ``ratios``, sorted by path, ratio rounded to two places.
         """
-        entries = self.read_refactor_input()
+        target = path or self.refactor_input_path
+        entries = self.read_refactor_input(target)
         for entry in entries:
             if entry["set"] == record.set:
                 return entry
@@ -662,7 +691,7 @@ class _Run:
             "head_before": await self.rev_parse_head(),
             "modified": [{"path": p, "ratio": r} for p, r in measured_modified(record.files, ratios)],
         }
-        atomic_write_json(self.refactor_input_path, [*entries, entry])
+        atomic_write_json(target, [*entries, entry])
         return entry
 
     def created_branches(self) -> set[str]:
@@ -711,6 +740,9 @@ class _Run:
                     self.skipped.append(stage)
                     continue
                 if stage == REFACTOR_STAGE and not self.config.refactor.enabled:
+                    self.skipped.append(stage)  # disabled in config: no handler, no clock check, no marks
+                    continue
+                if stage == PREWORK_STAGE and not self.config.prework.enabled:
                     self.skipped.append(stage)  # disabled in config: no handler, no clock check, no marks
                     continue
                 self.check_time()
@@ -971,12 +1003,14 @@ class _Run:
         extra_values: dict[str, str] | None = None,
     ) -> None:
         self.write_item_config()
-        if stage in (BUILD_STAGE, REFACTOR_STAGE):
+        if stage in (BUILD_STAGE, REFACTOR_STAGE, PREWORK_STAGE):
             self.handoff_dir.mkdir(parents=True, exist_ok=True)
         template = knowledge_file(prompt_file).read_text(encoding="utf-8")
         values = self.prompt_values(stage)
-        if stage == REFACTOR_STAGE:
+        if stage in (REFACTOR_STAGE, PREWORK_STAGE):
             values["patterns dir"] = str(knowledge_file("patterns"))
+        if stage == REFACTOR_STAGE:
+            values.update(REFACTOR_PROMPT_MODE)
         values.update(extra_values or {})
         prompt = build_orchestration_prompt(template, values)
         stop_file = stop_report_path(self.rec)
@@ -1006,6 +1040,8 @@ class _Run:
             self.rec.increment_retry(BUILD_RETRY_KEY)
         if stage == REFACTOR_STAGE and cp == "C5":
             self.rec.increment_retry(REFACTOR_RETRY_KEY)
+        if stage == PREWORK_STAGE and cp == "C5":
+            self.rec.increment_retry(PREWORK_RETRY_KEY)
         raise _Stop(Checkpoint(cp), text, leaf=leaf)
 
     async def stage_plan(self) -> None:
@@ -1048,10 +1084,113 @@ class _Run:
         await self.git("checkout", "-b", self.branch, f"origin/{base}")
         self.rec.increment_retry(BRANCH_CREATED_KEY)
 
+    async def prepare_prework_branch(self) -> None:
+        """Cut ``<branch>-prework`` from ``origin/<base>`` (resume: check out the existing one). No push, no PR."""
+        base = self.opt.base_branch
+        await self.ensure_clean()
+        await self.git("fetch", "origin", base, network=True)
+        exists = (
+            await self.git("rev-parse", "--verify", "--quiet", f"refs/heads/{self.prework_branch}", ok=False)
+        ).returncode == 0
+        if exists:
+            await self.git("checkout", self.prework_branch)
+            return
+        await self.git("checkout", "-b", self.prework_branch, f"origin/{base}")
+
     async def stage_prework(self) -> None:
-        """PLACEHOLDER, to be replaced by the prework handler work order: completes the stage as a no-op."""
+        """Clean the existing files the plan will modify: vibe_heal per file, then one pattern agent per group, then the gate.
+
+        Inputs are ``prework_files`` (the sorted pre-work set) and ``prework_vibeheal`` (whether vibe_heal is
+        configured), both set by the caller before the stage runs. Stops at C5 on a failed vibe_heal command, an
+        incomplete or out-of-scope group, or a failing gate; each C5 increments ``PREWORK_RETRY_KEY`` once.
+        """
         with self.rec.stage_scope(PREWORK_STAGE):
-            pass
+            bound = RetryBound(DEFAULT_MAX_RETRY_CYCLES, self.rec.retries.get(PREWORK_RETRY_KEY, 0)).result()
+            if bound.escalate:
+                raise _Stop(Checkpoint.C5, f"prework already failed {bound.attempts} retry cycles; not launching again")
+            files = tuple(self.prework_files)
+            if not files:
+                self.note("prework: no existing source files in the plan scope")
+                return
+            await self.prepare_prework_branch()
+            if self.prework_vibeheal:
+                await self.prework_health_pass(files)
+            else:
+                self.note("prework: vibe_heal not configured")
+            await self.prework_pattern_pass(files)
+            await self.prework_gate()
+
+    async def prework_health_pass(self, files: Sequence[str]) -> None:
+        """``vibe_heal dedupe`` then ``vibe_heal fix`` for each file, one at a time; a non-zero exit stops at C5."""
+        for index, path in enumerate(files):
+            if index > 0:
+                self.check_time()
+            for command in ("dedupe", "fix"):
+                res = await self.sh(["vibe_heal", command, path], self.repo)
+                if res.returncode != 0:
+                    self.rec.increment_retry(PREWORK_RETRY_KEY)
+                    raise _Stop(
+                        Checkpoint.C5,
+                        f"vibe_heal {command} failed for {path} (exit {res.returncode}): "
+                        f"{_tail(res.stderr or res.stdout)}",
+                    )
+
+    async def prework_pattern_pass(self, files: Sequence[str]) -> None:
+        """One pattern-set agent per stack group of the pre-work set, each checked after it ends."""
+        groups = [
+            g
+            for g in group_added_files(self.repo, list(files), pattern_set=self.config.refactor.pattern_set)
+            if g.files
+        ]
+        if not groups:
+            self.note("prework: no stack groups in the pre-work set")
+            return
+        path = self.prework_input_path
+        for index, group in enumerate(groups):
+            if index > 0:
+                self.check_time()
+            entry = next((e for e in self.read_refactor_input(path) if e["set"] == group.set), None)
+            resume_skip = (
+                entry is not None
+                and self.prework_handoff_path(group.set).exists()
+                and not (await self.git("status", "--porcelain", "--untracked-files=all")).stdout.strip()
+            )
+            if not resume_skip:
+                self.handoff_dir.mkdir(parents=True, exist_ok=True)
+                await self.record_group_entry(group, None, path)
+                await self.run_agent_stage(
+                    PREWORK_STAGE,
+                    prompt_file=REFACTOR_PROMPT_FILE,
+                    extra_values={
+                        **PREWORK_PROMPT_MODE,
+                        "target branch": self.prework_branch,
+                        "refactor_set": group.set,
+                        "group_files": "\n".join(group.files),
+                        "modified_files": "\n".join(group.files),
+                        "input_file": str(path),
+                    },
+                )
+            recorded = next(e for e in self.read_refactor_input(path) if e["set"] == group.set)
+            await self.check_refactor_group(
+                group,
+                str(recorded["head_before"]),
+                retry_key=PREWORK_RETRY_KEY,
+                handoff=self.prework_handoff_path(group.set),
+                label="prework",
+                branch=self.prework_branch,
+            )
+
+    async def prework_gate(self) -> None:
+        """Run the gate plan once, only when the pre-work branch carries commits; a failure stops at C5."""
+        await self.gate_refactor_group(
+            None, f"origin/{self.opt.base_branch}", retry_key=PREWORK_RETRY_KEY, label="prework"
+        )
+        if self.rec.retries.get(GATE_FAILED_KEY):
+            self.rec.retries[GATE_FAILED_KEY] = 0
+            self.rec.save()
+
+    def prework_handoff_path(self, set_name: str) -> Path:
+        return self.handoff_dir / f"prework-{set_name}.md"
 
     async def stage_refactor(self) -> None:
         """Run one refactor agent per stack group; stop at C5 on an incomplete, out-of-scope or gate-breaking group."""
@@ -1097,17 +1236,30 @@ class _Run:
     def refactor_handoff_path(self, set_name: str) -> Path:
         return self.handoff_dir / f"refactor-{set_name}.md"
 
-    async def check_refactor_group(self, group: StackGroup, head_before: str) -> None:
-        """Stop at C5 (one retry increment) if the group's checkout, handoff or edits are not as required."""
+    async def check_refactor_group(
+        self,
+        group: StackGroup,
+        head_before: str,
+        *,
+        retry_key: str = REFACTOR_RETRY_KEY,
+        handoff: Path | None = None,
+        label: str = "refactor",
+        branch: str | None = None,
+    ) -> None:
+        """Stop at C5 (one retry increment) if the group's checkout, handoff or edits are not as required.
+
+        The keyword arguments default to the refactor stage's values; the prework stage passes its own.
+        """
+        expected = branch or self.branch
         problems: list[str] = []
         current = (await self.git("rev-parse", "--abbrev-ref", "HEAD")).stdout.strip()
-        on_branch = current == self.branch
+        on_branch = current == expected
         if not on_branch:
-            problems.append(f"checkout is on {current!r}, expected {self.branch!r}")
+            problems.append(f"checkout is on {current!r}, expected {expected!r}")
         dirty = (await self.git("status", "--porcelain", "--untracked-files=all")).stdout.strip()
         if dirty:
             problems.append(f"uncommitted changes: {_tail(dirty, 200)}")
-        handoff = self.refactor_handoff_path(group.set)
+        handoff = handoff or self.refactor_handoff_path(group.set)
         listed: set[str] = set()
         if handoff.is_file():
             listed = parse_listed_edits(handoff.read_text(encoding="utf-8", errors="replace"))
@@ -1119,30 +1271,37 @@ class _Run:
             if violations:
                 problems.append("out-of-scope edits: " + ", ".join(violations))
         if problems:
-            self.rec.increment_retry(REFACTOR_RETRY_KEY)
+            self.rec.increment_retry(retry_key)
             raise _Stop(
                 Checkpoint.C5,
-                f"the refactor agent ended before group {group.set} was complete; " + "; ".join(problems),
+                f"the {label} agent ended before group {group.set} was complete; " + "; ".join(problems),
             )
 
-    async def gate_refactor_group(self, group: StackGroup, head_before: str) -> None:
-        """Run the existing gate when the group made commits; a failure stops at C5 and leaves the commits."""
+    async def gate_refactor_group(
+        self,
+        group: StackGroup | None,
+        head_before: str,
+        *,
+        retry_key: str = REFACTOR_RETRY_KEY,
+        label: str = "refactor",
+    ) -> None:
+        """Run the existing gate when ``head_before..HEAD`` has commits; a failure stops at C5 and leaves them."""
         count = (await self.git("rev-list", "--count", f"{head_before}..HEAD")).stdout.strip()
         if not count.isdigit() or int(count) == 0:
             return
         plan, reason = await self.build_gate_plan()
         if reason is not None:
-            self.note(f"refactor gate not run: {reason}")
+            self.note(f"{label} gate not run: {reason}")
             return
         if not await self.run_gate_plan(plan):
             return
-        self.rec.increment_retry(REFACTOR_RETRY_KEY)
+        self.rec.increment_retry(retry_key)
         g = self.gate_failure
         if g is None:
-            raise _Stop(Checkpoint.C5, "refactor gate failed")
+            raise _Stop(Checkpoint.C5, f"{label} gate failed")
         raise _Stop(
             Checkpoint.C5,
-            f"refactor gate failed: '{g.command}' in {g.directory} (exit {g.returncode}): {g.tail}",
+            f"{label} gate failed: '{g.command}' in {g.directory} (exit {g.returncode}): {g.tail}",
         )
 
     async def stage_build(self) -> None:
