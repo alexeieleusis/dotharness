@@ -67,9 +67,23 @@ Unknown keys are rejected. See [configuration](../configuration.md).
 
 ## Gate record
 
-Package A (the sisyphus gate-record writer) writes the evidence that `build.commands` passed on the head SHA. The format is settled. The reader here and the writer there must stay in sync:
+The sisyphus gate-record writer (`write_gate_record` in `dotharness.sisyphus.gaterecord`) writes the evidence that `build.commands` passed on the head SHA. It is called from `_Run.gate()` in the sisyphus orchestrator. The path comes from `dotharness.paths.build_gate_record_path`, which this reader also uses, so the reader and the writer cannot drift apart:
 
 - File: `~/.local/share/dotharness/state/<repo-slug>/build_gate_<PR number>.json`
 - Content: `{"head_sha": "<sha>"}` (other keys are ignored)
+
+When a record is written:
+
+- After the gate passes, sisyphus writes a record for the head SHA it read before the gate ran. The write is atomic, and rewriting the same PR overwrites the record.
+- When the gate does not run (no `build.commands` configured, no changed files, or no applicable build entry), sisyphus still writes a record for the current head SHA. It then adds the note `gate record written for PR #N (gate not run: <reason>)` to the digest.
+- A failed gate writes no record.
+- If the record cannot be written, sisyphus adds the note `gate record not written for PR #N: <error>` to the digest and carries on. The gate outcome is unchanged.
+
+### `<repo-slug>` and `[project] repo_name`
+
+`<repo-slug>` is the directory name under `~/.local/share/dotharness/state/`. For sisyphus it comes from the optional `[project] repo_name` key:
+
+- When `repo_name` is unset, `<repo-slug>` falls back to the sanitised basename plus 8-hex hash of `project.repo_dir`.
+- When `repo_name` is set, the value has `/` replaced by `-` (so `owner/repo` becomes `owner-repo`). The result must match `[a-zA-Z0-9._-]+` and must not be `.` or `..`. An invalid value is a config error.
 
 A missing, unreadable or SHA-mismatched record blocks the merge.
