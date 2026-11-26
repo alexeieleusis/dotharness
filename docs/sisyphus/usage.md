@@ -45,7 +45,7 @@ sisyphus archive --config <file>
    `auto-approve` and `ci-fix` skip drafts, so pr-review waits until the draft is marked ready. If
    pr-review is configured, self-review and vibe-heal analyze the draft in the meantime. If a non-draft open PR
    already exists for the branch, Sisyphus reuses it and neither converts nor edits it.
-6. Writes one merged digest to `[digest].path_template`. It never overwrites an existing file: a second run
+6. Writes one merged digest to `[digest].path_template`, which defaults to `<workspace_dir>/digest-<date>.md` when unset. It never overwrites an existing file: a second run
    on the same day writes `digest-<date>-2.md`, then `-3`, and so on.
 
 When there is nothing to do, the run prints nothing and exits 0. When something ran, one line per item and the digest path go to

@@ -82,9 +82,12 @@ class PresentationConfig:
     present_stops: bool = True
 
 
+DEFAULT_DIGEST_PATH_TEMPLATE = "<workspace_dir>/digest-<date>.md"
+
+
 @dataclass(frozen=True)
 class DigestConfig:
-    path_template: str | None = None
+    path_template: str = DEFAULT_DIGEST_PATH_TEMPLATE
 
 
 @dataclass(frozen=True)
@@ -275,6 +278,14 @@ def _parse_presentation(raw: Any) -> PresentationConfig:
     return PresentationConfig() if present_stops is None else PresentationConfig(present_stops=present_stops)
 
 
+def _parse_digest(raw: Any) -> DigestConfig:
+    t = _table(raw, "digest", ("path_template",))
+    template = _str(t, "digest", "path_template")
+    if template == "":
+        raise ConfigError("[digest] path_template must not be empty")
+    return DigestConfig() if template is None else DigestConfig(path_template=template)
+
+
 def _parse(data: dict[str, Any]) -> SisyphusConfig:
     top = (
         "project",
@@ -311,10 +322,7 @@ def _parse(data: dict[str, Any]) -> SisyphusConfig:
     limits = _parse_limits(data["limits"]) if "limits" in data else LimitsConfig()
     presentation = _parse_presentation(data["presentation"]) if "presentation" in data else PresentationConfig()
 
-    digest = DigestConfig()
-    if "digest" in data:
-        t = _table(data["digest"], "digest", ("path_template",))
-        digest = DigestConfig(path_template=_str(t, "digest", "path_template"))
+    digest = _parse_digest(data["digest"]) if "digest" in data else DigestConfig()
 
     knowledge = KnowledgeConfig()
     if "knowledge" in data:

@@ -172,7 +172,7 @@ in the file and have no effect.
 
 | Key | Type | Default |
 |---|---|---|
-| `path_template` | string | none |
+| `path_template` | string | `"<workspace_dir>/digest-<date>.md"` |
 
 ### `[knowledge]`
 
