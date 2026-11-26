@@ -17,7 +17,8 @@ from dotharness.code_host import (
     UnsupportedCapabilityError,
 )
 from dotharness.code_host.testing import InMemoryCodeHost
-from dotharness.pr_review.config import HarnessConfig, HarnessSection, MergeConfig, RepoConfig, _fallback_repo_slug
+from dotharness.paths import fallback_repo_slug
+from dotharness.pr_review.config import HarnessConfig, HarnessSection, MergeConfig, RepoConfig
 from dotharness.pr_review.runners import merge
 from dotharness.pr_review.runners.merge import MergeError
 
@@ -393,7 +394,7 @@ def test_golden_paths_and_slugs(case, tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("case", _GOLDEN["fallback_slug_cases"], ids=lambda c: c["slug"])
 def test_golden_fallback_slug(case):
-    assert _fallback_repo_slug(Path(case["working_dir"])) == case["slug"]
+    assert fallback_repo_slug(Path(case["working_dir"])) == case["slug"]
 
 
 @pytest.mark.parametrize("slug", _GOLDEN["valid_slugs"])
