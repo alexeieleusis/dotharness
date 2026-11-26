@@ -1405,12 +1405,12 @@ PARAMS = [
 
 def test_prompt_has_exactly_the_documented_placeholders() -> None:
     found = set(re.findall(r"<([^<>\n]+)>", PROMPT.read_text()))
-    assert found == {*PARAMS, "phase file name without .md"}  # the NN-<phase file name without .md>.md convention
+    assert found == set(PARAMS)
 
 
 def test_prompt_substitution_leaves_no_parameter() -> None:
     text = build_orchestration_prompt(PROMPT.read_text(), {p: f"VALUE[{p}]" for p in PARAMS})
-    assert set(re.findall(r"<([^<>\n]+)>", text)) == {"phase file name without .md"}
+    assert set(re.findall(r"<([^<>\n]+)>", text)) == set()
     assert all(f"VALUE[{p}]" in text for p in PARAMS)
 
 
@@ -1453,7 +1453,7 @@ def test_prompt_references_but_does_not_restate() -> None:
 def test_prompt_states_the_required_behaviours() -> None:
     text = " ".join(PROMPT.read_text().split())
     for needle in (
-        "`NN-<phase file name without .md>.md`, keeping the `-leaf` suffix",
+        "save it under the phase file's own name with `.md` kept",
         "one after the other",
         "never in parallel",
         "C3",
@@ -1475,8 +1475,8 @@ def test_prompts_ask_for_the_long_handoff_name_with_leaf_suffix() -> None:
     build = PROMPT.parents[2] / "knowledge" / "spec-prism-flow" / "build-execution-prompt.md"
     for path in (PROMPT, build):
         text = " ".join(path.read_text().split())
-        assert "NN-<phase file name without .md>.md" in text, path
-        assert "keeping the `-leaf` suffix" in text, path
+        assert "phase file's own name with `.md` kept" in text, path
+        assert "05-c-docs-wording-leaf.md" in text, path
 
 
 # ------------------------------------------------- follow-up 18: stop record and resume
