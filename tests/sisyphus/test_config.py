@@ -547,3 +547,43 @@ def test_host_options_table_with_work_item_parses(tmp_path: Path) -> None:
 def test_unknown_kind_lists_accepted_values(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="must be one of linear, github, host, file, got 'jira'"):
         _wi(tmp_path, "", "jira")
+
+
+def test_repo_name_slash_replaced(tmp_path: Path) -> None:
+    cfg = load_config(write(tmp_path, '[project]\nrepo_name = "owner/repo"\n'))
+    assert cfg.project.repo_name == "owner/repo"
+    assert cfg.project.repo_slug == "owner-repo"
+
+
+def test_repo_name_plain_kept(tmp_path: Path) -> None:
+    cfg = load_config(write(tmp_path, '[project]\nrepo_name = "my.repo_1"\n'))
+    assert cfg.project.repo_slug == "my.repo_1"
+
+
+@pytest.mark.parametrize("bad", ["..", ".", "a b", "", "a\\\\n"])
+def test_repo_name_invalid(tmp_path: Path, bad: str) -> None:
+    with pytest.raises(ConfigError) as ei:
+        load_config(write(tmp_path, f'[project]\nrepo_name = "{bad}"\n'))
+    assert "project" in str(ei.value)
+    assert "repo_name" in str(ei.value)
+
+
+def test_repo_name_non_string(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="must be a string"):
+        load_config(write(tmp_path, "[project]\nrepo_name = 3\n"))
+
+
+def test_repo_name_unset_uses_fallback_over_repo_dir(tmp_path: Path) -> None:
+    from dotharness.paths import fallback_repo_slug
+
+    cfg = load_config(write(tmp_path, f'[project]\nrepo_dir = "{tmp_path}"\n'))
+    assert cfg.project.repo_name is None
+    assert cfg.project.repo_slug == fallback_repo_slug(tmp_path)
+
+
+def test_repo_name_unset_no_repo_dir_uses_cwd(tmp_path: Path) -> None:
+    from dotharness.paths import fallback_repo_slug
+
+    cfg = load_config(write(tmp_path, MIN))
+    assert cfg.project.repo_name is None
+    assert cfg.project.repo_slug == fallback_repo_slug(Path("."))
