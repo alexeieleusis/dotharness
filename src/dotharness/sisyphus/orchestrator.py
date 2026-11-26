@@ -101,6 +101,9 @@ PR_NUMBER_KEY = "pr-number"  # additive: the PR number, so the branch cleanup ca
 _STOP_CHECKPOINTS = {PLAN_STAGE: {"C2"}, BUILD_STAGE: {"C3", "C4", "C5"}, REFACTOR_STAGE: {"C3", "C4", "C5"}}
 
 
+_MAX_UNMATCHED_HANDOFFS = 20  # names listed in the C5 "not matched to any leaf" clause
+
+
 class OrchestratorError(Exception):
     """Raised for an unusable setup or an unexpected state that is not one of C1..C8."""
 
@@ -1134,7 +1137,18 @@ class _Run:
         found = prbody.select_handoffs(self.handoff_dir, stems) if self.handoff_dir.is_dir() else {}
         missing = [stem for stem in stems if not found.get(stem)]
         if missing:
-            problems.append(f"no handoff for leaves: {', '.join(missing)}")
+            clause = f"no handoff for leaves: {', '.join(missing)}"
+            if self.handoff_dir.is_dir():
+                claimed = {path for paths in found.values() for path in paths}
+                unclaimed = sorted(p.name for p in self.handoff_dir.glob("*.md") if p.is_file() and p not in claimed)
+                if unclaimed:
+                    shown = ", ".join(unclaimed[:_MAX_UNMATCHED_HANDOFFS])
+                    extra = len(unclaimed) - _MAX_UNMATCHED_HANDOFFS
+                    more = f" and {extra} more" if extra > 0 else ""
+                    clause += f"; handoff files not matched to any leaf: {shown}{more}"
+                else:
+                    clause += "; handoff directory has no unmatched .md files"
+            problems.append(clause)
         dirty = (await self.git("status", "--porcelain", "--untracked-files=all")).stdout.strip()
         if dirty:
             problems.append(f"uncommitted changes: {_tail(dirty, 200)}")

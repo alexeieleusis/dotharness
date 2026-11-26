@@ -94,6 +94,50 @@ def test_select_handoffs(tmp_path: Path) -> None:
     assert [p.name for p in got["02-beta-leaf"]] == ["02-02-beta-leaf.md"]
 
 
+def test_select_handoffs_accepts_short_names(tmp_path: Path) -> None:
+    for n in (
+        "01-alpha.md",
+        "01-alpha-followup.md",
+        "01-alpha-leaf.md",
+        "02-01-alpha.md",
+        "refactor-alpha.md",
+        "refactor-alpha-leaf.md",
+        "1-alpha.md",
+        "1-alpha-leaf.md",
+        "01-other.md",
+    ):
+        (tmp_path / n).write_text("")
+    got = select_handoffs(tmp_path, STEMS)
+    assert sorted(p.name for p in got["01-alpha-leaf"]) == [
+        "01-alpha-followup.md",
+        "01-alpha-leaf.md",
+        "01-alpha.md",
+        "02-01-alpha.md",
+    ]
+    assert got["02-beta-leaf"] == []
+
+
+def test_select_handoffs_short_names_not_leaf_only(tmp_path: Path) -> None:
+    (tmp_path / "01-alpha.md").write_text("")
+    assert select_handoffs(tmp_path, ["01-alpha"]) == {"01-alpha": [tmp_path / "01-alpha.md"]}
+    assert select_handoffs(tmp_path, ["01--leaf"])["01--leaf"] == []
+
+
+def test_select_handoffs_short_names_single_attribution(tmp_path: Path) -> None:
+    for n in ("01-alpha.md", "02-beta.md", "02-beta-followup.md"):
+        (tmp_path / n).write_text("")
+    got = select_handoffs(tmp_path, STEMS)
+    assert [p.name for p in got["01-alpha-leaf"]] == ["01-alpha.md"]
+    assert [p.name for p in got["02-beta-leaf"]] == ["02-beta-followup.md", "02-beta.md"]
+
+
+def test_deviations_short_name_handoff(tmp_path: Path) -> None:
+    (tmp_path / "01-alpha.md").write_text(_handoff("Used A instead of B."))
+    out = extract_deviations(tmp_path, STEMS)
+    assert "no handoffs found" not in out
+    assert out.startswith("- 01-alpha-leaf: Used A instead of B.")
+
+
 def test_select_handoffs_ignores_refactor_handoffs(tmp_path: Path) -> None:
     for n in (
         "refactor-generic.md",
