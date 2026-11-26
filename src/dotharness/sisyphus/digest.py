@@ -281,7 +281,7 @@ def render_digest(records: Sequence[RunRecord], report: DigestReport | None = No
 def resolve_digest_path(config: SisyphusConfig, today: datetime | None = None) -> Path:
     """Expand ``[digest].path_template`` (placeholders ``<date>`` and ``<workspace_dir>``)."""
     template = config.digest.path_template
-    if not template:
+    if not template:  # defensive: the loader defaults the template and rejects ""
         raise DigestWriteError("[digest].path_template is not set")
     date = (today or datetime.now(UTC)).strftime("%Y-%m-%d")
     path = template.replace("<date>", date)

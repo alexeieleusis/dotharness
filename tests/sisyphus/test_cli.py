@@ -683,6 +683,26 @@ def test_digest_write_failure_is_nonzero_with_stderr(tmp_path: Path, fake_run_it
     assert "cannot write digest" in result.stderr
 
 
+def test_default_digest_path_when_no_digest_section(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+    env = make_env(tmp_path, ["ENG-1"], with_digest_section=False)
+    result = env.invoke("run", "--config", str(env.config), "--base", "b")
+    assert result.exit_code == 0, result.output
+    expected = tmp_path / "ws" / f"digest-{TODAY:%Y-%m-%d}.md"
+    assert expected.is_file()
+    assert f"digest: {expected}" in result.output
+    assert "not set" not in result.output
+    assert "not set" not in result.stderr
+
+
+def test_empty_digest_path_template_is_config_error(tmp_path: Path, fake_run_item: dict[str, Any]) -> None:
+    env = make_env(tmp_path, ["ENG-1"], digest="")
+    result = env.invoke("run", "--config", str(env.config), "--base", "b")
+    assert result.exit_code == 1
+    assert "config error" in result.stderr
+    assert "[digest] path_template" in result.stderr
+    assert fake_run_item["calls"] == []
+
+
 def test_config_error_is_nonzero(tmp_path: Path) -> None:
     bad = tmp_path / "bad.toml"
     bad.write_text("[nope]\n")

@@ -39,7 +39,7 @@ def test_minimal_defaults(tmp_path: Path) -> None:
     assert cfg.project.repo_dir is None
     assert cfg.source.work_item is None
     assert cfg.agent.backend is None
-    assert cfg.digest.path_template is None
+    assert cfg.digest.path_template == "<workspace_dir>/digest-<date>.md"
     assert cfg.knowledge.sizing_file is None
 
 
@@ -112,6 +112,16 @@ conventions_path = "c"
     assert cfg.limits.max_run_minutes == 10
     assert not hasattr(cfg, "merge")
     assert cfg.knowledge.conventions_path == "c"
+
+
+def test_digest_table_without_key_uses_default(tmp_path: Path) -> None:
+    cfg = load_config(write(tmp_path, MIN + "[digest]\n"))
+    assert cfg.digest.path_template == "<workspace_dir>/digest-<date>.md"
+
+
+def test_empty_digest_path_template_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=r"\[digest\] path_template"):
+        load_config(write(tmp_path, MIN + '[digest]\npath_template = ""\n'))
 
 
 def test_missing_project(tmp_path: Path) -> None:

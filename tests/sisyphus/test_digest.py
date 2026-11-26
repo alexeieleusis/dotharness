@@ -4,6 +4,7 @@ import ast
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -24,7 +25,9 @@ from dotharness.sisyphus.runrecord import RunRecord
 
 
 def _config(path: str | None, workspace: str | None = None) -> SisyphusConfig:
-    return SisyphusConfig(project=ProjectConfig(workspace_dir=workspace), digest=DigestConfig(path_template=path))
+    return SisyphusConfig(
+        project=ProjectConfig(workspace_dir=workspace), digest=DigestConfig(path_template=cast(str, path))
+    )
 
 
 def _headings(text: str) -> list[str]:
