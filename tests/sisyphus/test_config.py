@@ -8,6 +8,7 @@ from dotharness.sisyphus import config as config_mod
 from dotharness.sisyphus.config import (
     DEFAULT_CONFIG_FILE,
     ConfigError,
+    PreworkConfig,
     ProjectConfig,
     RefactorConfig,
     SisyphusConfig,
@@ -172,6 +173,7 @@ def test_unknown_top_level(tmp_path: Path) -> None:
         "knowledge",
         "archive",
         "refactor",
+        "prework",
     ],
 )
 def test_unknown_key_in_each_section(tmp_path: Path, section: str) -> None:
@@ -275,6 +277,7 @@ def test_relative_paths_verbatim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         ("project = 1\n", "project"),
         ("[project]\n[archive]\ndir = 1\n", "dir"),
         ("[project]\n[refactor]\nenabled = 1\n", "enabled"),
+        ("[project]\n[prework]\nenabled = 1\n", "enabled"),
     ],
 )
 def test_wrong_types(tmp_path: Path, text: str, key: str) -> None:
@@ -587,3 +590,29 @@ def test_repo_name_unset_no_repo_dir_uses_cwd(tmp_path: Path) -> None:
     cfg = load_config(write(tmp_path, MIN))
     assert cfg.project.repo_name is None
     assert cfg.project.repo_slug == fallback_repo_slug(Path("."))
+
+
+def test_prework_table_empty(tmp_path: Path) -> None:
+    assert load_config(write(tmp_path, MIN + "[prework]\n")).prework == PreworkConfig()
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_prework_enabled(tmp_path: Path, value: bool) -> None:
+    cfg = load_config(write(tmp_path, MIN + f"[prework]\nenabled = {str(value).lower()}\n"))
+    assert cfg.prework.enabled is value
+
+
+def test_prework_enabled_not_bool(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=r"\[prework\] enabled must be a boolean"):
+        load_config(write(tmp_path, MIN + '[prework]\nenabled = "yes"\n'))
+
+
+def test_prework_unknown_key(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=r"unknown key 'bogus' in \[prework\] \(allowed: enabled\)"):
+        load_config(write(tmp_path, MIN + "[prework]\nbogus = 1\n"))
+
+
+def test_prework_absent_defaults_enabled(tmp_path: Path) -> None:
+    cfg = load_config(write(tmp_path, MIN))
+    assert cfg.prework.enabled is True
+    assert PreworkConfig.__dataclass_params__.frozen

@@ -142,6 +142,11 @@ class RefactorConfig:
 
 
 @dataclass(frozen=True)
+class PreworkConfig:
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
 class SisyphusConfig:
     project: ProjectConfig
     source: SourceConfig = field(default_factory=SourceConfig)
@@ -152,6 +157,7 @@ class SisyphusConfig:
     knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
     archive: ArchiveConfig = field(default_factory=ArchiveConfig)
     refactor: RefactorConfig = field(default_factory=RefactorConfig)
+    prework: PreworkConfig = field(default_factory=PreworkConfig)
 
 
 def _table(raw: Any, name: str, allowed: tuple[str, ...], *, passthrough: bool = False) -> dict[str, Any]:
@@ -291,6 +297,14 @@ def _parse_refactor(data: dict[str, Any]) -> RefactorConfig:
     return RefactorConfig(enabled=True if enabled is None else enabled, pattern_set=pattern_set)
 
 
+def _parse_prework(data: dict[str, Any]) -> PreworkConfig:
+    if "prework" not in data:
+        return PreworkConfig()
+    t = _table(data["prework"], "prework", ("enabled",))
+    enabled = _bool(t, "prework", "enabled")
+    return PreworkConfig(enabled=True if enabled is None else enabled)
+
+
 def _parse_limits(raw: Any) -> LimitsConfig:
     keys = (
         "max_run_minutes",
@@ -334,6 +348,7 @@ def _parse(data: dict[str, Any]) -> SisyphusConfig:
         "knowledge",
         "archive",
         "refactor",
+        "prework",
     )
     for key in data:
         if key not in top:
@@ -382,6 +397,7 @@ def _parse(data: dict[str, Any]) -> SisyphusConfig:
         if archive_dir is not None:
             archive = ArchiveConfig(dir=archive_dir)
     refactor = _parse_refactor(data)
+    prework = _parse_prework(data)
 
     return SisyphusConfig(
         project=project,
@@ -393,6 +409,7 @@ def _parse(data: dict[str, Any]) -> SisyphusConfig:
         knowledge=knowledge,
         archive=archive,
         refactor=refactor,
+        prework=prework,
     )
 
 
