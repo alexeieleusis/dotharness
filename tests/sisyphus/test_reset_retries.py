@@ -20,6 +20,7 @@ from dotharness.sisyphus.resume import (
     reset_stage_retries,
 )
 from dotharness.sisyphus.runrecord import RunRecord, RunRecordError
+from dotharness.sisyphus.stages import PREWORK_RETRY_KEY
 from dotharness.sisyphus.stoprecord import action_for, is_abandoned
 from tests.sisyphus.test_cli import items, make_env
 from tests.sisyphus.test_orchestrator import ITEM, World, world  # noqa: F401  (fixture)
@@ -44,6 +45,7 @@ def resume(env: Any, *extra: str, ref: str = "OLD-1"):
 
 def test_mapping_matches_orchestrator_constants_and_never_lists_branch_created() -> None:
     assert RESET_KEYS["build"][0] == orchestrator.BUILD_RETRY_KEY
+    assert RESET_KEYS["prework"] == (PREWORK_RETRY_KEY, AUTO_RETRY_KEY)
     assert RESET_KEYS["refactor"] == (orchestrator.REFACTOR_RETRY_KEY, AUTO_RETRY_KEY)
     assert tuple(RESET_KEYS) == orchestrator.STAGE_ORDER
     assert set(RESET_KEYS) == set(orchestrator.STAGE_ORDER)
@@ -134,6 +136,16 @@ def test_refactor_stage_resets_its_counter_and_auto_retry(tmp_path: Path) -> Non
     assert reset_stage_retries(rec, AT) == {"refactor:retry-cycles": 2, AUTO_RETRY_KEY: 1}
     after = RunRecord.open(tmp_path, "X-1").retries
     assert after == {"build:retry-cycles": 3, "refactor:retry-cycles": 0, "branch-created": 1, AUTO_RETRY_KEY: 0}
+
+
+def test_prework_stage_resets_its_counter_and_auto_retry(tmp_path: Path) -> None:
+    rec = RunRecord.open(tmp_path, "X-1")
+    rec.mark_stage("prework")
+    rec.retries.update({"build:retry-cycles": 3, "prework:retry-cycles": 2, "branch-created": 1, AUTO_RETRY_KEY: 1})
+    rec.save()
+    assert reset_stage_retries(rec, AT) == {"prework:retry-cycles": 2, AUTO_RETRY_KEY: 1}
+    after = RunRecord.open(tmp_path, "X-1").retries
+    assert after == {"build:retry-cycles": 3, "prework:retry-cycles": 0, "branch-created": 1, AUTO_RETRY_KEY: 0}
 
 
 # ----------------------------------------------------------------- the CLI
