@@ -85,12 +85,17 @@ def _number(stem: str) -> str | None:
 def select_handoffs(handoff_dir: Path, stems: Sequence[str]) -> dict[str, list[Path]]:
     """Map each leaf stem to its handoff files: ``NN-<stem>.md`` and ``NN-<stem>-followup.md``, ``NN`` two digits.
 
-    ``<stem>`` may be the full leaf stem or the stem without its own number prefix.
+    ``<stem>`` may be any of: the full leaf stem (``05-c-docs-wording-leaf``), the stem without its own number
+    prefix (``c-docs-wording-leaf``), and, when the stem ends in ``-leaf``, the same two forms without that suffix
+    (``05-c-docs-wording``, ``c-docs-wording``).
     """
     out: dict[str, list[Path]] = {s: [] for s in stems}
     names = sorted(p for p in handoff_dir.iterdir() if p.is_file())
     for stem in stems:
-        variants = {stem, _strip_number(stem)}
+        bare = _strip_number(stem)
+        variants = {stem, bare}
+        if bare.endswith("-leaf") and len(bare) > len("-leaf"):
+            variants |= {stem.removesuffix("-leaf"), bare.removesuffix("-leaf")}
         for p in names:
             for v in variants:
                 if re.fullmatch(rf"\d{{2}}-{re.escape(v)}(?:-followup)?\.md", p.name):
