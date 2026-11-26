@@ -5,11 +5,18 @@ Lives in ``tests/`` so it may import both sides; the import-boundary tests scan 
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
+from dataclasses import dataclass, replace
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from dotharness.code_host import CheckStatus, MergeableState, RepositoryRef
+from dotharness.code_host.testing import InMemoryCodeHost
+from dotharness.pr_review.config import HarnessConfig, HarnessSection, MergeConfig, RepoConfig
+from dotharness.pr_review.runners import merge
 from dotharness.pr_review.runners.merge import gate_record_path, read_gate_record
 from dotharness.sisyphus.gaterecord import write_gate_record
 
@@ -40,3 +47,83 @@ def test_writer_and_reader_resolve_the_same_path(shared_data_dir: tuple[Path, st
     assert writer_path.is_relative_to(data_dir)
     assert writer_path.is_file()
     assert read_gate_record(slug, pr) == HEAD_SHA
+
+
+REPO = RepositoryRef("acme/frontend")
+
+
+@dataclass
+class MergeWorld:
+    """Merge-side scaffold: stubbed host and a config; every condition but the gate record holds."""
+
+    host: InMemoryCodeHost
+    cfg: HarnessConfig
+    number: int
+    head_sha: str
+
+
+def merged_calls(host: InMemoryCodeHost) -> list:
+    """The recorded ``squash_merge`` calls, in order."""
+    return [c for c in host.writes if c.operation == "ChangeRequests.squash_merge"]
+
+
+async def run_merge(cfg: HarnessConfig, **kw) -> None:
+    await merge.run(cfg, **kw)
+
+
+@pytest.fixture
+def merge_world(shared_data_dir: tuple[Path, str, int], tmp_path: Path) -> Iterator[MergeWorld]:
+    """One own PR at ``HEAD_SHA`` passing every merge condition except the (unwritten) gate record.
+
+    Reuses ``shared_data_dir`` (one fixture, one directory); writes no record and creates no state dir.
+    """
+    _, _slug, number = shared_data_dir
+    host = InMemoryCodeHost(repository="acme/frontend", user="me")
+    cfg = HarnessConfig(
+        harness=HarnessSection(
+            "opencode", "echo tok", knowledge_dir=tmp_path / "k", path_prepend=[], env={}, backend_timeout_seconds=10
+        ),
+        repo=RepoConfig("acme/frontend", tmp_path),
+        merge=MergeConfig(enabled=True, max_changed_lines=500, require_all_files_viewed=True),
+    )
+    host.add_change_request(REPO, head_reference="feat", author="me", head_revision=HEAD_SHA, number=number)
+    items = host._change_requests[REPO]
+    items[:] = [
+        replace(i, mergeable=MergeableState.MERGEABLE, additions=100, deletions=20) if i.number == number else i
+        for i in items
+    ]
+    host._version += 1
+    host.add_check(REPO, number, name="build", status=CheckStatus.PASS, required=True)
+    host._viewed[(REPO, number)] = {"a.py": True, "b.py": True}
+    with (
+        patch("dotharness.pr_review.runners.merge.acquire_lock"),
+        patch("dotharness.pr_review.runners.common.create_code_host", side_effect=lambda _selection: host.code_host()),
+    ):
+        yield MergeWorld(host, cfg, number, HEAD_SHA)
+
+
+async def test_merge_without_gate_record_skips_and_makes_no_merge_call(
+    merge_world: MergeWorld, caplog: pytest.LogCaptureFixture
+) -> None:
+    world = merge_world
+    assert world.cfg.repo_slug == REPO_SLUG
+    assert not gate_record_path(world.cfg.repo_slug, world.number).exists()
+
+    with caplog.at_level(logging.INFO):
+        await run_merge(world.cfg)
+
+    assert f"PR #{world.number}: skipped: {merge.SKIP_GATE_RECORD_MISSING}" in caplog.text
+    assert merged_calls(world.host) == []
+    assert world.host.writes == []
+
+
+async def test_scaffold_merges_once_gate_record_matches_head(merge_world: MergeWorld) -> None:
+    """Scaffold self-check: with a matching record every other condition holds, so the merge call is observable."""
+    world = merge_world
+    write_gate_record(world.cfg.repo_slug, world.number, world.head_sha)
+
+    await run_merge(world.cfg)
+
+    assert [(c.args, c.kwargs) for c in merged_calls(world.host)] == [
+        ((REPO, world.number), {"expected_head": world.head_sha})
+    ]
