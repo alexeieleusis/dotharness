@@ -6,7 +6,7 @@ runs each through the orchestrator and writes one merged digest. Credentials com
 inherited environment and ``[source.host].token_cmd``.
 
 Everything external is built by a services factory (``app invoked with obj=factory`` in tests), so no test runs a
-real agent, ``gh``, ``git push`` or the harness. The harness is reached only through the orchestrator's
+real agent, any code host CLI (for example ``gh``), ``git push`` or the harness. The harness is reached only through the orchestrator's
 subprocess calls; this module never imports it.
 
 Exit codes: 0 for success, nothing to do, lock held, or a run stopped at a checkpoint (its digest is
@@ -202,7 +202,7 @@ class Services:
     repo_info: Callable[[], Awaitable[str | None]] | None = field(default=None)
     # `status --check-prs`: PR number -> state (OPEN, MERGED, CLOSED); raises CodeHostError when it cannot be read.
     pr_state: Callable[[int], Awaitable[str]] | None = None
-    # Removes the pick label from a settled work item; `None` means no removal is available.
+    # Removes the pick label from a settled issue in the code host's issue tracker; `None` means no removal is available.
     label_remover: LabelRemover | None = None
     # Launcher for the stop-text presentation call (returns the RunResult, unlike `agent_runner`); tests pass a fake.
     present_launcher: Launcher = launch
@@ -833,10 +833,11 @@ def abandon_command(ctx: typer.Context, work_item_ref: RefArgument, config_path:
     """Abandon WORK_ITEM_REF: the explicit way out of a dead end (C7 and others).
 
     Marks the item abandoned and removes its waiting state so it no longer blocks auto-resume or picking.
-    Touches only Sisyphus's own state files, plus one remote effect: for a host work-item ref (``#N``) with a
+    Touches only Sisyphus's own state files, plus one remote effect: for a code host issue ref (``#N``) with a
     ``pick_label`` and removal enabled (``remove_label_when_settled`` not false, and a host that can remove labels),
     the pick label is now removed from the issue (a failure is reported on stderr and never changes the exit code).
-    When removal is off, including because the host cannot remove a label, ``abandon`` says nothing about it. Never the remote branch, any PR, the local branch,
+    When removal is off, including because the host cannot remove a label, ``abandon`` says nothing about it.
+    Never the remote branch, any PR, the local branch,
     the run record or the digest, and never rewrites history.
     """
     factory: ServicesFactory | None = ctx.obj
@@ -877,7 +878,7 @@ def abandon_command(ctx: typer.Context, work_item_ref: RefArgument, config_path:
 
 
 async def _remove_pick_label(config: SisyphusConfig, services: Services, ref: str) -> None:
-    """Remove the pick label from a settled host work item; any failure is one stderr line, never an exit code."""
+    """Remove the pick label from a settled issue in the code host's issue tracker; any failure is one stderr line, never an exit code."""
     number = label_removal_number(config, ref)
     wi = config.source.work_item
     if number is None or wi is None or not wi.pick_label or services.label_remover is None:
@@ -885,7 +886,7 @@ async def _remove_pick_label(config: SisyphusConfig, services: Services, ref: st
     try:
         await services.label_remover.remove_label(number, wi.pick_label)
     except Exception as exc:  # label removal is best effort; abandon must still succeed
-        detail = " ".join(str(exc).split())  # collapse multi-line gh stderr so this stays one line
+        detail = " ".join(str(exc).split())  # collapse multi-line host CLI stderr so this stays one line
         typer.echo(f"{ref}: pick label '{wi.pick_label}' not removed: {type(exc).__name__}: {detail}", err=True)
 
 
@@ -1030,14 +1031,14 @@ def status_command(
         bool,
         typer.Option(
             "--check-prs",
-            help="Query GitHub for each shown item's recorded PR and hide items whose PR is merged or closed.",
+            help="Ask the code host for each shown item's recorded PR and hide items whose PR is merged or closed.",
         ),
     ] = False,
 ) -> None:
     """Show stage, checkpoint, question, action and resume command per item (read-only; no lock, no agent).
 
     Settled items (abandoned, or finished with no stop) are hidden unless --all or a WORK_ITEM_REF is given.
-    With --check-prs, items whose recorded PR is merged or closed are hidden too (one gh lookup each, 10 s timeout).
+    With --check-prs, items whose recorded PR is merged or closed are hidden too (one code host lookup each, 10 s timeout).
     """
     factory: ServicesFactory | None = ctx.obj
     config = _load(config_path)

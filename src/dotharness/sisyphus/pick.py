@@ -2,7 +2,7 @@
 
 Tracker access goes through the injectable :class:`TrackerClient` and :class:`PullRequestLookup`
 protocols; :func:`pick_items` takes both as parameters, so tests use fakes. The real clients here
-(the configured code host's ``WorkItems`` and ``ChangeRequests`` for host work items, the Linear GraphQL API) read
+(the configured code host's ``WorkItems`` and ``ChangeRequests`` for the code host's issue tracker, the Linear GraphQL API) read
 credentials only from the inherited environment or a ``token_cmd`` the caller already resolved.
 Nothing in this module mutates a tracker (D-8).
 
@@ -50,9 +50,9 @@ class Candidate:
     """One work item offered by a tracker.
 
     ``ref`` is the item reference handed to the orchestrator (a Linear identifier such as ``ENG-12``,
-    or ``#<number>`` for a host work item). ``assignees`` holds every identifier the tracker knows for
+    or ``#<number>`` for a code host issue). ``assignees`` holds every identifier the tracker knows for
     the assignee (login, e-mail, display name) and ``labels`` the label names; ``state`` is the
-    tracker state name for Linear and ``open`` for an open host work item.
+    tracker state name for Linear and ``open`` for an open code host issue.
     """
 
     ref: str
@@ -79,10 +79,10 @@ class TrackerClient(Protocol):
 
 
 class PullRequestLookup(Protocol):
-    """GitHub pull-request reads used by the default open-PR check."""
+    """Code host pull-request reads used by the default open-PR check."""
 
     async def linked_prs(self, issue_number: int) -> Sequence[LinkedPr]:
-        """Pull requests GitHub links to or lists as closing ``issue_number``, any state."""
+        """Pull requests the code host links to or lists as closing ``issue_number``, any state."""
         ...
 
     async def open_pr_bodies(self) -> Sequence[str]:
@@ -104,7 +104,7 @@ def mentions_issue(body: str, number: int) -> bool:
 async def default_open_pr_check(candidate: Candidate, lookup: PullRequestLookup) -> bool:
     """Q-3 default, the stricter of two signals; either hit excludes the issue.
 
-    (a) an OPEN pull request GitHub links to the issue; (b) an open pull request whose body mentions
+    (a) an OPEN pull request the code host links to the issue; (b) an open pull request whose body mentions
     ``#N``. Merged or closed pull requests never exclude.
     """
     if candidate.number is None:
@@ -188,9 +188,9 @@ async def pick_items(
 ) -> list[Candidate]:
     """Return up to ``limit`` unstarted candidates in pick order (FR-9 step 1).
 
-    Linear and file trackers keep their own order. Host work items sort oldest first, then by number ascending (P4)
+    Linear and file trackers keep their own order. Code host issues sort oldest first, then by number ascending (P4)
     and those with an open PR (see :func:`default_open_pr_check`) are skipped; ``lookup`` is required
-    for host items and is wrapped so the open-PR bodies are read at most once per call. Items with a run record are skipped for both trackers, including those whose record sits in ``archive_dir``.
+    for the code host's issue tracker and is wrapped so the open-PR bodies are read at most once per call. Items with a run record are skipped for both trackers, including those whose record sits in ``archive_dir``.
     """
     src = _validate(source)
     if limit <= 0:
@@ -198,7 +198,7 @@ async def pick_items(
     candidates = [c for c in await tracker.list_candidates(src) if _eligible(c, src)]
     if uses_host_items(src):
         if lookup is None:
-            raise PickError("a pull-request lookup is required for GitHub issues")
+            raise PickError("a pull-request lookup is required for host-tracker issues")
         candidates.sort(key=lambda c: (c.created_at, c.number if c.number is not None else 0))
         lookup = _MemoLookup(lookup)
     return await _take_unstarted(candidates, workspace_dir, limit, src, lookup, open_pr_check, archive_dir)
@@ -213,7 +213,7 @@ async def _take_unstarted(
     open_pr_check: OpenPrCheck,
     archive_dir: str | Path | None = None,
 ) -> list[Candidate]:
-    """First ``limit`` candidates with no run record (and, for host items, no open PR), de-duplicated by ASCII-folded ref."""
+    """First ``limit`` candidates with no run record (and, for the code host's issue tracker, no open PR), de-duplicated by ASCII-folded ref."""
     picked: list[Candidate] = []
     seen: set[str] = set()
     for cand in candidates:

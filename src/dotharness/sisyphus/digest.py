@@ -34,7 +34,7 @@ CHECKPOINT_QUESTIONS: dict[str, str] = {
     Checkpoint.C5.value: "A leaf exhausted its retry cycles or violated its scope. Fix the cause by hand, or change the leaf?",
     Checkpoint.C6.value: "A hard run limit was hit. Raise the limit or accept the partial result?",
     Checkpoint.C7.value: "The PR branch cannot be updated without a rebase or force-push. Rebase it by hand?",
-    Checkpoint.C8.value: "A GitHub or Linear call failed in a way the agent could not recover from. Fix access (auth, network), then resume?",
+    Checkpoint.C8.value: "A code host or Linear call failed in a way the agent could not recover from. Fix access (auth, network), then resume?",
 }
 
 

@@ -126,7 +126,7 @@ the command stops before any host call with exit code 1 and this message, which 
 #### Timeouts
 
 The reference host applies the limits it declares: 30 seconds by default, and 10 seconds for the PR state lookup
-and for label removal. Earlier, other Sisyphus calls to `gh` had a 3600 second limit. They now have 30 seconds.
+and for label removal. Earlier, other Sisyphus calls to the code host CLI had a 3600 second limit. They now have 30 seconds.
 This is a documented deviation from the design goal G1. A read timeout raises `CodeHostTimeoutError` with
 `write=False`. A label removal timeout raises it with `write=True`.
 

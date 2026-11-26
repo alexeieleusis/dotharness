@@ -3,6 +3,7 @@
 # ruff: noqa: TRY003
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -240,6 +241,7 @@ def test_abandon_removes_pick_label(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert remover.calls == [(7, "sisyphus")]
     assert "pick label" in result.output and is_abandoned(rec.path)
+    assert "GitHub" not in result.output and re.search(r"\bgh\b", result.output) is None
 
 
 def test_abandon_already_abandoned_makes_no_label_call(tmp_path: Path) -> None:

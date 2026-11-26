@@ -87,7 +87,7 @@ If `name` is not a known host, the command stops with exit code 1 and
 `config error: code host setting [source.host] name = "<value>": <reason>`.
 
 Code-host calls have a 30 second limit. The calls that read a PR state or remove a label have a 10 second
-limit. Sisyphus calls to `gh` used a 3600 second limit before. The shorter limit is a documented deviation from
+limit. Sisyphus calls to the code host CLI used a 3600 second limit before. The shorter limit is a documented deviation from
 that earlier value.
 
 `[agent].backend` selects the agent command, run inside `repo_dir`:
@@ -101,7 +101,7 @@ The agent's working directory is the dedicated clone (see the safety rails), but
 sandbox. `claude --dangerously-skip-permissions` can read and write anywhere the invoking user can, and Sisyphus
 does not scrub the environment: the agent inherits the full environment of the `sisyphus` process, including
 `LINEAR_API_KEY` or `GH_TOKEN` if they are exported there. (A token produced by `token_cmd` is added only to the
-`gh` calls Sisyphus makes itself, not to the agent command.) Intake feeds ticket and issue text to the agent, so
+the code host CLI calls Sisyphus makes itself, not to the agent command.) Intake feeds ticket and issue text to the agent, so
 a prompt injection in that text could try to exfiltrate those credentials or push elsewhere. Mitigate it by:
 
 - using a least-privilege token scoped to the one repository (and a Linear key limited to what is needed).
@@ -110,7 +110,7 @@ a prompt injection in that text could try to exfiltrate those credentials or pus
   crontab/plist environment.
 
 Real `claude`/`opencode`,
-`gh`, Linear and `git push` calls are built from subprocess and `urllib` and are covered by tests with fakes
+Code host CLI, Linear and `git push` calls are built from subprocess and `urllib` and are covered by tests with fakes
 only. They have not been exercised against the real services.
 
 ## `sisyphus intake`
@@ -421,7 +421,7 @@ By default `sisyphus status` hides settled items: abandoned items, and finished 
 
 `--all` is a boolean flag that shows every item. The output is identical to the previous behavior. An explicit REF always prints that item, even if settled, without `--all`. An unknown REF exits 1 with `no run record for <ref>`.
 
-`--check-prs` is an opt-in flag (off by default; there is no config-file setting). It queries GitHub for each record that would otherwise be shown and has a recorded PR number (`retries["pr-number"]`), asking the code host for the PR state once per record (10 second limit), one after another. An item whose PR is `MERGED` or `CLOSED` is hidden, even with a checkpoint or stop record and whatever its stage, and counts in the hidden total N. Items that may need you keep showing: an open PR, a checkpoint with an open or unknown PR, and an `in_progress` item with no checkpoint and no stop record (never looked up). If a lookup fails (offline, `gh` missing, PR deleted, timeout), the item is shown, one `warning:` line goes to stderr and the exit code stays 0. The line reads `warning: cannot check PR #<n> for <item>: <host error text>`. `--all` and an explicit REF skip the lookup. `status` never writes run records or sidecars.
+`--check-prs` is an opt-in flag (off by default; there is no config-file setting). It queries the code host for each record that would otherwise be shown and has a recorded PR number (`retries["pr-number"]`), asking the code host for the PR state once per record (10 second limit), one after another. An item whose PR is `MERGED` or `CLOSED` is hidden, even with a checkpoint or stop record and whatever its stage, and counts in the hidden total N. Items that may need you keep showing: an open PR, a checkpoint with an open or unknown PR, and an `in_progress` item with no checkpoint and no stop record (never looked up). If a lookup fails (offline, host CLI missing, PR deleted, timeout), the item is shown, one `warning:` line goes to stderr and the exit code stays 0. The line reads `warning: cannot check PR #<n> for <item>: <host error text>`. `--all` and an explicit REF skip the lookup. `status` never writes run records or sidecars.
 
 Without `--check-prs`, an item stopped at a checkpoint (for example C5) stays visible even when its PR is already merged. Run `sisyphus abandon <ref>` to hide it, or use `sisyphus status --check-prs`.
 
@@ -449,7 +449,7 @@ cron mailer stays quiet.
 */30 * * * * cd /path/to/dedicated/clone && /usr/local/bin/sisyphus run --config /path/to/.sisyphus.toml --base main >> "$HOME/.local/state/sisyphus.log" 2>&1
 ```
 
-Cron has a minimal `PATH`. Use absolute paths, or set `PATH` (so `gh`, `git`, `claude` are found) at the top of
+Cron has a minimal `PATH`. Use absolute paths, or set `PATH` (so the code host CLI (`gh` for the reference host), `git`, `claude` are found) at the top of
 the crontab.
 
 ### launchd

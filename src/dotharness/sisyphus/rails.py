@@ -27,7 +27,7 @@ class Checkpoint(Enum):
     C5 = "C5"  # leaf exhausts max_retry_cycles or violates scope
     C6 = "C6"  # a hard FR-7 limit is hit
     C7 = "C7"  # branch cannot be updated without rebase or force-push (D-16)
-    C8 = "C8"  # unrecoverable GitHub/Linear call failure
+    C8 = "C8"  # unrecoverable Linear or code host call failure
 
 
 # ---------------------------------------------------------------- push guard

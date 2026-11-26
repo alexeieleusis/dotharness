@@ -14,7 +14,7 @@ from pathlib import Path
 
 from dotharness.subprocess_runner import run
 
-# The shared runner requires a timeout. Callers that passed none (git, gate commands, ``gh``) get this bound.
+# The shared runner requires a timeout. Callers that passed none (git, gate commands, any code host CLI such as ``gh``) get this bound.
 DEFAULT_COMMAND_TIMEOUT = 3600.0
 
 

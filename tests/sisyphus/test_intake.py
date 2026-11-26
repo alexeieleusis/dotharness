@@ -137,6 +137,14 @@ async def test_file_item_prompt_has_ticket_trailer(config: SisyphusConfig, tmp_p
         "outside the repository",
     ):
         assert phrase in prompt
+    assert "code host" in prompt
+    assert "Linear or GitHub" not in prompt
+
+
+def test_prompt_file_names_code_host_not_github() -> None:
+    text = knowledge_file("sisyphus/intake-prompt.md").read_text()
+    assert "code host" in text
+    assert "Linear or GitHub" not in text
 
 
 def test_file_item_expands_tilde(config: SisyphusConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
