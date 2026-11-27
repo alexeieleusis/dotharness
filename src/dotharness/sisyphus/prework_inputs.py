@@ -145,19 +145,26 @@ def _referenced_env_files(config_file: Path) -> list[Path]:
         data = load_toml(config_file)
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
         return []
-    repos = data.get("repo")
-    repos = [repos] if isinstance(repos, dict) else repos
-    if not isinstance(repos, list):
-        return []
     found: list[Path] = []
-    for repo in repos:
-        subdirs = repo.get("subdir") if isinstance(repo, dict) else None
-        for sub in subdirs if isinstance(subdirs, list) else []:
-            value = sub.get("env_file") if isinstance(sub, dict) else None
-            if isinstance(value, str) and value.strip():
-                path = Path(value.strip()).expanduser()
-                found.append(path if path.is_absolute() else config_file.parent / path)
+    for sub in _subdir_entries(data.get("repo")):
+        value = sub.get("env_file")
+        if isinstance(value, str) and value.strip():
+            path = Path(value.strip()).expanduser()
+            found.append(path if path.is_absolute() else config_file.parent / path)
     return found
+
+
+def _subdir_entries(repos: Any) -> list[dict[str, Any]]:
+    """All dict ``[[repo.subdir]]`` entries under ``repos`` (a single ``[repo]`` table or a list of them)."""
+    repo_list = [repos] if isinstance(repos, dict) else repos
+    if not isinstance(repo_list, list):
+        return []
+    entries: list[dict[str, Any]] = []
+    for repo in repo_list:
+        subdirs = repo.get("subdir") if isinstance(repo, dict) else None
+        if isinstance(subdirs, list):
+            entries.extend(s for s in subdirs if isinstance(s, dict))
+    return entries
 
 
 def vibeheal_configured(
