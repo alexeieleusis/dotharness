@@ -1203,9 +1203,7 @@ class _Run:
 
     async def prework_gate(self) -> None:
         """Run the gate plan once, only when the pre-work branch carries commits; a failure stops at C5."""
-        await self.gate_refactor_group(
-            None, f"origin/{self.opt.base_branch}", retry_key=PREWORK_RETRY_KEY, label="prework"
-        )
+        await self.gate_refactor_group(f"origin/{self.opt.base_branch}", retry_key=PREWORK_RETRY_KEY, label="prework")
         if self.rec.retries.get(GATE_FAILED_KEY):
             self.rec.retries[GATE_FAILED_KEY] = 0
             self.rec.save()
@@ -1334,7 +1332,7 @@ class _Run:
                 recorded = next(e for e in self.read_refactor_input() if e["set"] == group.set)
                 head_before = str(recorded["head_before"])
                 await self.check_refactor_group(group, head_before)
-                await self.gate_refactor_group(group, head_before)
+                await self.gate_refactor_group(head_before)
 
     def refactor_handoff_path(self, set_name: str) -> Path:
         return self.handoff_dir / f"refactor-{set_name}.md"
@@ -1382,7 +1380,6 @@ class _Run:
 
     async def gate_refactor_group(
         self,
-        group: StackGroup | None,
         head_before: str,
         *,
         retry_key: str = REFACTOR_RETRY_KEY,
