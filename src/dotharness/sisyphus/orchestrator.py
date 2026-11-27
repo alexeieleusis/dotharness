@@ -1250,20 +1250,13 @@ class _Run:
         ahead = (await self.git("rev-list", "--count", f"origin/{self.opt.base_branch}..HEAD")).stdout.strip()
         if not ahead.isdigit() or int(ahead) == 0:
             return
-        request = parse_push_argv(["push", "origin", self.prework_branch], history_rewrite=False, needs_rebase=False)
-        self.check_push_guard(request, extra_created=(self.prework_branch,))
-        res = await self.git("push", "origin", self.prework_branch, ok=False)
-        if res.returncode != 0:
-            raise _Stop(Checkpoint.C8, f"git push failed (exit {res.returncode}): {_tail(res.stderr)}")
-        try:
-            self.prework_pr = await self.gh.find_pr(self.prework_branch)
-            if self.prework_pr is None:
-                body = await self.build_prework_body(files)
-                self.prework_pr = await self.gh.open_pr(
-                    self.prework_branch, self.opt.base_branch, prbody.prework_title(self.build_pr_title()), body
-                )
-        except CodeHostError as exc:  # policy: ChangeRequests unsupported or failing -> stop at C8
-            raise _Stop(Checkpoint.C8, str(exc)) from exc
+        await self.push_branch(self.prework_branch, needs_rebase=False, extra_created=(self.prework_branch,))
+        self.prework_pr = await self.find_or_open_pr(
+            self.prework_branch,
+            self.opt.base_branch,
+            lambda: prbody.prework_title(self.build_pr_title()),
+            lambda: self.build_prework_body(files),
+        )
         self.rec.base_branch = self.prework_branch
         self.rec.save()
 
@@ -1490,13 +1483,27 @@ class _Run:
 
     async def stage_push(self) -> None:
         with self.rec.stage_scope(PUSH_STAGE):
-            request = parse_push_argv(
-                ["push", "origin", self.branch], history_rewrite=False, needs_rebase=await self.needs_rebase()
-            )
-            self.check_push_guard(request)
-            res = await self.git("push", "origin", self.branch, ok=False)
-            if res.returncode != 0:
-                raise _Stop(Checkpoint.C8, f"git push failed (exit {res.returncode}): {_tail(res.stderr)}")
+            await self.push_branch(self.branch, needs_rebase=await self.needs_rebase())
+
+    async def push_branch(self, branch: str, *, needs_rebase: bool, extra_created: Sequence[str] = ()) -> None:
+        """Guard, then ``git push origin <branch>``; a non-zero exit stops at C8. The one place the push rules live."""
+        request = parse_push_argv(["push", "origin", branch], history_rewrite=False, needs_rebase=needs_rebase)
+        self.check_push_guard(request, extra_created=extra_created)
+        res = await self.git("push", "origin", branch, ok=False)
+        if res.returncode != 0:
+            raise _Stop(Checkpoint.C8, f"git push failed (exit {res.returncode}): {_tail(res.stderr)}")
+
+    async def find_or_open_pr(
+        self, branch: str, base: str, title_fn: Callable[[], str], body_fn: Callable[[], Awaitable[str]]
+    ) -> PullRequest:
+        """Reuse the open PR for ``branch`` or open one against ``base``; a host failure stops at C8."""
+        try:
+            pr = await self.gh.find_pr(branch)
+            if pr is None:
+                pr = await self.gh.open_pr(branch, base, title_fn(), await body_fn())
+        except CodeHostError as exc:  # policy: ChangeRequests unsupported or failing -> stop at C8
+            raise _Stop(Checkpoint.C8, str(exc)) from exc
+        return pr
 
     # -- PR + gate
 
@@ -1516,13 +1523,9 @@ class _Run:
             self.write_item_config()
             read_build_commands(self.spf)
             read_gate_entries(self.spf)
-            try:
-                self.pr = await self.gh.find_pr(self.branch)
-                if self.pr is None:
-                    body = await self.build_pr_body()
-                    self.pr = await self.gh.open_pr(self.branch, self.effective_base, self.build_pr_title(), body)
-            except CodeHostError as exc:  # policy: ChangeRequests unsupported or failing -> stop at C8
-                raise _Stop(Checkpoint.C8, str(exc)) from exc
+            self.pr = await self.find_or_open_pr(
+                self.branch, self.effective_base, self.build_pr_title, self.build_pr_body
+            )
             if self.rec.retries.get(PR_NUMBER_KEY) != self.pr.number:
                 self.rec.retries[PR_NUMBER_KEY] = self.pr.number
                 self.rec.save()
