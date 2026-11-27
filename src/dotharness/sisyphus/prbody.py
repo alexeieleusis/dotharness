@@ -20,6 +20,7 @@ from dotharness.sisyphus.intake import parse_resolved_decisions, split_resolved_
 from dotharness.sisyphus.modified import format_percent, parse_modified
 from dotharness.sisyphus.plan import leaf_stems as _plan_leaf_stems
 from dotharness.sisyphus.plan import plan_path, read_spf_config
+from dotharness.sisyphus.refactor_handoff import parse_listed_edits
 
 PLAN_NOT_MATCHED_NOTE = (
     "Note: the plan directory could not be matched to this work item; plan-derived sections omitted."
@@ -264,15 +265,18 @@ class RefactorHandoff(NamedTuple):
     notes: tuple[str, ...]
 
 
-def _refactor_set_name(path: Path) -> str:
-    return path.name.removeprefix("refactor-").removesuffix(".md")
+def _refactor_set_name(path: Path, prefix: str = "refactor") -> str:
+    return path.name.removeprefix(f"{prefix}-").removesuffix(".md")
 
 
-def extract_refactor_handoffs(paths: Sequence[Path]) -> list[RefactorHandoff]:
-    """One result per refactor handoff, in input order; missing bullets and unreadable files become notes."""
+def extract_refactor_handoffs(paths: Sequence[Path], prefix: str = "refactor") -> list[RefactorHandoff]:
+    """One result per refactor handoff, in input order; missing bullets and unreadable files become notes.
+
+    ``prefix`` is the handoff file-name prefix (``prework`` for the pre-work stage's handoffs).
+    """
     results: list[RefactorHandoff] = []
     for path in paths:
-        name = _refactor_set_name(path)
+        name = _refactor_set_name(path, prefix)
         entry, note = _handoff_deviation(name, path)
         results.append(RefactorHandoff(name, entry, (note,) if note else ()))
     return results
@@ -446,12 +450,16 @@ def compose_body(
     deviations: str = "",
     refactor: str = "",
     requirements: str | None = None,
+    prework_link: str = "",
     workspace: Path,
     plan_dir: Path | None = None,
     home: Path | None = None,
     max_chars: int = MAX_BODY_CHARS,
 ) -> str:
     """Assemble the pull-request body from already-extracted section strings (FR-1, G2, FR-9, FR-12).
+
+    ``prework_link`` is the one line naming the pre-work PR this one stacks on (``""`` for none); it follows the
+    header and is not embedded (it holds a link).
 
     Never raises for missing content: empty sections are omitted, ``requirements=None`` becomes a one-line note.
     ``len(result) <= max_chars`` holds whenever ``len(header) <= max_chars``; the header is never truncated,
@@ -462,7 +470,7 @@ def compose_body(
     def emb(text: str) -> str:
         return embed(text, workspace, plan_dir, home).strip()
 
-    parts: list[str] = []
+    parts: list[str] = [prework_link.strip()] if prework_link.strip() else []
     for title, text in (
         ("Summary", summary),
         ("Phases", phases),
@@ -498,14 +506,14 @@ def compose_body(
 # ------------------------------------------------------------------ assembly
 
 
-def _refactor_handoff_path(handoff_dir: Path | None, set_name: str) -> Path | None:
-    """``<dir>/refactor-<set>.md`` when it names a single file in ``handoff_dir`` and is a file, else ``None``."""
+def _refactor_handoff_path(handoff_dir: Path | None, set_name: str, prefix: str = "refactor") -> Path | None:
+    """``<dir>/<prefix>-<set>.md`` when it names a single file in ``handoff_dir`` and is a file, else ``None``."""
     bad_seps = {"/", "\\", os.sep, *([os.altsep] if os.altsep else [])}
     if handoff_dir is None or not set_name or set_name in {".", ".."} or "\0" in set_name:
         return None
     if any(sep in set_name for sep in bad_seps):
         return None
-    path = handoff_dir / f"refactor-{set_name}.md"
+    path = handoff_dir / f"{prefix}-{set_name}.md"
     try:
         return path if path.is_file() else None
     except (OSError, ValueError):
@@ -550,6 +558,7 @@ async def build_body(
     run_git: Callable[[Sequence[str]], Awaitable[str | None]],
     refactor_records: Sequence[Mapping[str, object]] = (),
     refactor_handoff_dir: Path | None = None,
+    prework_link: str = "",
     max_chars: int = MAX_BODY_CHARS,
 ) -> str:
     """Locate the artifacts, check plan ownership, degrade per section and compose the body (FR-12, D-6).
@@ -586,10 +595,107 @@ async def build_body(
         deviations=deviations,
         refactor=refactor,
         requirements=requirements,
+        prework_link=prework_link,
         workspace=workspace,
         plan_dir=plan_dir,
         max_chars=max_chars,
     )
+
+
+# ------------------------------------------------------------ pre-work PR body
+
+PREWORK_TRUNCATED_NOTE = "Note: this description was truncated."
+_PREWORK_TAIL = "\n\n" + PREWORK_TRUNCATED_NOTE
+
+
+def prework_statement(item: str) -> str:
+    """First line of the pre-work PR body. It names the item but carries no closing keyword."""
+    return f"Code-health preparation for {item}: no feature change. The feature PR follows."
+
+
+def prework_link_line(ref: str) -> str:
+    """The one line of the feature PR body that links the pre-work PR (``ref`` is its URL or ``#<number>``)."""
+    return f"Stacked on the pre-work PR: {ref}"
+
+
+def prework_title(feature_title: str) -> str:
+    """``Prework: <feature title>``, capped like every title."""
+    return _cap_title(f"Prework: {feature_title}")
+
+
+def _commit_lines(label: str, commits: Sequence[tuple[str, str]]) -> list[str]:
+    return [f"- {label} ({len(commits)}):", *(f"  - {sha} {subject}" for sha, subject in commits)]
+
+
+def _prework_group_text(records: Sequence[Mapping[str, object]], handoff_dir: Path | None) -> str:
+    """One group per usable pre-work record: files, deviations and listed edits; ``""`` when there are none."""
+    groups: list[str] = []
+    for record in records:
+        if not _is_well_formed_record(record):
+            continue
+        set_name = str(record["set"])
+        path = _refactor_handoff_path(handoff_dir, set_name, "prework")
+        results = extract_refactor_handoffs([path] if path is not None else [], "prework")
+        result = results[0]._asdict() if results else None
+        listed: list[str] = []
+        if path is not None:
+            with contextlib.suppress(OSError, ValueError):
+                listed = sorted(parse_listed_edits(path.read_text(encoding="utf-8", errors="replace")))
+        files: Any = record["files"]
+        groups.append(
+            "\n".join([
+                f"### {set_name}",
+                "",
+                f"- Files: {', '.join(files) if files else 'none'}",
+                *_refactor_handoff_lines(set_name, result),
+                f"- Edits to existing files outside the group: {', '.join(listed) if listed else 'none'}",
+            ])
+        )
+    return "\n\n".join(groups)
+
+
+def compose_prework_body(
+    item: str,
+    *,
+    files: Sequence[str] = (),
+    health_commits: Sequence[tuple[str, str]] = (),
+    pattern_commits: Sequence[tuple[str, str]] = (),
+    records: Sequence[Mapping[str, object]] = (),
+    handoff_dir: Path | None = None,
+    workspace: Path,
+    plan_dir: Path | None = None,
+    home: Path | None = None,
+    max_chars: int = MAX_BODY_CHARS,
+) -> str:
+    """Pre-work PR body: the statement first, then files processed, commits per tool and the pattern groups.
+
+    Embedded text gets the same redaction and sanitising as the feature PR body, and ``len(result) <= max_chars``
+    holds whenever the statement fits (the statement is never truncated). Never raises for missing content.
+    """
+
+    def emb(text: str) -> str:
+        return embed(text, workspace, plan_dir, home).strip()
+
+    statement = emb(prework_statement(item))
+    parts: list[str] = []
+    if files:
+        parts.append("## Files processed\n\n" + emb("\n".join(f"- {path}" for path in files)))
+    commit_lines = [
+        *(_commit_lines("vibe_heal", health_commits) if health_commits else []),
+        *(_commit_lines("Pattern agent", pattern_commits) if pattern_commits else []),
+    ]
+    if commit_lines:
+        parts.append("## Commits per tool\n\n" + emb("\n".join(commit_lines)))
+    groups = _prework_group_text(records, handoff_dir)
+    if groups:
+        parts.append("## Pattern groups\n\n" + emb(groups))
+    body = "\n\n".join([statement, *parts])
+    if len(body) <= max_chars:
+        return body
+    rest = "\n\n".join(parts)
+    budget = max_chars - len(statement) - len(_HEADER_SEP) - len(_PREWORK_TAIL)
+    body = f"{statement}{_HEADER_SEP}{_truncate(rest, budget)}{_PREWORK_TAIL}"
+    return body[: max(max_chars, len(statement))]
 
 
 # ---------------------------------------------------------------- pull-request title

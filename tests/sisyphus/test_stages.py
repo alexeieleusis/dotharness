@@ -58,7 +58,22 @@ def test_reset_keys_cover_every_stage() -> None:
 
 def test_refactor_stage_sits_between_build_and_push() -> None:
     assert stages.REFACTOR_STAGE == "refactor"
-    assert stages.STAGE_ORDER.index("refactor") == 3
-    assert stages.STAGE_ORDER[2:5] == (stages.BUILD_STAGE, stages.REFACTOR_STAGE, stages.PUSH_STAGE)
+    assert stages.STAGE_ORDER.index("refactor") == 4
+    assert stages.STAGE_ORDER[3:6] == (stages.BUILD_STAGE, stages.REFACTOR_STAGE, stages.PUSH_STAGE)
     assert stages.REFACTOR_RETRY_KEY == "refactor:retry-cycles"
     assert RESET_KEYS["refactor"] == (stages.REFACTOR_RETRY_KEY, stages.AUTO_RETRY_KEY)
+
+
+def test_prework_stage_sits_between_plan_and_build() -> None:
+    assert stages.PREWORK_STAGE == "prework"
+    assert stages.STAGE_ORDER == (
+        stages.INTAKE_STAGE,
+        stages.PLAN_STAGE,
+        stages.PREWORK_STAGE,
+        stages.BUILD_STAGE,
+        stages.REFACTOR_STAGE,
+        stages.PUSH_STAGE,
+        stages.OPEN_PR_STAGE,
+    )
+    assert stages.PREWORK_RETRY_KEY == "prework:retry-cycles"
+    assert RESET_KEYS["prework"] == (stages.PREWORK_RETRY_KEY, stages.AUTO_RETRY_KEY)

@@ -1186,3 +1186,119 @@ def test_record_well_formed_without_modified() -> None:
 def test_format_refactor_section_modified_before_evidence() -> None:
     text = format_refactor_section([_record(modified=[{"path": "a.py", "ratio": 0.5}])], {})
     assert text.index("- Modified files") < text.index("- Evidence:")
+
+
+# ------------------------------------------------------------------ pre-work PR
+
+
+def _pw_record(name: str = "generic", files: tuple[str, ...] = ("a.py",)) -> dict[str, Any]:
+    return {"set": name, "files": list(files), "tests": [], "evidence": [], "fallback": True}
+
+
+def test_prework_title_prefixes_the_feature_title_and_is_capped() -> None:
+    assert prbody.prework_title("Add the thing") == "Prework: Add the thing"
+    assert prbody.prework_title(fallback_title("ENG-1")) == "Prework: Sisyphus: ENG-1"
+    assert len(prbody.prework_title("x" * 1000)) == MAX_TITLE_CHARS
+
+
+def test_prework_body_states_the_purpose_first_and_has_no_closing_keyword(tmp_path: Path) -> None:
+    body = prbody.compose_prework_body("ENG-1", files=["a.py"], workspace=tmp_path)
+    assert body.splitlines()[0] == "Code-health preparation for ENG-1: no feature change. The feature PR follows."
+    assert "Closes" not in body
+    assert "## Files processed" in body
+    assert "- a.py" in body
+
+
+def test_prework_body_lists_commits_per_tool_and_groups(tmp_path: Path) -> None:
+    handoffs = tmp_path / "handoffs"
+    handoffs.mkdir()
+    (handoffs / "prework-generic.md").write_text(
+        "- Deviations from the plan: skipped one file\n- Edits to existing files: other.py\n"
+    )
+    body = prbody.compose_prework_body(
+        "ENG-1",
+        files=["a.py", "b.py"],
+        health_commits=[("abc1234", "fix a")],
+        pattern_commits=[("def5678", "apply pattern")],
+        records=[_pw_record(files=("a.py", "b.py"))],
+        handoff_dir=handoffs,
+        workspace=tmp_path,
+    )
+    assert "- vibe_heal (1):\n  - abc1234 fix a" in body
+    assert "- Pattern agent (1):\n  - def5678 apply pattern" in body
+    assert "### generic" in body
+    assert "- Files: a.py, b.py" in body
+    assert "skipped one file" in body
+    assert "other.py" in body
+
+
+def test_prework_body_notes_a_missing_handoff(tmp_path: Path) -> None:
+    body = prbody.compose_prework_body("ENG-1", records=[_pw_record()], handoff_dir=tmp_path, workspace=tmp_path)
+    assert "Note: no handoff found for set generic." in body
+
+
+def test_prework_body_omits_empty_sections(tmp_path: Path) -> None:
+    body = prbody.compose_prework_body("ENG-1", workspace=tmp_path)
+    assert body == prbody.prework_statement("ENG-1")
+
+
+@pytest.mark.parametrize("limit", [150, 400, 2000])
+def test_prework_body_never_exceeds_the_limit_when_the_statement_fits(tmp_path: Path, limit: int) -> None:
+    files = [f"src/module{i}/file{i}.py" for i in range(200)]
+    body = prbody.compose_prework_body("ENG-1", files=files, workspace=tmp_path, max_chars=limit)
+    assert len(body) <= limit
+    assert body.startswith(prbody.prework_statement("ENG-1"))
+    if limit < 2000:
+        assert body.endswith(prbody.PREWORK_TRUNCATED_NOTE)
+
+
+def test_prework_body_keeps_the_statement_when_the_limit_is_tiny(tmp_path: Path) -> None:
+    body = prbody.compose_prework_body("ENG-1", files=["a.py"], workspace=tmp_path, max_chars=10)
+    assert body == prbody.prework_statement("ENG-1")
+
+
+def test_prework_body_default_limit_is_the_feature_pr_limit(tmp_path: Path) -> None:
+    files = [f"src/{'d' * 50}/file{i}.py" for i in range(5000)]
+    body = prbody.compose_prework_body("ENG-1", files=files, workspace=tmp_path)
+    assert len(body) <= MAX_BODY_CHARS
+
+
+def test_prework_body_redacts_paths_and_neutralises_mentions(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    home = tmp_path / "home"
+    handoffs = tmp_path / "handoffs"
+    handoffs.mkdir()
+    (handoffs / "prework-generic.md").write_text(
+        f"- Deviations from the plan: see {ws}/plan and @alice, #12, </details>\n"
+    )
+    body = prbody.compose_prework_body(
+        "ENG-1",
+        files=[f"{ws}/x.py"],
+        records=[_pw_record()],
+        handoff_dir=handoffs,
+        workspace=ws,
+        plan_dir=None,
+        home=home,
+    )
+    assert str(ws) not in body
+    assert "<workspace>" in body
+    assert "@alice" not in body
+    assert "#12" not in body
+    assert "</details>" not in body
+
+
+def test_compose_body_adds_exactly_one_prework_link_line_after_the_header(tmp_path: Path) -> None:
+    link = prbody.prework_link_line("https://example.test/pr/7")
+    body = compose_body("ENG-1", summary="s", prework_link=link, workspace=tmp_path)
+    lines = body.split("\n\n")
+    assert lines[0] == "Closes ENG-1"
+    assert lines[1] == "Stacked on the pre-work PR: https://example.test/pr/7"
+    assert body.count("pre-work PR") == 1
+    assert "pre-work" not in compose_body("ENG-1", summary="s", workspace=tmp_path)
+
+
+def test_handoff_helpers_accept_the_prework_prefix(tmp_path: Path) -> None:
+    path = tmp_path / "prework-java.md"
+    path.write_text("- Deviations from the plan: none\n")
+    (result,) = prbody.extract_refactor_handoffs([path], "prework")
+    assert result.set == "java"

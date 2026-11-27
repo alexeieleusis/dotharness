@@ -37,7 +37,7 @@ sisyphus archive --config <file>
      whose front matter is invalid (see "Ticket files and the producer") is skipped with a one-line note on
      stderr. Finished ticket files stay in place: they are skipped because the item has a run record, not
      because the file is removed.
-5. Runs each item through the orchestrator (intake, plan, build, refactor, push, open PR) and
+5. Runs each item through the orchestrator (intake, plan, prework, build, refactor, push, open PR) and
    stops at the first checkpoint (C1..C8). Before starting each further item it checks `max_run_minutes`. Once
    exceeded it starts nothing else and notes it under "Limits hit" (exit 0).
    An item is finished when its draft PR is open: "draft PR open, handed to the human". Nothing runs after
@@ -253,14 +253,14 @@ continued or abandoned. A workspace holding only a parked item still writes a di
 
 | stop | what stopped | what you do | clears | what resume does |
 |---|---|---|---|---|
-| C1 | brief has open decisions | edit the brief, mark them resolved | automatic (brief re-parsed) | re-parses the brief (never redrafts it), then plan init, plan, build, push, PR |
+| C1 | brief has open decisions | edit the brief, mark them resolved | automatic (brief re-parsed) | re-parses the brief (never redrafts it), then plan init, plan, prework, build, push, PR |
 | C2 | OPEN_QUESTIONS.md unresolved after draft-overview | write the answer file | automatic (answer file) | re-runs the plan stage with your answer, then build |
-| C3 | a leaf has an open question | write the answer file | automatic (answer file) | re-runs build with your answer. The build prompt continues from the stopped leaf. A refactor stop at C3 or C4 uses the same answer-file flow |
+| C3 | a leaf has an open question | write the answer file | automatic (answer file) | re-runs build with your answer. The build prompt continues from the stopped leaf. A refactor or prework stop at C3 or C4 uses the same answer-file flow |
 | C4 | a leaf deviation may change later leaves | write the answer file (accept or redirect) | automatic (answer file) | same as C3 |
-| C5 | retries exhausted or scope violation, or intake changing the target repository. In the refactor stage: retries exhausted, a refactor gate failure, or a scope violation (code edits outside the group's files without a listed reason) | decide: change the leaf or config, or fix the cause. For an intake stop, revert or remove the paths listed in the detail by hand and run `sisyphus resume REF --config F`. No `--reset-retries` is needed. To give the stage that stopped another budget, run `sisyphus resume REF --config F --reset-retries` | explicit | re-runs the stage. Build and refactor each have their own retry budget, 3 each (`DEFAULT_MAX_RETRY_CYCLES`). Build uses `build:retry-cycles` and refactor uses `refactor:retry-cycles`. The budget of the stage that stopped is kept, so an exhausted budget stops again at C5 without a new agent run, unless you pass `--reset-retries` (below), which gives that stage a fresh budget of 3 (it does not skip the stage) |
+| C5 | retries exhausted or scope violation, or intake changing the target repository. In the refactor stage: retries exhausted, a refactor gate failure, or a scope violation (code edits outside the group's files without a listed reason). The prework stage stops at C5 for the same reasons, and also when a `vibe_heal` command exits non-zero | decide: change the leaf or config, or fix the cause. For an intake stop, revert or remove the paths listed in the detail by hand and run `sisyphus resume REF --config F`. No `--reset-retries` is needed. To give the stage that stopped another budget, run `sisyphus resume REF --config F --reset-retries` | explicit | re-runs the stage. Build, refactor and prework each have their own retry budget, 3 each (`DEFAULT_MAX_RETRY_CYCLES`). Build uses `build:retry-cycles`, refactor uses `refactor:retry-cycles` and prework uses `prework:retry-cycles`. The budget of the stage that stopped is kept, so an exhausted budget stops again at C5 without a new agent run, unless you pass `--reset-retries` (below), which gives that stage a fresh budget of 3 (it does not skip the stage) |
 | C6 | a limit was hit | raise the limit in `.sisyphus.toml` (`max_run_minutes` needs nothing: the clock is per invocation) | explicit | leaf limit: re-counts the leaves, no re-plan. Time limit: continues at the next stage |
 | C7 | branch cannot be updated without rebase | no automatic way out: run `sisyphus abandon REF --config F` (the branch and any PR stay as they are for you to handle) | explicit | after you fixed the branch outside Sisyphus: re-runs the push stage on the same branch and PR |
-| C8 | a code host call (see "Failure text" below), Linear or git network call failed, or a dirty clone | fix access. For a dirty clone, clean it yourself | automatic retry after 30 minutes, 3 times, then explicit | retries the failed call in the same stage |
+| C8 | a code host call (see "Failure text" below), Linear or git network call failed, or a dirty clone. In the prework stage: the push of the pre-work branch or the opening of its draft PR failed | fix access. For a dirty clone, clean it yourself | automatic retry after 30 minutes, 3 times, then explicit | retries the failed call in the same stage. A prework stage that stopped at C8 runs again from its start (see "Prework stage" below) |
 | error | unexpected exception | fix the cause shown | explicit | re-runs the in-progress stage |
 
 **Failure text.** The text of a code host failure is new and may change. It holds the exit code and a short reason
@@ -281,7 +281,7 @@ detail. The same text appears in these places:
 `sisyphus resume REF --config F [--base B] --reset-retries` is the only way to zero retry counters, and it is
 explicit: `run`, auto-resume, plain `resume` and loading a record never reset anything. Use it after you fixed the
 cause by hand (in the brief or the answer file) or decided to give the stage another budget. It does **not** skip
-the stage: it gives the recorded stage a fresh budget (build or refactor: `max_retry_cycles`, 3) and then continues the
+the stage: it gives the recorded stage a fresh budget (build, refactor or prework: `max_retry_cycles`, 3) and then continues the
 resume as usual. It is only valid for a stopped item (same errors as `resume`), takes the same lock, and
 combines with `--again` for an abandoned item.
 
@@ -289,19 +289,95 @@ It resets the counters of the stage recorded in the item's run record, nothing e
 
 | recorded stage | counters set to 0 | never touched |
 |---|---|---|
-| intake, plan, push, open-pr | `auto-retry` | `build:retry-cycles`, `refactor:retry-cycles`, `plan:leaf-limit`, `branch-created` |
-| build | `build:retry-cycles`, `auto-retry` | `refactor:retry-cycles`, `plan:leaf-limit`, `branch-created` |
-| refactor | `refactor:retry-cycles`, `auto-retry` | `plan:leaf-limit`, `build:retry-cycles`, `branch-created` |
+| intake, plan, push, open-pr | `auto-retry` | `build:retry-cycles`, `refactor:retry-cycles`, `prework:retry-cycles`, `plan:leaf-limit`, `branch-created` |
+| prework | `prework:retry-cycles`, `auto-retry` | `build:retry-cycles`, `refactor:retry-cycles`, `plan:leaf-limit`, `branch-created` |
+| build | `build:retry-cycles`, `auto-retry` | `refactor:retry-cycles`, `prework:retry-cycles`, `plan:leaf-limit`, `branch-created` |
+| refactor | `refactor:retry-cycles`, `auto-retry` | `plan:leaf-limit`, `build:retry-cycles`, `prework:retry-cycles`, `branch-created` |
 
 `auto-retry` is the C8 automatic-resume count (stage independent). `branch-created` is not a retry counter (it
 records that Sisyphus made the branch, which the push guard relies on) and `plan:leaf-limit` is a marker that
-stops a C6 resume re-planning. Neither is ever reset. The table mirrors `resume.RESET_KEYS`: one row per recorded stage (intake, plan, push and open-pr share the first row). If the recorded stage
+stops a C6 resume re-planning. Neither is ever reset. The table mirrors `resume.RESET_KEYS`: one row per recorded stage (intake, plan, push and open-pr share the first row; `base_branch` in the run record is not a counter and is never reset). If the recorded stage
 has no counter above zero (for example an item stopped at C1) the flag is still accepted: it records a reset with
 no keys ("no counters to reset") and continues.
 
 Every reset is recorded durably in the run record (additive `resets` list: time, stage, each key with its
 previous value) and is shown by `sisyphus status` and under Deviations in the digest, for example
 `Retry reset: PROJ-7 at stage build on 2026-03-04T05:06:00+00:00: build:retry-cycles 3->0, auto-retry 1->0`.
+
+## Prework stage
+
+The `prework` stage runs between `plan` and `build`. It cleans the existing source files the plan will modify, so
+those cleanups do not end up mixed into the feature PR. Turn it off with `[prework] enabled = false` (see
+[Configuration](configuration.md#prework)); the stage is then recorded as skipped.
+
+What it does, in order:
+
+1. **Pre-work set.** Sisyphus reads the `## Scope` section of every leaf file in the plan and keeps the entries that
+   exist at `origin/<resolved base>` (the tree at that ref, not the working tree) and are source files. Entries with
+   `*` are globs: `*` matches within one path segment and `**` crosses directories (`?` and `[` are literal). Test files are dropped.
+   Lines of a Scope section that are not `- <path>` bullets are skipped. An absolute path or a `..` entry, or a
+   failing tree listing, stops the run with an error stop (not a checkpoint): the message starts with `prework:`.
+   If the set is empty the stage ends `complete` with the note `prework: no existing source files in the plan scope`
+   and does nothing else.
+2. **Branch.** The stage cuts `<item-branch>-prework` from `origin/<resolved base>` (on a re-run it checks out the
+   branch that exists).
+3. **Health pass.** For each file, one at a time, `vibe_heal dedupe <file>` then `vibe_heal fix <file>` (the tool must
+   be on `PATH`). A non-zero exit stops at C5 and counts one cycle of `prework:retry-cycles`. If vibe_heal is not
+   configured the pass is skipped with the note `prework: vibe_heal not configured` and only the pattern pass runs.
+4. **Pattern pass.** The files are grouped by stack, and one agent runs per group with the same pattern sets and
+   prompt as the refactor stage. Every file of a group is listed (no share is computed). The agent writes
+   `prework-<set>.md` in the handoff directory and its group state in `prework-input.json`, neither of which the
+   refactor stage or the build completion check reads. An incomplete or out-of-scope group stops at C5.
+5. **Gate.** The existing gate plan runs once for the pre-work branch against the resolved base. A failure stops at
+   C5 and leaves the commits.
+6. **Pre-work PR.** If the stage made any commit, Sisyphus pushes `<item-branch>-prework` (through the same push
+   guard as every push) and opens one draft PR from it into the resolved base. The title is `Prework: <item title>`.
+   The body starts by saying it is code-health preparation for the item with no feature change and that the
+   feature PR follows, then lists the files processed, the commits per tool, and each group's deviations and listed
+   edits. It has the same length limit and the same path redaction and mention neutralising as the feature PR body,
+   and it does not carry a closing keyword. Sisyphus does nothing else to it: no label, no reviewer request, no
+   ready-for-review, no merge. The pre-work PR body does not link to the feature PR. If a PR for the branch is
+   already open it is reused, so a re-run opens no second one. With no commits nothing is pushed and no PR opens.
+   A failing push or host call stops at C8.
+
+### Stacked feature PR
+
+After the pre-work branch is pushed, the run record stores it as the effective base (`base_branch`). The feature
+branch is then cut from `origin/<item-branch>-prework`, and the build, the refactor measurement, the gate, the
+phase list and the feature PR all use that branch as their base. The feature PR is opened against the pre-work
+branch and its body gains one line, `Stacked on the pre-work PR: <link>`. With no pre-work commits the base stays
+the resolved base (`--base`, then `[project].base_branch`, then the host default branch, then `main`) and the
+body has no such line.
+
+The push guard still protects the resolved base and the default branch, never the pre-work branch. A resume uses
+the stored effective base, not a freshly resolved one. When the `prework` stage runs again it clears the stored base
+first and works from the resolved base. Sisyphus does not retarget the feature PR after the pre-work PR is merged
+and does not store the pre-work PR number. The pre-work branch is not in the set of branches Sisyphus cleans up,
+abandons or archives; remove it by hand when the stack is done.
+
+### Which vibe_heal setups count as configured
+
+The detection reads files only and starts nothing. In order, vibe_heal counts as configured when any of these exists
+in the repository root, then in the directory of `.sisyphus.toml` (when the caller passes it as
+`OrchestratorOptions.config_dir`; the CLI does not pass it yet, so today only the repository root is searched):
+
+1. an env file: `.env.vibeheal`, `env.vibeheal`, then `.env.vibeheal.*` and `env.vibeheal.*` in sorted order
+   (`.example`, `.sample` and `.template` files are ignored), then `.env`;
+2. an `env_file` value in a `[[repo.subdir]]` table of `.harness.toml`, `harness.toml`, `.pr_review.toml` or
+   `pr_review.toml` (a relative value resolves against that file's directory and counts only when the target
+   exists; a malformed TOML file counts as no reference).
+
+When none is found the stage notes `prework: vibe_heal not configured` and runs the pattern pass alone.
+
+### Resume
+
+The stage's inputs (the set and the detection) are computed each time the stage is about to run, from the tree at
+`origin/<resolved base>`. After a stop inside the stage, a resume runs the whole stage again: `vibe_heal` runs again on
+every file (a clean file gives exit 0 and no commit), a group whose `prework-<set>.md` handoff exists and whose clone
+is clean is not given to the agent again, and the gate and the PR step run once more. A completed stage is skipped,
+and the effective base in the run record carries the stack into the build. `sisyphus resume REF --config F
+--reset-retries` at a stopped prework gives that stage a fresh budget of 3. To force a fresh agent pass for a group,
+delete its `prework-<set>.md` file, as for the refactor stage.
 
 ## Refactor stage: input files and known limits
 

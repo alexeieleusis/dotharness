@@ -1,9 +1,9 @@
-# Prompt: Refactor the code that one build wrote, for one stack group
+# Prompt: <prompt_title>
 
 > Every value in angle brackets below is a parameter. The caller substitutes all of them
 > before you see this text. This prompt names the files you must follow. It does not copy them.
 
-You orchestrate the refactor of one stack group for a single work item. Run only this stage.
+You orchestrate the <stage_label> of one stack group for a single work item. Run only this stage.
 
 - Stage to run now: `<stage>`
 - Work item: <work-item reference>
@@ -20,8 +20,7 @@ You orchestrate the refactor of one stack group for a single work item. Run only
 
 <group_files>
 
-- Files in this group that existed before this work item, with the share of each file this
-  branch changed (`none` when there are none):
+- Files in this group that existed before this work item<share_clause>:
 
 <modified_files>
 
@@ -84,8 +83,8 @@ stop report. Finish by listing every commit, every deviation, and every edit to 
 
 ## Handoff
 
-Before you finish, save the handoff for this group as `refactor-<refactor_set>.md`. Save it
-directly in `<handoff dir>`, not in a subdirectory of it. Write it even when the refactor changed nothing: the orchestrator checks that it exists. The name starts with `refactor-`. It never starts with two digits and a
+Before you finish, save the handoff for this group as `<handoff_prefix>-<refactor_set>.md`. Save it
+directly in `<handoff dir>`, not in a subdirectory of it. Write it even when the refactor changed nothing: the orchestrator checks that it exists. The name starts with `<handoff_prefix>-`. It never starts with two digits and a
 hyphen, so it cannot be mistaken for a file another stage wrote.
 
 The file holds these two bullets. Each one starts at the beginning of a line. Write them exactly as shown, with this text before the colon, because the orchestrator finds them by that text. Put nothing between the two bullets, and put the second one after the first. Any further notes go below both bullets, after a blank line.

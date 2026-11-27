@@ -135,6 +135,36 @@ def test_invalid_field_values_rejected(tmp_path: Path) -> None:
             RunRecord.open(tmp_path, "X")
 
 
+def test_legacy_record_without_base_branch_loads(tmp_path: Path) -> None:
+    rec = RunRecord.open(tmp_path, "X")
+    assert rec.base_branch is None
+    rec.save()
+    assert "base_branch" not in json.loads(rec.path.read_text())
+    assert RunRecord.open(tmp_path, "X").base_branch is None
+
+
+def test_base_branch_round_trips_and_survives_mutators(tmp_path: Path) -> None:
+    rec = RunRecord.open(tmp_path, "X")
+    rec.base_branch = "release/1.2"
+    rec.save()
+    assert json.loads(rec.path.read_text())["base_branch"] == "release/1.2"
+    reopened = RunRecord.open(tmp_path, "X")
+    assert reopened.base_branch == "release/1.2"
+    reopened.mark_stage("s")
+    assert json.loads(rec.path.read_text())["base_branch"] == "release/1.2"
+    reopened.increment_retry("k")
+    assert json.loads(rec.path.read_text())["base_branch"] == "release/1.2"
+
+
+@pytest.mark.parametrize("bad", ["", 123, ["a"], None])
+def test_invalid_base_branch_rejected(tmp_path: Path, bad: object) -> None:
+    rec = RunRecord.open(tmp_path, "X")
+    good = json.loads(rec.path.read_text())
+    rec.path.write_text(json.dumps({**good, "base_branch": bad}))
+    with pytest.raises(RunRecordError, match="base_branch"):
+        RunRecord.open(tmp_path, "X")
+
+
 def test_encoding_deterministic_safe_and_case_insensitive() -> None:
     long_lower = "x" * 500
     long_mixed = "xX" * 250

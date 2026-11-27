@@ -52,7 +52,7 @@ from dotharness.sisyphus.orchestrator import (
     stop_report_path,
 )
 from dotharness.sisyphus.paths import knowledge_file
-from dotharness.sisyphus.rails import Checkpoint
+from dotharness.sisyphus.rails import Checkpoint, parse_push_argv
 from dotharness.sisyphus.runrecord import RunRecord
 from dotharness.sisyphus.stoprecord import build_abandoned_record, read_stop_record, write_stop_record
 from tests.sisyphus.conftest import forbidden_imports
@@ -113,6 +113,9 @@ class World:
         self.git_log = ""
         self.git_log_rc = 0
         self.log_calls: list[list[str]] = []
+        self.tree = ""  # NUL-separated `git ls-tree` listing of origin/<base>
+        self.tree_rc = 0
+        self.tree_calls: list[list[str]] = []
         # git behaviour
         self.head = SHA1
         self.remote_head = SHA1
@@ -297,6 +300,9 @@ class World:
             return CommandResult(0, f"{self.remote_head}\n")
         if sub == "diff":
             return CommandResult(0, self.changed)
+        if sub == "ls-tree":  # the pre-work set listing; by default no plan Scope names a file, so the stage ends early
+            self.tree_calls.append(a)
+            return CommandResult(self.tree_rc, self.tree, "no such ref" if self.tree_rc else "")
         if sub == "merge":
             if self.ff_rc == 0:
                 self.head = self.remote_head
@@ -388,7 +394,7 @@ async def test_stage_order_and_record_writes(world: World, monkeypatch: pytest.M
     log = world.mark_log(monkeypatch)
     result = await world.run()
     assert result.completed
-    assert result.stages_run == ("intake", "plan", "build", "refactor", "push", "open-pr")
+    assert result.stages_run == ("intake", "plan", "prework", "build", "refactor", "push", "open-pr")
     expected = []
     for stage in result.stages_run:
         expected += [(stage, "in_progress"), (stage, "complete")]
@@ -911,7 +917,7 @@ async def test_resume_after_c3_relaunches_build_without_replanning(world: World)
     result = await world.run()
     assert result.completed
     assert result.stages_run == ("build", "refactor", "push", "open-pr")
-    assert result.stages_skipped == ("intake", "plan")
+    assert result.stages_skipped == ("intake", "plan", "prework")
     assert world.events.count("agent:plan") == 1
     assert world.events.count("agent:build") == 2
     assert RunRecord.open(world.tmp / "ws", ITEM).checkpoint is None
@@ -988,7 +994,7 @@ async def test_rerun_with_unchanged_inputs_repeats_nothing(world: World) -> None
     result = await world.run()
     assert result.completed
     assert result.stages_run == ()
-    assert result.stages_skipped == ("intake", "plan", "build", "refactor", "push", "open-pr")
+    assert result.stages_skipped == ("intake", "plan", "prework", "build", "refactor", "push", "open-pr")
     agents, _shells, finds = world.counts()
     assert (agents, finds) == (before[0], before[2])
     # the only extra call is the read-only "is the local branch still there?" probe of the branch cleanup
@@ -1942,7 +1948,7 @@ async def test_resume_checks_out_the_items_own_branch(world: World) -> None:
     result = await world.run()
     assert result.completed
     assert world.checkouts[-1] == branch_name(ITEM)
-    assert result.stages_skipped == ("intake", "plan", "build", "refactor")
+    assert result.stages_skipped == ("intake", "plan", "prework", "build", "refactor")
     assert world.events.count("agent:build") == 1  # committed work not redone
 
 
@@ -2422,7 +2428,7 @@ async def test_legacy_build_complete_record_resumes_into_refactor(world: World) 
     rec.mark_stage("build", "complete")  # a record written before the refactor stage existed
     result = await world.run()
     assert result.completed
-    assert result.stages_skipped == ("intake", "plan", "build")
+    assert result.stages_skipped == ("intake", "plan", "prework", "build")
     assert result.stages_run == ("refactor", "push", "open-pr")
     assert branch_name(ITEM) in world.checkouts  # a resume at refactor returns the clone to the item branch
     assert world.events.count("agent:build") == 1
@@ -2459,7 +2465,20 @@ def test_c2_stop_in_the_refactor_stage_is_rejected(world: World) -> None:
 async def test_stages_lists_refactor_in_order(world: World) -> None:
     run = _bare_run(world)
     assert run.stages() == list(orchestrator.STAGE_ORDER)
-    assert run.stages().index("refactor") == 3
+    assert run.stages().index("refactor") == 4
+
+
+async def test_every_stage_has_a_row_in_each_stage_table(world: World) -> None:
+    from dotharness.sisyphus.resume import RESET_KEYS
+
+    run = _bare_run(world)
+    handlers = run.stage_handlers()
+    for stage in orchestrator.STAGE_ORDER:
+        assert stage in RESET_KEYS
+        assert stage in handlers
+        assert stage in run.stages()
+    assert handlers[orchestrator.PREWORK_STAGE] == run.stage_prework
+    assert orchestrator._STOP_CHECKPOINTS[orchestrator.PREWORK_STAGE] == {"C3", "C4", "C5"}
 
 
 # ------------------------------------------------------------- disabled refactor stage skip (#208)
@@ -2489,8 +2508,8 @@ async def test_disabled_refactor_is_skipped_on_a_fresh_run(world: World, monkeyp
     result = await world.run()
     assert result.completed
     assert result.stages_skipped == ("refactor",)
-    assert result.stages_run == ("intake", "plan", "build", "push", "open-pr")
-    assert calls == ["check_time"] * 5  # one per stage that ran; none for refactor, no handler call
+    assert result.stages_run == ("intake", "plan", "prework", "build", "push", "open-pr")
+    assert calls == ["check_time"] * 6  # one per stage that ran; none for refactor, no handler call
     assert "agent:refactor" not in world.events
     assert "git push origin sisyphus/eng-1-cf2640ff" in world.events
     assert "open_pr" in world.events
@@ -2515,7 +2534,7 @@ async def test_disabled_refactor_resume_after_complete_build_skips_once(world: W
     RunRecord.open(world.tmp / "ws", ITEM).mark_stage("build", "complete")
     result = await world.run()
     assert result.completed
-    assert result.stages_skipped == ("intake", "plan", "build", "refactor")
+    assert result.stages_skipped == ("intake", "plan", "prework", "build", "refactor")
     assert result.stages_run == ("push", "open-pr")
 
 
@@ -2529,3 +2548,267 @@ async def test_disabled_refactor_resume_past_it_has_no_duplicate(world: World) -
     world.ancestor_rc_after_pr = 1
     result = await world.run()  # record is at push: refactor is before start
     assert result.stages_skipped.count("refactor") == 1
+
+
+# ------------------------------------------- pre-work PR, stacked (effective) base, pre-work inputs
+
+PREWORK_BRANCH = f"{branch_name(ITEM)}-prework"
+STACKED = "pw-branch"
+
+
+def _new_run(world: World) -> orchestrator._Run:
+    return orchestrator._Run(ITEM, world.config(), world.options(), world.agent, world.shell, world, world.clock, world)
+
+
+def _calls(world: World, *prefix: str) -> list[tuple[str, ...]]:
+    return [c for c, _cwd in world.shell_calls if c[1 : 1 + len(prefix)] == prefix]
+
+
+def _stack(world: World, base: str = STACKED) -> None:
+    rec = RunRecord.open(world.tmp / "ws", ITEM)
+    rec.base_branch = base
+    rec.save()
+
+
+def test_effective_base_is_the_resolved_base_until_a_stored_one_exists(world: World) -> None:
+    run = _new_run(world)
+    assert run.effective_base == "base-branch"
+    _stack(world)
+    assert _new_run(world).effective_base == STACKED  # a fresh run (resume) reads the stored value
+    assert _new_run(world).opt.base_branch == "base-branch"
+
+
+async def test_prepare_branch_cuts_the_feature_from_the_resolved_base_without_a_stack(world: World) -> None:
+    await _new_run(world).prepare_branch()
+    assert _calls(world, "fetch") == [("git", "fetch", "origin", "base-branch")]
+    assert _calls(world, "checkout") == [("git", "checkout", "-b", branch_name(ITEM), "origin/base-branch")]
+
+
+async def test_prepare_branch_cuts_the_feature_from_the_prework_branch(world: World) -> None:
+    _stack(world, PREWORK_BRANCH)
+    run = _new_run(world)
+    await run.prepare_branch()
+    assert _calls(world, "fetch") == [("git", "fetch", "origin", PREWORK_BRANCH)]
+    assert _calls(world, "checkout") == [("git", "checkout", "-b", branch_name(ITEM), f"origin/{PREWORK_BRANCH}")]
+    assert run.created_branches() == {branch_name(ITEM)}  # the pre-work branch is not in the created set
+
+
+async def test_every_base_reader_sees_the_effective_base(world: World) -> None:
+    _stack(world)
+    run = _new_run(world)
+    world.changed = "M\0tools/pkg/x.py\0"
+    await run._name_status()
+    await run.list_modified_code_units()
+    await run.build_gate_plan()
+    diffs = _calls(world, "diff")
+    assert ("git", "diff", "--name-status", "-z", f"origin/{STACKED}...HEAD") in diffs
+    assert ("git", "diff", "--numstat", f"origin/{STACKED}...HEAD", "--", "tools/pkg/x.py") in diffs
+    assert ("git", "diff", "--name-only", f"origin/{STACKED}...HEAD") in diffs
+    assert not [d for d in diffs if "origin/base-branch" in " ".join(d)]
+
+
+@pytest.mark.parametrize(("stored", "expected"), [(None, "base-branch"), (STACKED, STACKED)])
+async def test_gate_plan_diffs_against_the_pre_work_branch_after_the_switch(
+    world: World, stored: str | None, expected: str
+) -> None:
+    if stored:
+        _stack(world, stored)
+    plan, reason = await _new_run(world).build_gate_plan()
+    assert reason is None
+    assert plan
+    assert _calls(world, "diff") == [("git", "diff", "--name-only", f"origin/{expected}...HEAD")]
+
+
+async def test_resume_with_a_stored_base_stacks_build_gate_pr_and_phase_list(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world.requirements = "# Requirements: thing\n\nSummary.\n"  # an owned plan, so the phase list runs git log
+    world.build_stops = [{"checkpoint": "C3", "leaf": "13-foo", "detail": "Use A or B?"}]
+    await world.run()
+    _stack(world, PREWORK_BRANCH)
+    world.branch_exists = False  # the feature branch is cut again, now from the pre-work branch
+    world.shell_calls.clear()
+    world.log_calls.clear()
+
+    async def find(branch: str) -> PullRequest | None:
+        return PullRequest(7, "https://example.test/pr/7") if branch == PREWORK_BRANCH else None
+
+    monkeypatch.setattr(world, "find_pr", find)
+    result = await world.run(base_branch="fresh-base")  # a freshly resolved base never overrides the stored one
+    assert result.completed
+    cut = ("git", "checkout", "-b", branch_name(ITEM), f"origin/{PREWORK_BRANCH}")
+    assert _calls(world, "checkout", "-b") == [cut, cut]  # build, then refactor (the fake never keeps the branch)
+    assert ("git", "rev-list", "--count", f"origin/{PREWORK_BRANCH}..HEAD") in [c for c, _ in world.shell_calls]
+    assert ("git", "diff", "--name-only", f"origin/{PREWORK_BRANCH}...HEAD") in [c for c, _ in world.shell_calls]
+    assert world.log_calls == [["log", "--reverse", "--format=%h%x09%s", f"origin/{PREWORK_BRANCH}..HEAD"]]
+    branch, base, _title, body = world.opened[0]
+    assert (branch, base) == (branch_name(ITEM), PREWORK_BRANCH)
+    assert body.count("Stacked on the pre-work PR: https://example.test/pr/7") == 1
+    assert sum("pre-work PR" in line for line in body.splitlines()) == 1
+
+
+async def test_no_stored_base_means_no_back_link_and_the_resolved_base(world: World) -> None:
+    await world.run()
+    _branch, base, _title, body = world.opened[0]
+    assert base == "base-branch"
+    assert "pre-work" not in body
+    assert RunRecord.open(world.tmp / "ws", ITEM).base_branch is None
+
+
+def _request(branch: str) -> object:
+    return parse_push_argv(["push", "origin", branch], history_rewrite=False, needs_rebase=False)
+
+
+def test_push_guard_protects_the_resolved_base_not_the_effective_one(world: World) -> None:
+    _stack(world)
+    run = _new_run(world)
+    with pytest.raises(OrchestratorError, match="push to the default branch 'base-branch' is forbidden"):
+        run.check_push_guard(_request("base-branch"), extra_created=("base-branch",))
+    run.check_push_guard(_request(STACKED), extra_created=(STACKED,))  # the pre-work branch itself is pushable
+
+
+def test_push_guard_refuses_a_prework_branch_nobody_declared_created(world: World) -> None:
+    with pytest.raises(OrchestratorError, match="was not created by Sisyphus"):
+        _new_run(world).check_push_guard(_request(PREWORK_BRANCH))
+
+
+async def test_publish_pushes_and_opens_one_draft_pr_against_the_resolved_base(world: World) -> None:
+    run = _new_run(world)
+    world.ahead = "2"
+    world.git_log = "abc1234\tvibe_heal fix a.py\n"
+    await run.prework_publish(("tools/pkg/a.py",))
+    assert world.events == ["git push origin " + PREWORK_BRANCH, "find_pr", "open_pr"]
+    branch, base, title, body = world.opened[0]
+    assert (branch, base) == (PREWORK_BRANCH, "base-branch")
+    assert title.startswith("Prework: ")
+    assert body.splitlines()[0].startswith(f"Code-health preparation for {ITEM}")
+    assert "tools/pkg/a.py" in body
+    assert RunRecord.open(world.tmp / "ws", ITEM).base_branch == PREWORK_BRANCH
+    assert run.effective_base == PREWORK_BRANCH
+
+
+async def test_publish_with_no_commits_pushes_nothing_and_keeps_the_base(world: World) -> None:
+    run = _new_run(world)
+    world.ahead = "0"
+    await run.prework_publish(("tools/pkg/a.py",))
+    assert world.events == []
+    assert world.opened == []
+    assert run.effective_base == "base-branch"
+    assert RunRecord.open(world.tmp / "ws", ITEM).base_branch is None
+
+
+async def test_publish_reuses_an_existing_pr(world: World) -> None:
+    world.existing_pr = PullRequest(9, "https://example.test/pr/9")
+    run = _new_run(world)
+    await run.prework_publish(("tools/pkg/a.py",))
+    await run.prework_publish(("tools/pkg/a.py",))
+    assert world.opened == []
+    assert run.prework_pr == world.existing_pr
+    assert world.events.count("find_pr") == 2
+    assert run.effective_base == PREWORK_BRANCH
+
+
+async def test_publish_stops_at_c8_when_the_host_fails_and_keeps_the_base(world: World) -> None:
+    world.client_error = CodeHostError("host down")
+    run = _new_run(world)
+    with pytest.raises(orchestrator._Stop) as exc:
+        await run.prework_publish(("tools/pkg/a.py",))
+    assert exc.value.checkpoint is Checkpoint.C8
+    assert run.effective_base == "base-branch"
+
+
+async def test_publish_stops_at_c8_when_the_push_fails(world: World) -> None:
+    world.push_rc = 1
+    run = _new_run(world)
+    with pytest.raises(orchestrator._Stop) as exc:
+        await run.prework_publish(("tools/pkg/a.py",))
+    assert exc.value.checkpoint is Checkpoint.C8
+    assert world.opened == []
+
+
+async def test_publish_body_honours_a_body_limited_client(world: World) -> None:
+    class Limited(World):
+        max_body_chars = 140
+
+    (world.tmp / "limited").mkdir()
+    limited = Limited(world.tmp / "limited")
+    run = orchestrator._Run(
+        ITEM, limited.config(), limited.options(), limited.agent, limited.shell, limited, limited.clock, limited
+    )
+    await run.prework_publish(tuple(f"tools/pkg/file{i}.py" for i in range(30)))
+    assert len(limited.opened[0][3]) <= 140
+    assert limited.opened[0][3].startswith("Code-health preparation")
+
+
+def _scope_leaf(world: World, scope: str) -> None:
+    (world.phases / "00-leaf0-leaf.md").write_text(f"## Scope\n{scope}\n\n## Requirements\nx\n")
+
+
+async def test_load_inputs_reads_scope_from_the_resolved_base_tree(world: World) -> None:
+    _scope_leaf(world, "- tools/pkg/x.py\n- tools/pkg/missing.py\n- tools/pkg/test_x.py")
+    world.tree = "tools/pkg/x.py\0tools/pkg/test_x.py\0"
+    run = _new_run(world)
+    await run.load_prework_inputs()
+    assert run.prework_files == ("tools/pkg/x.py",)
+    assert world.tree_calls == [["ls-tree", "-r", "--name-only", "-z", "origin/base-branch"]]
+    assert run.prework_vibeheal is False
+
+
+async def test_load_inputs_detects_vibe_heal_configuration(world: World) -> None:
+    _scope_leaf(world, "- tools/pkg/x.py")
+    (world.repo / ".env.vibeheal").write_text("SONARQUBE_URL=https://example.test\n")
+    run = _new_run(world)
+    await run.load_prework_inputs()
+    assert run.prework_vibeheal is True
+
+
+async def test_load_inputs_looks_in_the_config_dir_too(world: World) -> None:
+    _scope_leaf(world, "- tools/pkg/x.py")
+    config_dir = world.tmp / "cfg"
+    config_dir.mkdir()
+    (config_dir / ".env.vibeheal").write_text("SONARQUBE_URL=https://example.test\n")
+    run = orchestrator._Run(
+        ITEM,
+        world.config(),
+        world.options(config_dir=config_dir),
+        world.agent,
+        world.shell,
+        world,
+        world.clock,
+        world,
+    )
+    await run.load_prework_inputs()
+    assert run.prework_vibeheal is True
+
+
+@pytest.mark.parametrize("scope", ["- /etc/passwd", "- ../outside.py"])
+async def test_invalid_scope_entry_is_an_orchestrator_error(world: World, scope: str) -> None:
+    _scope_leaf(world, scope)
+    with pytest.raises(OrchestratorError, match="prework: cannot read the pre-work set"):
+        await _new_run(world).load_prework_inputs()
+
+
+async def test_failing_tree_listing_is_an_orchestrator_error(world: World) -> None:
+    _scope_leaf(world, "- tools/pkg/x.py")
+    world.tree_rc = 128
+    with pytest.raises(OrchestratorError, match="prework: cannot read the pre-work set"):
+        await _new_run(world).load_prework_inputs()
+
+
+async def test_bad_scope_ends_the_run_with_an_error_stop_record_and_no_agent_for_build(world: World) -> None:
+    world.leaves = 1
+    original = world.agent
+
+    async def agent(prompt: str) -> None:
+        await original(prompt)
+        if "Stage to run now: `plan`" in prompt:
+            _scope_leaf(world, "- ../outside.py")
+
+    world.agent = agent  # type: ignore[method-assign]
+    with pytest.raises(OrchestratorError, match="prework"):
+        await world.run()
+    assert "agent:build" not in world.events
+    stop = read_stop_record(RunRecord.open(world.tmp / "ws", ITEM).path)
+    assert stop is not None
+    assert stop.checkpoint is None
+    assert "prework" in stop.detail

@@ -41,6 +41,7 @@ from dotharness.sisyphus.stoprecord import (
     write_stop_record,
 )
 from tests.sisyphus.test_cli import FakePrs, items, make_env
+from tests.sisyphus.test_orchestrator import ITEM, World, world  # noqa: F401  (fixture)
 
 NOW = datetime(2026, 1, 2, 12, tzinfo=UTC)
 OPEN = "# B\n\n## Open decisions log\n\n1. Which tracker?\n"
@@ -824,3 +825,37 @@ def test_consume_answer_retry_duplicate_dedupes_on_item_stopped_at_answer(
     assert lines[0]["answered_at"] != lines[1]["answered_at"]
     keys = {(x["item"], x["stopped_at"], x["answer"]) for x in lines}
     assert len(keys) == 1
+
+
+# ------------------------------------------------ resume index audit (prework stage inserted)
+
+_ALL_STAGES = ("intake", "plan", "prework", "build", "refactor", "push", "open-pr")
+
+
+async def test_pre_change_plan_complete_record_resumes_into_prework(world: World) -> None:  # noqa: F811
+    from dotharness.sisyphus.orchestrator import STAGE_ORDER
+
+    RunRecord.open(world.tmp / "ws", ITEM).mark_stage("plan", "complete")  # no prework mark: the old shape
+    world.branch_exists = False
+    result = await world.run()
+    assert result.stages_skipped == ("intake", "plan")
+    assert result.stages_run[0] == "prework"
+    assert STAGE_ORDER.index("prework") == 2
+
+
+@pytest.mark.parametrize("status", ["complete", "in_progress"])
+@pytest.mark.parametrize("stage", ["build", "refactor", "push", "open-pr"])
+async def test_resume_from_later_stages_is_unchanged_by_name(
+    world: World,  # noqa: F811
+    stage: str,
+    status: str,
+) -> None:
+    rec = RunRecord.open(world.tmp / "ws", ITEM)
+    rec.retries["branch-created"] = 1
+    rec.mark_stage(stage, status)
+    world.branch_exists = True
+    result = await world.run()
+    first = _ALL_STAGES.index(stage) + (1 if status == "complete" else 0)
+    assert result.stages_skipped == _ALL_STAGES[:first]
+    assert result.stages_run == _ALL_STAGES[first:]
+    assert "prework" not in result.stages_run

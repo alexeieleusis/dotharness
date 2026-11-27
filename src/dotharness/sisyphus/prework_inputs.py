@@ -1,0 +1,181 @@
+"""Pure, read-only inputs of the ``prework`` stage: the pre-work file set and the vibe_heal "configured" detector.
+
+Package A: no import of ``spec_prism_flow``, ``pr_review``, ``vibe_heal``, ``harness``, the orchestrator or ``prbody``.
+The only side effects are one injected git call and file reads.
+"""
+
+# ruff: noqa: TRY003
+
+from __future__ import annotations
+
+import os
+import re
+import tomllib
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from dotharness.fileio import load_toml
+from dotharness.sisyphus.plan import read_scope
+from dotharness.sisyphus.stack import classify_paths
+
+GitFn = Callable[[Sequence[str]], Awaitable[Any]]
+
+_GLOB_CHARS = frozenset("*")
+
+
+class PreworkInputError(RuntimeError):
+    """The tree listing at ``origin/<base>`` could not be read."""
+
+
+def glob_to_regex(pattern: str) -> re.Pattern[str]:
+    """Compile a Scope glob. Only ``*`` and ``**`` are special: ``*`` stays within one path segment and ``**`` matches
+    any number of characters including ``/`` (``a/**/b`` also matches ``a/b``). Everything else, ``?`` and ``[``
+    included, is a literal."""
+    parts = re.split(r"(\*\*/|\*\*|\*)", pattern)
+    rx = {"**/": "(?:.*/)?", "**": ".*", "*": "[^/]*"}
+    return re.compile("".join(rx.get(part) or re.escape(part) for part in parts))
+
+
+async def _tree_listing(git: GitFn, base: str) -> list[str]:
+    ref = f"origin/{base}"
+    res = await git(["ls-tree", "-r", "--name-only", "-z", ref])
+    if res.returncode != 0:
+        raise PreworkInputError(f"git ls-tree {ref} failed: {str(res.stderr or res.stdout).strip()[-200:]}")
+    return [p for p in str(res.stdout).split("\0") if p]
+
+
+async def prework_set(phase_dir: Path, base: str, git: GitFn) -> tuple[str, ...]:
+    """Sorted, de-duplicated repo-relative source paths named by the Scope of any leaf in ``phase_dir`` that exist at
+    ``origin/<base>`` (the working tree is never read). Empty tuple when none qualify.
+
+    An entry listed verbatim is kept as a literal path; otherwise one with ``*`` is a glob matched
+    against the one tree listing. Tests are dropped by ``classify_paths``; its ``ValueError`` (absolute or ``..`` entry) propagates,
+    as does a failing git call (``PreworkInputError``).
+    """
+    entries = read_scope(phase_dir).entries
+    classify_paths(entries)  # validate every entry first; raises ValueError
+    listing = await _tree_listing(git, base)
+    present = set(listing)
+    found: set[str] = set()
+    for entry in entries:
+        if entry in present:  # a literal path wins, e.g. ``app/[id]/page.tsx``
+            found.add(entry)
+        elif _GLOB_CHARS & set(entry):
+            rx = glob_to_regex(entry)
+            found.update(p for p in listing if rx.fullmatch(p))
+    return classify_paths(sorted(found)).sources
+
+
+# --- vibe_heal configured detector -------------------------------------------------------------------------------
+
+_VIBEHEAL_VARS = ("SONARQUBE_URL", "SONARQUBE_TOKEN", "SONARQUBE_PROJECT_KEY")
+_ENV_EXACT = (".env.vibeheal", "env.vibeheal")
+_ENV_VARIANT_GLOBS = (".env.vibeheal.*", "env.vibeheal.*")
+_ENV_FALLBACK = ".env"
+_EXAMPLE_SUFFIXES = (".example", ".sample", ".template")
+_PR_REVIEW_CONFIGS = (".harness.toml", "harness.toml", ".pr_review.toml", "pr_review.toml")
+
+
+@dataclass(frozen=True)
+class VibeHealDetection:
+    """``configured`` is the verdict of ``_is_configured``; ``env_file`` is the file found, or ``None``."""
+
+    configured: bool
+    env_file: Path | None
+
+
+def _is_configured(found_file: Path | None, env: Mapping[str, str]) -> bool:
+    """The single OD-1 predicate: an explicit env file was found, or ``env`` defines all of ``_VIBEHEAL_VARS``.
+
+    A bare ``.env`` only reaches here as ``found_file`` when it defines all of them (see ``_env_files_in``).
+    """
+    return found_file is not None or all(env.get(v, "").strip() for v in _VIBEHEAL_VARS)
+
+
+def _defines_vibeheal_vars(path: Path) -> bool:
+    """True when ``path`` has a non-empty ``KEY=VALUE`` line for every one of ``_VIBEHEAL_VARS``."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    defined: set[str] = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.removeprefix("export ").strip()
+        if key in _VIBEHEAL_VARS and value.strip().strip("\"'").strip():
+            defined.add(key)
+    return defined.issuperset(_VIBEHEAL_VARS)
+
+
+def _search_dirs(repo: Path, config_dir: Path) -> list[Path]:
+    dirs: list[Path] = []
+    for d in (repo, config_dir):
+        if d not in dirs:
+            dirs.append(d)
+    return dirs
+
+
+def _env_files_in(directory: Path) -> list[Path]:
+    found = [directory / n for n in _ENV_EXACT]
+    for pattern in _ENV_VARIANT_GLOBS:
+        found.extend(sorted(p for p in directory.glob(pattern) if not p.name.endswith(_EXAMPLE_SUFFIXES)))
+    found = [p for p in found if p.is_file()]
+    fallback = directory / _ENV_FALLBACK  # a bare .env is shared with other tools: count it only if it has our vars
+    if fallback.is_file() and _defines_vibeheal_vars(fallback):
+        found.append(fallback)
+    return found
+
+
+def _referenced_env_files(config_file: Path) -> list[Path]:
+    """``env_file`` values of ``[[repo.subdir]]`` entries, relative ones resolved against the config's directory."""
+    try:
+        data = load_toml(config_file)
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+        return []
+    found: list[Path] = []
+    for sub in _subdir_entries(data.get("repo")):
+        value = sub.get("env_file")
+        if isinstance(value, str) and value.strip():
+            path = Path(value.strip()).expanduser()
+            found.append(path if path.is_absolute() else config_file.parent / path)
+    return found
+
+
+def _subdir_entries(repos: Any) -> list[dict[str, Any]]:
+    """All dict ``[[repo.subdir]]`` entries under ``repos`` (a single ``[repo]`` table or a list of them)."""
+    repo_list = [repos] if isinstance(repos, dict) else repos
+    if not isinstance(repo_list, list):
+        return []
+    entries: list[dict[str, Any]] = []
+    for repo in repo_list:
+        subdirs = repo.get("subdir") if isinstance(repo, dict) else None
+        if isinstance(subdirs, list):
+            entries.extend(s for s in subdirs if isinstance(s, dict))
+    return entries
+
+
+def vibeheal_configured(
+    repo: Path, config_dir: Path | None = None, env: Mapping[str, str] | None = None
+) -> VibeHealDetection:
+    """Look for vibe_heal configuration by file reads only: env files in ``repo`` then ``config_dir`` (the directory of
+    ``.sisyphus.toml``; defaults to ``repo``), then env files referenced from a ``pr_review`` TOML in those directories.
+    A malformed TOML counts as no reference. ``env`` defaults to the process environment.
+    """
+    environ = os.environ if env is None else env
+    dirs = _search_dirs(repo, config_dir or repo)
+    candidates = [p for d in dirs for p in _env_files_in(d)]
+    candidates += [
+        ref
+        for d in dirs
+        for name in _PR_REVIEW_CONFIGS
+        if (d / name).is_file()
+        for ref in _referenced_env_files(d / name)
+        if ref.is_file()
+    ]
+    found = candidates[0] if candidates else None
+    return VibeHealDetection(_is_configured(found, environ), found)

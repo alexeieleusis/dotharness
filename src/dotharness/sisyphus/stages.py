@@ -4,15 +4,17 @@ from __future__ import annotations
 
 INTAKE_STAGE = "intake"
 PLAN_STAGE = "plan"
+PREWORK_STAGE = "prework"
 BUILD_STAGE = "build"
 REFACTOR_STAGE = "refactor"
 PUSH_STAGE = "push"
 OPEN_PR_STAGE = "open-pr"
-STAGE_ORDER = (INTAKE_STAGE, PLAN_STAGE, BUILD_STAGE, REFACTOR_STAGE, PUSH_STAGE, OPEN_PR_STAGE)
+STAGE_ORDER = (INTAKE_STAGE, PLAN_STAGE, PREWORK_STAGE, BUILD_STAGE, REFACTOR_STAGE, PUSH_STAGE, OPEN_PR_STAGE)
 
 # Run-record `retries` keys: `<stage>:<counter>` for a per-stage counter, a bare name for a run-wide one.
 AUTO_RETRY_KEY = "auto-retry"
 BUILD_RETRY_KEY = f"{BUILD_STAGE}:retry-cycles"
+PREWORK_RETRY_KEY = f"{PREWORK_STAGE}:retry-cycles"
 REFACTOR_RETRY_KEY = f"{REFACTOR_STAGE}:retry-cycles"
 LEAF_LIMIT_KEY = f"{PLAN_STAGE}:leaf-limit"
 GATE_FAILED_KEY = "gate-failed"  # additive: 1 once a gate command failed, so status and reruns still see it
