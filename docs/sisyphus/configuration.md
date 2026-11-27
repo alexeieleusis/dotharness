@@ -218,6 +218,10 @@ Optional.
   `.sisyphus.toml`, then for `env_file` entries under `[[repo.subdir]]` in `.harness.toml`, `harness.toml`,
   `.pr_review.toml` or `pr_review.toml` in the same places. When none is found it notes
   `prework: vibe_heal not configured` and runs the pattern pass alone. Nothing under `[prework]` configures the tool.
+- The mere presence of such a file counts as "configured", including an unrelated plain `.env`. Sisyphus does not
+  check that the file defines `SONARQUBE_URL`, `SONARQUBE_TOKEN` and `SONARQUBE_PROJECT_KEY`. If the file lacks them,
+  the `vibe_heal` call fails and the stage stops at C5 on every run. Set `enabled = false` to avoid that, or remove
+  or rename the file.
 - The pattern pass uses `[refactor] pattern_set` when set.
 - On resume the stage runs again from its start unless it completed: see "Prework stage" in [Usage](usage.md#prework-stage).
 - An unknown key or a non-boolean `enabled` is a `ConfigError`. A `.sisyphus.toml` without `[prework]` loads unchanged,
