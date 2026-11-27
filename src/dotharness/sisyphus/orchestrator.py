@@ -106,6 +106,21 @@ PREWORK_PROMPT_MODE = {
     "handoff_prefix": "prework",
     "share_clause": " (every file of the group is listed; no share is given)",
 }
+
+
+@dataclass(frozen=True)
+class AgentStageSpec:
+    """What differs between the stages that share the refactor prompt and its check/gate helpers."""
+
+    stage: str
+    retry_key: str
+    label: str
+    handoff_prefix: str
+    prompt_mode: Mapping[str, str]
+
+
+REFACTOR_SPEC = AgentStageSpec(REFACTOR_STAGE, REFACTOR_RETRY_KEY, "refactor", "refactor", REFACTOR_PROMPT_MODE)
+PREWORK_SPEC = AgentStageSpec(PREWORK_STAGE, PREWORK_RETRY_KEY, "prework", "prework", PREWORK_PROMPT_MODE)
 SPF_CONFIG_NAME = ".spec-prism-flow.toml"
 STOP_SUFFIX = ".stop.json"
 REFACTOR_INPUT_FILE = "refactor-input.json"
@@ -1026,7 +1041,7 @@ class _Run:
         if stage in (REFACTOR_STAGE, PREWORK_STAGE):
             values["patterns dir"] = str(knowledge_file("patterns"))
         if stage == REFACTOR_STAGE:
-            values.update(REFACTOR_PROMPT_MODE)
+            values.update(REFACTOR_SPEC.prompt_mode)
         values.update(extra_values or {})
         prompt = build_orchestration_prompt(template, values)
         stop_file = stop_report_path(self.rec)
@@ -1196,7 +1211,7 @@ class _Run:
                     PREWORK_STAGE,
                     prompt_file=REFACTOR_PROMPT_FILE,
                     extra_values={
-                        **PREWORK_PROMPT_MODE,
+                        **PREWORK_SPEC.prompt_mode,
                         "target branch": self.prework_branch,
                         "refactor_set": group.set,
                         "group_files": "\n".join(group.files),
@@ -1209,18 +1224,11 @@ class _Run:
                 # against ``head_before..HEAD`` would flag them as this group's out-of-scope edits.
                 continue
             recorded = next(e for e in self.read_refactor_input(path) if e["set"] == group.set)
-            await self.check_refactor_group(
-                group,
-                str(recorded["head_before"]),
-                retry_key=PREWORK_RETRY_KEY,
-                handoff=self.prework_handoff_path(group.set),
-                label="prework",
-                branch=self.prework_branch,
-            )
+            await self.check_refactor_group(group, str(recorded["head_before"]), PREWORK_SPEC)
 
     async def prework_gate(self) -> None:
         """Run the gate plan once, only when the pre-work branch carries commits; a failure stops at C5."""
-        await self.gate_refactor_group(f"origin/{self.opt.base_branch}", retry_key=PREWORK_RETRY_KEY, label="prework")
+        await self.gate_range(f"origin/{self.opt.base_branch}", PREWORK_SPEC)
         if self.rec.retries.get(GATE_FAILED_KEY):
             self.rec.retries[GATE_FAILED_KEY] = 0
             self.rec.save()
@@ -1353,27 +1361,15 @@ class _Run:
                     )
                 recorded = next(e for e in self.read_refactor_input() if e["set"] == group.set)
                 head_before = str(recorded["head_before"])
-                await self.check_refactor_group(group, head_before)
-                await self.gate_refactor_group(head_before)
+                await self.check_refactor_group(group, head_before, REFACTOR_SPEC)
+                await self.gate_range(head_before, REFACTOR_SPEC)
 
     def refactor_handoff_path(self, set_name: str) -> Path:
         return self.handoff_dir / f"refactor-{set_name}.md"
 
-    async def check_refactor_group(
-        self,
-        group: StackGroup,
-        head_before: str,
-        *,
-        retry_key: str = REFACTOR_RETRY_KEY,
-        handoff: Path | None = None,
-        label: str = "refactor",
-        branch: str | None = None,
-    ) -> None:
-        """Stop at C5 (one retry increment) if the group's checkout, handoff or edits are not as required.
-
-        The keyword arguments default to the refactor stage's values; the prework stage passes its own.
-        """
-        expected = branch or self.branch
+    async def check_refactor_group(self, group: StackGroup, head_before: str, spec: AgentStageSpec) -> None:
+        """Stop at C5 (one retry increment) if the group's checkout, handoff or edits are not as required."""
+        expected = self.prework_branch if spec is PREWORK_SPEC else self.branch
         problems: list[str] = []
         current = (await self.git("rev-parse", "--abbrev-ref", "HEAD")).stdout.strip()
         on_branch = current == expected
@@ -1382,7 +1378,7 @@ class _Run:
         dirty = (await self.git("status", "--porcelain", "--untracked-files=all")).stdout.strip()
         if dirty:
             problems.append(f"uncommitted changes: {_tail(dirty, 200)}")
-        handoff = handoff or self.refactor_handoff_path(group.set)
+        handoff = self.handoff_dir / f"{spec.handoff_prefix}-{group.set}.md"
         listed: set[str] = set()
         if handoff.is_file():
             listed = parse_listed_edits(handoff.read_text(encoding="utf-8", errors="replace"))
@@ -1394,20 +1390,15 @@ class _Run:
             if violations:
                 problems.append("out-of-scope edits: " + ", ".join(violations))
         if problems:
-            self.rec.increment_retry(retry_key)
+            self.rec.increment_retry(spec.retry_key)
             raise _Stop(
                 Checkpoint.C5,
-                f"the {label} agent ended before group {group.set} was complete; " + "; ".join(problems),
+                f"the {spec.label} agent ended before group {group.set} was complete; " + "; ".join(problems),
             )
 
-    async def gate_refactor_group(
-        self,
-        head_before: str,
-        *,
-        retry_key: str = REFACTOR_RETRY_KEY,
-        label: str = "refactor",
-    ) -> None:
+    async def gate_range(self, head_before: str, spec: AgentStageSpec) -> None:
         """Run the existing gate when ``head_before..HEAD`` has commits; a failure stops at C5 and leaves them."""
+        label = spec.label
         count = (await self.git("rev-list", "--count", f"{head_before}..HEAD")).stdout.strip()
         if not count.isdigit() or int(count) == 0:
             return
@@ -1417,7 +1408,7 @@ class _Run:
             return
         if not await self.run_gate_plan(plan):
             return
-        self.rec.increment_retry(retry_key)
+        self.rec.increment_retry(spec.retry_key)
         g = self.gate_failure
         if g is None:
             raise _Stop(Checkpoint.C5, f"{label} gate failed")
