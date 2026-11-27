@@ -1191,6 +1191,10 @@ class _Run:
                         "input_file": str(path),
                     },
                 )
+            if resume_skip:
+                # Validated when the group completed; HEAD now also holds later groups' commits, so a re-check
+                # against ``head_before..HEAD`` would flag them as this group's out-of-scope edits.
+                continue
             recorded = next(e for e in self.read_refactor_input(path) if e["set"] == group.set)
             await self.check_refactor_group(
                 group,
