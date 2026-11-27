@@ -119,11 +119,29 @@ class VibeHealDetection:
 
 
 def _is_configured(found_file: Path | None, env: Mapping[str, str]) -> bool:
-    """The single OD-1 predicate. Option A (current): configured once an env file is found.
+    """The single OD-1 predicate: an explicit env file was found, or ``env`` defines all of ``_VIBEHEAL_VARS``.
 
-    Option B would be: file defines all of ``_VIBEHEAL_VARS``, or ``env`` does.
+    A bare ``.env`` only reaches here as ``found_file`` when it defines all of them (see ``_env_files_in``).
     """
-    return found_file is not None
+    return found_file is not None or all(env.get(v, "").strip() for v in _VIBEHEAL_VARS)
+
+
+def _defines_vibeheal_vars(path: Path) -> bool:
+    """True when ``path`` has a non-empty ``KEY=VALUE`` line for every one of ``_VIBEHEAL_VARS``."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    defined: set[str] = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.removeprefix("export ").strip()
+        if key in _VIBEHEAL_VARS and value.strip().strip("\"'").strip():
+            defined.add(key)
+    return defined.issuperset(_VIBEHEAL_VARS)
 
 
 def _search_dirs(repo: Path, config_dir: Path) -> list[Path]:
@@ -138,8 +156,11 @@ def _env_files_in(directory: Path) -> list[Path]:
     found = [directory / n for n in _ENV_EXACT]
     for pattern in _ENV_VARIANT_GLOBS:
         found.extend(sorted(p for p in directory.glob(pattern) if not p.name.endswith(_EXAMPLE_SUFFIXES)))
-    found.append(directory / _ENV_FALLBACK)
-    return [p for p in found if p.is_file()]
+    found = [p for p in found if p.is_file()]
+    fallback = directory / _ENV_FALLBACK  # a bare .env is shared with other tools: count it only if it has our vars
+    if fallback.is_file() and _defines_vibeheal_vars(fallback):
+        found.append(fallback)
+    return found
 
 
 def _referenced_env_files(config_file: Path) -> list[Path]:
