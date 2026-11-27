@@ -131,3 +131,14 @@ def test_git_failure_raised(tmp_path):
     leaf(tmp_path, "01-a", ["- src/a.py"])
     with pytest.raises(PreworkInputError, match="origin/main"):
         run(tmp_path, rc=128)
+
+
+def test_literal_path_with_glob_chars_is_kept(tmp_path):
+    leaf(tmp_path, "01-a", ["- app/[id]/page.tsx"])
+    assert run(tmp_path, tree=["app/[id]/page.tsx", "app/i/page.tsx"]) == ("app/[id]/page.tsx",)
+
+
+def test_malformed_glob_raises_input_error(tmp_path):
+    leaf(tmp_path, "01-a", ["- x[z-a].py"])
+    with pytest.raises(PreworkInputError, match="invalid Scope glob"):
+        run(tmp_path)

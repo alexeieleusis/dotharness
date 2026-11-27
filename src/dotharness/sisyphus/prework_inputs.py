@@ -26,7 +26,7 @@ _GLOB_CHARS = frozenset("*?[")
 
 
 class PreworkInputError(RuntimeError):
-    """The tree listing at ``origin/<base>`` could not be read."""
+    """The tree listing at ``origin/<base>`` could not be read, or a Scope glob is malformed."""
 
 
 def _bracket_class(pattern: str, i: int) -> tuple[str, int]:
@@ -79,8 +79,8 @@ async def prework_set(phase_dir: Path, base: str, git: GitFn) -> tuple[str, ...]
     """Sorted, de-duplicated repo-relative source paths named by the Scope of any leaf in ``phase_dir`` that exist at
     ``origin/<base>`` (the working tree is never read). Empty tuple when none qualify.
 
-    Entries with ``*``, ``?`` or ``[`` are globs matched against the one tree listing; others are literal paths kept
-    only if listed. Tests are dropped by ``classify_paths``; its ``ValueError`` (absolute or ``..`` entry) propagates,
+    An entry listed verbatim is kept as a literal path; otherwise one with ``*``, ``?`` or ``[`` is a glob matched
+    against the one tree listing (an uncompilable glob raises ``PreworkInputError``). Tests are dropped by ``classify_paths``; its ``ValueError`` (absolute or ``..`` entry) propagates,
     as does a failing git call (``PreworkInputError``).
     """
     entries = read_scope(phase_dir).entries
@@ -89,11 +89,14 @@ async def prework_set(phase_dir: Path, base: str, git: GitFn) -> tuple[str, ...]
     present = set(listing)
     found: set[str] = set()
     for entry in entries:
-        if _GLOB_CHARS & set(entry):
-            rx = glob_to_regex(entry)
-            found.update(p for p in listing if rx.fullmatch(p))
-        elif entry in present:
+        if entry in present:  # a literal path wins, e.g. ``app/[id]/page.tsx``
             found.add(entry)
+        elif _GLOB_CHARS & set(entry):
+            try:
+                rx = glob_to_regex(entry)
+            except re.error as exc:
+                raise PreworkInputError(f"invalid Scope glob {entry!r}: {exc}") from exc
+            found.update(p for p in listing if rx.fullmatch(p))
     return classify_paths(sorted(found)).sources
 
 
