@@ -29,40 +29,41 @@ class PreworkInputError(RuntimeError):
     """The tree listing at ``origin/<base>`` could not be read."""
 
 
+def _bracket_class(pattern: str, i: int) -> tuple[str, int]:
+    """Translate the ``[...]`` at ``pattern[i]``; an unterminated ``[`` is a literal. Returns (regex, next index)."""
+    end = pattern.find("]", i + 2)
+    if end == -1:
+        return re.escape("["), i + 1
+    body = pattern[i + 1 : end]
+    neg = body[:1] in ("!", "^")
+    body = (body[1:] if neg else body).replace("\\", "\\\\")
+    return f"(?!/)[{'^' if neg else ''}{body}]", end + 1
+
+
+def _glob_token(pattern: str, i: int) -> tuple[str, int]:
+    """Translate the glob token starting at ``pattern[i]``. Returns (regex, next index)."""
+    if pattern.startswith("**/", i):
+        return "(?:.*/)?", i + 3
+    if pattern.startswith("**", i):
+        return ".*", i + 2
+    ch = pattern[i]
+    if ch == "*":
+        return "[^/]*", i + 1
+    if ch == "?":
+        return "[^/]", i + 1
+    if ch == "[":
+        return _bracket_class(pattern, i)
+    return re.escape(ch), i + 1
+
+
 def glob_to_regex(pattern: str) -> re.Pattern[str]:
     """Compile a Scope glob. ``*`` and ``?`` stay within one path segment, ``[...]`` is a segment character class,
     and ``**`` matches any number of characters including ``/`` (``a/**/b`` also matches ``a/b``)."""
     out: list[str] = []
-    i, n = 0, len(pattern)
-    while i < n:
-        ch = pattern[i]
-        if pattern.startswith("**/", i):
-            out.append("(?:.*/)?")
-            i += 3
-        elif pattern.startswith("**", i):
-            out.append(".*")
-            i += 2
-        elif ch == "*":
-            out.append("[^/]*")
-            i += 1
-        elif ch == "?":
-            out.append("[^/]")
-            i += 1
-        elif ch == "[":
-            end = pattern.find("]", i + 2)
-            if end == -1:
-                out.append(re.escape(ch))
-                i += 1
-            else:
-                body = pattern[i + 1 : end]
-                neg = body[:1] in ("!", "^")
-                body = body[1:] if neg else body
-                body = body.replace("\\", "\\\\")
-                out.append(f"(?!/)[{'^' if neg else ''}{body}]")
-                i = end + 1
-        else:
-            out.append(re.escape(ch))
-            i += 1
+    i = 0
+    while i < len(pattern):
+        piece, i = _glob_token(pattern, i)
+        out.append(piece)
     return re.compile("".join(out))
 
 
