@@ -18,4 +18,4 @@ The `local-review` command lives in the package `dotharness.pr_review.runners.lo
 
 The `ci-fix` command lives in `dotharness.pr_review.runners.ci_fix`. See [`ci-fix`](commands/ci-fix.md) for how to use it. Public names: `run`, `CiFixError`, `DIGEST_PREFIX`, `get_attempts` and `find_step_command`.
 
-The `merge` command lives in `dotharness.pr_review.runners.merge`. See [`merge`](commands/merge.md) for how to use it. Public names: `run`, `MergeError`, `gate_record_path` and `read_gate_record`.
+The `merge` command lives in `dotharness.pr_review.runners.merge`. See [`merge`](commands/merge.md) for how to use it. Public names: `run`, `MergeError`, `gate_record_path` and `read_gate_record`. The record it reads is written by `write_gate_record` in `dotharness.sisyphus.gaterecord`. The path functions (`build_gate_record_path`, `validate_repo_slug`, `fallback_repo_slug`) live in `dotharness.paths`, shared by the reader and the writer. See [Gate record](commands/merge.md#gate-record).

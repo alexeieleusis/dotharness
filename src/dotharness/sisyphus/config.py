@@ -18,6 +18,7 @@ from typing import Any
 
 from dotharness.ai_backend import BACKEND_NAMES
 from dotharness.fileio import TOMLDecodeError, load_toml
+from dotharness.paths import fallback_repo_slug, repo_slug_from_name
 from dotharness.sisyphus import stack
 
 DEFAULT_CONFIG_FILE = ".sisyphus.toml"
@@ -41,6 +42,24 @@ class ProjectConfig:
     workspace_dir: str | None = None
     brief_path_template: str | None = None
     base_branch: str | None = None
+    repo_name: str | None = None
+
+    @property
+    def repo_slug(self) -> str:
+        """Directory-safe repo slug: ``repo_name`` (``/`` -> ``-``, validated) or the fallback over ``repo_dir``.
+
+        With neither set the fallback runs over the current directory (as the CLI does for ``repo_dir``).
+        """
+        if self.repo_name is None:
+            return fallback_repo_slug(Path(self.repo_dir or "."))
+        return _resolve_repo_name(self.repo_name)
+
+
+def _resolve_repo_name(repo_name: str) -> str:
+    try:
+        return repo_slug_from_name(repo_name)
+    except ValueError as exc:
+        raise ConfigError(f"[project] repo_name '{repo_name}' is not a valid repo slug: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -322,13 +341,20 @@ def _parse(data: dict[str, Any]) -> SisyphusConfig:
     if "project" not in data:
         raise ConfigError("missing required [project] table")
 
-    t = _table(data["project"], "project", ("repo_dir", "workspace_dir", "brief_path_template", "base_branch"))
+    t = _table(
+        data["project"],
+        "project",
+        ("repo_dir", "workspace_dir", "brief_path_template", "base_branch", "repo_name"),
+    )
     project = ProjectConfig(
         repo_dir=_str(t, "project", "repo_dir"),
         workspace_dir=_str(t, "project", "workspace_dir"),
         brief_path_template=_str(t, "project", "brief_path_template"),
         base_branch=_str(t, "project", "base_branch"),
+        repo_name=_str(t, "project", "repo_name"),
     )
+    if project.repo_name is not None:
+        _resolve_repo_name(project.repo_name)  # fail at load time on an invalid slug
     source = _parse_source(data["source"]) if "source" in data else SourceConfig()
 
     agent = AgentConfig()

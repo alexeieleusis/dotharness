@@ -67,9 +67,27 @@ Unknown keys are rejected. See [configuration](../configuration.md).
 
 ## Gate record
 
-Package A (the sisyphus gate-record writer) writes the evidence that `build.commands` passed on the head SHA. The format is settled. The reader here and the writer there must stay in sync:
+The sisyphus gate-record writer (`write_gate_record` in `dotharness.sisyphus.gaterecord`) writes the evidence that `build.commands` passed on the head SHA. It is called from `_Run.gate()` in the sisyphus orchestrator. The path comes from `dotharness.paths.build_gate_record_path`, which this reader also uses, so the reader and the writer cannot drift apart:
 
 - File: `~/.local/share/dotharness/state/<repo-slug>/build_gate_<PR number>.json`
 - Content: `{"head_sha": "<sha>"}` (other keys are ignored)
+
+When a record is written:
+
+- After the gate passes, sisyphus writes a record for the head SHA it read before the gate ran. The write is atomic, and rewriting the same PR overwrites the record.
+- When the gate does not run (no `build.commands` configured, no changed files, or no applicable build entry), sisyphus writes no record, so such a PR does not merge through `pr_review merge`. The digest carries the note `gate not run for PR #N: <reason>`.
+- A failed gate writes no record.
+- If the record cannot be written, sisyphus adds the note `gate record not written for PR #N: <error>` to the digest and carries on. The gate outcome is unchanged.
+
+### `<repo-slug>` and `[project] repo_name`
+
+`<repo-slug>` is the directory name under `~/.local/share/dotharness/state/`. For sisyphus it comes from the optional `[project] repo_name` key:
+
+- When `repo_name` is unset, `<repo-slug>` falls back to the sanitised basename plus 8-hex hash of `project.repo_dir`.
+- When `repo_name` is set, the value has `/` replaced by `-` (so `owner/repo` becomes `owner-repo`). The result must match `[a-zA-Z0-9._-]+` and must not be `.` or `..`. An invalid value is a config error.
+
+`merge` derives its own slug from pr_review's `[repo] name` (required for `merge`; `/` becomes `-`, see [configuration](../configuration.md#repo)). The shared path function does not make the two slugs agree. The configs must. Set `[project] repo_name` to the same value as pr_review's `[repo] name` (for example `acme/frontend` in both) so that both sides resolve to `acme-frontend`.
+
+The unset fallback (basename plus 8-hex hash) can never equal a name-derived slug such as `owner-repo`. It only matches a pr_review config that has no `name` (`local-review`), so it is effectively unusable with `merge`. If the slugs differ, sisyphus writes the record but `merge` looks elsewhere and reports `gate_record_missing`.
 
 A missing, unreadable or SHA-mismatched record blocks the merge.

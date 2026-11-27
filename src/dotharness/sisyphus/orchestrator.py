@@ -40,6 +40,7 @@ from dotharness.sisyphus.digest import (
     needs_from_stop,
     write_digest,
 )
+from dotharness.sisyphus.gaterecord import write_gate_record
 from dotharness.sisyphus.intake import AgentRunner, BoundaryViolation, resolve_brief_path, run_intake
 from dotharness.sisyphus.lock import clone_lock
 from dotharness.sisyphus.modified import format_percent
@@ -1331,6 +1332,18 @@ class _Run:
             return [], "no [[build.gate]] entry applies to the touched package directories"
         return plan, None
 
+    def write_gate_record_for(self, number: int, head_sha: str) -> bool:
+        """Record the SHA for the PR; a write failure is noted and never changes the gate outcome.
+
+        Returns whether the record was written.
+        """
+        try:
+            write_gate_record(self.config.project.repo_slug, number, head_sha)
+        except (OSError, ValueError) as exc:
+            self.note(f"gate record not written for PR #{number}: {exc}")
+            return False
+        return True
+
     async def gate(self) -> None:
         """Run the gate commands in each touched package dir at HEAD; record the first failure.
 
@@ -1338,7 +1351,8 @@ class _Run:
         to it, in file order. An entry with ``packages`` applies only to a touched directory equal to one of
         them; an entry without ``packages`` applies to every touched directory. When neither source exists,
         when there are no changed files, or when only entries exist and none applies, note that the gate was
-        not run and return. The plan, and the reason there is none, come from :meth:`build_gate_plan`. A failing command is recorded in ``gate_failure`` and noted; the remaining commands
+        not run, write no gate record and return. The plan, and the reason there is none, come from
+        :meth:`build_gate_plan`. A failing command is recorded in ``gate_failure`` and noted; the remaining commands
         are skipped and nothing is raised, so the run still completes.
         """
         number = await self.pr_number()
@@ -1346,9 +1360,11 @@ class _Run:
         if reason is not None:
             self.note(f"gate not run for PR #{number}: {reason}")
             return
+        head_sha = await self.rev_parse_head()  # the commit the gate tests; not re-read after the commands run
         if await self.run_gate_plan(plan):
             return
         self.gated = True
+        self.write_gate_record_for(number, head_sha)
         if self.rec.retries.get(GATE_FAILED_KEY):
             self.rec.retries[GATE_FAILED_KEY] = 0
             self.rec.save()
