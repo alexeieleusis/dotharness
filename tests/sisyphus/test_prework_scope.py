@@ -59,16 +59,17 @@ def test_glob_semantics_pinned(tmp_path):
     assert run(tmp_path) == ("src/a.py", "src/pkg/b.py", "src/pkg/deep/c.py")  # ``**/`` also matches zero dirs
     leaf(tmp_path, "01-a", ["- src/**"])
     assert run(tmp_path) == ("src/a.py", "src/pkg/b.py", "src/pkg/deep/c.py")
-    leaf(tmp_path, "01-a", ["- x?.py", "- x[0-9].py"])
-    assert run(tmp_path) == ("x1.py",)
+    leaf(tmp_path, "01-a", ["- x?.py", "- x[0-9].py"])  # ``?`` and ``[`` are literals, not glob syntax
+    assert run(tmp_path) == ()
 
 
 def test_glob_regex_does_not_cross_slash():
     assert not glob_to_regex("src/*.py").fullmatch("src/pkg/b.py")
     assert glob_to_regex("a/**/b").fullmatch("a/b")
     assert glob_to_regex("a/**/b").fullmatch("a/x/y/b")
-    assert not glob_to_regex("x[!0-9].py").fullmatch("x1.py")
-    assert not glob_to_regex("a[/]b").fullmatch("a/b")
+    assert not glob_to_regex("x[0-9].py").fullmatch("x1.py")
+    assert glob_to_regex("x[0-9].py").fullmatch("x[0-9].py")
+    assert not glob_to_regex("x?.py").fullmatch("x1.py")
 
 
 def test_tests_and_non_source_dropped(tmp_path):
@@ -136,9 +137,3 @@ def test_git_failure_raised(tmp_path):
 def test_literal_path_with_glob_chars_is_kept(tmp_path):
     leaf(tmp_path, "01-a", ["- app/[id]/page.tsx"])
     assert run(tmp_path, tree=["app/[id]/page.tsx", "app/i/page.tsx"]) == ("app/[id]/page.tsx",)
-
-
-def test_malformed_glob_raises_input_error(tmp_path):
-    leaf(tmp_path, "01-a", ["- x[z-a].py"])
-    with pytest.raises(PreworkInputError, match="invalid Scope glob"):
-        run(tmp_path)

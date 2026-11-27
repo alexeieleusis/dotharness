@@ -22,49 +22,20 @@ from dotharness.sisyphus.stack import classify_paths
 
 GitFn = Callable[[Sequence[str]], Awaitable[Any]]
 
-_GLOB_CHARS = frozenset("*?[")
+_GLOB_CHARS = frozenset("*")
 
 
 class PreworkInputError(RuntimeError):
-    """The tree listing at ``origin/<base>`` could not be read, or a Scope glob is malformed."""
-
-
-def _bracket_class(pattern: str, i: int) -> tuple[str, int]:
-    """Translate the ``[...]`` at ``pattern[i]``; an unterminated ``[`` is a literal. Returns (regex, next index)."""
-    end = pattern.find("]", i + 2)
-    if end == -1:
-        return re.escape("["), i + 1
-    body = pattern[i + 1 : end]
-    neg = body[:1] in ("!", "^")
-    body = (body[1:] if neg else body).replace("\\", "\\\\")
-    return f"(?!/)[{'^' if neg else ''}{body}]", end + 1
-
-
-def _glob_token(pattern: str, i: int) -> tuple[str, int]:
-    """Translate the glob token starting at ``pattern[i]``. Returns (regex, next index)."""
-    if pattern.startswith("**/", i):
-        return "(?:.*/)?", i + 3
-    if pattern.startswith("**", i):
-        return ".*", i + 2
-    ch = pattern[i]
-    if ch == "*":
-        return "[^/]*", i + 1
-    if ch == "?":
-        return "[^/]", i + 1
-    if ch == "[":
-        return _bracket_class(pattern, i)
-    return re.escape(ch), i + 1
+    """The tree listing at ``origin/<base>`` could not be read."""
 
 
 def glob_to_regex(pattern: str) -> re.Pattern[str]:
-    """Compile a Scope glob. ``*`` and ``?`` stay within one path segment, ``[...]`` is a segment character class,
-    and ``**`` matches any number of characters including ``/`` (``a/**/b`` also matches ``a/b``)."""
-    out: list[str] = []
-    i = 0
-    while i < len(pattern):
-        piece, i = _glob_token(pattern, i)
-        out.append(piece)
-    return re.compile("".join(out))
+    """Compile a Scope glob. Only ``*`` and ``**`` are special: ``*`` stays within one path segment and ``**`` matches
+    any number of characters including ``/`` (``a/**/b`` also matches ``a/b``). Everything else, ``?`` and ``[``
+    included, is a literal."""
+    parts = re.split(r"(\*\*/|\*\*|\*)", pattern)
+    rx = {"**/": "(?:.*/)?", "**": ".*", "*": "[^/]*"}
+    return re.compile("".join(rx.get(part) or re.escape(part) for part in parts))
 
 
 async def _tree_listing(git: GitFn, base: str) -> list[str]:
@@ -79,8 +50,8 @@ async def prework_set(phase_dir: Path, base: str, git: GitFn) -> tuple[str, ...]
     """Sorted, de-duplicated repo-relative source paths named by the Scope of any leaf in ``phase_dir`` that exist at
     ``origin/<base>`` (the working tree is never read). Empty tuple when none qualify.
 
-    An entry listed verbatim is kept as a literal path; otherwise one with ``*``, ``?`` or ``[`` is a glob matched
-    against the one tree listing (an uncompilable glob raises ``PreworkInputError``). Tests are dropped by ``classify_paths``; its ``ValueError`` (absolute or ``..`` entry) propagates,
+    An entry listed verbatim is kept as a literal path; otherwise one with ``*`` is a glob matched
+    against the one tree listing. Tests are dropped by ``classify_paths``; its ``ValueError`` (absolute or ``..`` entry) propagates,
     as does a failing git call (``PreworkInputError``).
     """
     entries = read_scope(phase_dir).entries
@@ -92,10 +63,7 @@ async def prework_set(phase_dir: Path, base: str, git: GitFn) -> tuple[str, ...]
         if entry in present:  # a literal path wins, e.g. ``app/[id]/page.tsx``
             found.add(entry)
         elif _GLOB_CHARS & set(entry):
-            try:
-                rx = glob_to_regex(entry)
-            except re.error as exc:
-                raise PreworkInputError(f"invalid Scope glob {entry!r}: {exc}") from exc
+            rx = glob_to_regex(entry)
             found.update(p for p in listing if rx.fullmatch(p))
     return classify_paths(sorted(found)).sources
 

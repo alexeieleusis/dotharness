@@ -314,7 +314,7 @@ What it does, in order:
 
 1. **Pre-work set.** Sisyphus reads the `## Scope` section of every leaf file in the plan and keeps the entries that
    exist at `origin/<resolved base>` (the tree at that ref, not the working tree) and are source files. Entries with
-   `*`, `?` or `[` are globs, matched within one path segment (`**` crosses directories). Test files are dropped.
+   `*` are globs: `*` matches within one path segment and `**` crosses directories (`?` and `[` are literal). Test files are dropped.
    Lines of a Scope section that are not `- <path>` bullets are skipped. An absolute path or a `..` entry, or a
    failing tree listing, stops the run with an error stop (not a checkpoint): the message starts with `prework:`.
    If the set is empty the stage ends `complete` with the note `prework: no existing source files in the plan scope`
