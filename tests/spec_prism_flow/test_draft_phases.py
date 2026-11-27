@@ -2,6 +2,7 @@ import importlib.util
 import json
 import logging
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -454,7 +455,13 @@ def _load_sisyphus_plan():
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # dataclasses resolves string annotations via sys.modules[cls.__module__].
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
     return module
 
 
