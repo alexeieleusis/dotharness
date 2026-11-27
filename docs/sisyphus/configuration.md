@@ -202,6 +202,28 @@ Optional.
 - A `.sisyphus.toml` without `[refactor]` loads unchanged, with `enabled = true`.
 - There is no per-run CLI override: the `[refactor]` config table is the only switch.
 
+### `[prework]`
+
+Optional.
+
+| Key | Type | Default |
+|---|---|---|
+| `enabled` | bool | `true` |
+
+- `enabled = false` records the `prework` stage as skipped. It shows as `stages_skipped` in the digest.
+- The stage cleans the existing source files that the leaf Scope sections name, on a `<item-branch>-prework` branch,
+  and opens one draft pre-work PR the feature PR stacks on (see [Usage](usage.md#prework-stage)).
+- It uses `vibe_heal` only when it is configured. Sisyphus looks for env files (`.env.vibeheal`, `env.vibeheal`,
+  their `.*` variants, then `.env`) in the repository root and, when the caller supplies it, the directory of
+  `.sisyphus.toml`, then for `env_file` entries under `[[repo.subdir]]` in `.harness.toml`, `harness.toml`,
+  `.pr_review.toml` or `pr_review.toml` in the same places. When none is found it notes
+  `prework: vibe_heal not configured` and runs the pattern pass alone. Nothing under `[prework]` configures the tool.
+- The pattern pass uses `[refactor] pattern_set` when set.
+- On resume the stage runs again from its start unless it completed: see "Prework stage" in [Usage](usage.md#prework-stage).
+- An unknown key or a non-boolean `enabled` is a `ConfigError`. A `.sisyphus.toml` without `[prework]` loads unchanged,
+  with `enabled = true`.
+- There is no per-run CLI override: the `[prework]` config table is the only switch.
+
 ### `[archive]`
 
 Optional.

@@ -35,6 +35,8 @@ class Fake:
         self.gate_rc = 0
         self.vh_rc: dict[tuple[str, str], int] = {}
         self.branch_exists = False
+        self.push_rc = 0
+        self.log = ""
         self.calls: list[tuple[str, ...]] = []
 
     async def __call__(self, argv: Sequence[str], cwd: Path | None) -> CommandResult:  # noqa: C901
@@ -62,6 +64,10 @@ class Fake:
             return CommandResult(0, self.diff, "")
         if a[1] == "rev-list":
             return CommandResult(0, f"{self.commits}\n", "")
+        if a[1] == "push":
+            return CommandResult(self.push_rc, "", "denied" if self.push_rc else "")
+        if a[1] == "log":
+            return CommandResult(0, self.log, "")
         raise AssertionError(a)
 
 
@@ -404,3 +410,61 @@ async def test_disabled_in_config_is_skipped(tmp_path: Path) -> None:
     await run.execute()
     assert "prework" in run.skipped
     assert "prework" not in run.done_stages
+
+
+# ------------------------------------------------------------ push, draft PR and the stacked base
+
+
+async def test_commits_push_the_branch_open_one_draft_pr_and_store_the_base(env: Env) -> None:
+    env.groups = [G("generic")]
+    env.fake.commits = 1
+    await env.run.stage_prework()
+    assert ("git", "push", "origin", env.run.prework_branch) in env.fake.calls
+    assert [(o[0], o[1]) for o in env.world.opened] == [(env.run.prework_branch, "base-branch")]
+    assert env.world.opened[0][2].startswith("Prework: ")
+    assert env.run.rec.base_branch == env.run.prework_branch
+    assert env.run.effective_base == env.run.prework_branch
+
+
+async def test_no_commits_no_push_no_pr_and_the_base_is_unchanged(env: Env) -> None:
+    env.groups = [G("generic")]
+    await env.run.stage_prework()
+    assert not [c for c in env.fake.calls if c[:2] == ("git", "push")]
+    assert env.world.opened == []
+    assert env.run.rec.base_branch is None
+
+
+async def test_a_second_run_of_the_stage_opens_no_second_pr(env: Env) -> None:
+    env.groups = [G("generic")]
+    env.fake.commits = 1
+    await env.run.stage_prework()
+    await env.run.stage_prework()
+    assert len(env.world.opened) == 1
+    assert env.run.rec.base_branch == env.run.prework_branch
+
+
+async def test_rerun_works_from_the_resolved_base_even_with_a_stored_one(env: Env) -> None:
+    env.run.rec.base_branch = env.run.prework_branch
+    env.run.rec.save()
+    env.groups = [G("generic")]
+    env.fake.commits = 0
+    seen: list[str] = []
+
+    async def plan_() -> tuple[list[tuple[Path, str]], str | None]:
+        seen.append(env.run.effective_base)
+        return env.plan, None
+
+    env.fake.commits = 1
+    env.run.build_gate_plan = plan_  # type: ignore[method-assign]
+    await env.run.stage_prework()
+    assert seen == ["base-branch"]  # the gate compared against the resolved base, not the stored pre-work branch
+
+
+async def test_push_failure_stops_at_c8_without_a_pr_or_a_stored_base(env: Env) -> None:
+    env.groups = [G("generic")]
+    env.fake.commits = 1
+    env.fake.push_rc = 1
+    stop = await _stop(env)
+    assert stop.checkpoint is Checkpoint.C8
+    assert env.world.opened == []
+    assert env.run.rec.base_branch is None

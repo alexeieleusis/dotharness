@@ -48,6 +48,7 @@ from dotharness.sisyphus.paths import knowledge_file
 from dotharness.sisyphus.pick import LabelRemover, label_removal_number
 from dotharness.sisyphus.plan import leaf_stems, plan_path
 from dotharness.sisyphus.plan import read_spf_config as _read_spf_config
+from dotharness.sisyphus.prework_inputs import PreworkInputError, prework_set, vibeheal_configured
 from dotharness.sisyphus.rails import (
     DEFAULT_MAX_RETRY_CYCLES,
     Checkpoint,
@@ -196,6 +197,8 @@ class OrchestratorOptions:
     path and base); the library default has a placeholder for the config path.
     ``base_source`` names the chain link that produced ``base_branch`` (named in the intake-base stop
     message); the intake clone starts from ``base_branch`` too.
+    ``config_dir`` is the directory of ``.sisyphus.toml``; the pre-work stage looks there (after the repo root)
+    for vibe_heal configuration. It defaults to the repo directory.
     """
 
     base_branch: str
@@ -205,6 +208,7 @@ class OrchestratorOptions:
     phase_dir: Path | None = None
     lock_dir: Path | None = None
     resume_command: str | None = None
+    config_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -545,9 +549,19 @@ class _Run:
         self.stop_rec: StopRecord | None = None
         self.was_abandoned = False
         self.cleanup_done: str | None = None
-        # Inputs of the prework handler, set by the sibling that computes them (see stage_prework).
+        # Inputs of the prework handler, set by ``load_prework_inputs`` before the stage runs (see stage_prework).
         self.prework_files: tuple[str, ...] = ()
         self.prework_vibeheal = False
+        self.prework_pr: PullRequest | None = None
+
+    @property
+    def effective_base(self) -> str:
+        """The base every branch reader uses: the pushed pre-work branch (stored in the run record) or the resolved base.
+
+        The stored value wins over ``opt.base_branch`` so a resume keeps the stack. The push guard and the pre-work
+        stage itself keep using the resolved ``opt.base_branch``.
+        """
+        return self.rec.base_branch or self.opt.base_branch
 
     # -- git / process helpers
 
@@ -570,7 +584,7 @@ class _Run:
 
         Renames and copies (``R``/``C``, which carry two paths) are skipped.
         """
-        res = await self.git("diff", "--name-status", "-z", f"origin/{self.opt.base_branch}...{tip}")
+        res = await self.git("diff", "--name-status", "-z", f"origin/{self.effective_base}...{tip}")
         tokens = res.stdout.split("\0")
         entries: list[tuple[str, str]] = []
         i = 0
@@ -601,7 +615,7 @@ class _Run:
         tip and paths whose numstat or blob git cannot read are left out. Pass ``entries`` from ``_name_status``
         to reuse one diff snapshot.
         """
-        base = f"origin/{self.opt.base_branch}...{tip}"
+        base = f"origin/{self.effective_base}...{tip}"
         if entries is None:
             entries = await self._name_status(tip)
         modified = [path for status, path in entries if status == "M"]
@@ -746,6 +760,8 @@ class _Run:
                     self.skipped.append(stage)  # disabled in config: no handler, no clock check, no marks
                     continue
                 self.check_time()
+                if stage == PREWORK_STAGE:
+                    await self.load_prework_inputs()
                 began = self.clock()
                 await handlers[stage]()
                 self.done_stages.append(stage)
@@ -1070,7 +1086,8 @@ class _Run:
         return len(leaf_stems(phase_dir))
 
     async def prepare_branch(self) -> None:
-        base = self.opt.base_branch
+        """Check out the item branch, cutting it from ``origin/<effective base>`` (the pre-work branch once pushed)."""
+        base = self.effective_base
         await self.ensure_clean()
         await self.git("fetch", "origin", base, network=True)
         exists = (
@@ -1108,6 +1125,9 @@ class _Run:
             bound = RetryBound(DEFAULT_MAX_RETRY_CYCLES, self.rec.retries.get(PREWORK_RETRY_KEY, 0)).result()
             if bound.escalate:
                 raise _Stop(Checkpoint.C5, f"prework already failed {bound.attempts} retry cycles; not launching again")
+            if self.rec.base_branch is not None:  # the stage runs again: it works from the resolved base
+                self.rec.base_branch = None
+                self.rec.save()
             files = tuple(self.prework_files)
             if not files:
                 self.note("prework: no existing source files in the plan scope")
@@ -1119,6 +1139,7 @@ class _Run:
                 self.note("prework: vibe_heal not configured")
             await self.prework_pattern_pass(files)
             await self.prework_gate()
+            await self.prework_publish(files)
 
     async def prework_health_pass(self, files: Sequence[str]) -> None:
         """``vibe_heal dedupe`` then ``vibe_heal fix`` for each file, one at a time; a non-zero exit stops at C5."""
@@ -1191,6 +1212,88 @@ class _Run:
 
     def prework_handoff_path(self, set_name: str) -> Path:
         return self.handoff_dir / f"prework-{set_name}.md"
+
+    async def prework_publish(self, files: Sequence[str]) -> None:
+        """With commits on the pre-work branch: push it, open (or reuse) its one draft PR, stack the feature on it.
+
+        No commits means no push, no PR and an unchanged base. A host failure stops at C8 like ``stage_open_pr``.
+        The effective base is stored only once the branch is pushed and the PR exists.
+        """
+        ahead = (await self.git("rev-list", "--count", f"origin/{self.opt.base_branch}..HEAD")).stdout.strip()
+        if not ahead.isdigit() or int(ahead) == 0:
+            return
+        request = parse_push_argv(["push", "origin", self.prework_branch], history_rewrite=False, needs_rebase=False)
+        self.check_push_guard(request, extra_created=(self.prework_branch,))
+        res = await self.git("push", "origin", self.prework_branch, ok=False)
+        if res.returncode != 0:
+            raise _Stop(Checkpoint.C8, f"git push failed (exit {res.returncode}): {_tail(res.stderr)}")
+        try:
+            self.prework_pr = await self.gh.find_pr(self.prework_branch)
+            if self.prework_pr is None:
+                body = await self.build_prework_body(files)
+                self.prework_pr = await self.gh.open_pr(
+                    self.prework_branch, self.opt.base_branch, prbody.prework_title(self.build_pr_title()), body
+                )
+        except CodeHostError as exc:  # policy: ChangeRequests unsupported or failing -> stop at C8
+            raise _Stop(Checkpoint.C8, str(exc)) from exc
+        self.rec.base_branch = self.prework_branch
+        self.rec.save()
+
+    async def build_prework_body(self, files: Sequence[str]) -> str:
+        """The pre-work PR description; never raises (the statement alone is the fallback)."""
+        try:
+            plan_dir = prbody.locate_plan_dir(self.spf, self.repo) or self.plan_dir
+            records = _read_refactor_records(self.prework_input_path)
+            health, pattern = await self.prework_commits(records)
+            max_chars = (
+                self.gh.max_body_chars if isinstance(self.gh, BodyLimitedPullRequestClient) else prbody.MAX_BODY_CHARS
+            )
+            return prbody.compose_prework_body(
+                self.item,
+                files=files,
+                health_commits=health,
+                pattern_commits=pattern,
+                records=records,
+                handoff_dir=self.handoff_dir,
+                workspace=self.workspace,
+                plan_dir=plan_dir,
+                max_chars=max_chars,
+            )
+        except Exception:  # assembly must never stop the run
+            return prbody.prework_statement(self.item)
+
+    async def prework_commits(
+        self, records: Sequence[Mapping[str, Any]]
+    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+        """Pre-work commits split by tool: before the first pattern group's ``head_before`` is vibe_heal's, after is the agents'."""
+        base = f"origin/{self.opt.base_branch}"
+        split = str(records[0]["head_before"]) if records else "HEAD"
+
+        async def log(rev_range: str) -> list[tuple[str, str]]:
+            res = await self.git("log", "--reverse", prbody.COMMIT_LOG_FORMAT, rev_range, ok=False)
+            return prbody.parse_commits(res.stdout) if res.returncode == 0 else []
+
+        return await log(f"{base}..{split}"), await log(f"{split}..HEAD")
+
+    async def load_prework_inputs(self) -> None:
+        """Set ``prework_files`` and ``prework_vibeheal`` for the stage; a bad Scope or tree listing stops the run.
+
+        Reads the plan's leaf Scope sections and the tree at ``origin/<resolved base>``, and looks for vibe_heal
+        configuration in files only. ``PreworkInputError`` and ``ValueError`` become an :class:`OrchestratorError`
+        (an error stop with its stop record, like a malformed gate config).
+        """
+        phase_dir = self.opt.phase_dir or plan_path(read_spf_config(self.spf), self.repo, "phase_dir")
+        if phase_dir is None or not phase_dir.is_dir():
+            raise OrchestratorError(f"prework: the phase directory {phase_dir} does not exist")
+
+        async def tree_git(args: Sequence[str]) -> CommandResult:
+            return await self.git(*args, ok=False)
+
+        try:
+            self.prework_files = await prework_set(phase_dir, self.opt.base_branch, tree_git)
+        except (PreworkInputError, ValueError) as exc:
+            raise OrchestratorError(f"prework: cannot read the pre-work set: {exc}") from exc
+        self.prework_vibeheal = vibeheal_configured(self.repo, self.opt.config_dir).configured
 
     async def stage_refactor(self) -> None:
         """Run one refactor agent per stack group; stop at C5 on an incomplete, out-of-scope or gate-breaking group."""
@@ -1314,7 +1417,7 @@ class _Run:
             current = (await self.git("rev-parse", "--abbrev-ref", "HEAD")).stdout.strip()
             if current != self.branch:
                 raise OrchestratorError(f"build left the checkout on {current!r}, expected {self.branch!r}")
-            ahead = (await self.git("rev-list", "--count", f"origin/{self.opt.base_branch}..HEAD")).stdout.strip()
+            ahead = (await self.git("rev-list", "--count", f"origin/{self.effective_base}..HEAD")).stdout.strip()
             if not ahead.isdigit() or int(ahead) == 0:
                 raise OrchestratorError(f"build produced no commits on {self.branch}")
             await self.check_build_complete()
@@ -1359,11 +1462,16 @@ class _Run:
         await self.git("fetch", "origin", self.branch, network=True)
         return (await self.git("merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD", ok=False)).returncode != 0
 
-    def check_push_guard(self, request: Any) -> None:
-        """Refuse the push (stop or error) if it would touch a protected branch."""
+    def check_push_guard(self, request: Any, extra_created: Sequence[str] = ()) -> None:
+        """Refuse the push (stop or error) if it would touch a protected branch.
+
+        The protected set is the resolved base and the default branch, never the effective base. ``extra_created``
+        names branches Sisyphus created without a run-record marker (the pre-work branch).
+        """
         protected = {self.opt.base_branch, *([self.opt.default_branch] if self.opt.default_branch else [])}
+        created = self.created_branches() | set(extra_created)
         for default in sorted(protected):
-            decision = push_guard(request, default, self.created_branches())
+            decision = push_guard(request, default, created)
             if decision.allowed:
                 continue
             if decision.checkpoint is not None:
@@ -1402,7 +1510,7 @@ class _Run:
                 self.pr = await self.gh.find_pr(self.branch)
                 if self.pr is None:
                     body = await self.build_pr_body()
-                    self.pr = await self.gh.open_pr(self.branch, self.opt.base_branch, self.build_pr_title(), body)
+                    self.pr = await self.gh.open_pr(self.branch, self.effective_base, self.build_pr_title(), body)
             except CodeHostError as exc:  # policy: ChangeRequests unsupported or failing -> stop at C8
                 raise _Stop(Checkpoint.C8, str(exc)) from exc
             if self.rec.retries.get(PR_NUMBER_KEY) != self.pr.number:
@@ -1457,13 +1565,28 @@ class _Run:
             brief_path=resolve_brief_path(self.config, self.item),
             plan_dir=plan_dir,
             phase_dir=phase_dir,
-            base_branch=self.opt.base_branch,
+            base_branch=self.effective_base,
             workspace=self.workspace,
             run_git=run_git,
             refactor_records=_read_refactor_records(self.handoff_dir / REFACTOR_INPUT_FILE),
             refactor_handoff_dir=self.handoff_dir,
+            prework_link=await self.prework_link(),
             max_chars=max_chars,
         )
+
+    async def prework_link(self) -> str:
+        """The feature PR body's one back-link line, or ``""`` when the item is not stacked or the PR cannot be found."""
+        if self.rec.base_branch != self.prework_branch:
+            return ""
+        pr = self.prework_pr
+        if pr is None:
+            try:
+                pr = await self.gh.find_pr(self.prework_branch)
+            except CodeHostError:
+                return ""
+        if pr is None:
+            return ""
+        return prbody.prework_link_line(pr.url or f"#{pr.number}")
 
     def note(self, text: str) -> None:
         if text not in self.notes:
@@ -1494,7 +1617,7 @@ class _Run:
         entries = read_gate_entries(self.spf)
         if commands is None and entries is None:
             return [], f"no build.commands in {self.spf}"
-        changed = (await self.git("diff", "--name-only", f"origin/{self.opt.base_branch}...HEAD")).stdout.split("\n")
+        changed = (await self.git("diff", "--name-only", f"origin/{self.effective_base}...HEAD")).stdout.split("\n")
         dirs = package_dirs(self.repo, [c for c in changed if c.strip()])
         if not dirs:
             return [], "no changed files to gate"
