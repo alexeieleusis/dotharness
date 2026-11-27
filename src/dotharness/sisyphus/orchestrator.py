@@ -1101,8 +1101,11 @@ class _Run:
         await self.git("checkout", "-b", self.branch, f"origin/{base}")
         self.rec.increment_retry(BRANCH_CREATED_KEY)
 
-    async def prepare_prework_branch(self) -> None:
-        """Cut ``<branch>-prework`` from ``origin/<base>`` (resume: check out the existing one). No push, no PR."""
+    async def prepare_prework_branch(self) -> bool:
+        """Cut ``<branch>-prework`` from ``origin/<base>`` (resume: check out the existing one). No push, no PR.
+
+        Returns True when the branch already existed (a resume).
+        """
         base = self.opt.base_branch
         await self.ensure_clean()
         await self.git("fetch", "origin", base, network=True)
@@ -1111,8 +1114,9 @@ class _Run:
         ).returncode == 0
         if exists:
             await self.git("checkout", self.prework_branch)
-            return
+            return True
         await self.git("checkout", "-b", self.prework_branch, f"origin/{base}")
+        return False
 
     async def stage_prework(self) -> None:
         """Clean the existing files the plan will modify: vibe_heal per file, then one pattern agent per group, then the gate.
@@ -1132,11 +1136,20 @@ class _Run:
             if not files:
                 self.note("prework: no existing source files in the plan scope")
                 return
-            await self.prepare_prework_branch()
-            if self.prework_vibeheal:
-                await self.prework_health_pass(files)
-            else:
+            resumed = await self.prepare_prework_branch()
+            marker = self.prework_health_marker
+            if not resumed:
+                marker.unlink(missing_ok=True)  # a stale marker from an earlier branch must not skip the pass
+            if not self.prework_vibeheal:
                 self.note("prework: vibe_heal not configured")
+            elif resumed and marker.exists():
+                # vibe_heal reruns on a resume would use a SonarQube analysis older than the pattern commits and
+                # land edits after the groups' recorded head_before.
+                self.note("prework: vibe_heal already completed; skipping on resume")
+            else:
+                await self.prework_health_pass(files)
+                self.handoff_dir.mkdir(parents=True, exist_ok=True)
+                marker.write_text("done\n", encoding="utf-8")
             await self.prework_pattern_pass(files)
             await self.prework_gate()
             await self.prework_publish(files)
@@ -1211,6 +1224,11 @@ class _Run:
         if self.rec.retries.get(GATE_FAILED_KEY):
             self.rec.retries[GATE_FAILED_KEY] = 0
             self.rec.save()
+
+    @property
+    def prework_health_marker(self) -> Path:
+        """Written once the vibe_heal pass completes; not ``.md`` so PR-body handoff selection ignores it."""
+        return self.handoff_dir / "prework-health.done"
 
     def prework_handoff_path(self, set_name: str) -> Path:
         return self.handoff_dir / f"prework-{set_name}.md"
