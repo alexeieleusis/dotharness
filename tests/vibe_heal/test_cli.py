@@ -970,6 +970,50 @@ class TestReviewCommand:
         assert "Per-File Breakdown" in result.stdout
         assert "src/test.py" in result.stdout
 
+    @patch("dotharness.vibe_heal.cli.SonarQubeClient")
+    @patch("dotharness.vibe_heal.cli.ReviewOrchestrator")
+    @patch("dotharness.vibe_heal.cli.VibeHealConfig")
+    def test_review_analysis_bracketed_file_paths_not_parsed_as_markup(
+        self,
+        mock_config_class: MagicMock,
+        mock_orchestrator_class: MagicMock,
+        mock_client_class: MagicMock,
+    ) -> None:
+        """Bracketed paths (e.g. Next.js routes) render verbatim and don't raise MarkupError."""
+        mock_config = MagicMock(spec=VibeHealConfig)
+        mock_config.sonarqube_project_key = "test-project"
+        mock_config_class.return_value = mock_config
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = None
+        mock_client_class.return_value = mock_client
+
+        files = []
+        for path in ("src/pages/[id].tsx", "src/[/id].tsx"):
+            file_review = MagicMock()
+            file_review.file_path = path
+            file_review.issues = []
+            file_review.duplications = []
+            file_review.resolved_duplications = []
+            file_review.coverage_pct = None
+            files.append(file_review)
+
+        mock_result = MagicMock()
+        mock_result.total_issues = 0
+        mock_result.files = files
+        mock_result.branch = "feature-test"
+        mock_result.base_branch = "origin/main"
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run_analysis = AsyncMock(return_value=mock_result)
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        result = runner.invoke(app, ["review"])
+
+        assert result.exit_code == 0
+        assert "[id].tsx" in result.stdout
+        assert "[/id].tsx" in result.stdout
+
     @patch("dotharness.vibe_heal.review.reporter.load_report_from_path")
     @patch("dotharness.vibe_heal.cli.VibeHealConfig")
     def test_review_post_basic(

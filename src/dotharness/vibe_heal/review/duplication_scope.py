@@ -141,8 +141,7 @@ def _resolve_group(
     target_block = group.get_target_block(target_ref)
     if target_block is None:
         return None
-    block_lines = set(range(target_block.from_line, target_block.to_line + 1))
-    if not block_lines & old_changed_lines:
+    if not changed_lines_in_block(target_block, old_changed_lines):
         return None
     # Suppress if any active dup range overlaps this block (line shifts mean
     # the ranges are unlikely to match exactly after edits).
