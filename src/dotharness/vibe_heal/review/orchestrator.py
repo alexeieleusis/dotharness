@@ -145,7 +145,7 @@ class ReviewOrchestrator:
     - SonarQube analysis
     - Issue filtering to changed lines
     - Report generation
-    - GitHub review posting
+    - Code host review posting
     """
 
     def __init__(
@@ -316,7 +316,7 @@ class ReviewOrchestrator:
             for file_path in modified_files:
                 # repo_relative is the POSIX repo-root-relative path used for:
                 # - DiffParser map lookups (keys are always repo-root-relative POSIX)
-                # - FileReview.file_path (GitHub requires repo-root-relative paths)
+                # - FileReview.file_path (code hosts require repo-root-relative paths)
                 repo_relative = self._to_repo_relative(file_path)
                 file_issues, diag = await self._get_filtered_issues(
                     file_path,
@@ -411,7 +411,7 @@ class ReviewOrchestrator:
         pr_number: int | None = None,
         verbose: bool = False,
     ) -> None:
-        """Post review comments to a GitHub PR.
+        """Post review comments to the pull request through the code host.
 
         Workflow:
         1. Load report from JSON
@@ -634,7 +634,7 @@ class ReviewOrchestrator:
         changed_in_block = changed_lines_in_block(target_block, new_changed_lines)
         if not changed_in_block:
             return None
-        # Use the lowest changed line in the block as the anchor so the GitHub
+        # Use the lowest changed line in the block as the anchor so the code host's
         # PR comment is attached to a line that is actually in the diff.
         anchor_line = min(changed_in_block)
         other_locations = build_other_locations(group, target_block, response, project_key)

@@ -32,7 +32,7 @@ class ReviewIssue(BaseModel):
         description=(
             "True when the issue falls on a strictly changed line in the git diff. "
             "False when it falls only in the trailing context window added by DiffParser. "
-            "GitHub rejects inline PR comments on trailing-context lines (422), so only "
+            "Code hosts may reject inline PR comments on trailing-context lines, so only "
             "issues with on_changed_line=True are posted inline."
         ),
     )
@@ -58,7 +58,7 @@ class ReviewDuplication(BaseModel):
     anchor_line: int | None = Field(
         default=None,
         description=(
-            "First changed line within the duplicated block, used as the GitHub PR comment anchor. "
+            "First changed line within the duplicated block, used as the PR comment anchor. "
             "Falls back to from_line when not set (for backwards-compatible deserialized reports)."
         ),
     )

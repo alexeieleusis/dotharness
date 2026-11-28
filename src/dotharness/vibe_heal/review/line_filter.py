@@ -29,7 +29,7 @@ class IssueLineFilter:
             strict_changed_lines: The unexpanded set of genuinely changed lines
                 (no trailing context). When provided, issues that fall only in
                 the trailing window are included but marked on_changed_line=False
-                so the GitHub client knows not to attempt inline posting.
+                so the code host client knows not to attempt inline posting.
 
         Returns:
             List of ReviewIssue for issues on changed lines.

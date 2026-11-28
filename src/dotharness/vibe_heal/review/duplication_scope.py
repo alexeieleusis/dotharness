@@ -148,7 +148,7 @@ def _resolve_group(
     if any(a_from <= target_block.to_line and a_to >= target_block.from_line for a_from, a_to in active_dup_ranges):
         return None
     other_locations = build_other_locations(group, target_block, response, project_key)
-    # Choose the new-side anchor closest to the block so the GitHub PR comment
+    # Choose the new-side anchor closest to the block so the code host's PR comment
     # is attached near the relevant change rather than an unrelated hunk.
     anchor_new_line = min(new_changed_lines, key=lambda ln: abs(ln - target_block.from_line))
     return ResolvedDuplication(
