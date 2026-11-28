@@ -67,7 +67,7 @@ def _build_overflow_section(overflow: list[tuple[str, int, str]], max_inline: in
     suffix = f"\n_...and {extra} more not shown._" if extra else ""
     return (
         f"**{len(overflow)} finding(s) over the {max_inline}-comment inline limit**"
-        f" (capped to avoid GitHub rate limits):\n" + "\n".join(overflow_lines) + suffix
+        f" (capped by the code host's inline comment limit):\n" + "\n".join(overflow_lines) + suffix
     )
 
 
