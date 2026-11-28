@@ -884,7 +884,7 @@ def _review_post_mode(
 ) -> None:
     """Handle the --post branch of the review command.
 
-    Loads a previously saved report and posts it to a GitHub PR.
+    Loads a previously saved report and posts it to the pull request through the code host.
     SonarQube config is only required to determine the default report path;
     pass ``--report-file`` to skip the config lookup entirely.
 
@@ -893,7 +893,7 @@ def _review_post_mode(
         pr_number: Explicit PR number (None = auto-detect).
         env_file: Optional path to a custom env file (for config loading).
         verbose: Enable verbose output.
-        dry_run: Preview what would be posted without making GitHub API calls.
+        dry_run: Preview what would be posted without making host API calls.
     """
     try:
         code_host = _start_code_host_for_post(env_file)
@@ -975,17 +975,17 @@ def review(
     post: bool = typer.Option(
         False,
         "--post",
-        help="Post saved report to GitHub PR",
+        help="Post saved report to the pull request through the code host",
     ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
-        help="Preview what would be posted to GitHub without making API calls (only applies with --post)",
+        help="Preview what would be posted to the code host without making API calls (only applies with --post)",
     ),
     pr_number: int | None = typer.Option(
         None,
         "--pr",
-        help="GitHub PR number (override auto-detection)",
+        help="Pull request number (override auto-detection)",
     ),
     base_branch: str | None = typer.Option(
         None,
