@@ -1,5 +1,6 @@
 """Tests for CLI commands."""
 
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1037,7 +1038,9 @@ class TestReviewCommand:
         result = runner.invoke(app, ["review", "--post", "--pr", "3", "--report-file", "/nonexistent/review.json"])
 
         assert result.exit_code == 0
-        assert "inline review rejected by GitHub (bad line)" in result.stdout.replace("\n", " ")
+        output = result.stdout.replace("\n", " ")
+        assert "bad line" in output
+        assert "GitHub" not in output
         assert [p.kind for p in fake_code_host.posts()] == ["comment"]
 
     @patch("dotharness.vibe_heal.review.reporter.load_report_from_path")
@@ -1095,6 +1098,18 @@ class TestReviewCommand:
 
         assert result.exit_code == 0
         assert "review" in result.stdout
+
+    def test_review_help_is_host_neutral(self) -> None:
+        """Test that review --help names no specific code host."""
+        result = runner.invoke(app, ["review", "--help"])
+
+        assert result.exit_code == 0
+        assert "GitHub" not in result.stdout
+        assert re.search(r"\bgh\b", result.stdout) is None
+        # Rich wraps help text inside a bordered table; drop the borders before matching.
+        normalised = " ".join(result.stdout.replace("│", " ").split())
+        assert "only applies with --post" in normalised
+        assert "override auto-detection" in normalised
 
     @patch("dotharness.vibe_heal.cli.SonarQubeClient")
     @patch("dotharness.vibe_heal.cli.ReviewOrchestrator")

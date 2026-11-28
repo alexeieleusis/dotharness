@@ -116,6 +116,7 @@ class TestBuildReview:
         preview = _preview(self._n_issues(_MAX_INLINE_COMMENTS + 5))
         assert "5 finding(s) over the" in preview.body
         assert "capped" in preview.body
+        assert "GitHub" not in preview.body
         assert "src/file_50.py" in preview.body
 
     def test_overflow_lines_are_limited(self) -> None:
