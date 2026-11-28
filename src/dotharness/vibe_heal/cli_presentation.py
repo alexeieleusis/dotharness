@@ -1,7 +1,5 @@
 """Console presentation for the vibe_heal CLI: formats and prints command results."""
 
-import sys
-
 from rich.markup import escape as rich_escape
 from rich.table import Table
 
@@ -66,7 +64,7 @@ def display_cleanup_results(result: CleanupResult) -> None:
     if not result.success:
         if result.error_message:
             error(f"\nCleanup failed: {result.error_message}")
-        sys.exit(1)
+        return
 
     console.print("\n[green]✨ Branch cleanup complete![/green]")
     console.print(GITHUB_FOOTER_LINE)
@@ -122,7 +120,7 @@ def display_cleanup_pr_results(result: CleanupPrResult, dry_run: bool = False) -
     if not result.success:
         if result.error_message:
             error(f"\nCleanup failed: {result.error_message}")
-        sys.exit(1)
+        return
 
     console.print("\n[green]✨ Branch cleanup (PR scope) complete![/green]")
     console.print(GITHUB_FOOTER_LINE)
@@ -151,7 +149,7 @@ def display_dedupe_branch_results(result: DedupeBranchResult) -> None:
     if not result.success:
         if result.error_message:
             error(f"\nDeduplication failed: {result.error_message}")
-        sys.exit(1)
+        return
 
     console.print("\n[green]✨ Branch deduplication complete![/green]")
     console.print(GITHUB_FOOTER_LINE)

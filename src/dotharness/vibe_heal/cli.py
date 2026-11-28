@@ -374,6 +374,8 @@ async def _run_cleanup(
         )
 
         _display_cleanup_results(result)
+        if not result.success:
+            sys.exit(1)
 
 
 @app.command()
@@ -483,6 +485,8 @@ async def _run_cleanup_pr(
         )
 
         _display_cleanup_pr_results(result, dry_run=dry_run)
+        if not result.success:
+            sys.exit(1)
 
 
 @app.command()
@@ -623,6 +627,8 @@ async def _run_dedupe_branch(
         )
 
         _display_dedupe_branch_results(result)
+        if not result.success:
+            sys.exit(1)
 
 
 @app.command()
