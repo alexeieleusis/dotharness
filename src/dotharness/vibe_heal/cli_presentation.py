@@ -206,7 +206,7 @@ def build_review_table(result: ReviewAnalysisResult) -> None:
         issue_count = len(file_review.issues)
         dup_count = len(file_review.duplications) + len(file_review.resolved_duplications)
         highest_severity = get_highest_severity(file_review.issues)
-        row: list[str] = [file_review.file_path, str(issue_count), highest_severity, str(dup_count)]
+        row: list[str] = [rich_escape(file_review.file_path), str(issue_count), highest_severity, str(dup_count)]
         if show_coverage:
             cov_str = f"{file_review.coverage_pct}%" if file_review.coverage_pct is not None else "—"
             row.append(cov_str)
