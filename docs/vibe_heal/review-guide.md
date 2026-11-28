@@ -2,12 +2,12 @@
 
 ## Overview
 
-The `vibe_heal review` command analyzes SonarQube issues **scoped to the lines you actually changed** in your branch. It is a read-only companion to `cleanup`: it reports issues instead of fixing them, and can post the findings as inline GitHub PR review comments.
+The `vibe_heal review` command analyzes SonarQube issues **scoped to the lines you actually changed** in your branch. It is a read-only companion to `cleanup`: it reports issues instead of fixing them, and can post the findings as inline PR review comments on your code host.
 
 The workflow has two phases, plus a third standalone mode for CI baseline maintenance:
 
 1. **Analyze** (`vibe_heal review`) — create a temporary SonarQube project, run `sonar-scanner`, filter issues to changed lines, and save a `review.json` + `review.md` report.
-2. **Post** (`vibe_heal review --post`) — load the saved report and post inline comments to an open GitHub PR via the `gh` CLI.
+2. **Post** (`vibe_heal review --post`) — load the saved report and post inline comments to an open pull request through the code host (the reference host uses the `gh` CLI).
 3. **Baseline** (`vibe_heal review --baseline`) — scan the real SonarQube project directly (no temp project, no diff, no report) to refresh its analysis. See [Baseline Mode](#baseline-mode).
 
 ## When to Use
@@ -34,14 +34,14 @@ The workflow has two phases, plus a third standalone mode for CI baseline mainte
 
 ### Required for `review --post` (post phase)
 
-4. **gh CLI** installed and authenticated
+4. **gh CLI** installed and authenticated (reference host)
    ```bash
    # macOS
    brew install gh
    gh auth login
    ```
 
-5. An open GitHub Pull Request for the current branch.
+5. An open GitHub Pull Request for the current branch. (reference host)
 
 ### Code host selection
 
@@ -109,7 +109,7 @@ vibe_heal review --baseline
 
 See [Baseline Mode](#baseline-mode) for when and why to use this.
 
-### Post findings to GitHub PR
+### Post findings to the pull request
 
 ```bash
 # Post saved report as inline PR comments (auto-detects open PR)
@@ -135,9 +135,9 @@ vibe_heal review --post --report-file /tmp/my-review.json
 | `--env-file` | `.env.vibeheal` | Path to custom config file |
 | `--verbose` / `-v` | off | Enable debug logging |
 | `--coverage` | off | Report test coverage for changed lines (requires coverage data in SonarQube) |
-| `--post` | off | Post saved report to GitHub PR instead of analyzing |
+| `--post` | off | Post saved report to the pull request through the code host instead of analyzing |
 | `--dry-run` | off | With `--post`: preview comments without API calls |
-| `--pr` | auto | With `--post`: explicit GitHub PR number |
+| `--pr` | auto | With `--post`: pull request number (override auto-detection) |
 | `--baseline` | off | Scan the real SonarQube project directly to refresh its baseline (no diff, no report). Ignores `--pr`, `--pattern`, `--coverage`, and `--base-branch` if combined. |
 
 ### Stacked PRs
@@ -177,9 +177,9 @@ vibe_heal's `DOTHARNESS_BASE_BRANCH` is its own knob, separate from pr_review `[
 
 ```
 1. Load review.json from default path (or --report-file)
-2. Detect open PR via `gh pr list` (or use --pr)
-3. Build GitHub Reviews API payload with one inline comment per finding
-4. Post review to GitHub PR
+2. Detect open PR (the reference host uses `gh pr list`) (or use --pr)
+3. Build the review payload with one inline comment per finding
+4. Post the review to the pull request through the code host
 ```
 
 The two phases are decoupled — you can run `review` in CI and `review --post` locally, or re-post an old report to a new PR.

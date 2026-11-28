@@ -13,7 +13,7 @@ module status.
 
 - [Overview](vibe_heal/overview.md): features and the command table
 - [Branch cleanup guide](vibe_heal/branch-cleanup-guide.md): the `cleanup`, `dedupe-branch` and `cleanup-pr` commands
-- [Review guide](vibe_heal/review-guide.md): the `review` command and GitHub PR commenting
+- [Review guide](vibe_heal/review-guide.md): the `review` command and PR commenting
 - [Architecture](vibe_heal/architecture.md): system design and module structure
 - [API reference](vibe_heal/api.md): generated from the `dotharness.vibe_heal` docstrings
 
