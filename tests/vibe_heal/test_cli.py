@@ -1037,7 +1037,9 @@ class TestReviewCommand:
         result = runner.invoke(app, ["review", "--post", "--pr", "3", "--report-file", "/nonexistent/review.json"])
 
         assert result.exit_code == 0
-        assert "inline review rejected by GitHub (bad line)" in result.stdout.replace("\n", " ")
+        output = result.stdout.replace("\n", " ")
+        assert "bad line" in output
+        assert "GitHub" not in output
         assert [p.kind for p in fake_code_host.posts()] == ["comment"]
 
     @patch("dotharness.vibe_heal.review.reporter.load_report_from_path")

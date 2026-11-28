@@ -881,9 +881,10 @@ class TestRunPost:
         with patch("dotharness.vibe_heal.review.orchestrator.warn") as mock_warn:
             await orchestrator.run_post(report_file=self._report_file(tmp_path), pr_number=5)
 
-        mock_warn.assert_called_once_with(
-            "Warning: inline review rejected by GitHub (line not in diff) — posting as a top-level comment instead."
-        )
+        mock_warn.assert_called_once()
+        message = mock_warn.call_args.args[0]
+        assert "line not in diff" in message
+        assert "GitHub" not in message
         assert [p.kind for p in fake.posts()] == ["comment"]
 
     @pytest.mark.asyncio

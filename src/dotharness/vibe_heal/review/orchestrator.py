@@ -125,7 +125,7 @@ async def post_report(code_host: CodeHost, report: ReviewResult, number: int) ->
     )
     if result.fell_back:
         warn(
-            f"Warning: inline review rejected by GitHub ({result.reason or ''}) — "
+            f"Warning: inline review rejected by the code host ({result.reason or ''}) — "
             "posting as a top-level comment instead."
         )
     success(
